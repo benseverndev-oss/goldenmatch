@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.csv
+*.parquet
+*.xlsx
+goldencheck.yml
+.ruff_cache/
