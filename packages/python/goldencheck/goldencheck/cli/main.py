@@ -128,9 +128,11 @@ def validate(
 
     if json_output:
         report_json(findings, profile, sys.stdout)
+    elif not no_tui:
+        from goldencheck.tui.app import GoldenCheckApp
+        tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
+        tui_app.run()
     else:
-        if not no_tui:
-            typer.echo("TUI not yet implemented, showing CLI output")
         report_rich(findings, profile)
 
     exit_code = report_ci(findings, cfg.settings.fail_on)
@@ -162,9 +164,11 @@ def review(
 
     if json_output:
         report_json(findings, profile, sys.stdout)
+    elif not no_tui:
+        from goldencheck.tui.app import GoldenCheckApp
+        tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
+        tui_app.run()
     else:
-        if not no_tui:
-            typer.echo("TUI not yet implemented, showing CLI output")
         report_rich(findings, profile)
 
     exit_code = report_ci(findings, fail_on)
@@ -177,7 +181,9 @@ def _do_scan(file: Path, *, no_tui: bool, json_output: bool) -> None:
 
     if json_output:
         report_json(findings, profile, sys.stdout)
+    elif not no_tui:
+        from goldencheck.tui.app import GoldenCheckApp
+        tui_app = GoldenCheckApp(findings=findings, profile=profile)
+        tui_app.run()
     else:
-        if not no_tui:
-            typer.echo("TUI not yet implemented, showing CLI output")
         report_rich(findings, profile)
