@@ -1,0 +1,11 @@
+id,name,email,age,status,phone,price,start_date,end_date,notes
+1,Alice,alice@example.com,30,active,(555) 123-4567,29.99,2024-01-01,2024-01-15,
+2,Bob,bob@test.com,25,inactive,555-123-4567,49.99,2024-02-01,2024-02-15,some note
+3,Charlie,,forty-five,active,5551234567,99999.99,2024-03-15,2024-03-01,
+4,Diana,diana@example.com,28,pending,(555) 987-6543,15.50,2024-04-01,2024-04-15,
+5,Eve,not-an-email,33,active,555.987.6543,22.00,2024-05-01,2024-05-15,
+6,Frank,frank@test.com,250,closed,(555) 111-2222,35.00,2024-06-01,2024-06-15,another note
+7,Grace,grace@example.com,28,active,(555) 333-4444,42.50,2024-07-01,2024-07-15,
+8,Hank,hank@test.com,31,UNKNOWN,(555) 555-6666,28.00,2024-08-01,2024-08-15,
+9,,ivy@example.com,29,active,(555) 777-8888,33.00,2024-09-01,2024-09-15,
+10,Jack,jack@example.com,35,active,(555) 999-0000,45.00,2024-10-01,2024-10-15,
