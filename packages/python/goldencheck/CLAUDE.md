@@ -1,6 +1,6 @@
 # GoldenCheck
 
-Data validation that discovers rules from your data. DQBench Score: 84.98.
+Data validation that discovers rules from your data. DQBench Score: 87.71.
 
 ## Commands
 
