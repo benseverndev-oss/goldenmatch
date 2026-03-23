@@ -1,6 +1,7 @@
 """Merge LLM response into existing findings list."""
 from __future__ import annotations
 import logging
+import re
 from dataclasses import replace
 from goldencheck.llm.prompts import LLMResponse
 from goldencheck.models.finding import Finding, Severity
@@ -8,6 +9,10 @@ from goldencheck.models.finding import Finding, Severity
 logger = logging.getLogger(__name__)
 
 SEVERITY_MAP = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}
+
+
+def _strip_suppression_suffix(message: str) -> str:
+    return re.sub(r'\s*\(suppressed:.*?\)\s*$', '', message)
 
 
 def merge_llm_findings(
@@ -47,7 +52,7 @@ def merge_llm_findings(
                 result[index[key]] = replace(
                     old,
                     severity=SEVERITY_MAP.get(upgrade.new_severity.lower(), old.severity),
-                    message=f"{old.message} [LLM: {upgrade.reason}]",
+                    message=f"{_strip_suppression_suffix(old.message)} [LLM: {upgrade.reason}]",
                     source="llm",
                 )
             else:
@@ -68,7 +73,7 @@ def merge_llm_findings(
                 result[index[key]] = replace(
                     old,
                     severity=SEVERITY_MAP.get(downgrade.new_severity.lower(), old.severity),
-                    message=f"{old.message} [LLM: {downgrade.reason}]",
+                    message=f"{_strip_suppression_suffix(old.message)} [LLM: {downgrade.reason}]",
                     source="llm",
                 )
             # else: silently ignore

@@ -1,0 +1,69 @@
+types:
+  identifier:
+    name_hints: ["id", "key", "pk", "code", "sku", "number", "num", "record"]
+    value_signals:
+      min_unique_pct: 0.95
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  person_name:
+    name_hints: ["name", "first_name", "last_name", "full_name"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency", "cardinality"]
+
+  email:
+    name_hints: ["email", "mail", "e_mail"]
+    value_signals:
+      format_match: "email"
+      min_match_pct: 0.70
+    suppress: ["pattern_consistency"]
+
+  phone:
+    name_hints: ["phone", "tel", "fax", "mobile", "cell"]
+    value_signals:
+      format_match: "phone"
+      min_match_pct: 0.70
+    suppress: ["type_inference", "pattern_consistency"]
+
+  address:
+    name_hints: ["address", "street", "addr", "line1", "line2"]
+    value_signals:
+      avg_length_min: 15
+    suppress: ["pattern_consistency", "cardinality"]
+
+  free_text:
+    name_hints: ["notes", "comment", "description", "text", "memo", "message", "remarks"]
+    value_signals:
+      avg_length_min: 30
+      min_unique_pct: 0.80
+    suppress: ["pattern_consistency", "cardinality", "type_inference", "drift_detection"]
+
+  datetime:
+    name_hints: ["date", "time", "created", "updated", "_at", "timestamp"]
+    value_signals:
+      format_match: "date"
+    suppress: ["pattern_consistency"]
+
+  boolean:
+    name_hints: ["is_", "has_", "flag", "active", "enabled", "disabled"]
+    value_signals:
+      max_unique: 3
+    suppress: ["range_distribution", "uniqueness"]
+
+  currency:
+    name_hints: ["amount", "price", "cost", "total", "fee", "payment", "charge", "balance"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  code_enum:
+    name_hints: ["status", "type", "category", "level", "tier", "grade", "rating", "priority"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
+
+  geo:
+    name_hints: ["country", "state", "city", "zip", "postal", "region", "province"]
+    value_signals:
+      short_strings: true
+    suppress: ["pattern_consistency"]
