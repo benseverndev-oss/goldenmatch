@@ -54,6 +54,8 @@ class PatternConsistencyProfiler(BaseProfiler):
             minority_pct = minority_count / total
 
             if minority_pct < MINORITY_THRESHOLD:
+                # minority <5% → 0.8; 5-30% → 0.5
+                confidence = 0.8 if minority_pct < 0.05 else 0.5
                 # Find sample values that match this minority pattern
                 mask = patterns == minority_pattern
                 sample_vals = non_null.filter(mask).head(5).to_list()
@@ -69,6 +71,7 @@ class PatternConsistencyProfiler(BaseProfiler):
                     affected_rows=minority_count,
                     sample_values=[str(v) for v in sample_vals],
                     suggestion="Standardize values to a single format/pattern",
+                    confidence=confidence,
                 ))
 
         return findings

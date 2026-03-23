@@ -34,17 +34,21 @@ class FormatDetectionProfiler(BaseProfiler):
             match_pct = match_count / total
 
             if match_pct > 0.70:
+                # >95% match → 0.9; 70-95% → 0.6
+                detect_confidence = 0.9 if match_pct > 0.95 else 0.6
                 findings.append(Finding(
                     severity=Severity.INFO,
                     column=column,
                     check="format_detection",
                     message=f"Column appears to contain {fmt_name} values ({match_pct:.1%} match)",
                     affected_rows=match_count,
+                    confidence=detect_confidence,
                 ))
                 non_match_count = total - match_count
                 if non_match_count > 0:
                     non_matching = non_null.filter(~matches)
                     sample = non_matching.head(5).to_list()
+                    # Non-matching findings inherit same confidence as detection
                     findings.append(Finding(
                         severity=Severity.WARNING,
                         column=column,
@@ -55,6 +59,7 @@ class FormatDetectionProfiler(BaseProfiler):
                         affected_rows=non_match_count,
                         sample_values=[str(v) for v in sample],
                         suggestion=f"Review non-{fmt_name} values for data quality issues",
+                        confidence=detect_confidence,
                     ))
 
         return findings

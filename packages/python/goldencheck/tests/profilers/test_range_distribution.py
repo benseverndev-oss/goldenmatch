@@ -18,3 +18,9 @@ def test_string_column_skipped():
     df = pl.DataFrame({"name": ["Alice", "Bob"]})
     findings = RangeDistributionProfiler().profile(df, "name")
     assert len(findings) == 0
+
+def test_range_profiler_chains_with_type_inference():
+    df = pl.DataFrame({"age": ["25", "30", "999", "28", "33"]})
+    context = {"age": {"mostly_numeric": True}}
+    findings = RangeDistributionProfiler().profile(df, "age", context=context)
+    assert len(findings) > 0  # should detect outlier 999
