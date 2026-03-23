@@ -40,6 +40,30 @@ This adds:
 
 You only need one provider installed, but both are included in the extras group.
 
+## With MCP Server
+
+To use `goldencheck mcp-serve` for Claude Desktop integration:
+
+```bash
+pip install goldencheck[mcp]
+```
+
+This adds:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| mcp | >=1.0 | Model Context Protocol server SDK |
+
+See [MCP Server](MCP-Server) for setup instructions.
+
+## All Extras
+
+Install everything:
+
+```bash
+pip install goldencheck[llm,mcp]
+```
+
 ## Verify Installation
 
 ```bash
@@ -54,7 +78,7 @@ Clone the repository and install in editable mode with dev dependencies:
 ```bash
 git clone https://github.com/benzsevern/goldencheck.git
 cd goldencheck
-pip install -e ".[dev,llm]"
+pip install -e ".[dev,llm,mcp]"
 ```
 
 Dev dependencies include:
@@ -93,11 +117,12 @@ goldencheck/
 │   ├── config/       # YAML config loader, schema, writer
 │   ├── engine/       # Scanner, validator, reader, sampler
 │   ├── llm/          # LLM boost: providers, prompts, budget, merger
+│   ├── mcp/          # MCP server (6 tools)
 │   ├── models/       # Finding and DatasetProfile dataclasses
+│   ├── notebook.py   # Jupyter/Colab display hooks
 │   ├── profilers/    # 10 column profilers
 │   ├── relations/    # 2 cross-column profilers
 │   ├── semantic/     # Semantic type classification
-│   ├── suppression/  # Suppression engine and deduplication
 │   ├── reporters/    # Rich console, JSON, CI reporters
 │   └── tui/          # Textual TUI (4 tabs)
 ├── tests/            # pytest test suite (166 tests)
