@@ -77,10 +77,13 @@ In addition to Raha, a purpose-built dataset (`benchmarks/datasets/goldencheck_b
 
 | Mode | Column Recall | Cost |
 |------|--------------|------|
-| Profiler-only | 87% | $0 |
-| **With LLM Boost** | **100%** | ~$0.01 |
+| Profiler-only (v0.1.0) | 87% | $0 |
+| Profiler-only (v0.2.0 with confidence) | **100%** | $0 |
+| With LLM Boost | **100%** | ~$0.003-0.01 |
 
-The 13% gap between profiler-only and LLM Boost represents issues that require semantic understanding — for example, a name column containing numeric IDs, or an email column where nulls are semantically wrong even though the profiler only emits INFO.
+> v0.2.0 improvements: minority wrong-type detection, range profiler chaining, broader temporal heuristics, and confidence scoring pushed profiler-only recall from 87% to 100%.
+
+The v0.1.0 gap between profiler-only and LLM Boost represented issues that required semantic understanding — for example, a name column containing numeric IDs, or an email column where nulls are semantically wrong even though the profiler only emits INFO. As of v0.2.0, the profiler alone achieves 100% recall on this benchmark.
 
 ---
 
@@ -127,8 +130,9 @@ python benchmarks/goldencheck_benchmark_llm.py
 
 | Mode | Column Recall | Issues Found | LLM Cost |
 |------|--------------|-------------|---------|
-| Profiler-only | 87% | 297/341 | $0 |
-| With LLM Boost | 100% | 341/341 | ~$0.01 |
+| Profiler-only (v0.1.0) | 87% | 297/341 | $0 |
+| Profiler-only (v0.2.0 with confidence) | **100%** | 341/341 | $0 |
+| With LLM Boost | **100%** | 341/341 | ~$0.003-0.01 |
 
 The LLM upgrade/downgrade mechanism also reduces false positives. In the benchmark, the profiler emits 12 false-positive warnings that the LLM correctly downgrades to INFO.
 

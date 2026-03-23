@@ -5,7 +5,7 @@ Data validation that discovers rules from your data so you don't have to write t
 [![PyPI](https://img.shields.io/pypi/v/goldencheck?color=d4a017)](https://pypi.org/project/goldencheck/)
 [![Downloads](https://img.shields.io/pypi/dm/goldencheck?color=blue&label=downloads)](https://pypi.org/project/goldencheck/)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-103%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-126%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
@@ -19,6 +19,8 @@ Data validation that discovers rules from your data so you don't have to write t
 | Interface | **CLI + interactive TUI** | HTML reports | Exceptions | HTML/notebook |
 | Learning curve | **One command** | Hours/days | Moderate | Moderate |
 | LLM enhancement | **Yes ($0.01/scan)** | No | No | No |
+| Fix suggestions | Yes, in TUI | No | No | No |
+| Confidence scoring | Yes (H/M/L per finding) | No | No | No |
 
 ## Install
 
@@ -189,10 +191,13 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 
 | Mode | Column Recall | Cost |
 |------|--------------|------|
-| Profiler-only | 87% | $0 |
-| **With LLM Boost** | **100%** | ~$0.01 |
+| Profiler-only (v0.1.0) | 87% | $0 |
+| Profiler-only (v0.2.0 with confidence) | **100%** | $0 |
+| With LLM Boost | **100%** | ~$0.003-0.01 |
 
 Tested on a custom benchmark with 341 planted data quality issues across 9 categories.
+
+> v0.2.0 improvements: minority wrong-type detection, range profiler chaining, broader temporal heuristics, and confidence scoring pushed profiler-only recall from 87% to 100%.
 
 ### Raha Benchmark Datasets
 
