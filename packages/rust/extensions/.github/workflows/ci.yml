@@ -70,22 +70,11 @@ jobs:
       - name: Build extension
         run: cargo build -p goldenmatch_pg --features pg16 --no-default-features
 
-      - name: Generate and install SQL schema
-        working-directory: postgres
-        run: |
-          # Generate the SQL schema file - pgrx writes to stdout
-          cargo pgrx schema pg16 2>/tmp/pgrx-schema-stderr.log > /tmp/goldenmatch_pg--0.1.0.sql || true
-          echo "=== stderr ===" && cat /tmp/pgrx-schema-stderr.log | tail -10
-          echo "=== SQL file size ===" && wc -c /tmp/goldenmatch_pg--0.1.0.sql
-          if [ -s /tmp/goldenmatch_pg--0.1.0.sql ]; then
-            cp /tmp/goldenmatch_pg--0.1.0.sql /usr/share/postgresql/16/extension/
-            echo "SQL file installed"
-          else
-            echo "pgrx schema produced no stdout, trying --out flag"
-            cargo pgrx schema pg16 --out /usr/share/postgresql/16/extension/goldenmatch_pg--0.1.0.sql 2>&1 || true
-            ls -la /usr/share/postgresql/16/extension/goldenmatch_pg* 2>&1
-          fi
-
       - name: Run pgrx tests
         working-directory: postgres
-        run: cargo pgrx test pg16 2>&1
+        run: |
+          # pgrx in workspace mode doesn't write SQL to the extension dir automatically.
+          # Use cargo pgrx install which handles everything including SQL generation.
+          cargo pgrx install --pg-config=/usr/lib/postgresql/16/bin/pg_config --features pg16 --no-default-features --release
+          ls -la /usr/share/postgresql/16/extension/goldenmatch_pg*
+          cargo pgrx test pg16
