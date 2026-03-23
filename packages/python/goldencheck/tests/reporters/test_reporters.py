@@ -31,3 +31,19 @@ def test_ci_exit_code_warning():
     findings = [Finding(severity=Severity.WARNING, column="x", check="y", message="hmm")]
     assert report_ci(findings, "warning") == 1
     assert report_ci(findings, "error") == 0
+
+def test_json_reporter_includes_source_when_llm():
+    findings = [Finding(severity=Severity.ERROR, column="x", check="y", message="bad", source="llm")]
+    profile = DatasetProfile(file_path="test.csv", row_count=100, column_count=5, columns=[])
+    buf = io.StringIO()
+    report_json(findings, profile, buf)
+    data = json.loads(buf.getvalue())
+    assert data["findings"][0]["source"] == "llm"
+
+def test_json_reporter_omits_source_when_none():
+    findings = [Finding(severity=Severity.INFO, column="x", check="y", message="ok")]
+    profile = DatasetProfile(file_path="test.csv", row_count=100, column_count=5, columns=[])
+    buf = io.StringIO()
+    report_json(findings, profile, buf)
+    data = json.loads(buf.getvalue())
+    assert "source" not in data["findings"][0]
