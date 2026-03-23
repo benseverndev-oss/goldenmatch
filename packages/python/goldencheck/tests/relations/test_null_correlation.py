@@ -29,12 +29,14 @@ def test_three_column_group_reported():
     findings = NullCorrelationProfiler().profile(df)
     assert any("correlat" in f.message.lower() for f in findings)
 
-def test_two_column_pair_suppressed():
+def test_two_column_pair_reported_with_lower_confidence():
     df = pl.DataFrame({
         "a": [1, None, 3, None] * 25,
         "b": [10, None, 30, None] * 25,
     })
     findings = NullCorrelationProfiler().profile(df)
-    # Pairs of 2 should no longer be reported
+    # Pairs of 2 are now reported (with lower confidence instead of suppressed)
     corr = [f for f in findings if "correlat" in f.message.lower()]
-    assert len(corr) == 0
+    assert len(corr) >= 1
+    # Confidence should be <= 0.5 (pair-level, not group-level)
+    assert all(f.confidence <= 0.5 for f in corr)
