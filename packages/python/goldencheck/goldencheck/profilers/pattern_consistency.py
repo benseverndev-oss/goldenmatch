@@ -81,6 +81,15 @@ class PatternConsistencyProfiler(BaseProfiler):
             # Find sample values that match this minority pattern
             mask = patterns == minority_pattern
             sample_vals = non_null.filter(mask).head(5).to_list()
+
+            # Detect structural pattern shift (e.g., letter-first vs digit-first = mixed standards)
+            dom_starts_alpha = dominant_pattern and dominant_pattern[0] == "L"
+            min_starts_alpha = minority_pattern and minority_pattern[0] == "L"
+            if dom_starts_alpha != min_starts_alpha and minority_pct < WARNING_THRESHOLD:
+                msg_extra = " — possible invalid format or mixed coding standard"
+            else:
+                msg_extra = ""
+
             findings.append(Finding(
                 severity=severity,
                 column=column,
@@ -88,7 +97,7 @@ class PatternConsistencyProfiler(BaseProfiler):
                 message=(
                     f"Inconsistent pattern detected: '{minority_pattern}' appears in "
                     f"{minority_count} row(s) ({minority_pct:.1%}) vs dominant pattern "
-                    f"'{dominant_pattern}' ({dominant_count} row(s))"
+                    f"'{dominant_pattern}' ({dominant_count} row(s))" + msg_extra
                 ),
                 affected_rows=minority_count,
                 sample_values=[str(v) for v in sample_vals],
