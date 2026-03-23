@@ -143,6 +143,19 @@ def scan_file(
     # Post-classification checks: detect issues that require semantic type knowledge
     all_findings = _post_classification_checks(sample, all_findings, column_types)
 
+    # Apply learned LLM rules if available
+    rules_path = Path("goldencheck_rules.json")
+    if rules_path.exists():
+        try:
+            from goldencheck.llm.rule_generator import load_rules, apply_rules
+            rules = load_rules(rules_path)
+            if rules:
+                rule_findings = apply_rules(sample, rules)
+                all_findings.extend(rule_findings)
+                logger.info("Applied %d learned rules, got %d findings", len(rules), len(rule_findings))
+        except Exception as e:
+            logger.warning("Failed to apply learned rules: %s", e)
+
     all_findings = apply_corroboration_boost(all_findings)
     all_findings.sort(key=lambda f: f.severity, reverse=True)
     profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
