@@ -10,3 +10,4 @@ build/
 *.xlsx
 goldencheck.yml
 .ruff_cache/
+.testing/
