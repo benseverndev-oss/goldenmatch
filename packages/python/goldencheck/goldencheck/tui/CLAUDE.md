@@ -50,6 +50,13 @@ app.run()
 
 Pinned findings (`finding.pinned == True`) get added to `config.columns` as `ColumnRule(type="string")`. Config is written to `goldencheck.yml` via `goldencheck.config.writer.save_config`.
 
+## FindingsPane Columns
+
+`["", "Severity", "Column", "Check", "Message", "Rows", "Conf", "Source"]`
+
+- **Conf**: H (>=0.8), M (0.5-0.79), L (<0.5) — confidence score indicator
+- **Source**: `[LLM]` if finding came from LLM boost, empty otherwise
+
 ## Gotchas
 
 - `GoldenCheckApp.__init__` accepts an optional `config: GoldenCheckConfig` — pass it when launching from `validate`/`review` so existing rules are visible in the Rules tab

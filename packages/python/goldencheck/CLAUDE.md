@@ -56,6 +56,29 @@ read_file → maybe_sample → run profilers → classify semantic types
 - Convention: `tests/{module}/test_{file}.py`
 - Commit messages: conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`)
 
+## Environment
+
+API keys for LLM testing live in `.testing/.env` (gitignored):
+```bash
+source .testing/.env   # loads OPENAI_API_KEY, TWINE credentials
+```
+
+## Benchmarks
+
+```bash
+python benchmarks/speed_benchmark.py                    # Speed test
+python benchmarks/goldencheck_benchmark.py              # Detection (profiler-only)
+source .testing/.env && python benchmarks/goldencheck_benchmark_llm.py  # With LLM
+pip install dqbench && dqbench run goldencheck          # DQBench head-to-head
+dqbench run all                                         # Compare against GX/Pandera/Soda
+```
+
+## Publishing
+
+```bash
+python -m build && source .testing/.env && python -m twine upload dist/*
+```
+
 ## Gotchas
 
 - `*.csv` is in `.gitignore` — test fixtures need `!tests/fixtures/*.csv` exception
