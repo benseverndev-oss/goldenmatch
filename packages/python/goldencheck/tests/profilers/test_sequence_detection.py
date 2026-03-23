@@ -1,6 +1,5 @@
 """Tests for SequenceDetectionProfiler."""
 import polars as pl
-import pytest
 from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 
 

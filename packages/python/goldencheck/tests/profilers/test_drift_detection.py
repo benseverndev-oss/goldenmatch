@@ -1,6 +1,5 @@
 """Tests for DriftDetectionProfiler."""
 import polars as pl
-import pytest
 from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 
 
