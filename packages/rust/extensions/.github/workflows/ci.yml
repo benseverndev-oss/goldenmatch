@@ -70,8 +70,6 @@ jobs:
       - name: Build extension
         run: cargo build -p goldenmatch_pg --features pg16 --no-default-features
 
-      - name: Install extension for testing
-        run: cargo pgrx install --pg-config=/usr/lib/postgresql/16/bin/pg_config --features pg16 --no-default-features --test
-
       - name: Run pgrx tests
-        run: cargo pgrx test pg16 -p goldenmatch_pg
+        working-directory: postgres
+        run: cargo pgrx test pg16
