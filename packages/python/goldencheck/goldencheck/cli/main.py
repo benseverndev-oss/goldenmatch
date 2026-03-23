@@ -6,6 +6,7 @@ from typing import Optional
 import typer
 from typer.core import TyperGroup
 from goldencheck.engine.scanner import scan_file, scan_file_with_llm
+from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.validator import validate_file
 from goldencheck.config.loader import load_config
 from goldencheck.reporters.rich_console import report_rich
@@ -161,6 +162,7 @@ def review(
         findings, profile = scan_file_with_llm(file, provider=llm_provider)
     else:
         findings, profile = scan_file(file)
+        findings = apply_confidence_downgrade(findings, llm_boost=False)
     config_path = config or Path("goldencheck.yml")
     cfg = load_config(config_path)
     if cfg is not None:
@@ -201,6 +203,7 @@ def _do_scan(
         findings, profile = scan_file_with_llm(file, provider=llm_provider)
     else:
         findings, profile = scan_file(file)
+        findings = apply_confidence_downgrade(findings, llm_boost=False)
 
     if json_output:
         report_json(findings, profile, sys.stdout)
