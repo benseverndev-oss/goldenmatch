@@ -152,11 +152,13 @@ Each profiler assigns confidence based on statistical signal strength:
 After all profilers run, boost confidence for columns flagged by multiple profilers:
 
 ```
-If 2+ profilers flag same column with WARNING/ERROR:
-    boost each finding's confidence by 0.1 (cap at 1.0)
-If 3+ profilers flag same column:
-    boost by 0.2 (cap at 1.0)
+Count WARNING/ERROR profilers per column.
+If count == 2: boost each finding's confidence by 0.1 (cap at 1.0)
+If count >= 3: boost each finding's confidence by 0.2 (cap at 1.0)
+These are exclusive tiers, not cumulative. A 3+ column gets +0.2, not +0.3.
 ```
+
+**Context dict:** `profiler_context` is created once per `scan_file` call and accumulated across all columns. Each column's profiler writes to `profiler_context[col_name]`, so there's no stale-key risk — keys are namespaced by column name. Scanner must run `TypeInferenceProfiler` before `RangeDistributionProfiler` in `COLUMN_PROFILERS` (ordering dependency).
 
 ## Part 3: Confidence-Based LLM Routing
 
