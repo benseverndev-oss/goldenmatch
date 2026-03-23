@@ -190,6 +190,22 @@ def review(
     raise typer.Exit(code=exit_code)
 
 
+@app.command(name="mcp-serve")
+def mcp_serve() -> None:
+    """Start the MCP server (stdio) for Claude Desktop integration."""
+    try:
+        from goldencheck.mcp.server import run_server
+    except ImportError:
+        typer.echo(
+            "Error: MCP dependencies not installed. Run: pip install goldencheck[mcp]",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    import asyncio
+    asyncio.run(run_server())
+
+
 def _do_scan(
     file: Path,
     *,

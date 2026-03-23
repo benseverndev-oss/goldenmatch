@@ -7,6 +7,7 @@ Data validation that discovers rules from your data. DQBench Score: 72.00.
 ```bash
 pip install -e ".[dev]"          # Dev install
 pip install -e ".[llm]"          # With LLM boost
+pip install -e ".[mcp]"          # With MCP server
 pytest --tb=short -v             # Run tests (166 passing)
 ruff check .                     # Lint
 ruff check . --fix               # Auto-fix lint
@@ -19,14 +20,16 @@ goldencheck validate data.csv    # Validate against goldencheck.yml
 
 ```
 goldencheck/
-├── cli/           # Typer CLI (scan, validate, review commands)
+├── cli/           # Typer CLI (scan, validate, review, mcp-serve commands)
 ├── engine/        # Scanner pipeline, validator, confidence scoring
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
 ├── relations/     # Cross-column profilers (temporal, null correlation)
 ├── semantic/      # Type classifier + suppression engine
 ├── llm/           # LLM boost (providers, prompts, merger, budget)
+├── mcp/           # MCP server (6 tools: scan, validate, profile, health_score, get_column_detail, list_checks)
 ├── config/        # Pydantic YAML config (goldencheck.yml)
-├── models/        # Finding, Profile dataclasses
+├── models/        # Finding, Profile dataclasses (with _repr_html_ for Jupyter)
+├── notebook.py    # ScanResult wrapper + HTML renderers for Jupyter/Colab
 ├── reporters/     # Rich, JSON, CI output
 └── tui/           # Textual TUI (4 tabs)
 ```

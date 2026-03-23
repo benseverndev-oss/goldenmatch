@@ -52,6 +52,9 @@ llm = [
     "anthropic>=0.30",
     "openai>=1.30",
 ]
+mcp = [
+    "mcp>=1.0",
+]
 
 [tool.ruff]
 line-length = 100
