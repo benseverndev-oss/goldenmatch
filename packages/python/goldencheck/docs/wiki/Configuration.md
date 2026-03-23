@@ -166,6 +166,73 @@ ignore:
 
 ---
 
+## Semantic Types
+
+GoldenCheck ships with built-in semantic type definitions (`goldencheck/semantic/types.py`). You can override or extend these by placing a `goldencheck_types.yaml` file in your project directory.
+
+### `types.yaml` (built-in, read-only)
+
+Located at `goldencheck/semantic/types.yaml`. Contains the canonical list of built-in semantic types and their detection heuristics:
+
+```yaml
+version: 1
+
+types:
+  email:
+    keywords: [email, e_mail, mail]
+    format: email
+  phone:
+    keywords: [phone, mobile, cell, tel]
+    format: phone
+  name:
+    keywords: [name, first_name, last_name, full_name, surname]
+  id:
+    keywords: [id, uuid, guid, identifier]
+    unique: true
+  currency:
+    keywords: [price, amount, cost, total, revenue, fee]
+    numeric: true
+  date:
+    keywords: [date, created_at, updated_at, timestamp]
+    temporal: true
+  category:
+    keywords: [status, type, category, tier, group]
+    low_cardinality: true
+```
+
+### `goldencheck_types.yaml` (project-level, user-defined)
+
+Place this file in your project root to add custom semantic types or override built-in ones. Custom types are merged on top of the built-in types:
+
+```yaml
+version: 1
+
+types:
+  sku:
+    keywords: [sku, product_code, item_code]
+    pattern: "^[A-Z]{2,4}-\\d{4,8}$"
+
+  customer_tier:
+    keywords: [tier, plan, subscription_level]
+    enum: [free, pro, enterprise]
+    low_cardinality: true
+```
+
+Custom type definitions support:
+
+| Field | Description |
+|-------|-------------|
+| `keywords` | Column name substrings that trigger this type (case-insensitive) |
+| `format` | Expected format: `email`, `phone`, `url` |
+| `pattern` | Regex pattern that values should match |
+| `enum` | List of allowed values |
+| `unique` | Whether values are expected to be unique |
+| `numeric` | Whether values are expected to be numeric |
+| `temporal` | Whether values are expected to be dates/datetimes |
+| `low_cardinality` | Whether the column is expected to be a small enum |
+
+---
+
 ## Layering Strategy
 
 GoldenCheck does not auto-generate a config on scan. The file only contains what you explicitly pin. This keeps configs small and meaningful.

@@ -1,6 +1,6 @@
 # Profilers
 
-GoldenCheck runs 7 column-level profilers and 2 cross-column profilers on every scan. Each profiler is independent — they do not share state and can be extended without touching any other profiler.
+GoldenCheck runs 10 column-level profilers and 2 cross-column profilers on every scan. Each profiler is independent — they do not share state and can be extended without touching any other profiler.
 
 ---
 
@@ -185,6 +185,86 @@ Inconsistent pattern detected: 'DDDDDDDDDD' appears in 47 row(s) (0.9%)
   vs dominant pattern 'LLL LLL-LLLL' (5,100 row(s))
   Sample: [2025551234, 8005559999]
 Suggestion: Standardize values to a single format/pattern
+```
+
+---
+
+### EncodingDetectionProfiler
+
+**File:** `goldencheck/profilers/encoding_detection.py`
+
+Detects encoding artifacts and invisible character issues in string columns. These are common when data has been exported from Excel, copy-pasted from web pages, or converted between character sets.
+
+**Triggers on:** `String` / `Utf8` dtype columns only.
+
+**Detected issues:**
+
+| Issue | Characters | Description |
+|-------|-----------|-------------|
+| Zero-width characters | U+200B, U+200C, U+200D, U+FEFF | Invisible characters that cause silent comparison failures |
+| Smart quotes | `"`, `"`, `'`, `'` | Typographic quotes that break exact-match lookups |
+| Latin-1 mojibake | `Ã`, `Â`, `â€` | UTF-8 bytes decoded as Latin-1 — garbled accented characters |
+
+| Severity | Condition |
+|----------|-----------|
+| WARNING | Any of the above patterns detected in one or more values |
+
+**Example finding:**
+```
+3 value(s) contain zero-width Unicode characters (U+200B/U+FEFF)
+  Sample: ["John​Smith", "Alice​"]
+Suggestion: Strip zero-width characters before storing or comparing values
+```
+
+---
+
+### SequenceGapProfiler
+
+**File:** `goldencheck/profilers/sequence_gap.py`
+
+Detects gaps in numeric sequences. Useful for identifying missing records in ID columns, invoice numbers, order sequences, or any column expected to be a contiguous integer range.
+
+**Triggers on:** Integer dtype columns that are 100% unique and have low cardinality relative to the row count.
+
+**Logic:** Computes `expected_count = max - min + 1` and compares against `actual_count`. If the ratio is below 0.98 (more than 2% of values are missing), a finding is raised. The first few missing values are included as samples.
+
+| Severity | Condition |
+|----------|-----------|
+| WARNING | Sequence has gaps (missing integers between min and max) |
+
+**Example finding:**
+```
+Sequence gaps detected: 47 missing value(s) between 1 and 10000
+  Missing sample: [23, 47, 102, 891, 1204]
+Suggestion: Investigate whether records were deleted or IDs were never assigned
+```
+
+---
+
+### DriftDetectionProfiler
+
+**File:** `goldencheck/profilers/drift_detection.py`
+
+Detects statistical drift between the first and second half of a dataset. This surfaces data that changes character over time — common in logs, event streams, or pipelines that append data from different sources.
+
+**Triggers on:** All columns. Requires at least 100 rows.
+
+**Categorical drift:** Compares the top-value distribution between the first and second half. If a dominant value in the first half disappears or a new dominant value appears in the second half, drift is flagged.
+
+**Numeric drift:** Compares the mean of the first half vs. the second half. If the means differ by more than 20% of the overall standard deviation, drift is flagged.
+
+| Severity | Condition |
+|----------|-----------|
+| WARNING | Categorical distribution shift between first and second half |
+| WARNING | Numeric mean shift > 20% of standard deviation between halves |
+
+**Example findings:**
+```
+Categorical drift: value 'active' drops from 72% to 31% between halves
+Suggestion: Investigate whether data was loaded from different time periods or sources
+
+Numeric drift: mean shifts from 42.3 to 61.7 between first and second half of dataset
+Suggestion: Check for batch effects or pipeline changes that may have altered values over time
 ```
 
 ---

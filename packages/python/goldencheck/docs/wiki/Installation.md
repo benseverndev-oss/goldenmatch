@@ -44,7 +44,7 @@ You only need one provider installed, but both are included in the extras group.
 
 ```bash
 goldencheck --version
-# GoldenCheck 0.1.0
+# GoldenCheck 0.2.0
 ```
 
 ## Development Setup
@@ -94,11 +94,13 @@ goldencheck/
 │   ├── engine/       # Scanner, validator, reader, sampler
 │   ├── llm/          # LLM boost: providers, prompts, budget, merger
 │   ├── models/       # Finding and DatasetProfile dataclasses
-│   ├── profilers/    # 7 column profilers
+│   ├── profilers/    # 10 column profilers
 │   ├── relations/    # 2 cross-column profilers
+│   ├── semantic/     # Semantic type classification
+│   ├── suppression/  # Suppression engine and deduplication
 │   ├── reporters/    # Rich console, JSON, CI reporters
 │   └── tui/          # Textual TUI (4 tabs)
-├── tests/            # pytest test suite (103 tests)
+├── tests/            # pytest test suite (166 tests)
 ├── benchmarks/       # Speed and detection benchmarks
 ├── docs/wiki/        # This documentation
 └── pyproject.toml
