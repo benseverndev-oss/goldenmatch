@@ -17,3 +17,9 @@ def test_non_string_column_skipped():
     df = pl.DataFrame({"count": [1, 2, 3, 4, 5]})
     findings = FormatDetectionProfiler().profile(df, "count")
     assert len(findings) == 0
+
+def test_emails_in_url_column_flagged():
+    urls = ["https://example.com"] * 90 + ["user@email.com"] * 10
+    df = pl.DataFrame({"website_url": urls})
+    findings = FormatDetectionProfiler().profile(df, "website_url")
+    assert any("wrong" in f.message.lower() or "email" in f.message.lower() for f in findings)
