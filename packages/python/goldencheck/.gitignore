@@ -8,6 +8,8 @@ build/
 *.csv
 *.parquet
 *.xlsx
+# But keep test fixtures
+!tests/fixtures/*.csv
 goldencheck.yml
 .ruff_cache/
 .testing/
