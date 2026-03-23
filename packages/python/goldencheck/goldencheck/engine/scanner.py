@@ -119,14 +119,9 @@ def scan_file_with_llm(
         findings.sort(key=lambda f: f.severity, reverse=True)
         return findings, profile
 
-    # Focus LLM on low-confidence columns only
-    low_conf_cols = {f.column for f in findings if f.confidence < 0.5}
-    if not low_conf_cols:
-        logger.info("All findings are high confidence. LLM boost not needed.")
-        return findings, profile
-
-    # Build sample blocks from the already-loaded sample (no double read)
-    blocks = build_sample_blocks(sample, findings, focus_columns=low_conf_cols)
+    # Send all columns to LLM — it provides value even on high-confidence columns
+    # by catching semantic issues profilers can't detect (encoding, checksums, cross-column logic)
+    blocks = build_sample_blocks(sample, findings)
 
     # Build user prompt
     user_prompt = "Here is the dataset summary:\n\n" + json.dumps(blocks, indent=2, default=str)
