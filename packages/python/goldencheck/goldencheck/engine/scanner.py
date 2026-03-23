@@ -92,12 +92,23 @@ def scan_file_with_llm(
     from goldencheck.llm.providers import call_llm, check_llm_available
     from goldencheck.llm.parser import parse_llm_response
     from goldencheck.llm.merger import merge_llm_findings
+    from goldencheck.llm.budget import CostReport, estimate_cost, check_budget
+    from goldencheck.llm.providers import DEFAULT_MODELS
 
     # Check LLM is available BEFORE doing any work
     check_llm_available(provider)
 
     # Run profilers first — returns findings, profile, AND the sampled df
     findings, profile, sample = scan_file(path, sample_size=sample_size, return_sample=True)
+
+    # Budget check before calling LLM (~2000 input, ~500 output as estimates)
+    import os
+    model = os.environ.get("GOLDENCHECK_LLM_MODEL", DEFAULT_MODELS.get(provider, ""))
+    estimated_cost = estimate_cost(2000, 500, model)
+    if not check_budget(estimated_cost):
+        logger.warning("Skipping LLM boost due to budget constraint.")
+        findings.sort(key=lambda f: f.severity, reverse=True)
+        return findings, profile
 
     # Build sample blocks from the already-loaded sample (no double read)
     blocks = build_sample_blocks(sample, findings)
@@ -106,8 +117,14 @@ def scan_file_with_llm(
     user_prompt = "Here is the dataset summary:\n\n" + json.dumps(blocks, indent=2, default=str)
 
     # Call LLM
+    cost_report = CostReport()
     try:
-        raw_response = call_llm(provider, user_prompt)
+        raw_response, input_tokens, output_tokens = call_llm(provider, user_prompt)
+        cost_report.record(input_tokens, output_tokens, model)
+        logger.info(
+            "LLM boost cost: $%.4f (input: %d, output: %d, model: %s)",
+            cost_report.cost_usd, input_tokens, output_tokens, model,
+        )
         llm_response = parse_llm_response(raw_response)
         if llm_response:
             findings = merge_llm_findings(findings, llm_response)

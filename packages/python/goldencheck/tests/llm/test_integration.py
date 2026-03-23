@@ -19,7 +19,7 @@ MOCK_RESPONSE = json.dumps({
 })
 
 @patch("goldencheck.llm.providers.check_llm_available")
-@patch("goldencheck.llm.providers.call_llm", return_value=MOCK_RESPONSE)
+@patch("goldencheck.llm.providers.call_llm", return_value=(MOCK_RESPONSE, 1800, 420))
 def test_llm_boost_integration(mock_call, mock_check):
     findings, profile = scan_file_with_llm(FIXTURES / "simple.csv", provider="anthropic")
     assert any(f.source == "llm" for f in findings)
