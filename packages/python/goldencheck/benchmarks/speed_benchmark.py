@@ -27,6 +27,9 @@ def generate_dataset(n_rows: int, path: Path):
     df = pl.DataFrame(data)
     df.write_csv(path)
 
+_GOLDENCHECK_BENCH_CSV = Path(__file__).parent / "datasets" / "goldencheck_bench" / "dirty.csv"
+
+
 def run_speed_benchmark():
     sizes = [1_000, 10_000, 100_000, 1_000_000]
     results = []
@@ -51,6 +54,7 @@ def run_speed_benchmark():
 
         rows_per_sec = n / elapsed
         results.append({
+            "label": f"{n:,} rows (synthetic)",
             "rows": n,
             "time_s": elapsed,
             "memory_mb": peak / (1024 * 1024),
@@ -63,14 +67,46 @@ def run_speed_benchmark():
 
         tmp_path.unlink()
 
+    # --- goldencheck_bench dataset (5,000 rows, 15 columns, ground-truth issues) ---
+    if _GOLDENCHECK_BENCH_CSV.exists():
+        print(f"\nScanning goldencheck_bench dataset ({_GOLDENCHECK_BENCH_CSV})...")
+        file_size_mb = _GOLDENCHECK_BENCH_CSV.stat().st_size / (1024 * 1024)
+        tracemalloc.start()
+        start = time.perf_counter()
+
+        findings, profile = scan_file(_GOLDENCHECK_BENCH_CSV)
+
+        elapsed = time.perf_counter() - start
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        n = profile.row_count
+        rows_per_sec = n / elapsed
+        results.append({
+            "label": f"{n:,} rows (goldencheck_bench)",
+            "rows": n,
+            "time_s": elapsed,
+            "memory_mb": peak / (1024 * 1024),
+            "rows_per_sec": rows_per_sec,
+            "findings": len(findings),
+            "file_mb": file_size_mb,
+        })
+        print(f"  Time: {elapsed:.2f}s | Memory: {peak/(1024*1024):.1f} MB | {rows_per_sec:,.0f} rows/sec | {len(findings)} findings")
+    else:
+        print(f"\nSkipping goldencheck_bench dataset (not found at {_GOLDENCHECK_BENCH_CSV})")
+        print("  Run: python benchmarks/generate_datasets.py  to create it.")
+
     # Print summary table
     print(f"\n{'='*80}")
     print(f"{'SPEED BENCHMARK RESULTS':^80}")
     print(f"{'='*80}")
-    print(f"{'Rows':<12} {'File MB':<10} {'Time (s)':<12} {'Memory (MB)':<14} {'Rows/sec':<14} {'Findings'}")
+    print(f"{'Dataset':<38} {'File MB':<10} {'Time (s)':<12} {'Memory (MB)':<14} {'Rows/sec':<14} {'Findings'}")
     print(f"{'-'*80}")
     for r in results:
-        print(f"{r['rows']:>10,}  {r['file_mb']:>8.1f}  {r['time_s']:>10.2f}  {r['memory_mb']:>12.1f}  {r['rows_per_sec']:>12,.0f}  {r['findings']:>8}")
+        print(
+            f"{r['label']:<38} {r['file_mb']:>8.1f}  {r['time_s']:>10.2f}  "
+            f"{r['memory_mb']:>12.1f}  {r['rows_per_sec']:>12,.0f}  {r['findings']:>8}"
+        )
     print(f"{'='*80}")
 
 if __name__ == "__main__":
