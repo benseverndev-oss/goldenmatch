@@ -1,11 +1,9 @@
 from pathlib import Path
-import yaml
 from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.validator import validate_file
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+from goldencheck.config.schema import GoldenCheckConfig, ColumnRule
 from goldencheck.config.loader import load_config
 from goldencheck.config.writer import save_config
-from goldencheck.models.finding import Finding, Severity
 from goldencheck.reporters.ci_reporter import report_ci
 
 FIXTURES = Path(__file__).parent / "fixtures"

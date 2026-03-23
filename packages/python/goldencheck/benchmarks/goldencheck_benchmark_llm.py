@@ -148,7 +148,7 @@ def main():
 
     # --- Comparison ---
     print(f"\n{'='*80}")
-    print(f"  COMPARISON")
+    print("  COMPARISON")
     print(f"{'='*80}")
     print(f"  {'Profiler':<24} {'Base Recall':>12} {'LLM Recall':>12} {'Delta':>8}")
     print(f"  {'-'*60}")

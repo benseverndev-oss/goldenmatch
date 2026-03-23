@@ -2,7 +2,7 @@
 from __future__ import annotations
 from textual.widgets import DataTable
 from textual.containers import Vertical
-from goldencheck.models.finding import Finding, Severity
+from goldencheck.models.finding import Finding
 
 
 class FindingsPane(Vertical):

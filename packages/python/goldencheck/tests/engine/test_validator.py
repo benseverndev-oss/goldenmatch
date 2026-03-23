@@ -1,7 +1,6 @@
 from pathlib import Path
-import polars as pl
 from goldencheck.engine.validator import validate_file
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings, IgnoreEntry
+from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, IgnoreEntry
 from goldencheck.models.finding import Severity
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
