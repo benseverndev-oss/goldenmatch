@@ -1,5 +1,5 @@
 [package]
-name = "goldenmatch-pg"
+name = "goldenmatch_pg"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
