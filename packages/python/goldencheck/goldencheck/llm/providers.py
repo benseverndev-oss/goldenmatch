@@ -32,8 +32,8 @@ def check_llm_available(provider: str) -> None:
         raise SystemExit(f"Unknown LLM provider: {provider}. Use 'anthropic' or 'openai'.")
 
 
-def call_llm(provider: str, user_prompt: str) -> str:
-    """Send prompt to LLM and return raw response text."""
+def call_llm(provider: str, user_prompt: str) -> tuple[str, int, int]:
+    """Send prompt to LLM and return (text, input_tokens, output_tokens)."""
     model = os.environ.get("GOLDENCHECK_LLM_MODEL", DEFAULT_MODELS.get(provider, ""))
 
     if provider == "anthropic":
@@ -45,7 +45,7 @@ def call_llm(provider: str, user_prompt: str) -> str:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return response.content[0].text
+        return response.content[0].text, response.usage.input_tokens, response.usage.output_tokens
 
     elif provider == "openai":
         import openai
@@ -59,6 +59,6 @@ def call_llm(provider: str, user_prompt: str) -> str:
                 {"role": "user", "content": user_prompt},
             ],
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content, response.usage.prompt_tokens, response.usage.completion_tokens
 
     raise ValueError(f"Unknown provider: {provider}")
