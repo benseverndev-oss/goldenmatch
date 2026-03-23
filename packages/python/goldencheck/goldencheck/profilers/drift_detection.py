@@ -14,7 +14,12 @@ NUMERIC_DTYPES = (
 MIN_ROWS = 1000
 
 # Number of standard deviations between means to flag as drift
-DRIFT_STDDEV_THRESHOLD = 2.0
+DRIFT_STDDEV_THRESHOLD = 3.0
+DRIFT_STDDEV_EXTREME = 5.0  # >5 stddev → WARNING; 3-5 stddev → INFO
+
+# Fraction of new categories in second half to flag as drift
+CATEGORICAL_DRIFT_THRESHOLD = 0.20  # >20% new categories
+CATEGORICAL_DRIFT_EXTREME = 0.50    # >50% new categories → WARNING; 20-50% → INFO
 
 
 class DriftDetectionProfiler(BaseProfiler):
@@ -46,8 +51,10 @@ class DriftDetectionProfiler(BaseProfiler):
 
             deviation = abs(mean2 - mean1) / std1
             if deviation > DRIFT_STDDEV_THRESHOLD:
+                # >5 stddev → WARNING (extreme); 3-5 stddev → INFO
+                severity = Severity.WARNING if deviation > DRIFT_STDDEV_EXTREME else Severity.INFO
                 findings.append(Finding(
-                    severity=Severity.WARNING,
+                    severity=severity,
                     column=column,
                     check="drift_detection",
                     message=(
@@ -66,23 +73,28 @@ class DriftDetectionProfiler(BaseProfiler):
             new_cats = cats_second - cats_first
 
             if new_cats:
-                sample_new = sorted(new_cats)[:10]
-                # Count rows in second half that contain new categories
-                new_cat_mask = second_half.cast(pl.String).is_in(list(new_cats))
-                affected = int(new_cat_mask.sum())
-                findings.append(Finding(
-                    severity=Severity.WARNING,
-                    column=column,
-                    check="drift_detection",
-                    message=(
-                        f"Categorical drift detected in '{column}': "
-                        f"{len(new_cats)} new categor(y/ies) appear in the second half of the data "
-                        f"that are absent from the first half: {sample_new}"
-                    ),
-                    affected_rows=affected,
-                    sample_values=[str(v) for v in sample_new],
-                    suggestion="Verify whether new categories are expected or indicate schema/labelling drift",
-                    confidence=0.6,
-                ))
+                # Only flag if new categories represent >20% of all categories in second half
+                new_cat_pct = len(new_cats) / len(cats_second) if cats_second else 0
+                if new_cat_pct > CATEGORICAL_DRIFT_THRESHOLD:
+                    sample_new = sorted(new_cats)[:10]
+                    # Count rows in second half that contain new categories
+                    new_cat_mask = second_half.cast(pl.String).is_in(list(new_cats))
+                    affected = int(new_cat_mask.sum())
+                    # >50% new categories → WARNING (extreme); 20-50% → INFO
+                    severity = Severity.WARNING if new_cat_pct > CATEGORICAL_DRIFT_EXTREME else Severity.INFO
+                    findings.append(Finding(
+                        severity=severity,
+                        column=column,
+                        check="drift_detection",
+                        message=(
+                            f"Categorical drift detected in '{column}': "
+                            f"{len(new_cats)} new categor(y/ies) appear in the second half of the data "
+                            f"that are absent from the first half: {sample_new}"
+                        ),
+                        affected_rows=affected,
+                        sample_values=[str(v) for v in sample_new],
+                        suggestion="Verify whether new categories are expected or indicate schema/labelling drift",
+                        confidence=0.6,
+                    ))
 
         return findings

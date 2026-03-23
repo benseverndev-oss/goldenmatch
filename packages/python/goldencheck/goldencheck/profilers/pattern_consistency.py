@@ -4,7 +4,8 @@ import polars as pl
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
-MINORITY_THRESHOLD = 0.30
+MINORITY_THRESHOLD = 0.30  # only flag patterns below this threshold
+WARNING_THRESHOLD = 0.05  # <5% → WARNING (very rare, likely error); 5-30% → INFO
 
 
 def _generalize(value: str) -> str:
@@ -70,13 +71,18 @@ class PatternConsistencyProfiler(BaseProfiler):
         emitted = minority_candidates[:MAX_PATTERNS]
 
         for minority_pattern, minority_count, minority_pct in emitted:
-            # minority <5% → 0.8; 5-30% → 0.5
-            confidence = 0.8 if minority_pct < 0.05 else 0.5
+            # <5% → WARNING (very rare, likely error); 5-30% → INFO (valid variant)
+            if minority_pct < WARNING_THRESHOLD:
+                severity = Severity.WARNING
+                confidence = 0.8
+            else:
+                severity = Severity.INFO
+                confidence = 0.5
             # Find sample values that match this minority pattern
             mask = patterns == minority_pattern
             sample_vals = non_null.filter(mask).head(5).to_list()
             findings.append(Finding(
-                severity=Severity.WARNING,
+                severity=severity,
                 column=column,
                 check="pattern_consistency",
                 message=(
@@ -94,7 +100,7 @@ class PatternConsistencyProfiler(BaseProfiler):
         if total_minority > MAX_PATTERNS:
             extra = total_minority - MAX_PATTERNS
             findings.append(Finding(
-                severity=Severity.WARNING,
+                severity=Severity.INFO,
                 column=column,
                 check="pattern_consistency",
                 message=(
