@@ -15,6 +15,9 @@ from goldencheck.profilers.format_detection import FormatDetectionProfiler
 from goldencheck.profilers.range_distribution import RangeDistributionProfiler
 from goldencheck.profilers.cardinality import CardinalityProfiler
 from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
+from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
+from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
+from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 from goldencheck.relations.temporal import TemporalOrderProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 
@@ -28,6 +31,9 @@ COLUMN_PROFILERS = [
     RangeDistributionProfiler(),
     CardinalityProfiler(),
     PatternConsistencyProfiler(),
+    EncodingDetectionProfiler(),
+    SequenceDetectionProfiler(),
+    DriftDetectionProfiler(),
 ]
 
 RELATION_PROFILERS = [
