@@ -92,6 +92,10 @@ class NullCorrelationProfiler:
             elif correlation >= self.threshold:
                 low_pairs.append((col_a, col_b))
 
+        # Cap: report at most 3 correlation groups total across both tiers
+        MAX_GROUPS = 3
+        all_group_findings: list[Finding] = []
+
         # Group high-threshold pairs using union-find
         if high_pairs:
             uf = _UnionFind(columns)
@@ -112,7 +116,7 @@ class NullCorrelationProfiler:
                     # Pair at high threshold — medium confidence
                     confidence = 0.5
 
-                findings.append(
+                all_group_findings.append(
                     Finding(
                         severity=Severity.INFO,
                         column=",".join(group_sorted),
@@ -141,7 +145,7 @@ class NullCorrelationProfiler:
             pair_sorted = sorted([col_a, col_b])
             pair_str = ", ".join(f"'{c}'" for c in pair_sorted)
             total_nulls = max(null_counts[c] for c in pair_sorted)
-            findings.append(
+            all_group_findings.append(
                 Finding(
                     severity=Severity.INFO,
                     column=",".join(pair_sorted),
@@ -158,5 +162,9 @@ class NullCorrelationProfiler:
                     confidence=0.4,
                 )
             )
+
+        # Emit at most MAX_GROUPS findings (prefer higher-confidence ones first)
+        all_group_findings.sort(key=lambda f: f.confidence or 0, reverse=True)
+        findings.extend(all_group_findings[:MAX_GROUPS])
 
         return findings

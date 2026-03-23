@@ -48,30 +48,60 @@ class PatternConsistencyProfiler(BaseProfiler):
         dominant_count = pattern_counts["count"][0]
         dominant_pattern = pattern_counts[column][0]
 
+        # Collect all minority patterns (rarest first — already sorted ascending by reversing)
+        minority_candidates = []
         for i in range(1, n_patterns):
             minority_pattern = pattern_counts[column][i]
             minority_count = int(pattern_counts["count"][i])
             minority_pct = minority_count / total
 
             if minority_pct < MINORITY_THRESHOLD:
-                # minority <5% → 0.8; 5-30% → 0.5
-                confidence = 0.8 if minority_pct < 0.05 else 0.5
-                # Find sample values that match this minority pattern
-                mask = patterns == minority_pattern
-                sample_vals = non_null.filter(mask).head(5).to_list()
-                findings.append(Finding(
-                    severity=Severity.WARNING,
-                    column=column,
-                    check="pattern_consistency",
-                    message=(
-                        f"Inconsistent pattern detected: '{minority_pattern}' appears in "
-                        f"{minority_count} row(s) ({minority_pct:.1%}) vs dominant pattern "
-                        f"'{dominant_pattern}' ({dominant_count} row(s))"
-                    ),
-                    affected_rows=minority_count,
-                    sample_values=[str(v) for v in sample_vals],
-                    suggestion="Standardize values to a single format/pattern",
-                    confidence=confidence,
-                ))
+                minority_candidates.append((minority_pattern, minority_count, minority_pct))
+
+        if not minority_candidates:
+            return findings
+
+        # Sort rarest first (most likely errors)
+        minority_candidates.sort(key=lambda x: x[1])
+
+        # Cap at top 5
+        MAX_PATTERNS = 5
+        total_minority = len(minority_candidates)
+        emitted = minority_candidates[:MAX_PATTERNS]
+
+        for minority_pattern, minority_count, minority_pct in emitted:
+            # minority <5% → 0.8; 5-30% → 0.5
+            confidence = 0.8 if minority_pct < 0.05 else 0.5
+            # Find sample values that match this minority pattern
+            mask = patterns == minority_pattern
+            sample_vals = non_null.filter(mask).head(5).to_list()
+            findings.append(Finding(
+                severity=Severity.WARNING,
+                column=column,
+                check="pattern_consistency",
+                message=(
+                    f"Inconsistent pattern detected: '{minority_pattern}' appears in "
+                    f"{minority_count} row(s) ({minority_pct:.1%}) vs dominant pattern "
+                    f"'{dominant_pattern}' ({dominant_count} row(s))"
+                ),
+                affected_rows=minority_count,
+                sample_values=[str(v) for v in sample_vals],
+                suggestion="Standardize values to a single format/pattern",
+                confidence=confidence,
+            ))
+
+        # Summary finding if more than MAX_PATTERNS minority patterns exist
+        if total_minority > MAX_PATTERNS:
+            extra = total_minority - MAX_PATTERNS
+            findings.append(Finding(
+                severity=Severity.WARNING,
+                column=column,
+                check="pattern_consistency",
+                message=(
+                    f"{extra} additional inconsistent pattern(s) detected (showing top {MAX_PATTERNS})"
+                ),
+                suggestion="Standardize values to a single format/pattern",
+                confidence=0.5,
+            ))
 
         return findings
