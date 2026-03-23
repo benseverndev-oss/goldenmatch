@@ -42,3 +42,16 @@ def test_wide_dataset_limited_to_50():
     blocks = build_sample_blocks(df, findings, max_columns=50)
     assert len(blocks) == 50
     assert "col_0" in blocks  # column with findings should be included
+
+def test_focus_columns_filters():
+    data = {f"col_{i}": list(range(100)) for i in range(10)}
+    df = pl.DataFrame(data)
+    blocks = build_sample_blocks(df, [], focus_columns={"col_0", "col_5"})
+    assert len(blocks) == 2
+    assert "col_0" in blocks
+    assert "col_5" in blocks
+
+def test_focus_columns_none_returns_all():
+    df = pl.DataFrame({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
+    blocks = build_sample_blocks(df, [])
+    assert len(blocks) == 3

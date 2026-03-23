@@ -13,12 +13,17 @@ def build_sample_blocks(
     df: pl.DataFrame,
     findings: list[Finding],
     max_columns: int = 50,
+    focus_columns: set[str] | None = None,
 ) -> dict[str, dict]:
     """Build a representative sample block for each column."""
     random.seed(42)
 
-    # If too many columns, prioritize those with most findings
+    # If focus_columns is specified, filter to only those columns early
     columns = list(df.columns)
+    if focus_columns is not None:
+        columns = [c for c in columns if c in focus_columns]
+
+    # If too many columns, prioritize those with most findings
     if len(columns) > max_columns:
         logger.warning(
             "LLM boost limited to %d columns (dataset has %d). "

@@ -5,6 +5,7 @@ from pathlib import Path
 import polars as pl
 from goldencheck.engine.reader import read_file
 from goldencheck.engine.sampler import maybe_sample
+from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.models.finding import Finding
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
 from goldencheck.profilers.type_inference import TypeInferenceProfiler
@@ -46,6 +47,7 @@ def scan_file(
 
     all_findings: list[Finding] = []
     column_profiles: list[ColumnProfile] = []
+    profiler_context: dict = {}
 
     for col_name in df.columns:
         col = df[col_name]
@@ -62,7 +64,7 @@ def scan_file(
         column_profiles.append(cp)
         for profiler in COLUMN_PROFILERS:
             try:
-                findings = profiler.profile(sample, col_name)
+                findings = profiler.profile(sample, col_name, context=profiler_context)
                 all_findings.extend(findings)
             except Exception as e:
                 logger.warning("Profiler %s failed on column %s: %s", type(profiler).__name__, col_name, e)
@@ -74,6 +76,7 @@ def scan_file(
         except Exception as e:
             logger.warning("Relation profiler %s failed: %s", type(profiler).__name__, e)
 
+    all_findings = apply_corroboration_boost(all_findings)
     all_findings.sort(key=lambda f: f.severity, reverse=True)
     profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
     if return_sample:
@@ -110,8 +113,14 @@ def scan_file_with_llm(
         findings.sort(key=lambda f: f.severity, reverse=True)
         return findings, profile
 
+    # Focus LLM on low-confidence columns only
+    low_conf_cols = {f.column for f in findings if f.confidence < 0.5}
+    if not low_conf_cols:
+        logger.info("All findings are high confidence. LLM boost not needed.")
+        return findings, profile
+
     # Build sample blocks from the already-loaded sample (no double read)
-    blocks = build_sample_blocks(sample, findings)
+    blocks = build_sample_blocks(sample, findings, focus_columns=low_conf_cols)
 
     # Build user prompt
     user_prompt = "Here is the dataset summary:\n\n" + json.dumps(blocks, indent=2, default=str)

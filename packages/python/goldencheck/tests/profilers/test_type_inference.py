@@ -31,7 +31,7 @@ def test_minority_numeric_in_text_column():
 def test_type_inference_writes_context():
     df = pl.DataFrame({"age": ["25", "30", "45", "28", "33"]})
     context = {}
-    findings = TypeInferenceProfiler().profile(df, "age", context=context)
+    TypeInferenceProfiler().profile(df, "age", context=context)
     assert context.get("age", {}).get("mostly_numeric") is True
 
 def test_type_inference_existing_behavior_unchanged():
