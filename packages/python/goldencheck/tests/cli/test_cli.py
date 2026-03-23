@@ -25,3 +25,9 @@ def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "0.1.0" in result.stdout
+
+
+def test_llm_boost_without_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = runner.invoke(app, ["scan", str(FIXTURES / "simple.csv"), "--llm-boost", "--no-tui"])
+    assert result.exit_code != 0

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 import typer
 from typer.core import TyperGroup
-from goldencheck.engine.scanner import scan_file
+from goldencheck.engine.scanner import scan_file, scan_file_with_llm
 from goldencheck.engine.validator import validate_file
 from goldencheck.config.loader import load_config
 from goldencheck.reporters.rich_console import report_rich
@@ -75,12 +75,18 @@ def main(
     file: Path | None = None
     no_tui = False
     json_output = False
+    llm_boost = False
+    llm_provider = "anthropic"
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
             no_tui = True
         elif arg == "--json":
             json_output = True
+        elif arg == "--llm-boost":
+            llm_boost = True
+        elif arg == "--llm-provider":
+            llm_provider = args.pop(0)
         elif not arg.startswith("-"):
             if file is None:
                 file = Path(arg)
@@ -92,7 +98,7 @@ def main(
         typer.echo("Error: Missing data file argument.", err=True)
         raise typer.Exit(code=1)
 
-    _do_scan(file, no_tui=no_tui, json_output=json_output)
+    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider)
 
 
 @app.command()
@@ -100,9 +106,11 @@ def scan(
     file: Path = typer.Argument(..., help="Data file to profile."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Disable TUI and print Rich output instead."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
+    llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
+    llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
 ) -> None:
     """Profile a data file and report findings."""
-    _do_scan(file, no_tui=no_tui, json_output=json_output)
+    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider)
 
 
 @app.command()
@@ -145,9 +153,14 @@ def review(
     config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to goldencheck.yml."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Disable TUI and print Rich output instead."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
+    llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
+    llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
 ) -> None:
     """Profile AND validate a file, launching TUI for interactive review."""
-    findings, profile = scan_file(file)
+    if llm_boost:
+        findings, profile = scan_file_with_llm(file, provider=llm_provider)
+    else:
+        findings, profile = scan_file(file)
     config_path = config or Path("goldencheck.yml")
     cfg = load_config(config_path)
     if cfg is not None:
@@ -175,9 +188,19 @@ def review(
     raise typer.Exit(code=exit_code)
 
 
-def _do_scan(file: Path, *, no_tui: bool, json_output: bool) -> None:
+def _do_scan(
+    file: Path,
+    *,
+    no_tui: bool,
+    json_output: bool,
+    llm_boost: bool = False,
+    llm_provider: str = "anthropic",
+) -> None:
     """Run scan and output results."""
-    findings, profile = scan_file(file)
+    if llm_boost:
+        findings, profile = scan_file_with_llm(file, provider=llm_provider)
+    else:
+        findings, profile = scan_file(file)
 
     if json_output:
         report_json(findings, profile, sys.stdout)
