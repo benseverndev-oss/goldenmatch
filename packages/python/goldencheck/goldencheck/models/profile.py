@@ -55,3 +55,31 @@ class DatasetProfile:
         else:
             grade = "F"
         return grade, points
+
+    def _repr_html_(self) -> str:
+        colors = {"A": "#00ff00", "B": "#7fff00", "C": "#ffff00", "D": "#ff7f00", "F": "#ff0000"}
+        grade, score = self.health_score()
+        color = colors.get(grade, "#888")
+        badge = (
+            f'<span style="background:{color};color:#000;padding:2px 8px;'
+            f'border-radius:4px;font-weight:bold">{grade} ({score})</span>'
+        )
+        rows = ""
+        for c in self.columns:
+            top = ", ".join(f"{v}({n})" for v, n in c.top_values[:3]) if c.top_values else ""
+            rows += (
+                f'<tr><td style="font-weight:bold">{c.name}</td>'
+                f'<td>{c.inferred_type}</td>'
+                f'<td style="text-align:right">{c.null_pct:.1f}%</td>'
+                f'<td style="text-align:right">{c.unique_pct:.1f}%</td>'
+                f'<td style="color:#888;font-size:0.85em">{top}</td></tr>'
+            )
+        return (
+            f'<div style="font-family:monospace;font-size:13px">'
+            f'<div style="margin-bottom:8px"><strong>{self.file_path}</strong> &mdash; '
+            f'{self.row_count:,} rows, {self.column_count} columns &mdash; {badge}</div>'
+            f'<table style="border-collapse:collapse;width:100%">'
+            f'<thead><tr style="border-bottom:2px solid #444;text-align:left">'
+            f'<th>Column</th><th>Type</th><th>Null%</th><th>Unique%</th><th>Top Values</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div>'
+        )

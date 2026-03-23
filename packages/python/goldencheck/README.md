@@ -4,9 +4,11 @@ Data validation that discovers rules from your data so you don't have to write t
 
 [![PyPI](https://img.shields.io/pypi/v/goldencheck?color=d4a017)](https://pypi.org/project/goldencheck/)
 [![Downloads](https://img.shields.io/pypi/dm/goldencheck?color=blue&label=downloads)](https://pypi.org/project/goldencheck/)
+[![CI](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Tests](https://img.shields.io/badge/tests-166%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
 
@@ -234,7 +236,57 @@ Tested on a custom benchmark with 341 planted data quality issues across 9 categ
 | [Rich](https://rich.readthedocs.io/) | CLI output formatting |
 | [Pydantic 2](https://docs.pydantic.dev/) | Config validation |
 
-**Optional:** [Anthropic SDK](https://docs.anthropic.com/) / [OpenAI SDK](https://platform.openai.com/) for LLM Boost
+**Optional:** [Anthropic SDK](https://docs.anthropic.com/) / [OpenAI SDK](https://platform.openai.com/) for LLM Boost | [MCP SDK](https://modelcontextprotocol.io/) for MCP server
+
+## MCP Server (Claude Desktop)
+
+GoldenCheck includes an MCP server for Claude Desktop integration:
+
+```bash
+pip install goldencheck[mcp]
+```
+
+Add to your Claude Desktop config (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "goldencheck": {
+      "command": "goldencheck",
+      "args": ["mcp-serve"]
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `scan` | Scan a file for data quality issues (with optional LLM boost) |
+| `validate` | Validate against pinned rules in goldencheck.yml |
+| `profile` | Get column-level statistics and health score |
+| `health_score` | Quick A-F grade for a data file |
+| `get_column_detail` | Deep-dive into a specific column |
+| `list_checks` | List all available profiler checks |
+
+## Jupyter / Colab
+
+GoldenCheck renders rich HTML in Jupyter notebooks:
+
+```python
+from goldencheck.engine.scanner import scan_file
+from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.notebook import ScanResult
+
+findings, profile = scan_file("data.csv")
+findings = apply_confidence_downgrade(findings, llm_boost=False)
+
+# Rich HTML display in notebooks
+ScanResult(findings=findings, profile=profile)
+```
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 ## Contributing
 
