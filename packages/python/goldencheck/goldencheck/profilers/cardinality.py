@@ -9,7 +9,7 @@ ENUM_MIN_ROWS = 50
 
 
 class CardinalityProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str) -> list[Finding]:
+    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
         findings: list[Finding] = []
         col = df[column]
         total = len(col)

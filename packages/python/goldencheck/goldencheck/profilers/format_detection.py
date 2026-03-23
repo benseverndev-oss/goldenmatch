@@ -16,7 +16,7 @@ FORMATS = [
 
 
 class FormatDetectionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str) -> list[Finding]:
+    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
         findings: list[Finding] = []
         col = df[column]
 
