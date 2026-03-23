@@ -53,8 +53,18 @@ Set `GOLDENCHECK_LLM_BUDGET=0.10` to cap spending per run.
 
 `parse_llm_response(raw_text)` in `llm/parser.py` strips markdown fences (` ```json ... ``` `) before JSON parsing. Returns `None` on parse failure — scanner logs a warning and returns profiler-only results.
 
+## Testing LLM Locally
+
+```bash
+source .testing/.env   # loads OPENAI_API_KEY
+goldencheck tests/fixtures/messy.csv --llm-boost --llm-provider openai --no-tui
+```
+
+Mock-based tests: see `tests/llm/test_integration.py` — patches `call_llm` and `check_llm_available`.
+
 ## Gotchas
 
+- All columns are sent to the LLM (confidence routing was removed — LLM adds value even on high-confidence columns for semantic issues)
 - LLM availability is checked **before** running profilers in `scan_file_with_llm` — fail fast, don't waste scan time
 - `apply_confidence_downgrade` is **not** called when LLM boost is active (the LLM handles low-confidence cases)
 - Relations use a comma-joined sorted column name as the `column` field — queries like `finding.column.split(",")` to recover column list
