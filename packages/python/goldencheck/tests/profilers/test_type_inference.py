@@ -39,3 +39,13 @@ def test_type_inference_existing_behavior_unchanged():
     df = pl.DataFrame({"age": ["25", "30", "forty-five", "28", "33"]})
     findings = TypeInferenceProfiler().profile(df, "age")
     assert any(f.confidence >= 0.8 for f in findings)
+
+def test_integer_zip_flagged():
+    df = pl.DataFrame({"billing_zip": [10001, 7001, 90210]})
+    findings = TypeInferenceProfiler().profile(df, "billing_zip")
+    assert any("string" in f.message.lower() and "zip" in f.message.lower() for f in findings)
+
+def test_integer_non_zip_not_flagged():
+    df = pl.DataFrame({"total_amount": [100, 200, 300]})
+    findings = TypeInferenceProfiler().profile(df, "total_amount")
+    assert not any("should be string" in f.message.lower() for f in findings)

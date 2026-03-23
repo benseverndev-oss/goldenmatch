@@ -62,4 +62,29 @@ class FormatDetectionProfiler(BaseProfiler):
                         confidence=detect_confidence,
                     ))
 
+                # Cross-format detection: check if non-matching values belong to a different format
+                CROSS_FORMAT_CHECKS = {
+                    "url": [("email", EMAIL_REGEX)],
+                    "email": [("url", URL_PREFIX)],
+                    "phone": [("email", EMAIL_REGEX)],
+                }
+                for other_fmt, other_pattern in CROSS_FORMAT_CHECKS.get(fmt_name, []):
+                    if non_match_count > 0:
+                        wrong_fmt_matches = non_null.filter(~matches).str.contains(other_pattern)
+                        wrong_fmt_count = wrong_fmt_matches.sum()
+                        if wrong_fmt_count > 0:
+                            wrong_pct = wrong_fmt_count / total
+                            findings.append(Finding(
+                                severity=Severity.ERROR,
+                                column=column,
+                                check="format_detection",
+                                message=(
+                                    f"Column is detected as {fmt_name} but {wrong_fmt_count} value(s) "
+                                    f"({wrong_pct:.1%}) appear to be {other_fmt} — wrong type values present"
+                                ),
+                                affected_rows=wrong_fmt_count,
+                                suggestion=f"Remove or correct {other_fmt} values from this {fmt_name} column",
+                                confidence=detect_confidence,
+                            ))
+
         return findings

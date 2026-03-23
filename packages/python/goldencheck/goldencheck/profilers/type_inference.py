@@ -42,4 +42,21 @@ class TypeInferenceProfiler(BaseProfiler):
                     suggestion="Investigate numeric values in this text column",
                     confidence=0.3,
                 ))
+
+        # Check: integer/float column that should be string based on name
+        SHOULD_BE_STRING = ["zip", "postal", "phone", "fax", "ssn", "npi", "id", "code", "sku"]
+        if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Float32, pl.Float64):
+            col_lower = column.lower()
+            for hint in SHOULD_BE_STRING:
+                if hint in col_lower:
+                    findings.append(Finding(
+                        severity=Severity.WARNING,
+                        column=column,
+                        check="type_inference",
+                        message=f"Column '{column}' is numeric but name suggests it should be string (may lose leading zeros)",
+                        confidence=0.6,
+                        suggestion="Consider storing as string to preserve formatting",
+                    ))
+                    break
+
         return findings
