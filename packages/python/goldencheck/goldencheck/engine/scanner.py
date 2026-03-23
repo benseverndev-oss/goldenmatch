@@ -34,7 +34,11 @@ RELATION_PROFILERS = [
     NullCorrelationProfiler(),
 ]
 
-def scan_file(path: Path, sample_size: int = 100_000) -> tuple[list[Finding], DatasetProfile]:
+def scan_file(
+    path: Path,
+    sample_size: int = 100_000,
+    return_sample: bool = False,
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     row_count = len(df)
     sample = maybe_sample(df, max_rows=sample_size)
@@ -72,4 +76,50 @@ def scan_file(path: Path, sample_size: int = 100_000) -> tuple[list[Finding], Da
 
     all_findings.sort(key=lambda f: f.severity, reverse=True)
     profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
+    if return_sample:
+        return all_findings, profile, sample
     return all_findings, profile
+
+
+def scan_file_with_llm(
+    path: Path,
+    provider: str = "anthropic",
+    sample_size: int = 100_000,
+) -> tuple[list[Finding], DatasetProfile]:
+    """Scan a file with profilers, then enhance with LLM boost."""
+    import json
+    from goldencheck.llm.sample_block import build_sample_blocks
+    from goldencheck.llm.providers import call_llm, check_llm_available
+    from goldencheck.llm.parser import parse_llm_response
+    from goldencheck.llm.merger import merge_llm_findings
+
+    # Check LLM is available BEFORE doing any work
+    check_llm_available(provider)
+
+    # Run profilers first — returns findings, profile, AND the sampled df
+    findings, profile, sample = scan_file(path, sample_size=sample_size, return_sample=True)
+
+    # Build sample blocks from the already-loaded sample (no double read)
+    blocks = build_sample_blocks(sample, findings)
+
+    # Build user prompt
+    user_prompt = "Here is the dataset summary:\n\n" + json.dumps(blocks, indent=2, default=str)
+
+    # Call LLM
+    try:
+        raw_response = call_llm(provider, user_prompt)
+        llm_response = parse_llm_response(raw_response)
+        if llm_response:
+            findings = merge_llm_findings(findings, llm_response)
+            logger.info("LLM boost: merged %d column assessments, %d relations",
+                       len(llm_response.columns), len(llm_response.relations))
+        else:
+            logger.warning("LLM response could not be parsed. Showing profiler-only results.")
+    except SystemExit:
+        raise
+    except Exception as e:
+        logger.warning("LLM boost failed: %s. Showing profiler-only results.", e)
+
+    # Re-sort by severity
+    findings.sort(key=lambda f: f.severity, reverse=True)
+    return findings, profile
