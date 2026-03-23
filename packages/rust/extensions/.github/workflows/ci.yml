@@ -70,22 +70,10 @@ jobs:
       - name: Build extension
         run: cargo build -p goldenmatch_pg --features pg16 --no-default-features
 
-      - name: Generate and install extension schema
-        working-directory: postgres
-        run: |
-          cargo pgrx schema pg16 2>&1 || true
-          # pgrx schema generates SQL to stdout or to sql/ directory
-          # Find and install it
-          find . ../target -name "goldenmatch_pg--*.sql" -type f 2>/dev/null | head -5
-          SQL_FILE=$(find . ../target -name "goldenmatch_pg--*.sql" -type f 2>/dev/null | head -1)
-          if [ -n "$SQL_FILE" ]; then
-            cp "$SQL_FILE" /usr/share/postgresql/16/extension/
-            echo "Installed SQL: $SQL_FILE"
-          else
-            echo "WARNING: No SQL file generated, creating minimal one"
-            cargo pgrx schema pg16 > /usr/share/postgresql/16/extension/goldenmatch_pg--0.1.0.sql
-          fi
-
       - name: Run pgrx tests
         working-directory: postgres
-        run: cargo pgrx test pg16
+        run: |
+          # pgrx test handles install + schema generation + test in one step
+          # Must also chmod the sharedir for SQL file installation
+          sudo chmod a+rwx /usr/share/postgresql/16/extension
+          cargo pgrx test pg16 2>&1
