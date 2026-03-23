@@ -27,15 +27,22 @@ class NullabilityProfiler(BaseProfiler):
                 message=f"0 nulls across {total} rows — likely required",
                 confidence=confidence))
         elif null_pct > 0 and null_pct < 1:
-            # Only flag notable null rates: >50% (mostly missing) or extreme edges (>5% or <1% for large cols)
-            # Skip 1-50% null rate on small datasets — that's just "normal optional"
-            notable = (
-                null_pct > 0.50  # mostly-null column
-                or (total >= 100 and null_pct > 0.05)   # >5% nulls in sizeable column
-                or (total >= 100 and null_pct < 0.01)   # <1% nulls — nearly required
-            )
-            if notable:
-                findings.append(Finding(severity=Severity.INFO, column=column, check="nullability",
-                    message=f"{null_count} nulls ({null_pct:.1%}) — column is optional", affected_rows=null_count,
-                    confidence=0.7))
+            non_null_pct = 1.0 - null_pct
+            # Suspicious: >95% non-null but not fully required — likely a data quality issue
+            if non_null_pct > 0.95 and total >= 100:
+                findings.append(Finding(severity=Severity.WARNING, column=column, check="nullability",
+                    message=f"{null_count} nulls ({null_pct:.1%}) in a {non_null_pct:.1%} non-null column — possible data quality issue",
+                    affected_rows=null_count,
+                    suggestion="Verify whether these nulls are expected or indicate missing data",
+                    confidence=0.75))
+            else:
+                # Only flag notable null rates: >80% (mostly missing) or >5% in sizeable column
+                notable = (
+                    null_pct > 0.80  # high null rate — mostly missing (optional column)
+                    or (total >= 100 and null_pct > 0.05)   # >5% nulls in sizeable column
+                )
+                if notable:
+                    findings.append(Finding(severity=Severity.INFO, column=column, check="nullability",
+                        message=f"{null_count} nulls ({null_pct:.1%}) — column is optional", affected_rows=null_count,
+                        confidence=0.7))
         return findings

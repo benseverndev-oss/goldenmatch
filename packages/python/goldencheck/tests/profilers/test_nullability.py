@@ -13,9 +13,9 @@ def test_all_nulls_flags_error():
     assert any(f.severity == Severity.ERROR for f in findings)
 
 def test_some_nulls_notable_rate_reports_info():
-    # >50% null rate — notable enough to report
-    nulls = [None] * 60
-    vals = ["hello"] * 40
+    # >80% null rate — notable enough to report as INFO
+    nulls = [None] * 85
+    vals = ["hello"] * 15
     df = pl.DataFrame({"notes": vals + nulls})
     findings = NullabilityProfiler().profile(df, "notes")
     assert any(f.check == "nullability" for f in findings)

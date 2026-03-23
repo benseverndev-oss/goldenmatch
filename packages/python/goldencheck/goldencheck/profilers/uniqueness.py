@@ -20,8 +20,13 @@ class UniquenessProfiler(BaseProfiler):
                 confidence=confidence))
         elif unique_pct < 1.0:
             dup_count = len(non_null) - unique_count
-            if dup_count > 0 and unique_pct > 0.95:
-                # 95-99% unique → confidence 0.6
+            # Only warn for near-unique columns that appear to be identifiers
+            # (name contains 'id', 'key', 'code', 'sku') — near-unique on other columns is noise
+            IDENTIFIER_KEYWORDS = ("id", "key", "code", "sku")
+            col_lower = column.lower()
+            is_identifier = any(kw in col_lower for kw in IDENTIFIER_KEYWORDS)
+            if dup_count > 0 and unique_pct > 0.95 and is_identifier:
+                # 95-99% unique identifier with duplicates → WARNING
                 findings.append(Finding(severity=Severity.WARNING, column=column, check="uniqueness",
                     message=f"Near-unique column ({unique_pct:.1%} unique) with {dup_count} duplicates",
                     affected_rows=dup_count,
