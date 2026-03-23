@@ -42,7 +42,7 @@ types:
     name_hints: ["date", "time", "created", "updated", "_at", "timestamp"]
     value_signals:
       format_match: "date"
-    suppress: ["pattern_consistency"]
+    suppress: ["pattern_consistency", "drift_detection"]
 
   boolean:
     name_hints: ["is_", "has_", "flag", "active", "enabled", "disabled"]

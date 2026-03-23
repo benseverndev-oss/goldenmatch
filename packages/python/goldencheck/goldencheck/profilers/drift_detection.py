@@ -38,6 +38,14 @@ class DriftDetectionProfiler(BaseProfiler):
         if len(first_half) == 0 or len(second_half) == 0:
             return findings
 
+        # Skip high-cardinality columns — IPs, session IDs, UUIDs, etc.
+        # naturally have different values in each half, not meaningful drift
+        non_null = col.drop_nulls()
+        if len(non_null) > 0:
+            unique_pct = non_null.n_unique() / len(non_null)
+            if unique_pct > 0.90 and col.dtype not in NUMERIC_DTYPES:
+                return findings
+
         is_numeric = col.dtype in NUMERIC_DTYPES
 
         if is_numeric:

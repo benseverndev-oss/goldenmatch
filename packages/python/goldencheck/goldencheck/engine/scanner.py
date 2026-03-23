@@ -6,7 +6,7 @@ import polars as pl
 from goldencheck.engine.reader import read_file
 from goldencheck.engine.sampler import maybe_sample
 from goldencheck.engine.confidence import apply_corroboration_boost
-from goldencheck.models.finding import Finding
+from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
 from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.profilers.nullability import NullabilityProfiler
@@ -20,6 +20,7 @@ from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 from goldencheck.relations.temporal import TemporalOrderProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
+from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,54 @@ COLUMN_PROFILERS = [
 RELATION_PROFILERS = [
     TemporalOrderProfiler(),
     NullCorrelationProfiler(),
+    NumericCrossColumnProfiler(),
 ]
+
+def _post_classification_checks(
+    sample: pl.DataFrame,
+    findings: list[Finding],
+    column_types: dict,
+) -> list[Finding]:
+    """Add findings that require semantic type knowledge."""
+    new_findings = list(findings)
+
+    for col_name, classification in column_types.items():
+        if classification.type_name != "person_name":
+            continue
+        if col_name not in sample.columns:
+            continue
+        col = sample[col_name]
+        if col.dtype not in (pl.Utf8, pl.String):
+            continue
+
+        # Detect digit characters in person name columns
+        non_null = col.drop_nulls()
+        if len(non_null) == 0:
+            continue
+
+        digit_mask = non_null.str.contains(r"\d")
+        digit_count = int(digit_mask.sum())
+        if digit_count > 0:
+            digit_pct = digit_count / len(non_null)
+            # Only flag if it's a minority (< 10%) — widespread digits means it's not really a name column
+            if 0 < digit_pct < 0.10:
+                sample_vals = non_null.filter(digit_mask).head(5).to_list()
+                new_findings.append(Finding(
+                    severity=Severity.WARNING,
+                    column=col_name,
+                    check="type_inference",
+                    message=(
+                        f"Column '{col_name}' appears to be a person name but {digit_count} "
+                        f"row(s) ({digit_pct:.1%}) contain numeric characters — possible invalid values"
+                    ),
+                    affected_rows=digit_count,
+                    sample_values=[str(v) for v in sample_vals],
+                    suggestion="Check for data entry errors or encoding issues in name values",
+                    confidence=0.85,
+                ))
+
+    return new_findings
+
 
 def scan_file(
     path: Path,
@@ -91,6 +139,9 @@ def scan_file(
 
     # Apply type suppression BEFORE corroboration boost
     all_findings = apply_type_suppression(all_findings, column_types, type_defs)
+
+    # Post-classification checks: detect issues that require semantic type knowledge
+    all_findings = _post_classification_checks(sample, all_findings, column_types)
 
     all_findings = apply_corroboration_boost(all_findings)
     all_findings.sort(key=lambda f: f.severity, reverse=True)
