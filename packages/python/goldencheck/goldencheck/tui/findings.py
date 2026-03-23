@@ -12,12 +12,13 @@ class FindingsPane(Vertical):
 
     def compose(self):
         table = DataTable(id="findings-table")
-        table.add_columns("", "Severity", "Column", "Check", "Message", "Rows", "Source")
+        table.add_columns("", "Severity", "Column", "Check", "Message", "Rows", "Source", "Conf")
         for i, f in enumerate(self.findings):
             pin = "[x]" if f.pinned else "[ ]"
             sev = f.severity.name
             badge = "[LLM]" if f.source == "llm" else ""
-            table.add_row(pin, sev, f.column, f.check, f.message[:55], str(f.affected_rows), badge, key=str(i))
+            conf = "H" if f.confidence >= 0.8 else "M" if f.confidence >= 0.5 else "L"
+            table.add_row(pin, sev, f.column, f.check, f.message[:55], str(f.affected_rows), badge, conf, key=str(i))
         yield table
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

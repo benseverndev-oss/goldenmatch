@@ -19,7 +19,7 @@ def report_json(findings: list[Finding], profile: DatasetProfile, output: IO) ->
         "summary": {"errors": errors, "warnings": warnings, "info": infos},
         "findings": [
             {
-                k: v for k, v in {
+                **{k: v for k, v in {
                     "severity": f.severity.name.lower(),
                     "column": f.column,
                     "check": f.check,
@@ -27,7 +27,8 @@ def report_json(findings: list[Finding], profile: DatasetProfile, output: IO) ->
                     "affected_rows": f.affected_rows,
                     "sample_values": f.sample_values,
                     "source": f.source,
-                }.items() if v is not None
+                }.items() if v is not None},
+                "confidence": f.confidence,
             }
             for f in findings
         ],
