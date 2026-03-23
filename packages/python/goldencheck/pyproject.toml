@@ -48,6 +48,10 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
 ]
+llm = [
+    "anthropic>=0.30",
+    "openai>=1.30",
+]
 
 [tool.ruff]
 line-length = 100
