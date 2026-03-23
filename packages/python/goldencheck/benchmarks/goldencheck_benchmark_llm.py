@@ -32,11 +32,10 @@ def evaluate(findings: list[Finding], gt: dict) -> dict:
     for cat, info in gt["issue_categories"].items():
         planted_by_profiler[cat] = set(info["columns"])
 
-    # Build detected column sets per profiler (WARNING/ERROR only)
+    # Build detected column sets per profiler (all severities — INFO counts as detection)
     detected_by_profiler = defaultdict(set)
     for f in findings:
-        if f.severity in (Severity.ERROR, Severity.WARNING):
-            detected_by_profiler[f.check].add(f.column)
+        detected_by_profiler[f.check].add(f.column)
 
     results = {}
     for profiler, planted_cols in planted_by_profiler.items():
@@ -65,10 +64,9 @@ def evaluate(findings: list[Finding], gt: dict) -> dict:
         for col in info["columns"]:
             all_planted.add((cat, col))
     for f in findings:
-        if f.severity in (Severity.ERROR, Severity.WARNING):
-            key = (f.check, f.column)
-            if key in all_planted:
-                all_detected_strict.add(key)
+        key = (f.check, f.column)
+        if key in all_planted:
+            all_detected_strict.add(key)
 
     # Overall — column-level (any WARNING/ERROR on a planted column counts)
     planted_columns = set()
@@ -78,11 +76,10 @@ def evaluate(findings: list[Finding], gt: dict) -> dict:
     # Also check comma-joined column names for cross-column findings
     detected_columns = set()
     for f in findings:
-        if f.severity in (Severity.ERROR, Severity.WARNING):
-            detected_columns.add(f.column)
-            # Split comma-joined columns
-            for part in f.column.split(","):
-                detected_columns.add(part.strip())
+        detected_columns.add(f.column)
+        # Split comma-joined columns
+        for part in f.column.split(","):
+            detected_columns.add(part.strip())
 
     column_recall = len(planted_columns & detected_columns) / len(planted_columns) if planted_columns else 0
     strict_recall = len(all_detected_strict) / len(all_planted) if all_planted else 0
@@ -120,7 +117,7 @@ def print_results(label: str, findings: list[Finding], eval_results: dict, elaps
 
     print(f"  {'-'*75}")
     print(f"  {'STRICT RECALL':<24} {'':<8} {'':<9} {eval_results['overall_recall']:>7.0%}  (exact check name match)")
-    print(f"  {'COLUMN RECALL':<24} {'':<8} {'':<9} {eval_results['column_recall']:>7.0%}  (any WARNING/ERROR on planted column)")
+    print(f"  {'COLUMN RECALL':<24} {'':<8} {'':<9} {eval_results['column_recall']:>7.0%}  (any finding on planted column)")
     if eval_results.get("missed_columns"):
         print(f"  Missed columns: {sorted(eval_results['missed_columns'])}")
     print(f"{'='*80}")

@@ -7,7 +7,8 @@ import polars as pl
 
 from goldencheck.models.finding import Finding, Severity
 
-_DEFAULT_THRESHOLD = 0.95
+_DEFAULT_THRESHOLD = 0.90
+_HIGH_THRESHOLD = 0.95
 
 
 class _UnionFind:
@@ -36,7 +37,13 @@ class _UnionFind:
 
 
 class NullCorrelationProfiler:
-    """Reports groups of 3+ columns whose null/non-null patterns agree >= threshold fraction of rows."""
+    """Reports columns whose null/non-null patterns agree >= threshold fraction of rows.
+
+    Confidence scoring:
+    - Groups of 3+ columns at >= 95% agreement: confidence=0.8
+    - Pairs at >= 95% agreement: confidence=0.5
+    - Pairs at 90-95% agreement: confidence=0.4
+    """
 
     def __init__(self, threshold: float = _DEFAULT_THRESHOLD) -> None:
         self.threshold = threshold
@@ -57,8 +64,10 @@ class NullCorrelationProfiler:
             col: int(null_masks[col].sum()) for col in columns
         }
 
-        # Find correlated pairs
-        correlated_pairs: list[tuple[str, str]] = []
+        # Find correlated pairs at each threshold tier
+        high_pairs: list[tuple[str, str]] = []   # >= _HIGH_THRESHOLD
+        low_pairs: list[tuple[str, str]] = []    # >= self.threshold but < _HIGH_THRESHOLD
+
         for col_a, col_b in combinations(columns, 2):
             null_count_a = null_counts[col_a]
             null_count_b = null_counts[col_b]
@@ -78,39 +87,75 @@ class NullCorrelationProfiler:
             agreement = int((mask_a == mask_b).sum())
             correlation = agreement / n_rows
 
-            if correlation >= self.threshold:
-                correlated_pairs.append((col_a, col_b))
+            if correlation >= _HIGH_THRESHOLD:
+                high_pairs.append((col_a, col_b))
+            elif correlation >= self.threshold:
+                low_pairs.append((col_a, col_b))
 
-        if not correlated_pairs:
-            return findings
+        # Group high-threshold pairs using union-find
+        if high_pairs:
+            uf = _UnionFind(columns)
+            for col_a, col_b in high_pairs:
+                uf.union(col_a, col_b)
 
-        # Group using union-find
-        uf = _UnionFind(columns)
-        for col_a, col_b in correlated_pairs:
-            uf.union(col_a, col_b)
+            for group in uf.groups():
+                if len(group) < 2:
+                    continue
+                group_sorted = sorted(group)
+                group_str = ", ".join(f"'{c}'" for c in group_sorted)
+                total_nulls = max(null_counts[c] for c in group)
 
-        # Only report groups of 3+ members
-        for group in uf.groups():
-            if len(group) < 3:
+                if len(group) >= 3:
+                    # High confidence — full group finding
+                    confidence = 0.8
+                else:
+                    # Pair at high threshold — medium confidence
+                    confidence = 0.5
+
+                findings.append(
+                    Finding(
+                        severity=Severity.INFO,
+                        column=",".join(group_sorted),
+                        check="null_correlation",
+                        message=(
+                            f"Columns {group_str} have strongly correlated null patterns "
+                            f"(>= {_HIGH_THRESHOLD:.0%} agreement). They may represent a logical group."
+                        ),
+                        affected_rows=total_nulls,
+                        suggestion=(
+                            "Consider treating these columns as a unit — "
+                            "validate that they are all populated or all absent together."
+                        ),
+                        confidence=confidence,
+                    )
+                )
+
+        # Report low-threshold pairs (90-95%) with lower confidence
+        # Avoid duplicating pairs already covered by the high-threshold grouping
+        high_pair_cols: set[frozenset[str]] = {
+            frozenset([a, b]) for a, b in high_pairs
+        }
+        for col_a, col_b in low_pairs:
+            if frozenset([col_a, col_b]) in high_pair_cols:
                 continue
-            group_sorted = sorted(group)
-            group_str = ", ".join(f"'{c}'" for c in group_sorted)
-            total_nulls = max(null_counts[c] for c in group)
+            pair_sorted = sorted([col_a, col_b])
+            pair_str = ", ".join(f"'{c}'" for c in pair_sorted)
+            total_nulls = max(null_counts[c] for c in pair_sorted)
             findings.append(
                 Finding(
                     severity=Severity.INFO,
-                    column=",".join(group_sorted),
+                    column=",".join(pair_sorted),
                     check="null_correlation",
                     message=(
-                        f"Columns {group_str} have strongly correlated null patterns "
-                        f"(>= {self.threshold:.0%} agreement). They may represent a logical group."
+                        f"Columns {pair_str} have moderately correlated null patterns "
+                        f"(90-95% agreement). They may represent a logical group."
                     ),
                     affected_rows=total_nulls,
                     suggestion=(
                         "Consider treating these columns as a unit — "
                         "validate that they are all populated or all absent together."
                     ),
-                    confidence=0.8,
+                    confidence=0.4,
                 )
             )
 
