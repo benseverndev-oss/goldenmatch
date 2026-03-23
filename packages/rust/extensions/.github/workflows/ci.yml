@@ -68,7 +68,7 @@ jobs:
         run: cargo pgrx init --pg16=/usr/lib/postgresql/16/bin/pg_config
 
       - name: Build extension
-        run: cargo build -p goldenmatch-pg --features pg16 --no-default-features
+        run: cargo build -p goldenmatch_pg --features pg16 --no-default-features
 
       - name: Run pgrx tests
-        run: cargo pgrx test pg16 -p goldenmatch-pg
+        run: cargo pgrx test pg16 -p goldenmatch_pg

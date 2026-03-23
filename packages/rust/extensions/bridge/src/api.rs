@@ -4,7 +4,7 @@
 //! and returns the result as Rust types.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyDict;
 
 use crate::convert;
 use crate::error::BridgeError;
