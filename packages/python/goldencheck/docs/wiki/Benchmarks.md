@@ -4,6 +4,42 @@ GoldenCheck ships with a custom benchmark suite in the `benchmarks/` directory. 
 
 ---
 
+## DQBench Score
+
+**GoldenCheck v0.2.0 — profiler-only, zero-config: 72.00**
+
+GoldenCheck's zero-config discovery outperforms every competitor even when competitors have hand-written rules.
+
+### Score Progression
+
+| Version | Mode | DQBench Score |
+|---------|------|---------------|
+| v0.1.0 | profiler-only | 9.10 |
+| v0.1.5 | profiler-only | 34.22 |
+| v0.2.0 | profiler-only | **72.00** |
+
+### Head-to-Head Comparison
+
+| Tool | Mode | T1 F1 | T2 F1 | T3 F1 | DQBench Score |
+|------|------|-------|-------|-------|---------------|
+| **GoldenCheck** | **zero-config** | **84.9%** | **80.0%** | **57.6%** | **72.00** |
+| Pandera | best-effort rules | 36.4% | 38.1% | 25.0% | 32.51 |
+| Soda Core | best-effort rules | 38.1% | 23.5% | 13.3% | 22.36 |
+| Great Expectations | best-effort rules | 36.4% | 23.5% | 12.5% | 21.68 |
+| Great Expectations | auto-profiled | 22.2% | 42.1% | 0.0% | 21.29 |
+| Soda Core | auto-profiled | 0.0% | 11.1% | 6.2% | 6.94 |
+| All tools | zero-config | 0.0% | 0.0% | 0.0% | 0.00 |
+
+**DQBench Score formula:** Tier1_F1 × 20% + Tier2_F1 × 40% + Tier3_F1 × 40%
+
+Run the benchmark yourself:
+```bash
+pip install dqbench goldencheck
+dqbench run goldencheck
+```
+
+---
+
 ## Speed Benchmark
 
 **Script:** `benchmarks/speed_benchmark.py`

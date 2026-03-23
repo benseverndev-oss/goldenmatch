@@ -40,11 +40,14 @@ A sortable data table of all findings from the scan.
 |--------|-------------|
 | Pin | `[x]` if pinned, `[ ]` if not |
 | Severity | ERROR / WARNING / INFO |
+| Conf | Confidence: `H` (high), `M` (medium), `L` (low) |
 | Column | The column name the finding applies to |
 | Check | The profiler check name |
 | Message | Truncated finding description (first 55 chars) |
 | Rows | Number of affected rows |
 | Source | `[LLM]` badge if the finding came from LLM Boost |
+
+The `Conf` column helps prioritize which findings to act on first. `H` findings are deterministic (e.g., type mismatches, format violations). `M` findings are heuristic (e.g., outliers, near-duplicates). `L` findings are statistical and may need more investigation before acting.
 
 **Interaction:** Select a row and press Space (or Enter) to toggle the pin. Pinned findings are promoted to permanent rules when you press F2.
 

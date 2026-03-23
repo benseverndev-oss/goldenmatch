@@ -33,16 +33,26 @@ goldencheck/
 ├── profilers/
 │   ├── base.py              # BaseProfiler ABC
 │   ├── cardinality.py
+│   ├── drift_detection.py   # Categorical and numeric drift between dataset halves
+│   ├── encoding_detection.py# Zero-width Unicode, smart quotes, Latin-1 mojibake
 │   ├── format_detection.py
 │   ├── nullability.py
 │   ├── pattern_consistency.py
 │   ├── range_distribution.py
+│   ├── sequence_gap.py      # Gap detection for integer sequences
 │   ├── type_inference.py
 │   └── uniqueness.py
 │
 ├── relations/
 │   ├── null_correlation.py
 │   └── temporal.py
+│
+├── semantic/
+│   ├── classifier.py        # SemanticTypeClassifier — maps columns to semantic types
+│   └── types.py             # Built-in semantic type definitions
+│
+├── suppression/
+│   └── engine.py            # SuppressionEngine — applies ignore rules and deduplication
 │
 ├── reporters/
 │   ├── ci_reporter.py       # report_ci() — compute exit code from findings
@@ -81,9 +91,18 @@ goldencheck data.csv
     engine/scanner.py  scan_file()
          │
          ├─ for each column:
-         │    COLUMN_PROFILERS (7 profilers) → list[Finding]
+         │    COLUMN_PROFILERS (10 profilers) → list[Finding]
          │
          ├─ RELATION_PROFILERS (2 profilers) → list[Finding]
+         │
+         ├─ semantic/classifier.py
+         │    SemanticTypeClassifier → annotate findings with semantic context
+         │
+         ├─ suppression/engine.py
+         │    SuppressionEngine → apply ignore rules, dedup
+         │
+         ├─ confidence scoring pipeline
+         │    assign H/M/L confidence to each Finding
          │
          └─ sort by severity → (list[Finding], DatasetProfile)
                   │
@@ -164,6 +183,8 @@ class Finding:
     suggestion: str | None    # recommended fix
     pinned: bool = False      # promoted to a rule by the user
     source: str | None        # "llm" if from LLM Boost, None for profiler
+    confidence: str | None    # "H", "M", or "L" — set by confidence scoring pipeline
+    semantic_type: str | None # e.g., "email", "phone", "name" — from SemanticTypeClassifier
 ```
 
 ### `GoldenCheckConfig`
@@ -176,6 +197,55 @@ class GoldenCheckConfig(BaseModel):
     relations: list[RelationRule] = []
     ignore: list[IgnoreEntry] = []
 ```
+
+---
+
+## Semantic Type Classification
+
+**Module:** `goldencheck/semantic/`
+
+The semantic type classifier runs after all profilers and annotates each column with an inferred semantic type. This enables smarter severity assessment — for example, knowing a column is an email means nulls in it are more likely to be errors, not just INFO.
+
+**Built-in semantic types** (from `goldencheck/semantic/types.py`):
+
+| Semantic Type | Detection heuristic |
+|---------------|-------------------|
+| `email` | FormatDetectionProfiler classified it + >70% match |
+| `phone` | FormatDetectionProfiler classified it as phone |
+| `url` | FormatDetectionProfiler classified it as URL |
+| `name` | Column name contains `name`, `first`, `last`, `full` |
+| `id` | Column is 100% unique integer |
+| `currency` | Column name contains `price`, `amount`, `cost`, `total` |
+| `date` | Temporal column (parsed as date) |
+| `category` | Low cardinality string (<20 unique values) |
+
+**Custom types** can be added in `goldencheck_types.yaml` — see [Configuration](Configuration.md#semantic-types).
+
+---
+
+## Suppression Engine
+
+**Module:** `goldencheck/suppression/engine.py`
+
+The suppression engine applies the `ignore` list from `goldencheck.yml` to filter findings before they are returned to the CLI or TUI. It runs after all profilers and after the confidence scoring pipeline.
+
+**Rules:** An `ignore` entry matches a finding if both `column` and `check` match. Suppressed findings are dropped entirely — they do not appear in output or count toward the health score.
+
+The suppression engine also deduplicates findings: if two profilers emit the same `(column, check)` pair, only the higher-severity finding is kept.
+
+---
+
+## Confidence Scoring Pipeline
+
+Each `Finding` carries a `confidence` field set to `"H"` (high), `"M"` (medium), or `"L"` (low). Confidence is assigned based on how deterministic the detection logic is:
+
+| Confidence | Meaning | Examples |
+|------------|---------|---------|
+| `H` | Deterministic — rule is exact | Type mismatch, format violation, enum violation, temporal order error |
+| `M` | Heuristic — likely but not certain | Outlier detection, near-unique duplicates, pattern inconsistency |
+| `L` | Statistical — could be noise | Null correlation, drift detection, sequence gaps in sparse data |
+
+Confidence is displayed in the TUI (Findings tab, `Conf` column) and included in JSON output. The LLM Boost pass can revise confidence when it upgrades or downgrades a finding.
 
 ---
 
