@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "bridge",
+    "postgres",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+repository = "https://github.com/benzsevern/goldenmatch-extensions"

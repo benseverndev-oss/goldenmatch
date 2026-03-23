@@ -1,0 +1,5 @@
+comment = 'Entity resolution toolkit -- deduplicate, match, and maintain golden records'
+default_version = '0.1.0'
+module_pathname = '$libdir/goldenmatch'
+relocatable = false
+schema = goldenmatch

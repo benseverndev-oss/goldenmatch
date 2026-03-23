@@ -1,0 +1,25 @@
+[package]
+name = "goldenmatch-pg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "GoldenMatch entity resolution as a PostgreSQL extension"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["pg16"]
+pg16 = ["pgrx/pg16"]
+pg15 = ["pgrx/pg15"]
+pg17 = ["pgrx/pg17"]
+pg_test = []
+
+[dependencies]
+pgrx = "0.12.9"
+goldenmatch-bridge = { path = "../bridge" }
+serde_json = "1"
+
+[dev-dependencies]
+pgrx-tests = "0.12.9"
