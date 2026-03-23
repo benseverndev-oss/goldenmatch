@@ -38,12 +38,6 @@ class CardinalityProfiler(BaseProfiler):
                 suggestion="Define an enum or categorical constraint for this column",
                 confidence=confidence,
             ))
-        else:
-            findings.append(Finding(
-                severity=Severity.INFO,
-                column=column,
-                check="cardinality",
-                message=f"Cardinality: {unique_count} unique value(s) across {total} rows",
-            ))
+        # High-cardinality columns are normal — no finding needed
 
         return findings
