@@ -1,6 +1,5 @@
 """Tests for EncodingDetectionProfiler."""
 import polars as pl
-import pytest
 from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
 
 
