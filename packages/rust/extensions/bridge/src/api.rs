@@ -73,7 +73,10 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         // Extract golden DataFrame as JSON
         let golden_json = if let Ok(golden) = result.getattr("golden") {
             if !golden.is_none() {
-                Some(convert::polars_df_to_json(py, &golden.into_pyobject(py).unwrap().unbind())?)
+                Some(convert::polars_df_to_json(
+                    py,
+                    &golden.into_pyobject(py).unwrap().unbind(),
+                )?)
             } else {
                 None
             }
@@ -83,15 +86,11 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
 
         // Extract stats
         let stats = result.getattr("stats")?;
-        let stats_json: String = json_mod
-            .call_method1("dumps", (stats,))?
-            .extract()?;
+        let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
 
         // Extract clusters
         let clusters = result.getattr("clusters")?;
-        let clusters_json: String = json_mod
-            .call_method1("dumps", (clusters,))?
-            .extract()?;
+        let clusters_json: String = json_mod.call_method1("dumps", (clusters,))?.extract()?;
 
         Ok(DedupeResult {
             golden_json,
@@ -141,7 +140,10 @@ pub fn match_tables(
 
         let matched_json = if let Ok(matched) = result.getattr("matched") {
             if !matched.is_none() {
-                Some(convert::polars_df_to_json(py, &matched.into_pyobject(py).unwrap().unbind())?)
+                Some(convert::polars_df_to_json(
+                    py,
+                    &matched.into_pyobject(py).unwrap().unbind(),
+                )?)
             } else {
                 None
             }
@@ -151,7 +153,10 @@ pub fn match_tables(
 
         let unmatched_json = if let Ok(unmatched) = result.getattr("unmatched") {
             if !unmatched.is_none() {
-                Some(convert::polars_df_to_json(py, &unmatched.into_pyobject(py).unwrap().unbind())?)
+                Some(convert::polars_df_to_json(
+                    py,
+                    &unmatched.into_pyobject(py).unwrap().unbind(),
+                )?)
             } else {
                 None
             }

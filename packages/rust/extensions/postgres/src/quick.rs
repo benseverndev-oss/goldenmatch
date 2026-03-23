@@ -44,11 +44,7 @@ pub fn goldenmatch_score(
 /// -- Returns: 0.95
 /// ```
 #[pg_extern]
-pub fn goldenmatch_score_pair(
-    record_a: String,
-    record_b: String,
-    config: String,
-) -> f64 {
+pub fn goldenmatch_score_pair(record_a: String, record_b: String, config: String) -> f64 {
     match goldenmatch_bridge::api::score_pair(&record_a, &record_b, &config) {
         Ok(score) => score,
         Err(e) => {
@@ -69,11 +65,7 @@ pub fn goldenmatch_score_pair(
 /// -- Returns: 'MATCH (score: 0.93) ...'
 /// ```
 #[pg_extern]
-pub fn goldenmatch_explain(
-    record_a: String,
-    record_b: String,
-    config: String,
-) -> String {
+pub fn goldenmatch_explain(record_a: String, record_b: String, config: String) -> String {
     match goldenmatch_bridge::api::explain_pair(&record_a, &record_b, &config) {
         Ok(explanation) => explanation,
         Err(e) => format!("Error: {}", e),
@@ -92,10 +84,7 @@ pub fn goldenmatch_explain(
 /// Note: This initial version accepts JSON input directly.
 /// Future versions will read from a named table via SPI.
 #[pg_extern]
-pub fn goldenmatch_dedupe(
-    rows_json: String,
-    config_json: String,
-) -> String {
+pub fn goldenmatch_dedupe(rows_json: String, config_json: String) -> String {
     match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
         Ok(result) => {
             // Return golden records JSON, or stats if no golden records
@@ -124,9 +113,7 @@ pub fn goldenmatch_match(
     config_json: String,
 ) -> String {
     match goldenmatch_bridge::api::match_tables(&target_json, &reference_json, &config_json) {
-        Ok(result) => {
-            result.matched_json.unwrap_or_else(|| "[]".to_string())
-        }
+        Ok(result) => result.matched_json.unwrap_or_else(|| "[]".to_string()),
         Err(e) => format!("{{\"error\": \"{}\"}}", e),
     }
 }
