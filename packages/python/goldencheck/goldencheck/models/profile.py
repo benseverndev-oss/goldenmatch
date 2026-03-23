@@ -44,9 +44,14 @@ class DatasetProfile:
             points = 100 - (errors * 10) - (warnings * 3)
             points = max(points, 0)
 
-        if points >= 90: grade = "A"
-        elif points >= 80: grade = "B"
-        elif points >= 70: grade = "C"
-        elif points >= 60: grade = "D"
-        else: grade = "F"
+        if points >= 90:
+            grade = "A"
+        elif points >= 80:
+            grade = "B"
+        elif points >= 70:
+            grade = "C"
+        elif points >= 60:
+            grade = "D"
+        else:
+            grade = "F"
         return grade, points

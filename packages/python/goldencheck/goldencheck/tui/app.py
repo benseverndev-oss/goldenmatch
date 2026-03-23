@@ -4,9 +4,9 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Header, Footer, TabbedContent, TabPane
-from goldencheck.models.finding import Finding, Severity
+from goldencheck.models.finding import Finding
 from goldencheck.models.profile import DatasetProfile
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, IgnoreEntry
+from goldencheck.config.schema import GoldenCheckConfig, ColumnRule
 from goldencheck.config.writer import save_config
 from goldencheck.tui.overview import OverviewPane
 from goldencheck.tui.findings import FindingsPane

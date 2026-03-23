@@ -23,7 +23,7 @@ class OverviewPane(Vertical):
         yield Static(f"Health Score: [{color_class}][bold]{grade}[/bold] ({points}/100)[/{color_class}]")
         yield Static(f"Rows: {self.profile.row_count:,}  |  Columns: {self.profile.column_count}")
         yield Static(f"\n[red]{errors} errors[/red]  |  [yellow]{warnings} warnings[/yellow]  |  [cyan]{infos} info[/cyan]")
-        yield Static(f"\nColumns profiled:")
+        yield Static("\nColumns profiled:")
         for cp in self.profile.columns:
             null_str = f"  nulls: {cp.null_count}" if cp.null_count > 0 else ""
             yield Static(f"  {cp.name} ({cp.inferred_type}){null_str}")
