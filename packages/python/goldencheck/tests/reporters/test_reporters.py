@@ -47,3 +47,19 @@ def test_json_reporter_omits_source_when_none():
     report_json(findings, profile, buf)
     data = json.loads(buf.getvalue())
     assert "source" not in data["findings"][0]
+
+def test_json_reporter_always_includes_confidence():
+    findings = [Finding(severity=Severity.INFO, column="x", check="y", message="ok", confidence=0.7)]
+    profile = DatasetProfile(file_path="test.csv", row_count=100, column_count=5, columns=[])
+    buf = io.StringIO()
+    report_json(findings, profile, buf)
+    data = json.loads(buf.getvalue())
+    assert data["findings"][0]["confidence"] == 0.7
+
+def test_json_reporter_default_confidence():
+    findings = [Finding(severity=Severity.INFO, column="x", check="y", message="ok")]
+    profile = DatasetProfile(file_path="test.csv", row_count=100, column_count=5, columns=[])
+    buf = io.StringIO()
+    report_json(findings, profile, buf)
+    data = json.loads(buf.getvalue())
+    assert data["findings"][0]["confidence"] == 1.0

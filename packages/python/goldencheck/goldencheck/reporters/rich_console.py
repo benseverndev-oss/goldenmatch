@@ -25,7 +25,9 @@ def report_rich(findings: list[Finding], profile: DatasetProfile) -> None:
     table.add_column("Column", width=20)
     table.add_column("Check", width=15)
     table.add_column("Message")
+    table.add_column("Conf", width=4)
     for f in findings:
         color = SEVERITY_COLORS.get(f.severity, "white")
-        table.add_row(f"[{color}]{f.severity.name}[/{color}]", f.column, f.check, f.message)
+        conf = "H" if f.confidence >= 0.8 else "M" if f.confidence >= 0.5 else "[red]L[/red]"
+        table.add_row(f"[{color}]{f.severity.name}[/{color}]", f.column, f.check, f.message, conf)
     console.print(table)

@@ -19,3 +19,4 @@ class Finding:
     suggestion: str | None = None
     pinned: bool = False
     source: str | None = None
+    confidence: float = 1.0

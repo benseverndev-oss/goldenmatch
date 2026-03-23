@@ -32,3 +32,11 @@ def test_finding_default_source_is_none():
 def test_finding_with_llm_source():
     f = Finding(severity=Severity.ERROR, column="x", check="y", message="z", source="llm")
     assert f.source == "llm"
+
+def test_finding_default_confidence():
+    f = Finding(severity=Severity.INFO, column="x", check="y", message="z")
+    assert f.confidence == 1.0
+
+def test_finding_custom_confidence():
+    f = Finding(severity=Severity.WARNING, column="x", check="y", message="z", confidence=0.3)
+    assert f.confidence == 0.3
