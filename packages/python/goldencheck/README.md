@@ -21,6 +21,7 @@ Data validation that discovers rules from your data so you don't have to write t
 | LLM enhancement | **Yes ($0.01/scan)** | No | No | No |
 | Fix suggestions | Yes, in TUI | No | No | No |
 | Confidence scoring | Yes (H/M/L per finding) | No | No | No |
+| DQBench Score | **72.00** | 21.68 (best-effort) | 32.51 (best-effort) | 6.94 (auto) |
 
 ## Install
 
@@ -186,6 +187,23 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | 10K rows | 0.23s | 43K rows/sec |
 | 100K rows | 2.29s | 44K rows/sec |
 | **1M rows** | **2.07s** | **482K rows/sec** |
+
+### DQBench v1.0 — Head-to-Head
+
+| Tool | Mode | DQBench Score |
+|------|------|---------------|
+| **GoldenCheck** | **zero-config** | **72.00** |
+| Pandera | best-effort rules | 32.51 |
+| Soda Core | best-effort rules | 22.36 |
+| Great Expectations | best-effort rules | 21.68 |
+
+> GoldenCheck's zero-config discovery outperforms every competitor — even when they have hand-written rules.
+
+Run the benchmark yourself:
+```bash
+pip install dqbench goldencheck
+dqbench run goldencheck
+```
 
 ### Detection Accuracy
 
