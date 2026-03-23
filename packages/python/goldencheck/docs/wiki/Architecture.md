@@ -26,9 +26,15 @@ goldencheck/
 │   ├── providers.py         # call_llm() wrappers for Anthropic and OpenAI
 │   └── sample_block.py      # build_sample_blocks() — compact column summaries
 │
+├── mcp/
+│   ├── __init__.py
+│   └── server.py            # MCP server: 6 tools (scan, validate, profile, etc.)
+│
 ├── models/
-│   ├── finding.py           # Finding dataclass, Severity enum
-│   └── profile.py           # ColumnProfile, DatasetProfile dataclasses
+│   ├── finding.py           # Finding dataclass, Severity enum (with _repr_html_)
+│   └── profile.py           # ColumnProfile, DatasetProfile (with _repr_html_)
+│
+├── notebook.py              # ScanResult wrapper + HTML renderers for Jupyter/Colab
 │
 ├── profilers/
 │   ├── base.py              # BaseProfiler ABC

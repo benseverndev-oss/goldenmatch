@@ -96,6 +96,24 @@ goldencheck review data.csv --config configs/staging.yml
 
 ---
 
+### `mcp-serve`
+
+Start the MCP (Model Context Protocol) server for Claude Desktop integration.
+
+```bash
+goldencheck mcp-serve
+```
+
+Uses the stdio transport protocol. See [MCP Server](MCP-Server) for full documentation and Claude Desktop setup.
+
+Requires `goldencheck[mcp]` installed:
+
+```bash
+pip install goldencheck[mcp]
+```
+
+---
+
 ## Flags
 
 All flags are available on `scan` and `review`. `validate` supports `--no-tui`, `--json`, and `--config`.
