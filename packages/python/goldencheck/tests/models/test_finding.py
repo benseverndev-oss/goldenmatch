@@ -24,3 +24,11 @@ def test_finding_with_suggestion():
 def test_severity_ordering():
     assert Severity.ERROR.value > Severity.WARNING.value
     assert Severity.WARNING.value > Severity.INFO.value
+
+def test_finding_default_source_is_none():
+    f = Finding(severity=Severity.INFO, column="x", check="y", message="z")
+    assert f.source is None
+
+def test_finding_with_llm_source():
+    f = Finding(severity=Severity.ERROR, column="x", check="y", message="z", source="llm")
+    assert f.source == "llm"

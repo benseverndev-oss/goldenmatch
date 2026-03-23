@@ -18,3 +18,4 @@ class Finding:
     sample_values: list[str] = field(default_factory=list)
     suggestion: str | None = None
     pinned: bool = False
+    source: str | None = None
