@@ -18,6 +18,22 @@ _PAIR_HEURISTICS: list[tuple[str, str]] = [
     ("birth", "death"),
     ("order", "delivery"),
     ("order", "ship"),
+    ("admission", "discharge"),
+    ("admit", "discharge"),
+    ("service", "submit"),
+    ("submit", "approval"),
+    ("effective", "expir"),
+    ("issue", "expir"),
+    ("received", "processed"),
+    ("received", "complet"),
+    ("placed", "fulfill"),
+    ("placed", "shipped"),
+    ("request", "approved"),
+    ("booked", "checkin"),
+    ("checkin", "checkout"),
+    ("enroll", "graduat"),
+    ("invoice", "payment"),
+    ("prescribed", "dispensed"),
 ]
 
 
@@ -88,7 +104,7 @@ class TemporalOrderProfiler:
                 except Exception:
                     pass
 
-        if len(date_cols) <= 10:
+        if len(date_cols) <= 6:
             from itertools import combinations
             for col_a, col_b in combinations(date_cols, 2):
                 if (col_a, col_b) not in kw_pair_set and (col_b, col_a) not in kw_pair_set:
@@ -134,8 +150,8 @@ class TemporalOrderProfiler:
                 column=f"{start_col},{end_col}",
                 check="temporal_order",
                 message=(
-                    f"Column '{start_col}' has {violation_count} row(s) where its value "
-                    f"is later than '{end_col}', violating expected temporal order."
+                    f"{violation_count} row(s) where '{start_col}' is later than "
+                    f"'{end_col}', violating expected temporal order"
                 ),
                 affected_rows=violation_count,
                 sample_values=samples,
