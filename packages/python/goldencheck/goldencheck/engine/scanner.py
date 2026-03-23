@@ -82,6 +82,16 @@ def scan_file(
         except Exception as e:
             logger.warning("Relation profiler %s failed: %s", type(profiler).__name__, e)
 
+    from goldencheck.semantic.classifier import classify_columns, load_type_defs
+    from goldencheck.semantic.suppression import apply_suppression as apply_type_suppression
+
+    # Classify columns
+    column_types = classify_columns(sample)
+    type_defs = load_type_defs()
+
+    # Apply type suppression BEFORE corroboration boost
+    all_findings = apply_type_suppression(all_findings, column_types, type_defs)
+
     all_findings = apply_corroboration_boost(all_findings)
     all_findings.sort(key=lambda f: f.severity, reverse=True)
     profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
