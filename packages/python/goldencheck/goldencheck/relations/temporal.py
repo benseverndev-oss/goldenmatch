@@ -10,6 +10,14 @@ _PAIR_HEURISTICS: list[tuple[str, str]] = [
     ("start", "end"),
     ("created", "updated"),
     ("begin", "finish"),
+    ("signup", "login"),
+    ("signup", "last_login"),
+    ("open", "close"),
+    ("opened", "closed"),
+    ("hire", "termination"),
+    ("birth", "death"),
+    ("order", "delivery"),
+    ("order", "ship"),
 ]
 
 
@@ -20,9 +28,6 @@ def _find_date_pairs(columns: list[str]) -> list[tuple[str, str]]:
     lower_cols = list(lower_to_orig.keys())
 
     for start_kw, end_kw in _PAIR_HEURISTICS:
-        start_candidates = [lc for lc in lower_cols if start_kw in lc]
-        end_candidates = [lc for lc in lower_cols if end_kw in lc and end_kw != start_kw or (end_kw == start_kw and lc != lc)]
-
         # Rebuild: end_kw must appear in col but NOT the start_kw (to avoid "started" matching "end")
         start_candidates = [lc for lc in lower_cols if start_kw in lc]
         end_candidates = [lc for lc in lower_cols if end_kw in lc and lc not in start_candidates]
@@ -41,52 +46,101 @@ def _find_date_pairs(columns: list[str]) -> list[tuple[str, str]]:
     return unique
 
 
+def _try_cast_to_date(series: pl.Series) -> pl.Series:
+    """Attempt to cast a series to Date if stored as strings."""
+    if series.dtype == pl.Utf8 or series.dtype == pl.String:
+        return series.str.to_date(format="%Y-%m-%d", strict=False)
+    return series
+
+
 class TemporalOrderProfiler:
     """Checks that start-like date columns are <= end-like date columns."""
 
     def profile(self, df: pl.DataFrame) -> list[Finding]:
         findings: list[Finding] = []
-        pairs = _find_date_pairs(df.columns)
 
-        for start_col, end_col in pairs:
-            start_series = df[start_col]
-            end_series = df[end_col]
+        # Keyword-matched pairs (high confidence)
+        kw_pairs = _find_date_pairs(df.columns)
+        kw_pair_set: set[tuple[str, str]] = set(kw_pairs)
 
-            # Attempt to cast to Date if stored as strings
-            try:
-                if start_series.dtype == pl.Utf8 or start_series.dtype == pl.String:
-                    start_series = start_series.str.to_date(format="%Y-%m-%d", strict=False)
-                if end_series.dtype == pl.Utf8 or end_series.dtype == pl.String:
-                    end_series = end_series.str.to_date(format="%Y-%m-%d", strict=False)
-            except Exception:
-                # Cannot parse as dates — skip this pair
-                continue
+        checked_pairs: set[tuple[str, str]] = set()
 
-            if start_series.dtype not in (pl.Date, pl.Datetime) or end_series.dtype not in (pl.Date, pl.Datetime):
-                continue
+        for start_col, end_col in kw_pairs:
+            checked_pairs.add((start_col, end_col))
+            result = self._check_pair(df, start_col, end_col, confidence=0.9)
+            if result:
+                findings.append(result)
 
-            # Find rows where start > end (ignoring nulls)
-            violation_mask = (start_series > end_series).fill_null(False)
-            violation_count = violation_mask.sum()
+        # Any-date-pair fallback: find all Date-typed columns
+        # Guard: skip if >10 date columns
+        date_cols = []
+        for col in df.columns:
+            s = df[col]
+            dtype = s.dtype
+            if dtype in (pl.Date, pl.Datetime):
+                date_cols.append(col)
+            elif dtype in (pl.Utf8, pl.String):
+                # Try casting to check if it's a date column
+                try:
+                    casted = s.str.to_date(format="%Y-%m-%d", strict=False)
+                    if casted.drop_nulls().len() > 0:
+                        date_cols.append(col)
+                except Exception:
+                    pass
 
-            if violation_count > 0:
-                sample_starts = start_series.filter(violation_mask).head(3).cast(pl.String).to_list()
-                sample_ends = end_series.filter(violation_mask).head(3).cast(pl.String).to_list()
-                samples = [f"{s} > {e}" for s, e in zip(sample_starts, sample_ends)]
-
-                findings.append(
-                    Finding(
-                        severity=Severity.ERROR,
-                        column=f"{start_col},{end_col}",
-                        check="temporal_order",
-                        message=(
-                            f"Column '{start_col}' has {violation_count} row(s) where its value "
-                            f"is later than '{end_col}', violating expected temporal order."
-                        ),
-                        affected_rows=violation_count,
-                        sample_values=samples,
-                        suggestion=f"Ensure '{start_col}' <= '{end_col}' for all rows.",
-                    )
-                )
+        if len(date_cols) <= 10:
+            from itertools import combinations
+            for col_a, col_b in combinations(date_cols, 2):
+                if (col_a, col_b) not in kw_pair_set and (col_b, col_a) not in kw_pair_set:
+                    if (col_a, col_b) not in checked_pairs:
+                        checked_pairs.add((col_a, col_b))
+                        result = self._check_pair(df, col_a, col_b, confidence=0.4)
+                        if result:
+                            findings.append(result)
 
         return findings
+
+    def _check_pair(
+        self,
+        df: pl.DataFrame,
+        start_col: str,
+        end_col: str,
+        confidence: float,
+    ) -> Finding | None:
+        start_series = df[start_col]
+        end_series = df[end_col]
+
+        # Attempt to cast to Date if stored as strings
+        try:
+            start_series = _try_cast_to_date(start_series)
+            end_series = _try_cast_to_date(end_series)
+        except Exception:
+            return None
+
+        if start_series.dtype not in (pl.Date, pl.Datetime) or end_series.dtype not in (pl.Date, pl.Datetime):
+            return None
+
+        # Find rows where start > end (ignoring nulls)
+        violation_mask = (start_series > end_series).fill_null(False)
+        violation_count = violation_mask.sum()
+
+        if violation_count > 0:
+            sample_starts = start_series.filter(violation_mask).head(3).cast(pl.String).to_list()
+            sample_ends = end_series.filter(violation_mask).head(3).cast(pl.String).to_list()
+            samples = [f"{s} > {e}" for s, e in zip(sample_starts, sample_ends)]
+
+            return Finding(
+                severity=Severity.ERROR,
+                column=f"{start_col},{end_col}",
+                check="temporal_order",
+                message=(
+                    f"Column '{start_col}' has {violation_count} row(s) where its value "
+                    f"is later than '{end_col}', violating expected temporal order."
+                ),
+                affected_rows=violation_count,
+                sample_values=samples,
+                suggestion=f"Ensure '{start_col}' <= '{end_col}' for all rows.",
+                confidence=confidence,
+            )
+
+        return None
