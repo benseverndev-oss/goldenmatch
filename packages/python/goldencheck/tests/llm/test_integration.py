@@ -23,11 +23,10 @@ MOCK_RESPONSE = json.dumps({
 @patch("goldencheck.llm.providers.check_llm_available")
 @patch("goldencheck.llm.providers.call_llm", return_value=(MOCK_RESPONSE, 1800, 420))
 def test_llm_boost_integration(mock_call, mock_check):
-    """When all profiler findings are high confidence, LLM boost is skipped."""
+    """LLM boost is always called when --llm-boost is used."""
     findings, profile = scan_file_with_llm(FIXTURES / "simple.csv", provider="anthropic")
-    # All findings from simple.csv are >= 0.5 confidence after corroboration boost,
-    # so LLM is correctly skipped — no LLM-sourced findings expected.
-    mock_call.assert_not_called()
+    mock_call.assert_called_once()
+    assert any(f.source == "llm" for f in findings)
     assert profile is not None
 
 
