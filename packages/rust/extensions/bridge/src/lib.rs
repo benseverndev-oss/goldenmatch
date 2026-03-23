@@ -21,26 +21,22 @@ pub fn init() -> Result<(), error::BridgeError> {
     INIT.call_once(|| {
         pyo3::prepare_freethreaded_python();
 
-        Python::with_gil(|py| {
-            match py.import("goldenmatch") {
-                Ok(gm) => {
-                    match gm.getattr("__version__") {
-                        Ok(ver) => {
-                            let version: String = ver.extract().unwrap_or_default();
-                            eprintln!("goldenmatch-bridge: loaded goldenmatch {}", version);
-                        }
-                        Err(_) => {
-                            eprintln!("goldenmatch-bridge: loaded goldenmatch (unknown version)");
-                        }
-                    }
+        Python::with_gil(|py| match py.import("goldenmatch") {
+            Ok(gm) => match gm.getattr("__version__") {
+                Ok(ver) => {
+                    let version: String = ver.extract().unwrap_or_default();
+                    eprintln!("goldenmatch-bridge: loaded goldenmatch {}", version);
                 }
-                Err(e) => {
-                    result = Err(error::BridgeError::PythonImport(format!(
-                        "Could not import goldenmatch: {}. \
+                Err(_) => {
+                    eprintln!("goldenmatch-bridge: loaded goldenmatch (unknown version)");
+                }
+            },
+            Err(e) => {
+                result = Err(error::BridgeError::PythonImport(format!(
+                    "Could not import goldenmatch: {}. \
                          Install with: pip install goldenmatch>=1.1.0",
-                        e
-                    )));
-                }
+                    e
+                )));
             }
         });
     });

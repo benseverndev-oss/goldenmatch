@@ -3,8 +3,8 @@
 //! Handles converting between Rust Arrow RecordBatches and Python Polars DataFrames
 //! via the Arrow C Data Interface (zero-copy where possible).
 
-use pyo3::prelude::*;
 use crate::error::BridgeError;
+use pyo3::prelude::*;
 
 /// Convert a JSON string of records into a Python Polars DataFrame.
 ///
