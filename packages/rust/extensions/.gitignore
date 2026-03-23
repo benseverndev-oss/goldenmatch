@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.so
+*.dylib
+*.dll
+*.pdb
+.env

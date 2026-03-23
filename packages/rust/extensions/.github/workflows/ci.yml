@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy (bridge only)
+        run: cargo clippy -p goldenmatch-bridge -- -D warnings
+
+  bridge-tests:
+    name: Bridge Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch
+        run: pip install goldenmatch>=1.1.0
+      - name: Build bridge crate
+        run: cargo build -p goldenmatch-bridge
+      - name: Test bridge crate
+        run: cargo test -p goldenmatch-bridge
+
+  postgres-build:
+    name: Postgres Extension (PG 16)
+    runs-on: ubuntu-latest
+    env:
+      PG_VERSION: "16"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16 postgresql-server-dev-16 libclang-dev
+
+      - name: Install goldenmatch
+        run: pip install goldenmatch>=1.1.0
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init --pg16=/usr/lib/postgresql/16/bin/pg_config
+
+      - name: Build extension
+        run: cargo build -p goldenmatch-pg --features pg16 --no-default-features
+
+      - name: Run pgrx tests
+        run: cargo pgrx test pg16 -p goldenmatch-pg
