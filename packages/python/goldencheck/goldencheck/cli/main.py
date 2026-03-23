@@ -190,6 +190,43 @@ def review(
     raise typer.Exit(code=exit_code)
 
 
+@app.command()
+def learn(
+    file: Path = typer.Argument(..., help="Data file to analyze."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path for rules (default: goldencheck_rules.json)."),
+    llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
+) -> None:
+    """Generate validation rules using LLM analysis of your data.
+
+    Sends a representative sample to an LLM which generates domain-specific
+    validation rules (regex, length, value lists, cross-column checks).
+    Rules are saved and automatically applied on future scans.
+    """
+    from goldencheck.llm.rule_generator import generate_rules, save_rules
+    from goldencheck.engine.reader import read_file
+    from goldencheck.engine.sampler import maybe_sample
+
+    df = read_file(file)
+    sample = maybe_sample(df, max_rows=100_000)
+
+    # Run profilers first to give LLM context
+    findings, _ = scan_file(file)
+
+    typer.echo(f"Analyzing {len(df)} rows, {len(df.columns)} columns...")
+    rules = generate_rules(sample, findings, provider=llm_provider)
+
+    if not rules:
+        typer.echo("No rules generated.", err=True)
+        raise typer.Exit(code=1)
+
+    out_path = output or Path("goldencheck_rules.json")
+    save_rules(rules, out_path)
+    typer.echo(f"Generated {len(rules)} rules → {out_path}")
+
+    for r in rules:
+        typer.echo(f"  [{r.rule_type}] {r.column}: {r.description}")
+
+
 @app.command(name="mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio) for Claude Desktop integration."""
