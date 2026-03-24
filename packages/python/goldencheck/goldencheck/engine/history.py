@@ -51,7 +51,7 @@ def record_scan(
 
     record = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "file": str(Path(file).name),
+        "file": str(Path(file).resolve()),
         "rows": profile.row_count,
         "columns": profile.column_count,
         "grade": grade,
@@ -100,6 +100,6 @@ def load_history(
 
 def get_previous_scan(file: str | Path) -> ScanRecord | None:
     """Get the most recent scan record for a file."""
-    name = str(Path(file).name)
-    records = load_history(file_filter=name)
+    resolved = str(Path(file).resolve())
+    records = load_history(file_filter=resolved)
     return records[-1] if records else None

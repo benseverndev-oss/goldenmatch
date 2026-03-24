@@ -495,20 +495,35 @@ def _tool_get_domain_info(arguments: dict) -> dict:
 
 
 def _tool_install_domain(arguments: dict) -> dict:
+    import re
     import urllib.request
 
     domain = arguments["domain"]
     output_path = arguments.get("output_path", "goldencheck_domain.yaml")
+
+    # Validate domain name (alphanumeric + hyphens/underscores only)
+    if not re.match(r'^[a-z0-9_-]+$', domain):
+        return {"error": f"Invalid domain name: '{domain}'. Use lowercase letters, numbers, hyphens, underscores."}
+
+    # Prevent path traversal
+    resolved = Path(output_path).resolve()
+    cwd = Path.cwd().resolve()
+    if not str(resolved).startswith(str(cwd)):
+        return {"error": "Output path must be within the working directory."}
+
     url = f"https://raw.githubusercontent.com/benzsevern/goldencheck-types/main/domains/{domain}.yaml"
 
     try:
-        urllib.request.urlretrieve(url, output_path)
+        resp = urllib.request.urlopen(url, timeout=10)
+        content = resp.read()
+        with open(resolved, "wb") as f:
+            f.write(content)
     except Exception as e:
         return {"error": f"Failed to download domain '{domain}': {e}"}
 
     return {
         "installed": domain,
-        "path": output_path,
+        "path": str(output_path),
     }
 
 
