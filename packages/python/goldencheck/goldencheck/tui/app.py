@@ -73,6 +73,10 @@ class GoldenCheckApp(App):
         save_config(self.config, Path("goldencheck.yml"))
         self.notify("Rules saved to goldencheck.yml")
 
+    _guided_findings: list = []
+    _guided_index: int = 0
+    _guided_active: bool = False
+
     def action_guided_review(self) -> None:
         """Walk through findings one at a time with pin/dismiss."""
         from goldencheck.models.finding import Severity as _Sev
@@ -83,10 +87,12 @@ class GoldenCheckApp(App):
 
         self._guided_findings = reviewable
         self._guided_index = 0
+        self._guided_active = True
         self._show_guided_finding()
 
     def _show_guided_finding(self) -> None:
         if self._guided_index >= len(self._guided_findings):
+            self._guided_active = False
             pinned_count = sum(1 for f in self.findings if f.pinned)
             self.notify(f"Guided review complete. {pinned_count} rules pinned. Press F2 to save.")
             return
@@ -100,6 +106,30 @@ class GoldenCheckApp(App):
             f"(Conf: {conf}) — Space=Pin, n=Skip, Esc=Stop",
             timeout=0,
         )
+
+    def on_key(self, event) -> None:
+        """Handle key events during guided review."""
+        if not self._guided_active:
+            return
+
+        if event.key == "space":
+            # Pin current finding
+            f = self._guided_findings[self._guided_index]
+            f.pinned = True
+            self._guided_index += 1
+            self._show_guided_finding()
+            event.prevent_default()
+        elif event.key == "n":
+            # Skip current finding
+            self._guided_index += 1
+            self._show_guided_finding()
+            event.prevent_default()
+        elif event.key == "escape":
+            # Stop guided review
+            self._guided_active = False
+            pinned_count = sum(1 for f in self.findings if f.pinned)
+            self.notify(f"Guided review stopped. {pinned_count} rules pinned.")
+            event.prevent_default()
 
     def action_show_help(self) -> None:
         self.notify("1-4: Switch tabs | Space: Pin rule | F2: Save | g: Guided | e: View rows | q: Quit")
