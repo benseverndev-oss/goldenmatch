@@ -27,7 +27,16 @@ class BaseProfiler(ABC):
 | `SequenceDetectionProfiler` | `sequence_detection` | Gaps in sequential numbering |
 | `DriftDetectionProfiler` | `drift_detection` | Distribution drift, new categories over time |
 
-Plus 2 relation profilers in `goldencheck/relations/`: `TemporalOrderProfiler` (`temporal_order`) and `NullCorrelationProfiler` — these call `profiler.profile(sample)` with no column arg.
+## 4 Relation Profilers (`goldencheck/relations/`)
+
+| Class | Check name | What it flags |
+|---|---|---|
+| `TemporalOrderProfiler` | `temporal_order` | start > end date violations (30 keyword pairs + fallback for ≤6 date cols) |
+| `NullCorrelationProfiler` | `null_correlation` | Columns null together |
+| `NumericCrossColumnProfiler` | `cross_column_validation` | value > max constraint violations (e.g., claim > policy_max) |
+| `AgeValidationProfiler` | `cross_column` | Age doesn't match calculated age from DOB (2-year tolerance) |
+
+Relation profilers call `profiler.profile(sample)` with no column arg.
 
 ## Adding a New Profiler
 
@@ -48,3 +57,7 @@ Plus 2 relation profilers in `goldencheck/relations/`: `TemporalOrderProfiler` (
 - Profilers run on the **sample**, not the full df — don't report `affected_rows` as absolute counts without noting this
 - `context` dict is shared across all profilers for a given column; write with namespaced keys (e.g., `context["type_inference.inferred"] = "email"`)
 - Relation profilers receive the full sample DataFrame, not a single column
+- `PatternConsistencyProfiler` populates `Finding.metadata` with `dominant_pattern` and `minority_pattern` — suppression engine reads these to decide whether to suppress
+- `DriftDetectionProfiler` skips high-cardinality string columns (>90% unique) to avoid FP on IPs, UUIDs, session IDs
+- `NumericCrossColumnProfiler` finding column is value column only (not comma-joined with max column) to avoid benchmark FP
+- `AgeValidationProfiler` excludes column names containing "stage", "page", "usage", "mileage", "dosage", "voltage" from age matching
