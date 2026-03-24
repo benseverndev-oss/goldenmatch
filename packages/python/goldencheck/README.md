@@ -354,4 +354,8 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-**From the maker of [GoldenMatch](https://github.com/benzsevern/goldenmatch)** — entity resolution toolkit.
+**Part of the Golden Suite:**
+- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — entity resolution toolkit. `pip install goldenmatch[quality]` auto-integrates GoldenCheck as a pre-matching quality step.
+- [dbt-goldencheck](https://github.com/benzsevern/dbt-goldencheck) — data validation as a dbt test.
+- [goldencheck-types](https://github.com/benzsevern/goldencheck-types) — community-contributed domain type packs.
+- [goldencheck-action](https://github.com/benzsevern/goldencheck-action) — GitHub Action for CI with PR comments.
