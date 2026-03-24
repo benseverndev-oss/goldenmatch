@@ -91,4 +91,22 @@ jobs:
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
           echo "=== Test goldenmatch_score exact ==="
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('hello'::TEXT, 'hello'::TEXT, 'exact'::TEXT);"
+          echo "=== Test SPI: dedupe a real table ==="
+          sudo -u postgres psql -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE test_customers (name TEXT, email TEXT);
+            INSERT INTO test_customers VALUES
+              ('John Smith', 'john@x.com'),
+              ('JOHN SMITH', 'john@x.com'),
+              ('Jane Doe', 'jane@y.com'),
+              ('Bob Jones', 'bob@z.com');
+            SELECT goldenmatch.goldenmatch_dedupe_table('test_customers'::TEXT, '{"exact": ["email"]}'::TEXT);
+          EOSQL
+          echo "=== Test SPI: match two tables ==="
+          sudo -u postgres psql -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE test_prospects (name TEXT, email TEXT);
+            INSERT INTO test_prospects VALUES ('John', 'john@x.com'), ('Alice', 'alice@z.com');
+            CREATE TABLE test_reference (name TEXT, email TEXT);
+            INSERT INTO test_reference VALUES ('JOHN SMITH', 'john@x.com'), ('Bob', 'bob@z.com');
+            SELECT goldenmatch.goldenmatch_match_tables('test_prospects'::TEXT, 'test_reference'::TEXT, '{"exact": ["email"]}'::TEXT);
+          EOSQL
           echo "=== All tests passed ==="

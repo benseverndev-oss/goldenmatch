@@ -1,18 +1,68 @@
 //! Quick-start SQL functions for GoldenMatch.
 //!
-//! These are registered in the `public` schema for easy access.
-//! Each function is a thin wrapper around the bridge crate's API.
+//! Two flavors of each function:
+//! - Table-based: reads from a PG table via SPI (primary interface)
+//! - JSON-based: accepts raw JSON (for programmatic use)
 
 use pgrx::prelude::*;
+
+use crate::spi;
+
+// ── Table-based functions (primary interface) ──────────────────────────
+
+/// Deduplicate a Postgres table.
+///
+/// ```sql
+/// SELECT goldenmatch_dedupe_table('customers', '{"exact": ["email"]}');
+/// -- Returns JSON with golden records, clusters, and stats
+/// ```
+#[pg_extern]
+pub fn goldenmatch_dedupe_table(table_name: String, config_json: String) -> String {
+    let rows_json = match spi::read_table_as_json(&table_name) {
+        Ok(json) => json,
+        Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+    };
+
+    match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
+        Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
+        Err(e) => format!("{{\"error\": \"{}\"}}", e),
+    }
+}
+
+/// Match a target table against a reference table.
+///
+/// ```sql
+/// SELECT goldenmatch_match_tables('prospects', 'customers', '{"fuzzy": {"name": 0.85}}');
+/// -- Returns JSON with matched pairs
+/// ```
+#[pg_extern]
+pub fn goldenmatch_match_tables(
+    target_table: String,
+    reference_table: String,
+    config_json: String,
+) -> String {
+    let target_json = match spi::read_table_as_json(&target_table) {
+        Ok(json) => json,
+        Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+    };
+    let ref_json = match spi::read_table_as_json(&reference_table) {
+        Ok(json) => json,
+        Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+    };
+
+    match goldenmatch_bridge::api::match_tables(&target_json, &ref_json, &config_json) {
+        Ok(result) => result.matched_json.unwrap_or_else(|| "[]".to_string()),
+        Err(e) => format!("{{\"error\": \"{}\"}}", e),
+    }
+}
+
+// ── Scalar functions ───────────────────────────────────────────────────
 
 /// Score two strings using a named similarity algorithm.
 ///
 /// ```sql
 /// SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler');
 /// -- Returns: 0.91
-///
-/// SELECT goldenmatch_score('hello', 'hello', 'exact');
-/// -- Returns: 1.0
 /// ```
 ///
 /// Supported scorers: jaro_winkler, levenshtein, exact, token_sort, soundex_match
@@ -41,7 +91,6 @@ pub fn goldenmatch_score(
 ///     '{"name": "Jon Smyth", "email": "j@x.com"}',
 ///     '{"fuzzy": {"name": 0.85}, "exact": ["email"]}'
 /// );
-/// -- Returns: 0.95
 /// ```
 #[pg_extern]
 pub fn goldenmatch_score_pair(record_a: String, record_b: String, config: String) -> f64 {
@@ -62,7 +111,6 @@ pub fn goldenmatch_score_pair(record_a: String, record_b: String, config: String
 ///     '{"name": "Jon Smyth", "email": "j@x.com"}',
 ///     '{"fuzzy": {"name": 0.85}, "exact": ["email"]}'
 /// );
-/// -- Returns: 'MATCH (score: 0.93) ...'
 /// ```
 #[pg_extern]
 pub fn goldenmatch_explain(record_a: String, record_b: String, config: String) -> String {
@@ -72,29 +120,25 @@ pub fn goldenmatch_explain(record_a: String, record_b: String, config: String) -
     }
 }
 
-/// Deduplicate a table and return golden records as JSON.
+// ── JSON-based functions (programmatic use) ────────────────────────────
+
+/// Deduplicate JSON records directly.
 ///
 /// ```sql
-/// SELECT * FROM goldenmatch_dedupe(
+/// SELECT goldenmatch_dedupe(
 ///     '[{"name": "John", "email": "j@x.com"}, {"name": "JOHN", "email": "j@x.com"}]',
 ///     '{"exact": ["email"]}'
 /// );
 /// ```
-///
-/// Note: This initial version accepts JSON input directly.
-/// Future versions will read from a named table via SPI.
 #[pg_extern]
 pub fn goldenmatch_dedupe(rows_json: String, config_json: String) -> String {
     match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
-        Ok(result) => {
-            // Return golden records JSON, or stats if no golden records
-            result.golden_json.unwrap_or_else(|| result.stats_json)
-        }
+        Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
         Err(e) => format!("{{\"error\": \"{}\"}}", e),
     }
 }
 
-/// Match records from a target table against a reference table.
+/// Match two sets of JSON records.
 ///
 /// ```sql
 /// SELECT goldenmatch_match(
@@ -103,9 +147,6 @@ pub fn goldenmatch_dedupe(rows_json: String, config_json: String) -> String {
 ///     '{"exact": ["email"]}'
 /// );
 /// ```
-///
-/// Note: This initial version accepts JSON input directly.
-/// Future versions will read from named tables via SPI.
 #[pg_extern]
 pub fn goldenmatch_match(
     target_json: String,

@@ -3,6 +3,7 @@ use pgrx::prelude::*;
 pgrx::pg_module_magic!();
 
 mod quick;
+mod spi;
 
 #[cfg(test)]
 pub mod pg_test {
