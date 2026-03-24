@@ -186,3 +186,21 @@ def test_shorthand_unknown_flag():
 def test_no_file_argument():
     result = runner.invoke(app, [])
     assert result.exit_code == 0  # shows help
+
+
+# --- Multi-file + HTML tests ---
+
+def test_multi_file_scan():
+    result = runner.invoke(app, [
+        "scan", str(FIXTURES / "simple.csv"), str(FIXTURES / "messy.csv"), "--no-tui"
+    ])
+    assert result.exit_code == 0
+
+
+def test_html_report(tmp_path):
+    html = tmp_path / "report.html"
+    result = runner.invoke(app, ["scan", str(FIXTURES / "simple.csv"), "--no-tui", "--html", str(html)])
+    assert result.exit_code == 0
+    assert html.exists()
+    content = html.read_text()
+    assert "GoldenCheck Report" in content

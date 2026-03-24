@@ -95,7 +95,7 @@ def main(
         typer.echo(ctx.get_help())
         raise typer.Exit()
 
-    file: Path | None = None
+    files: list[Path] = []
     no_tui = False
     json_output = False
     llm_boost = False
@@ -106,6 +106,7 @@ def main(
     no_history = False
     webhook = None
     notify_on = "grade-drop"
+    html = None
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
@@ -140,27 +141,32 @@ def main(
                 typer.echo("Error: '--notify-on' requires a value.", err=True)
                 raise typer.Exit(code=2)
             notify_on = args.pop(0)
+        elif arg == "--html":
+            if not args:
+                typer.echo("Error: '--html' requires a value.", err=True)
+                raise typer.Exit(code=2)
+            html = Path(args.pop(0))
         elif not arg.startswith("-"):
-            if file is None:
-                file = Path(arg)
+            files.append(Path(arg))
         else:
             typer.echo(f"Error: Unknown option '{arg}'.", err=True)
             raise typer.Exit(code=2)
 
-    if file is None:
+    if not files:
         typer.echo("Error: Missing data file argument.", err=True)
         raise typer.Exit(code=1)
 
-    _do_scan(
-        file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
-        llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
-        no_history=no_history, webhook=webhook, notify_on=notify_on,
-    )
+    for file in files:
+        _do_scan(
+            file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
+            llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
+            no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
+        )
 
 
 @app.command()
 def scan(
-    file: Path = typer.Argument(..., help="Data file to profile."),
+    files: list[Path] = typer.Argument(..., help="Data file(s) to profile."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Disable TUI and print Rich output instead."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
@@ -173,15 +179,16 @@ def scan(
     notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
     html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report at this path."),
 ) -> None:
-    """Profile a data file and report findings."""
+    """Profile one or more data files and report findings."""
     if smart and guided:
         typer.echo("Error: Cannot use --smart and --guided together.", err=True)
         raise typer.Exit(code=2)
-    _do_scan(
-        file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
-        llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
-        no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
-    )
+    for file in files:
+        _do_scan(
+            file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
+            llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
+            no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
+        )
 
 
 @app.command()
