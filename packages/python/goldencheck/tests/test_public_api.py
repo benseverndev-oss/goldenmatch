@@ -14,6 +14,11 @@ def test_top_level_imports():
     )
     assert callable(scan_file)
     assert callable(scan_file_with_llm)
+    assert Finding is not None
+    assert Severity is not None
+    assert DatasetProfile is not None
+    assert ColumnProfile is not None
+    assert ScanResult is not None
     assert __version__
 
 
