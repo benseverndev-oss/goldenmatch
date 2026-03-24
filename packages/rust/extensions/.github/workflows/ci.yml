@@ -18,9 +18,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Check formatting
+      - name: Check formatting (bridge)
         run: cargo fmt --all -- --check
-      - name: Clippy (bridge only)
+      - name: Check formatting (postgres)
+        working-directory: postgres
+        run: cargo fmt --all -- --check
+      - name: Clippy (bridge)
         run: cargo clippy -p goldenmatch-bridge -- -D warnings
 
   bridge-tests:
@@ -55,7 +58,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-16 postgresql-server-dev-16 libclang-dev
-          # Make PG directories writable for pgrx install/test
           sudo chmod a+rwx /usr/share/postgresql/16/extension /usr/lib/postgresql/16/lib
 
       - name: Install goldenmatch
@@ -67,16 +69,7 @@ jobs:
       - name: Initialize pgrx
         run: cargo pgrx init --pg16=/usr/lib/postgresql/16/bin/pg_config
 
-      - name: Build extension
-        run: cargo build -p goldenmatch_pg --features pg16 --no-default-features
-
-      - name: Run pgrx tests
+      - name: Build and test extension
         working-directory: postgres
-        continue-on-error: true
         run: |
-          # Known issue: pgrx 0.12 in workspace mode doesn't write the SQL file
-          # during install/test. The extension builds and the SQL entities are
-          # discovered (5 functions), but the SQL file never gets written to the
-          # extension directory. Build verification is the primary gate.
-          # See: https://github.com/pgcentralfoundation/pgrx/issues/1707
-          cargo pgrx test pg16 || echo "pgrx test failed (known workspace SQL issue)"
+          cargo pgrx test pg16
