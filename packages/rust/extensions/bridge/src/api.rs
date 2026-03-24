@@ -364,21 +364,18 @@ pub fn dedupe_clusters(
 
         let mut members = Vec::new();
         for (cluster_id, info) in clusters_dict {
-            Python::with_gil(|py| -> Result<(), BridgeError> {
-                let info_ref = info.bind(py);
-                if let Ok(Some(m)) = info_ref.get_item("members") {
-                    let member_ids: Vec<i64> = m.extract()?;
-                    let size = member_ids.len() as i64;
-                    for record_id in member_ids {
-                        members.push(ClusterMember {
-                            cluster_id,
-                            record_id,
-                            cluster_size: size,
-                        });
-                    }
+            let info_ref = info.bind(py);
+            if let Ok(Some(m)) = info_ref.get_item("members") {
+                let member_ids: Vec<i64> = m.extract()?;
+                let size = member_ids.len() as i64;
+                for record_id in member_ids {
+                    members.push(ClusterMember {
+                        cluster_id,
+                        record_id,
+                        cluster_size: size,
+                    });
                 }
-                Ok(())
-            })?;
+            }
         }
         Ok(members)
     })

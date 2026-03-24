@@ -9,39 +9,40 @@ pub mod convert;
 pub mod error;
 
 use pyo3::prelude::*;
-use std::sync::Once;
+use std::sync::OnceLock;
 
-static INIT: Once = Once::new();
+static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Initialize the Python interpreter (once per process).
 /// Returns Ok(()) if goldenmatch is importable, Err otherwise.
 pub fn init() -> Result<(), error::BridgeError> {
-    let mut result = Ok(());
-
-    INIT.call_once(|| {
+    let result = INIT_RESULT.get_or_init(|| {
         pyo3::prepare_freethreaded_python();
 
         Python::with_gil(|py| match py.import("goldenmatch") {
-            Ok(gm) => match gm.getattr("__version__") {
-                Ok(ver) => {
-                    let version: String = ver.extract().unwrap_or_default();
-                    eprintln!("goldenmatch-bridge: loaded goldenmatch {}", version);
+            Ok(gm) => {
+                match gm.getattr("__version__") {
+                    Ok(ver) => {
+                        let version: String = ver.extract().unwrap_or_default();
+                        eprintln!("goldenmatch-bridge: loaded goldenmatch {}", version);
+                    }
+                    Err(_) => {
+                        eprintln!("goldenmatch-bridge: loaded goldenmatch (unknown version)");
+                    }
                 }
-                Err(_) => {
-                    eprintln!("goldenmatch-bridge: loaded goldenmatch (unknown version)");
-                }
-            },
-            Err(e) => {
-                result = Err(error::BridgeError::PythonImport(format!(
-                    "Could not import goldenmatch: {}. \
-                         Install with: pip install goldenmatch>=1.1.0",
-                    e
-                )));
+                Ok(())
             }
-        });
+            Err(e) => Err(format!(
+                "Could not import goldenmatch: {}. Install with: pip install goldenmatch>=1.1.0",
+                e
+            )),
+        })
     });
 
-    result
+    match result {
+        Ok(()) => Ok(()),
+        Err(msg) => Err(error::BridgeError::PythonImport(msg.clone())),
+    }
 }
 
 #[cfg(test)]

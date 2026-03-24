@@ -124,7 +124,7 @@ CREATE FUNCTION "goldenmatch_score"(
     "value_b" TEXT,
     "scorer" TEXT DEFAULT 'jaro_winkler'
 ) RETURNS DOUBLE PRECISION
-STRICT PARALLEL SAFE
+STRICT PARALLEL RESTRICTED
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_score_wrapper';
 

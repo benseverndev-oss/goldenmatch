@@ -90,6 +90,14 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
 # ── Implementation ──────────────────────────────────────────────────────
 
 
+def _validate_table_name(name: str) -> str:
+    """Validate table name to prevent SQL injection."""
+    import re
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', name):
+        raise ValueError(f"Invalid table name: {name}")
+    return name
+
+
 def _score(value_a: str, value_b: str, scorer: str) -> float:
     from goldenmatch import score_strings
     return score_strings(value_a, value_b, scorer)
@@ -139,6 +147,8 @@ def _dedupe_table(con: duckdb.DuckDBPyConnection, table_name: str, config_json: 
     import polars as pl
     from goldenmatch import dedupe_df
 
+    _validate_table_name(table_name)
+
     # Use a cursor to avoid deadlock (UDF can't query the same connection)
     cursor = con.cursor()
     df = cursor.sql(f"SELECT * FROM {table_name}").pl()
@@ -159,6 +169,9 @@ def _match_tables(
 ) -> str:
     import polars as pl
     from goldenmatch import match_df
+
+    _validate_table_name(target_table)
+    _validate_table_name(ref_table)
 
     cursor = con.cursor()
     target = cursor.sql(f"SELECT * FROM {target_table}").pl()
@@ -202,6 +215,8 @@ def _gm_run(con: duckdb.DuckDBPyConnection, job_name: str, table_name: str) -> s
 
     job = state["jobs"][job_name]
     job["status"] = "running"
+
+    _validate_table_name(table_name)
 
     # Read table via cursor (avoids UDF deadlock)
     cursor = con.cursor()

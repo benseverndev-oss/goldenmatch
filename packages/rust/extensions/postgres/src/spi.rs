@@ -17,12 +17,10 @@ use pgrx::spi;
 /// - NULL -> JSON null
 /// - Everything else -> JSON string via ::text cast
 pub fn read_table_as_json(table_name: &str) -> Result<String, String> {
-    // Validate table name (prevent SQL injection)
-    if table_name.contains(';')
-        || table_name.contains('\'')
-        || table_name.contains('"')
-        || table_name.contains('-')
-        || table_name.contains(' ')
+    // Validate table name (allow only alphanumeric, underscore, dot for schema.table)
+    if !table_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
     {
         return Err(format!("Invalid table name: {}", table_name));
     }
