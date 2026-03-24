@@ -123,6 +123,9 @@ jobs:
             SELECT goldenmatch.gm_jobs();
             -- Get golden records
             SELECT goldenmatch.gm_golden('test_job'::TEXT);
+            -- Query pairs and clusters
+            SELECT * FROM goldenmatch.gm_pairs('test_job'::TEXT);
+            SELECT * FROM goldenmatch.gm_clusters('test_job'::TEXT);
             -- Drop the job
             SELECT goldenmatch.gm_drop('test_job'::TEXT);
           EOSQL
