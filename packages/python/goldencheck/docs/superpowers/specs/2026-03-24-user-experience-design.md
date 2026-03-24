@@ -2,7 +2,7 @@
 
 ## Goal
 
-Close the gaps in the end-user journey: guided onboarding, smart finding triage, webhook notifications, and scan history tracking.
+Close the gaps in the end-user journey: guided onboarding, smart finding triage, scan history tracking, and webhook notifications.
 
 ## Scope
 
@@ -10,8 +10,10 @@ Four features, executed in order:
 
 1. `goldencheck init` — interactive setup wizard
 2. Guided scan modes — `--guided` CLI, TUI guided mode, `--smart` auto-triage
-3. Webhook notifications — `--webhook` + `--notify-on`
-4. History tracking — `.goldencheck/history.jsonl` + `goldencheck history`
+3. History tracking — `.goldencheck/history.jsonl` + `goldencheck history`
+4. Webhook notifications — `--webhook` + `--notify-on` (depends on history for `grade-drop`)
+
+**Note:** History (3) is implemented before webhooks (4) because the `grade-drop` notification trigger needs to read previous scan results from history.
 
 ---
 
@@ -52,14 +54,17 @@ Next: git add goldencheck.yml .github/ && git push
 @app.command()
 def init(
     file: Path = typer.Argument(..., help="Data file to scan for initial rules."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Accept defaults, skip interactive prompts."),
 ) -> None:
 ```
 
-No flags — everything is asked interactively via `typer.prompt()` / `typer.confirm()`.
+The `--yes` flag accepts defaults (no CI, no domain, no LLM boost) for scripted/CI usage.
+
+**Note:** `init` is a standard `@app.command()` subcommand. The hand-rolled fallback parser in `main()` only routes to `scan` — `init` does not need special handling there.
 
 ### What It Generates
 
-**`goldencheck.yml`** — populated with auto-pinned rules from the scan. Uses the existing `save_config` writer. Only pins findings with confidence >= 0.8 and severity >= WARNING.
+**`goldencheck.yml`** — populated with auto-pinned rules from the scan. Uses the existing `save_config` writer. Uses `auto_triage()` from the triage engine (Section 2c) — pins all findings in the "pin" bucket.
 
 **CI workflow** (if GitHub selected):
 ```yaml
@@ -85,13 +90,6 @@ data-quality:
     - goldencheck validate <file> --no-tui --fail-on error
 ```
 
-### Auto-Pin Logic
-
-The same engine used by `--smart` (see Section 2c). Pins findings where:
-- `severity >= WARNING`
-- `confidence >= 0.8`
-- Not suppressed (not INFO after suppression)
-
 ### Architecture
 
 - **New file:** `goldencheck/cli/init_wizard.py` — keeps wizard logic out of `main.py`
@@ -104,6 +102,8 @@ The same engine used by `--smart` (see Section 2c). Pins findings where:
 ## 2. Guided Scan Modes
 
 Three modes that share a common auto-triage engine.
+
+**Mutual exclusivity:** `--smart` and `--guided` are mutually exclusive. If both are passed, error out: "Cannot use --smart and --guided together."
 
 ### 2a. `--smart` Auto-Triage (zero interaction)
 
@@ -147,7 +147,9 @@ Only presents findings that `--smart` would mark as "review" (medium confidence)
 
 ### 2c. TUI Guided Mode
 
-A new overlay/wizard in the TUI that presents findings sequentially. Activated by a keybinding (e.g., `g` for guided).
+A new overlay/wizard in the TUI that presents findings sequentially. Activated by keybinding `g` for guided.
+
+**Keybinding conflict check:** The existing TUI bindings are `1-4` (tabs), `Space` (pin), `F2` (save), `e` (view rows), `q` (quit), `?` (help). `g` is unused and safe.
 
 Each finding is shown fullscreen with:
 - Severity, column, check, message
@@ -163,70 +165,41 @@ After all findings are reviewed, returns to the normal TUI with pins applied.
 
 ```python
 def auto_triage(findings: list[Finding]) -> TriageResult:
-    """Classify findings into pin/dismiss/review buckets."""
+    """Classify findings into pin/dismiss/review buckets.
+
+    Operates on POST-downgrade findings (after apply_confidence_downgrade).
+    """
 ```
 
 - **Pin:** severity >= WARNING AND confidence >= 0.8
 - **Dismiss:** severity == INFO OR confidence < 0.5
 - **Review:** everything else (medium confidence warnings)
 
-Used by `init`, `--smart`, and `--guided`.
+Used by `init`, `--smart`, and `--guided`. Single source of truth for triage logic.
+
+### Hand-Rolled Arg Parser Updates
+
+The `main()` callback's hand-rolled arg parser must be extended for new flags on the `scan` shorthand path:
+
+```python
+# Add to the while args: loop in main()
+elif arg == "--smart":
+    smart = True
+elif arg == "--guided":
+    guided = True
+elif arg == "--no-history":
+    no_history = True
+elif arg == "--webhook":
+    webhook = args.pop(0)
+elif arg == "--notify-on":
+    notify_on = args.pop(0)
+```
+
+These must be passed through to `_do_scan()`.
 
 ---
 
-## 3. Webhook Notifications
-
-### CLI Interface
-
-```bash
-goldencheck scan data.csv --webhook https://hooks.slack.com/... --notify-on grade-drop
-goldencheck watch data/ --webhook https://my-api.com/alerts --notify-on any-error
-```
-
-### `--notify-on` Options
-
-| Value | Triggers when |
-|-------|---------------|
-| `grade-drop` (default) | Health grade decreased since last scan |
-| `any-error` | Any ERROR-level finding exists |
-| `any-warning` | Any WARNING or ERROR finding exists |
-
-### Payload
-
-HTTP POST with JSON body:
-
-```json
-{
-  "tool": "goldencheck",
-  "version": "0.5.0",
-  "trigger": "grade-drop",
-  "file": "data/orders.csv",
-  "health_grade": "C",
-  "health_score": 71,
-  "previous_grade": "B",
-  "errors": 3,
-  "warnings": 8,
-  "top_findings": [
-    {"severity": "error", "column": "email", "check": "format_detection", "message": "..."}
-  ]
-}
-```
-
-### Architecture
-
-- **New file:** `goldencheck/engine/notifier.py`
-- `send_webhook(url, payload)` — simple `urllib.request.urlopen` POST, no dependencies
-- `should_notify(current_result, previous_result, notify_on)` — compares grades/findings
-- Previous result read from history (see Section 4) or `.goldencheck/last_scan.json`
-- Timeout: 5 seconds. Failures logged but don't fail the scan.
-
-### Slack Formatting
-
-The payload works with Slack incoming webhooks as-is (they accept any JSON). For richer formatting, users can pipe through a Slack Block Kit transformer — we don't build Slack-specific formatting (YAGNI, users can wrap it).
-
----
-
-## 4. History Tracking
+## 3. History Tracking
 
 ### Storage
 
@@ -237,18 +210,24 @@ The payload works with Slack incoming webhooks as-is (they accept any JSON). For
 {"timestamp":"2026-03-22T09:15:00","file":"orders.csv","rows":10000,"columns":12,"grade":"B","score":85,"errors":1,"warnings":4,"findings_count":15}
 ```
 
+**Size estimate:** ~200 bytes/scan. One year of hourly scans = ~1.7 MB. No rotation needed.
+
 ### Auto-Recording
 
-Every `scan_file()` call appends to history. The CLI commands (`scan`, `review`, `fix`, `watch`) trigger this automatically. The `--no-history` flag disables it.
+Every CLI scan command (`scan`, `review`, `fix`, `watch`) auto-appends to history after scanning. The `--no-history` flag disables it. The recording happens in `_do_scan()` and the `watch` loop, not inside `scan_file()` itself (engine stays pure).
 
-### CLI
+### CLI Signature
 
-```bash
-goldencheck history                    # show all scans
-goldencheck history orders.csv         # filter by file
-goldencheck history --last 10          # last 10 scans
-goldencheck history --json             # JSON output
+```python
+@app.command()
+def history(
+    file: Optional[Path] = typer.Argument(None, help="Filter history by file."),
+    last: Optional[int] = typer.Option(None, "--last", "-n", help="Show last N scans."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
 ```
+
+**Note:** `history` is a standard `@app.command()` subcommand. The hand-rolled parser routes "history" correctly as a subcommand (not a file path) since it has no file extension.
 
 ### Output
 
@@ -266,13 +245,69 @@ Trend: orders.csv improved 72 → 92 over 4 days
 - **New file:** `goldencheck/engine/history.py`
 - `record_scan(file, profile, findings)` — appends one JSONL line
 - `load_history(file_filter=None, last_n=None) -> list[ScanRecord]`
+- `get_previous_scan(file) -> ScanRecord | None` — returns most recent scan for a file (used by webhooks)
 - `ScanRecord` dataclass: timestamp, file, rows, columns, grade, score, errors, warnings
-- Directory `.goldencheck/` auto-created on first scan
+- Directory `.goldencheck/` auto-created on first record
 - Add `.goldencheck/` to the project's `.gitignore` recommendation in `init`
 
-### Integration with Webhooks
+---
 
-`should_notify()` reads the previous scan from history to detect grade drops. If history is empty (first scan), no notification is sent.
+## 4. Webhook Notifications
+
+### CLI Signatures
+
+Webhooks are available on `scan` and `watch` commands:
+
+```python
+# Added to scan command
+webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
+notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
+
+# Added to watch command
+webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
+notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
+```
+
+Not added to `validate`, `review`, `fix`, `diff`, `learn`, or `init` — webhooks are for monitoring, not interactive commands.
+
+### `--notify-on` Options
+
+| Value | Triggers when |
+|-------|---------------|
+| `grade-drop` (default) | Health grade decreased since last scan (reads from history) |
+| `any-error` | Any ERROR-level finding exists |
+| `any-warning` | Any WARNING or ERROR finding exists |
+
+### Payload
+
+HTTP POST with JSON body:
+
+```json
+{
+  "tool": "goldencheck",
+  "version": "<from __version__>",
+  "trigger": "grade-drop",
+  "file": "data/orders.csv",
+  "health_grade": "C",
+  "health_score": 71,
+  "previous_grade": "B",
+  "errors": 3,
+  "warnings": 8,
+  "top_findings": [
+    {"severity": "error", "column": "email", "check": "format_detection", "message": "..."}
+  ]
+}
+```
+
+**Version:** Uses `goldencheck.__version__`, not a hardcoded string.
+
+### Architecture
+
+- **New file:** `goldencheck/engine/notifier.py`
+- `send_webhook(url, payload)` — `urllib.request.urlopen` POST with `Content-Type: application/json`, 5-second timeout
+- `should_notify(current_grade, current_findings, previous_scan, notify_on) -> bool`
+- Previous scan read from `history.get_previous_scan(file)`. If no history exists (first scan), `grade-drop` does not trigger (no baseline to compare against). `any-error` and `any-warning` still trigger on first scan.
+- **Error handling:** No retries (fire-and-forget). Non-2xx responses, timeouts, SSL errors, and invalid URLs are logged as warnings but never fail the scan.
 
 ---
 
@@ -280,20 +315,22 @@ Trend: orders.csv improved 72 → 92 over 4 days
 
 | Component | Test Approach |
 |-----------|---------------|
-| `init` wizard | Mock `typer.prompt`, verify generated files |
-| Auto-triage | Unit test: findings with various confidence/severity → correct buckets |
+| `init` wizard | Mock `typer.prompt`, verify generated files; test `--yes` mode |
+| Auto-triage | Unit test: findings with various confidence/severity → correct buckets (post-downgrade) |
 | `--smart` | Integration test: scan fixture, verify goldencheck.yml written |
 | `--guided` | Mock stdin, verify pin/dismiss behavior |
-| Webhook | Mock `urllib.request`, verify payload format and trigger logic |
-| History | Unit test: record + load round-trip; test JSONL append |
-| `history` command | CLI test: invoke after recording, verify output |
+| `--smart`/`--guided` mutual exclusivity | CLI test: both flags → error |
+| Webhook | Mock `urllib.request`, verify payload format, trigger logic, error handling |
+| History | Unit test: record + load round-trip; test JSONL append; test get_previous_scan |
+| `history` command | CLI test: invoke after recording, verify output format |
 
 ## Non-Goals
 
 - No web dashboard (future)
 - No Slack-specific Block Kit formatting (users wrap the webhook)
-- No history pruning/rotation (files stay small for months of daily scans)
+- No history pruning/rotation (~200 bytes/scan, stays small)
 - No TUI for `history` (CLI table only)
+- No webhook retries (fire-and-forget)
 
 ## Version
 
