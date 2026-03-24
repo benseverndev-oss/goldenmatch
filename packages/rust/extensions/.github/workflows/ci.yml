@@ -134,7 +134,7 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install goldenmatch>=1.1.0
+          pip install goldenmatch>=1.1.0 pyarrow
           cd duckdb && pip install -e ".[dev]" || pip install -e .
           pip install pytest
       - name: Run tests
