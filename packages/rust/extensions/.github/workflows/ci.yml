@@ -122,4 +122,21 @@ jobs:
             -- Drop the job
             SELECT goldenmatch.gm_drop('test_job'::TEXT);
           EOSQL
-          echo "=== All tests passed ==="
+          echo "=== All Postgres tests passed ==="
+
+  duckdb-tests:
+    name: DuckDB Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install goldenmatch>=1.1.0
+          cd duckdb && pip install -e ".[dev]" || pip install -e .
+          pip install pytest
+      - name: Run tests
+        working-directory: duckdb
+        run: python -m pytest tests/ -v
