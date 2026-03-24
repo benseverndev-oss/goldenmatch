@@ -6,7 +6,7 @@ GoldenCheck ships with a custom benchmark suite in the `benchmarks/` directory. 
 
 ## DQBench Score
 
-**GoldenCheck v0.3.0 — profiler-only, zero-config: 87.71**
+**GoldenCheck v0.5.0 — profiler-only, zero-config: 88.40**
 
 GoldenCheck's zero-config discovery outperforms every competitor even when competitors have hand-written rules.
 
@@ -17,13 +17,14 @@ GoldenCheck's zero-config discovery outperforms every competitor even when compe
 | v0.1.0 | profiler-only | 9.10 |
 | v0.1.5 | profiler-only | 34.22 |
 | v0.2.0 | profiler-only | 72.00 |
-| v0.3.0 | profiler-only | **87.71** |
+| v0.3.0 | profiler-only | 87.71 |
+| v0.5.0 | profiler-only | **88.40** |
 
 ### Head-to-Head Comparison
 
 | Tool | Mode | T1 F1 | T2 F1 | T3 F1 | DQBench Score |
 |------|------|-------|-------|-------|---------------|
-| **GoldenCheck** | **zero-config** | **93.8%** | **90.9%** | **81.5%** | **87.71** |
+| **GoldenCheck** | **zero-config** | **94.1%** | **90.9%** | **83.0%** | **88.40** |
 | Pandera | best-effort rules | 36.4% | 38.1% | 25.0% | 32.51 |
 | Soda Core | best-effort rules | 38.1% | 23.5% | 13.3% | 22.36 |
 | Great Expectations | best-effort rules | 36.4% | 23.5% | 12.5% | 21.68 |

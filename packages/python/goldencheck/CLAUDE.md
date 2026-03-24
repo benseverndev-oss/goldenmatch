@@ -20,15 +20,15 @@ goldencheck validate data.csv    # Validate against goldencheck.yml
 
 ```
 goldencheck/
-├── cli/           # Typer CLI (scan, validate, review, mcp-serve commands)
-├── engine/        # Scanner pipeline, validator, confidence scoring
+├── cli/           # Typer CLI (9 commands: scan, validate, review, diff, watch, fix, learn, mcp-serve)
+├── engine/        # Scanner, validator, confidence, fixer, differ, watcher
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
-├── relations/     # Cross-column profilers (temporal, null correlation)
-├── semantic/      # Type classifier + suppression engine
-├── llm/           # LLM boost (providers, prompts, merger, budget)
-├── mcp/           # MCP server (6 tools: scan, validate, profile, health_score, get_column_detail, list_checks)
+├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation)
+├── semantic/      # Type classifier + suppression engine + domain packs (healthcare, finance, ecommerce)
+├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
+├── mcp/           # MCP server (9 tools incl. domain discovery)
 ├── config/        # Pydantic YAML config (goldencheck.yml)
-├── models/        # Finding, Profile dataclasses (with _repr_html_ for Jupyter)
+├── models/        # Finding (with metadata dict), Profile dataclasses
 ├── notebook.py    # ScanResult wrapper + HTML renderers for Jupyter/Colab
 ├── reporters/     # Rich, JSON, CI output
 └── tui/           # Textual TUI (4 tabs)

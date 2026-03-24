@@ -2,6 +2,38 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [0.5.0] - 2026-03-24
+
+### Added
+- **`goldencheck diff`** — compare two data files or against git HEAD. Shows schema changes, finding changes, and stat deltas. Supports `--ref` and `--json`
+- **`goldencheck watch`** — poll a directory for file changes, re-scan on modification. Supports `--interval`, `--pattern`, `--exit-on` for CI, graceful SIGINT/SIGTERM
+- **`goldencheck fix`** — auto-fix data quality issues with three modes: safe (whitespace, Unicode, encoding), moderate (+ case standardization), aggressive (+ type coercion). Supports `--dry-run` and `--force`
+- **Domain packs** — `--domain healthcare|finance|ecommerce` flag for domain-specific semantic types
+- **3 new MCP tools** — `list_domains`, `get_domain_info`, `install_domain` for domain pack discovery
+- **Age vs DOB cross-validation** — new relation profiler detecting age/DOB mismatches
+- **Numeric cross-column profiler** — detects value > max constraint violations
+- **String length format check** — flags identifier columns with inconsistent lengths
+- **Public API surface** — `__all__` exports on all public modules, `py.typed` PEP 561 marker, top-level convenience imports (`from goldencheck import scan_file, Finding`)
+- **Friendly CLI error messages** — no more raw tracebacks for common errors
+- **CI coverage** — Codecov integration + smoke test job
+- **GitHub Action** — `benzsevern/goldencheck-action@v1` for CI with PR comments
+
+### Improved
+- **DQBench Score: 87.71 → 88.40** — geo suppression narrowing, classifier prefix-match bug fix
+- Semantic classifier: prefix-marked hints (`is_`, `has_`) no longer false-match via substring
+- Pattern consistency profiler: populates `metadata` dict for structured pattern data
+- Mixed coding standard detection improved (letter-first vs digit-first)
+- Drift detection skips high-cardinality strings and datetime columns
+
+## [0.4.0] - 2026-03-24
+
+### Added
+- **`goldencheck fix`** command with safe/moderate/aggressive modes
+- **Friendly error handler** — context manager catching FileNotFoundError, PermissionError, ValueError, ComputeError
+- **Public API surface** — `__all__`, `py.typed`, top-level re-exports
+- **CI coverage** — Codecov + smoke test jobs
+- **Version consolidation** — single `__version__` source in `__init__.py`
+
 ## [0.3.0] - 2025-03-24
 
 ### Added
