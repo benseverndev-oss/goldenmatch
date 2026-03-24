@@ -150,6 +150,56 @@ TOOLS = [
             "required": ["file_path", "column"],
         },
     ),
+    Tool(
+        name="list_domains",
+        description=(
+            "List all available domain packs (healthcare, finance, ecommerce, etc.). "
+            "Domain packs provide specialized semantic type definitions for specific data domains."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="get_domain_info",
+        description=(
+            "Get detailed info about a specific domain pack — "
+            "lists all semantic types, their name hints, and suppression rules."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": "Domain pack name (e.g., healthcare, finance, ecommerce)",
+                },
+            },
+            "required": ["domain"],
+        },
+    ),
+    Tool(
+        name="install_domain",
+        description=(
+            "Download a community domain pack from the goldencheck-types repository "
+            "and save it for use in future scans."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": "Domain pack name to install",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Output path (default: goldencheck_domain.yaml)",
+                    "default": "goldencheck_domain.yaml",
+                },
+            },
+            "required": ["domain"],
+        },
+    ),
 ]
 
 
@@ -394,6 +444,74 @@ def _findings_by_column(findings: list[Finding]) -> dict[str, dict[str, int]]:
     return by_col
 
 
+def _tool_list_domains(_arguments: dict) -> dict:
+    from goldencheck.semantic.classifier import list_available_domains
+    import yaml
+
+    domains = []
+    for name in list_available_domains():
+        domain_path = Path(__file__).parent.parent / "semantic" / "domains" / f"{name}.yaml"
+        desc = ""
+        types_count = 0
+        if domain_path.exists():
+            with open(domain_path) as f:
+                data = yaml.safe_load(f) or {}
+            desc = data.get("description", "")
+            types_count = len(data.get("types", {}))
+        domains.append({
+            "name": name,
+            "description": desc,
+            "types_count": types_count,
+            "source": "bundled",
+        })
+    return {"domains": domains}
+
+
+def _tool_get_domain_info(arguments: dict) -> dict:
+    import yaml
+
+    domain = arguments["domain"]
+    domain_path = Path(__file__).parent.parent / "semantic" / "domains" / f"{domain}.yaml"
+    if not domain_path.exists():
+        from goldencheck.semantic.classifier import list_available_domains
+        available = list_available_domains()
+        return {"error": f"Unknown domain: '{domain}'. Available: {', '.join(available)}"}
+
+    with open(domain_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    types_info = {}
+    for name, cfg in data.get("types", {}).items():
+        types_info[name] = {
+            "name_hints": cfg.get("name_hints", []),
+            "suppress": cfg.get("suppress", []),
+        }
+
+    return {
+        "name": domain,
+        "description": data.get("description", ""),
+        "types": types_info,
+    }
+
+
+def _tool_install_domain(arguments: dict) -> dict:
+    import urllib.request
+
+    domain = arguments["domain"]
+    output_path = arguments.get("output_path", "goldencheck_domain.yaml")
+    url = f"https://raw.githubusercontent.com/benzsevern/goldencheck-types/main/domains/{domain}.yaml"
+
+    try:
+        urllib.request.urlretrieve(url, output_path)
+    except Exception as e:
+        return {"error": f"Failed to download domain '{domain}': {e}"}
+
+    return {
+        "installed": domain,
+        "path": output_path,
+    }
+
+
 _TOOL_HANDLERS = {
     "scan": _tool_scan,
     "validate": _tool_validate,
@@ -401,6 +519,9 @@ _TOOL_HANDLERS = {
     "health_score": _tool_health_score,
     "list_checks": _tool_list_checks,
     "get_column_detail": _tool_get_column_detail,
+    "list_domains": _tool_list_domains,
+    "get_domain_info": _tool_get_domain_info,
+    "install_domain": _tool_install_domain,
 }
 
 

@@ -20,39 +20,77 @@ class ColumnClassification:
     type_name: str | None
     source: str  # "name", "value", "llm", "none"
 
-def load_type_defs(custom_path: Path | None = None) -> dict[str, TypeDef]:
-    """Load base types + optional user types."""
-    base_path = Path(__file__).parent / "types.yaml"
-    with open(base_path) as f:
-        base = yaml.safe_load(f)
-
+def _load_yaml_types(path: Path) -> dict[str, TypeDef]:
+    """Load type definitions from a YAML file."""
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
     defs = {}
-    for name, cfg in base.get("types", {}).items():
+    for name, cfg in data.get("types", {}).items():
         defs[name] = TypeDef(
             name_hints=cfg.get("name_hints", []),
             value_signals=cfg.get("value_signals", {}),
             suppress=cfg.get("suppress", []),
         )
-
-    # Merge user types (replace same-name, prepend new)
-    if custom_path and custom_path.exists():
-        with open(custom_path) as f:
-            user = yaml.safe_load(f)
-        for name, cfg in user.get("types", {}).items():
-            defs[name] = TypeDef(
-                name_hints=cfg.get("name_hints", []),
-                value_signals=cfg.get("value_signals", {}),
-                suppress=cfg.get("suppress", []),
-            )
-
     return defs
+
+
+def list_available_domains() -> list[str]:
+    """List available domain pack names."""
+    domains_dir = Path(__file__).parent / "domains"
+    if not domains_dir.exists():
+        return []
+    return sorted(p.stem for p in domains_dir.glob("*.yaml"))
+
+
+def load_type_defs(
+    custom_path: Path | None = None,
+    domain: str | None = None,
+) -> dict[str, TypeDef]:
+    """Load type definitions with layered priority: base < domain < user.
+
+    Domain types match before base types (dict ordering determines priority
+    in _match_by_name which returns on first match).
+    """
+    # Layer 1: base types
+    base_path = Path(__file__).parent / "types.yaml"
+    base_defs = _load_yaml_types(base_path)
+
+    # Layer 2: domain types (override/extend base)
+    domain_defs: dict[str, TypeDef] = {}
+    if domain:
+        domain_path = Path(__file__).parent / "domains" / f"{domain}.yaml"
+        if not domain_path.exists():
+            available = list_available_domains()
+            raise ValueError(
+                f"Unknown domain: '{domain}'. "
+                f"Available: {', '.join(available) if available else 'none'}"
+            )
+        domain_defs = _load_yaml_types(domain_path)
+
+    # Layer 3: user custom types
+    user_defs: dict[str, TypeDef] = {}
+    if custom_path and custom_path.exists():
+        user_defs = _load_yaml_types(custom_path)
+
+    # Merge with priority: user > domain > base
+    # Build dict so higher-priority types come first (dict iteration order)
+    merged: dict[str, TypeDef] = {}
+    for d in [user_defs, domain_defs, base_defs]:
+        for name, typedef in d.items():
+            if name not in merged:
+                merged[name] = typedef
+
+    return merged
+
 
 def classify_columns(
     df: pl.DataFrame,
     custom_types_path: Path | None = None,
+    type_defs: dict[str, TypeDef] | None = None,
 ) -> dict[str, ColumnClassification]:
     """Classify each column's semantic type with provenance."""
-    type_defs = load_type_defs(custom_types_path)
+    if type_defs is None:
+        type_defs = load_type_defs(custom_types_path)
     results = {}
 
     for col_name in df.columns:
