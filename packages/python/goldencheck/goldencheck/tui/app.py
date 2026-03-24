@@ -36,6 +36,7 @@ class GoldenCheckApp(App):
         Binding("3", "switch_tab('column-detail')", "Column Detail", show=True),
         Binding("4", "switch_tab('rules')", "Rules", show=True),
         Binding("f2", "save_rules", "Save Rules"),
+        Binding("d", "dismiss_finding", "Dismiss"),
         Binding("g", "guided_review", "Guided"),
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "show_help", "Help"),
@@ -65,13 +66,36 @@ class GoldenCheckApp(App):
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one(TabbedContent).active = tab_id
 
+    _dismissed: set = set()
+
+    def action_dismiss_finding(self) -> None:
+        """Dismiss the selected finding — adds to ignore list on F2 save."""
+        # Find the currently selected finding in the findings pane
+        findings_pane = self.query_one(FindingsPane)
+        try:
+            row_idx = findings_pane.table.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.findings):
+                f = self.findings[row_idx]
+                self._dismissed.add((f.column, f.check))
+                self.notify(f"Dismissed: [{f.column}] {f.check} (saved on F2)")
+        except Exception:
+            self.notify("Select a finding first")
+
     def action_save_rules(self) -> None:
         # Build config from pinned findings
         for f in self.findings:
             if f.pinned and f.column not in self.config.columns:
                 self.config.columns[f.column] = ColumnRule(type="string")
+        # Add dismissed findings to ignore list
+        from goldencheck.config.schema import IgnoreEntry
+        for col, check in self._dismissed:
+            entry = IgnoreEntry(column=col, check=check)
+            if entry not in self.config.ignore:
+                self.config.ignore.append(entry)
         save_config(self.config, Path("goldencheck.yml"))
-        self.notify("Rules saved to goldencheck.yml")
+        dismissed_count = len(self._dismissed)
+        pinned_count = sum(1 for f in self.findings if f.pinned)
+        self.notify(f"Saved: {pinned_count} rules pinned, {dismissed_count} dismissed")
 
     _guided_findings: list = []
     _guided_index: int = 0
