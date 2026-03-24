@@ -26,7 +26,7 @@ Supported `value_signals` keys: `min_unique_pct`, `max_unique`, `format_match`, 
 ## Classifier Logic
 
 `classify_columns(df)` runs per column:
-1. **Name heuristic** (`_match_by_name`): substring match; hint ending with `_` = prefix match; starting with `_` = suffix match. First match wins.
+1. **Name heuristic** (`_match_by_name`): hints ending with `_` = prefix-only match (NOT substring); hints starting with `_` = suffix-only match; all others = substring match. First match wins. Dict iteration order determines priority.
 2. **Value fallback** (`_match_by_value`): iterates type_defs, checks all `value_signals`. First match wins.
 3. Returns `ColumnClassification(type_name, source)` where `source` is `"name"`, `"value"`, or `"none"`.
 
@@ -55,10 +55,18 @@ class ColumnClassification:
 
 ## User-Defined Types
 
-Pass `custom_types_path` to `load_type_defs()`. User types in `goldencheck.yml` replace same-name base types; new names are added. Loaded after base `types.yaml`, so user entries win on collision.
+Pass `custom_types_path` to `load_type_defs()`. User types replace same-name base types; new names are added.
+
+## Domain Packs
+
+`goldencheck/semantic/domains/{healthcare,finance,ecommerce}.yaml` — YAML files with `description` + `types` keys.
+`load_type_defs(domain="healthcare")` loads base → domain → user with priority ordering.
+`classify_columns(df, type_defs=preloaded)` accepts preloaded type_defs to avoid double-loading in scanner.
+`list_available_domains()` scans the `domains/` directory for `.yaml` files.
 
 ## Gotchas
 
 - Suppression runs **before** corroboration boost in the scanner pipeline — a boosted finding was suppressed based on pre-boost confidence
 - The `(suppressed: ...)` suffix is stripped by `llm/merger.py` before appending LLM annotations
 - `format_match: "date"` only requires 50% match (lower than email/phone at 70%)
+- `pattern_consistency` suppression checks `Finding.metadata` for pattern lengths — if patterns differ in length by >1, suppression is skipped (catches zip code format issues)

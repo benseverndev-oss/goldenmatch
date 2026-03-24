@@ -6,9 +6,11 @@
 read_file(path)                         # reader.py — CSV/Parquet/Excel → pl.DataFrame
 maybe_sample(df, max_rows=100_000)      # sampler.py — deterministic seed=42
 run COLUMN_PROFILERS per column         # 10 profilers, shared context dict
-run RELATION_PROFILERS on full sample   # temporal, null_correlation
+run RELATION_PROFILERS on full sample   # temporal, null_correlation, numeric_cross, age_validation
 classify_columns(sample)                # semantic/classifier.py
 apply_suppression(findings, ...)        # semantic/suppression.py — BEFORE boost
+_post_classification_checks(...)       # digits-in-name, code-like patterns, string length format
+apply learned LLM rules if available   # goldencheck_rules.json
 apply_corroboration_boost(findings)     # confidence.py — AFTER suppression
 sort by severity descending             # ERROR first
 ```
@@ -78,3 +80,22 @@ Ignored findings (from `config.ignore` list) are filtered by `(column, check)` p
 - `COLUMN_PROFILERS` and `RELATION_PROFILERS` in `scanner.py` are module-level singletons — profilers must be stateless
 - `validate_file` reads the **full file** (not sampled) for accurate validation counts
 - The `profile` object in the return tuple is built from the full `df`, not the sample — row/column counts are always accurate
+
+## scan_file domain parameter
+
+`scan_file(path, domain="healthcare")` passes domain to `load_type_defs()` and `classify_columns()`.
+Type defs are loaded once and shared between classifier and suppression.
+
+## fixer.py
+
+`apply_fixes(df, findings, mode, *, force=False) -> (DataFrame, FixReport)`. Three modes: safe, moderate, aggressive.
+Aggressive requires `force=True`. Fix functions are pure (Series → Series). FixReport tracks changes per column.
+
+## differ.py
+
+`diff_files(old_df, new_df, old_findings, new_findings) -> DiffReport`. Compares schema, findings, stats.
+Finding matching key: `(column, check)` with severity/rows comparison for worsened/improved.
+
+## watcher.py
+
+`watch_directory(path, interval, pattern, exit_on) -> int`. Polls with mtime tracking. SIGINT/SIGTERM graceful shutdown.
