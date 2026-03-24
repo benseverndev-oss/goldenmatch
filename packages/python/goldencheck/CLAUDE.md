@@ -8,12 +8,16 @@ Data validation that discovers rules from your data. DQBench Score: 88.40.
 pip install -e ".[dev]"          # Dev install
 pip install -e ".[llm]"          # With LLM boost
 pip install -e ".[mcp]"          # With MCP server
-pytest --tb=short -v             # Run tests (166 passing)
+pytest --tb=short -v             # Run tests (189+ passing)
 ruff check .                     # Lint
 ruff check . --fix               # Auto-fix lint
 goldencheck data.csv --no-tui    # Scan a file (CLI output)
 goldencheck data.csv             # Scan with TUI
 goldencheck validate data.csv    # Validate against goldencheck.yml
+goldencheck diff old.csv new.csv # Compare two files
+goldencheck fix data.csv         # Auto-fix (safe mode)
+goldencheck watch data/          # Poll directory for changes
+goldencheck scan data.csv --domain healthcare  # Domain-specific types
 ```
 
 ## Architecture
@@ -74,6 +78,8 @@ python benchmarks/goldencheck_benchmark.py              # Detection (profiler-on
 source .testing/.env && python benchmarks/goldencheck_benchmark_llm.py  # With LLM
 pip install dqbench && dqbench run goldencheck          # DQBench head-to-head
 dqbench run all                                         # Compare against GX/Pandera/Soda
+# Inline quick score check:
+# python -c "import sys; sys.path.insert(0,'D:/show_case/dqbench'); from dqbench.runner import run_benchmark; from dqbench.adapters.goldencheck import GoldenCheckAdapter; s=run_benchmark(GoldenCheckAdapter()); print(f'Score: {s.dqbench_score:.2f}')"
 ```
 
 ## Publishing
@@ -89,3 +95,10 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 - `scan_file_with_llm` calls `scan_file(..., return_sample=True)` — suppression and boost run inside `scan_file`, not in the LLM path
 - GitHub auth: `gh auth switch --user benzsevern` before pushing
 - Ruff line length: 100 chars
+- `__version__` is defined ONLY in `goldencheck/__init__.py` — `cli/main.py` imports it, don't add a second copy
+- Wiki lives at `/tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md . && git add . && git commit && git push`
+- Classifier hint matching: hints ending with `_` are prefix-only (NOT substring) — `is_` matches `is_active` but NOT `diagnosis_desc`
+- `Finding.metadata` dict is used by pattern_consistency for structured pattern data — suppression reads it
+- Domain pack loading priority: user types > domain types > base types (dict insertion order matters)
+- Cross-column findings: use only the "violating" column name to avoid FP on clean columns in benchmarks
+- DQBench adapter does NOT call `apply_confidence_downgrade` — raw `scan_file()` output is scored
