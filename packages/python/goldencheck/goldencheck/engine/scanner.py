@@ -21,6 +21,7 @@ from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 from goldencheck.relations.temporal import TemporalOrderProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
+from goldencheck.relations.age_validation import AgeValidationProfiler
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ RELATION_PROFILERS = [
     TemporalOrderProfiler(),
     NullCorrelationProfiler(),
     NumericCrossColumnProfiler(),
+    AgeValidationProfiler(),
 ]
 
 def _post_classification_checks(
@@ -87,6 +89,119 @@ def _post_classification_checks(
                     suggestion="Check for data entry errors or encoding issues in name values",
                     confidence=0.85,
                 ))
+
+    # --- Code-like format inconsistency (e.g. 5-digit vs 9-digit zip) ---
+    # Only add if no pattern_consistency finding already exists at WARNING+ for this column
+    from goldencheck.profilers.pattern_consistency import _generalize
+    existing_pc_cols = {
+        f.column for f in new_findings
+        if f.check == "pattern_consistency" and f.severity in (Severity.WARNING, Severity.ERROR)
+    }
+    for col_name, classification in column_types.items():
+        if not classification or classification.type_name not in ("geo", "identifier"):
+            continue
+        if col_name in existing_pc_cols:
+            continue
+        if col_name not in sample.columns:
+            continue
+        col = sample[col_name]
+        if col.dtype not in (pl.Utf8, pl.String):
+            continue
+        non_null = col.drop_nulls()
+        total = len(non_null)
+        if total == 0:
+            continue
+        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD)
+        patterns = non_null.map_elements(_generalize, return_dtype=pl.String)
+        pattern_counts = patterns.value_counts().sort("count", descending=True)
+        if len(pattern_counts) < 2:
+            continue
+        dominant_pattern = pattern_counts[col_name][0]
+        # Only check code-like patterns (mostly digits)
+        digit_ratio = sum(1 for c in dominant_pattern if c == "D") / max(len(dominant_pattern), 1)
+        if digit_ratio < 0.5:
+            continue
+        # Look for any secondary pattern with different length
+        for i in range(1, len(pattern_counts)):
+            minority_pattern = pattern_counts[col_name][i]
+            minority_count = int(pattern_counts["count"][i])
+            if abs(len(dominant_pattern) - len(minority_pattern)) > 1:
+                new_findings.append(Finding(
+                    severity=Severity.WARNING,
+                    column=col_name,
+                    check="pattern_consistency",
+                    message=(
+                        f"Inconsistent pattern detected: '{minority_pattern}' appears in "
+                        f"{minority_count} row(s) ({minority_count / total:.1%}) vs dominant pattern "
+                        f"'{dominant_pattern}'"
+                    ),
+                    affected_rows=minority_count,
+                    sample_values=non_null.filter(patterns == minority_pattern).head(5).to_list(),
+                    suggestion="Standardize values to a single format/pattern",
+                    confidence=0.8,
+                    metadata={"dominant_pattern": dominant_pattern, "minority_pattern": minority_pattern},
+                ))
+                break  # Only flag the most significant pattern difference
+
+    # --- String length format check for identifier-like columns ---
+    _ID_NAME_KEYWORDS = ("id", "number", "code", "auth", "key")
+    _ID_NAME_EXCLUDE = ("phone", "npi")
+    for col_name in sample.columns:
+        col = sample[col_name]
+
+        # Accept string or numeric columns (numeric IDs are common)
+        is_string = col.dtype in (pl.Utf8, pl.String)
+        is_numeric = col.dtype in (
+            pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+            pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+            pl.Float32, pl.Float64,
+        )
+        if not (is_string or is_numeric):
+            continue
+
+        # Check if column name suggests it's an identifier/code
+        name_lower = col_name.lower()
+        if not any(kw in name_lower for kw in _ID_NAME_KEYWORDS):
+            continue
+        if any(exc in name_lower for exc in _ID_NAME_EXCLUDE):
+            continue
+
+        non_null = col.drop_nulls()
+        total = len(non_null)
+        if total == 0:
+            continue
+
+        # Cast to string for length analysis
+        str_vals = non_null.cast(pl.String) if is_numeric else non_null
+        lengths = str_vals.str.len_chars().alias("_len")
+        length_counts = lengths.value_counts().sort("count", descending=True)
+
+        if len(length_counts) == 0:
+            continue
+
+        dominant_length = int(length_counts["_len"][0])
+        dominant_count = int(length_counts["count"][0])
+        dominant_pct = dominant_count / total
+
+        outlier_count = total - dominant_count
+
+        if dominant_pct > 0.90 and outlier_count > 0:
+            sample_mask = lengths != dominant_length
+            sample_vals = str_vals.filter(sample_mask).head(5).to_list()
+            new_findings.append(Finding(
+                severity=Severity.WARNING,
+                column=col_name,
+                check="format_detection",
+                message=(
+                    f"Inconsistent string length: {dominant_pct:.0%} of values are "
+                    f"{dominant_length} chars but {outlier_count} row(s) have different "
+                    f"lengths — possible invalid format"
+                ),
+                affected_rows=outlier_count,
+                sample_values=[str(v) for v in sample_vals],
+                suggestion="Verify that all values conform to the expected length",
+                confidence=0.75,
+            ))
 
     return new_findings
 
