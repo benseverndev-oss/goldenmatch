@@ -57,15 +57,34 @@ docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benzsevern/goldenm
 psql -h localhost -U postgres -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
 ```
 
-### Pre-built Binaries
+### apt (Debian/Ubuntu)
 
-Download from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+Download `.deb` from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
 
 ```bash
-tar xzf goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64.tar.gz
-sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.so $(pg_config --pkglibdir)/
-sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.control $(pg_config --sharedir)/extension/
-sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.sql $(pg_config --sharedir)/extension/
+# PG 16 example -- packages available for PG 15, 16, 17
+curl -LO https://github.com/benzsevern/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch_0.2.0_amd64.deb
+sudo dpkg -i postgresql-16-goldenmatch_0.2.0_amd64.deb
+pip install goldenmatch>=1.1.0
+```
+
+### yum/dnf (RHEL/CentOS/Fedora)
+
+```bash
+curl -LO https://github.com/benzsevern/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch-0.2.0.x86_64.rpm
+sudo rpm -i postgresql-16-goldenmatch-0.2.0.x86_64.rpm
+pip install goldenmatch>=1.1.0
+```
+
+### Pre-built Binaries (manual)
+
+Download `.tar.gz` from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+
+```bash
+tar xzf goldenmatch_pg-v0.2.0-pg16-py312-linux-x86_64.tar.gz
+sudo cp goldenmatch_pg-v0.2.0-pg16-py312-linux-x86_64/*.so $(pg_config --pkglibdir)/
+sudo cp goldenmatch_pg-v0.2.0-pg16-py312-linux-x86_64/*.control $(pg_config --sharedir)/extension/
+sudo cp goldenmatch_pg-v0.2.0-pg16-py312-linux-x86_64/*.sql $(pg_config --sharedir)/extension/
 ```
 
 ### Build from Source

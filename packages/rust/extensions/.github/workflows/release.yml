@@ -51,7 +51,7 @@ jobs:
         working-directory: postgres
         run: cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
 
-      - name: Package extension
+      - name: Package extension (tar.gz)
         run: |
           ARCH=$(uname -m)
           PKG_NAME="goldenmatch_pg-${RELEASE_TAG}-pg${PG_VERSION}-py312-linux-${ARCH}"
@@ -61,13 +61,53 @@ jobs:
           cp postgres/sql/goldenmatch_pg--0.1.0.sql "${PKG_NAME}/"
           cp README.md "${PKG_NAME}/"
           tar czf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
-          echo "PKG_FILE=${PKG_NAME}.tar.gz" >> "$GITHUB_ENV"
+          echo "PKG_NAME=${PKG_NAME}" >> "$GITHUB_ENV"
 
-      - name: Upload release artifact
+      - name: Build .deb and .rpm packages
+        env:
+          NFPM_VERSION: "2.41.1"
+        run: |
+          # Install nfpm
+          curl -sSLo /tmp/nfpm.tar.gz "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          tar xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          chmod +x /tmp/nfpm
+
+          PKG_VER="${RELEASE_TAG#v}"
+          ARCH=$(dpkg --print-architecture)
+
+          cat > /tmp/nfpm.yaml <<EOF
+          name: postgresql-${PG_VERSION}-goldenmatch
+          arch: ${ARCH}
+          version: ${PKG_VER}
+          maintainer: Ben Severn <benzsevern@gmail.com>
+          description: GoldenMatch entity resolution extension for PostgreSQL ${PG_VERSION}
+          homepage: https://github.com/benzsevern/goldenmatch-extensions
+          license: MIT
+          depends:
+            - postgresql-${PG_VERSION}
+          contents:
+            - src: ${PKG_NAME}/goldenmatch_pg.so
+              dst: /usr/lib/postgresql/${PG_VERSION}/lib/goldenmatch_pg.so
+            - src: ${PKG_NAME}/goldenmatch_pg.control
+              dst: /usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg.control
+            - src: ${PKG_NAME}/goldenmatch_pg--0.1.0.sql
+              dst: /usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg--0.1.0.sql
+          EOF
+
+          /tmp/nfpm package --config /tmp/nfpm.yaml --packager deb
+          /tmp/nfpm package --config /tmp/nfpm.yaml --packager rpm
+
+          echo "DEB_FILE=$(ls *.deb)" >> "$GITHUB_ENV"
+          echo "RPM_FILE=$(ls *.rpm)" >> "$GITHUB_ENV"
+
+      - name: Upload release artifacts
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${RELEASE_TAG}" "${PKG_FILE}" --clobber
+        run: |
+          gh release upload "${RELEASE_TAG}" "${PKG_NAME}.tar.gz" --clobber
+          gh release upload "${RELEASE_TAG}" "${DEB_FILE}" --clobber
+          gh release upload "${RELEASE_TAG}" "${RPM_FILE}" --clobber
 
   docker:
     name: Docker Image
