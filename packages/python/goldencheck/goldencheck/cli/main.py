@@ -11,6 +11,7 @@ from goldencheck.engine.scanner import scan_file, scan_file_with_llm
 from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.validator import validate_file
 from goldencheck.config.loader import load_config
+from goldencheck.config.writer import save_config
 from goldencheck.reporters.rich_console import report_rich
 from goldencheck.reporters.json_reporter import report_json
 from goldencheck.reporters.ci_reporter import report_ci
@@ -100,6 +101,11 @@ def main(
     llm_boost = False
     llm_provider = "anthropic"
     domain = None
+    smart = False
+    guided = False
+    no_history = False
+    webhook = None
+    notify_on = "grade-drop"
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
@@ -112,6 +118,16 @@ def main(
             llm_provider = args.pop(0)
         elif arg == "--domain":
             domain = args.pop(0)
+        elif arg == "--smart":
+            smart = True
+        elif arg == "--guided":
+            guided = True
+        elif arg == "--no-history":
+            no_history = True
+        elif arg == "--webhook":
+            webhook = args.pop(0)
+        elif arg == "--notify-on":
+            notify_on = args.pop(0)
         elif not arg.startswith("-"):
             if file is None:
                 file = Path(arg)
@@ -123,7 +139,11 @@ def main(
         typer.echo("Error: Missing data file argument.", err=True)
         raise typer.Exit(code=1)
 
-    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider, domain=domain)
+    _do_scan(
+        file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
+        llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
+        no_history=no_history, webhook=webhook, notify_on=notify_on,
+    )
 
 
 @app.command()
@@ -134,9 +154,21 @@ def scan(
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
     domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
+    smart: bool = typer.Option(False, "--smart", help="Auto-triage: pin high-confidence, dismiss low."),
+    guided: bool = typer.Option(False, "--guided", help="Walk through findings one at a time."),
+    no_history: bool = typer.Option(False, "--no-history", help="Don't record this scan in history."),
+    webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
+    notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
 ) -> None:
     """Profile a data file and report findings."""
-    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider, domain=domain)
+    if smart and guided:
+        typer.echo("Error: Cannot use --smart and --guided together.", err=True)
+        raise typer.Exit(code=2)
+    _do_scan(
+        file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
+        llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
+        no_history=no_history, webhook=webhook, notify_on=notify_on,
+    )
 
 
 @app.command()
@@ -408,6 +440,56 @@ def watch(
         raise typer.Exit(code=exit_code)
 
 
+@app.command()
+def init(
+    file: Path = typer.Argument(..., help="Data file to scan for initial rules."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Accept defaults, skip interactive prompts."),
+) -> None:
+    """Interactive setup wizard — scan, pin rules, scaffold CI.
+
+    Scans your data, auto-pins high-confidence findings, and generates
+    goldencheck.yml + CI workflow in one command.
+    """
+    from goldencheck.cli.init_wizard import run_init_wizard
+
+    with _cli_error_handler():
+        run_init_wizard(file, yes=yes)
+
+
+@app.command()
+def history(
+    file: Optional[Path] = typer.Argument(None, help="Filter history by file."),
+    last: Optional[int] = typer.Option(None, "--last", "-n", help="Show last N scans."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
+    """Show scan history — scores, grades, and trends over time."""
+    import json as json_mod
+    from goldencheck.engine.history import load_history
+
+    file_filter = file.name if file else None
+    records = load_history(file_filter=file_filter, last_n=last)
+
+    if not records:
+        typer.echo("No scan history found. Run a scan first.")
+        raise typer.Exit(code=0)
+
+    if json_output:
+        from dataclasses import asdict
+        typer.echo(json_mod.dumps([asdict(r) for r in records], indent=2))
+        raise typer.Exit(code=0)
+
+    # Table output
+    typer.echo(f"{'Date':<20} {'File':<20} {'Score':>5} {'Grade':>5} {'Errors':>6} {'Warnings':>8}")
+    for r in records:
+        ts = r.timestamp[:16].replace("T", " ")
+        typer.echo(f"{ts:<20} {r.file:<20} {r.score:>5} {r.grade:>5} {r.errors:>6} {r.warnings:>8}")
+
+    if len(records) >= 2:
+        first, last_r = records[0], records[-1]
+        if first.file == last_r.file:
+            typer.echo(f"\nTrend: {first.file} {first.score} -> {last_r.score}")
+
+
 @app.command(name="mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio) for Claude Desktop integration."""
@@ -432,6 +514,11 @@ def _do_scan(
     llm_boost: bool = False,
     llm_provider: str = "anthropic",
     domain: str | None = None,
+    smart: bool = False,
+    guided: bool = False,
+    no_history: bool = False,
+    webhook: str | None = None,
+    notify_on: str = "grade-drop",
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
@@ -441,6 +528,63 @@ def _do_scan(
             findings, profile = scan_file(file, domain=domain)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
 
+        # Record history (before triage, so raw findings are recorded)
+        if not no_history:
+            from goldencheck.engine.history import record_scan
+            record_scan(file, profile, findings)
+
+        # Smart auto-triage
+        if smart:
+            from goldencheck.engine.triage import auto_triage
+            triage = auto_triage(findings)
+            typer.echo(f"Auto-triaged {len(findings)} findings:")
+            typer.echo(f"  Pinned:    {len(triage.pin)} (high confidence)")
+            typer.echo(f"  Dismissed: {len(triage.dismiss)} (low confidence or INFO)")
+            typer.echo(f"  Review:    {len(triage.review)} (medium — use --guided)")
+
+            if triage.pin:
+                from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+                config = GoldenCheckConfig(settings=Settings(fail_on="error"))
+                for f in triage.pin:
+                    if f.column not in config.columns:
+                        config.columns[f.column] = ColumnRule(type="string")
+                save_config(config, Path("goldencheck.yml"))
+                typer.echo(f"\nWritten to goldencheck.yml ({len(config.columns)} rules)")
+            return
+
+        # Guided walkthrough
+        if guided:
+            from goldencheck.engine.triage import auto_triage
+            from goldencheck.models.finding import Severity
+            triage = auto_triage(findings)
+            reviewable = [f for f in findings if f.severity >= Severity.WARNING]
+            if not reviewable:
+                typer.echo("No findings to review.")
+                return
+
+            pinned = []
+            for i, f in enumerate(reviewable, 1):
+                conf = "HIGH" if f.confidence >= 0.8 else "MED" if f.confidence >= 0.5 else "LOW"
+                samples = ", ".join(f.sample_values[:3]) if f.sample_values else ""
+                typer.echo(f"\n[{i}/{len(reviewable)}] {f.severity.name}: '{f.column}' — {f.message[:80]}")
+                typer.echo(f"      Confidence: {conf}  |  Samples: {samples}")
+                choice = typer.prompt("      Pin this rule? [Y/n/skip]", default="y")
+                if choice.lower() in ("y", "yes", ""):
+                    pinned.append(f)
+
+            if pinned:
+                from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+                config = GoldenCheckConfig(settings=Settings(fail_on="error"))
+                for f in pinned:
+                    if f.column not in config.columns:
+                        config.columns[f.column] = ColumnRule(type="string")
+                save_config(config, Path("goldencheck.yml"))
+                typer.echo(f"\nPinned {len(pinned)} rules -> goldencheck.yml")
+            else:
+                typer.echo("\nNo rules pinned.")
+            return
+
+        # Normal output
         if json_output:
             report_json(findings, profile, sys.stdout)
         elif not no_tui:
@@ -449,3 +593,25 @@ def _do_scan(
             tui_app.run()
         else:
             report_rich(findings, profile)
+
+        # Webhook notification
+        if webhook:
+            from goldencheck.engine.history import get_previous_scan
+            from goldencheck.engine.notifier import should_notify, send_webhook
+
+            from goldencheck.models.finding import Severity as _Sev
+            by_col: dict[str, dict[str, int]] = {}
+            for f in findings:
+                if f.severity >= _Sev.WARNING:
+                    by_col.setdefault(f.column, {"errors": 0, "warnings": 0})
+                    key = "errors" if f.severity == _Sev.ERROR else "warnings"
+                    by_col[f.column][key] = by_col[f.column].get(key, 0) + 1
+            grade, score = profile.health_score(findings_by_column=by_col)
+
+            prev = get_previous_scan(file)
+            if should_notify(grade, findings, prev, notify_on):
+                send_webhook(
+                    webhook, str(file), grade, score, findings,
+                    trigger=notify_on,
+                    previous_grade=prev.grade if prev else None,
+                )
