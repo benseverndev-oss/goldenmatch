@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldencheck"
-version = "0.6.0"
+version = "0.9.0"
 description = "Data validation that discovers rules from your data so you don't have to write them"
 readme = "README.md"
 requires-python = ">=3.11"

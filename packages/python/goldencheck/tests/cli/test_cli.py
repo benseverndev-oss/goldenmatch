@@ -24,7 +24,7 @@ def test_help():
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.6.0" in result.stdout
+    assert "0.9.0" in result.stdout
 
 
 def test_llm_boost_without_key(monkeypatch):
@@ -83,3 +83,106 @@ def test_fix_no_changes(tmp_path):
     result = runner.invoke(app, ["fix", str(csv)])
     assert result.exit_code == 0
     assert "clean" in result.stdout.lower()
+
+
+# --- Diff command tests ---
+
+def test_diff_two_files(tmp_path):
+    old = tmp_path / "old.csv"
+    new = tmp_path / "new.csv"
+    old.write_text("name,age\nAlice,25\nBob,30\n")
+    new.write_text("name,age,status\nAlice,25,active\nBob,30,inactive\nCharlie,28,active\n")
+    result = runner.invoke(app, ["diff", str(old), str(new)])
+    assert result.exit_code == 0
+    assert "status" in result.stdout
+
+
+def test_diff_json_output(tmp_path):
+    old = tmp_path / "old.csv"
+    new = tmp_path / "new.csv"
+    old.write_text("name,age\nAlice,25\n")
+    new.write_text("name,age\nAlice,25\nBob,30\n")
+    result = runner.invoke(app, ["diff", str(old), str(new), "--json"])
+    assert result.exit_code == 0
+    assert "schema_changes" in result.stdout
+
+
+def test_diff_no_changes(tmp_path):
+    f = tmp_path / "data.csv"
+    f.write_text("name,age\nAlice,25\n")
+    result = runner.invoke(app, ["diff", str(f), str(f)])
+    assert result.exit_code == 0
+    assert "No changes" in result.stdout
+
+
+# --- Smart/guided tests ---
+
+def test_smart_triage(tmp_path):
+    csv = tmp_path / "data.csv"
+    csv.write_text("name,age\nAlice,25\nBob,30\n")
+    result = runner.invoke(app, ["scan", str(csv), "--smart", "--no-tui"])
+    assert result.exit_code == 0
+    assert "Auto-triaged" in result.stdout
+
+
+def test_smart_and_guided_mutual_exclusion(tmp_path):
+    csv = tmp_path / "data.csv"
+    csv.write_text("name,age\nAlice,25\n")
+    result = runner.invoke(app, ["scan", str(csv), "--smart", "--guided"])
+    assert result.exit_code == 2
+
+
+# --- History command tests ---
+
+def test_history_empty():
+    result = runner.invoke(app, ["history"])
+    assert result.exit_code == 0
+    assert "No scan history" in result.stdout or "Date" in result.stdout
+
+
+def test_history_json():
+    result = runner.invoke(app, ["history", "--json"])
+    assert result.exit_code == 0
+
+
+# --- Init command tests ---
+
+def test_init_yes_mode(tmp_path):
+    csv = tmp_path / "data.csv"
+    csv.write_text("name,email\nAlice,a@b.com\nBob,b@c.com\n")
+    result = runner.invoke(app, ["init", str(csv), "--yes"])
+    assert result.exit_code == 0
+    assert "goldencheck.yml" in result.stdout
+
+
+# --- Domain flag tests ---
+
+def test_scan_with_domain(tmp_path):
+    csv = tmp_path / "data.csv"
+    csv.write_text("name,age\nAlice,25\nBob,30\n")
+    result = runner.invoke(app, ["scan", str(csv), "--no-tui", "--domain", "healthcare"])
+    assert result.exit_code == 0
+
+
+def test_scan_invalid_domain(tmp_path):
+    csv = tmp_path / "data.csv"
+    csv.write_text("name,age\nAlice,25\n")
+    result = runner.invoke(app, ["scan", str(csv), "--no-tui", "--domain", "nonexistent"])
+    assert result.exit_code == 1
+
+
+# --- Arg parser edge cases ---
+
+def test_shorthand_no_tui():
+    result = runner.invoke(app, [str(FIXTURES / "simple.csv"), "--no-tui", "--json"])
+    assert result.exit_code == 0
+
+
+def test_shorthand_unknown_flag():
+    result = runner.invoke(app, [str(FIXTURES / "simple.csv"), "--badopt"])
+    assert result.exit_code == 2
+
+
+def test_no_file_argument():
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0  # shows help
