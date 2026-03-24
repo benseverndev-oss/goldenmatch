@@ -1,9 +1,9 @@
 [package]
 name = "goldenmatch_pg"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
 description = "GoldenMatch entity resolution as a PostgreSQL extension"
 
 [lib]
