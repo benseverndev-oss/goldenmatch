@@ -2,6 +2,27 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [0.3.0] - 2025-03-24
+
+### Added
+- **MCP server** — `goldencheck mcp-serve` exposes 6 tools (scan, validate, profile, health_score, get_column_detail, list_checks) for Claude Desktop integration. Install with `pip install goldencheck[mcp]`
+- **LLM rule generation** — `goldencheck learn` sends data samples to an LLM and generates domain-specific validation rules (regex, length, value lists, cross-column). Rules saved to `goldencheck_rules.json` and auto-applied on future scans
+- **Jupyter / Colab support** — `_repr_html_()` on Finding and DatasetProfile, plus `ScanResult` wrapper in `goldencheck.notebook` for rich HTML display
+- **Colab demo notebook** — `scripts/goldencheck_demo.ipynb` with "Open in Colab" badge
+- **DevContainer** — `.devcontainer/devcontainer.json` for Codespaces (Python 3.12, ruff, Jupyter)
+- **Try-It GitHub Action** — zero-install demo via `workflow_dispatch`, paste a CSV URL and get results
+- **Numeric cross-column profiler** — detects value > max constraint violations (e.g., claim_amount > policy_max)
+- **Digits-in-name detection** — flags numeric characters in person_name columns as WARNING
+- **Mixed coding standard detection** — pattern_consistency now detects structural pattern shifts (letter-first vs digit-first)
+
+### Improved
+- **DQBench Score: 72.00 → 87.71** (+15.71 points)
+- Temporal order heuristics expanded: admission/discharge, service/submit, and 15+ new pairs
+- Drift detection skips high-cardinality string columns (>90% unique) — eliminates false positives on IPs, UUIDs, session IDs
+- Drift detection suppressed on datetime columns via semantic types
+- Date-pair fallback tightened (6-column guard) — prevents noisy combinatorial pairs
+- CI badge added to README
+
 ## [0.2.0] - 2025-03-23
 
 ### Added

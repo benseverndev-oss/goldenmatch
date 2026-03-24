@@ -33,11 +33,11 @@ Every other data validation tool makes you write rules first. GoldenCheck flips 
 
 Zero config to start. No schemas. No decorators. No YAML. Just point it at a file.
 
-## DQBench Score: 72.00
+## DQBench Score: 87.71
 
 | Tool | Mode | Score |
 |------|------|-------|
-| **GoldenCheck** | **zero-config** | **72.00** |
+| **GoldenCheck** | **zero-config** | **87.71** |
 | Pandera | best-effort rules | 32.51 |
 | Soda Core | best-effort rules | 22.36 |
 | Great Expectations | best-effort rules | 21.68 |
@@ -50,6 +50,7 @@ GoldenCheck's zero-config discovery outperforms every competitor — even when t
 - **CI/CD** — `--json` output + exit codes for pipelines
 - **MCP** — `goldencheck mcp-serve` for Claude Desktop
 - **Jupyter/Colab** — Rich HTML display with `ScanResult`
+- **LLM Rules** — `goldencheck learn` generates domain-specific rules
 - **Python API** — Import `scan_file()` directly
 
 ---

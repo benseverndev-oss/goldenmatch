@@ -96,6 +96,37 @@ goldencheck review data.csv --config configs/staging.yml
 
 ---
 
+### `learn`
+
+Generate domain-specific validation rules using LLM analysis of your data.
+
+```bash
+goldencheck learn <file> [flags]
+```
+
+Sends a representative sample to an LLM which generates specific, testable rules: regex patterns, length constraints, value lists, and cross-column logic. Rules are saved to `goldencheck_rules.json` and automatically applied on future scans.
+
+**Examples:**
+
+```bash
+# Generate rules using OpenAI
+goldencheck learn data.csv --llm-provider openai
+
+# Save rules to a custom path
+goldencheck learn data.csv --output rules/production.json
+```
+
+**Flags:**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output`, `-o` | path | `goldencheck_rules.json` | Output path for rules |
+| `--llm-provider <name>` | string | `anthropic` | LLM provider: `anthropic` or `openai` |
+
+Requires `goldencheck[llm]` installed and an API key in the environment.
+
+---
+
 ### `mcp-serve`
 
 Start the MCP (Model Context Protocol) server for Claude Desktop integration.

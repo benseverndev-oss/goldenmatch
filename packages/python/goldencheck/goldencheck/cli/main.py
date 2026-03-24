@@ -13,7 +13,7 @@ from goldencheck.reporters.rich_console import report_rich
 from goldencheck.reporters.json_reporter import report_json
 from goldencheck.reporters.ci_reporter import report_ci
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 class _DefaultCommandGroup(TyperGroup):

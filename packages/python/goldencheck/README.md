@@ -165,6 +165,8 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `goldencheck scan <file>` | Explicit scan |
 | `goldencheck validate <file>` | Validate against goldencheck.yml |
 | `goldencheck review <file>` | Scan + validate, launch TUI |
+| `goldencheck learn <file>` | Generate LLM validation rules |
+| `goldencheck mcp-serve` | Start MCP server for Claude Desktop |
 
 ### Flags
 
