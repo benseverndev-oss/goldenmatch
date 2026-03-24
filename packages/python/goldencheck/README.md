@@ -207,13 +207,15 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | Command | Description |
 |---------|-------------|
 | `goldencheck <file>` | Scan and launch TUI |
-| `goldencheck scan <file>` | Explicit scan |
+| `goldencheck scan <file>` | Explicit scan (supports `--smart`, `--guided`) |
 | `goldencheck validate <file>` | Validate against goldencheck.yml |
 | `goldencheck review <file>` | Scan + validate, launch TUI |
+| `goldencheck init <file>` | Interactive setup wizard (scan → config → CI) |
 | `goldencheck diff <file> [file2]` | Compare two files or against git HEAD |
 | `goldencheck watch <dir>` | Poll directory, re-scan on change |
 | `goldencheck fix <file>` | Auto-fix data quality issues |
 | `goldencheck learn <file>` | Generate LLM validation rules |
+| `goldencheck history` | Show scan history and trends |
 | `goldencheck mcp-serve` | Start MCP server (9 tools) |
 
 ### Flags
@@ -227,6 +229,10 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `--llm-boost` | Enable LLM enhancement |
 | `--llm-provider <name>` | LLM provider: `anthropic` (default) or `openai` |
 | `--mode <level>` | Fix mode: `safe`, `moderate`, `aggressive` |
+| `--smart` | Auto-triage: pin high-confidence, dismiss low |
+| `--guided` | Walk through findings one-by-one |
+| `--webhook <url>` | POST findings to Slack/PagerDuty/any URL |
+| `--notify-on <trigger>` | Webhook trigger: `grade-drop`, `any-error`, `any-warning` |
 | `--version` | Show version |
 
 ## Benchmarks
