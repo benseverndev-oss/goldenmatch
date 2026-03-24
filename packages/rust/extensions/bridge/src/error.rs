@@ -22,4 +22,3 @@ impl From<pyo3::PyErr> for BridgeError {
         BridgeError::PythonRuntime(err.to_string())
     }
 }
-
