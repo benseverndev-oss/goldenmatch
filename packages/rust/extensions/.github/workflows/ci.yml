@@ -82,8 +82,9 @@ jobs:
           # pyo3 links against actions/setup-python. Install goldenmatch into THAT Python's
           # site-packages, then create a .pth file in the system Python so Postgres can find it.
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
-          # Also install via system pip as fallback (with updated typing_extensions)
-          sudo pip install --break-system-packages typing_extensions>=4.12 goldenmatch>=1.1.0 2>/dev/null || true
+          # Force-upgrade system typing_extensions and install goldenmatch for system Python
+          sudo pip install --break-system-packages --force-reinstall typing_extensions>=4.12 2>/dev/null || true
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
           # Create a .pth file pointing to the actions Python site-packages
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
