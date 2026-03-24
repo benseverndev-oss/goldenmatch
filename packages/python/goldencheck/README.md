@@ -24,7 +24,7 @@ Data validation that discovers rules from your data so you don't have to write t
 | LLM enhancement | **Yes ($0.01/scan)** | No | No | No |
 | Fix suggestions | Yes, in TUI | No | No | No |
 | Confidence scoring | Yes (H/M/L per finding) | No | No | No |
-| DQBench Score | **87.71** | 21.68 (best-effort) | 32.51 (best-effort) | 6.94 (auto) |
+| DQBench Score | **88.40** | 21.68 (best-effort) | 32.51 (best-effort) | 6.94 (auto) |
 
 ## Install
 
@@ -197,7 +197,7 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 
 | Tool | Mode | DQBench Score |
 |------|------|---------------|
-| **GoldenCheck** | **zero-config** | **87.71** |
+| **GoldenCheck** | **zero-config** | **88.40** |
 | Pandera | best-effort rules | 32.51 |
 | Soda Core | best-effort rules | 22.36 |
 | Great Expectations | best-effort rules | 21.68 |

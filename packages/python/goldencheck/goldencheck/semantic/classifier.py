@@ -77,12 +77,14 @@ def _match_by_name(col_name: str, type_defs: dict[str, TypeDef]) -> str | None:
     for type_name, type_def in type_defs.items():
         for hint in type_def.name_hints:
             # Prefix match: hint ends with _
-            if hint.endswith("_") and col_lower.startswith(hint):
-                return type_name
+            if hint.endswith("_"):
+                if col_lower.startswith(hint):
+                    return type_name
             # Suffix match: hint starts with _
-            elif hint.startswith("_") and col_lower.endswith(hint):
-                return type_name
-            # Substring match
+            elif hint.startswith("_"):
+                if col_lower.endswith(hint):
+                    return type_name
+            # Substring match (only for hints without _ prefix/suffix markers)
             elif hint in col_lower:
                 return type_name
     return None
