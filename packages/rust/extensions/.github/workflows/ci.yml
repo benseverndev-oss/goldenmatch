@@ -72,10 +72,19 @@ jobs:
       - name: Install extension and run tests
         working-directory: postgres
         run: |
-          # Install the extension (generates .so, .control, and .sql)
+          # Install the extension
           cargo pgrx install --pg-config=/usr/lib/postgresql/16/bin/pg_config --release
-          echo "=== Extension files installed ==="
-          ls -la /usr/share/postgresql/16/extension/goldenmatch_pg* || echo "No SQL files in extension dir"
-          ls -la /usr/lib/postgresql/16/lib/goldenmatch_pg* || echo "No .so files"
-          # Now run the tests (they do their own install for the test build)
+          # pgrx 0.12.9 bug: SQL file not written. Search the entire build tree.
+          echo "=== Searching for SQL files ==="
+          find ../target -name "*.sql" -type f 2>/dev/null | head -10
+          find . -name "*.sql" -type f 2>/dev/null | head -10
+          echo "=== Extension dir ==="
+          ls -la /usr/share/postgresql/16/extension/goldenmatch* 2>/dev/null || echo "none"
+          # If SQL was found in build tree, copy it
+          SQL=$(find ../target -name "goldenmatch_pg--*.sql" -type f 2>/dev/null | head -1)
+          if [ -n "$SQL" ]; then
+            cp "$SQL" /usr/share/postgresql/16/extension/
+            echo "Copied SQL from build tree: $SQL"
+          fi
+          # Run tests
           cargo pgrx test pg16
