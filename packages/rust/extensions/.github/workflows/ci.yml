@@ -77,15 +77,19 @@ jobs:
           ls -la /usr/share/postgresql/16/extension/goldenmatch_pg*
           ls -la /usr/lib/postgresql/16/lib/goldenmatch_pg*
 
+      - name: Install goldenmatch for Postgres Python
+        run: |
+          # pyo3 links against actions/setup-python. Install goldenmatch into THAT Python's
+          # site-packages, then create a .pth file in the system Python so Postgres can find it.
+          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          # Also install via system pip as fallback
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
+          # Create a .pth file pointing to the actions Python site-packages
+          echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
+
       - name: Test extension via psql
         run: |
-          # pyo3 links against the actions/setup-python Python. Postgres needs PYTHONPATH
-          # to find goldenmatch installed there.
-          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
-          echo "PYTHONPATH=${PYTHON_SITE}" | sudo tee -a /etc/environment
-          export PYTHONPATH="${PYTHON_SITE}"
-          # Start Postgres with PYTHONPATH set
-          sudo PYTHONPATH="${PYTHON_SITE}" -u postgres pg_ctlcluster 16 main start || true
+          sudo -u postgres pg_ctlcluster 16 main start || true
           sleep 2
           # List available symbols in the .so for debugging
           echo "=== Exported symbols containing goldenmatch ==="
