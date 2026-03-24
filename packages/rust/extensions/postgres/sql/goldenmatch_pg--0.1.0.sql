@@ -95,6 +95,20 @@ STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'gm_drop_wrapper';
 
+CREATE FUNCTION "gm_pairs"(
+    "job_name" TEXT
+) RETURNS TABLE ("id_a" BIGINT, "id_b" BIGINT, "score" DOUBLE PRECISION)
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'gm_pairs_wrapper';
+
+CREATE FUNCTION "gm_clusters"(
+    "job_name" TEXT
+) RETURNS TABLE ("cluster_id" BIGINT, "record_id" BIGINT)
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'gm_clusters_wrapper';
+
 -- ══════════════════════════════════════════════════════════════════════
 -- Table-returning functions (structured results)
 -- ══════════════════════════════════════════════════════════════════════
