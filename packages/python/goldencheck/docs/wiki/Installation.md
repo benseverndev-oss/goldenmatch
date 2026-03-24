@@ -68,7 +68,7 @@ pip install goldencheck[llm,mcp]
 
 ```bash
 goldencheck --version
-# GoldenCheck 0.2.0
+# GoldenCheck 0.3.0
 ```
 
 ## Development Setup
