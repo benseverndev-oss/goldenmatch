@@ -6,7 +6,7 @@ types:
     suppress: ["cardinality", "pattern_consistency", "drift_detection"]
 
   person_name:
-    name_hints: ["name", "first_name", "last_name", "full_name"]
+    name_hints: ["first_name", "last_name", "full_name", "person_name", "customer_name", "patient_name", "employee_name", "contact_name"]
     value_signals:
       mixed_case: true
     suppress: ["pattern_consistency", "cardinality"]
