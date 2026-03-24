@@ -37,6 +37,13 @@ Your message field MUST include keywords that describe the specific issue. For e
 - For format issues, include "format", "invalid", "email", "phone", or "url"
 - For drift, include "drift", "new category", or "distribution change"
 
+Additional checks to perform:
+- For ID/code columns: check if prefixes or suffixes follow patterns consistent with related categorical columns (e.g., insurance ID prefix should match provider type). Report as "cross_column" with "mismatch" or "inconsistent with" in the message.
+- For age columns: verify mathematical consistency with date-of-birth columns. Report as "cross_column" with "doesn't match" in the message.
+- For date columns: check for impossible dates (future dates, dates before 1900). Check if weekend dates appear for weekday-only contexts.
+- For geographic columns: verify state/zip prefix consistency. Report as "cross_column" with "mismatch" in the message.
+- For medical/clinical data: check for mixed coding standards (e.g., ICD-9 codes mixed into ICD-10 dataset).
+
 Respond with valid JSON matching this schema:
 {
   "columns": {
