@@ -2,6 +2,26 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.0.0] - 2026-03-24
+
+### Added
+- **Multi-file scan** — `goldencheck scan file1.csv file2.csv` scans multiple files in one command
+- **HTML report** — `--html report.html` generates a shareable, self-contained dark-themed report
+- **Progress indicator** — prints row count, column count, and sampling note before scanning
+- **TUI dismiss** — `d` key dismisses findings, persists to `ignore` list on F2 save
+- **Real-world dataset tests** — 22 tests across 5 public datasets (airports, countries, GDP, population, S&P 500)
+- **API stability doc** — `docs/api-stability.md` with stable/beta/experimental classification
+- **Fixer completions** — `strip_control_chars` (moderate), `fill_nulls_with_mode` (aggressive)
+- **Exit codes in --help** — documented in the app help text
+
+### Fixed
+- 10 code review bugs: diff crash, MCP path traversal, domain+LLM forwarding, arg parser guards, history path, TUI guided mode, age/DOB dtype, webhook semantics, init LLM prompt, MCP check list
+- `person_name` classifier narrowed to avoid false positives on airport names, municipalities, HQ locations
+- Ruff unused import errors in CI
+
+### Stats
+- **296 tests** | **DQBench 88.40** | **11 commands** | **9 MCP tools** | **3 domain packs**
+
 ## [0.6.0] - 2026-03-24
 
 ### Added
