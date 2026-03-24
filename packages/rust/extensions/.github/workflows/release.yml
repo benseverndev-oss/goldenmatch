@@ -32,6 +32,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
           sudo apt-get update
           sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
           sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
@@ -62,6 +64,7 @@ jobs:
           echo "PKG_FILE=${PKG_NAME}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Upload release artifact
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${RELEASE_TAG}" "${PKG_FILE}" --clobber
