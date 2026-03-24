@@ -31,29 +31,6 @@ pub fn polars_df_to_json(py: Python<'_>, df: &PyObject) -> Result<String, Bridge
     Ok(json_str)
 }
 
-/// Convert a list of column-oriented data into a Polars DataFrame.
-/// Takes column names and a JSON string representation.
-pub fn table_data_to_polars_df(
-    py: Python<'_>,
-    _table_name: &str,
-    columns: &[String],
-    rows_json: &str,
-) -> Result<PyObject, BridgeError> {
-    let pl = py.import("polars")?;
-    let io = py.import("io")?;
-
-    let string_io = io.call_method1("StringIO", (rows_json,))?;
-    let df = pl.call_method1("read_json", (string_io,))?;
-
-    if !columns.is_empty() {
-        let col_list: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
-        let selected = df.call_method1("select", (col_list,))?;
-        return Ok(selected.into_pyobject(py).unwrap().unbind());
-    }
-
-    Ok(df.into_pyobject(py).unwrap().unbind())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -93,16 +93,23 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
 
     // 5. Store results
     // Clear previous results for this job
-    let clear_sql = format!(
-        "DELETE FROM goldenmatch._pairs WHERE job_name = '{}'; \
-         DELETE FROM goldenmatch._clusters WHERE job_name = '{}'; \
-         DELETE FROM goldenmatch._golden WHERE job_name = '{}'",
-        job_name.replace('\'', "''"),
-        job_name.replace('\'', "''"),
-        job_name.replace('\'', "''")
+    let escaped = job_name.replace('\'', "''");
+    let clear_pairs = format!(
+        "DELETE FROM goldenmatch._pairs WHERE job_name = '{}'",
+        escaped
+    );
+    let clear_clusters = format!(
+        "DELETE FROM goldenmatch._clusters WHERE job_name = '{}'",
+        escaped
+    );
+    let clear_golden = format!(
+        "DELETE FROM goldenmatch._golden WHERE job_name = '{}'",
+        escaped
     );
     Spi::connect(|mut client| {
-        let _ = client.update(&clear_sql, None, None);
+        let _ = client.update(&clear_pairs, None, None);
+        let _ = client.update(&clear_clusters, None, None);
+        let _ = client.update(&clear_golden, None, None);
     });
 
     // Store golden records if available
@@ -188,24 +195,34 @@ pub fn gm_golden(job_name: String) -> String {
 #[pg_extern]
 pub fn gm_drop(job_name: String) -> String {
     let escaped = job_name.replace('\'', "''");
-    let sql = format!(
-        "DELETE FROM goldenmatch._golden WHERE job_name = '{}'; \
-         DELETE FROM goldenmatch._clusters WHERE job_name = '{}'; \
-         DELETE FROM goldenmatch._pairs WHERE job_name = '{}'; \
-         DELETE FROM goldenmatch._jobs WHERE name = '{}'",
-        escaped, escaped, escaped, escaped
+    let del_golden = format!(
+        "DELETE FROM goldenmatch._golden WHERE job_name = '{}'",
+        escaped
     );
+    let del_clusters = format!(
+        "DELETE FROM goldenmatch._clusters WHERE job_name = '{}'",
+        escaped
+    );
+    let del_pairs = format!(
+        "DELETE FROM goldenmatch._pairs WHERE job_name = '{}'",
+        escaped
+    );
+    let del_jobs = format!("DELETE FROM goldenmatch._jobs WHERE name = '{}'", escaped);
 
-    Spi::connect(|mut client| match client.update(&sql, None, None) {
-        Ok(_) => format!("Job '{}' dropped", job_name),
-        Err(e) => format!("Error dropping job: {}", e),
+    Spi::connect(|mut client| {
+        for sql in [&del_golden, &del_clusters, &del_pairs, &del_jobs] {
+            if let Err(e) = client.update(sql, None, None) {
+                return format!("Error dropping job: {}", e);
+            }
+        }
+        format!("Job '{}' dropped", job_name)
     })
 }
 
 fn set_job_status(job_name: &str, status: &str) {
     let sql = format!(
         "UPDATE goldenmatch._jobs SET status = '{}' WHERE name = '{}'",
-        status,
+        status.replace('\'', "''"),
         job_name.replace('\'', "''")
     );
     Spi::connect(|mut client| {

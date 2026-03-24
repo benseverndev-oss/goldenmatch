@@ -8,6 +8,4 @@ description = "Python bridge for GoldenMatch SQL extensions"
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["auto-initialize"] }
-arrow = { version = "54", features = ["ffi"] }
 thiserror = "2"
-serde_json = "1"

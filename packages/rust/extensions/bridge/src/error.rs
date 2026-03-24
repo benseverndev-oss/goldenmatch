@@ -23,8 +23,3 @@ impl From<pyo3::PyErr> for BridgeError {
     }
 }
 
-impl From<arrow::error::ArrowError> for BridgeError {
-    fn from(err: arrow::error::ArrowError) -> Self {
-        BridgeError::ArrowConversion(err.to_string())
-    }
-}
