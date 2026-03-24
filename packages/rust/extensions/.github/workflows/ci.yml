@@ -79,7 +79,14 @@ jobs:
 
       - name: Test extension via psql
         run: |
-          sudo -u postgres pg_ctlcluster 16 main start || true
+          # pyo3 links against the actions/setup-python Python. Postgres needs PYTHONPATH
+          # to find goldenmatch installed there.
+          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          echo "PYTHONPATH=${PYTHON_SITE}" | sudo tee -a /etc/environment
+          export PYTHONPATH="${PYTHON_SITE}"
+          # Start Postgres with PYTHONPATH set
+          sudo PYTHONPATH="${PYTHON_SITE}" -u postgres pg_ctlcluster 16 main start || true
+          sleep 2
           # List available symbols in the .so for debugging
           echo "=== Exported symbols containing goldenmatch ==="
           nm -D /usr/lib/postgresql/16/lib/goldenmatch_pg.so 2>/dev/null | grep -i goldenmatch | head -20 || echo "nm not available"
