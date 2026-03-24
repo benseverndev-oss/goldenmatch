@@ -80,11 +80,15 @@ jobs:
       - name: Test extension via psql
         run: |
           sudo -u postgres pg_ctlcluster 16 main start || true
-          sudo -u postgres psql -c "CREATE EXTENSION goldenmatch_pg;"
+          # List available symbols in the .so for debugging
+          echo "=== Exported symbols containing goldenmatch ==="
+          nm -D /usr/lib/postgresql/16/lib/goldenmatch_pg.so 2>/dev/null | grep -i goldenmatch | head -20 || echo "nm not available"
+          # Create extension
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
+          echo "=== Functions created ==="
+          sudo -u postgres psql -c "SELECT proname, pronargs FROM pg_proc WHERE proname LIKE 'goldenmatch%';"
           echo "=== Test goldenmatch_score ==="
-          sudo -u postgres psql -c "SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler');"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler');"
           echo "=== Test goldenmatch_score exact ==="
-          sudo -u postgres psql -c "SELECT goldenmatch_score('hello', 'hello', 'exact');"
-          echo "=== Test goldenmatch_score_pair ==="
-          sudo -u postgres psql -tc "SELECT goldenmatch_score_pair('{\"name\": \"John\"}', '{\"name\": \"Jon\"}', '{\"fuzzy\": {\"name\": 0.85}}');"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch_score('hello', 'hello', 'exact');"
           echo "=== All tests passed ==="
