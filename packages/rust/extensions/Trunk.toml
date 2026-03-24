@@ -1,16 +1,20 @@
 [extension]
 name = "goldenmatch_pg"
-version = "0.1.0"
+version = "0.2.0"
 repository = "https://github.com/benzsevern/goldenmatch-extensions"
 license = "MIT"
 description = "Entity resolution in PostgreSQL -- deduplicate records, match across tables, and maintain golden records"
 homepage = "https://github.com/benzsevern/goldenmatch"
+documentation = "https://github.com/benzsevern/goldenmatch-extensions#readme"
 categories = ["data_transforms", "machine_learning"]
 
 [build]
 postgres_version = "16"
 platform = "linux/amd64"
+pgrx_version = "0.12.9"
+# Note: This extension requires Python 3.12+ with 'pip install goldenmatch>=1.1.0'
+# on the target PostgreSQL server at runtime.
 
-[build.requires]
-python3 = "3.12"
-pip_packages = ["goldenmatch>=1.1.0"]
+[build.script]
+# Trunk runs this to build. The Dockerfile and CI show the full build process.
+pre_install = ["pip3 install goldenmatch>=1.1.0"]
