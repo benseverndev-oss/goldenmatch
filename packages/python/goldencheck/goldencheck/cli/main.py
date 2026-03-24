@@ -99,6 +99,7 @@ def main(
     json_output = False
     llm_boost = False
     llm_provider = "anthropic"
+    domain = None
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
@@ -109,6 +110,8 @@ def main(
             llm_boost = True
         elif arg == "--llm-provider":
             llm_provider = args.pop(0)
+        elif arg == "--domain":
+            domain = args.pop(0)
         elif not arg.startswith("-"):
             if file is None:
                 file = Path(arg)
@@ -120,7 +123,7 @@ def main(
         typer.echo("Error: Missing data file argument.", err=True)
         raise typer.Exit(code=1)
 
-    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider)
+    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider, domain=domain)
 
 
 @app.command()
@@ -130,9 +133,10 @@ def scan(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
 ) -> None:
     """Profile a data file and report findings."""
-    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider)
+    _do_scan(file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost, llm_provider=llm_provider, domain=domain)
 
 
 @app.command()
@@ -427,13 +431,14 @@ def _do_scan(
     json_output: bool,
     llm_boost: bool = False,
     llm_provider: str = "anthropic",
+    domain: str | None = None,
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
         if llm_boost:
             findings, profile = scan_file_with_llm(file, provider=llm_provider)
         else:
-            findings, profile = scan_file(file)
+            findings, profile = scan_file(file, domain=domain)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
 
         if json_output:

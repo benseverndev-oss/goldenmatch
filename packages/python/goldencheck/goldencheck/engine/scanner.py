@@ -210,6 +210,7 @@ def scan_file(
     path: Path,
     sample_size: int = 100_000,
     return_sample: bool = False,
+    domain: str | None = None,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     row_count = len(df)
@@ -250,9 +251,9 @@ def scan_file(
     from goldencheck.semantic.classifier import classify_columns, load_type_defs
     from goldencheck.semantic.suppression import apply_suppression as apply_type_suppression
 
-    # Classify columns
-    column_types = classify_columns(sample)
-    type_defs = load_type_defs()
+    # Classify columns (load type defs once, pass to both classify and suppress)
+    type_defs = load_type_defs(domain=domain)
+    column_types = classify_columns(sample, type_defs=type_defs)
 
     # Apply type suppression BEFORE corroboration boost
     all_findings = apply_type_suppression(all_findings, column_types, type_defs)
