@@ -19,14 +19,20 @@ def should_notify(
     previous_scan: ScanRecord | None,
     notify_on: str,
 ) -> bool:
-    """Determine whether to fire a webhook notification."""
+    """Determine whether to fire a webhook notification.
+
+    Trigger semantics:
+    - grade-drop: health grade decreased since last scan
+    - any-error: at least one ERROR finding exists
+    - any-warning: at least one WARNING or ERROR finding exists (lower threshold than any-error)
+    """
     errors = sum(1 for f in current_findings if f.severity == Severity.ERROR)
     warnings = sum(1 for f in current_findings if f.severity == Severity.WARNING)
 
     if notify_on == "any-error":
         return errors > 0
     elif notify_on == "any-warning":
-        return errors > 0 or warnings > 0
+        return warnings > 0 or errors > 0
     elif notify_on == "grade-drop":
         if previous_scan is None:
             return False

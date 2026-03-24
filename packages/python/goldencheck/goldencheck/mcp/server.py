@@ -390,6 +390,14 @@ def _tool_list_checks(_arguments: dict) -> dict:
                 "name": "null_correlation",
                 "description": "Cross-column: finds columns that are null together",
             },
+            {
+                "name": "cross_column_validation",
+                "description": "Cross-column: detects value > max constraint violations (e.g., claim > policy_max)",
+            },
+            {
+                "name": "cross_column",
+                "description": "Cross-column: detects age vs DOB mismatches and other semantic inconsistencies",
+            },
         ]
     }
 

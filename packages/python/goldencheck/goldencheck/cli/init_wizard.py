@@ -49,6 +49,7 @@ def run_init_wizard(file: Path, *, yes: bool = False) -> None:
     if yes:
         ci_choice = "none"
         domain = None
+        use_llm = False
     else:
         ci_choice = typer.prompt(
             "What CI do you use?",
@@ -61,7 +62,9 @@ def run_init_wizard(file: Path, *, yes: bool = False) -> None:
             default="none",
         )
         domain = domain_choice if domain_choice != "none" else None
-        typer.confirm("Enable LLM boost? ~$0.01/scan", default=False)  # reserved for future use
+        use_llm = typer.confirm("Enable LLM boost? ~$0.01/scan", default=False)
+        if use_llm:
+            typer.echo("  Note: LLM boost will be used in CI workflow. Set API key as a repo secret.")
 
     # Re-scan with domain if selected
     if domain:
@@ -89,7 +92,10 @@ def run_init_wizard(file: Path, *, yes: bool = False) -> None:
         ci_dir.mkdir(parents=True, exist_ok=True)
         ci_path = ci_dir / "goldencheck.yml"
         pattern = f"**/*{file.suffix}" if file.suffix else "**/*.csv"
-        ci_path.write_text(GITHUB_CI_TEMPLATE.format(pattern=pattern))
+        template = GITHUB_CI_TEMPLATE.format(pattern=pattern)
+        if use_llm:
+            template = template.rstrip() + "\n          llm-boost: true\n"
+        ci_path.write_text(template)
         typer.echo(f"  \u2713 {ci_path}")
     elif ci_choice == "gitlab":
         ci_path = Path(".gitlab-ci.yml")

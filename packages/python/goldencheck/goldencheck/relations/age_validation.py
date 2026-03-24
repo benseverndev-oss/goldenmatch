@@ -88,15 +88,18 @@ class AgeValidationProfiler:
                     continue
 
                 # Calculate expected age using DataFrame select for proper evaluation
+                # Check ORIGINAL column dtype, not parsed dtype (dob_series is already Date)
+                original_dtype = df[dob_col].dtype
                 try:
+                    if original_dtype in (pl.Utf8, pl.String):
+                        dob_expr = pl.col(dob_col).str.to_date(format="%Y-%m-%d", strict=False)
+                    else:
+                        dob_expr = pl.col(dob_col).cast(pl.Date, strict=False)
+
                     result = df.select(
                         actual=pl.col(age_col).cast(pl.Float64),
                         expected=(
-                            (pl.lit(reference_date).cast(pl.Date) - pl.col(dob_col).str.to_date(format="%Y-%m-%d", strict=False))
-                            .dt.total_days()
-                            / 365.25
-                        ) if dob_series.dtype in (pl.Utf8, pl.String) else (
-                            (pl.lit(reference_date).cast(pl.Date) - pl.col(dob_col).cast(pl.Date))
+                            (pl.lit(reference_date).cast(pl.Date) - dob_expr)
                             .dt.total_days()
                             / 365.25
                         ),
