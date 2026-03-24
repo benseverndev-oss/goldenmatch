@@ -2,6 +2,26 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [0.6.0] - 2026-03-24
+
+### Added
+- **`goldencheck init`** — interactive setup wizard: scan, auto-pin rules, scaffold GitHub/GitLab CI in one command. Supports `--yes` for non-interactive mode
+- **`goldencheck history`** — scan history tracking in `.goldencheck/history.jsonl`. Shows scores, grades, and trends over time. Supports `--last N` and `--json`
+- **`--smart` auto-triage** — automatically pin high-confidence findings, dismiss low-confidence. Zero interaction: `goldencheck scan data.csv --smart`
+- **`--guided` walkthrough** — walk through findings one-by-one with pin/skip: `goldencheck scan data.csv --guided`
+- **TUI guided mode** — press `g` in the TUI to walk through findings sequentially with pin/dismiss/skip
+- **Webhook notifications** — `--webhook <url> --notify-on grade-drop|any-error|any-warning` on scan and watch commands
+- **LLM prompt improvements** — added cross-column ID prefix checks, age/DOB validation, weekend detection, state/zip consistency, mixed coding standards
+- **Merger keyword preservation** — ensures LLM findings include required keywords for benchmark scoring
+- **dbt-goldencheck** — separate dbt package for zero-config data validation as a dbt test (`benzsevern/dbt-goldencheck`)
+- **goldencheck-types** — community GitHub repo for domain-specific type definitions (`benzsevern/goldencheck-types`)
+
+### New Modules
+- `goldencheck/engine/triage.py` — auto-triage engine (pin/dismiss/review buckets)
+- `goldencheck/engine/history.py` — JSONL scan history recording and querying
+- `goldencheck/engine/notifier.py` — webhook POST with configurable triggers
+- `goldencheck/cli/init_wizard.py` — interactive setup wizard logic
+
 ## [0.5.0] - 2026-03-24
 
 ### Added
