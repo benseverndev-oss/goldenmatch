@@ -1,8 +1,10 @@
 """CLI entry points for GoldenCheck."""
 from __future__ import annotations
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+import polars as pl
 import typer
 from typer.core import TyperGroup
 from goldencheck.engine.scanner import scan_file, scan_file_with_llm
@@ -13,7 +15,26 @@ from goldencheck.reporters.rich_console import report_rich
 from goldencheck.reporters.json_reporter import report_json
 from goldencheck.reporters.ci_reporter import report_ci
 
-__version__ = "0.3.0"
+from goldencheck import __version__
+
+
+@contextmanager
+def _cli_error_handler():
+    """Catch common errors and print friendly messages instead of tracebacks."""
+    try:
+        yield
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    except PermissionError as e:
+        typer.echo(f"Error: Permission denied: {e}", err=True)
+        raise typer.Exit(code=1)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    except pl.exceptions.ComputeError as e:
+        typer.echo(f"Error: Could not parse file. {e}", err=True)
+        raise typer.Exit(code=1)
 
 
 class _DefaultCommandGroup(TyperGroup):
@@ -122,30 +143,31 @@ def validate(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
 ) -> None:
     """Validate a data file against pinned rules in goldencheck.yml."""
-    config_path = config or Path("goldencheck.yml")
-    cfg = load_config(config_path)
-    if cfg is None:
-        typer.echo(
-            f"Error: No configuration found at '{config_path}'. "
-            "Run 'goldencheck scan' first to generate a config.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    with _cli_error_handler():
+        config_path = config or Path("goldencheck.yml")
+        cfg = load_config(config_path)
+        if cfg is None:
+            typer.echo(
+                f"Error: No configuration found at '{config_path}'. "
+                "Run 'goldencheck scan' first to generate a config.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
-    findings = validate_file(file, cfg)
-    _, profile = scan_file(file, sample_size=cfg.settings.sample_size)
+        findings = validate_file(file, cfg)
+        _, profile = scan_file(file, sample_size=cfg.settings.sample_size)
 
-    if json_output:
-        report_json(findings, profile, sys.stdout)
-    elif not no_tui:
-        from goldencheck.tui.app import GoldenCheckApp
-        tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
-        tui_app.run()
-    else:
-        report_rich(findings, profile)
+        if json_output:
+            report_json(findings, profile, sys.stdout)
+        elif not no_tui:
+            from goldencheck.tui.app import GoldenCheckApp
+            tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
+            tui_app.run()
+        else:
+            report_rich(findings, profile)
 
-    exit_code = report_ci(findings, cfg.settings.fail_on)
-    raise typer.Exit(code=exit_code)
+        exit_code = report_ci(findings, cfg.settings.fail_on)
+        raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -158,36 +180,36 @@ def review(
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
 ) -> None:
     """Profile AND validate a file, launching TUI for interactive review."""
-    if llm_boost:
-        findings, profile = scan_file_with_llm(file, provider=llm_provider)
-    else:
-        findings, profile = scan_file(file)
-        findings = apply_confidence_downgrade(findings, llm_boost=False)
-    config_path = config or Path("goldencheck.yml")
-    cfg = load_config(config_path)
-    if cfg is not None:
-        val_findings = validate_file(file, cfg)
-        # Merge: validation findings take precedence (deduplicate by column+check)
-        existing = {(f.column, f.check) for f in val_findings}
-        for f in findings:
-            if (f.column, f.check) not in existing:
-                val_findings.append(f)
-        findings = val_findings
-        fail_on = cfg.settings.fail_on
-    else:
-        fail_on = "error"
+    with _cli_error_handler():
+        if llm_boost:
+            findings, profile = scan_file_with_llm(file, provider=llm_provider)
+        else:
+            findings, profile = scan_file(file)
+            findings = apply_confidence_downgrade(findings, llm_boost=False)
+        config_path = config or Path("goldencheck.yml")
+        cfg = load_config(config_path)
+        if cfg is not None:
+            val_findings = validate_file(file, cfg)
+            existing = {(f.column, f.check) for f in val_findings}
+            for f in findings:
+                if (f.column, f.check) not in existing:
+                    val_findings.append(f)
+            findings = val_findings
+            fail_on = cfg.settings.fail_on
+        else:
+            fail_on = "error"
 
-    if json_output:
-        report_json(findings, profile, sys.stdout)
-    elif not no_tui:
-        from goldencheck.tui.app import GoldenCheckApp
-        tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
-        tui_app.run()
-    else:
-        report_rich(findings, profile)
+        if json_output:
+            report_json(findings, profile, sys.stdout)
+        elif not no_tui:
+            from goldencheck.tui.app import GoldenCheckApp
+            tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
+            tui_app.run()
+        else:
+            report_rich(findings, profile)
 
-    exit_code = report_ci(findings, fail_on)
-    raise typer.Exit(code=exit_code)
+        exit_code = report_ci(findings, fail_on)
+        raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -202,29 +224,90 @@ def learn(
     validation rules (regex, length, value lists, cross-column checks).
     Rules are saved and automatically applied on future scans.
     """
-    from goldencheck.llm.rule_generator import generate_rules, save_rules
-    from goldencheck.engine.reader import read_file
-    from goldencheck.engine.sampler import maybe_sample
+    with _cli_error_handler():
+        from goldencheck.llm.rule_generator import generate_rules, save_rules
+        from goldencheck.engine.reader import read_file
+        from goldencheck.engine.sampler import maybe_sample
 
-    df = read_file(file)
-    sample = maybe_sample(df, max_rows=100_000)
+        df = read_file(file)
+        sample = maybe_sample(df, max_rows=100_000)
 
-    # Run profilers first to give LLM context
-    findings, _ = scan_file(file)
+        findings, _ = scan_file(file)
 
-    typer.echo(f"Analyzing {len(df)} rows, {len(df.columns)} columns...")
-    rules = generate_rules(sample, findings, provider=llm_provider)
+        typer.echo(f"Analyzing {len(df)} rows, {len(df.columns)} columns...")
+        rules = generate_rules(sample, findings, provider=llm_provider)
 
-    if not rules:
-        typer.echo("No rules generated.", err=True)
-        raise typer.Exit(code=1)
+        if not rules:
+            typer.echo("No rules generated.", err=True)
+            raise typer.Exit(code=1)
 
-    out_path = output or Path("goldencheck_rules.json")
-    save_rules(rules, out_path)
-    typer.echo(f"Generated {len(rules)} rules → {out_path}")
+        out_path = output or Path("goldencheck_rules.json")
+        save_rules(rules, out_path)
+        typer.echo(f"Generated {len(rules)} rules → {out_path}")
 
-    for r in rules:
-        typer.echo(f"  [{r.rule_type}] {r.column}: {r.description}")
+        for r in rules:
+            typer.echo(f"  [{r.rule_type}] {r.column}: {r.description}")
+
+
+@app.command()
+def fix(
+    file: Path = typer.Argument(..., help="Data file to fix."),
+    mode: str = typer.Option("safe", "--mode", "-m", help="Fix mode: safe, moderate, or aggressive."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without writing."),
+    force: bool = typer.Option(False, "--force", help="Required for aggressive mode."),
+) -> None:
+    """Apply automated fixes to a data file.
+
+    Modes:
+      safe       — trim whitespace, remove invisible chars, normalize Unicode (default)
+      moderate   — safe + standardize enum case, fix smart quotes
+      aggressive — moderate + coerce types (requires --force)
+    """
+    with _cli_error_handler():
+        from goldencheck.engine.fixer import apply_fixes
+        from goldencheck.engine.reader import read_file
+        from goldencheck.engine.scanner import scan_file as _scan
+
+        df = read_file(file)
+        findings, _ = _scan(file)
+
+        try:
+            fixed_df, report = apply_fixes(df, findings, mode=mode, force=force)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
+
+        if not report.entries:
+            typer.echo("No issues found — file is clean.")
+            raise typer.Exit(code=0)
+
+        typer.echo(f"\nFixes applied ({mode} mode):")
+        for entry in report.entries:
+            typer.echo(f"  {entry.column}: {entry.fix_type} ({entry.rows_affected} rows)")
+        typer.echo(f"\nTotal: {report.total_rows_fixed} row-fixes across {len(report.entries)} operations")
+
+        if dry_run:
+            typer.echo("\n--dry-run: No file written.")
+            raise typer.Exit(code=0)
+
+        out_path = output or Path(f"{file.stem}_fixed{file.suffix}")
+        if out_path.resolve() == Path(file).resolve():
+            typer.echo("Error: Output path is the same as input. Use -o to specify a different path.", err=True)
+            raise typer.Exit(code=1)
+
+        ext = file.suffix.lower()
+        if ext == ".parquet":
+            fixed_df.write_parquet(out_path)
+        elif ext in (".xlsx", ".xls"):
+            csv_out = out_path.with_suffix(".csv")
+            fixed_df.write_csv(csv_out)
+            typer.echo("Note: Excel input converted to CSV output (single sheet)")
+            out_path = csv_out
+        else:
+            fixed_df.write_csv(out_path)
+
+        typer.echo(f"Written to: {out_path}")
 
 
 @app.command(name="mcp-serve")
@@ -252,17 +335,18 @@ def _do_scan(
     llm_provider: str = "anthropic",
 ) -> None:
     """Run scan and output results."""
-    if llm_boost:
-        findings, profile = scan_file_with_llm(file, provider=llm_provider)
-    else:
-        findings, profile = scan_file(file)
-        findings = apply_confidence_downgrade(findings, llm_boost=False)
+    with _cli_error_handler():
+        if llm_boost:
+            findings, profile = scan_file_with_llm(file, provider=llm_provider)
+        else:
+            findings, profile = scan_file(file)
+            findings = apply_confidence_downgrade(findings, llm_boost=False)
 
-    if json_output:
-        report_json(findings, profile, sys.stdout)
-    elif not no_tui:
-        from goldencheck.tui.app import GoldenCheckApp
-        tui_app = GoldenCheckApp(findings=findings, profile=profile)
-        tui_app.run()
-    else:
-        report_rich(findings, profile)
+        if json_output:
+            report_json(findings, profile, sys.stdout)
+        elif not no_tui:
+            from goldencheck.tui.app import GoldenCheckApp
+            tui_app = GoldenCheckApp(findings=findings, profile=profile)
+            tui_app.run()
+        else:
+            report_rich(findings, profile)
