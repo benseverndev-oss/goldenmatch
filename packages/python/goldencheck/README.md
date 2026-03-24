@@ -7,7 +7,7 @@ Data validation that discovers rules from your data so you don't have to write t
 [![CI](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldencheck/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldencheck)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-189%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-189%2B%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
@@ -96,6 +96,50 @@ goldencheck data.csv --no-tui --json
 |----------|----------------|
 | **Temporal ordering** | start_date > end_date violations |
 | **Null correlation** | Columns that are null together (e.g., address + city + zip) |
+| **Numeric cross-column** | value > max violations (e.g., claim_amount > policy_max) |
+| **Age vs DOB** | Age column doesn't match calculated age from date_of_birth |
+
+## Domain Packs
+
+Improve detection accuracy with domain-specific type definitions:
+
+```bash
+goldencheck scan data.csv --domain healthcare   # NPI, ICD, insurance, patient types
+goldencheck scan data.csv --domain finance      # accounts, routing, CUSIP, transactions
+goldencheck scan data.csv --domain ecommerce    # SKUs, orders, tracking, products
+```
+
+Domain packs add semantic types that reduce false positives and improve classification for industry-specific data.
+
+## Schema Diff
+
+Compare two versions of a data file:
+
+```bash
+goldencheck diff data.csv                  # compare against git HEAD
+goldencheck diff old.csv new.csv           # compare two files
+goldencheck diff data.csv --ref main       # compare against a branch
+```
+
+## Auto-Fix
+
+Apply automated fixes to clean your data:
+
+```bash
+goldencheck fix data.csv                          # safe: trim, normalize, fix encoding
+goldencheck fix data.csv --mode moderate          # + standardize case
+goldencheck fix data.csv --mode aggressive --force # + coerce types
+goldencheck fix data.csv --dry-run                # preview changes
+```
+
+## Watch Mode
+
+Continuously monitor a directory for data quality:
+
+```bash
+goldencheck watch data/ --interval 30        # re-scan every 30s
+goldencheck watch data/ --exit-on error      # CI mode: fail on first error
+```
 
 ## LLM Boost
 
@@ -166,8 +210,11 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `goldencheck scan <file>` | Explicit scan |
 | `goldencheck validate <file>` | Validate against goldencheck.yml |
 | `goldencheck review <file>` | Scan + validate, launch TUI |
+| `goldencheck diff <file> [file2]` | Compare two files or against git HEAD |
+| `goldencheck watch <dir>` | Poll directory, re-scan on change |
+| `goldencheck fix <file>` | Auto-fix data quality issues |
 | `goldencheck learn <file>` | Generate LLM validation rules |
-| `goldencheck mcp-serve` | Start MCP server for Claude Desktop |
+| `goldencheck mcp-serve` | Start MCP server (9 tools) |
 
 ### Flags
 
@@ -176,10 +223,10 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `--no-tui` | Print results to console |
 | `--json` | JSON output |
 | `--fail-on <level>` | Exit 1 on severity: `error` or `warning` |
+| `--domain <name>` | Domain pack: `healthcare`, `finance`, `ecommerce` |
 | `--llm-boost` | Enable LLM enhancement |
 | `--llm-provider <name>` | LLM provider: `anthropic` (default) or `openai` |
-| `--verbose` | Show info-level logs |
-| `--debug` | Show debug-level logs |
+| `--mode <level>` | Fix mode: `safe`, `moderate`, `aggressive` |
 | `--version` | Show version |
 
 ## Benchmarks

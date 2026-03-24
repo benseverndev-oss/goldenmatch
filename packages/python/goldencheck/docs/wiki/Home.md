@@ -12,14 +12,19 @@
 |------|-------------|
 | [Installation](Installation) | Install GoldenCheck and optional extras |
 | [Quick Start](Quick-Start) | Get started in 60 seconds |
-| [CLI Reference](CLI) | All commands, flags, and exit codes |
+| [CLI Reference](CLI) | 9 commands, flags, and exit codes |
 | [Interactive TUI](Interactive-TUI) | 4-tab interactive terminal interface |
-| [Profilers](Profilers) | 10 column + 2 cross-column profilers |
+| [Profilers](Profilers) | 10 column + 4 cross-column profilers |
 | [Configuration](Configuration) | `goldencheck.yml` reference |
+| [Domain Packs](Domain-Packs) | Healthcare, finance, e-commerce type definitions |
+| [Schema Diff](Schema-Diff) | Compare data versions, detect drift |
+| [Auto Fix](Auto-Fix) | Automated data cleaning (safe/moderate/aggressive) |
+| [Watch Mode](Watch-Mode) | Continuous directory monitoring |
 | [LLM Boost](LLM-Boost) | LLM-enhanced validation (~$0.01/scan) |
-| [MCP Server](MCP-Server) | Claude Desktop integration (6 tools) |
+| [MCP Server](MCP-Server) | Claude Desktop integration (9 tools) |
 | [Jupyter & Colab](Jupyter-and-Colab) | Rich HTML display in notebooks |
-| [Benchmarks](Benchmarks) | DQBench Score: 72.00, speed tests |
+| [GitHub Action](GitHub-Action) | CI integration with PR comments |
+| [Benchmarks](Benchmarks) | DQBench Score: 88.40, speed tests |
 | [Architecture](Architecture) | Module layout and data flow |
 
 ## What Makes GoldenCheck Different
@@ -46,12 +51,12 @@ GoldenCheck's zero-config discovery outperforms every competitor — even when t
 
 ## Integration Points
 
-- **CLI** — `goldencheck data.csv` for terminal workflows
-- **CI/CD** — `--json` output + exit codes for pipelines
-- **MCP** — `goldencheck mcp-serve` for Claude Desktop
+- **CLI** — 9 commands: scan, validate, review, diff, watch, fix, learn, mcp-serve
+- **CI/CD** — `goldencheck-action@v1` for GitHub, `--json` + exit codes for any CI
+- **MCP** — 9 tools for Claude Desktop integration
+- **Domain Packs** — `--domain healthcare|finance|ecommerce`
 - **Jupyter/Colab** — Rich HTML display with `ScanResult`
-- **LLM Rules** — `goldencheck learn` generates domain-specific rules
-- **Python API** — Import `scan_file()` directly
+- **Python API** — `from goldencheck import scan_file, Finding`
 
 ---
 
