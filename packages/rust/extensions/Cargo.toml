@@ -3,6 +3,9 @@ resolver = "2"
 members = [
     "bridge",
 ]
+exclude = [
+    "postgres",
+]
 
 [workspace.package]
 version = "0.1.0"
