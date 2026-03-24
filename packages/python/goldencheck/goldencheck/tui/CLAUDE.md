@@ -62,3 +62,5 @@ Pinned findings (`finding.pinned == True`) get added to `config.columns` as `Col
 - `GoldenCheckApp.__init__` accepts an optional `config: GoldenCheckConfig` — pass it when launching from `validate`/`review` so existing rules are visible in the Rules tab
 - Tab IDs must match the `id=` in `TabPane(...)` and the strings passed to `action_switch_tab()` — they are `"overview"`, `"findings"`, `"column-detail"`, `"rules"` (note the hyphen in column-detail)
 - Textual requires Python ≥ 3.11 and `textual>=1.0` — same constraint as the project
+- `fix`, `diff`, and `watch` commands are CLI-only — they don't launch the TUI
+- `Finding.metadata` dict exists but is not displayed in the TUI (available for future columns)
