@@ -62,6 +62,17 @@ goldencheck tests/fixtures/messy.csv --llm-boost --llm-provider openai --no-tui
 
 Mock-based tests: see `tests/llm/test_integration.py` — patches `call_llm` and `check_llm_available`.
 
+## Rule Generator (`rule_generator.py`)
+
+`goldencheck learn <file>` generates domain-specific validation rules via LLM:
+- `generate_rules(df, findings, provider) -> list[GeneratedRule]` — sends sample blocks to LLM with `RULE_GENERATION_PROMPT`
+- `apply_rules(df, rules) -> list[Finding]` — applies rules (regex, length, value_list, cross_column) to produce findings
+- `save_rules(rules, path)` / `load_rules(path)` — JSON serialization
+- Rules saved to `goldencheck_rules.json` are auto-applied by `scan_file()` if present in working directory
+- `RuleParams` model uses `coerce_numbers_to_str=True` to handle LLM returning integers in `invalid_values`
+
+**Important:** Raw LLM-generated rules can hurt precision. The `learn → review → apply` workflow (human curation) is recommended over dumping all rules directly.
+
 ## Gotchas
 
 - All columns are sent to the LLM (confidence routing was removed — LLM adds value even on high-confidence columns for semantic issues)
