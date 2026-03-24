@@ -36,6 +36,7 @@ class GoldenCheckApp(App):
         Binding("3", "switch_tab('column-detail')", "Column Detail", show=True),
         Binding("4", "switch_tab('rules')", "Rules", show=True),
         Binding("f2", "save_rules", "Save Rules"),
+        Binding("g", "guided_review", "Guided"),
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "show_help", "Help"),
     ]
@@ -72,5 +73,33 @@ class GoldenCheckApp(App):
         save_config(self.config, Path("goldencheck.yml"))
         self.notify("Rules saved to goldencheck.yml")
 
+    def action_guided_review(self) -> None:
+        """Walk through findings one at a time with pin/dismiss."""
+        from goldencheck.models.finding import Severity as _Sev
+        reviewable = [f for f in self.findings if f.severity >= _Sev.WARNING and not f.pinned]
+        if not reviewable:
+            self.notify("No findings to review (all pinned or INFO-only)")
+            return
+
+        self._guided_findings = reviewable
+        self._guided_index = 0
+        self._show_guided_finding()
+
+    def _show_guided_finding(self) -> None:
+        if self._guided_index >= len(self._guided_findings):
+            pinned_count = sum(1 for f in self.findings if f.pinned)
+            self.notify(f"Guided review complete. {pinned_count} rules pinned. Press F2 to save.")
+            return
+
+        f = self._guided_findings[self._guided_index]
+        conf = "HIGH" if f.confidence >= 0.8 else "MED" if f.confidence >= 0.5 else "LOW"
+        total = len(self._guided_findings)
+        idx = self._guided_index + 1
+        self.notify(
+            f"[{idx}/{total}] {f.severity.name} [{f.column}] {f.message[:60]} "
+            f"(Conf: {conf}) — Space=Pin, n=Skip, Esc=Stop",
+            timeout=0,
+        )
+
     def action_show_help(self) -> None:
-        self.notify("1-4: Switch tabs | Space: Pin rule | F2: Save | e: View rows | q: Quit")
+        self.notify("1-4: Switch tabs | Space: Pin rule | F2: Save | g: Guided | e: View rows | q: Quit")

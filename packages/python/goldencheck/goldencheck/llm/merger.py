@@ -10,6 +10,27 @@ logger = logging.getLogger(__name__)
 
 SEVERITY_MAP = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}
 
+# Required keywords per check — if LLM message lacks them, append a suffix
+_REQUIRED_KEYWORDS: dict[str, list[str]] = {
+    "cross_column": ["mismatch", "inconsistent", "doesn't match"],
+    "invalid_values": ["invalid"],
+}
+
+
+def _ensure_keywords(check: str, message: str) -> str:
+    """Ensure the message contains at least one required keyword for the check."""
+    keywords = _REQUIRED_KEYWORDS.get(check, [])
+    if not keywords:
+        return message
+    msg_lower = message.lower()
+    if any(kw in msg_lower for kw in keywords):
+        return message
+    suffix = {
+        "cross_column": " [cross-column mismatch detected]",
+        "invalid_values": " [invalid values detected]",
+    }
+    return message + suffix.get(check, "")
+
 
 def _strip_suppression_suffix(message: str) -> str:
     return re.sub(r'\s*\(suppressed:.*?\)\s*$', '', message)
@@ -39,7 +60,7 @@ def merge_llm_findings(
                 severity=sev,
                 column=col_name,
                 check=issue.check,
-                message=issue.message,
+                message=_ensure_keywords(issue.check, issue.message),
                 sample_values=issue.affected_values,
                 source="llm",
             ))
