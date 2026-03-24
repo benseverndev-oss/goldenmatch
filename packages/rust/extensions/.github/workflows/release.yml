@@ -3,6 +3,7 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,7 +21,7 @@ jobs:
         pg: [15, 16, 17]
         os: [ubuntu-latest]
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
       PG_VERSION: ${{ matrix.pg }}
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-pg-extension
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
