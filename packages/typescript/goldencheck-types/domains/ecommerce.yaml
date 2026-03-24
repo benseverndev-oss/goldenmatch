@@ -1,0 +1,56 @@
+description: "E-commerce — SKUs, order IDs, tracking numbers, product categories, shipping"
+
+types:
+  sku:
+    name_hints: ["sku", "product_code", "item_code", "upc", "ean"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency"]
+
+  order_id:
+    name_hints: ["order_id", "order_number", "order_num", "purchase_id"]
+    value_signals:
+      min_unique_pct: 0.95
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  tracking_number:
+    name_hints: ["tracking", "shipment_id", "waybill"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["pattern_consistency", "cardinality", "drift_detection"]
+
+  product_category:
+    name_hints: ["category", "product_category", "department", "product_type"]
+    value_signals:
+      max_unique: 50
+    suppress: ["uniqueness", "range_distribution"]
+
+  order_status:
+    name_hints: ["order_status", "fulfillment_status", "delivery_status"]
+    value_signals:
+      max_unique: 15
+    suppress: ["uniqueness", "range_distribution"]
+
+  shipping_method:
+    name_hints: ["shipping_method", "carrier", "delivery_method"]
+    value_signals:
+      max_unique: 15
+    suppress: ["uniqueness", "range_distribution"]
+
+  coupon_code:
+    name_hints: ["coupon", "promo", "discount_code", "voucher"]
+    value_signals:
+      short_strings: true
+    suppress: ["uniqueness", "pattern_consistency"]
+
+  product_name:
+    name_hints: ["product_name", "item_name", "product_title"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency", "cardinality"]
+
+  customer_address:
+    name_hints: ["shipping_address", "billing_address", "delivery_address"]
+    value_signals:
+      avg_length_min: 15
+    suppress: ["pattern_consistency", "cardinality", "drift_detection"]
