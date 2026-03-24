@@ -48,7 +48,6 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     )
 
     # Table-based functions (read from DuckDB tables)
-    # These capture the connection for SPI-style table reading
     con.create_function(
         "goldenmatch_dedupe_table",
         lambda table_name, config: _dedupe_table(con, table_name, config),
@@ -58,6 +57,33 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         "goldenmatch_match_tables",
         lambda target, ref, config: _match_tables(con, target, ref, config),
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+
+    # Pipeline functions (job management via DuckDB tables)
+    _ensure_pipeline_tables(con)
+    con.create_function(
+        "gm_configure",
+        lambda name, config: _gm_configure(con, name, config),
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "gm_run",
+        lambda name, table: _gm_run(con, name, table),
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "gm_jobs", lambda: _gm_jobs(con),
+        [], "VARCHAR",
+    )
+    con.create_function(
+        "gm_golden",
+        lambda name: _gm_golden(con, name),
+        ["VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "gm_drop",
+        lambda name: _gm_drop(con, name),
+        ["VARCHAR"], "VARCHAR",
     )
 
 
@@ -144,3 +170,89 @@ def _match_tables(
     if result.matched is not None:
         return result.matched.write_json()
     return "[]"
+
+
+# ── Pipeline functions (job management) ─────────────────────────────────
+
+
+def _ensure_pipeline_tables(con: duckdb.DuckDBPyConnection) -> None:
+    """Initialize pipeline state for this connection."""
+    _get_state(con)  # Creates state dict if not exists
+
+
+def _gm_configure(con: duckdb.DuckDBPyConnection, job_name: str, config_json: str) -> str:
+    # Pipeline functions use an in-memory dict to avoid DuckDB UDF transaction isolation issues.
+    # The _gm_state dict is shared across all pipeline UDF calls on this connection.
+    state = _get_state(con)
+    state["jobs"][job_name] = {
+        "config_json": config_json,
+        "status": "configured",
+        "golden": None,
+    }
+    return f"Job '{job_name}' configured"
+
+
+def _gm_run(con: duckdb.DuckDBPyConnection, job_name: str, table_name: str) -> str:
+    import polars as pl
+    from goldenmatch import dedupe_df
+
+    state = _get_state(con)
+    if job_name not in state["jobs"]:
+        return json.dumps({"error": f"Job '{job_name}' not found"})
+
+    job = state["jobs"][job_name]
+    job["status"] = "running"
+
+    # Read table via cursor (avoids UDF deadlock)
+    cursor = con.cursor()
+    df = cursor.sql(f"SELECT * FROM {table_name}").pl()
+    cursor.close()
+
+    cfg = json.loads(job["config_json"])
+    try:
+        result = dedupe_df(df, **cfg)
+    except Exception as e:
+        job["status"] = "failed"
+        return json.dumps({"error": str(e)})
+
+    # Store golden records in memory
+    if result.golden is not None:
+        job["golden"] = json.loads(result.golden.write_json())
+    else:
+        job["golden"] = []
+
+    job["status"] = "completed"
+    return json.dumps(result.stats)
+
+
+def _gm_jobs(con: duckdb.DuckDBPyConnection) -> str:
+    state = _get_state(con)
+    jobs = [
+        {"name": name, "status": info["status"]}
+        for name, info in state["jobs"].items()
+    ]
+    return json.dumps(jobs)
+
+
+def _gm_golden(con: duckdb.DuckDBPyConnection, job_name: str) -> str:
+    state = _get_state(con)
+    if job_name not in state["jobs"]:
+        return "[]"
+    golden = state["jobs"][job_name].get("golden", [])
+    return json.dumps(golden) if golden else "[]"
+
+
+def _gm_drop(con: duckdb.DuckDBPyConnection, job_name: str) -> str:
+    state = _get_state(con)
+    if job_name in state["jobs"]:
+        del state["jobs"][job_name]
+    return f"Job '{job_name}' dropped"
+
+
+# Global pipeline state (shared across all UDF calls)
+_pipeline_state: dict = {"jobs": {}}
+
+
+def _get_state(con: duckdb.DuckDBPyConnection) -> dict:
+    """Get the global pipeline state."""
+    return _pipeline_state
