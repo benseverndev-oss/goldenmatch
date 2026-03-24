@@ -29,7 +29,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 
 ### postgres/ (goldenmatch_pg)
 - pgrx 0.12.9 Postgres extension, standalone crate (not in workspace)
-- `quick.rs` -- 9 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
+- `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
 - SQL file at `sql/goldenmatch_pg--0.1.0.sql` -- handwritten (pgrx doesn't auto-generate)
@@ -42,6 +42,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 - Requires `pyarrow` for DuckDB `.pl()` Polars conversion
 
 ## Testing
+- Rust bash preamble (copy-paste before any cargo command): `export PATH="/c/Users/bsevern/.cargo/bin:$PATH" && export RUSTUP_HOME="C:/Users/bsevern/.rustup" && export CARGO_HOME="C:/Users/bsevern/.cargo"`
 - `cargo build -p goldenmatch-bridge` -- builds bridge locally (works on Windows)
 - `cargo test -p goldenmatch-bridge` -- runs bridge tests (needs goldenmatch Python package installed)
 - Postgres extension: build/test only via CI (needs libclang + PG dev headers)
