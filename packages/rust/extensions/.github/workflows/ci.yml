@@ -69,14 +69,13 @@ jobs:
       - name: Initialize pgrx
         run: cargo pgrx init --pg16=/usr/lib/postgresql/16/bin/pg_config
 
-      - name: Build extension and generate SQL
+      - name: Install extension and run tests
         working-directory: postgres
         run: |
-          # pgrx schema writes SQL to stdout, diagnostic messages to stderr
-          cargo pgrx schema pg16 1> /usr/share/postgresql/16/extension/goldenmatch_pg--0.1.0.sql
-          echo "Generated SQL file ($(wc -l < /usr/share/postgresql/16/extension/goldenmatch_pg--0.1.0.sql) lines):"
-          head -10 /usr/share/postgresql/16/extension/goldenmatch_pg--0.1.0.sql
-
-      - name: Run pgrx tests
-        working-directory: postgres
-        run: cargo pgrx test pg16
+          # Install the extension (generates .so, .control, and .sql)
+          cargo pgrx install --pg-config=/usr/lib/postgresql/16/bin/pg_config --release
+          echo "=== Extension files installed ==="
+          ls -la /usr/share/postgresql/16/extension/goldenmatch_pg* || echo "No SQL files in extension dir"
+          ls -la /usr/lib/postgresql/16/lib/goldenmatch_pg* || echo "No .so files"
+          # Now run the tests (they do their own install for the test build)
+          cargo pgrx test pg16
