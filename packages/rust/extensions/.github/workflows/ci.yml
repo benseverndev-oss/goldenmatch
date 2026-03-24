@@ -109,6 +109,10 @@ jobs:
             INSERT INTO test_reference VALUES ('JOHN SMITH', 'john@x.com'), ('Bob', 'bob@z.com');
             SELECT goldenmatch.goldenmatch_match_tables('test_prospects'::TEXT, 'test_reference'::TEXT, '{"exact": ["email"]}'::TEXT);
           EOSQL
+          echo "=== Test table-returning: dedupe_pairs ==="
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT * FROM goldenmatch.goldenmatch_dedupe_pairs('test_customers'::TEXT, '{\"exact\": [\"email\"]}'::TEXT);"
+          echo "=== Test table-returning: dedupe_clusters ==="
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT * FROM goldenmatch.goldenmatch_dedupe_clusters('test_customers'::TEXT, '{\"exact\": [\"email\"]}'::TEXT);"
           echo "=== Test Pipeline: configure + run + inspect ==="
           sudo -u postgres psql -v ON_ERROR_STOP=1 <<'EOSQL'
             -- Configure a job

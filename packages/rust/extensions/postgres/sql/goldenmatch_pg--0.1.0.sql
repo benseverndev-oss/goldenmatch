@@ -96,6 +96,26 @@ LANGUAGE c
 AS 'MODULE_PATHNAME', 'gm_drop_wrapper';
 
 -- ══════════════════════════════════════════════════════════════════════
+-- Table-returning functions (structured results)
+-- ══════════════════════════════════════════════════════════════════════
+
+CREATE FUNCTION "goldenmatch_dedupe_pairs"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TABLE ("id_a" BIGINT, "id_b" BIGINT, "score" DOUBLE PRECISION)
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_dedupe_pairs_wrapper';
+
+CREATE FUNCTION "goldenmatch_dedupe_clusters"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TABLE ("cluster_id" BIGINT, "record_id" BIGINT, "cluster_size" BIGINT)
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_dedupe_clusters_wrapper';
+
+-- ══════════════════════════════════════════════════════════════════════
 -- Scalar functions
 -- ══════════════════════════════════════════════════════════════════════
 
