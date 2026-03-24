@@ -59,7 +59,7 @@ class _DefaultCommandGroup(TyperGroup):
 
 app = typer.Typer(
     name="goldencheck",
-    help="Data validation that discovers rules from your data so you don't have to write them.",
+    help="Data validation that discovers rules from your data so you don't have to write them.\n\nExit codes: 0 = pass, 1 = findings at/above --fail-on, 2 = usage error.",
     add_completion=False,
     cls=_DefaultCommandGroup,
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
@@ -171,6 +171,7 @@ def scan(
     no_history: bool = typer.Option(False, "--no-history", help="Don't record this scan in history."),
     webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
     notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
+    html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report at this path."),
 ) -> None:
     """Profile a data file and report findings."""
     if smart and guided:
@@ -179,7 +180,7 @@ def scan(
     _do_scan(
         file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
         llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
-        no_history=no_history, webhook=webhook, notify_on=notify_on,
+        no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
     )
 
 
@@ -535,6 +536,7 @@ def _do_scan(
     no_history: bool = False,
     webhook: str | None = None,
     notify_on: str = "grade-drop",
+    html: Path | None = None,
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
@@ -543,6 +545,15 @@ def _do_scan(
         else:
             findings, profile = scan_file(file, domain=domain)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
+
+        # Progress message (to stderr so it doesn't pollute --json)
+        sample_note = ""
+        if profile.row_count > 100_000:
+            sample_note = ", sampled to 100,000"
+        typer.echo(
+            f"Scanned {profile.row_count:,} rows, {profile.column_count} columns{sample_note}",
+            err=True,
+        )
 
         # Record history (before triage, so raw findings are recorded)
         if not no_history:
@@ -599,6 +610,12 @@ def _do_scan(
             else:
                 typer.echo("\nNo rules pinned.")
             return
+
+        # HTML report (generate alongside normal output)
+        if html:
+            from goldencheck.reporters.html_reporter import report_html
+            report_html(findings, profile, html)
+            typer.echo(f"HTML report: {html}", err=True)
 
         # Normal output
         if json_output:
