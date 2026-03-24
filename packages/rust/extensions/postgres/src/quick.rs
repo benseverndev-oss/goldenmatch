@@ -56,6 +56,83 @@ pub fn goldenmatch_match_tables(
     }
 }
 
+// ── Table-returning functions (structured results) ─────────────────────
+
+/// Deduplicate a table and return matched pairs as rows.
+///
+/// ```sql
+/// SELECT * FROM goldenmatch_dedupe_pairs('customers', '{"exact": ["email"]}');
+/// -- Returns: id_a | id_b | score
+/// ```
+#[pg_extern]
+pub fn goldenmatch_dedupe_pairs(
+    table_name: String,
+    config_json: String,
+) -> TableIterator<'static, (name!(id_a, i64), name!(id_b, i64), name!(score, f64))> {
+    let rows_json = match spi::read_table_as_json(&table_name) {
+        Ok(json) => json,
+        Err(e) => {
+            pgrx::warning!("goldenmatch_dedupe_pairs error: {}", e);
+            return TableIterator::new(Vec::new());
+        }
+    };
+
+    match goldenmatch_bridge::api::dedupe_pairs(&rows_json, &config_json) {
+        Ok(pairs) => {
+            let rows: Vec<(i64, i64, f64)> = pairs
+                .into_iter()
+                .map(|p| (p.id_a, p.id_b, p.score))
+                .collect();
+            TableIterator::new(rows)
+        }
+        Err(e) => {
+            pgrx::warning!("goldenmatch_dedupe_pairs error: {}", e);
+            TableIterator::new(Vec::new())
+        }
+    }
+}
+
+/// Deduplicate a table and return cluster assignments as rows.
+///
+/// ```sql
+/// SELECT * FROM goldenmatch_dedupe_clusters('customers', '{"exact": ["email"]}');
+/// -- Returns: cluster_id | record_id | cluster_size
+/// ```
+#[pg_extern]
+pub fn goldenmatch_dedupe_clusters(
+    table_name: String,
+    config_json: String,
+) -> TableIterator<
+    'static,
+    (
+        name!(cluster_id, i64),
+        name!(record_id, i64),
+        name!(cluster_size, i64),
+    ),
+> {
+    let rows_json = match spi::read_table_as_json(&table_name) {
+        Ok(json) => json,
+        Err(e) => {
+            pgrx::warning!("goldenmatch_dedupe_clusters error: {}", e);
+            return TableIterator::new(Vec::new());
+        }
+    };
+
+    match goldenmatch_bridge::api::dedupe_clusters(&rows_json, &config_json) {
+        Ok(members) => {
+            let rows: Vec<(i64, i64, i64)> = members
+                .into_iter()
+                .map(|m| (m.cluster_id, m.record_id, m.cluster_size))
+                .collect();
+            TableIterator::new(rows)
+        }
+        Err(e) => {
+            pgrx::warning!("goldenmatch_dedupe_clusters error: {}", e);
+            TableIterator::new(Vec::new())
+        }
+    }
+}
+
 // ── Scalar functions ───────────────────────────────────────────────────
 
 /// Score two strings using a named similarity algorithm.

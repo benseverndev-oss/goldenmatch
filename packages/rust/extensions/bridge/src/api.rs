@@ -20,6 +20,27 @@ pub struct DedupeResult {
     pub stats_json: String,
 }
 
+/// A scored pair from deduplication.
+pub struct ScoredPair {
+    pub id_a: i64,
+    pub id_b: i64,
+    pub score: f64,
+}
+
+/// A cluster assignment from deduplication.
+pub struct ClusterMember {
+    pub cluster_id: i64,
+    pub record_id: i64,
+    pub cluster_size: i64,
+}
+
+/// A match result row.
+pub struct MatchRow {
+    pub target_id: i64,
+    pub ref_id: i64,
+    pub score: f64,
+}
+
 /// Result of a match operation.
 pub struct MatchResult {
     /// Matched pairs as JSON array
@@ -254,6 +275,114 @@ pub fn explain_pair(
         let result = gm.call_method("explain_pair_df", (rec_a, rec_b), Some(&kwargs))?;
         let explanation: String = result.extract()?;
         Ok(explanation)
+    })
+}
+
+/// Deduplicate and return scored pairs as structured data.
+pub fn dedupe_pairs(rows_json: &str, config_json: &str) -> Result<Vec<ScoredPair>, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let df = convert::json_to_polars_df(py, rows_json)?;
+        let config_dict = json_mod.call_method1("loads", (config_json,))?;
+
+        let kwargs = PyDict::new(py);
+        if let Ok(exact) = config_dict.get_item("exact") {
+            if !exact.is_none() {
+                kwargs.set_item("exact", exact)?;
+            }
+        }
+        if let Ok(fuzzy) = config_dict.get_item("fuzzy") {
+            if !fuzzy.is_none() {
+                kwargs.set_item("fuzzy", fuzzy)?;
+            }
+        }
+        if let Ok(blocking) = config_dict.get_item("blocking") {
+            if !blocking.is_none() {
+                kwargs.set_item("blocking", blocking)?;
+            }
+        }
+        if let Ok(threshold) = config_dict.get_item("threshold") {
+            if !threshold.is_none() {
+                kwargs.set_item("threshold", threshold)?;
+            }
+        }
+
+        let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
+        let scored_pairs = result.getattr("scored_pairs")?;
+        let pairs_list: Vec<(i64, i64, f64)> = scored_pairs.extract()?;
+
+        Ok(pairs_list
+            .into_iter()
+            .map(|(a, b, s)| ScoredPair {
+                id_a: a,
+                id_b: b,
+                score: s,
+            })
+            .collect())
+    })
+}
+
+/// Deduplicate and return cluster assignments as structured data.
+pub fn dedupe_clusters(
+    rows_json: &str,
+    config_json: &str,
+) -> Result<Vec<ClusterMember>, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let df = convert::json_to_polars_df(py, rows_json)?;
+        let config_dict = json_mod.call_method1("loads", (config_json,))?;
+
+        let kwargs = PyDict::new(py);
+        if let Ok(exact) = config_dict.get_item("exact") {
+            if !exact.is_none() {
+                kwargs.set_item("exact", exact)?;
+            }
+        }
+        if let Ok(fuzzy) = config_dict.get_item("fuzzy") {
+            if !fuzzy.is_none() {
+                kwargs.set_item("fuzzy", fuzzy)?;
+            }
+        }
+        if let Ok(blocking) = config_dict.get_item("blocking") {
+            if !blocking.is_none() {
+                kwargs.set_item("blocking", blocking)?;
+            }
+        }
+
+        let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
+        let clusters_obj = result.getattr("clusters")?;
+        let clusters_dict: std::collections::HashMap<i64, pyo3::Py<pyo3::types::PyDict>> =
+            clusters_obj.extract()?;
+
+        let mut members = Vec::new();
+        for (cluster_id, info) in clusters_dict {
+            Python::with_gil(|py| -> Result<(), BridgeError> {
+                let info_ref = info.bind(py);
+                if let Ok(member_list) = info_ref.get_item("members") {
+                    if let Some(m) = member_list {
+                        let member_ids: Vec<i64> = m.extract()?;
+                        let size = member_ids.len() as i64;
+                        for record_id in member_ids {
+                            members.push(ClusterMember {
+                                cluster_id,
+                                record_id,
+                                cluster_size: size,
+                            });
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        Ok(members)
     })
 }
 
