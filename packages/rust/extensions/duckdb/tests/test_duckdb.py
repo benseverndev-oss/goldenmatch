@@ -114,3 +114,49 @@ class TestMatchTables:
             SELECT goldenmatch_match_tables('test_target', 'test_ref', '{"exact": ["email"]}')
         """).fetchone()[0]
         assert isinstance(result, str)
+
+
+class TestPipeline:
+    def test_configure(self, con):
+        result = con.sql("""
+            SELECT gm_configure('test_job', '{"exact": ["email"]}')
+        """).fetchone()[0]
+        assert "configured" in result
+
+    def test_full_pipeline(self, con):
+        # Create test data
+        con.sql("""
+            CREATE TABLE pipeline_customers AS
+            SELECT * FROM (VALUES
+                ('John', 'john@x.com'),
+                ('JOHN', 'john@x.com'),
+                ('Jane', 'jane@y.com')
+            ) AS t(name, email)
+        """)
+
+        # Configure (must fetch to execute the UDF)
+        con.sql("SELECT gm_configure('pipe_test', '{\"exact\": [\"email\"]}')").fetchone()
+
+        # Run
+        result = con.sql("SELECT gm_run('pipe_test', 'pipeline_customers')").fetchone()[0]
+        stats = json.loads(result)
+        assert "total_records" in stats
+
+        # List jobs
+        jobs_json = con.sql("SELECT gm_jobs()").fetchone()[0]
+        jobs = json.loads(jobs_json)
+        assert len(jobs) >= 1
+        assert any(j["name"] == "pipe_test" for j in jobs)
+
+        # Get golden records
+        golden_json = con.sql("SELECT gm_golden('pipe_test')").fetchone()[0]
+        assert isinstance(golden_json, str)
+
+        # Drop
+        result = con.sql("SELECT gm_drop('pipe_test')").fetchone()[0]
+        assert "dropped" in result
+
+        # Verify dropped
+        jobs_json = con.sql("SELECT gm_jobs()").fetchone()[0]
+        jobs = json.loads(jobs_json)
+        assert not any(j["name"] == "pipe_test" for j in jobs)
