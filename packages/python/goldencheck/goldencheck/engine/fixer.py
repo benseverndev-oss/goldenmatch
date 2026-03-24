@@ -102,6 +102,16 @@ def _standardize_case(s: pl.Series, findings: list[Finding], column: str) -> pl.
     )
 
 
+def _strip_control_chars(s: pl.Series) -> pl.Series:
+    """Remove control characters (except newline/tab)."""
+    if s.dtype not in (pl.Utf8, pl.String):
+        return s
+    return s.map_elements(
+        lambda v: re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', v) if isinstance(v, str) else v,
+        return_dtype=pl.String,
+    )
+
+
 def _coerce_numeric(s: pl.Series) -> pl.Series:
     """Attempt to cast string column to numeric."""
     if s.dtype not in (pl.Utf8, pl.String):
@@ -110,6 +120,16 @@ def _coerce_numeric(s: pl.Series) -> pl.Series:
         return s.cast(pl.Float64, strict=False)
     except Exception:
         return s
+
+
+def _fill_nulls_with_mode(s: pl.Series) -> pl.Series:
+    """Fill null values with the column's mode (most frequent value)."""
+    if s.null_count() == 0:
+        return s
+    mode_val = s.drop_nulls().mode()
+    if len(mode_val) == 0:
+        return s
+    return s.fill_null(mode_val[0])
 
 
 # ---------------------------------------------------------------------------
@@ -164,24 +184,29 @@ def apply_fixes(
 
         # Moderate fixes
         if mode in ("moderate", "aggressive"):
-            fixed = _standardize_case(col, findings, col_name)
-            changed = (col.cast(pl.String).fill_null("") != fixed.cast(pl.String).fill_null(""))
-            n_changed = int(changed.sum())
-            if n_changed > 0:
-                before = col.filter(changed).head(3).cast(pl.String).to_list()
-                after = fixed.filter(changed).head(3).cast(pl.String).to_list()
-                report.entries.append(FixEntry(
-                    column=col_name,
-                    fix_type="standardize_case",
-                    rows_affected=n_changed,
-                    sample_before=[str(v) for v in before],
-                    sample_after=[str(v) for v in after],
-                ))
-                result = result.with_columns(fixed.alias(col_name))
-                col = result[col_name]
+            for fix_name, fix_fn in [
+                ("standardize_case", lambda c: _standardize_case(c, findings, col_name)),
+                ("strip_control_chars", _strip_control_chars),
+            ]:
+                fixed = fix_fn(col)
+                changed = (col.cast(pl.String).fill_null("") != fixed.cast(pl.String).fill_null(""))
+                n_changed = int(changed.sum())
+                if n_changed > 0:
+                    before = col.filter(changed).head(3).cast(pl.String).to_list()
+                    after = fixed.filter(changed).head(3).cast(pl.String).to_list()
+                    report.entries.append(FixEntry(
+                        column=col_name,
+                        fix_type=fix_name,
+                        rows_affected=n_changed,
+                        sample_before=[str(v) for v in before],
+                        sample_after=[str(v) for v in after],
+                    ))
+                    result = result.with_columns(fixed.alias(col_name))
+                    col = result[col_name]
 
         # Aggressive fixes
         if mode == "aggressive":
+            # Coerce string → numeric
             fixed = _coerce_numeric(col)
             if fixed.dtype != col.dtype:
                 report.entries.append(FixEntry(
@@ -190,5 +215,18 @@ def apply_fixes(
                     rows_affected=len(col),
                 ))
                 result = result.with_columns(fixed.alias(col_name))
+                col = result[col_name]
+
+            # Fill nulls with mode
+            if col.null_count() > 0:
+                fixed = _fill_nulls_with_mode(col)
+                filled = col.null_count() - fixed.null_count()
+                if filled > 0:
+                    report.entries.append(FixEntry(
+                        column=col_name,
+                        fix_type="fill_nulls",
+                        rows_affected=filled,
+                    ))
+                    result = result.with_columns(fixed.alias(col_name))
 
     return result, report

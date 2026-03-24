@@ -1,4 +1,4 @@
-{"timestamp": "2026-03-24T13:28:22", "file": "simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
-{"timestamp": "2026-03-24T13:37:35", "file": "simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
-{"timestamp": "2026-03-24T14:39:47", "file": "D:\\show_case\\goldencheck\\tests\\fixtures\\simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
-{"timestamp": "2026-03-24T14:45:54", "file": "D:\\show_case\\goldencheck\\tests\\fixtures\\simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
+{"timestamp": "2026-03-24T15:25:49", "file": "D:\\show_case\\goldencheck\\tests\\fixtures\\simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
+{"timestamp": "2026-03-24T15:25:50", "file": "C:\\Users\\bsevern\\AppData\\Local\\Temp\\pytest-of-bsevern\\pytest-353\\test_smart_triage0\\data.csv", "rows": 2, "columns": 2, "grade": "A", "score": 97, "errors": 0, "warnings": 1, "findings_count": 2}
+{"timestamp": "2026-03-24T15:25:50", "file": "C:\\Users\\bsevern\\AppData\\Local\\Temp\\pytest-of-bsevern\\pytest-353\\test_scan_with_domain0\\data.csv", "rows": 2, "columns": 2, "grade": "A", "score": 97, "errors": 0, "warnings": 1, "findings_count": 2}
+{"timestamp": "2026-03-24T15:25:50", "file": "D:\\show_case\\goldencheck\\tests\\fixtures\\simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
