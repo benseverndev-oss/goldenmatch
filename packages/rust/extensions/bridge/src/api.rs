@@ -109,9 +109,16 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         let stats = result.getattr("stats")?;
         let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
 
-        // Extract clusters
+        // Extract clusters -- convert to JSON-safe dict (pair_scores has tuple keys)
         let clusters = result.getattr("clusters")?;
-        let clusters_json: String = json_mod.call_method1("dumps", (clusters,))?.extract()?;
+        let clusters_json: String = {
+            let str_repr: String = clusters.call_method0("__str__")?.extract()?;
+            // Use str() representation as fallback since json.dumps fails on tuple keys
+            match json_mod.call_method1("dumps", (clusters,)) {
+                Ok(j) => j.extract()?,
+                Err(_) => str_repr,
+            }
+        };
 
         Ok(DedupeResult {
             golden_json,
