@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-pg-extension:
+    name: Build PG ${{ matrix.pg }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        pg: [16]
+        os: [ubuntu-latest]
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      PG_VERSION: ${{ matrix.pg }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
+          sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
+
+      - name: Install goldenmatch
+        run: pip install goldenmatch>=1.1.0
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init "--pg${PG_VERSION}=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config"
+
+      - name: Build extension (release)
+        working-directory: postgres
+        run: cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release
+
+      - name: Package extension
+        run: |
+          ARCH=$(uname -m)
+          PKG_NAME="goldenmatch_pg-${RELEASE_TAG}-pg${PG_VERSION}-py312-linux-${ARCH}"
+          mkdir -p "${PKG_NAME}"
+          cp "/usr/lib/postgresql/${PG_VERSION}/lib/goldenmatch_pg.so" "${PKG_NAME}/"
+          cp "/usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg.control" "${PKG_NAME}/"
+          cp postgres/sql/goldenmatch_pg--0.1.0.sql "${PKG_NAME}/"
+          cp README.md "${PKG_NAME}/"
+          tar czf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
+          echo "PKG_FILE=${PKG_NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${RELEASE_TAG}" "${PKG_FILE}" --clobber
+
+  docker:
+    name: Docker Image
+    runs-on: ubuntu-latest
+    needs: build-pg-extension
+    permissions:
+      packages: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.event.release.tag_name }}
+            ghcr.io/${{ github.repository }}:latest

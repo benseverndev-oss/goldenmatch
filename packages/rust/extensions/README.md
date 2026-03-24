@@ -40,42 +40,54 @@ goldenmatch-extensions/
 
 The extension embeds a CPython interpreter via [pyo3](https://pyo3.rs/) and calls the GoldenMatch Python package. Data flows through Apache Arrow for efficient interchange.
 
-## Requirements
+## Installation
 
-- PostgreSQL 15, 16, or 17
-- Python 3.11+ with `pip install goldenmatch>=1.1.0`
-- Rust toolchain (for building from source)
-
-## Building from Source
+### Quick Install (Linux)
 
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install goldenmatch>=1.1.0
+curl -sSL https://raw.githubusercontent.com/benzsevern/goldenmatch-extensions/main/install.sh | bash
+```
 
-# Install pgrx
-cargo install cargo-pgrx
+### Docker (zero config)
+
+```bash
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benzsevern/goldenmatch-extensions:latest
+# Extension is pre-installed. Connect and use:
+psql -h localhost -U postgres -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
+```
+
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+
+```bash
+tar xzf goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64.tar.gz
+sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.so $(pg_config --pkglibdir)/
+sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.control $(pg_config --sharedir)/extension/
+sudo cp goldenmatch_pg-v0.1.0-pg16-py312-linux-x86_64/*.sql $(pg_config --sharedir)/extension/
+```
+
+### Build from Source
+
+```bash
+# Prerequisites: Rust, PostgreSQL dev headers, libclang, Python 3.11+
+pip install goldenmatch>=1.1.0
+cargo install cargo-pgrx --version "0.12.9"
 cargo pgrx init --pg16=$(which pg_config)
 
-# Build
-cd goldenmatch-extensions
-cargo pgrx package --pg-config=$(which pg_config)
-
-# Install
-cargo pgrx install --pg-config=$(which pg_config)
+# Build and install
+cd goldenmatch-extensions/postgres
+cargo pgrx install --pg-config=$(which pg_config) --release
+cp sql/goldenmatch_pg--0.1.0.sql $(pg_config --sharedir)/extension/
 ```
 
-Then in PostgreSQL:
+### After Installation
+
 ```sql
-CREATE EXTENSION goldenmatch;
-```
-
-## Docker
-
-```bash
-docker build -t goldenmatch/postgres:16 .
-docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres goldenmatch/postgres:16
-# Extension is pre-installed. Connect and use:
-# psql -h localhost -U postgres -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
+CREATE EXTENSION goldenmatch_pg;
+-- Verify it works:
+SELECT goldenmatch.goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler');
 ```
 
 ## SQL Functions

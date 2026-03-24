@@ -1,0 +1,16 @@
+[extension]
+name = "goldenmatch_pg"
+version = "0.1.0"
+repository = "https://github.com/benzsevern/goldenmatch-extensions"
+license = "MIT"
+description = "Entity resolution in PostgreSQL -- deduplicate records, match across tables, and maintain golden records"
+homepage = "https://github.com/benzsevern/goldenmatch"
+categories = ["data_transforms", "machine_learning"]
+
+[build]
+postgres_version = "16"
+platform = "linux/amd64"
+
+[build.requires]
+python3 = "3.12"
+pip_packages = ["goldenmatch>=1.1.0"]
