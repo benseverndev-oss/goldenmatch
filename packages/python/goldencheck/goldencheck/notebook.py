@@ -4,6 +4,8 @@ from __future__ import annotations
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import DatasetProfile, ColumnProfile
 
+__all__ = ["ScanResult", "findings_to_html", "profile_to_html"]
+
 
 # --- Finding display ---
 

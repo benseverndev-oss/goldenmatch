@@ -2,6 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+__all__ = ["ColumnProfile", "DatasetProfile"]
+
 @dataclass
 class ColumnProfile:
     name: str

@@ -24,6 +24,8 @@ from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["scan_file", "scan_file_with_llm"]
+
 COLUMN_PROFILERS = [
     TypeInferenceProfiler(),
     NullabilityProfiler(),

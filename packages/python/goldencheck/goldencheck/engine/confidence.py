@@ -4,6 +4,8 @@ from collections import defaultdict
 from dataclasses import replace
 from goldencheck.models.finding import Finding, Severity
 
+__all__ = ["apply_confidence_downgrade", "apply_corroboration_boost"]
+
 
 def apply_corroboration_boost(findings: list[Finding]) -> list[Finding]:
     """Boost confidence for columns flagged by multiple profilers.
