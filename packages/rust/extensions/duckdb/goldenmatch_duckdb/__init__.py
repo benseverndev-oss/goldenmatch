@@ -16,7 +16,7 @@ Usage:
     # Deduplicate a table
     con.sql("SELECT goldenmatch_dedupe_table('customers', '{\"exact\": [\"email\"]}')")
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import duckdb
 
