@@ -6,3 +6,8 @@ Cargo.lock
 *.dll
 *.pdb
 .env
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
