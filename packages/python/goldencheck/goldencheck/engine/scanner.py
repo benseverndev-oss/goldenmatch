@@ -286,6 +286,7 @@ def scan_file_with_llm(
     path: Path,
     provider: str = "anthropic",
     sample_size: int = 100_000,
+    domain: str | None = None,
 ) -> tuple[list[Finding], DatasetProfile]:
     """Scan a file with profilers, then enhance with LLM boost."""
     import json
@@ -300,7 +301,7 @@ def scan_file_with_llm(
     check_llm_available(provider)
 
     # Run profilers first — returns findings, profile, AND the sampled df
-    findings, profile, sample = scan_file(path, sample_size=sample_size, return_sample=True)
+    findings, profile, sample = scan_file(path, sample_size=sample_size, return_sample=True, domain=domain)
 
     # Budget check before calling LLM (~2000 input, ~500 output as estimates)
     import os

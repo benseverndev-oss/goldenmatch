@@ -115,8 +115,14 @@ def main(
         elif arg == "--llm-boost":
             llm_boost = True
         elif arg == "--llm-provider":
+            if not args:
+                typer.echo("Error: '--llm-provider' requires a value.", err=True)
+                raise typer.Exit(code=2)
             llm_provider = args.pop(0)
         elif arg == "--domain":
+            if not args:
+                typer.echo("Error: '--domain' requires a value.", err=True)
+                raise typer.Exit(code=2)
             domain = args.pop(0)
         elif arg == "--smart":
             smart = True
@@ -125,8 +131,14 @@ def main(
         elif arg == "--no-history":
             no_history = True
         elif arg == "--webhook":
+            if not args:
+                typer.echo("Error: '--webhook' requires a value.", err=True)
+                raise typer.Exit(code=2)
             webhook = args.pop(0)
         elif arg == "--notify-on":
+            if not args:
+                typer.echo("Error: '--notify-on' requires a value.", err=True)
+                raise typer.Exit(code=2)
             notify_on = args.pop(0)
         elif not arg.startswith("-"):
             if file is None:
@@ -214,11 +226,12 @@ def review(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
 ) -> None:
     """Profile AND validate a file, launching TUI for interactive review."""
     with _cli_error_handler():
         if llm_boost:
-            findings, profile = scan_file_with_llm(file, provider=llm_provider)
+            findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain)
         else:
             findings, profile = scan_file(file)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
@@ -403,6 +416,9 @@ def diff(
             finally:
                 tmp_path.unlink(missing_ok=True)
 
+            new_df = read_file(file)
+            new_findings, new_profile = scan_file(file)
+            new_findings = apply_confidence_downgrade(new_findings, llm_boost=False)
             label = f"{file.name} (current vs {git_ref})"
 
         report = diff_files(old_df, new_df, old_findings, new_findings, old_profile, new_profile)
@@ -523,7 +539,7 @@ def _do_scan(
     """Run scan and output results."""
     with _cli_error_handler():
         if llm_boost:
-            findings, profile = scan_file_with_llm(file, provider=llm_provider)
+            findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain)
         else:
             findings, profile = scan_file(file, domain=domain)
             findings = apply_confidence_downgrade(findings, llm_boost=False)

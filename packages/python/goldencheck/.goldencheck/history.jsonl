@@ -1,2 +1,3 @@
 {"timestamp": "2026-03-24T13:28:22", "file": "simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
 {"timestamp": "2026-03-24T13:37:35", "file": "simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
+{"timestamp": "2026-03-24T14:39:47", "file": "D:\\show_case\\goldencheck\\tests\\fixtures\\simple.csv", "rows": 5, "columns": 5, "grade": "A", "score": 94, "errors": 0, "warnings": 2, "findings_count": 10}
