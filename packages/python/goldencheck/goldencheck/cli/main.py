@@ -310,6 +310,100 @@ def fix(
         typer.echo(f"Written to: {out_path}")
 
 
+@app.command()
+def diff(
+    file: Path = typer.Argument(..., help="Data file to compare."),
+    file2: Optional[Path] = typer.Argument(None, help="Second file (omit to compare against git)."),
+    ref: Optional[str] = typer.Option(None, "--ref", help="Git ref to compare against (default: HEAD)."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
+    """Compare two versions of a data file.
+
+    Shows schema changes, finding changes, and statistics delta.
+
+    Auto-detects git: if the file is tracked, compares against HEAD.
+    Pass a second file for explicit two-file comparison.
+    """
+    import json
+    import subprocess
+    import tempfile
+    from goldencheck.engine.differ import diff_files, format_diff_report
+    from goldencheck.engine.reader import read_file
+
+    with _cli_error_handler():
+        if file2:
+            # Two-file mode: file=old, file2=new
+            old_df = read_file(file)
+            old_findings, old_profile = scan_file(file)
+            old_findings = apply_confidence_downgrade(old_findings, llm_boost=False)
+            new_df = read_file(file2)
+            new_findings, new_profile = scan_file(file2)
+            new_findings = apply_confidence_downgrade(new_findings, llm_boost=False)
+            label = f"{file.name} vs {file2.name}"
+        else:
+            # Git mode
+            git_ref = ref or "HEAD"
+            try:
+                result = subprocess.run(
+                    ["git", "show", f"{git_ref}:{file}"],
+                    capture_output=True, check=True,
+                )
+            except subprocess.CalledProcessError:
+                typer.echo(
+                    f"Error: Cannot read '{file}' from git ref '{git_ref}'. "
+                    "Provide a second file for explicit comparison.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+            with tempfile.NamedTemporaryFile(suffix=file.suffix, delete=False, mode="wb") as tmp:
+                tmp.write(result.stdout)
+                tmp_path = Path(tmp.name)
+
+            try:
+                old_df = read_file(tmp_path)
+                old_findings, old_profile = scan_file(tmp_path)
+                old_findings = apply_confidence_downgrade(old_findings, llm_boost=False)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+            label = f"{file.name} (current vs {git_ref})"
+
+        report = diff_files(old_df, new_df, old_findings, new_findings, old_profile, new_profile)
+
+        if json_output:
+            from dataclasses import asdict
+            typer.echo(json.dumps(asdict(report), indent=2, default=str))
+        else:
+            typer.echo(format_diff_report(report, label))
+
+
+@app.command()
+def watch(
+    directory: Path = typer.Argument(..., help="Directory to watch."),
+    interval: int = typer.Option(60, "--interval", "-i", help="Poll interval in seconds."),
+    pattern: Optional[str] = typer.Option(None, "--pattern", "-p", help="Glob pattern (e.g., '*.csv')."),
+    exit_on: Optional[str] = typer.Option(None, "--exit-on", help="Exit on severity: error or warning."),
+    json_output: bool = typer.Option(False, "--json", help="JSON output per scan."),
+) -> None:
+    """Watch a directory for data file changes and re-scan.
+
+    Polls for file modifications and re-scans changed files.
+    Use --exit-on for CI pipelines that should fail on first error.
+    """
+    from goldencheck.engine.watcher import watch_directory
+
+    with _cli_error_handler():
+        exit_code = watch_directory(
+            directory,
+            interval=interval,
+            pattern=pattern,
+            exit_on=exit_on,
+            json_output=json_output,
+        )
+        raise typer.Exit(code=exit_code)
+
+
 @app.command(name="mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio) for Claude Desktop integration."""
