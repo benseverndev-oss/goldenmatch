@@ -103,6 +103,7 @@ class PatternConsistencyProfiler(BaseProfiler):
                 sample_values=[str(v) for v in sample_vals],
                 suggestion="Standardize values to a single format/pattern",
                 confidence=confidence,
+                metadata={"dominant_pattern": dominant_pattern, "minority_pattern": minority_pattern},
             ))
 
         # Summary finding if more than MAX_PATTERNS minority patterns exist

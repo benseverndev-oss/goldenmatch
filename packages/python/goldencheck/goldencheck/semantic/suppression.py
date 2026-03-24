@@ -30,6 +30,26 @@ def apply_suppression(
         if classification and classification.type_name:
             type_def = type_defs.get(classification.type_name)
             if type_def and f.check in type_def.suppress:
+                # For pattern_consistency findings on geo/identifier columns,
+                # skip suppression if patterns are code-like (mostly digits)
+                # and differ significantly in length (e.g. 5-digit vs 9-digit
+                # zip codes). This preserves real format inconsistencies while
+                # still suppressing natural variation in names/cities.
+                if (
+                    f.check == "pattern_consistency"
+                    and classification.type_name in ("geo", "identifier")
+                ):
+                    dom = f.metadata.get("dominant_pattern")
+                    minor = f.metadata.get("minority_pattern")
+                    if dom and minor and abs(len(dom) - len(minor)) > 1:
+                        # Only skip suppression when BOTH patterns are
+                        # code-like (mostly digits). Mixed patterns (e.g.
+                        # DD vs LLLLLLL in age columns) should stay suppressed.
+                        dom_digit = sum(1 for c in dom if c == "D") / max(len(dom), 1)
+                        minor_digit = sum(1 for c in minor if c == "D") / max(len(minor), 1)
+                        if dom_digit > 0.5 and minor_digit > 0.5:
+                            result.append(f)
+                            continue
                 result.append(replace(
                     f,
                     severity=Severity.INFO,

@@ -22,6 +22,7 @@ class Finding:
     pinned: bool = False
     source: str | None = None
     confidence: float = 1.0
+    metadata: dict = field(default_factory=dict)
 
     def _repr_html_(self) -> str:
         colors = {Severity.ERROR: "#ff4444", Severity.WARNING: "#ffbb33", Severity.INFO: "#33b5e5"}
