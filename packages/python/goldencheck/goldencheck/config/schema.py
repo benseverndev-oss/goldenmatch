@@ -2,6 +2,8 @@
 from __future__ import annotations
 from pydantic import BaseModel
 
+__all__ = ["GoldenCheckConfig", "ColumnRule", "Settings", "RelationRule", "IgnoreEntry"]
+
 class Settings(BaseModel):
     sample_size: int = 100_000
     severity_threshold: str = "warning"

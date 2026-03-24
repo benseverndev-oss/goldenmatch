@@ -3,6 +3,8 @@ from __future__ import annotations
 from enum import IntEnum
 from dataclasses import dataclass, field
 
+__all__ = ["Finding", "Severity"]
+
 class Severity(IntEnum):
     INFO = 1
     WARNING = 2
