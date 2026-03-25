@@ -1,0 +1,211 @@
+{
+  "dataset": "goldenflow_bench_v1",
+  "rows": 5000,
+  "columns": 15,
+  "planted_transforms": [
+    {
+      "column": "full_name",
+      "transform": "strip",
+      "expected_change_count": 1225,
+      "description": "Full names with leading/trailing whitespace that need stripping",
+      "sample_before": [
+        "  John Smith  "
+      ],
+      "sample_after": [
+        "John Smith"
+      ]
+    },
+    {
+      "column": "full_name",
+      "transform": "strip_titles",
+      "expected_change_count": 1209,
+      "description": "Full names with honorific titles (Dr., Mr., etc.) to strip",
+      "sample_before": [
+        "DR. JANE DOE"
+      ],
+      "sample_after": [
+        "JANE DOE"
+      ]
+    },
+    {
+      "column": "email",
+      "transform": "lowercase",
+      "expected_change_count": 1254,
+      "description": "Email addresses in UPPERCASE that need lowercasing",
+      "sample_before": [
+        "JOHN@TEST.COM"
+      ],
+      "sample_after": [
+        "john@test.com"
+      ]
+    },
+    {
+      "column": "email",
+      "transform": "strip",
+      "expected_change_count": 1299,
+      "description": "Email addresses with surrounding whitespace",
+      "sample_before": [
+        "  jane@test.com  "
+      ],
+      "sample_after": [
+        "jane@test.com"
+      ]
+    },
+    {
+      "column": "phone",
+      "transform": "phone_e164",
+      "expected_change_count": 5000,
+      "description": "Phone numbers in various formats that should normalize to E.164",
+      "sample_before": [
+        "(555) 123-4567",
+        "555.987.6543",
+        "+1-555-456-7890"
+      ],
+      "sample_after": [
+        "+15551234567",
+        "+15559876543",
+        "+15554567890"
+      ]
+    },
+    {
+      "column": "address",
+      "transform": "address_standardize",
+      "expected_change_count": 2540,
+      "description": "Street addresses with full street type words needing abbreviation",
+      "sample_before": [
+        "123 Main Street"
+      ],
+      "sample_after": [
+        "123 Main St"
+      ]
+    },
+    {
+      "column": "state",
+      "transform": "state_abbreviate",
+      "expected_change_count": 3725,
+      "description": "State names as full words or lowercase that need abbreviating",
+      "sample_before": [
+        "Pennsylvania",
+        "new york"
+      ],
+      "sample_after": [
+        "PA",
+        "NY"
+      ]
+    },
+    {
+      "column": "zip",
+      "transform": "zip_normalize",
+      "expected_change_count": 2490,
+      "description": "ZIP codes needing zero-padding or +4 suffix stripping",
+      "sample_before": [
+        "9001",
+        "10001-1234"
+      ],
+      "sample_after": [
+        "09001",
+        "10001"
+      ]
+    },
+    {
+      "column": "signup_date",
+      "transform": "date_iso8601",
+      "expected_change_count": 3974,
+      "description": "Dates in various formats to normalise to ISO 8601",
+      "sample_before": [
+        "03/15/2024",
+        "Jan 5, 2023",
+        "March 15, 2024"
+      ],
+      "sample_after": [
+        "2024-03-15",
+        "2023-01-05",
+        "2024-03-15"
+      ]
+    },
+    {
+      "column": "price",
+      "transform": "currency_strip",
+      "expected_change_count": 5000,
+      "description": "Currency strings like '$1,234.56' needing numeric extraction; 'free' maps to null",
+      "sample_before": [
+        "$1,234.56",
+        "$99.99",
+        "free"
+      ],
+      "sample_after": [
+        1234.56,
+        99.99,
+        null
+      ]
+    },
+    {
+      "column": "active",
+      "transform": "boolean_normalize",
+      "expected_change_count": 4523,
+      "description": "Boolean-like strings (Yes/No/1/True) to normalize to True/False",
+      "sample_before": [
+        "Yes",
+        "Y",
+        "1",
+        "True",
+        "No",
+        "false"
+      ],
+      "sample_after": [
+        true,
+        true,
+        true,
+        true,
+        false,
+        false
+      ]
+    },
+    {
+      "column": "notes",
+      "transform": "null_standardize",
+      "expected_change_count": 2724,
+      "description": "Null-sentinel strings (N/A, NULL, blank) to convert to None",
+      "sample_before": [
+        "N/A",
+        "NULL",
+        ""
+      ],
+      "sample_after": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "column": "pct",
+      "transform": "percentage_normalize",
+      "expected_change_count": 5000,
+      "description": "Percentage strings like '85%' to normalize to 0.85",
+      "sample_before": [
+        "85%",
+        "100%",
+        "50"
+      ],
+      "sample_after": [
+        0.85,
+        1.0,
+        0.5
+      ]
+    }
+  ],
+  "zero_config_expected": {
+    "columns_that_should_transform": [
+      "full_name",
+      "email",
+      "phone",
+      "state",
+      "zip",
+      "signup_date",
+      "notes"
+    ],
+    "columns_that_should_not_transform": [
+      "city"
+    ]
+  }
+}
