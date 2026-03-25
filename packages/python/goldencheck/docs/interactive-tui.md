@@ -137,7 +137,7 @@ Grade thresholds:
 7. Edit `goldencheck.yml` by hand if needed (e.g., adjust a range, add enum values).
 8. Run `goldencheck validate data.csv` in CI to enforce the rules.
 
-Dismissed findings (not pinned) do not appear in `goldencheck.yml` but will still appear on future scans. To suppress a specific finding permanently, add it to the `ignore` list in `goldencheck.yml` — see [Configuration]({% link configuration.md#ignore.md %}).
+Dismissed findings (not pinned) do not appear in `goldencheck.yml` but will still appear on future scans. To suppress a specific finding permanently, add it to the `ignore` list in `goldencheck.yml` — see [Configuration]({% link configuration.md %}#ignore).
 
 ---
 

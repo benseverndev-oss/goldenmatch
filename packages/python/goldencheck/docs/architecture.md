@@ -229,7 +229,7 @@ The semantic type classifier runs after all profilers and annotates each column 
 | `date` | Temporal column (parsed as date) |
 | `category` | Low cardinality string (<20 unique values) |
 
-**Custom types** can be added in `goldencheck_types.yaml` — see [Configuration]({% link configuration.md#semantic-types.md %}).
+**Custom types** can be added in `goldencheck_types.yaml` — see [Configuration]({% link configuration.md %}#semantic-types).
 
 ---
 
@@ -266,7 +266,7 @@ Confidence is displayed in the TUI (Findings tab, `Conf` column) and included in
 1. Create `goldencheck/profilers/my_profiler.py` implementing `BaseProfiler.profile(df, column) -> list[Finding]`.
 2. Add an instance to `COLUMN_PROFILERS` in `goldencheck/engine/scanner.py`.
 
-See [Profilers]({% link profilers.md#adding-a-custom-profiler.md %}) for a full example.
+See [Profilers]({% link profilers.md %}#adding-a-custom-profiler) for a full example.
 
 ### Add a cross-column profiler
 
