@@ -7,6 +7,14 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 - **This repo:** Rust bridge + Postgres extension + DuckDB Python UDFs
 - **PyPI packages:** `goldenmatch` (Python), `goldenmatch-duckdb` (DuckDB UDFs)
 
+## Branch & Merge SOP (all Golden Suite repos)
+- Feature work goes on `feature/<name>` branches, never directly to main
+- Merge via **squash merge PR** (watchers see PR activity, history stays clean)
+- PR title format: `feat: <description>` or `fix: <description>`
+- PR body: summary bullets + test plan
+- Merge when: tests pass, docs updated. Days not weeks.
+- After merge: delete remote branch
+
 ## Environment
 - Windows 11, bash shell (Git Bash) -- use Unix paths
 - Two GitHub accounts: `benzsevern` (personal, for this repo) and `benzsevern-mjh` (work)
@@ -51,8 +59,10 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 ## CI
 - 4 jobs: lint, bridge-tests, postgres-build, duckdb-tests
 - Lint: `cargo fmt --check` (bridge + postgres separately) + `cargo clippy` (bridge only)
-- Postgres CI: installs PG16 + libclang, builds with pgrx, tests via psql (not pgrx test)
-- Release workflow (`.github/workflows/release.yml`): triggered by GitHub Release, builds .tar.gz binary + Docker image to ghcr.io
+- Postgres CI: tests PG 15/16/17 in parallel (fail-fast: false). Uses PostgreSQL apt repo for PG 15/17 availability
+- Multi-PG: must `pg_createcluster` explicitly + use `pg_lsclusters` to find correct port per version
+- System Python for Postgres: `sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py` then `sudo pip install --break-system-packages goldenmatch`
+- Release workflow: builds .tar.gz + .deb + .rpm for PG 15/16/17, pushes Docker to ghcr.io + Docker Hub
 
 ## Gotchas
 - pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.1.0.sql` manually
