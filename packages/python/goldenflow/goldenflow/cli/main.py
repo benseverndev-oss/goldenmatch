@@ -33,13 +33,19 @@ def transform(
     output_dir: Optional[Path] = typer.Option(None, "-o", "--output-dir", help="Output directory"),
     domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack to use"),
     from_findings: bool = typer.Option(False, "--from-findings", help="Read findings from stdin"),
+    llm_mode: bool = typer.Option(False, "--llm", help="Enable LLM-enhanced transforms"),
 ):
     """Transform a data file (zero-config or config-driven)."""
     import sys
     import json
     import io
+    import os
 
     import polars as pl
+
+    if llm_mode:
+        import goldenflow.llm.corrector  # noqa: F401 — registers the transform
+        os.environ["GOLDENFLOW_LLM"] = "1"
 
     import goldenflow
     from goldenflow.config.loader import load_config
