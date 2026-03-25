@@ -3,19 +3,26 @@ from __future__ import annotations
 
 import os
 
+import pytest
 
-from goldencheck.mcp.agent_tools import (
-    _tool_analyze_data,
-    _tool_approve_reject,
-    _tool_auto_configure,
-    _tool_compare_domains,
-    _tool_explain_column,
-    _tool_explain_finding,
-    _tool_pipeline_handoff,
-    _tool_review_queue,
-    _tool_review_stats,
-    _tool_suggest_fix,
-)
+try:
+    from goldencheck.mcp.agent_tools import (  # noqa: E402
+        _tool_analyze_data,
+        _tool_approve_reject,
+        _tool_auto_configure,
+        _tool_compare_domains,
+        _tool_explain_column,
+        _tool_explain_finding,
+        _tool_pipeline_handoff,
+        _tool_review_queue,
+        _tool_review_stats,
+        _tool_suggest_fix,
+    )
+    HAS_MCP = True
+except ImportError:
+    HAS_MCP = False
+
+pytestmark = pytest.mark.skipif(not HAS_MCP, reason="mcp not installed")
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "simple.csv")
 
