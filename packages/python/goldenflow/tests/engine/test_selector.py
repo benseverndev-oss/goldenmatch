@@ -1,4 +1,3 @@
-import polars as pl
 
 # Ensure transforms are imported so they register
 import goldenflow.transforms.text  # noqa: F401

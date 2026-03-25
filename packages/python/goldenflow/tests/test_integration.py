@@ -6,9 +6,7 @@ import polars as pl
 import goldenflow
 from goldenflow.config.schema import (
     DedupSpec,
-    FilterSpec,
     GoldenFlowConfig,
-    SplitSpec,
     TransformSpec,
 )
 from goldenflow.engine.transformer import TransformEngine

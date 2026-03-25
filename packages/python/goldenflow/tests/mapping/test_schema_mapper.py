@@ -1,6 +1,6 @@
 import polars as pl
 
-from goldenflow.mapping.schema_mapper import SchemaMapper, ColumnMapping
+from goldenflow.mapping.schema_mapper import SchemaMapper
 
 
 def test_auto_map_identical_columns():

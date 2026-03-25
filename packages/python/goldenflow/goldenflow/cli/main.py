@@ -71,7 +71,6 @@ def transform(
     # Handle stdin input (path == "-")
     is_stdin = str(path) == "-"
     if is_stdin:
-        from goldenflow.connectors.file import read_file
         stdin_bytes = sys.stdin.buffer.read()
         df = pl.read_csv(io.BytesIO(stdin_bytes))
         engine = TransformEngine(config=cfg)

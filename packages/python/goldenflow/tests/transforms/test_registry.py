@@ -5,7 +5,6 @@ from goldenflow.transforms import (
     list_transforms,
     parse_transform_name,
     register_transform,
-    registry,
 )
 
 
