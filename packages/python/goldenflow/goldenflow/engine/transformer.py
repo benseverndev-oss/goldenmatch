@@ -40,6 +40,23 @@ class TransformEngine:
             write_file(result.df, out_path)
             result.manifest.save(manifest_path)
 
+        # Record run in history
+        try:
+            from goldenflow.history import save_run, generate_run_id, RunRecord
+            record = RunRecord(
+                run_id=generate_run_id(),
+                source=str(path),
+                timestamp=result.manifest.created_at,
+                rows=result.df.shape[0],
+                columns=result.df.shape[1],
+                transforms_applied=len(result.manifest.records),
+                errors=len(result.manifest.errors),
+                duration_seconds=0.0,  # TODO: track actual duration
+            )
+            save_run(record)
+        except Exception:
+            pass  # History tracking is best-effort
+
         return result
 
     def transform_df(
@@ -99,6 +116,8 @@ class TransformEngine:
         self, df: pl.DataFrame, manifest: Manifest
     ) -> pl.DataFrame:
         """Apply transforms specified in config."""
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
         # Lazy-import LLM module if any op mentions "llm"
         all_ops = [op for spec in self.config.transforms for op in spec.ops]
         if any("llm" in op for op in all_ops):
@@ -107,19 +126,28 @@ class TransformEngine:
             except ImportError:
                 pass
 
-        for spec in self.config.transforms:
-            if spec.column not in df.columns:
-                continue
-            for op_raw in spec.ops:
-                name, params = parse_transform_name(op_raw)
-                info = get_transform(name)
-                if info is None:
-                    manifest.add_error(
-                        column=spec.column, transform=name, row=-1,
-                        error=f"Transform '{name}' not found in registry",
-                    )
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Transforming...", total=len(self.config.transforms))
+            for spec in self.config.transforms:
+                progress.update(task, description=f"Transforming {spec.column}...")
+                if spec.column not in df.columns:
+                    progress.advance(task)
                     continue
-                df = self._apply_single_transform(df, spec.column, info, params, manifest)
+                for op_raw in spec.ops:
+                    name, params = parse_transform_name(op_raw)
+                    info = get_transform(name)
+                    if info is None:
+                        manifest.add_error(
+                            column=spec.column, transform=name, row=-1,
+                            error=f"Transform '{name}' not found in registry",
+                        )
+                        continue
+                    df = self._apply_single_transform(df, spec.column, info, params, manifest)
+                progress.advance(task)
         return df
 
     def _apply_auto_transforms(
@@ -127,14 +155,24 @@ class TransformEngine:
     ) -> pl.DataFrame:
         """Auto-detect and apply transforms based on column profiling."""
         import os
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
         file_path = source if source and source != "<dataframe>" else ""
         profile = profile_dataframe(df, file_path=file_path)
-        for col_profile in profile.columns:
-            selected = select_transforms(col_profile)
-            for info in selected:
-                df = self._apply_single_transform(
-                    df, col_profile.name, info, [], manifest
-                )
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Auto-profiling...", total=len(profile.columns))
+            for col_profile in profile.columns:
+                progress.update(task, description=f"Auto-transforming {col_profile.name}...")
+                selected = select_transforms(col_profile)
+                for info in selected:
+                    df = self._apply_single_transform(
+                        df, col_profile.name, info, [], manifest
+                    )
+                progress.advance(task)
 
         if os.environ.get("GOLDENFLOW_LLM") == "1":
             try:
