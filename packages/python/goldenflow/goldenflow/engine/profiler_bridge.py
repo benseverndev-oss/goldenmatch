@@ -6,12 +6,13 @@ from dataclasses import dataclass, field
 import polars as pl
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PHONE_RE = re.compile(r"^[\+\(\)\-\.\s\d]{7,20}$")
+_PHONE_RE = re.compile(r"^[\+\(]?[\d][\d\(\)\-\.\s]{6,18}\d$")
 _DATE_RE = re.compile(
     r"^(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|"
     r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})$"
 )
 _NAME_RE = re.compile(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+)+$")
+_ZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
 
 
 @dataclass
@@ -56,14 +57,15 @@ def _infer_type(series: pl.Series) -> str:
     if not sample_stripped:
         return "string"
 
-    # Check patterns against sample
-    checks = {
-        "email": (_EMAIL_RE, 0.7),
-        "phone": (_PHONE_RE, 0.6),
-        "date": (_DATE_RE, 0.5),
-        "name": (_NAME_RE, 0.5),
-    }
-    for type_name, (pattern, threshold) in checks.items():
+    # Check patterns against sample — order matters (more specific first)
+    checks = [
+        ("email", _EMAIL_RE, 0.7),
+        ("zip", _ZIP_RE, 0.7),
+        ("date", _DATE_RE, 0.5),
+        ("phone", _PHONE_RE, 0.6),
+        ("name", _NAME_RE, 0.5),
+    ]
+    for type_name, pattern, threshold in checks:
         match_pct = sum(1 for v in sample_stripped if pattern.match(v)) / len(sample_stripped)
         if match_pct >= threshold:
             return type_name
