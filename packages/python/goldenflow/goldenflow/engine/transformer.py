@@ -53,7 +53,7 @@ class TransformEngine:
         if self.config.transforms:
             df = self._apply_config_transforms(df, manifest)
         else:
-            df = self._apply_auto_transforms(df, manifest)
+            df = self._apply_auto_transforms(df, manifest, source=source)
 
         # Apply renames
         for old, new in self.config.renames.items():
@@ -107,10 +107,11 @@ class TransformEngine:
         return df
 
     def _apply_auto_transforms(
-        self, df: pl.DataFrame, manifest: Manifest
+        self, df: pl.DataFrame, manifest: Manifest, source: str = ""
     ) -> pl.DataFrame:
         """Auto-detect and apply transforms based on column profiling."""
-        profile = profile_dataframe(df)
+        file_path = source if source and source != "<dataframe>" else ""
+        profile = profile_dataframe(df, file_path=file_path)
         for col_profile in profile.columns:
             selected = select_transforms(col_profile)
             for info in selected:
