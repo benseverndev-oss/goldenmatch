@@ -2,12 +2,17 @@
 
 **Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.**
 
-Works on files (CSV, Excel, Parquet) or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs.
+Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs.
 
 ```bash
 pip install goldenflow
 goldenflow transform data.csv
 ```
+
+[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen)](https://github.com/benzsevern/goldenflow)
+[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
 
@@ -28,10 +33,39 @@ GoldenFlow makes the transforms reusable, composable, and automatic.
 
 ---
 
+## Quick Start
+
+```bash
+pip install goldenflow
+
+# Auto-transform (zero-config)
+goldenflow transform messy_data.csv
+
+# Try the demo first
+goldenflow demo
+goldenflow transform demo_data.csv -c demo_config.yaml
+
+# With config
+goldenflow learn messy_data.csv -o config.yaml
+goldenflow transform messy_data.csv -c config.yaml
+
+# Schema mapping
+goldenflow map --source system_a.csv --target system_b.csv
+
+# Full pipeline
+goldencheck scan data.csv
+goldenflow transform data.csv
+goldenmatch dedupe data_transformed.csv
+```
+
+---
+
 ## Zero-Config Mode
 
 ```bash
 goldenflow transform customers.csv
+# or just:
+goldenflow customers.csv
 ```
 
 GoldenFlow profiles every column and applies safe transforms automatically:
@@ -52,6 +86,157 @@ customers.csv           -> customers_transformed.csv
 ```
 
 The manifest is an audit trail — what changed, why, and which rows were affected.
+
+---
+
+## CLI Commands
+
+GoldenFlow has 14 commands. The most common ones:
+
+```bash
+# Core transforms
+goldenflow transform data.csv                    # Zero-config: auto-detect and fix
+goldenflow transform data.csv -c config.yaml     # Apply saved config
+goldenflow transform data.csv --domain healthcare # Use a domain pack
+goldenflow transform data.csv --strict           # Fail on any transform error
+goldenflow transform data.csv --llm              # Enable LLM-enhanced corrections
+goldenflow data.csv                              # Shorthand: auto-routes to transform
+
+# Schema & profiling
+goldenflow map -s a.csv -t b.csv                 # Auto-map schemas between files
+goldenflow profile data.csv                      # Show column profiles
+goldenflow learn data.csv -o config.yaml         # Generate config from data patterns
+goldenflow validate data.csv                     # Dry-run: show what would change
+goldenflow diff before.csv after.csv             # Compare pre/post transform
+
+# Continuous & scheduled
+goldenflow watch ./data/                         # Auto-transform new/changed files
+goldenflow schedule data.csv --every 1h          # Run on a schedule (5m, 1h, 30s...)
+goldenflow stream large_file.csv --chunk-size 50000  # Stream-process in batches
+
+# Discovery & history
+goldenflow init data.csv                         # Interactive setup wizard
+goldenflow demo                                  # Generate sample data to try
+goldenflow history                               # Show recent transform runs
+goldenflow history -n 50                         # Last 50 runs
+
+# Integrations
+goldenflow interactive data.csv                  # Launch TUI
+goldenflow serve                                 # REST API for real-time transforms
+goldenflow mcp-serve                             # MCP server for Claude Desktop
+```
+
+### Default Routing
+
+Running `goldenflow <file>` without a subcommand auto-routes to `transform`:
+
+```bash
+goldenflow customers.csv       # equivalent to: goldenflow transform customers.csv
+goldenflow -                   # read from stdin, write to stdout
+```
+
+---
+
+## Streaming
+
+For files too large to load into memory, use `StreamProcessor` or the `stream` command:
+
+```bash
+goldenflow stream large_file.csv --chunk-size 50000
+```
+
+```python
+from goldenflow.streaming import StreamProcessor
+
+processor = StreamProcessor(config=config)
+
+# Process a single record
+result = processor.transform_one({"name": "  John  ", "phone": "(555) 123-4567"})
+
+# Process a batch
+result = processor.transform_batch(df_batch)
+
+# Stream a large file in chunks
+for result in processor.stream_file("large_data.csv", chunk_size=10_000):
+    write_to_output(result.df)
+
+print(f"Processed {processor.batches_processed} batches")
+```
+
+---
+
+## Cloud Connectors
+
+GoldenFlow reads from and writes to S3 and Google Cloud Storage transparently:
+
+```bash
+# S3
+goldenflow transform s3://my-bucket/raw/customers.csv -o s3://my-bucket/clean/
+
+# GCS
+goldenflow transform gs://my-bucket/data/records.csv
+```
+
+```python
+from goldenflow.connectors.s3 import read_s3, write_s3
+from goldenflow.connectors.gcs import read_gcs, write_gcs
+
+df = read_s3("s3://my-bucket/raw/customers.csv")
+df = read_gcs("gs://my-bucket/data/records.csv")
+```
+
+Cloud paths are detected automatically — no extra flags needed.
+
+---
+
+## Watch Mode
+
+Auto-transform files as they arrive in a directory:
+
+```bash
+goldenflow watch ./data/
+goldenflow watch ./incoming/ -c config.yaml -o ./processed/
+```
+
+GoldenFlow polls the directory and applies transforms to any new or changed files.
+
+---
+
+## Scheduling
+
+Run transforms on a repeating schedule:
+
+```bash
+goldenflow schedule data.csv --every 1h
+goldenflow schedule data.csv --every 30m -c config.yaml -o ./output/
+```
+
+Supported intervals: `30s`, `5m`, `1h`, `2h`, etc.
+
+---
+
+## Setup Wizard
+
+Generate a YAML config interactively:
+
+```bash
+goldenflow init data.csv
+```
+
+The wizard profiles your data, suggests transforms, and saves a `goldenflow.yaml` ready to use.
+
+---
+
+## History
+
+GoldenFlow tracks every transform run in `~/.goldenflow/history/`:
+
+```bash
+goldenflow history         # Last 20 runs
+goldenflow history -n 50   # Last 50 runs
+```
+
+Each run record captures: source file, row count, transforms applied, errors, and duration.
 
 ---
 
@@ -78,7 +263,29 @@ Ambiguous mappings get flagged for human review. Confident mappings apply automa
 
 ---
 
-## Transform Library
+## Domain Packs
+
+Pre-configured transform sets for common industries. All 5 are now implemented:
+
+```bash
+goldenflow transform patients.csv --domain healthcare
+goldenflow transform employees.csv --domain people_hr
+goldenflow transform transactions.csv --domain finance
+goldenflow transform orders.csv --domain ecommerce
+goldenflow transform listings.csv --domain real_estate
+```
+
+| Domain Pack | What It Covers |
+|-------------|---------------|
+| **People/HR** | Name parsing, SSN formatting, employment dates, gender/boolean standardization |
+| **Healthcare** | Patient IDs, diagnosis codes, clinical dates, HIPAA-sensitive field handling |
+| **Finance** | Currency normalization, account numbers, transaction dates, amount parsing |
+| **E-commerce** | SKU normalization, price parsing, order dates, address standardization |
+| **Real Estate** | Property addresses, listing dates, price normalization, geo fields |
+
+---
+
+## Transform Library (43+ transforms)
 
 ### Text Transforms
 | Transform | What It Does |
@@ -139,6 +346,40 @@ Ambiguous mappings get flagged for human review. Confident mappings apply automa
 
 ---
 
+## Special Modes
+
+### Strict Mode
+
+Fail immediately if any transform error occurs — useful in CI or production pipelines:
+
+```bash
+goldenflow transform data.csv --strict
+```
+
+Exits with code 1 and prints the first 5 errors if any transform fails.
+
+### LLM Mode
+
+Use an LLM to enhance categorical corrections and handle edge cases that fuzzy matching misses:
+
+```bash
+goldenflow transform data.csv --llm
+```
+
+Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in your environment. Falls back to standard transforms gracefully.
+
+### Auto-Correct
+
+`category_auto_correct` uses fuzzy matching to fix misspelled categorical values automatically. It is suppressed on high-cardinality columns (>10% unique values) to avoid false positives.
+
+```
+"actve" -> "active"
+"Pennsylvnia" -> "Pennsylvania"
+"Unted States" -> "United States"
+```
+
+---
+
 ## YAML Config
 
 For repeatable pipelines:
@@ -175,21 +416,10 @@ dedup:
 goldenflow transform customers.csv -c goldenflow.yaml
 ```
 
----
-
-## CLI Commands
+Generate a config from your data automatically:
 
 ```bash
-goldenflow transform data.csv              # Zero-config: auto-detect and fix
-goldenflow transform data.csv -c config.yaml  # Apply saved config
-goldenflow map -s a.csv -t b.csv           # Auto-map schemas
-goldenflow learn data.csv -o config.yaml   # Generate a config from data patterns
-goldenflow validate data.csv               # Dry-run: show what would change
-goldenflow diff before.csv after.csv       # Compare pre/post transform
-goldenflow profile data.csv               # Show column profiles
-goldenflow interactive data.csv           # Launch TUI
-goldenflow serve                          # REST API for real-time transforms
-goldenflow mcp-serve                      # MCP server for Claude Desktop
+goldenflow learn data.csv -o config.yaml
 ```
 
 ---
@@ -216,6 +446,77 @@ config = GoldenFlowConfig(
 engine = TransformEngine(config=config)
 result = engine.transform_df(df)
 ```
+
+### Jupyter Notebook Support
+
+`TransformResult`, `Manifest`, and `DatasetProfile` all have `_repr_html_()` — they render as rich HTML tables automatically in Jupyter:
+
+```python
+import goldenflow
+
+result = goldenflow.transform_file("messy_data.csv")
+result           # renders as HTML table in Jupyter
+result.manifest  # renders transform audit trail
+```
+
+---
+
+## Public API (34 exports)
+
+```python
+from goldenflow import (
+    # Core engine
+    TransformEngine, TransformResult,
+    # Config
+    GoldenFlowConfig, TransformSpec, SplitSpec, FilterSpec, DedupSpec, MappingSpec,
+    # Convenience
+    transform_file, transform_df,
+    # Manifest
+    Manifest, TransformRecord, TransformError,
+    # Profiler
+    DatasetProfile, ColumnProfile,
+    # Selector & differ
+    select_transforms, diff_dataframes, DiffResult,
+    # Transform registry
+    TransformInfo, register_transform, get_transform, list_transforms, parse_transform_name,
+    # Mapping
+    SchemaMapper, ColumnMapping,
+    # Config helpers
+    load_config, save_config, merge_configs, learn_config,
+    # Domains
+    DomainPack, load_domain,
+    # Connectors
+    read_file, write_file,
+)
+```
+
+---
+
+## Integrations
+
+### REST API
+
+```bash
+goldenflow serve --host 0.0.0.0 --port 8000
+```
+
+POST CSV data, get transformed CSV back. Built with FastAPI.
+
+### MCP Server
+
+```bash
+goldenflow mcp-serve
+```
+
+Exposes GoldenFlow as an MCP tool for Claude Desktop. Configure in your Claude Desktop settings.
+
+### TUI
+
+```bash
+goldenflow interactive data.csv
+```
+
+Full-featured terminal UI built with Textual. Browse profiles, apply transforms, preview results.
 
 ---
 
@@ -250,25 +551,11 @@ Raw Data
    production-ready data
 ```
 
-Or chain them:
+Chain them:
 
 ```bash
 goldencheck scan data.csv | goldenflow transform --from-findings | goldenmatch dedupe
 ```
-
----
-
-## Domain Packs
-
-Pre-configured transform sets for common industries:
-
-```bash
-goldenflow transform patients.csv --domain people_hr
-```
-
-**People/HR** (v1): Name parsing, SSN formatting, employment dates, gender/boolean standardization.
-
-Healthcare, Finance, E-commerce, Real Estate packs coming soon.
 
 ---
 
@@ -289,26 +576,15 @@ dqbench run goldenflow
 
 ---
 
-## Quick Start
+## Error Handling
 
-```bash
-pip install goldenflow
+GoldenFlow catches errors at the CLI boundary and shows friendly, actionable messages — no raw stack traces. Individual transform errors are captured in the manifest rather than crashing the run. Use `--strict` to change this behavior.
 
-# Auto-transform
-goldenflow transform messy_data.csv
+---
 
-# With config
-goldenflow learn messy_data.csv -o config.yaml
-goldenflow transform messy_data.csv -c config.yaml
+## Progress Bars
 
-# Schema mapping
-goldenflow map --source system_a.csv --target system_b.csv
-
-# Full pipeline
-goldencheck scan data.csv
-goldenflow transform data.csv
-goldenmatch dedupe data_transformed.csv
-```
+Long-running operations (streaming, watch mode, scheduling) display a Rich progress spinner showing batch count, rows processed, and estimated completion.
 
 ---
 
