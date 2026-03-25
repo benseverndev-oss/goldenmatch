@@ -514,6 +514,74 @@ def history(
             typer.echo(f"\nTrend: {first.file} {first.score} -> {last_r.score}")
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", "--host", help="Host to bind to."),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on."),
+) -> None:
+    """Start the GoldenCheck REST API server.
+
+    Endpoints: POST /scan (file upload), POST /scan/url (scan from URL),
+    GET /health, GET /checks, GET /domains.
+    """
+    from goldencheck.server import run_server as _run_http
+    _run_http(host=host, port=port)
+
+
+@app.command(name="scan-db")
+def scan_db(
+    connection: str = typer.Argument(..., help="Database connection string (postgres://, snowflake://, etc.)"),
+    table: Optional[str] = typer.Option(None, "--table", "-t", help="Table name to scan."),
+    query: Optional[str] = typer.Option(None, "--query", "-q", help="Custom SQL query."),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+    html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report."),
+    sample_size: int = typer.Option(100000, "--sample-size", help="Max rows to fetch."),
+) -> None:
+    """Scan a database table directly.
+
+    Supports Postgres, Snowflake, BigQuery, and any SQLAlchemy-compatible database.
+    Requires: pip install connectorx (or sqlalchemy + pandas)
+    """
+    with _cli_error_handler():
+        from goldencheck.engine.db_scanner import scan_database
+        findings, profile = scan_database(
+            connection, table=table, query=query,
+            sample_size=sample_size, domain=domain,
+        )
+
+        if html:
+            from goldencheck.reporters.html_reporter import report_html
+            report_html(findings, profile, html)
+            typer.echo(f"HTML report: {html}", err=True)
+
+        if json_output:
+            report_json(findings, profile, sys.stdout)
+        else:
+            report_rich(findings, profile)
+
+
+@app.command()
+def schedule(
+    files: list[Path] = typer.Argument(..., help="Data files to scan on schedule."),
+    interval: str = typer.Option("daily", "--interval", "-i", help="Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds."),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack."),
+    webhook: Optional[str] = typer.Option(None, "--webhook", help="Webhook URL for notifications."),
+    notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
+    json_output: bool = typer.Option(False, "--json", help="JSON output per scan."),
+) -> None:
+    """Run scans on a schedule (hourly, daily, weekly, or custom interval).
+
+    Like 'watch' but time-based instead of file-change-based.
+    """
+    with _cli_error_handler():
+        from goldencheck.engine.scheduler import run_schedule
+        run_schedule(
+            files, interval=interval, domain=domain,
+            webhook=webhook, notify_on=notify_on, json_output=json_output,
+        )
+
+
 @app.command(name="mcp-serve")
 def mcp_serve() -> None:
     """Start the MCP server (stdio) for Claude Desktop integration."""
