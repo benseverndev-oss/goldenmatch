@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import re
+
+import polars as pl
+
+from goldenflow.transforms import register_transform
+
+_STREET_ABBREV = {
+    "Street": "St", "Avenue": "Ave", "Boulevard": "Blvd", "Drive": "Dr",
+    "Lane": "Ln", "Road": "Rd", "Court": "Ct", "Place": "Pl",
+    "Circle": "Cir", "Trail": "Trl", "Way": "Way", "Parkway": "Pkwy",
+    "Highway": "Hwy", "Terrace": "Ter", "Square": "Sq",
+}
+_STREET_EXPAND = {v: k for k, v in _STREET_ABBREV.items()}
+
+_STATES = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY", "District Of Columbia": "DC",
+}
+_STATES_REVERSE = {v: k for k, v in _STATES.items()}
+_STATES_LOWER = {k.lower(): v for k, v in _STATES.items()}
+
+
+@register_transform(
+    name="address_standardize", input_types=["address"], auto_apply=False, priority=50, mode="series"
+)
+def address_standardize(series: pl.Series) -> pl.Series:
+    def _std(val: str | None) -> str | None:
+        if val is None:
+            return None
+        result = val
+        for full, abbr in _STREET_ABBREV.items():
+            result = re.sub(rf"\b{full}\b", abbr, result, flags=re.IGNORECASE)
+        return result
+
+    return series.map_elements(_std, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="address_expand", input_types=["address"], auto_apply=False, priority=50, mode="series"
+)
+def address_expand(series: pl.Series) -> pl.Series:
+    def _expand(val: str | None) -> str | None:
+        if val is None:
+            return None
+        result = val
+        for abbr, full in _STREET_EXPAND.items():
+            result = re.sub(rf"\b{abbr}\b", full, result, flags=re.IGNORECASE)
+        return result
+
+    return series.map_elements(_expand, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="state_abbreviate", input_types=["state", "string"], auto_apply=False, priority=50, mode="series"
+)
+def state_abbreviate(series: pl.Series) -> pl.Series:
+    def _abbr(val: str | None) -> str | None:
+        if val is None:
+            return None
+        val_stripped = val.strip()
+        if len(val_stripped) == 2 and val_stripped.upper() in _STATES_REVERSE:
+            return val_stripped.upper()
+        matched = _STATES_LOWER.get(val_stripped.lower())
+        return matched if matched else val
+
+    return series.map_elements(_abbr, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="state_expand", input_types=["state", "string"], auto_apply=False, priority=50, mode="series"
+)
+def state_expand(series: pl.Series) -> pl.Series:
+    def _expand(val: str | None) -> str | None:
+        if val is None:
+            return None
+        return _STATES_REVERSE.get(val.strip().upper(), val)
+
+    return series.map_elements(_expand, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="zip_normalize", input_types=["zip", "string"], auto_apply=True, priority=55, mode="series"
+)
+def zip_normalize(series: pl.Series) -> pl.Series:
+    def _norm(val: str | None) -> str | None:
+        if val is None:
+            return None
+        val = val.strip()
+        val = val.split("-")[0]  # strip +4
+        if val.isdigit():
+            return val.zfill(5)
+        return val  # preserve invalid
+
+    return series.map_elements(_norm, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="split_address", input_types=["address"], auto_apply=False, priority=45, mode="dataframe"
+)
+def split_address(df: pl.DataFrame, column: str) -> pl.DataFrame:
+    """Parse 'street, city, state zip' into separate columns."""
+    streets, cities, states, zips = [], [], [], []
+    pattern = re.compile(r"^(.+?),\s*(.+?),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$")
+    for val in df[column].to_list():
+        if val is None:
+            streets.append(None); cities.append(None)
+            states.append(None); zips.append(None)
+            continue
+        m = pattern.match(val.strip())
+        if m:
+            streets.append(m.group(1)); cities.append(m.group(2))
+            states.append(m.group(3)); zips.append(m.group(4))
+        else:
+            streets.append(val); cities.append(None)
+            states.append(None); zips.append(None)
+    return df.with_columns(
+        pl.Series("street", streets),
+        pl.Series("city", cities),
+        pl.Series("state", states),
+        pl.Series("zip", zips),
+    )
