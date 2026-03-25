@@ -92,7 +92,7 @@ def state_expand(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="zip_normalize", input_types=["zip", "string"], auto_apply=True, priority=55, mode="series"
+    name="zip_normalize", input_types=["zip"], auto_apply=True, priority=55, mode="series"
 )
 def zip_normalize(series: pl.Series) -> pl.Series:
     def _norm(val: str | None) -> str | None:
