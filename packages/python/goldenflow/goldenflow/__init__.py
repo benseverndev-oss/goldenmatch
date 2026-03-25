@@ -18,6 +18,7 @@ import goldenflow.transforms.address  # noqa: F401
 import goldenflow.transforms.dates  # noqa: F401
 import goldenflow.transforms.categorical  # noqa: F401
 import goldenflow.transforms.numeric  # noqa: F401
+import goldenflow.transforms.auto_correct  # noqa: F401
 
 
 def transform_file(path, config=None, output_dir=None):
