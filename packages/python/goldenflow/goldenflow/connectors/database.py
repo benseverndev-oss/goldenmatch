@@ -18,4 +18,4 @@ def write_table(df: pl.DataFrame, connection_string: str, table: str, **kwargs) 
         import connectorx  # noqa: F401
     except ImportError:
         raise ImportError("Database support requires: pip install goldenflow[db]")
-    raise NotImplementedError("Database writing is not yet implemented — use file export")
+    df.write_database(table, connection_string, if_table_exists="replace", **kwargs)
