@@ -58,6 +58,9 @@ db = [
 mcp = [
     "mcp>=1.0",
 ]
+agent = [
+    "aiohttp>=3.9",
+]
 
 [tool.ruff]
 line-length = 100
