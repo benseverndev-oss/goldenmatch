@@ -10,6 +10,7 @@ Data validation that discovers rules from your data so you don't have to write t
 ![Tests](https://img.shields.io/badge/tests-296%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017)](https://benzsevern.github.io/goldencheck/)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
 

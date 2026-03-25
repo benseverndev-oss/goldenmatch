@@ -93,10 +93,12 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 - `*.csv` is in `.gitignore` — test fixtures need `!tests/fixtures/*.csv` exception
 - The CLI has a hand-rolled arg parser in `main()` callback for the `goldencheck data.csv` shorthand — update it when adding new flags
 - `scan_file_with_llm` calls `scan_file(..., return_sample=True)` — suppression and boost run inside `scan_file`, not in the LLM path
-- GitHub auth: `gh auth switch --user benzsevern` before pushing
+- GitHub auth: `gh auth switch --user benzsevern` then `GIT_ASKPASS=$(which echo) git -c credential.helper="!gh auth git-credential" push origin main` — Windows Credential Manager ignores `gh auth switch`
 - Ruff line length: 100 chars
 - `__version__` is defined ONLY in `goldencheck/__init__.py` — `cli/main.py` imports it, don't add a second copy
-- Wiki lives at `/tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md . && git add . && git commit && git push`
+- Wiki repo: `git clone https://github.com/benzsevern/goldencheck.wiki.git /tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md /tmp/goldencheck.wiki/ && cd /tmp/goldencheck.wiki && git add -A && git commit -m "docs: sync" && git push`
+- GitHub Pages: Jekyll + just-the-docs (dark), source in `docs/`, workflow in `.github/workflows/pages.yml`, live at `benzsevern.github.io/goldencheck`
+- Jekyll link anchors: `{% link file.md %}#anchor` NOT `{% link file.md#anchor %}`
 - Classifier hint matching: hints ending with `_` are prefix-only (NOT substring) — `is_` matches `is_active` but NOT `diagnosis_desc`
 - `Finding.metadata` dict is used by pattern_consistency for structured pattern data — suppression reads it
 - Domain pack loading priority: user types > domain types > base types (dict insertion order matters)
