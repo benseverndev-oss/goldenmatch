@@ -547,6 +547,19 @@ _TOOL_HANDLERS = {
     "install_domain": _tool_install_domain,
 }
 
+# ---------------------------------------------------------------------------
+# Agent tools (optional — requires goldencheck.agent extras)
+# ---------------------------------------------------------------------------
+
+try:
+    from goldencheck.mcp.agent_tools import AGENT_TOOLS, _AGENT_TOOL_HANDLERS
+
+    TOOLS.extend(AGENT_TOOLS)
+    _TOOL_HANDLERS.update(_AGENT_TOOL_HANDLERS)
+except Exception:  # noqa: BLE001
+    logger.debug("Agent tools not available (missing agent extras)")
+
+
 
 # ---------------------------------------------------------------------------
 # Server factory
