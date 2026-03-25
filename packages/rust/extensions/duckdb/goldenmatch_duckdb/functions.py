@@ -55,7 +55,7 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     )
     con.create_function(
         "goldenmatch_match_tables",
-        lambda target, ref, config: _match_tables(con, target, ref, config),
+        lambda target, reference, config: _match_tables(con, target, reference, config),
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
     )
 
@@ -135,9 +135,9 @@ def _match_json(target_json: str, ref_json: str, config_json: str) -> str:
     import polars as pl
     from goldenmatch import match_df
     target = pl.DataFrame(json.loads(target_json))
-    ref = pl.DataFrame(json.loads(ref_json))
+    ref_df = pl.DataFrame(json.loads(ref_json))
     cfg = json.loads(config_json)
-    result = match_df(target, ref, **cfg)
+    result = match_df(target, ref_df, **cfg)
     if result.matched is not None:
         return result.matched.write_json()
     return "[]"
@@ -175,11 +175,11 @@ def _match_tables(
 
     cursor = con.cursor()
     target = cursor.sql(f"SELECT * FROM {target_table}").pl()
-    ref = cursor.sql(f"SELECT * FROM {ref_table}").pl()
+    ref_df = cursor.sql(f"SELECT * FROM {ref_table}").pl()
     cursor.close()
 
     cfg = json.loads(config_json)
-    result = match_df(target, ref, **cfg)
+    result = match_df(target, ref_df, **cfg)
     if result.matched is not None:
         return result.matched.write_json()
     return "[]"
