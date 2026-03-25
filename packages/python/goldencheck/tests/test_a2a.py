@@ -3,8 +3,16 @@ from __future__ import annotations
 
 import os
 
-from goldencheck.a2a.server import AGENT_CARD, _check_auth
-from goldencheck.a2a.skills import dispatch_skill
+import pytest
+
+try:
+    from goldencheck.a2a.server import AGENT_CARD, _check_auth
+    from goldencheck.a2a.skills import dispatch_skill
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
+
+pytestmark = pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "simple.csv")
 
