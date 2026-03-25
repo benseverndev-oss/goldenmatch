@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "goldenflow"
+version = "0.1.0"
+description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Ben Severn" }]
+
+dependencies = [
+    "polars>=1.0",
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "textual>=0.50",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "phonenumbers>=8.13",
+    "python-dateutil>=2.9",
+    "pyyaml>=6.0",
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.3"]
+check = ["goldencheck>=1.0"]
+excel = ["openpyxl>=3.1"]
+db = ["connectorx>=0.3"]
+mcp = ["mcp>=1.0"]
+all = ["goldenflow[check,excel,db,mcp]"]
+
+[project.scripts]
+goldenflow = "goldenflow.cli.main:app"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
