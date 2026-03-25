@@ -55,6 +55,14 @@ class TransformEngine:
         else:
             df = self._apply_auto_transforms(df, manifest, source=source)
 
+        # Apply splits
+        for split in self.config.splits:
+            if split.source not in df.columns:
+                continue
+            info = get_transform(split.method)
+            if info and info.mode == "dataframe":
+                df = info.func(df, split.source)
+
         # Apply renames
         for old, new in self.config.renames.items():
             if old in df.columns:

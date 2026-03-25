@@ -87,6 +87,20 @@ def test_transform_with_filters():
     assert result.df.shape[0] == 2
 
 
+def test_transform_with_splits():
+    df = pl.DataFrame({"full_name": ["John Smith", "Jane Doe"]})
+    from goldenflow.config.schema import SplitSpec
+    config = GoldenFlowConfig(
+        splits=[SplitSpec(source="full_name", target=["first_name", "last_name"], method="split_name")]
+    )
+    engine = TransformEngine(config=config)
+    result = engine.transform_df(df)
+    assert "first_name" in result.df.columns
+    assert "last_name" in result.df.columns
+    assert result.df["first_name"].to_list() == ["John", "Jane"]
+    assert result.df["last_name"].to_list() == ["Smith", "Doe"]
+
+
 def test_transform_output_files(sample_csv: Path, tmp_path: Path):
     engine = TransformEngine()
     result = engine.transform_file(sample_csv, output_dir=tmp_path)
