@@ -141,6 +141,39 @@ goldencheck watch data/ --interval 30        # re-scan every 30s
 goldencheck watch data/ --exit-on error      # CI mode: fail on first error
 ```
 
+## REST API
+
+Run GoldenCheck as a microservice:
+
+```bash
+goldencheck serve --port 8000
+
+# Scan via file upload
+curl -X POST http://localhost:8000/scan --data-binary @data.csv
+
+# Scan via URL
+curl -X POST http://localhost:8000/scan/url -d '{"url": "https://example.com/data.csv"}'
+```
+
+## Database Scanning
+
+Scan tables directly — no CSV export needed:
+
+```bash
+pip install goldencheck[db]
+goldencheck scan-db "postgresql://user:pass@host/db" --table orders
+goldencheck scan-db "snowflake://..." --query "SELECT * FROM orders WHERE date > '2024-01-01'"
+```
+
+## Scheduled Runs
+
+Cron-like scheduling with webhook notifications:
+
+```bash
+goldencheck schedule data/*.csv --interval hourly --webhook https://hooks.slack.com/...
+goldencheck schedule data/*.csv --interval daily --notify-on grade-drop
+```
+
 ## LLM Boost
 
 Add `--llm-boost` to enhance profiler findings with LLM intelligence. The LLM receives a representative sample of your data and:
@@ -216,6 +249,9 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `goldencheck fix <file>` | Auto-fix data quality issues |
 | `goldencheck learn <file>` | Generate LLM validation rules |
 | `goldencheck history` | Show scan history and trends |
+| `goldencheck serve` | Start REST API server |
+| `goldencheck scan-db <conn>` | Scan a database table directly |
+| `goldencheck schedule <files>` | Run scans on a cron schedule |
 | `goldencheck mcp-serve` | Start MCP server (9 tools) |
 
 ### Flags

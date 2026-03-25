@@ -24,6 +24,9 @@
 | [MCP Server](MCP-Server) | Claude Desktop integration (9 tools) |
 | [Jupyter & Colab](Jupyter-and-Colab) | Rich HTML display in notebooks |
 | [GitHub Action](GitHub-Action) | CI integration with PR comments |
+| [REST API](REST-API) | HTTP microservice (POST /scan, /scan/url) |
+| [Database Scanning](Database-Scanning) | Scan Postgres, Snowflake, BigQuery directly |
+| [Scheduled Runs](Scheduled-Runs) | Cron-like scheduling with webhooks |
 | [Benchmarks](Benchmarks) | DQBench Score: 88.40, speed tests |
 | [Architecture](Architecture) | Module layout and data flow |
 
@@ -51,7 +54,7 @@ GoldenCheck's zero-config discovery outperforms every competitor — even when t
 
 ## Integration Points
 
-- **CLI** — 9 commands: scan, validate, review, diff, watch, fix, learn, mcp-serve
+- **CLI** — 14 commands: scan, validate, review, diff, watch, fix, learn, init, history, serve, scan-db, schedule, mcp-serve
 - **CI/CD** — `goldencheck-action@v1` for GitHub, `--json` + exit codes for any CI
 - **MCP** — 9 tools for Claude Desktop integration
 - **Domain Packs** — `--domain healthcare|finance|ecommerce`
