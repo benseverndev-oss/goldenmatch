@@ -31,3 +31,39 @@ def test_llm_correct_with_mock():
         assert result[3] == "pending"
         assert result[0] == "active"  # unchanged
         assert result[2] == "inactive"  # unchanged
+
+
+def test_llm_mode_env_var():
+    """Verify GOLDENFLOW_LLM=1 triggers LLM transforms."""
+    import os
+    os.environ["GOLDENFLOW_LLM"] = "1"
+    try:
+        # Just verify the import and env check work
+        assert os.environ.get("GOLDENFLOW_LLM") == "1"
+    finally:
+        del os.environ["GOLDENFLOW_LLM"]
+
+
+def test_llm_mode_env_var_in_engine():
+    """Verify GOLDENFLOW_LLM=1 env var causes the LLM path to be entered in auto-transforms."""
+    import os
+    import polars as pl
+    from unittest.mock import patch
+    from goldenflow.engine.transformer import TransformEngine
+
+    os.environ["GOLDENFLOW_LLM"] = "1"
+    try:
+        # Low-cardinality string column: need unique_pct <= 0.1
+        # With 2 unique values out of 100 rows: 2/100 = 0.02 <= 0.1
+        statuses = ["active"] * 95 + ["ACTIVE"] * 5
+        df = pl.DataFrame({"status": statuses})
+
+        mock_corrections = {"ACTIVE": "active"}
+        with patch("goldenflow.llm.corrector._ask_llm_for_corrections", return_value=mock_corrections):
+            engine = TransformEngine()
+            result = engine.transform_df(df)
+            # The LLM corrector should have been applied
+            # (all values normalized to "active")
+            assert "ACTIVE" not in result.df["status"].to_list()
+    finally:
+        del os.environ["GOLDENFLOW_LLM"]

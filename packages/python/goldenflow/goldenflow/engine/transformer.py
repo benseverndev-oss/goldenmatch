@@ -99,6 +99,14 @@ class TransformEngine:
         self, df: pl.DataFrame, manifest: Manifest
     ) -> pl.DataFrame:
         """Apply transforms specified in config."""
+        # Lazy-import LLM module if any op mentions "llm"
+        all_ops = [op for spec in self.config.transforms for op in spec.ops]
+        if any("llm" in op for op in all_ops):
+            try:
+                import goldenflow.llm.corrector  # noqa: F401 — registers LLM transforms
+            except ImportError:
+                pass
+
         for spec in self.config.transforms:
             if spec.column not in df.columns:
                 continue
@@ -118,6 +126,7 @@ class TransformEngine:
         self, df: pl.DataFrame, manifest: Manifest, source: str = ""
     ) -> pl.DataFrame:
         """Auto-detect and apply transforms based on column profiling."""
+        import os
         file_path = source if source and source != "<dataframe>" else ""
         profile = profile_dataframe(df, file_path=file_path)
         for col_profile in profile.columns:
@@ -126,6 +135,18 @@ class TransformEngine:
                 df = self._apply_single_transform(
                     df, col_profile.name, info, [], manifest
                 )
+
+        if os.environ.get("GOLDENFLOW_LLM") == "1":
+            try:
+                from goldenflow.llm.corrector import category_llm_correct  # noqa: F401
+                llm_info = get_transform("category_llm_correct")
+                if llm_info:
+                    for col_profile in profile.columns:
+                        if col_profile.inferred_type == "string" and col_profile.unique_pct <= 0.1:
+                            df = self._apply_single_transform(df, col_profile.name, llm_info, [], manifest)
+            except ImportError:
+                pass
+
         return df
 
     def _apply_single_transform(
