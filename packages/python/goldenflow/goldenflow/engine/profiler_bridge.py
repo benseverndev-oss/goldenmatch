@@ -21,7 +21,7 @@ _NAME_PATTERNS: dict[str, list[str]] = {
     "email": ["email", "e_mail", "mail"],
     "date": ["date", "created", "updated", "timestamp", "dob", "birth"],
     "state": ["state", "province", "region"],
-    "name": ["name", "first_name", "last_name", "fname", "lname"],
+    "name": ["first_name", "last_name", "fname", "lname", "full_name", "fullname"],
 }
 
 
