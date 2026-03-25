@@ -34,6 +34,11 @@ def select_transforms(
         ):
             selected.append(t)
 
+    # Filter out category_auto_correct for high-cardinality columns
+    # (only apply to categorical columns — low unique count relative to rows)
+    if profile.unique_pct > 0.1:  # more than 10% unique values = not categorical
+        selected = [t for t in selected if t.name != "category_auto_correct"]
+
     # Sort by priority descending (higher = runs first)
     selected.sort(key=lambda t: t.priority, reverse=True)
     return selected
