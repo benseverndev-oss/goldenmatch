@@ -11,5 +11,5 @@ def test_read_table_requires_connectorx():
 def test_write_table_requires_connectorx():
     import polars as pl
     df = pl.DataFrame({"a": [1]})
-    with pytest.raises((ImportError, NotImplementedError)):
+    with pytest.raises(ImportError):
         write_table(df, "postgresql://localhost/test", "users")

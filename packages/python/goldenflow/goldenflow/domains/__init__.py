@@ -7,10 +7,10 @@ if TYPE_CHECKING:
 
 _DOMAINS: dict[str, str] = {
     "people_hr": "goldenflow.domains.people_hr",
-    "healthcare": None,
-    "finance": None,
-    "ecommerce": None,
-    "real_estate": None,
+    "healthcare": "goldenflow.domains.healthcare",
+    "finance": "goldenflow.domains.finance",
+    "ecommerce": "goldenflow.domains.ecommerce",
+    "real_estate": "goldenflow.domains.real_estate",
 }
 
 
