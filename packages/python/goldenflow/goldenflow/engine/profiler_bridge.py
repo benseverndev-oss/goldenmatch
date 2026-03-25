@@ -14,6 +14,34 @@ _DATE_RE = re.compile(
 _NAME_RE = re.compile(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+)+$")
 _ZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
 
+# Column name patterns for semantic type override
+_NAME_PATTERNS: dict[str, list[str]] = {
+    "zip": ["zip", "postal", "zipcode", "zip_code", "postal_code"],
+    "phone": ["phone", "tel", "mobile", "cell", "fax"],
+    "email": ["email", "e_mail", "mail"],
+    "date": ["date", "created", "updated", "timestamp", "dob", "birth"],
+    "state": ["state", "province", "region"],
+    "name": ["name", "first_name", "last_name", "fname", "lname"],
+}
+
+
+def _override_type_by_column_name(column_name: str, current_type: str) -> str:
+    """Override inferred type based on column name heuristics.
+
+    Only overrides when the current type is generic (string/numeric) and the
+    column name strongly suggests a specific semantic type.
+    """
+    if current_type not in ("string", "numeric"):
+        return current_type  # don't override already-specific types
+
+    col_lower = column_name.lower().replace("-", "_")
+    for semantic_type, patterns in _NAME_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in col_lower:
+                return semantic_type
+
+    return current_type
+
 
 @dataclass
 class ColumnProfile:
@@ -80,9 +108,12 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
     unique_count = non_null.n_unique()
     sample = non_null.head(5).cast(pl.Utf8).to_list() if len(non_null) > 0 else []
 
+    inferred = _infer_type(series)
+    inferred = _override_type_by_column_name(series.name, inferred)
+
     return ColumnProfile(
         name=series.name,
-        inferred_type=_infer_type(series),
+        inferred_type=inferred,
         row_count=row_count,
         null_count=null_count,
         null_pct=null_count / row_count if row_count > 0 else 0.0,
@@ -138,6 +169,8 @@ def profile_dataframe(df: pl.DataFrame, file_path: str = "", use_llm: bool | Non
                     semantic_type = "date"
                 else:
                     semantic_type = gc_type
+                # Apply column name heuristic override
+                semantic_type = _override_type_by_column_name(cp.name, semantic_type)
                 columns.append(ColumnProfile(
                     name=cp.name,
                     inferred_type=semantic_type,
