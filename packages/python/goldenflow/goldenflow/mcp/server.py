@@ -55,7 +55,6 @@ TOOLS = [
 
 def handle_tool(name: str, arguments: dict) -> str:
     """Handle an MCP tool call."""
-    import goldenflow
     from goldenflow.connectors.file import read_file
     from goldenflow.engine.profiler_bridge import profile_dataframe
     from goldenflow.engine.transformer import TransformEngine

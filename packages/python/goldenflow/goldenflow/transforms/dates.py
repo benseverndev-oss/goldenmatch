@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from dateutil import parser as dateutil_parser
 import polars as pl
