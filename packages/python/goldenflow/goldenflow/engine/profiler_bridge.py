@@ -92,15 +92,33 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
     )
 
 
-def profile_dataframe(df: pl.DataFrame, file_path: str = "") -> DatasetProfile:
-    """Profile a DataFrame. Uses GoldenCheck if available, otherwise falls back to built-in."""
+def profile_dataframe(df: pl.DataFrame, file_path: str = "", use_llm: bool | None = None) -> DatasetProfile:
+    """Profile a DataFrame. Uses GoldenCheck if available, otherwise falls back to built-in.
+
+    When use_llm is None (default), auto-detects: uses LLM if OPENAI_API_KEY or
+    ANTHROPIC_API_KEY is set in the environment. Set explicitly to True/False to override.
+    """
     try:
         from goldencheck import scan_file
         from goldencheck.models.profile import DatasetProfile as GCProfile
 
         # If we have a file path and GoldenCheck, use it
         if file_path:
-            findings, gc_profile = scan_file(file_path)
+            # Determine whether to use LLM-enhanced scanning
+            if use_llm is None:
+                import os
+                use_llm = bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
+
+            if use_llm:
+                try:
+                    from goldencheck import scan_file_with_llm
+                    provider = "openai" if os.environ.get("OPENAI_API_KEY") else "anthropic"
+                    findings, gc_profile = scan_file_with_llm(file_path, provider=provider)
+                except Exception:
+                    # Fall back to non-LLM scan if LLM fails
+                    findings, gc_profile = scan_file(file_path)
+            else:
+                findings, gc_profile = scan_file(file_path)
             columns = []
             for cp in gc_profile.columns:
                 # Map GoldenCheck types to our semantic types
