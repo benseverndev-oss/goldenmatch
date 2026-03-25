@@ -598,6 +598,26 @@ def mcp_serve() -> None:
     asyncio.run(run_server())
 
 
+@app.command(name="agent-serve")
+def agent_serve(
+    port: int = typer.Option(8100, help="Port for the A2A server"),
+) -> None:
+    """Start the A2A agent server for agent-to-agent communication."""
+    try:
+        from goldencheck.a2a.server import run_a2a_server
+    except ImportError:
+        typer.echo(
+            "Error: Agent dependencies not installed. Run: pip install goldencheck[agent]",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Starting GoldenCheck A2A agent on port {port}...")
+    typer.echo(f"Agent card: http://localhost:{port}/.well-known/agent.json")
+    import asyncio
+    asyncio.run(run_a2a_server(port=port))
+
+
 def _do_scan(
     file: Path,
     *,
