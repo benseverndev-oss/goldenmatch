@@ -48,3 +48,27 @@ def test_select_no_transforms_for_unknown_type():
     selected = select_transforms(profile)
     # Only universal transforms (string-type with auto_apply) should match
     assert all(t.auto_apply for t in selected)
+
+
+def test_auto_correct_excluded_for_high_cardinality():
+    """category_auto_correct should not fire on high-cardinality columns."""
+    import goldenflow.transforms.auto_correct  # noqa: F401
+    profile = ColumnProfile(
+        name="notes", inferred_type="string", row_count=1000,
+        null_count=0, null_pct=0.0, unique_count=800, unique_pct=0.8,
+    )
+    selected = select_transforms(profile)
+    names = [t.name for t in selected]
+    assert "category_auto_correct" not in names
+
+
+def test_auto_correct_included_for_low_cardinality():
+    """category_auto_correct should fire on low-cardinality categorical columns."""
+    import goldenflow.transforms.auto_correct  # noqa: F401
+    profile = ColumnProfile(
+        name="status", inferred_type="string", row_count=1000,
+        null_count=0, null_pct=0.0, unique_count=5, unique_pct=0.005,
+    )
+    selected = select_transforms(profile)
+    names = [t.name for t in selected]
+    assert "category_auto_correct" in names

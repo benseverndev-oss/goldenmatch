@@ -3,6 +3,7 @@ import polars as pl
 from goldenflow.transforms.text import (
     collapse_whitespace,
     lowercase,
+    normalize_quotes,
     normalize_unicode,
     remove_punctuation,
     strip,
@@ -59,3 +60,14 @@ def test_truncate():
     s = pl.Series("a", ["hello world", "hi", "a very long string"])
     result = truncate(s, n=5)
     assert result.to_list() == ["hello", "hi", "a ver"]
+
+
+def test_normalize_quotes():
+    result = _apply_expr(normalize_quotes, "a", [
+        '\u201cHello\u201d',      # "Hello"
+        '\u2018world\u2019',      # 'world'
+        'no quotes here',
+    ])
+    assert result[0] == '"Hello"'
+    assert result[1] == "'world'"
+    assert result[2] == 'no quotes here'

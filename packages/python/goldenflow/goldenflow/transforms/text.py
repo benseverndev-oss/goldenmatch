@@ -65,3 +65,23 @@ def collapse_whitespace(column: str) -> pl.Expr:
 )
 def truncate(series: pl.Series, n: int = 255) -> pl.Series:
     return series.str.slice(0, n)
+
+
+@register_transform(
+    name="normalize_quotes",
+    input_types=["string"],
+    auto_apply=True,
+    priority=84,
+    mode="expr",
+)
+def normalize_quotes(column: str) -> pl.Expr:
+    """Replace smart/curly quotes with straight quotes."""
+    return (
+        pl.col(column)
+        .str.replace_all("\u201c", '"')   # left double
+        .str.replace_all("\u201d", '"')   # right double
+        .str.replace_all("\u2018", "'")   # left single
+        .str.replace_all("\u2019", "'")   # right single
+        .str.replace_all("\u2033", '"')   # double prime
+        .str.replace_all("\u2032", "'")   # prime
+    )
