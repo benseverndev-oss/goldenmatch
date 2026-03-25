@@ -7,10 +7,17 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
 
-# Import dispatch_skill directly from the module to avoid a2a/__init__.py's aiohttp import
-skills_mod = importlib.import_module("goldencheck.a2a.skills")
-dispatch_skill = skills_mod.dispatch_skill
+try:
+    # Import directly from the module to avoid a2a/__init__.py's aiohttp import
+    skills_mod = importlib.import_module("goldencheck.a2a.skills")
+    dispatch_skill = skills_mod.dispatch_skill
+    HAS_SKILLS = True
+except ImportError:
+    HAS_SKILLS = False
+
+pytestmark = pytest.mark.skipif(not HAS_SKILLS, reason="agent dependencies not available")
 
 SIMPLE_CSV = str(Path(__file__).resolve().parent / "fixtures" / "simple.csv")
 
