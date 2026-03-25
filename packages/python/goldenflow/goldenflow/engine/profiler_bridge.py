@@ -99,10 +99,28 @@ def profile_dataframe(df: pl.DataFrame, file_path: str = "") -> DatasetProfile:
         # If we have a file path and GoldenCheck, use it
         if file_path:
             findings, gc_profile = scan_file(file_path)
-            columns = [
-                ColumnProfile(
+            columns = []
+            for cp in gc_profile.columns:
+                # Map GoldenCheck types to our semantic types
+                # GoldenCheck returns "String", "Integer", etc. — we need "string", "phone", "email"
+                gc_type = (cp.inferred_type or "").lower()
+                # For generic string types, use our regex-based semantic inference
+                if gc_type in ("string", "str", "utf8"):
+                    series = df[cp.name] if cp.name in df.columns else None
+                    semantic_type = _infer_type(series) if series is not None else "string"
+                elif gc_type in ("integer", "int", "int64", "i64"):
+                    semantic_type = "numeric"
+                elif gc_type in ("float", "float64", "f64", "number", "numeric"):
+                    semantic_type = "numeric"
+                elif gc_type in ("boolean", "bool"):
+                    semantic_type = "boolean"
+                elif gc_type in ("date", "datetime"):
+                    semantic_type = "date"
+                else:
+                    semantic_type = gc_type
+                columns.append(ColumnProfile(
                     name=cp.name,
-                    inferred_type=cp.inferred_type,
+                    inferred_type=semantic_type,
                     row_count=cp.row_count,
                     null_count=cp.null_count,
                     null_pct=cp.null_pct,
@@ -110,9 +128,7 @@ def profile_dataframe(df: pl.DataFrame, file_path: str = "") -> DatasetProfile:
                     unique_pct=cp.unique_pct,
                     sample_values=[str(v) for v, _ in (cp.top_values or [])[:5]],
                     detected_format=cp.detected_format,
-                )
-                for cp in gc_profile.columns
-            ]
+                ))
             return DatasetProfile(
                 file_path=gc_profile.file_path,
                 row_count=gc_profile.row_count,
