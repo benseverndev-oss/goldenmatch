@@ -52,6 +52,9 @@ llm = [
     "anthropic>=0.30",
     "openai>=1.30",
 ]
+db = [
+    "connectorx>=0.3",
+]
 mcp = [
     "mcp>=1.0",
 ]
