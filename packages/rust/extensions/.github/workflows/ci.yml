@@ -46,6 +46,7 @@ jobs:
     name: Postgres Extension (PG ${{ matrix.pg }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         pg: [15, 16, 17]
     env:
@@ -89,13 +90,19 @@ jobs:
 
       - name: Test extension via psql
         run: |
-          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main start || true
+          # Ensure cluster exists and is running
+          sudo pg_createcluster "${PG_VERSION}" main 2>/dev/null || true
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main start 2>/dev/null || true
           sleep 2
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
-          sudo -u postgres psql -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%';"
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('hello'::TEXT, 'hello'::TEXT, 'exact'::TEXT);"
-          sudo -u postgres psql -v ON_ERROR_STOP=1 <<'EOSQL'
+          # Connect to the correct port (PG 15=5432, 16=5433, 17=5434 when multiple installed)
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          echo "Using PG ${PG_VERSION} on port ${PGPORT}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
+          sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%';"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('hello'::TEXT, 'hello'::TEXT, 'exact'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
             CREATE TABLE test_customers (name TEXT, email TEXT);
             INSERT INTO test_customers VALUES
               ('John Smith', 'john@x.com'),
