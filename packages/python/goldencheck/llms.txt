@@ -1,0 +1,17 @@
+# GoldenCheck
+
+> Data quality validation — profile columns, detect issues, classify types, and fix problems with optional LLM boost.
+
+## Interfaces
+- MCP Server: `goldencheck mcp-serve` (19 tools: scan, validate, fix, audit, learn, explain, review, agent orchestration)
+- A2A Server: `goldencheck agent-serve --port 8100` (9 skills)
+- CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
+- Python API: `from goldencheck import scan_file, validate_file`
+- REST API: `goldencheck serve` on port 8000
+
+## Install
+- `pip install goldencheck`
+
+## Docs
+- [Architecture](CLAUDE.md): Full codebase guide with profiler system, semantic types, LLM integration
+- [GitHub](https://github.com/benzsevern/goldencheck): Source
