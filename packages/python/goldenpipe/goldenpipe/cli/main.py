@@ -1,104 +1,180 @@
-"""GoldenPipe CLI."""
+"""GoldenPipe CLI -- pipeline framework for data quality."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-app = typer.Typer(name="goldenpipe", help="Golden Suite orchestrator -- Check, Flow, Match in one pipeline.")
+app = typer.Typer(help="GoldenPipe -- pluggable pipeline framework for data quality")
 console = Console()
 
 
 @app.command()
 def run(
-    source: str = typer.Argument(..., help="Path to CSV, Excel, or Parquet file"),
-    skip_flow: bool = typer.Option(False, "--skip-flow", help="Skip GoldenFlow transformation"),
-    skip_match: bool = typer.Option(False, "--skip-match", help="Skip GoldenMatch deduplication"),
-    strategy: str = typer.Option(None, "--strategy", help="Force matching strategy (pprl, auto)"),
-    output: str = typer.Option(None, "--output", "-o", help="Write golden records to file"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show reasoning for each stage"),
-):
-    """Run the full Golden Suite pipeline on a file."""
-    from goldenpipe.pipeline import Pipeline
+    source: str = typer.Argument(..., help="Input file path"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Pipeline YAML config"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show reasoning and timing"),
+) -> None:
+    """Run a pipeline on a data file."""
+    from goldenpipe._api import run as gp_run
+    result = gp_run(source, config=config)
 
-    if not Path(source).exists():
-        console.print(f"[red]File not found: {source}[/red]")
-        raise typer.Exit(1)
-
-    pipe = Pipeline(source, strategy=strategy)
-
-    with console.status("[bold yellow]Running GoldenPipe..."):
-        pipe.check()
-        if not skip_flow:
-            pipe.flow()
-        if not skip_match:
-            pipe.match()
-
-    result = pipe.result
-
-    # Summary table
-    table = Table(title="GoldenPipe Result", show_header=True)
+    table = Table(title=f"GoldenPipe: {result.source}")
     table.add_column("Stage", style="bold")
     table.add_column("Status")
-    table.add_column("Detail")
+    table.add_column("Details")
 
-    # Check
-    if result.check is not None:
-        n = len(getattr(result.check, "findings", []) or [])
-        table.add_row("Check", "[green]Done[/green]", f"{n} findings")
-    elif "check" in str(result.skipped):
-        table.add_row("Check", "[yellow]Skipped[/yellow]", result.reasoning.get("check", ""))
-    else:
-        table.add_row("Check", "[red]Failed[/red]", result.reasoning.get("check", ""))
+    for name, sr in result.stages.items():
+        color = {"success": "green", "skipped": "yellow", "failed": "red"}.get(
+            sr.status.value, "dim"
+        )
+        details = sr.error or ""
+        table.add_row(name, f"[{color}]{sr.status.value}[/{color}]", details)
 
-    # Flow
-    if result.transform is not None:
-        table.add_row("Flow", "[green]Done[/green]", result.reasoning.get("flow", ""))
-    elif "flow" in result.skipped:
-        table.add_row("Flow", "[yellow]Skipped[/yellow]", result.reasoning.get("flow", ""))
-    elif skip_flow:
-        table.add_row("Flow", "[dim]Skipped[/dim]", "User requested --skip-flow")
-    else:
-        table.add_row("Flow", "[red]Failed[/red]", result.reasoning.get("flow", ""))
-
-    # Match
-    if result.match is not None:
-        clusters = getattr(result.match, "total_clusters", "?")
-        rate = getattr(result.match, "match_rate", 0)
-        table.add_row("Match", "[green]Done[/green]", f"{clusters} clusters, {rate:.1%} match rate")
-    elif "match" in result.skipped:
-        table.add_row("Match", "[yellow]Skipped[/yellow]", result.reasoning.get("match", ""))
-    elif skip_match:
-        table.add_row("Match", "[dim]Skipped[/dim]", "User requested --skip-match")
-    else:
-        table.add_row("Match", "[red]Failed[/red]", result.reasoning.get("match", ""))
-
-    console.print()
     console.print(table)
-    console.print(f"\n[bold]Status:[/bold] {result.status} | [bold]Input:[/bold] {result.input_rows} rows | [bold]Source:[/bold] {result.source}")
+    console.print(
+        f"\n[bold]{result.status.value.upper()}[/bold] | "
+        f"{result.input_rows} rows | {result.source}"
+    )
 
     if result.errors:
-        console.print(f"\n[red]Errors:[/red]")
-        for err in result.errors:
-            console.print(f"  {err}")
+        console.print("\n[red]Errors:[/red]")
+        for e in result.errors:
+            console.print(f"  - {e}")
 
     if verbose:
-        console.print(f"\n[bold]Reasoning:[/bold]")
-        for stage, reason in result.reasoning.items():
-            console.print(f"  {stage}: {reason}")
-        console.print(f"\n[bold]Timing:[/bold]")
-        for stage, secs in result.timing.items():
-            console.print(f"  {stage}: {secs:.2f}s")
+        if result.reasoning:
+            console.print("\n[bold]Reasoning:[/bold]")
+            for k, v in result.reasoning.items():
+                if not k.startswith("_"):
+                    console.print(f"  {k}: {v}")
+        if result.timing:
+            console.print("\n[bold]Timing:[/bold]")
+            for k, v in result.timing.items():
+                console.print(f"  {k}: {v:.2f}s")
 
-    # Write output
-    if output and result.match is not None:
-        golden = getattr(result.match, "golden", None)
-        if golden is not None:
-            golden.write_csv(output)
-            console.print(f"\n[green]Golden records written to {output}[/green]")
+    if output and result.artifacts.get("golden") is not None:
+        result.artifacts["golden"].write_csv(output)
+        console.print(f"\nGolden records written to {output}")
 
 
-if __name__ == "__main__":
-    app()
+@app.command()
+def stages() -> None:
+    """List all discovered stages."""
+    from goldenpipe.engine.registry import StageRegistry
+
+    reg = StageRegistry()
+    reg.discover()
+    all_stages = reg.list_all()
+
+    table = Table(title="Discovered Stages")
+    table.add_column("Name", style="bold")
+    table.add_column("Produces")
+    table.add_column("Consumes")
+
+    for name, info in sorted(all_stages.items()):
+        table.add_row(name, ", ".join(info.produces), ", ".join(info.consumes))
+
+    console.print(table)
+    console.print(f"\n{len(all_stages)} stage(s) found")
+
+
+@app.command()
+def validate(
+    config: str = typer.Option(..., "--config", "-c", help="Pipeline YAML config"),
+) -> None:
+    """Dry-run wiring validation without executing."""
+    from goldenpipe.config.loader import load_config
+    from goldenpipe.engine.registry import StageRegistry
+    from goldenpipe.engine.resolver import Resolver, WiringError
+
+    try:
+        cfg = load_config(config)
+        reg = StageRegistry()
+        reg.discover()
+        plan = Resolver.resolve(cfg, reg)
+        console.print(f"[green]Valid[/green] -- {len(plan.stages)} stages resolved")
+        for s in plan.stages:
+            console.print(f"  {s.name}")
+    except WiringError as e:
+        console.print(f"[red]Wiring Error:[/red] {e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def init(
+    dir: str = typer.Option(".", "--dir", "-d", help="Directory to create config in"),
+) -> None:
+    """Generate a starter goldenpipe.yml from installed tools."""
+    from goldenpipe.engine.registry import StageRegistry
+
+    reg = StageRegistry()
+    reg.discover()
+    all_stages = reg.list_all()
+
+    lines = ["pipeline: my-pipeline", "stages:"]
+    for name in sorted(all_stages.keys()):
+        lines.append(f"  - {name}")
+
+    if not all_stages:
+        lines.append("  # No stages discovered. Install goldenpipe[golden-suite] or add custom stages.")
+
+    out = Path(dir) / "goldenpipe.yml"
+    out.write_text("\n".join(lines) + "\n")
+    console.print(f"Created {out}")
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(8000, help="Port for REST API"),
+) -> None:
+    """Start the REST API server."""
+    try:
+        import uvicorn
+        from goldenpipe.api.server import create_app
+        uvicorn.run(create_app(), host="0.0.0.0", port=port)
+    except ImportError:
+        console.print("[red]FastAPI not installed. Run: pip install goldenpipe[api][/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="mcp-serve")
+def mcp_serve() -> None:
+    """Start the MCP server."""
+    try:
+        from goldenpipe.mcp.server import run_server
+        run_server()
+    except ImportError:
+        console.print("[red]MCP not installed. Run: pip install goldenpipe[mcp][/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="agent-serve")
+def agent_serve(
+    port: int = typer.Option(8250, help="Port for A2A server"),
+) -> None:
+    """Start the A2A agent server."""
+    try:
+        from goldenpipe.a2a.server import run_server
+        run_server(port=port)
+    except ImportError:
+        console.print("[red]aiohttp not installed. Run: pip install goldenpipe[agent][/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def interactive() -> None:
+    """Launch the TUI."""
+    try:
+        from goldenpipe.tui.app import GoldenPipeApp
+        GoldenPipeApp().run()
+    except ImportError:
+        console.print("[red]Textual not installed. Run: pip install goldenpipe[tui][/red]")
+        raise typer.Exit(code=1)
