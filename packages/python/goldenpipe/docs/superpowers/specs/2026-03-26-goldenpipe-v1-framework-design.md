@@ -56,9 +56,19 @@ class PipeContext:
 Returned by every stage's `run()` method.
 
 ```python
+class StageStatus(str, Enum):
+    SUCCESS = "success"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+class PipeStatus(str, Enum):
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
 @dataclass
 class StageResult:
-    status: str                        # "success" | "skipped" | "failed"
+    status: StageStatus
     decision: Decision | None = None   # optional routing instruction
     error: str | None = None           # error message if failed
 ```
@@ -72,9 +82,11 @@ Routing instruction from a stage to the framework.
 class Decision:
     skip: list[str] = field(default_factory=list)    # stage names to skip
     abort: bool = False                               # stop pipeline
-    insert: list[str] = field(default_factory=list)  # stage names to add
+    insert: list[str] = field(default_factory=list)  # stage names to add after current stage
     reason: str = ""                                  # explanation
 ```
+
+**Insertion semantics:** Stages listed in `insert` are placed immediately after the current stage in execution order. Combined with `skip`, this enables replacement: `Decision(skip=["match"], insert=["match_pprl"])` means "skip the original match stage and run match_pprl in its place (at the current position)."
 
 ### StageInfo
 
@@ -85,9 +97,13 @@ Metadata for registry and wiring validation.
 class StageInfo:
     name: str
     produces: list[str]                    # artifact keys this stage writes
-    consumes: list[str]                    # artifact keys this stage reads
+    consumes: list[str]                    # artifact keys this stage reads (hard deps)
     config_schema: type | None = None      # optional Pydantic model for per-stage config
 ```
+
+**Reserved artifact key:** `"df"` is a reserved key that maps to `ctx.df` (not `ctx.artifacts["df"]`). A built-in `load` stage always runs first and `produces: ["df"]`. Stages that read or mutate the DataFrame declare `consumes: ["df"]` and/or `produces: ["df"]`. The Resolver treats `"df"` as always available after `load`.
+
+**Hard vs soft dependencies:** `consumes` declares hard dependencies — the Resolver raises `WiringError` if unsatisfied. Soft dependencies (e.g., "use findings if available, but don't require them") are handled via `needs` in the YAML `StageSpec` or by checking `ctx.artifacts.get()` at runtime.
 
 ### PipeResult
 
@@ -96,7 +112,7 @@ Final output returned to the caller.
 ```python
 @dataclass
 class PipeResult:
-    status: str                            # "success" | "partial" | "failed"
+    status: PipeStatus
     source: str
     input_rows: int
     stages: dict[str, StageResult]         # stage name to result
@@ -107,7 +123,9 @@ class PipeResult:
     timing: dict[str, float]
 ```
 
-Status logic: all succeeded → `"success"`, some failed → `"partial"`, all failed → `"failed"`.
+Status logic: all succeeded → `SUCCESS`, some failed → `PARTIAL`, all failed → `FAILED`.
+
+`PipeResult` includes `_repr_html_()` for Jupyter notebook rendering, consistent with GoldenMatch's `DedupeResult` and `MatchResult`.
 
 ## Stage System
 
@@ -142,7 +160,7 @@ Shorthand for simple stages. Wraps a function into a Protocol-compliant object.
 @stage(name="normalize_phones", produces=["df"], consumes=["df"])
 def normalize_phones(ctx: PipeContext) -> StageResult:
     ctx.df = ctx.df.with_columns(pl.col("phone").str.replace_all(r"[^\d]", ""))
-    return StageResult(status="success")
+    return StageResult(status=StageStatus.SUCCESS)
 ```
 
 ### Built-in Golden Suite Adapters
@@ -151,9 +169,11 @@ In `goldenpipe/adapters/`:
 
 | Adapter | Wraps | Consumes | Produces | Guard |
 |---------|-------|----------|----------|-------|
-| `check.py` | `goldencheck.scan_file()` | — | `["findings"]` | `HAS_CHECK` |
-| `flow.py` | `goldenflow.transform_df()` | `["findings"]` | `["df", "manifest"]` | `HAS_FLOW` |
+| `check.py` | `goldencheck.scan_file()` | `["df"]` | `["findings"]` | `HAS_CHECK` |
+| `flow.py` | `goldenflow.transform_df()` | `["df"]` | `["df", "manifest"]` | `HAS_FLOW` |
 | `match.py` | `goldenmatch.dedupe_df()` | `["df"]` | `["clusters", "golden"]` | `HAS_MATCH` |
+
+The flow adapter reads `findings` from `ctx.artifacts` at runtime if available (soft dependency for `from_findings` mode), but does not declare it as a hard `consumes` dependency. This keeps flow composable without requiring check.
 
 Each adapter's `validate()` raises a clear error if the tool isn't installed.
 
@@ -198,7 +218,7 @@ For each stage:
 1. Call `validate(ctx)` if defined
 2. Call `run(ctx)` — record timing and result
 3. If `Decision` returned, pass to Router
-4. If exception raised, call `rollback(ctx)` if defined, record error, continue
+4. If exception raised, call `rollback(ctx)` if defined, record error. Behavior depends on `StageSpec.on_error`: `"continue"` (default) proceeds to next stage; `"abort"` stops the pipeline
 
 Returns `PipeResult` when all stages complete or pipeline aborts.
 
@@ -279,7 +299,8 @@ class StageSpec(BaseModel):
     name: str | None = None
     use: str
     needs: list[str] = []
-    skip_if: str | None = None
+    skip_if: str | None = None       # artifact key — skip if key is missing/falsy in ctx.artifacts
+    on_error: Literal["continue", "abort"] = "continue"
     config: dict[str, Any] = {}
 
 class PipelineConfig(BaseModel):
@@ -308,6 +329,14 @@ Three sources, checked in priority order:
 3. **Entry points** — `goldenpipe.stages` namespace in `pyproject.toml`
 
 Resolution order: YAML explicit > local `stages/` > entry points. Users override built-in stages by dropping a same-named file in `stages/`.
+
+**`stages/` path resolution:** Relative to the YAML config file's parent directory (if config provided) or CWD (if zero-config).
+
+**Third-party entry point example:**
+```toml
+[project.entry-points."goldenpipe.stages"]
+my_custom_stage = "my_package.stages:MyStage"
+```
 
 ## Interfaces
 
