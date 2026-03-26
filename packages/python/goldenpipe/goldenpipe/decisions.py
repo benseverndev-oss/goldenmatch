@@ -1,60 +1,43 @@
-"""Adaptive pipeline decisions -- pure logic, no tool imports."""
+"""Built-in decision functions for pipeline routing."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from goldenpipe.models.context import Decision, PipeContext
 
 
-@dataclass
-class FlowDecision:
-    skip: bool
-    reason: str
-    abort: bool = False
-    findings: list = field(default_factory=list)
-
-
-@dataclass
-class MatchDecision:
-    strategy: str = "auto"
-    skip: bool = False
-    reason: str = ""
-
-
-def decide_flow(check_result) -> FlowDecision:
-    """Decide whether to run GoldenFlow based on check findings."""
-    if check_result is None:
-        return FlowDecision(skip=True, reason="Check was skipped or failed")
-
-    findings = getattr(check_result, "findings", []) or []
+def severity_gate(ctx: PipeContext) -> Decision | None:
+    """Abort pipeline if any finding has critical severity."""
+    findings = ctx.artifacts.get("findings")
     if not findings:
-        return FlowDecision(skip=True, reason="No quality issues found")
+        return None
 
-    fatal = [f for f in findings if getattr(f, "severity", "") == "critical"]
-    fixable = [f for f in findings if getattr(f, "severity", "") != "critical"]
+    has_critical = any(f.get("severity") == "critical" for f in findings)
+    if has_critical:
+        return Decision(abort=True, reason="Critical findings detected")
+    return None
 
-    if fatal and not fixable:
-        return FlowDecision(
-            skip=True, abort=True,
-            reason=f"Fatal issues only: {[getattr(f, 'check', str(f)) for f in fatal]}",
+
+def pii_router(ctx: PipeContext) -> Decision | None:
+    """Route to PPRL matching if PII is detected."""
+    findings = ctx.artifacts.get("findings")
+    if not findings:
+        return None
+
+    has_pii = any(f.get("check") == "pii_detection" for f in findings)
+    if has_pii:
+        return Decision(
+            skip=["goldenmatch.dedupe"],
+            insert=["goldenmatch.dedupe_pprl"],
+            reason="PII detected, routing to PPRL matching",
         )
-
-    return FlowDecision(
-        skip=False,
-        findings=fixable,
-        reason=f"{len(fixable)} fixable issues found",
-    )
+    return None
 
 
-def decide_match(check_result, row_count: int, strategy_override: str | None = None) -> MatchDecision:
-    """Decide matching strategy based on check results and data profile."""
-    if strategy_override:
-        return MatchDecision(strategy=strategy_override, reason=f"User specified: {strategy_override}")
-
+def row_count_gate(ctx: PipeContext) -> Decision | None:
+    """Skip matching if fewer than 2 rows."""
+    row_count = ctx.metadata.get("input_rows", 0)
     if row_count < 2:
-        return MatchDecision(skip=True, reason=f"Only {row_count} rows -- nothing to deduplicate")
-
-    findings = getattr(check_result, "findings", []) or [] if check_result else []
-    sensitive = any(getattr(f, "check", "") == "pii_detection" for f in findings)
-    if sensitive:
-        return MatchDecision(strategy="pprl", reason="Sensitive fields detected")
-
-    return MatchDecision(strategy="auto", reason="Auto-detect strategy from data")
+        return Decision(
+            skip=["goldenmatch.dedupe"],
+            reason=f"Only {row_count} row(s), skipping deduplication",
+        )
+    return None
