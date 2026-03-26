@@ -1,90 +1,83 @@
-"""Tests for adaptive pipeline decisions -- no tool imports needed."""
-from dataclasses import dataclass
-from goldenpipe.decisions import decide_flow, decide_match, FlowDecision, MatchDecision
+"""Tests for built-in decision functions."""
+from goldenpipe.decisions import severity_gate, pii_router, row_count_gate
+from goldenpipe.models.context import PipeContext, Decision
 
 
-@dataclass
-class FakeFinding:
-    check: str = "whitespace"
-    severity: str = "warning"
+class TestSeverityGate:
+    def test_no_findings(self):
+        ctx = PipeContext()
+        d = severity_gate(ctx)
+        assert d is None
+
+    def test_no_critical(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [{"severity": "warning", "check": "nulls"}]
+        d = severity_gate(ctx)
+        assert d is None
+
+    def test_critical_aborts(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [{"severity": "critical", "check": "schema_mismatch"}]
+        d = severity_gate(ctx)
+        assert d is not None
+        assert d.abort is True
+
+    def test_mixed_with_critical_aborts(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [
+            {"severity": "critical", "check": "schema"},
+            {"severity": "warning", "check": "nulls"},
+        ]
+        d = severity_gate(ctx)
+        assert d is not None
+        assert d.abort is True
 
 
-@dataclass
-class FakeScanResult:
-    findings: list = None
+class TestPiiRouter:
+    def test_no_findings(self):
+        ctx = PipeContext()
+        d = pii_router(ctx)
+        assert d is None
 
-    def __post_init__(self):
-        if self.findings is None:
-            self.findings = []
+    def test_no_pii(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [{"check": "nulls"}]
+        d = pii_router(ctx)
+        assert d is None
 
+    def test_pii_detected(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [{"check": "pii_detection"}]
+        d = pii_router(ctx)
+        assert d is not None
+        assert "goldenmatch.dedupe" in d.skip
+        assert "goldenmatch.dedupe_pprl" in d.insert
 
-class TestDecideFlow:
-    def test_no_findings_skips(self):
-        result = FakeScanResult(findings=[])
-        decision = decide_flow(result)
-        assert decision.skip is True
-        assert "No quality issues" in decision.reason
-
-    def test_fixable_findings_runs(self):
-        result = FakeScanResult(findings=[FakeFinding()])
-        decision = decide_flow(result)
-        assert decision.skip is False
-        assert "1 fixable" in decision.reason
-
-    def test_fatal_only_aborts(self):
-        result = FakeScanResult(findings=[FakeFinding(severity="critical")])
-        decision = decide_flow(result)
-        assert decision.skip is True
-        assert decision.abort is True
-
-    def test_mixed_runs_fixable(self):
-        result = FakeScanResult(findings=[
-            FakeFinding(severity="critical"),
-            FakeFinding(severity="warning"),
-        ])
-        decision = decide_flow(result)
-        assert decision.skip is False
-        assert len(decision.findings) == 1
-
-    def test_none_check_result_skips(self):
-        decision = decide_flow(None)
-        assert decision.skip is True
-
-    def test_returns_flow_decision(self):
-        decision = decide_flow(FakeScanResult())
-        assert isinstance(decision, FlowDecision)
+    def test_pii_preserves_other_stages(self):
+        ctx = PipeContext()
+        ctx.artifacts["findings"] = [{"check": "pii_detection"}]
+        d = pii_router(ctx)
+        assert d.abort is False
 
 
-class TestDecideMatch:
-    def test_auto_by_default(self):
-        decision = decide_match(None, 100)
-        assert decision.strategy == "auto"
-        assert decision.skip is False
+class TestRowCountGate:
+    def test_zero_rows(self):
+        ctx = PipeContext(metadata={"input_rows": 0})
+        d = row_count_gate(ctx)
+        assert d is not None
+        assert "goldenmatch.dedupe" in d.skip
 
-    def test_too_few_rows_skips(self):
-        decision = decide_match(None, 1)
-        assert decision.skip is True
-        assert "1 rows" in decision.reason
+    def test_one_row(self):
+        ctx = PipeContext(metadata={"input_rows": 1})
+        d = row_count_gate(ctx)
+        assert d is not None
 
-    def test_zero_rows_skips(self):
-        decision = decide_match(None, 0)
-        assert decision.skip is True
+    def test_two_rows_no_skip(self):
+        ctx = PipeContext(metadata={"input_rows": 2})
+        d = row_count_gate(ctx)
+        assert d is None
 
-    def test_strategy_override(self):
-        decision = decide_match(None, 100, strategy_override="pprl")
-        assert decision.strategy == "pprl"
-        assert "User specified" in decision.reason
-
-    def test_pii_detection_routes_pprl(self):
-        result = FakeScanResult(findings=[FakeFinding(check="pii_detection")])
-        decision = decide_match(result, 100)
-        assert decision.strategy == "pprl"
-
-    def test_no_pii_stays_auto(self):
-        result = FakeScanResult(findings=[FakeFinding(check="whitespace")])
-        decision = decide_match(result, 100)
-        assert decision.strategy == "auto"
-
-    def test_returns_match_decision(self):
-        decision = decide_match(None, 50)
-        assert isinstance(decision, MatchDecision)
+    def test_many_rows_no_skip(self):
+        ctx = PipeContext(metadata={"input_rows": 1000})
+        d = row_count_gate(ctx)
+        assert d is None

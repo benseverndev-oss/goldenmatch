@@ -1,100 +1,59 @@
-"""Tests for the pipeline orchestrator."""
-import polars as pl
-import pytest
-from pathlib import Path
+"""Tests for Pipeline class."""
+from goldenpipe.pipeline import Pipeline
+from goldenpipe.models.config import PipelineConfig, StageSpec
+from goldenpipe.models.context import PipeStatus, StageStatus, PipeContext, StageResult
+from goldenpipe.models.stage import stage
+from goldenpipe.engine.registry import StageRegistry
 
 
-@pytest.fixture
-def sample_csv(tmp_path):
-    path = tmp_path / "customers.csv"
-    pl.DataFrame({
-        "name": ["John Smith", "john smith", "Jane Doe", "JOHN SMITH", "Bob Jones"],
-        "email": ["john@x.com", "john@x.com", "jane@y.com", "john@x.com", "bob@z.com"],
-        "phone": ["555-0101", "555-0101", "555-0202", "555-0101", "555-0303"],
-    }).write_csv(path)
-    return str(path)
-
-
-class TestPipeResult:
-    def test_repr(self):
-        from goldenpipe.pipeline import PipeResult
-        r = PipeResult(source="test.csv", input_rows=100)
-        assert "test.csv" in repr(r)
-        assert "100" in repr(r)
-
-    def test_default_status(self):
-        from goldenpipe.pipeline import PipeResult
-        r = PipeResult()
-        assert r.status == "success"
+@stage(name="noop", produces=["df"], consumes=["df"])
+def noop_stage(ctx: PipeContext) -> StageResult:
+    return StageResult(status=StageStatus.SUCCESS)
 
 
 class TestPipeline:
-    def test_full_pipeline(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv)
-        assert result.source == sample_csv
-        assert result.input_rows == 5
-        assert result.status in ("success", "partial")
-
-    def test_step_by_step(self, sample_csv):
-        from goldenpipe import Pipeline
-        pipe = Pipeline(sample_csv)
-        pipe.check()
-        pipe.flow()
-        pipe.match()
-        result = pipe.result
+    def test_run_csv(self, sample_csv):
+        reg = StageRegistry()
+        reg.register(noop_stage)
+        config = PipelineConfig(pipeline="test", stages=[StageSpec(use="noop")])
+        pipe = Pipeline(config=config, registry=reg)
+        result = pipe.run(source=str(sample_csv))
+        assert result.status == PipeStatus.SUCCESS
         assert result.input_rows == 5
 
-    def test_match_only(self, sample_csv):
-        from goldenpipe import Pipeline
-        pipe = Pipeline(sample_csv)
-        pipe.match()
-        result = pipe.result
-        assert result.match is not None or "match" in str(result.errors)
+    def test_run_df(self, sample_df):
+        reg = StageRegistry()
+        reg.register(noop_stage)
+        config = PipelineConfig(pipeline="test", stages=[StageSpec(use="noop")])
+        pipe = Pipeline(config=config, registry=reg)
+        result = pipe.run(df=sample_df)
+        assert result.status == PipeStatus.SUCCESS
+        assert result.input_rows == 5
 
-    def test_strategy_override(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv, strategy="auto")
-        assert result.status in ("success", "partial")
+    def test_run_no_source(self):
+        pipe = Pipeline()
+        result = pipe.run()
+        assert result.status == PipeStatus.FAILED
 
-    def test_reasoning_populated(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv)
-        assert isinstance(result.reasoning, dict)
-        # At least some stages should have reasoning
-        assert len(result.reasoning) > 0
+    def test_run_nonexistent_file(self):
+        pipe = Pipeline()
+        result = pipe.run(source="/nonexistent.csv")
+        assert result.status == PipeStatus.FAILED
 
-    def test_timing_populated(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv)
-        assert isinstance(result.timing, dict)
-
-    def test_nonexistent_file(self, tmp_path):
-        from goldenpipe import run
-        result = run(str(tmp_path / "nonexistent.csv"))
-        assert result.status == "failed"
-        assert len(result.errors) > 0
-
-    def test_skipped_list(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv)
-        assert isinstance(result.skipped, list)
-
-    def test_errors_list(self, sample_csv):
-        from goldenpipe import run
-        result = run(sample_csv)
-        assert isinstance(result.errors, list)
+    def test_auto_config(self):
+        pipe = Pipeline()
+        config = pipe._auto_config()
+        assert config.pipeline == "auto"
 
 
 class TestImports:
-    def test_import_goldenpipe(self):
+    def test_public_api(self):
         import goldenpipe as gp
         assert hasattr(gp, "run")
+        assert hasattr(gp, "run_df")
+        assert hasattr(gp, "run_stages")
         assert hasattr(gp, "Pipeline")
         assert hasattr(gp, "PipeResult")
+        assert hasattr(gp, "stage")
         assert hasattr(gp, "__version__")
-
-    def test_import_decisions(self):
-        from goldenpipe import decide_flow, decide_match
-        assert callable(decide_flow)
-        assert callable(decide_match)
+        assert gp.__version__ == "1.0.0"
