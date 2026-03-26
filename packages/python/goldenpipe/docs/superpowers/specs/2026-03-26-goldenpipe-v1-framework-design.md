@@ -276,7 +276,7 @@ stages:
   - name: clean
     use: goldenflow.transform
     needs: [validate]
-    skip_if: no_findings
+    skip_if: findings
     config:
       from_findings: true
 
