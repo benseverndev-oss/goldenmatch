@@ -1,0 +1,17 @@
+# GoldenPipe
+
+> Pipeline framework for data quality — compose Check, Flow, Match stages with pluggable routing and YAML config.
+
+## Interfaces
+- MCP Server: `goldenpipe mcp-serve` (4 tools: run_pipeline, validate_pipeline, list_stages, explain_pipeline)
+- A2A Server: `goldenpipe agent-serve --port 8250` (4 skills)
+- CLI: `goldenpipe run`, `goldenpipe validate`, `goldenpipe stages`, + 5 more commands
+- Python API: `import goldenpipe` — `run()`, `run_df()`, `run_stages()`
+- REST API: `goldenpipe serve` on port 8000
+
+## Install
+- `pip install goldenpipe` (standalone) or `pip install goldenpipe[golden-suite]` (with all tools)
+
+## Docs
+- [Architecture](CLAUDE.md): Framework design, stage system, engine layers
+- [GitHub](https://github.com/benzsevern/goldenpipe): Source
