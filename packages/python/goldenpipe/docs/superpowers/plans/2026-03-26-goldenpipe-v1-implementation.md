@@ -121,7 +121,7 @@ api = ["fastapi>=0.110", "uvicorn>=0.29"]
 mcp = ["mcp>=1.0"]
 agent = ["aiohttp>=3.9"]
 all = ["goldenpipe[golden-suite,tui,api,mcp,agent]"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "httpx>=0.27"]
 
 [project.scripts]
 goldenpipe = "goldenpipe.cli.main:app"
@@ -471,6 +471,7 @@ File: `tests/test_stage.py`
 
 ```python
 """Tests for Stage protocol and @stage decorator."""
+import polars as pl
 from goldenpipe.models.stage import StageInfo, stage
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 
@@ -529,7 +530,6 @@ class TestStageDecorator:
             ctx.df = ctx.df.with_columns(pl.col("name").str.to_uppercase())
             return StageResult(status=StageStatus.SUCCESS)
 
-        import polars as pl
         ctx = PipeContext(df=sample_df)
         upper_names.run(ctx)
         assert ctx.df["name"][0] == "JOHN SMITH"
@@ -1073,6 +1073,10 @@ class StageRegistry:
 
     def discover(self, stages_dir: Path | None = None) -> None:
         """Discover stages from entry points and optional local directory."""
+        # Always register built-in LoadStage
+        from goldenpipe.adapters import LoadStage
+        self._stages["load"] = LoadStage()
+
         self._discover_entry_points()
         if stages_dir is not None:
             self._discover_local(stages_dir)
@@ -1088,8 +1092,12 @@ class StageRegistry:
         for ep in eps:
             try:
                 stage_cls = ep.load()
-                if hasattr(stage_cls, "info"):
+                if hasattr(stage_cls, "info") and hasattr(stage_cls, "run"):
+                    # Already an instance (e.g., @stage decorated function)
                     self._stages[ep.name] = stage_cls
+                elif hasattr(stage_cls, "info"):
+                    # Class — instantiate it
+                    self._stages[ep.name] = stage_cls()
             except Exception:
                 pass  # Skip broken entry points
 
@@ -1869,7 +1877,10 @@ class Reporter:
         statuses = [r.status for r in stages.values()]
         non_skip = [s for s in statuses if s != StageStatus.SKIPPED]
 
-        if not non_skip or all(s == StageStatus.FAILED for s in non_skip):
+        if not non_skip:
+            # No stages ran (all skipped or empty) — success, nothing failed
+            status = PipeStatus.SUCCESS
+        elif all(s == StageStatus.FAILED for s in non_skip):
             status = PipeStatus.FAILED
         elif all(s == StageStatus.SUCCESS for s in non_skip):
             status = PipeStatus.SUCCESS
@@ -1942,15 +1953,16 @@ class TestSeverityGate:
         assert d is not None
         assert d.abort is True
 
-    def test_mixed_does_not_abort(self):
+    def test_mixed_with_critical_aborts(self):
         ctx = PipeContext()
         ctx.artifacts["findings"] = [
             {"severity": "critical", "check": "schema"},
             {"severity": "warning", "check": "nulls"},
         ]
-        # Mixed: has non-critical findings, so don't abort
+        # Any critical finding triggers abort
         d = severity_gate(ctx)
-        assert d is None
+        assert d is not None
+        assert d.abort is True
 
 
 class TestPiiRouter:
@@ -2026,14 +2038,14 @@ from goldenpipe.models.context import Decision, PipeContext
 
 
 def severity_gate(ctx: PipeContext) -> Decision | None:
-    """Abort pipeline if ALL findings are critical severity."""
+    """Abort pipeline if any finding has critical severity."""
     findings = ctx.artifacts.get("findings")
     if not findings:
         return None
 
-    severities = {f.get("severity", "") for f in findings}
-    if severities == {"critical"}:
-        return Decision(abort=True, reason="All findings are critical severity")
+    has_critical = any(f.get("severity") == "critical" for f in findings)
+    if has_critical:
+        return Decision(abort=True, reason="Critical findings detected")
     return None
 
 
@@ -2171,7 +2183,23 @@ Expected: FAIL
 File: `goldenpipe/adapters/__init__.py`
 
 ```python
-"""Golden Suite adapters with lazy imports."""
+"""Golden Suite adapters with lazy imports + built-in LoadStage."""
+from goldenpipe.models.context import PipeContext, StageResult, StageStatus
+from goldenpipe.models.stage import StageInfo
+
+
+class LoadStage:
+    """Built-in stage that marks df as available. Data loading is handled by Pipeline."""
+
+    info = StageInfo(name="load", produces=["df"], consumes=[])
+    rollback = None
+
+    def validate(self, ctx: PipeContext) -> None:
+        pass
+
+    def run(self, ctx: PipeContext) -> StageResult:
+        # df is already set on ctx by Pipeline before execution
+        return StageResult(status=StageStatus.SUCCESS)
 ```
 
 File: `goldenpipe/adapters/check.py`
