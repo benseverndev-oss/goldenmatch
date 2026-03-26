@@ -252,6 +252,20 @@ def mcp_serve():
     run_server()
 
 
+@app.command(name="agent-serve")
+def agent_serve(
+    port: int = typer.Option(8150, "--port"),
+):
+    """Start the A2A agent server."""
+    try:
+        from goldenflow.a2a.server import run_server
+        run_server(port=port)
+    except ImportError:
+        from rich.console import Console
+        Console().print("[red]aiohttp not installed. Run: pip install goldenflow[agent][/red]")
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def watch(
     path: Path = typer.Argument(".", help="Directory to watch"),

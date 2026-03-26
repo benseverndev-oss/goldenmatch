@@ -1,3 +1,4 @@
+"""MCP server for GoldenFlow -- 10 tools for data transformation."""
 from __future__ import annotations
 
 import json
@@ -50,6 +51,72 @@ TOOLS = [
             "required": ["path"],
         },
     },
+    {
+        "name": "diff",
+        "description": "Compare two data files and show what changed (added, removed, modified rows).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path_before": {"type": "string", "description": "Path to original file"},
+                "path_after": {"type": "string", "description": "Path to transformed file"},
+            },
+            "required": ["path_before", "path_after"],
+        },
+    },
+    {
+        "name": "validate",
+        "description": "Dry-run transform on a file. Shows what would change without writing output.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to data file"},
+                "config": {"type": "string", "description": "Optional YAML config path"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "list_transforms",
+        "description": "List all registered transforms with their modes, input types, and auto-apply status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "explain_transform",
+        "description": "Describe what a specific transform does, its mode, and input types.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "transform_name": {"type": "string", "description": "Name of the transform"},
+            },
+            "required": ["transform_name"],
+        },
+    },
+    {
+        "name": "list_domains",
+        "description": "List available domain packs (e.g., people_hr, ecommerce, finance).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "select_from_findings",
+        "description": "Map GoldenCheck findings to recommended GoldenFlow transforms. Bridge tool for Check-to-Flow handoff.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "List of GoldenCheck findings (each with 'check' and 'column' fields)",
+                },
+            },
+            "required": ["findings"],
+        },
+    },
 ]
 
 
@@ -95,6 +162,91 @@ def handle_tool(name: str, arguments: dict) -> str:
         from goldenflow.config.learner import learn_config
         config = learn_config(Path(arguments["path"]))
         return config.model_dump_json(indent=2)
+
+    elif name == "diff":
+        from goldenflow.engine.differ import diff_dataframes
+        df_before = read_file(Path(arguments["path_before"]))
+        df_after = read_file(Path(arguments["path_after"]))
+        result = diff_dataframes(df_before, df_after)
+        return json.dumps({
+            "added_rows": result.added,
+            "removed_rows": result.removed,
+            "modified_rows": result.modified,
+            "unchanged_rows": result.unchanged,
+            "columns_added": result.columns_added,
+            "columns_removed": result.columns_removed,
+        }, indent=2, default=str)
+
+    elif name == "validate":
+        path = Path(arguments["path"])
+        config = None
+        if "config" in arguments:
+            from goldenflow.config.loader import load_config
+            config = load_config(Path(arguments["config"]))
+        engine = TransformEngine(config=config)
+        result = engine.transform_df(read_file(path), source=str(path))
+        records = result.manifest.records if hasattr(result.manifest, "records") else []
+        return json.dumps({
+            "would_apply": [
+                {"column": r.column, "transform": r.transform, "rows_affected": r.rows_affected}
+                for r in records
+            ],
+            "total_transforms": len(records),
+        }, indent=2, default=str)
+
+    elif name == "list_transforms":
+        from goldenflow.transforms import list_transforms
+        transforms = list_transforms()
+        return json.dumps([
+            {
+                "name": t.name,
+                "mode": t.mode,
+                "input_types": t.input_types,
+                "auto_apply": t.auto_apply,
+                "priority": t.priority,
+            }
+            for t in transforms
+        ], indent=2)
+
+    elif name == "explain_transform":
+        from goldenflow.transforms import get_transform
+        t = get_transform(arguments["transform_name"])
+        if t is None:
+            return json.dumps({"error": f"Transform '{arguments['transform_name']}' not found"})
+        desc = getattr(t, "description", None) or getattr(getattr(t, "fn", None), "__doc__", None) or "No description available"
+        return json.dumps({
+            "name": t.name,
+            "mode": t.mode,
+            "input_types": t.input_types,
+            "auto_apply": t.auto_apply,
+            "priority": t.priority,
+            "description": desc,
+        }, indent=2)
+
+    elif name == "list_domains":
+        from goldenflow.domains import load_domain
+        domain_names = ["base", "people_hr", "ecommerce", "finance", "healthcare", "real_estate"]
+        domains = []
+        for d in domain_names:
+            try:
+                pack = load_domain(d)
+                domains.append({
+                    "name": d,
+                    "description": getattr(pack, "description", ""),
+                    "transform_count": len(getattr(pack, "transforms", [])),
+                })
+            except Exception:
+                pass
+        return json.dumps(domains, indent=2)
+
+    elif name == "select_from_findings":
+        from goldenflow.engine.selector import select_from_findings
+        findings = arguments["findings"]
+        selected = select_from_findings(findings)
+        return json.dumps([
+            {"column": s.get("column", ""), "transform": s.get("transform", ""), "reason": s.get("reason", "")}
+            for s in selected
+        ], indent=2, default=str)
 
     return json.dumps({"error": f"Unknown tool: {name}"})
 
