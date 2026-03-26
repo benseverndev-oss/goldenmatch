@@ -13,3 +13,4 @@ build/
 goldencheck.yml
 .ruff_cache/
 .testing/
+benchmarks/results.json

@@ -618,6 +618,80 @@ def agent_serve(
     asyncio.run(run_a2a_server(port=port))
 
 
+@app.command()
+def evaluate(
+    file: Path = typer.Argument(..., help="Data file to scan."),
+    ground_truth: Path = typer.Option(
+        ..., "--ground-truth", "-g", help="JSON file with expected findings.",
+    ),
+    min_f1: float = typer.Option(0.0, "--min-f1", help="Minimum F1 score; exit 1 if below."),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
+) -> None:
+    """Evaluate scan accuracy against a ground-truth JSON file.
+
+    The ground-truth file should be a JSON array of objects with "column" and "check" keys.
+    Prints precision, recall, F1, and detail breakdowns. Exits 1 if F1 < --min-f1.
+    """
+    import json as json_mod
+    from goldencheck.engine.evaluate import evaluate_scan
+
+    with _cli_error_handler():
+        if not ground_truth.exists():
+            typer.echo(f"Error: Ground truth file not found: {ground_truth}", err=True)
+            raise typer.Exit(code=1)
+
+        findings, profile = scan_file(file)
+        findings = apply_confidence_downgrade(findings, llm_boost=False)
+
+        expected = json_mod.loads(ground_truth.read_text(encoding="utf-8"))
+        result = evaluate_scan(findings, expected)
+
+        if json_output:
+            # Serialize tuple lists as lists of lists for JSON compat
+            out = {
+                k: [list(t) for t in v] if k.endswith("_details") else v
+                for k, v in result.items()
+            }
+            typer.echo(json_mod.dumps(out, indent=2))
+        else:
+            typer.echo(f"Precision:       {result['precision']:.4f}")
+            typer.echo(f"Recall:          {result['recall']:.4f}")
+            typer.echo(f"F1:              {result['f1']:.4f}")
+            typer.echo(f"True positives:  {result['true_positives']}")
+            typer.echo(f"False positives: {result['false_positives']}")
+            typer.echo(f"False negatives: {result['false_negatives']}")
+
+            if result["fp_details"]:
+                typer.echo("\nFalse positives:")
+                for col, chk in result["fp_details"]:
+                    typer.echo(f"  {col}: {chk}")
+
+            if result["fn_details"]:
+                typer.echo("\nFalse negatives (missed):")
+                for col, chk in result["fn_details"]:
+                    typer.echo(f"  {col}: {chk}")
+
+        if result["f1"] < min_f1:
+            typer.echo(
+                f"\nF1 {result['f1']:.4f} is below minimum {min_f1:.4f}", err=True,
+            )
+            raise typer.Exit(code=1)
+
+
+@app.command()
+def demo(
+    no_tui: bool = typer.Option(False, "--no-tui", help="Print results to stdout."),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack to apply."),
+) -> None:
+    """Run GoldenCheck on built-in sample data to see it in action."""
+    from goldencheck.cli.demo_data import generate_demo_csv
+
+    path = generate_demo_csv()
+    typer.echo(f"Generated demo data: {path}")
+    typer.echo("Scanning for data quality issues...\n")
+    _do_scan(path, no_tui=True, json_output=False, domain=domain)
+
+
 def _do_scan(
     file: Path,
     *,

@@ -1,7 +1,12 @@
 {
   "name": "GoldenCheck",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
-  "postCreateCommand": "pip install -e '.[dev,llm]'",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "forwardPorts": [8000, 8100],
+  "portsAttributes": {
+    "8000": { "label": "GoldenCheck REST API" },
+    "8100": { "label": "GoldenCheck A2A Agent" }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -11,6 +16,8 @@
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
         "editor.formatOnSave": true,
         "editor.rulers": [100]
       }
