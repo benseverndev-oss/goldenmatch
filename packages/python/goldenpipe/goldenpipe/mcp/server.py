@@ -77,7 +77,7 @@ def create_server() -> "Server":
     if not HAS_MCP:
         raise ImportError("MCP not installed. Run: pip install goldenpipe[mcp]")
 
-    server = Server("goldenpipe")
+    server = Server("GoldenPipe")
 
     @server.list_tools()
     async def handle_list_tools():
@@ -138,7 +138,8 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
 
     import uvicorn
     from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server()
@@ -153,9 +154,20 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
         async with session_manager.run():
             yield
 
+    async def server_card(request):
+        return JSONResponse({
+            "name": "GoldenPipe",
+            "description": "Orchestrator for the Golden Suite — chains data validation, transformation, and entity resolution into one adaptive pipeline. 4 MCP tools for listing stages, validating wiring, running pipelines, and explaining configs. Skips unnecessary stages automatically.",
+            "homepage": "https://github.com/benzsevern/goldenpipe",
+            "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
+        })
+
     starlette_app = Starlette(
         debug=False,
-        routes=[Mount("/mcp", app=session_manager.handle_request)],
+        routes=[
+            Route("/.well-known/mcp/server-card.json", server_card),
+            Mount("/mcp", app=session_manager.handle_request),
+        ],
         lifespan=lifespan,
     )
 
