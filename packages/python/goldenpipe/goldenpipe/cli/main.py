@@ -146,11 +146,19 @@ def serve(
 
 
 @app.command(name="mcp-serve")
-def mcp_serve() -> None:
+def mcp_serve(
+    transport: str = typer.Option("stdio", help="Transport type: stdio or http"),
+    host: str = typer.Option("0.0.0.0", help="Host for HTTP transport"),
+    port: int = typer.Option(8250, help="Port for HTTP transport"),
+) -> None:
     """Start the MCP server."""
     try:
-        from goldenpipe.mcp.server import run_server
-        run_server()
+        if transport == "http":
+            from goldenpipe.mcp.server import run_server_http
+            run_server_http(host=host, port=port)
+        else:
+            from goldenpipe.mcp.server import run_server
+            run_server()
     except ImportError:
         console.print("[red]MCP not installed. Run: pip install goldenpipe[mcp][/red]")
         raise typer.Exit(code=1)

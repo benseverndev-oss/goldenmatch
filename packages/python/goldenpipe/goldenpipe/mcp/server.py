@@ -1,6 +1,7 @@
 """MCP server with pipeline tools."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 try:
@@ -71,13 +72,10 @@ def explain_pipeline_tool(config_path: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-def run_server() -> None:
-    """Start the MCP server."""
+def create_server() -> "Server":
+    """Create and configure the MCP server instance."""
     if not HAS_MCP:
         raise ImportError("MCP not installed. Run: pip install goldenpipe[mcp]")
-
-    import asyncio
-    import json
 
     server = Server("goldenpipe")
 
@@ -117,8 +115,48 @@ def run_server() -> None:
 
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
 
+    return server
+
+
+def run_server() -> None:
+    """Start the MCP server over stdio transport."""
+    import asyncio
+
+    server = create_server()
+
     async def main():
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
 
     asyncio.run(main())
+
+
+def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
+    """Start the MCP server over Streamable HTTP transport."""
+    import contextlib
+    from collections.abc import AsyncIterator
+
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    server = create_server()
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=False,
+        stateless=False,
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    starlette_app = Starlette(
+        debug=False,
+        routes=[Mount("/mcp", app=session_manager.handle_request)],
+        lifespan=lifespan,
+    )
+
+    uvicorn.run(starlette_app, host=host, port=port)

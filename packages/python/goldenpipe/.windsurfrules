@@ -1,0 +1,69 @@
+# GoldenPipe -- Windsurf Rules
+
+## Project Overview
+
+GoldenPipe is the Golden Suite orchestrator. It chains three tools: GoldenCheck (data validation), GoldenFlow (data transformation), and GoldenMatch (entity resolution).
+
+Related repos (each has its own instructions):
+- GoldenCheck: `D:\show_case\goldencheck` -- GitHub `benzsevern/goldencheck`
+- GoldenFlow: `D:\show_case\goldenflow` -- GitHub `benzsevern/goldenflow`
+- GoldenMatch: `D:\show_case\goldenmatch` -- GitHub `benzsevern/goldenmatch`
+- GoldenPipe: GitHub `benzsevern/goldenpipe`
+
+## Environment
+
+- Windows 11, bash shell (Git Bash).
+- Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`.
+- Two GitHub accounts: `benzsevern` (personal) and `benzsevern-mjh` (work).
+- MUST run `gh auth switch --user benzsevern` before push, switch back to `benzsevern-mjh` after.
+
+## Branch & Merge SOP (all Golden Suite repos)
+
+- Feature work goes on `feature/<name>` branches, never directly to main.
+- Merge via squash merge PR (watchers see PR activity, history stays clean).
+- PR title format: `feat: <description>` or `fix: <description>`.
+- Merge when: tests pass, docs updated. Days not weeks.
+- After merge: delete remote branch.
+
+## Architecture
+
+- `goldenpipe/pipeline.py` -- Pipeline class, `run()` function. ONLY file that imports from tools.
+- `goldenpipe/decisions.py` -- Adaptive logic (`decide_flow`, `decide_match`). NO tool imports. Testable independently.
+- `goldenpipe/cli/main.py` -- Typer CLI.
+- Tools imported with `try/except ImportError` guards (`HAS_CHECK`, `HAS_FLOW`, `HAS_MATCH`).
+- Data flows as Polars DataFrames in memory between stages.
+
+## Pipeline Flow
+
+```
+load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
+  -> if fixable: GoldenFlow.transform_df(df) -> updated df
+  -> decide_match(findings, row_count, strategy_override)
+  -> GoldenMatch.dedupe_df(df) or AgentSession.deduplicate(path)
+  -> PipeResult
+```
+
+## Testing
+
+- Run `pytest --tb=short` from project root.
+- `test_decisions.py`: no tool deps, tests pure decision logic.
+- `test_pipeline.py`: requires goldencheck, goldenflow, goldenmatch installed.
+
+## Public API / Key Conventions
+
+- Pipeline is the main entry point; instantiate and call `run()`.
+- Decision functions (`decide_flow`, `decide_match`) are pure logic with no side effects and no tool imports -- keep them that way.
+- All inter-stage data is passed as Polars DataFrames, not file paths.
+
+## Performance / Gotchas
+
+- Tool imports are guarded behind `try/except ImportError`. Code must handle the case where any tool is missing (`HAS_CHECK`, `HAS_FLOW`, `HAS_MATCH` flags).
+- Do not add tool imports to `decisions.py`; it must remain independently testable.
+- Only `pipeline.py` should import from the external tool packages.
+
+## A2A Port Convention
+
+- GoldenCheck: 8100
+- GoldenFlow: 8150
+- GoldenMatch: 8200
+- GoldenPipe: 8250

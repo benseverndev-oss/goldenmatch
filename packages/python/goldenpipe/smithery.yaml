@@ -1,0 +1,13 @@
+name: goldenpipe
+description: Orchestrate your data pipeline end-to-end -- chain validation, transformation, and deduplication in one command.
+icon: "\U0001F6A7"
+startCommand: goldenpipe mcp-serve
+tools:
+  - name: list_stages
+    description: List all discovered pipeline stages with their input/output contracts.
+  - name: validate_pipeline
+    description: Validate pipeline wiring -- checks that stage inputs and outputs connect correctly.
+  - name: run_pipeline
+    description: Run a pipeline on a data file with optional config.
+  - name: explain_pipeline
+    description: Explain what a pipeline config will do -- shows stage order and data flow.
