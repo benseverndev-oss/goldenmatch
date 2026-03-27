@@ -1,0 +1,237 @@
+# GoldenCheck — Full API Reference
+
+> Data quality validation — profile columns, detect issues, classify types, and fix problems with optional LLM boost.
+> See also: [llms.txt](llms.txt) for a concise overview.
+
+## Install
+
+```bash
+pip install goldencheck
+pip install goldencheck[llm]    # With LLM boost
+pip install goldencheck[mcp]    # With MCP server
+pip install goldencheck[agent]  # With A2A agent server
+```
+
+## Quick Start
+
+```python
+from goldencheck import scan_file, validate_file, apply_fixes
+
+# Zero-config scan
+result = scan_file("data.csv")
+for finding in result.findings:
+    print(f"[{finding.severity}] {finding.column}: {finding.message}")
+
+# Scan with LLM boost
+result = scan_file_with_llm("data.csv")
+
+# Validate against a saved config
+findings = validate_file("data.csv")
+
+# Auto-fix issues
+report = apply_fixes("data.csv")
+print(f"Fixed {report.total_fixed} issues")
+```
+
+## Core: Scanner and Models
+
+```python
+from goldencheck import (
+    scan_file,           # scan_file(path, *, domain=None, return_sample=False) -> ScanResult
+    scan_file_with_llm,  # scan_file_with_llm(path, *, domain=None) -> ScanResult
+    Finding,             # Finding(column, severity, check, message, confidence, source, metadata)
+    Severity,            # IntEnum: ERROR=3, WARNING=2, INFO=1
+    DatasetProfile,      # DatasetProfile: row_count, column_count, columns: list[ColumnProfile]
+    ColumnProfile,       # ColumnProfile: name, dtype, null_pct, unique_pct, min, max, patterns, ...
+    ScanResult,          # ScanResult: findings, profile, sample (Jupyter _repr_html_ support)
+)
+```
+
+## Engine: Validator, Fixer, Differ
+
+```python
+from goldencheck import (
+    validate_file,                 # validate_file(path, *, config=None) -> list[Finding]
+    apply_confidence_downgrade,    # apply_confidence_downgrade(findings) -> list[Finding]
+    apply_corroboration_boost,     # apply_corroboration_boost(findings) -> list[Finding]
+    auto_triage,                   # auto_triage(findings) -> TriageResult
+    TriageResult,                  # TriageResult: critical, warnings, info, auto_fixable
+    apply_fixes,                   # apply_fixes(path, *, config=None) -> FixReport
+    FixReport,                     # FixReport: entries, total_fixed, output_path
+    FixEntry,                      # FixEntry: column, check, rows_affected, action
+    diff_files,                    # diff_files(path_a, path_b) -> DiffReport
+    DiffReport,                    # DiffReport: schema_changes, finding_changes, stat_changes
+    SchemaChange,                  # SchemaChange: column, change_type, details
+    FindingChange,                 # FindingChange: column, check, direction, details
+    StatChange,                    # StatChange: column, stat, old_value, new_value
+    read_file,                     # read_file(path) -> pl.DataFrame
+)
+```
+
+## Config: Schema, Loader, Writer
+
+```python
+from goldencheck import (
+    GoldenCheckConfig,   # Root config model (Pydantic)
+    ColumnRule,          # Per-column validation rule (type, constraints, checks)
+    Settings,            # Global settings (confidence_threshold, sample_size, ...)
+    RelationRule,        # Cross-column relationship rule
+    IgnoreEntry,         # Suppress specific findings by column/check
+    load_config,         # load_config(path) -> GoldenCheckConfig
+    save_config,         # save_config(config, path) -> None
+)
+```
+
+## Semantic: Classifier
+
+```python
+from goldencheck import (
+    classify_columns,         # classify_columns(df, *, domain=None) -> dict[str, str]
+    list_available_domains,   # list_available_domains() -> list[str]
+)
+# Built-in domains: healthcare, finance, ecommerce
+```
+
+## Agent (optional, requires goldencheck[agent])
+
+```python
+from goldencheck import (
+    AgentSession,   # AgentSession() -- autonomous DQ agent
+    ReviewQueue,    # ReviewQueue for human-in-the-loop review
+)
+```
+
+## Common Usage Patterns
+
+### Zero-config scan
+```python
+from goldencheck import scan_file
+
+result = scan_file("customers.csv")
+print(result)  # Rich display in terminal; HTML in Jupyter
+```
+
+### Domain-specific scanning
+```python
+from goldencheck import scan_file
+
+result = scan_file("patients.csv", domain="healthcare")
+# Detects NPI format errors, ICD code issues, clinical date problems
+```
+
+### Validate against learned config
+```bash
+# Learn rules from clean data
+goldencheck learn clean_data.csv -o goldencheck.yml
+
+# Validate new data against those rules
+goldencheck validate new_data.csv
+```
+
+### Auto-fix with review
+```python
+from goldencheck import apply_fixes
+
+report = apply_fixes("data.csv")
+for entry in report.entries:
+    print(f"  {entry.column}: {entry.action} ({entry.rows_affected} rows)")
+```
+
+### Schema diff between files
+```python
+from goldencheck import diff_files
+
+report = diff_files("last_week.csv", "this_week.csv")
+for change in report.schema_changes:
+    print(f"  {change.column}: {change.change_type}")
+for change in report.finding_changes:
+    print(f"  {change.column}/{change.check}: {change.direction}")
+```
+
+### LLM-boosted scanning
+```python
+from goldencheck import scan_file_with_llm
+
+result = scan_file_with_llm("complex_data.csv")
+# LLM discovers semantic issues that profilers miss
+```
+
+### Confidence pipeline
+```python
+from goldencheck import scan_file, apply_confidence_downgrade, apply_corroboration_boost
+
+result = scan_file("data.csv")
+findings = apply_corroboration_boost(result.findings)     # boost corroborated findings
+findings = apply_confidence_downgrade(findings)            # downgrade low-signal findings
+high_confidence = [f for f in findings if f.confidence >= 0.8]
+```
+
+## Configuration Example (goldencheck.yml)
+
+```yaml
+settings:
+  confidence_threshold: 0.7
+  sample_size: 10000
+
+columns:
+  email:
+    type: email
+    checks:
+      - not_null
+      - unique
+  age:
+    type: integer
+    constraints:
+      min: 0
+      max: 150
+  status:
+    type: categorical
+    allowed: [active, inactive, pending]
+
+relations:
+  - columns: [start_date, end_date]
+    check: temporal_order
+
+ignore:
+  - column: internal_id
+    check: "*"
+```
+
+## CLI Commands
+
+```bash
+goldencheck data.csv                           # Zero-config scan (CLI output)
+goldencheck data.csv --domain healthcare       # Domain-specific scan
+goldencheck scan data.csv --no-tui             # Scan without TUI
+goldencheck validate data.csv                  # Validate against goldencheck.yml
+goldencheck fix data.csv                       # Auto-fix safe issues
+goldencheck diff old.csv new.csv               # Compare two files
+goldencheck learn data.csv -o config.yml       # Learn rules from data
+goldencheck watch data/                        # Poll directory for changes
+goldencheck review data.csv                    # Interactive review mode
+goldencheck mcp-serve                          # Start MCP server
+goldencheck agent-serve --port 8100            # Start A2A server
+goldencheck serve                              # Start REST API
+```
+
+## Pipeline Flow
+
+```
+read_file -> maybe_sample -> run profilers -> classify semantic types
+-> apply suppression -> corroboration boost -> sort by severity
+-> (optional) LLM boost -> confidence downgrade -> report/TUI
+```
+
+## Interfaces
+
+- **MCP Server**: `goldencheck mcp-serve` — 19 tools (9 core + 10 agent) for Claude Desktop
+- **A2A Server**: `goldencheck agent-serve --port 8100` — 9 skills via Agent-to-Agent protocol
+- **REST API**: `goldencheck serve` on port 8000
+- **CLI**: 14+ Typer commands
+- **Python API**: `from goldencheck import scan_file, validate_file` — 30+ exports
+- **TUI**: 4-tab Textual interface
+
+## Links
+
+- [GitHub](https://github.com/benzsevern/goldencheck)
+- [Concise overview](llms.txt)

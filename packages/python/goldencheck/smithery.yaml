@@ -1,0 +1,45 @@
+name: goldencheck
+description: Catch data quality issues before they hit production -- zero-config scanning that discovers rules from your data.
+icon: "\u2705"
+startCommand: goldencheck mcp-serve
+tools:
+  # Core tools (9)
+  - name: scan
+    description: Scan a data file for quality issues -- returns findings with severity, confidence, and affected rows.
+  - name: validate
+    description: Validate a data file against pinned rules in goldencheck.yml.
+  - name: profile
+    description: Profile a data file with column-level statistics and health score (A-F).
+  - name: health_score
+    description: Quick health score (A-F, 0-100) summary of overall data quality.
+  - name: list_checks
+    description: List all available profiler checks and what they detect.
+  - name: get_column_detail
+    description: Deep-dive into a specific column with detailed profile and findings.
+  - name: list_domains
+    description: List available domain packs (healthcare, finance, ecommerce, etc.).
+  - name: get_domain_info
+    description: Get semantic types and suppression rules for a specific domain pack.
+  - name: install_domain
+    description: Download a community domain pack from the goldencheck-types repository.
+  # Agent tools (10)
+  - name: analyze_data
+    description: Detect domain, profile columns, and recommend a scanning strategy.
+  - name: auto_configure
+    description: Scan data, triage findings, and generate goldencheck.yml config automatically.
+  - name: explain_finding
+    description: Natural language explanation for a single finding with context.
+  - name: explain_column
+    description: Column health narrative combining findings and profile data.
+  - name: review_queue
+    description: List pending review items for a scan job.
+  - name: approve_reject
+    description: Pin or dismiss a review item.
+  - name: compare_domains
+    description: Scan with each domain pack and report the best fit.
+  - name: suggest_fix
+    description: Preview fixes for findings without applying them.
+  - name: pipeline_handoff
+    description: Generate a quality attestation for downstream tools.
+  - name: review_stats
+    description: Get counts by status -- pending, pinned, and dismissed.
