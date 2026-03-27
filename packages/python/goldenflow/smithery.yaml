@@ -1,3 +1,4 @@
+url: https://goldenflow-mcp-production.up.railway.app/mcp/
 name: goldenflow
 description: Fix messy data in one command -- auto-detects and applies the right transforms to standardize any dataset.
 icon: "\U0001F300"

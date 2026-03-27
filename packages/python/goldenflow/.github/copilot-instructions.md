@@ -289,3 +289,10 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 - Cloud connectors (s3.py, gcs.py) have optional dependencies -- `pip install goldenflow[s3]` or `pip install goldenflow[gcs]`; they raise `ImportError` with a helpful message if the dependency is missing
 - `streaming.py` reads the full file before batching (currently) -- for truly out-of-core processing, use Polars LazyFrame directly
 - `history.py` stores runs in `~/.goldenflow/history/` -- this directory is created on first run and is not cleaned up automatically
+
+## Remote MCP Server
+- Endpoint: https://goldenflow-mcp-production.up.railway.app/mcp/
+- Smithery: https://smithery.ai/servers/benzsevern/goldenflow
+- 10 tools, Streamable HTTP transport
+- Dockerfile: Dockerfile.mcp
+- Local HTTP: goldenflow mcp-serve --transport http --port 8150
