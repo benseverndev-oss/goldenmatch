@@ -4,6 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldenpipe mcp-serve` (4 tools: run_pipeline, validate_pipeline, list_stages, explain_pipeline)
+- Remote MCP: https://goldenpipe-mcp-production.up.railway.app/mcp/ (4 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenpipe)
 - A2A Server: `goldenpipe agent-serve --port 8250` (4 skills)
 - CLI: `goldenpipe run`, `goldenpipe validate`, `goldenpipe stages`, + 5 more commands
 - Python API: `import goldenpipe` — `run()`, `run_df()`, `run_stages()`

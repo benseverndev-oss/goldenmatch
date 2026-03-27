@@ -44,3 +44,14 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 
 ## A2A Port Convention
 - GoldenCheck: 8100, GoldenFlow: 8150, GoldenMatch: 8200, GoldenPipe: 8250
+
+## Remote MCP Server
+
+Hosted on Railway, registered on Smithery:
+- **Endpoint:** `https://goldenpipe-mcp-production.up.railway.app/mcp/`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenpipe`
+- **Server card:** `https://goldenpipe-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
+- **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
+- **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
+- **Railway project:** `golden-suite-mcp` (service: `goldenpipe-mcp`, port 8250)
+- **Local HTTP:** `goldenpipe mcp-serve --transport http --port 8250`

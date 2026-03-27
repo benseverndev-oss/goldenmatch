@@ -67,3 +67,10 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 - GoldenFlow: 8150
 - GoldenMatch: 8200
 - GoldenPipe: 8250
+
+## Remote MCP Server
+- Endpoint: https://goldenpipe-mcp-production.up.railway.app/mcp/
+- Smithery: https://smithery.ai/servers/benzsevern/goldenpipe
+- 4 tools, Streamable HTTP transport
+- Dockerfile: Dockerfile.mcp
+- Local HTTP: goldenpipe mcp-serve --transport http --port 8250

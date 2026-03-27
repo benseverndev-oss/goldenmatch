@@ -209,6 +209,7 @@ goldenpipe agent-serve --port 8250            # Start A2A server
 ## Interfaces
 
 - **MCP Server**: `goldenpipe mcp-serve` — 4 tools (run, validate, list stages, explain)
+- **Remote MCP**: https://goldenpipe-mcp-production.up.railway.app/mcp/ (4 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenpipe)
 - **A2A Server**: `goldenpipe agent-serve --port 8250` — 4 skills via Agent-to-Agent protocol
 - **REST API**: `goldenpipe serve` on port 8000
 - **CLI**: 8 Typer commands
