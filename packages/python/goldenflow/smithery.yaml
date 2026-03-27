@@ -1,0 +1,25 @@
+name: goldenflow
+description: Fix messy data in one command -- auto-detects and applies the right transforms to standardize any dataset.
+icon: "\U0001F300"
+startCommand: goldenflow mcp-serve
+tools:
+  - name: transform
+    description: Transform a data file using zero-config auto-detection or a saved YAML config.
+  - name: map
+    description: Auto-map schemas between source and target files by matching column names and profiles.
+  - name: profile
+    description: Profile a data file showing column types, null counts, and patterns.
+  - name: learn
+    description: Generate a YAML config from data patterns for reproducible transforms.
+  - name: diff
+    description: Compare two data files and show added, removed, and modified rows.
+  - name: validate
+    description: Dry-run transform -- shows what would change without writing output.
+  - name: list_transforms
+    description: List all registered transforms with modes, input types, and auto-apply status.
+  - name: explain_transform
+    description: Describe what a specific transform does, its mode, and input types.
+  - name: list_domains
+    description: List available domain packs (people_hr, ecommerce, finance, healthcare, real_estate).
+  - name: select_from_findings
+    description: Map GoldenCheck findings to recommended GoldenFlow transforms -- bridge tool for Check-to-Flow handoff.
