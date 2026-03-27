@@ -123,3 +123,10 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 - Optional dep tests: any test importing `mcp`, `aiohttp`, or agent modules needs `pytest.mark.skipif` -- CI only installs `[dev]`.
 - `__init__.py` for optional packages (`a2a/`, agent tools): wrap imports in `try/except ImportError` or CI collection crashes.
 - A2A port convention: GoldenCheck 8100, GoldenFlow 8150, GoldenMatch 8200.
+
+## Remote MCP Server
+- Endpoint: https://goldencheck-mcp-production.up.railway.app/mcp/
+- Smithery: https://smithery.ai/servers/benzsevern/goldencheck
+- 19 tools, Streamable HTTP transport
+- Dockerfile: Dockerfile.mcp
+- Local HTTP: goldencheck mcp-serve --transport http --port 8100

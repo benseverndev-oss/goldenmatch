@@ -4,6 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldencheck mcp-serve` (19 tools: scan, validate, fix, audit, learn, explain, review, agent orchestration)
+- Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
 - A2A Server: `goldencheck agent-serve --port 8100` (9 skills)
 - CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
 - Python API: `from goldencheck import scan_file, validate_file`
