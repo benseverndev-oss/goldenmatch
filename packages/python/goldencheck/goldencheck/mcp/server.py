@@ -566,7 +566,7 @@ except Exception:  # noqa: BLE001
 # ---------------------------------------------------------------------------
 
 def create_server() -> Server:
-    server = Server("goldencheck")
+    server = Server("GoldenCheck")
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -602,7 +602,8 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
 
     import uvicorn
     from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server()
@@ -617,9 +618,18 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
         async with session_manager.run():
             yield
 
+    async def server_card(request):
+        return JSONResponse({
+            "name": "GoldenCheck",
+            "description": "Data validation that discovers rules from your data — no hand-written checks needed. Profiles columns, detects quality issues, scores confidence. 19 MCP tools for scanning, validating, profiling, auto-configuring, and explaining findings. DQBench Score: 88.40. Built on Polars, 482K rows/sec.",
+            "homepage": "https://github.com/benzsevern/goldencheck",
+            "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
+        })
+
     starlette_app = Starlette(
         debug=False,
         routes=[
+            Route("/.well-known/mcp/server-card.json", server_card),
             Mount("/mcp", app=session_manager.handle_request),
         ],
         lifespan=lifespan,
