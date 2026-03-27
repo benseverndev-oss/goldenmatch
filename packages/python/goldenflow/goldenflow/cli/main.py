@@ -246,10 +246,18 @@ def serve(
 
 
 @app.command(name="mcp-serve")
-def mcp_serve():
-    """Start MCP server for Claude Desktop."""
-    from goldenflow.mcp.server import run_server
-    run_server()
+def mcp_serve(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or http"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host for HTTP transport"),
+    port: int = typer.Option(8150, "--port", help="Port for HTTP transport"),
+):
+    """Start MCP server (stdio for Claude Desktop, http for remote)."""
+    if transport == "http":
+        from goldenflow.mcp.server import run_server_http
+        run_server_http(host=host, port=port)
+    else:
+        from goldenflow.mcp.server import run_server
+        run_server()
 
 
 @app.command(name="agent-serve")

@@ -576,6 +576,24 @@ dqbench run goldenflow
 
 ---
 
+## Why GoldenFlow?
+
+| | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
+|---|---|---|---|---|---|
+| Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
+| 43+ built-in transforms | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
+| Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
+| Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |
+| Streaming / large files | Built-in | Manual chunking | No | Yes (warehouse) | No |
+| MCP server | Yes | No | No | No | No |
+| Polars-native | Yes | No (pandas) | No (pandas/Spark) | No (SQL) | No (pandas) |
+| DQBench transform score | 100/100 | N/A | N/A | N/A | N/A |
+
+GoldenFlow is purpose-built for the transform step between validation and matching — not a general ETL tool. It turns messy data into clean, standardized data automatically.
+
+---
+
 ## Error Handling
 
 GoldenFlow catches errors at the CLI boundary and shows friendly, actionable messages — no raw stack traces. Individual transform errors are captured in the manifest rather than crashing the run. Use `--strict` to change this behavior.

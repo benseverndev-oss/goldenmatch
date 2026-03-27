@@ -1,0 +1,17 @@
+# GoldenFlow
+
+> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms.
+
+## Interfaces
+- MCP Server: `goldenflow mcp-serve` (4 tools: transform, map, profile, learn)
+- CLI: `goldenflow transform`, `goldenflow map`, + 13 more commands
+- Python API: `from goldenflow import transform_file, transform_df`
+- REST API: `goldenflow serve` on port 8000
+
+## Install
+- `pip install goldenflow`
+
+## Docs
+- [Architecture](CLAUDE.md): Full codebase guide with transform registry, domain packs, engine pipeline
+- [GitHub](https://github.com/benzsevern/goldenflow): Source
+- [Full API Reference](llms-full.txt): Extended documentation with all function signatures and usage patterns

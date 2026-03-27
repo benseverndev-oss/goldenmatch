@@ -251,11 +251,10 @@ def handle_tool(name: str, arguments: dict) -> str:
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
-def run_server():
-    """Run the MCP server. Requires mcp package."""
+def create_server():
+    """Create and return a configured MCP Server instance."""
     try:
         from mcp.server import Server
-        from mcp.server.stdio import stdio_server
     except ImportError:
         raise ImportError("MCP server requires: pip install goldenflow[mcp]")
 
@@ -270,5 +269,40 @@ def run_server():
         result = handle_tool(name, arguments)
         return [{"type": "text", "text": result}]
 
+    return server
+
+
+def run_server():
+    """Run the MCP server over stdio. Requires mcp package."""
+    from mcp.server.stdio import stdio_server
+
     import asyncio
+
+    server = create_server()
     asyncio.run(stdio_server(server))
+
+
+def run_server_http(host: str = "0.0.0.0", port: int = 8150):
+    """Run the MCP server over Streamable HTTP transport."""
+    import contextlib
+    from collections.abc import AsyncIterator
+
+    import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    server = create_server()
+    session_manager = StreamableHTTPSessionManager(app=server, stateless=True)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    starlette_app = Starlette(
+        lifespan=lifespan,
+        routes=[Mount("/mcp", app=session_manager.handle_request)],
+    )
+
+    uvicorn.run(starlette_app, host=host, port=port)

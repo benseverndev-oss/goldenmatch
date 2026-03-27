@@ -1,0 +1,22 @@
+title: GoldenFlow
+description: Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.
+url: https://benzsevern.github.io
+baseurl: /goldenflow
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+color_scheme: dark
+
+permalink: pretty
+
+aux_links:
+  PyPI: https://pypi.org/project/goldenflow/
+  GitHub: https://github.com/benzsevern/goldenflow
+
+aux_links_new_tab: true
+nav_sort: case_insensitive
+footer_content: "GoldenFlow &mdash; MIT License"
+search_enabled: true
+back_to_top: true
+back_to_top_text: Back to top
+
+exclude:
+  - superpowers/

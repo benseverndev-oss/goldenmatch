@@ -40,6 +40,22 @@ all = ["goldenflow[check,excel,db,mcp,agent,s3,gcs]"]
 [project.scripts]
 goldenflow = "goldenflow.cli.main:app"
 
+keywords = ["data-transformation", "data-quality", "etl", "standardization", "normalization", "data-cleaning", "polars"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/benzsevern/goldenflow"
+Repository = "https://github.com/benzsevern/goldenflow"
+Issues = "https://github.com/benzsevern/goldenflow/issues"
+
 [tool.ruff]
 line-length = 100
 
