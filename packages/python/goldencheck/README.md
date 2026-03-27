@@ -363,6 +363,29 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 | `get_column_detail` | Deep-dive into a specific column |
 | `list_checks` | List all available profiler checks |
 
+## Remote MCP Server
+
+GoldenCheck is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldencheck) — connect from any MCP client without installing anything.
+
+**Claude Desktop / Claude Code:**
+```json
+{
+  "mcpServers": {
+    "goldencheck": {
+      "url": "https://goldencheck-mcp-production.up.railway.app/mcp/"
+    }
+  }
+}
+```
+
+**Local server:**
+```bash
+pip install goldencheck[mcp]
+goldencheck mcp-serve
+```
+
+19 tools available: scan files, validate rules, profile columns, health-score datasets, auto-configure validation, explain findings, compare domains, suggest fixes.
+
 ## Jupyter / Colab
 
 GoldenCheck renders rich HTML in Jupyter notebooks:

@@ -6,13 +6,31 @@ nav_order: 16
 
 GoldenCheck includes an MCP (Model Context Protocol) server for Claude Desktop and other MCP-compatible clients.
 
-## Install
+## Remote Server (no install required)
+
+GoldenCheck is available as a hosted remote MCP server on Smithery. Connect from Claude Desktop, Claude Code, or any MCP client without installing anything locally.
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "goldencheck": {
+      "url": "https://goldencheck-mcp-production.up.railway.app/mcp/"
+    }
+  }
+}
+```
+
+Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldencheck](https://smithery.ai/servers/benzsevern/goldencheck)
+
+## Local Install
 
 ```bash
 pip install goldencheck[mcp]
 ```
 
-## Setup (Claude Desktop)
+### Local Setup (Claude Desktop)
 
 Add to your `claude_desktop_config.json`:
 
@@ -122,4 +140,15 @@ This starts the stdio-based MCP server. It's primarily designed to be launched b
 
 ## Protocol
 
-GoldenCheck uses the **stdio** transport protocol. The server reads JSON-RPC messages from stdin and writes responses to stdout, following the [MCP specification](https://modelcontextprotocol.io/).
+GoldenCheck supports two transport protocols:
+
+- **stdio** (local): The server reads JSON-RPC messages from stdin and writes responses to stdout. Used when launched by MCP clients like Claude Desktop via the `command` config.
+- **Streamable HTTP** (remote): The hosted server at `https://goldencheck-mcp-production.up.railway.app/mcp/` uses Streamable HTTP transport. Used when connecting via the `url` config.
+
+Both follow the [MCP specification](https://modelcontextprotocol.io/).
+
+You can also run the HTTP transport locally:
+
+```bash
+goldencheck mcp-serve --transport http --port 8100
+```

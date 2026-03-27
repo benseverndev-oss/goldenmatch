@@ -225,6 +225,7 @@ read_file -> maybe_sample -> run profilers -> classify semantic types
 ## Interfaces
 
 - **MCP Server**: `goldencheck mcp-serve` — 19 tools (9 core + 10 agent) for Claude Desktop
+- **Remote MCP**: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
 - **A2A Server**: `goldencheck agent-serve --port 8100` — 9 skills via Agent-to-Agent protocol
 - **REST API**: `goldencheck serve` on port 8000
 - **CLI**: 14+ Typer commands

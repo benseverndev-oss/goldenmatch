@@ -88,6 +88,17 @@ dqbench run all                                         # Compare against GX/Pan
 python -m build && source .testing/.env && python -m twine upload dist/*
 ```
 
+## Remote MCP Server
+
+Hosted on Railway, registered on Smithery:
+- **Endpoint:** `https://goldencheck-mcp-production.up.railway.app/mcp/`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldencheck`
+- **Server card:** `https://goldencheck-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
+- **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
+- **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
+- **Railway project:** `golden-suite-mcp` (service: `goldencheck-mcp`, port 8100)
+- **Local HTTP:** `goldencheck mcp-serve --transport http --port 8100`
+
 ## Gotchas
 
 - `*.csv` is in `.gitignore` — test fixtures need `!tests/fixtures/*.csv` exception

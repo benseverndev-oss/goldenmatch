@@ -1,3 +1,4 @@
+url: https://goldencheck-mcp-production.up.railway.app/mcp/
 name: goldencheck
 description: Catch data quality issues before they hit production -- zero-config scanning that discovers rules from your data.
 icon: "\u2705"
