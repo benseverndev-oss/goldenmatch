@@ -1,3 +1,4 @@
+url: https://goldenpipe-mcp-production.up.railway.app/mcp/
 name: goldenpipe
 description: Orchestrate your data pipeline end-to-end -- chain validation, transformation, and deduplication in one command.
 icon: "\U0001F6A7"

@@ -51,6 +51,29 @@ goldenpipe run customers.csv --strategy pprl  # Force privacy mode
 goldenpipe run customers.csv -o golden.csv  # Save golden records
 ```
 
+## Remote MCP Server
+
+GoldenPipe is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenpipe) — connect from any MCP client without installing anything.
+
+**Claude Desktop / Claude Code:**
+```json
+{
+  "mcpServers": {
+    "goldenpipe": {
+      "url": "https://goldenpipe-mcp-production.up.railway.app/mcp/"
+    }
+  }
+}
+```
+
+**Local server:**
+```bash
+pip install goldenpipe[mcp]
+goldenpipe mcp-serve
+```
+
+4 tools available: list pipeline stages, validate wiring, run full check-transform-match pipeline, explain configs.
+
 ## Part of the Golden Suite
 
 | Package | What It Does |
