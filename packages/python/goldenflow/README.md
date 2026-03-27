@@ -518,6 +518,29 @@ goldenflow interactive data.csv
 
 Full-featured terminal UI built with Textual. Browse profiles, apply transforms, preview results.
 
+## Remote MCP Server
+
+GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenflow) — connect from any MCP client without installing anything.
+
+**Claude Desktop / Claude Code:**
+```json
+{
+  "mcpServers": {
+    "goldenflow": {
+      "url": "https://goldenflow-mcp-production.up.railway.app/mcp/"
+    }
+  }
+}
+```
+
+**Local server:**
+```bash
+pip install goldenflow[mcp]
+goldenflow mcp-serve
+```
+
+10 tools available: transform files, auto-map schemas, profile columns, generate configs, diff before/after, apply domain packs.
+
 ---
 
 ## Integration with the Golden Suite

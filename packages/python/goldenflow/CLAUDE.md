@@ -281,6 +281,17 @@ dqbench run all                                  # Compare against other tools
 python -m build && source .testing/.env && python -m twine upload dist/*
 ```
 
+## Remote MCP Server
+
+Hosted on Railway, registered on Smithery:
+- **Endpoint:** `https://goldenflow-mcp-production.up.railway.app/mcp/`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenflow`
+- **Server card:** `https://goldenflow-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
+- **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
+- **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
+- **Railway project:** `golden-suite-mcp` (service: `goldenflow-mcp`, port 8150)
+- **Local HTTP:** `goldenflow mcp-serve --transport http --port 8150`
+
 ## Gotchas
 
 - `*.csv` is in `.gitignore` -- test fixtures need `!tests/fixtures/*.csv` exception
