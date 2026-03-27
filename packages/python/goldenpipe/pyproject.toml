@@ -15,11 +15,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Typing :: Typed",
 ]
-
-[project.urls]
-Homepage = "https://github.com/benzsevern/goldenpipe"
-Repository = "https://github.com/benzsevern/goldenpipe"
-Issues = "https://github.com/benzsevern/goldenpipe/issues"
 dependencies = [
     "polars>=1.0",
     "typer>=0.12",
@@ -42,6 +37,11 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "httpx>=0.2
 
 [project.scripts]
 goldenpipe = "goldenpipe.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/benzsevern/goldenpipe"
+Repository = "https://github.com/benzsevern/goldenpipe"
+Issues = "https://github.com/benzsevern/goldenpipe/issues"
 
 [project.entry-points."goldenpipe.stages"]
 "goldencheck.scan" = "goldenpipe.adapters.check:ScanStage"
