@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.benzsevern/goldencheck -->
 # GoldenCheck
 
 Data validation that discovers rules from your data so you don't have to write them.
