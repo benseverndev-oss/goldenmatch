@@ -1,0 +1,6 @@
+fname,lname,email_addr,tel,zipcode
+John,Doe,john@example.com,555-0100,10001
+Jane,Smith,jane@test.org,(555) 020-0200,90210
+Bob,Johnson,bob.j@mail.com,+15550300,30301
+Alice,Williams,alice.w@example.net,555.0400,60601
+Charlie,Brown,charlie@test.com,15550500,02101
