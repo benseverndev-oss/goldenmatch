@@ -5,6 +5,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/goldenpipe?color=d4a017)](https://pypi.org/project/goldenpipe/)
 [![CI](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/benzsevern/goldenpipe/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenpipe)
 [![Downloads](https://static.pepy.tech/badge/goldenpipe/month)](https://pepy.tech/project/goldenpipe)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
