@@ -11,6 +11,7 @@ Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases
 [![Downloads](https://static.pepy.tech/badge/goldenflow/month)](https://pepy.tech/project/goldenflow)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benzsevern.github.io/goldenflow/)
 [![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
 
 ```bash
@@ -547,7 +548,14 @@ goldenflow mcp-serve
 
 ---
 
-## Integration with the Golden Suite
+## Part of the Golden Suite
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
+| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
 
 ```
 Raw Data
