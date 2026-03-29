@@ -5,15 +5,17 @@
 
 Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs.
 
+[![PyPI](https://img.shields.io/pypi/v/goldenflow?color=d4a017)](https://pypi.org/project/goldenflow/)
+[![CI](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml)
+[![Downloads](https://static.pepy.tech/badge/goldenflow/month)](https://pepy.tech/project/goldenflow)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
+
 ```bash
 pip install goldenflow
 goldenflow transform data.csv
 ```
-
-![Tests](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)
-[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
 
