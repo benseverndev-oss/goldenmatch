@@ -26,6 +26,38 @@ def _sqlite_type_to_infermap(sqlite_type: str) -> str:
     return "string"
 
 
+def _pg_type_to_infermap(pg_type: str) -> str:
+    """Map a PostgreSQL data_type string to an infermap dtype."""
+    t = (pg_type or "").lower().strip()
+    if t in ("integer", "bigint", "smallint", "serial", "bigserial"):
+        return "integer"
+    if t in ("real", "double precision", "numeric", "decimal", "money"):
+        return "float"
+    if t == "boolean":
+        return "boolean"
+    if t == "date":
+        return "date"
+    if t in ("timestamp", "timestamp with time zone", "timestamp without time zone"):
+        return "datetime"
+    return "string"
+
+
+def _duckdb_type_to_infermap(duckdb_type: str) -> str:
+    """Map a DuckDB data_type string to an infermap dtype."""
+    t = (duckdb_type or "").upper().strip()
+    if t in ("INTEGER", "BIGINT", "SMALLINT", "TINYINT", "HUGEINT", "INT4", "INT8", "INT2", "INT1"):
+        return "integer"
+    if t in ("REAL", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "FLOAT4", "FLOAT8"):
+        return "float"
+    if t == "BOOLEAN":
+        return "boolean"
+    if t == "DATE":
+        return "date"
+    if t in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ"):
+        return "datetime"
+    return "string"
+
+
 def _parse_connection(uri: str) -> dict:
     """Parse a database URI and return a dict with driver and connection info."""
     parsed = urlparse(uri)
@@ -82,7 +114,7 @@ class DBProvider:
                 raise NotImplementedError(
                     "psycopg2 is required for PostgreSQL. Install with: pip install psycopg2-binary"
                 ) from exc
-            raise NotImplementedError("PostgreSQL support is not yet implemented.")
+            return self._extract_postgres(conn_info, table, sample_size)
 
         if driver == "mysql":
             try:
@@ -101,7 +133,7 @@ class DBProvider:
                 raise NotImplementedError(
                     "duckdb is required for DuckDB connections. Install with: pip install duckdb"
                 ) from exc
-            raise NotImplementedError("DuckDB support is not yet implemented.")
+            return self._extract_duckdb(conn_info, table, sample_size)
 
         raise InferMapError(f"Unsupported driver: {driver!r}")
 
@@ -166,3 +198,126 @@ class DBProvider:
             conn.close()
 
         return SchemaInfo(fields=fields, source_name=table)
+
+    def _extract_postgres(self, conn_info: dict, table: str, sample_size: int) -> SchemaInfo:
+        import psycopg2
+
+        try:
+            conn = psycopg2.connect(
+                host=conn_info["host"],
+                port=conn_info["port"],
+                user=conn_info["user"],
+                password=conn_info["password"],
+                dbname=conn_info["database"],
+            )
+        except Exception as exc:
+            raise InferMapError(
+                f"Cannot connect to PostgreSQL at {conn_info['host']}:{conn_info['port']}: {exc}"
+            ) from exc
+
+        try:
+            cur = conn.cursor()
+
+            # Get column info from information_schema
+            cur.execute("""
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = %s
+                ORDER BY ordinal_position
+            """, (table,))
+            columns = cur.fetchall()
+
+            if not columns:
+                raise InferMapError(f"Table '{table}' not found or has no columns")
+
+            # Total row count
+            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+            total = cur.fetchone()[0]
+
+            # Sample rows
+            cur.execute(f'SELECT * FROM "{table}" LIMIT %s', (sample_size,))
+            sample_rows = cur.fetchall()
+            col_names = [desc[0] for desc in cur.description]
+
+            fields = []
+            for col_idx, (col_name, data_type, is_nullable) in enumerate(columns):
+                raw_samples = [row[col_idx] for row in sample_rows if row[col_idx] is not None]
+                sample_values = [str(v) for v in raw_samples[:sample_size]]
+
+                # Count nulls in sample
+                null_count = sum(1 for row in sample_rows if row[col_idx] is None)
+                total_sampled = len(sample_rows)
+                null_rate = null_count / total_sampled if total_sampled > 0 else 0.0
+
+                unique_count = len(set(str(v) for v in raw_samples))
+                non_null_count = len(raw_samples)
+                unique_rate = unique_count / non_null_count if non_null_count > 0 else 0.0
+
+                fields.append(FieldInfo(
+                    name=col_name,
+                    dtype=_pg_type_to_infermap(data_type),
+                    sample_values=sample_values,
+                    null_rate=round(null_rate, 4),
+                    unique_rate=round(unique_rate, 4),
+                    value_count=total - int(null_rate * total),
+                    metadata={"db_type": data_type},
+                ))
+
+            return SchemaInfo(fields=fields, source_name=f"{conn_info['database']}.{table}")
+        finally:
+            conn.close()
+
+    def _extract_duckdb(self, conn_info: dict, table: str, sample_size: int) -> SchemaInfo:
+        import duckdb
+
+        db_path = conn_info.get("path", ":memory:")
+        try:
+            conn = duckdb.connect(db_path, read_only=True) if db_path != ":memory:" else duckdb.connect(":memory:")
+        except Exception as exc:
+            raise InferMapError(f"Cannot connect to DuckDB at {db_path!r}: {exc}") from exc
+
+        try:
+            # Get column info
+            result = conn.execute("""
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = ?
+                ORDER BY ordinal_position
+            """, [table]).fetchall()
+
+            if not result:
+                raise InferMapError(f"Table '{table}' not found in DuckDB: {db_path}")
+
+            # Total count
+            total = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+
+            # Sample
+            sample_rows = conn.execute(f'SELECT * FROM "{table}" USING SAMPLE {sample_size}').fetchall()
+            col_names = [col[0] for col in result]
+
+            fields = []
+            for col_idx, (col_name, data_type) in enumerate(result):
+                raw_samples = [row[col_idx] for row in sample_rows if row[col_idx] is not None]
+                sample_values = [str(v) for v in raw_samples[:sample_size]]
+
+                null_count = sum(1 for row in sample_rows if row[col_idx] is None)
+                total_sampled = len(sample_rows)
+                null_rate = null_count / total_sampled if total_sampled > 0 else 0.0
+
+                unique_count = len(set(str(v) for v in raw_samples))
+                non_null_count = len(raw_samples)
+                unique_rate = unique_count / non_null_count if non_null_count > 0 else 0.0
+
+                fields.append(FieldInfo(
+                    name=col_name,
+                    dtype=_duckdb_type_to_infermap(data_type),
+                    sample_values=sample_values,
+                    null_rate=round(null_rate, 4),
+                    unique_rate=round(unique_rate, 4),
+                    value_count=total - int(null_rate * total),
+                    metadata={"db_type": data_type},
+                ))
+
+            return SchemaInfo(fields=fields, source_name=f"{db_path}:{table}")
+        finally:
+            conn.close()
