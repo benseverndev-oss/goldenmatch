@@ -9,6 +9,7 @@
 [![Downloads](https://static.pepy.tech/badge/goldenpipe/month)](https://pepy.tech/project/goldenpipe)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenpipe-d4a017)](https://benzsevern.github.io/goldenpipe/)
 
 ## What It Does
 
@@ -81,12 +82,12 @@ goldenpipe mcp-serve
 
 ## Part of the Golden Suite
 
-| Package | What It Does |
-|---------|-------------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Data validation |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Data transformation |
-| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Entity resolution |
-| **GoldenPipe** | Orchestrates all three |
+| Tool | Purpose | Install |
+|------|---------|---------|
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
+| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
 
 ## License
 
