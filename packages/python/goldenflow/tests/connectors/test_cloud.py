@@ -1,6 +1,5 @@
 import sys
 import pytest
-from unittest.mock import patch
 from goldenflow.connectors.s3 import _parse_s3_uri
 from goldenflow.connectors.gcs import _parse_gcs_uri
 
