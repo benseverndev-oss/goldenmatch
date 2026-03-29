@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.benzsevern/goldenpipe -->
 # GoldenPipe
 
 **Golden Suite orchestrator** -- Check quality, fix issues, deduplicate records. One command.
