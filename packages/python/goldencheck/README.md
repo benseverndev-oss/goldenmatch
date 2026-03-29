@@ -10,6 +10,7 @@ Data validation that discovers rules from your data so you don't have to write t
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017)](https://benzsevern.github.io/goldencheck/)
+[![DQBench](https://img.shields.io/badge/DQBench-88.40-gold)](https://github.com/benzsevern/dqbench)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
@@ -414,8 +415,16 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-**Part of the Golden Suite:**
-- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — entity resolution toolkit. `pip install goldenmatch[quality]` auto-integrates GoldenCheck as a pre-matching quality step.
+## Part of the Golden Suite
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
+| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
+
+**Companion projects:**
 - [dbt-goldencheck](https://github.com/benzsevern/dbt-goldencheck) — data validation as a dbt test.
 - [goldencheck-types](https://github.com/benzsevern/goldencheck-types) — community-contributed domain type packs.
 - [goldencheck-action](https://github.com/benzsevern/goldencheck-action) — GitHub Action for CI with PR comments.
