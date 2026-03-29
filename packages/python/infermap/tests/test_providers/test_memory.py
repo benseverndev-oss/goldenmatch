@@ -1,9 +1,10 @@
 """Tests for InMemoryProvider."""
 from __future__ import annotations
 
-import pandas as pd
 import polars as pl
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 from infermap.providers.memory import InMemoryProvider
 
