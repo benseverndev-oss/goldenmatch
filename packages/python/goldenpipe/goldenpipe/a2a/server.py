@@ -1,7 +1,6 @@
 """A2A protocol server for GoldenPipe (aiohttp)."""
 from __future__ import annotations
 
-import json
 
 try:
     from aiohttp import web

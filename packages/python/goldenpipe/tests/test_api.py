@@ -1,6 +1,5 @@
 """Tests for Python API."""
 import polars as pl
-import pytest
 from goldenpipe._api import run, run_df, run_stages
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus, PipeStatus
 from goldenpipe.models.stage import stage

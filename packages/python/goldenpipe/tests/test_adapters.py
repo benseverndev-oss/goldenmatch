@@ -1,7 +1,6 @@
 """Tests for Golden Suite adapters (mocked)."""
 import pytest
 from unittest.mock import MagicMock, patch
-import polars as pl
 
 from goldenpipe.models.context import PipeContext, StageStatus
 

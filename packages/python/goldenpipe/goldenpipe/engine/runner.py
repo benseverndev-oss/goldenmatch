@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from goldenpipe.engine.registry import StageRegistry
-from goldenpipe.engine.resolver import ExecutionPlan, PlannedStage
+from goldenpipe.engine.resolver import ExecutionPlan
 from goldenpipe.engine.router import Router
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 
