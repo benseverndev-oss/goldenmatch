@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.benzsevern/goldenflow",
+  "title": "GoldenFlow",
+  "description": "Data transformation toolkit — standardize, reshape, and normalize messy data",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/benzsevern/goldenflow.git",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "goldenflow",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "remotes": [
+    {
+      "transportType": "streamable-http",
+      "url": "https://goldenflow-mcp-production.up.railway.app/mcp/"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +31,9 @@ class TransformEngine:
     ) -> TransformResult:
         """Transform a file. Optionally write output files."""
         df = read_file(path)
+        t0 = time.monotonic()
         result = self.transform_df(df, source=str(path))
+        elapsed = time.monotonic() - t0
 
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -51,7 +54,7 @@ class TransformEngine:
                 columns=result.df.shape[1],
                 transforms_applied=len(result.manifest.records),
                 errors=len(result.manifest.errors),
-                duration_seconds=0.0,  # TODO: track actual duration
+                duration_seconds=round(elapsed, 3),
             )
             save_run(record)
         except Exception:
