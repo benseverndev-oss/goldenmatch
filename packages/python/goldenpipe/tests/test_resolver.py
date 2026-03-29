@@ -1,6 +1,6 @@
 """Tests for pipeline resolver and wiring validation."""
 import pytest
-from goldenpipe.engine.resolver import Resolver, ExecutionPlan, PlannedStage, WiringError
+from goldenpipe.engine.resolver import Resolver, ExecutionPlan, WiringError
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.stage import stage

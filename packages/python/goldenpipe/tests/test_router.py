@@ -1,7 +1,6 @@
 """Tests for decision routing."""
-import pytest
 from goldenpipe.engine.router import Router
-from goldenpipe.engine.resolver import PlannedStage, ExecutionPlan
+from goldenpipe.engine.resolver import PlannedStage
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.models.config import StageSpec
 from goldenpipe.models.context import Decision, PipeContext, StageResult, StageStatus

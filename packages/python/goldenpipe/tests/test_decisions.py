@@ -1,6 +1,6 @@
 """Tests for built-in decision functions."""
 from goldenpipe.decisions import severity_gate, pii_router, row_count_gate
-from goldenpipe.models.context import PipeContext, Decision
+from goldenpipe.models.context import PipeContext
 
 
 class TestSeverityGate:

@@ -11,7 +11,7 @@ from goldenpipe.engine.resolver import Resolver
 from goldenpipe.engine.runner import Runner
 from goldenpipe.engine.reporter import Reporter
 from goldenpipe.models.config import PipelineConfig, StageSpec
-from goldenpipe.models.context import PipeContext, PipeResult, PipeStatus
+from goldenpipe.models.context import PipeContext, PipeResult
 
 
 def run(source: str, config: str | None = None) -> PipeResult:

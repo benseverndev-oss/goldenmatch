@@ -1,5 +1,4 @@
 """Tests for goldenpipe.models.context."""
-import polars as pl
 from goldenpipe.models.context import (
     PipeContext, StageResult, Decision, PipeResult,
     StageStatus, PipeStatus,

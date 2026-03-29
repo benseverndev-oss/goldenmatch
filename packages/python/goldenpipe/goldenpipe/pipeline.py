@@ -1,7 +1,6 @@
 """Pipeline -- thin wrapper over the engine layer."""
 from __future__ import annotations
 
-from pathlib import Path
 
 import polars as pl
 

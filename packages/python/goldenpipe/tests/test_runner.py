@@ -1,5 +1,4 @@
 """Tests for pipeline runner."""
-import pytest
 from goldenpipe.engine.runner import Runner
 from goldenpipe.engine.resolver import PlannedStage, ExecutionPlan
 from goldenpipe.engine.registry import StageRegistry

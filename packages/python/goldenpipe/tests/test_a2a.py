@@ -2,7 +2,7 @@
 import pytest
 
 try:
-    from aiohttp import web
+    from aiohttp import web  # noqa: F401
     from goldenpipe.a2a.server import create_app
     HAS_AIOHTTP = True
 except ImportError:
