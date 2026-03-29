@@ -9,9 +9,11 @@ from goldenflow.transforms import register_transform
 def account_mask(series: pl.Series) -> pl.Series:
     """Mask account numbers showing only last 4 digits."""
     def _mask(val):
-        if val is None: return None
+        if val is None:
+            return None
         digits = re.sub(r"\D", "", str(val))
-        if len(digits) < 4: return val
+        if len(digits) < 4:
+            return val
         return "*" * (len(digits) - 4) + digits[-4:]
     return series.map_elements(_mask, return_dtype=pl.Utf8)
 
@@ -19,7 +21,8 @@ def account_mask(series: pl.Series) -> pl.Series:
 def cusip_format(series: pl.Series) -> pl.Series:
     """Standardize CUSIP identifiers (9 chars, uppercase)."""
     def _fmt(val):
-        if val is None: return None
+        if val is None:
+            return None
         return val.strip().upper()[:9]
     return series.map_elements(_fmt, return_dtype=pl.Utf8)
 

@@ -46,9 +46,6 @@ class StreamProcessor:
     ) -> Iterator[TransformResult]:
         """Stream a file in chunks, yielding TransformResult per chunk."""
         path = Path(path)
-        lazy = pl.scan_csv(path)
-        # Process in chunks by slicing the lazy frame
-        total_rows = pl.read_csv(path, n_rows=0).shape[0]  # just get schema
         # Read full file and split into batches
         full_df = pl.read_csv(path)
         for start in range(0, full_df.shape[0], chunk_size):

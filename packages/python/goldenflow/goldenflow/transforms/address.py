@@ -116,16 +116,22 @@ def split_address(df: pl.DataFrame, column: str) -> pl.DataFrame:
     pattern = re.compile(r"^(.+?),\s*(.+?),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$")
     for val in df[column].to_list():
         if val is None:
-            streets.append(None); cities.append(None)
-            states.append(None); zips.append(None)
+            streets.append(None)
+            cities.append(None)
+            states.append(None)
+            zips.append(None)
             continue
         m = pattern.match(val.strip())
         if m:
-            streets.append(m.group(1)); cities.append(m.group(2))
-            states.append(m.group(3)); zips.append(m.group(4))
+            streets.append(m.group(1))
+            cities.append(m.group(2))
+            states.append(m.group(3))
+            zips.append(m.group(4))
         else:
-            streets.append(val); cities.append(None)
-            states.append(None); zips.append(None)
+            streets.append(val)
+            cities.append(None)
+            states.append(None)
+            zips.append(None)
     return df.with_columns(
         pl.Series("street", streets),
         pl.Series("city", cities),

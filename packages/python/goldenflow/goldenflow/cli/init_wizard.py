@@ -17,7 +17,6 @@ def run_wizard(data_path: Path | None = None, output_path: Path = Path("goldenfl
     from goldenflow.engine.selector import select_transforms
     from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
     from goldenflow.config.loader import save_config
-    from goldenflow.transforms import list_transforms
 
     console.print("[bold]GoldenFlow Setup Wizard[/bold]\n")
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import typer
 from rich.console import Console
 
 console = Console()
@@ -20,7 +19,6 @@ def watch_directory(
     from goldenflow.config.loader import load_config
     from goldenflow.config.schema import GoldenFlowConfig
     from goldenflow.engine.transformer import TransformEngine
-    from goldenflow.connectors.file import read_file, write_file
 
     cfg = load_config(config_path) if config_path else GoldenFlowConfig()
     engine = TransformEngine(config=cfg)

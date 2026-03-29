@@ -9,9 +9,11 @@ from goldenflow.transforms import register_transform
 def npi_validate(series: pl.Series) -> pl.Series:
     """Validate NPI numbers (10-digit, Luhn check)."""
     def _validate(val):
-        if val is None: return None
+        if val is None:
+            return None
         digits = re.sub(r"\D", "", str(val))
-        if len(digits) != 10: return False
+        if len(digits) != 10:
+            return False
         # Luhn check with prefix 80840
         full = "80840" + digits
         total = 0
@@ -19,7 +21,8 @@ def npi_validate(series: pl.Series) -> pl.Series:
             n = int(d)
             if i % 2 == 1:
                 n *= 2
-                if n > 9: n -= 9
+                if n > 9:
+                    n -= 9
             total += n
         return total % 10 == 0
     return series.map_elements(_validate, return_dtype=pl.Boolean)
@@ -28,7 +31,8 @@ def npi_validate(series: pl.Series) -> pl.Series:
 def icd10_format(series: pl.Series) -> pl.Series:
     """Standardize ICD-10 codes (uppercase, insert dot after 3rd char)."""
     def _fmt(val):
-        if val is None: return None
+        if val is None:
+            return None
         code = val.strip().upper().replace(".", "")
         if len(code) > 3:
             return code[:3] + "." + code[3:]

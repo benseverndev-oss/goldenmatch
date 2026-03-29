@@ -8,7 +8,8 @@ from goldenflow.transforms import register_transform
 def mls_normalize(series: pl.Series) -> pl.Series:
     """Normalize MLS listing IDs (uppercase, strip whitespace)."""
     def _norm(val):
-        if val is None: return None
+        if val is None:
+            return None
         return val.strip().upper()
     return series.map_elements(_norm, return_dtype=pl.Utf8)
 

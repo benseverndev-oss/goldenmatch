@@ -9,7 +9,8 @@ from goldenflow.transforms import register_transform
 def sku_normalize(series: pl.Series) -> pl.Series:
     """Normalize SKU identifiers (uppercase, strip whitespace, remove special chars)."""
     def _norm(val):
-        if val is None: return None
+        if val is None:
+            return None
         return re.sub(r"[^A-Z0-9\-]", "", val.strip().upper())
     return series.map_elements(_norm, return_dtype=pl.Utf8)
 

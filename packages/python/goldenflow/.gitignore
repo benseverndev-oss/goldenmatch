@@ -21,6 +21,20 @@ htmlcov/
 .idea/
 *.swp
 
+# Caches and venvs
+.mypy_cache/
+.ruff_cache/
+.tox/
+*.egg
+.venv/
+venv/
+
+# AI editor configs
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/
+
 # OS
 .DS_Store
 Thumbs.db
