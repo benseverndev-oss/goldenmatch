@@ -38,6 +38,8 @@ dependencies = [
 Homepage = "https://github.com/benzsevern/goldencheck"
 Repository = "https://github.com/benzsevern/goldencheck"
 Issues = "https://github.com/benzsevern/goldencheck/issues"
+Documentation = "https://benzsevern.github.io/goldencheck/"
+Changelog = "https://github.com/benzsevern/goldencheck/blob/main/CHANGELOG.md"
 
 [project.scripts]
 goldencheck = "goldencheck.cli.main:app"
