@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-import threading
 from datetime import datetime
 from pathlib import Path
 

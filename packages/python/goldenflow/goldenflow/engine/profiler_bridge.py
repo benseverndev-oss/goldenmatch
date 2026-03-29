@@ -131,7 +131,6 @@ def profile_dataframe(df: pl.DataFrame, file_path: str = "", use_llm: bool | Non
     """
     try:
         from goldencheck import scan_file
-        from goldencheck.models.profile import DatasetProfile as GCProfile
 
         # If we have a file path and GoldenCheck, use it
         if file_path:

@@ -10,7 +10,7 @@ pip install goldenflow
 goldenflow transform data.csv
 ```
 
-[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen)](https://github.com/benzsevern/goldenflow)
+![Tests](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)
 [![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)

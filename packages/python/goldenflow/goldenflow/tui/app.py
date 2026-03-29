@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button,
     Checkbox,
@@ -138,7 +136,6 @@ class TransformTab(TabPane):
             return
 
         # Show before
-        before = self._df[self._selected_column].head(5).cast_insensitive("utf8" if hasattr(self._df[self._selected_column], "cast_insensitive") else "Utf8")
         try:
             import polars as pl
             before_list = self._df[self._selected_column].head(5).cast(pl.Utf8).to_list()

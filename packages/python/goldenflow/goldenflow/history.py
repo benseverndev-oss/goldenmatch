@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 HISTORY_DIR = Path.home() / ".goldenflow" / "history"

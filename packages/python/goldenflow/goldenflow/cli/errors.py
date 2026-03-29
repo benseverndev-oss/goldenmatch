@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import sys
 
 import typer
 from rich.console import Console
