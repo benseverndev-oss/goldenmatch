@@ -14,3 +14,14 @@ goldencheck.yml
 .ruff_cache/
 .testing/
 benchmarks/results.json
+.firecrawl/
+.goldencheck/
+.mypy_cache/
+.tox/
+*.egg
+htmlcov/
+venv/
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/

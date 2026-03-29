@@ -2,6 +2,22 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.0.2] - 2026-03-29
+
+### Added
+- **MCP Registry metadata** — `server.json` and `mcp-name` verification for registry discovery
+
+## [1.0.1] - 2026-03-25
+
+### Added
+- **REST API server** — `goldencheck serve` exposes scan/validate/profile/health endpoints
+- **Database scanning** — `goldencheck scan-db` scans tables directly from PostgreSQL, MySQL, SQLite
+- **Scheduled runs** — `goldencheck schedule` for cron-style recurring scans with webhook alerts
+- **HTML reports** — `--html report.html` generates shareable, self-contained dark-themed reports
+
+### Stats
+- **296 tests** | **DQBench 88.40** | **14 commands** | **9 MCP tools** | **3 domain packs**
+
 ## [1.0.0] - 2026-03-24
 
 ### Added
