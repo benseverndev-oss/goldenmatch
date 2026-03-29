@@ -5,6 +5,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/goldenpipe?color=d4a017)](https://pypi.org/project/goldenpipe/)
 [![Python](https://img.shields.io/pypi/pyversions/goldenpipe)](https://pypi.org/project/goldenpipe/)
+![Tests](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml/badge.svg)
 
 ## What It Does
 
