@@ -1,0 +1,13 @@
+name: infermap
+description: Map messy source columns to a known target schema using a transparent multi-pass scoring pipeline. Zero config, explainable results.
+icon: "\U0001F5FA"
+startCommand: infermap serve
+tools:
+  - name: map
+    description: Map source columns to target schema using weighted scorer pipeline with optimal assignment.
+  - name: inspect
+    description: Inspect a schema -- show fields, types, samples, and statistics.
+  - name: validate
+    description: Validate that a source file satisfies a mapping config. Exits code 1 with --strict if required fields are unmapped.
+  - name: apply
+    description: Apply a saved mapping config to remap a file's columns.

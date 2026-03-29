@@ -1,0 +1,43 @@
+# Environment
+.env
+.env.*
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.testing/
+
+# Linting
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# AI editor configs
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/
+
+# OS
+.DS_Store
+Thumbs.db

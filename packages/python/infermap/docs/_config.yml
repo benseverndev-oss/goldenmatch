@@ -1,0 +1,22 @@
+title: infermap
+description: Inference-driven schema mapping engine -- map messy source columns to a known target schema accurately and explainably.
+url: https://benzsevern.github.io
+baseurl: /infermap
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+color_scheme: dark
+
+permalink: pretty
+
+aux_links:
+  PyPI: https://pypi.org/project/infermap/
+  GitHub: https://github.com/benzsevern/infermap
+
+aux_links_new_tab: true
+nav_sort: case_insensitive
+footer_content: "infermap &mdash; MIT License"
+search_enabled: true
+back_to_top: true
+back_to_top_text: Back to top
+
+exclude:
+  - superpowers/
