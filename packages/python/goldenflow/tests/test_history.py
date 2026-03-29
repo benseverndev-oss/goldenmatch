@@ -1,4 +1,3 @@
-from pathlib import Path
 from goldenflow.history import RunRecord, save_run, list_runs, generate_run_id
 
 def test_generate_run_id():

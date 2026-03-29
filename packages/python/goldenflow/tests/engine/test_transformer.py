@@ -103,7 +103,7 @@ def test_transform_with_splits():
 
 def test_transform_output_files(sample_csv: Path, tmp_path: Path):
     engine = TransformEngine()
-    result = engine.transform_file(sample_csv, output_dir=tmp_path)
+    engine.transform_file(sample_csv, output_dir=tmp_path)
     transformed_path = tmp_path / "sample_transformed.csv"
     manifest_path = tmp_path / "sample_manifest.json"
     assert transformed_path.exists()

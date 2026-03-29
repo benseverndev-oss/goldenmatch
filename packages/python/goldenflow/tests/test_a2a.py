@@ -2,8 +2,7 @@
 import pytest
 
 try:
-    from aiohttp import web
-    from goldenflow.a2a.server import create_app, AGENT_CARD
+    from goldenflow.a2a.server import create_app
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False

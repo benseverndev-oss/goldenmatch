@@ -1,5 +1,4 @@
 import polars as pl
-from pathlib import Path
 from goldenflow.streaming import StreamProcessor
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 
