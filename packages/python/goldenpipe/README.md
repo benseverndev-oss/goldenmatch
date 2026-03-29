@@ -4,8 +4,10 @@
 **Golden Suite orchestrator** -- Check quality, fix issues, deduplicate records. One command.
 
 [![PyPI](https://img.shields.io/pypi/v/goldenpipe?color=d4a017)](https://pypi.org/project/goldenpipe/)
-[![Python](https://img.shields.io/pypi/pyversions/goldenpipe)](https://pypi.org/project/goldenpipe/)
-![Tests](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml/badge.svg)
+[![CI](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml)
+[![Downloads](https://static.pepy.tech/badge/goldenpipe/month)](https://pepy.tech/project/goldenpipe)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What It Does
 
