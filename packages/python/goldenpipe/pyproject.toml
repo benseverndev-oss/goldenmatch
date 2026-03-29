@@ -42,6 +42,8 @@ goldenpipe = "goldenpipe.cli.main:app"
 Homepage = "https://github.com/benzsevern/goldenpipe"
 Repository = "https://github.com/benzsevern/goldenpipe"
 Issues = "https://github.com/benzsevern/goldenpipe/issues"
+Documentation = "https://benzsevern.github.io/goldenpipe/"
+Changelog = "https://github.com/benzsevern/goldenpipe/blob/main/CHANGELOG.md"
 
 [project.entry-points."goldenpipe.stages"]
 "goldencheck.scan" = "goldenpipe.adapters.check:ScanStage"

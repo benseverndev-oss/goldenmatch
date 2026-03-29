@@ -10,3 +10,18 @@ build/
 .env
 *.env
 .goldenpipe/
+
+.mypy_cache/
+.tox/
+*.egg
+htmlcov/
+.venv/
+venv/
+
+# AI editor configs
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/
+AGENTS.md
+CLAUDE.md
