@@ -13,6 +13,7 @@ Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benzsevern.github.io/goldenflow/)
 [![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenflow/blob/main/scripts/goldenflow_demo.ipynb)
 
 ```bash
 pip install goldenflow
