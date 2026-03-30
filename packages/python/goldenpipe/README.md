@@ -10,6 +10,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenpipe-d4a017)](https://benzsevern.github.io/goldenpipe/)
+[![DQBench Pipeline](https://img.shields.io/badge/DQBench%20Pipeline-41.21-gold)](https://github.com/benzsevern/dqbench)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenpipe/blob/main/scripts/goldenpipe_demo.ipynb)
 
 ## What It Does
