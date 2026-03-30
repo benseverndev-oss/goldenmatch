@@ -4,48 +4,30 @@ on:
   workflow_dispatch:
     inputs:
       csv_url:
-        description: "URL to a public CSV file"
-        required: true
-        type: string
-      llm_boost:
-        description: "Enable LLM boost (requires OPENAI_API_KEY secret)"
+        description: "URL to a CSV file (or leave blank for built-in demo)"
         required: false
-        type: boolean
-        default: false
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
-  try-it:
+  scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install GoldenCheck
-        run: pip install goldencheck[llm]
-
-      - name: Download CSV
+      - run: pip install -e .
+      - name: Run built-in demo
+        if: inputs.csv_url == ''
+        run: goldencheck demo --no-tui
+      - name: Download user CSV
+        if: inputs.csv_url != ''
+        run: curl -sL -o user_data.csv "$CSV_URL"
         env:
           CSV_URL: ${{ inputs.csv_url }}
-        run: curl -L -o input.csv "$CSV_URL"
-
-      - name: Scan (profiler-only)
-        if: ${{ !inputs.llm_boost }}
-        run: goldencheck input.csv --no-tui --json > results.json 2>&1 || true
-
-      - name: Scan (with LLM boost)
-        if: ${{ inputs.llm_boost }}
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: goldencheck input.csv --no-tui --json --llm-boost --llm-provider openai > results.json 2>&1 || true
-
-      - name: Display results
-        run: cat results.json
-
-      - name: Upload results
-        uses: actions/upload-artifact@v4
-        with:
-          name: goldencheck-results
-          path: results.json
+      - name: Scan user CSV
+        if: inputs.csv_url != ''
+        run: goldencheck scan user_data.csv --no-tui --json
