@@ -1,0 +1,28 @@
+# infermap config: Healthcare data systems (EHR, claims, lab)
+# Medical field names vary widely between systems — heavy alias coverage needed
+
+scorers:
+  AliasScorer:
+    weight: 1.0
+  PatternTypeScorer:
+    weight: 0.9       # dates and IDs are strong signals in healthcare data
+  FuzzyNameScorer:
+    weight: 0.3       # medical abbreviations don't fuzzy-match well
+
+aliases:
+  patient_id: [PatientID, pat_id, pid, patient_no, pt_id, member_id]
+  mrn: [MedicalRecordNo, medical_record_number, chart_number, MRN, chart_no]
+  full_name: [PatientName, patient_name, member_name, pt_name]
+  first_name: [fname, first, given_name, pat_first, member_first]
+  last_name: [lname, last, surname, pat_last, member_last]
+  date_of_birth: [DateOfBirth, dob, birth_date, birthdate, DOB, pat_dob]
+  gender: [Gender, sex, patient_sex, pat_gender]
+  phone: [PhoneNumber, phone_number, tel, telephone, contact_phone, home_phone]
+  email: [EmailAddress, email_address, contact_email, pat_email]
+  address: [PatientAddress, patient_addr, home_address, street_address, addr]
+  zip_code: [PatientZip, postal_code, zipcode, zip, postal]
+  insurance: [InsuranceProvider, insurance_company, insurer, payer, plan_name, carrier]
+  blood_type: [BloodType, blood_group, abo_type]
+  npi: [provider_npi, national_provider_identifier, attending_npi, ordering_npi]
+  icd_code: [diagnosis_code, dx_code, icd10, icd_10, primary_dx]
+  cpt_code: [procedure_code, proc_code, service_code, hcpcs]
