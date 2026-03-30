@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 from infermap.engine import MapEngine
 from infermap.types import MapResult

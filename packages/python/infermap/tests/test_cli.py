@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-import pytest
 from typer.testing import CliRunner
 
 from infermap.cli import app

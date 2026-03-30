@@ -6,7 +6,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from infermap.providers.memory import InMemoryProvider
+from infermap.providers.memory import InMemoryProvider  # noqa: E402
 
 
 def make_polars_df():

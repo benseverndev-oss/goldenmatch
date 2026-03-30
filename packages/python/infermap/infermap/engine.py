@@ -11,9 +11,9 @@ import yaml
 
 from infermap.assignment import optimal_assign
 from infermap.providers import extract_schema
-from infermap.scorers import AliasScorer, default_scorers
+from infermap.scorers import default_scorers
 from infermap.scorers.alias import ALIASES, _ALIAS_LOOKUP
-from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo
+from infermap.types import FieldMapping, MapResult, SchemaInfo
 
 logger = logging.getLogger("infermap")
 

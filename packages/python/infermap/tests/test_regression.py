@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 import infermap
 from infermap.config import from_config
