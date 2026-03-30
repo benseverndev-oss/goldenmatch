@@ -1,0 +1,30 @@
+name: Try GoldenFlow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Generate demo data
+        run: goldenflow demo --output demo_data.csv
+      - name: Zero-config transform
+        run: goldenflow transform demo_data.csv --output-dir output/
+      - name: Profile
+        run: goldenflow profile demo_data.csv
+      - name: Diff
+        run: goldenflow diff demo_data.csv output/demo_data_transformed.csv
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: goldenflow-results
+          path: output/
