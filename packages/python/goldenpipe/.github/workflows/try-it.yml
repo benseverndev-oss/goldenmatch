@@ -1,0 +1,37 @@
+name: Try GoldenPipe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[golden-suite]"
+      - name: Create sample data
+        run: |
+          python -c "
+          import csv
+          rows = [
+              ['first_name', 'last_name', 'email', 'phone', 'city'],
+              ['  John  ', 'Smith', 'JOHN@ACME.COM', '(555) 123-4567', 'new york'],
+              ['john', 'smith', 'john@acme.com', '555.123.4567', 'New York'],
+              ['Jane', 'Doe', 'jane@corp.com', '555-987-6543', 'Chicago'],
+              ['  JANE', 'DOE', 'JANE@CORP.COM', '(555)987-6543', 'chicago'],
+              ['Bob', 'Wilson', 'bob@test.com', '555 111 2222', 'Boston'],
+          ]
+          with open('sample.csv', 'w', newline='') as f:
+              csv.writer(f).writerows(rows)
+          print('Created sample.csv')
+          "
+      - name: Run pipeline
+        run: goldenpipe run sample.csv
+      - name: List stages
+        run: goldenpipe stages
