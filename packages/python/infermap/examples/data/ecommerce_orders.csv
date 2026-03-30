@@ -1,0 +1,6 @@
+order_ref,buyer_email,buyer_phone,ship_to_addr,ship_zipcode,item_sku,item_desc,qty,unit_price,order_dt
+ORD-001,alice@shop.com,555-2001,100 Oak St,10001,SKU-A100,Wireless Mouse,2,29.99,2024-11-01
+ORD-002,bob@shop.com,(555) 200-2000,200 Pine Ave,90210,SKU-B200,USB-C Hub,1,49.99,2024-11-02
+ORD-003,carol@shop.com,+15552003,300 Elm Rd,30301,SKU-C300,Mechanical Keyboard,1,89.99,2024-11-03
+ORD-004,dave@shop.com,555.2004,400 Birch Dr,60601,SKU-D400,Monitor Stand,3,19.99,2024-11-04
+ORD-005,eve@shop.com,15552005,500 Cedar Ct,02101,SKU-E500,Webcam HD,1,59.99,2024-11-05

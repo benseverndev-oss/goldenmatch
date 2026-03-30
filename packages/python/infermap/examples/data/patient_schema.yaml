@@ -1,0 +1,34 @@
+# Target schema for a hospital's patient database
+# Used by infermap to map messy source columns to clean target fields
+fields:
+  - name: patient_id
+    type: string
+    aliases: [PatientID, patient_no, pat_id, pid]
+    required: true
+  - name: full_name
+    type: string
+    aliases: [PatientName, patient_name, name]
+    required: true
+  - name: date_of_birth
+    type: date
+    aliases: [DateOfBirth, dob, birth_date, birthdate]
+    required: true
+  - name: mrn
+    type: string
+    aliases: [MedicalRecordNo, medical_record_number, chart_number, MRN]
+    required: true
+  - name: phone
+    type: string
+    aliases: [PhoneNumber, telephone, tel, mobile, cell]
+  - name: email
+    type: string
+    aliases: [EmailAddress, email_address, e_mail, contact_email]
+  - name: gender
+    type: string
+    aliases: [sex, Gender]
+  - name: blood_type
+    type: string
+    aliases: [BloodType, blood_group]
+  - name: insurance
+    type: string
+    aliases: [InsuranceProvider, insurance_company, insurer, payer]
