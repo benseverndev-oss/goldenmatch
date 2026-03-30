@@ -2,6 +2,16 @@ name: Try GoldenFlow
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Demo mode to run"
+        required: true
+        type: choice
+        options:
+          - Quick Demo
+          - Configured Transform
+          - DQBench Benchmark
+        default: Quick Demo
 
 permissions:
   contents: read
@@ -15,15 +25,36 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
+
+      # --- Quick Demo (default) ---
       - name: Generate demo data
+        if: inputs.mode == 'Quick Demo'
         run: goldenflow demo --output demo_data.csv
       - name: Zero-config transform
+        if: inputs.mode == 'Quick Demo'
         run: goldenflow transform demo_data.csv --output-dir output/
       - name: Profile
+        if: inputs.mode == 'Quick Demo'
         run: goldenflow profile demo_data.csv
       - name: Diff
+        if: inputs.mode == 'Quick Demo'
         run: goldenflow diff demo_data.csv output/demo_data_transformed.csv
+
+      # --- Configured Transform ---
+      - name: Run configured transform example
+        if: inputs.mode == 'Configured Transform'
+        run: python examples/configured_transform.py
+
+      # --- DQBench Benchmark ---
+      - name: Install DQBench
+        if: inputs.mode == 'DQBench Benchmark'
+        run: pip install dqbench
+      - name: Run DQBench benchmark
+        if: inputs.mode == 'DQBench Benchmark'
+        run: python examples/benchmark.py
+
       - name: Upload results
+        if: inputs.mode == 'Quick Demo'
         uses: actions/upload-artifact@v4
         with:
           name: goldenflow-results
