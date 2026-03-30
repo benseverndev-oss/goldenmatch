@@ -3,8 +3,16 @@ name: Try GoldenCheck
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "What to run"
+        required: true
+        type: choice
+        options:
+          - Quick Demo
+          - DQBench Benchmark
+        default: "Quick Demo"
       csv_url:
-        description: "URL to a CSV file (or leave blank for built-in demo)"
+        description: "URL to a CSV file (Quick Demo only — leave blank for built-in sample)"
         required: false
         default: ""
 
@@ -12,7 +20,8 @@ permissions:
   contents: read
 
 jobs:
-  scan:
+  quick-demo:
+    if: inputs.mode == 'Quick Demo'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +31,7 @@ jobs:
       - run: pip install -e .
       - name: Run built-in demo
         if: inputs.csv_url == ''
-        run: goldencheck demo --no-tui
+        run: python examples/scan_and_profile.py
       - name: Download user CSV
         if: inputs.csv_url != ''
         run: curl -sL -o user_data.csv "$CSV_URL"
@@ -31,3 +40,15 @@ jobs:
       - name: Scan user CSV
         if: inputs.csv_url != ''
         run: goldencheck scan user_data.csv --no-tui --json
+
+  dqbench:
+    if: inputs.mode == 'DQBench Benchmark'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . dqbench
+      - name: Run DQBench Detect benchmark
+        run: python examples/benchmark.py
