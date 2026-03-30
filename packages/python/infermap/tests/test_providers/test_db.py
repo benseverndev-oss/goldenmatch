@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -130,7 +129,6 @@ class TestDBProviderPostgres:
 
     def test_postgres_extract_mocked(self):
         """Full extraction test using mocked psycopg2 connection."""
-        from infermap.providers.db import _pg_type_to_infermap
 
         provider = DBProvider()
 

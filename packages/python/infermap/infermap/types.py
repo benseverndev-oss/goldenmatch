@@ -5,7 +5,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-import polars as pl
 import yaml
 
 logger = logging.getLogger("infermap")

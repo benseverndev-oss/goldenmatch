@@ -237,7 +237,6 @@ class DBProvider:
             # Sample rows
             cur.execute(f'SELECT * FROM "{table}" LIMIT %s', (sample_size,))
             sample_rows = cur.fetchall()
-            col_names = [desc[0] for desc in cur.description]
 
             fields = []
             for col_idx, (col_name, data_type, is_nullable) in enumerate(columns):
@@ -293,7 +292,6 @@ class DBProvider:
 
             # Sample
             sample_rows = conn.execute(f'SELECT * FROM "{table}" USING SAMPLE {sample_size}').fetchall()
-            col_names = [col[0] for col in result]
 
             fields = []
             for col_idx, (col_name, data_type) in enumerate(result):
