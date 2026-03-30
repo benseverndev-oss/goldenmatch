@@ -104,6 +104,9 @@ def test_source_name_from_table(sqlite_db):
     assert schema.source_name == "contacts"
 
 
+psycopg2 = pytest.importorskip("psycopg2", reason="psycopg2 not installed")
+
+
 class TestDBProviderPostgres:
     """PostgreSQL tests using mocks (no live server available)."""
 
@@ -216,6 +219,9 @@ class TestDBProviderPostgres:
             }
             with pytest.raises(InferMapError, match="not found or has no columns"):
                 provider._extract_postgres(conn_info, "nonexistent", 500)
+
+
+duckdb = pytest.importorskip("duckdb", reason="duckdb not installed")
 
 
 class TestDBProviderDuckDB:
