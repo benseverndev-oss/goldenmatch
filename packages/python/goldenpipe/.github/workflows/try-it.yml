@@ -2,20 +2,35 @@ name: Try GoldenPipe
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        options:
+          - "Full Suite Demo"
+          - "Pipeline Only"
+          - "DQBench Benchmark"
+        default: "Full Suite Demo"
 
 permissions:
   contents: read
 
 jobs:
-  pipeline:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[golden-suite]"
-      - name: Create sample data
+      - run: pip install -e ".[golden-suite]" dqbench
+
+      - name: Full Suite Demo
+        if: inputs.mode == 'Full Suite Demo'
+        run: python examples/full_suite_demo.py
+
+      - name: Pipeline Only
+        if: inputs.mode == 'Pipeline Only'
         run: |
           python -c "
           import csv
@@ -24,14 +39,14 @@ jobs:
               ['  John  ', 'Smith', 'JOHN@ACME.COM', '(555) 123-4567', 'new york'],
               ['john', 'smith', 'john@acme.com', '555.123.4567', 'New York'],
               ['Jane', 'Doe', 'jane@corp.com', '555-987-6543', 'Chicago'],
-              ['  JANE', 'DOE', 'JANE@CORP.COM', '(555)987-6543', 'chicago'],
               ['Bob', 'Wilson', 'bob@test.com', '555 111 2222', 'Boston'],
           ]
           with open('sample.csv', 'w', newline='') as f:
               csv.writer(f).writerows(rows)
-          print('Created sample.csv')
           "
-      - name: Run pipeline
-        run: goldenpipe run sample.csv
-      - name: List stages
-        run: goldenpipe stages
+          goldenpipe run sample.csv
+          goldenpipe stages
+
+      - name: DQBench Benchmark
+        if: inputs.mode == 'DQBench Benchmark'
+        run: python examples/benchmark_suite.py
