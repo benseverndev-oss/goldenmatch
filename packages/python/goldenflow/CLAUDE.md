@@ -304,3 +304,86 @@ Hosted on Railway, registered on Smithery:
 - Cloud connectors (s3.py, gcs.py) have optional dependencies -- `pip install goldenflow[s3]` or `pip install goldenflow[gcs]`; they raise `ImportError` with a helpful message if the dependency is missing
 - `streaming.py` reads the full file before batching (currently) -- for truly out-of-core processing, use Polars LazyFrame directly
 - `history.py` stores runs in `~/.goldenflow/history/` -- this directory is created on first run and is not cleaned up automatically
+
+## API Quick Reference
+
+### transform_df() — Transform a DataFrame
+```python
+import goldenflow
+
+# Zero-config (auto-detects and applies safe transforms)
+result = goldenflow.transform_df(df)
+cleaned = result.df
+print(f"Applied {len(result.manifest.records)} transforms")
+
+# Configured (explicit transforms per column)
+from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+
+config = GoldenFlowConfig(transforms=[
+    TransformSpec(column="first_name", ops=["strip", "title_case"]),
+    TransformSpec(column="last_name", ops=["strip", "title_case"]),
+    TransformSpec(column="email", ops=["strip", "lowercase"]),
+    TransformSpec(column="phone", ops=["strip", "phone_national"]),
+    TransformSpec(column="city", ops=["strip", "title_case"]),
+    TransformSpec(column="address", ops=["strip", "collapse_whitespace"]),
+])
+result = goldenflow.transform_df(df, config=config)
+```
+
+### TransformResult fields
+```python
+result.df          # pl.DataFrame — transformed data
+result.manifest    # Manifest — audit trail
+result.manifest.records     # list[TransformRecord]
+result.manifest.created_at  # str
+```
+
+### Available transforms (43+)
+**Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate
+**Phone:** phone_e164, phone_national, phone_digits, phone_validate
+**Name:** split_name, split_name_reverse, strip_titles, name_proper
+**Address:** address_standardize, state_abbreviate, zip_normalize, split_address
+**Date:** date_iso8601, date_us, date_eu, age_from_dob
+**Categorical:** category_auto_correct, category_standardize, boolean_normalize, null_standardize
+**Numeric:** currency_strip, percentage_normalize, round
+
+### Zero-config vs Configured — when to use which
+- **Zero-config:** great for interactive exploration, finding what's wrong
+- **Configured:** essential for pipelines and benchmarks where you need specific transforms
+- Zero-config does NOT: title_case names, normalize phone formats, standardize addresses
+- If you need title_case, phone_national, or address_standardize — use a config
+
+### Schema mapping
+```python
+from goldenflow import SchemaMapper
+import polars as pl
+
+source = pl.DataFrame({"fname": ["John"], "lname": ["Smith"]})
+target = pl.DataFrame({"first_name": [""], "last_name": [""]})
+mapper = SchemaMapper()
+mappings = mapper.map(source, target)  # returns list[ColumnMapping]
+for m in mappings:
+    print(f"{m.source} → {m.target} ({m.confidence:.0%})")
+```
+
+### Config schema
+```python
+GoldenFlowConfig(
+    transforms=[TransformSpec(column="col", ops=["strip", "title_case"])],
+    renames={"old_name": "new_name"},
+    drop=["unwanted_column"],
+    filters=[FilterSpec(column="age", condition="gt:0")],
+    dedup=DedupSpec(columns=["email"], keep="first"),
+)
+```
+
+## DQBench Integration
+- **DQBench Transform Score: 100.00**
+- Adapter: `dqbench/adapters/goldenflow.py`
+- Run: `pip install dqbench && dqbench run goldenflow`
+
+## Common Mistakes
+- Expecting zero-config to title_case names — it only strips whitespace
+- Expecting zero-config to normalize phone formats — use phone_national explicitly
+- Using `result.manifest.total_transforms` — doesn't exist, use `len(result.manifest.records)`
+- SchemaMapper.map() takes DataFrames, not file paths

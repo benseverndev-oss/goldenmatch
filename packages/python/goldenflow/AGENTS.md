@@ -1,15 +1,13 @@
-# GoldenFlow -- Agent Instructions
+# GoldenFlow
 
 Data transformation toolkit -- standardize, reshape, and normalize messy data. DQBench Transform Score: 100/100.
 
 ## Related Projects
-
-- **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation.
-- **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution.
+- **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
+- **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
 - **GitHub:** `benzsevern/goldenflow`, `benzsevern/goldencheck`, `benzsevern/goldenmatch`
 
 ## Branch & Merge SOP (all Golden Suite repos)
-
 - Feature work goes on `feature/<name>` branches, never directly to main
 - Merge via **squash merge PR** (watchers see PR activity, history stays clean)
 - PR title format: `feat: <description>` or `fix: <description>`
@@ -18,7 +16,6 @@ Data transformation toolkit -- standardize, reshape, and normalize messy data. D
 - After merge: delete remote branch
 
 ## Environment
-
 - Windows 11, bash shell (Git Bash)
 - Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`
 - Two GitHub accounts: `benzsevern` (personal) and `benzsevern-mjh` (work)
@@ -34,10 +31,8 @@ pip install -e ".[all]"             # Everything
 pytest --tb=short -v                # Run tests (158 passing)
 ruff check .                        # Lint
 ruff check . --fix                  # Auto-fix lint
-```
 
-14 CLI commands:
-```bash
+# 14 CLI commands:
 goldenflow transform data.csv                    # Zero-config: auto-detect and fix
 goldenflow transform data.csv -c goldenflow.yaml # Apply saved config
 goldenflow transform data.csv --domain healthcare # Use a domain pack
@@ -128,16 +123,20 @@ The engine in `engine/transformer.py` dispatches based on `TransformInfo.mode` -
 ## Streaming Module (streaming.py)
 
 `StreamProcessor` wraps `TransformEngine` for incremental processing:
+
 - `transform_one(record: dict)` -- single record, returns `TransformResult`
 - `transform_batch(df: pl.DataFrame)` -- one batch
 - `stream_file(path, chunk_size=10_000)` -- yields `TransformResult` per chunk
 - `batches_processed` property -- count of batches completed
 
+The `goldenflow stream` CLI command uses this with a Rich progress bar.
+
 ## Cloud Connectors
 
 - `connectors/s3.py` -- `read_s3(uri)` / `write_s3(df, uri)` using boto3
 - `connectors/gcs.py` -- `read_gcs(uri)` / `write_gcs(df, uri)` using google-cloud-storage
-- The file connector (`connectors/file.py`) detects `s3://` and `gs://` prefixes and delegates automatically.
+
+The file connector (`connectors/file.py`) detects `s3://` and `gs://` prefixes and delegates to the appropriate cloud connector automatically.
 
 ## History Module (history.py)
 
@@ -221,16 +220,21 @@ Config is a `GoldenFlowConfig` Pydantic model (`config/schema.py`). `config/lear
 GoldenFlow sits in the middle of the Golden Suite pipeline:
 
 ```
-Raw Data -> GoldenCheck (profile & discover quality issues)
-         -> GoldenFlow (fix issues, standardize, reshape)
-         -> GoldenMatch (deduplicate, match, create golden records)
-         -> Production
+Raw Data
+   |
+   v GoldenCheck   -- profile & discover quality issues
+   | findings
+   v GoldenFlow    -- fix issues, standardize, reshape
+   | clean data
+   v GoldenMatch   -- deduplicate, match, create golden records
+   | golden records
+   v Production
 ```
 
 **GoldenCheck integration** (`pip install goldenflow[check]`):
-- `engine/profiler_bridge.py` calls GoldenCheck's scanner to get column profiles
-- `engine/selector.py:select_from_findings()` maps GoldenCheck finding checks to transform names
-- CLI flag `goldenflow transform data.csv --from-findings findings.json`
+- `engine/profiler_bridge.py` calls GoldenCheck's scanner to get column profiles without re-implementing profiling
+- `engine/selector.py:select_from_findings()` maps GoldenCheck finding checks (e.g. `"whitespace_issues"`) to transform names
+- CLI flag `goldenflow transform data.csv --from-findings findings.json` uses this path
 
 **GoldenMatch integration**:
 - GoldenFlow's output (clean CSV + manifest) feeds directly into `goldenmatch dedupe`
@@ -277,6 +281,17 @@ dqbench run all                                  # Compare against other tools
 python -m build && source .testing/.env && python -m twine upload dist/*
 ```
 
+## Remote MCP Server
+
+Hosted on Railway, registered on Smithery:
+- **Endpoint:** `https://goldenflow-mcp-production.up.railway.app/mcp/`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenflow`
+- **Server card:** `https://goldenflow-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
+- **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
+- **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
+- **Railway project:** `golden-suite-mcp` (service: `goldenflow-mcp`, port 8150)
+- **Local HTTP:** `goldenflow mcp-serve --transport http --port 8150`
+
 ## Gotchas
 
 - `*.csv` is in `.gitignore` -- test fixtures need `!tests/fixtures/*.csv` exception
@@ -290,9 +305,85 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 - `streaming.py` reads the full file before batching (currently) -- for truly out-of-core processing, use Polars LazyFrame directly
 - `history.py` stores runs in `~/.goldenflow/history/` -- this directory is created on first run and is not cleaned up automatically
 
-## Remote MCP Server
-- Endpoint: https://goldenflow-mcp-production.up.railway.app/mcp/
-- Smithery: https://smithery.ai/servers/benzsevern/goldenflow
-- 10 tools, Streamable HTTP transport
-- Dockerfile: Dockerfile.mcp
-- Local HTTP: goldenflow mcp-serve --transport http --port 8150
+## API Quick Reference
+
+### transform_df() — Transform a DataFrame
+```python
+import goldenflow
+
+# Zero-config (auto-detects and applies safe transforms)
+result = goldenflow.transform_df(df)
+cleaned = result.df
+print(f"Applied {len(result.manifest.records)} transforms")
+
+# Configured (explicit transforms per column)
+from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+
+config = GoldenFlowConfig(transforms=[
+    TransformSpec(column="first_name", ops=["strip", "title_case"]),
+    TransformSpec(column="last_name", ops=["strip", "title_case"]),
+    TransformSpec(column="email", ops=["strip", "lowercase"]),
+    TransformSpec(column="phone", ops=["strip", "phone_national"]),
+    TransformSpec(column="city", ops=["strip", "title_case"]),
+    TransformSpec(column="address", ops=["strip", "collapse_whitespace"]),
+])
+result = goldenflow.transform_df(df, config=config)
+```
+
+### TransformResult fields
+```python
+result.df          # pl.DataFrame — transformed data
+result.manifest    # Manifest — audit trail
+result.manifest.records     # list[TransformRecord]
+result.manifest.created_at  # str
+```
+
+### Available transforms (43+)
+**Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate
+**Phone:** phone_e164, phone_national, phone_digits, phone_validate
+**Name:** split_name, split_name_reverse, strip_titles, name_proper
+**Address:** address_standardize, state_abbreviate, zip_normalize, split_address
+**Date:** date_iso8601, date_us, date_eu, age_from_dob
+**Categorical:** category_auto_correct, category_standardize, boolean_normalize, null_standardize
+**Numeric:** currency_strip, percentage_normalize, round
+
+### Zero-config vs Configured — when to use which
+- **Zero-config:** great for interactive exploration, finding what's wrong
+- **Configured:** essential for pipelines and benchmarks where you need specific transforms
+- Zero-config does NOT: title_case names, normalize phone formats, standardize addresses
+- If you need title_case, phone_national, or address_standardize — use a config
+
+### Schema mapping
+```python
+from goldenflow import SchemaMapper
+import polars as pl
+
+source = pl.DataFrame({"fname": ["John"], "lname": ["Smith"]})
+target = pl.DataFrame({"first_name": [""], "last_name": [""]})
+mapper = SchemaMapper()
+mappings = mapper.map(source, target)  # returns list[ColumnMapping]
+for m in mappings:
+    print(f"{m.source} → {m.target} ({m.confidence:.0%})")
+```
+
+### Config schema
+```python
+GoldenFlowConfig(
+    transforms=[TransformSpec(column="col", ops=["strip", "title_case"])],
+    renames={"old_name": "new_name"},
+    drop=["unwanted_column"],
+    filters=[FilterSpec(column="age", condition="gt:0")],
+    dedup=DedupSpec(columns=["email"], keep="first"),
+)
+```
+
+## DQBench Integration
+- **DQBench Transform Score: 100.00**
+- Adapter: `dqbench/adapters/goldenflow.py`
+- Run: `pip install dqbench && dqbench run goldenflow`
+
+## Common Mistakes
+- Expecting zero-config to title_case names — it only strips whitespace
+- Expecting zero-config to normalize phone formats — use phone_national explicitly
+- Using `result.manifest.total_transforms` — doesn't exist, use `len(result.manifest.records)`
+- SchemaMapper.map() takes DataFrames, not file paths
