@@ -115,3 +115,43 @@ Hosted on Railway, registered on Smithery:
 - Domain pack loading priority: user types > domain types > base types (dict insertion order matters)
 - Cross-column findings: use only the "violating" column name to avoid FP on clean columns in benchmarks
 - DQBench adapter does NOT call `apply_confidence_downgrade` — raw `scan_file()` output is scored
+
+## API Quick Reference
+
+### scan_file() — Scan a CSV for quality issues
+```python
+import goldencheck
+
+findings = goldencheck.scan_file("data.csv")
+for f in findings:
+    print(f"[{f.severity}] {f.column}: {f.check} — {f.message}")
+```
+
+### health_score() — Get a letter grade + numeric score
+```python
+score = goldencheck.health_score("data.csv")
+print(score)  # e.g. "B (78/100)"
+```
+
+### CLI commands
+```bash
+goldencheck scan data.csv              # scan for issues
+goldencheck profile data.csv           # column-level stats
+goldencheck health-score data.csv      # health grade
+goldencheck validate data.csv          # validate against pinned rules
+goldencheck fix data.csv               # auto-fix safe issues
+goldencheck mcp-serve                  # start MCP server (19 tools)
+goldencheck demo --no-tui              # generate and scan demo data
+```
+
+### Domain packs
+```bash
+goldencheck scan data.csv --domain healthcare
+goldencheck scan data.csv --domain finance
+goldencheck scan data.csv --domain ecommerce
+```
+
+## DQBench Integration
+- **DQBench Detect Score: 88.40**
+- Adapter: `dqbench/adapters/goldencheck.py`
+- Run: `pip install dqbench && dqbench run goldencheck`
