@@ -1,0 +1,28 @@
+# infermap config: HR / Payroll / HRIS systems
+# Employee data across ADP, Workday, BambooHR, Gusto, etc.
+
+scorers:
+  AliasScorer:
+    weight: 1.0
+  PatternTypeScorer:
+    weight: 0.8
+  FuzzyNameScorer:
+    weight: 0.3
+
+aliases:
+  employee_id: [emp_id, worker_id, staff_id, personnel_no, ee_id, badge_number]
+  first_name: [fname, first, given_name, legal_first, preferred_name]
+  last_name: [lname, last, surname, family_name, legal_last]
+  email: [work_email, email_address, corporate_email, business_email, emp_email]
+  phone: [work_phone, mobile, cell, phone_number, contact_phone, home_phone]
+  hire_date: [start_date, date_hired, employment_start, onboard_date, join_date]
+  termination_date: [end_date, separation_date, last_day, offboard_date]
+  department: [dept, dept_name, division, business_unit, cost_center, team]
+  job_title: [title, position, role, job_name, designation, occupation]
+  manager: [supervisor, reports_to, manager_name, direct_manager, mgr]
+  salary: [base_salary, annual_salary, compensation, base_pay, pay_rate]
+  ssn: [social_security, tax_id, sin, national_id, government_id]
+  date_of_birth: [dob, birth_date, birthdate, DOB]
+  address: [home_address, street_address, mailing_address, residential_address]
+  zip_code: [postal_code, zipcode, zip, postcode]
+  status: [employment_status, emp_status, active_status, worker_status]

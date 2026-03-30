@@ -1,0 +1,27 @@
+# infermap config: E-commerce / order management systems
+# Order, product, and customer fields across platforms (Shopify, WooCommerce, ERP, warehouse)
+
+scorers:
+  PatternTypeScorer:
+    weight: 0.9       # emails, dates, and currency are strong type signals
+  ProfileScorer:
+    weight: 0.7       # price fields have distinctive distributions
+  FuzzyNameScorer:
+    weight: 0.3       # e-commerce field names are inconsistent
+
+aliases:
+  order_id: [order_ref, order_no, order_number, po_number, invoice_no, transaction_id]
+  customer_email: [buyer_email, email, email_address, contact_email, shopper_email]
+  customer_phone: [buyer_phone, phone, telephone, contact_phone, mobile]
+  customer_name: [buyer_name, full_name, shopper_name, bill_to_name]
+  shipping_address: [ship_to_addr, ship_address, delivery_address, addr, address_line_1]
+  postal_code: [ship_zipcode, zip_code, zipcode, zip, postcode]
+  product_sku: [item_sku, sku, product_code, item_code, part_number, upc]
+  product_name: [item_desc, item_name, description, product_title, product_description]
+  quantity: [qty, item_qty, units, count, num_items]
+  price: [unit_price, item_price, amount, cost, sale_price, list_price]
+  order_date: [order_dt, created_at, purchase_date, transaction_date, placed_at]
+  status: [order_status, fulfillment_status, ship_status, delivery_status]
+  tracking_number: [tracking_no, tracking_id, shipment_tracking, carrier_tracking]
+  discount: [discount_amount, coupon_value, promo_discount, savings]
+  tax: [tax_amount, sales_tax, vat, gst]
