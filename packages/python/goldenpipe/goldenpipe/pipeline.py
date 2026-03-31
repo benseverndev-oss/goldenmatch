@@ -34,7 +34,7 @@ class Pipeline:
             ctx.metadata["input_rows"] = len(df)
         elif source:
             try:
-                ctx.df = pl.read_csv(source, ignore_errors=True)
+                ctx.df = pl.read_csv(source, ignore_errors=True, encoding="utf8-lossy")
                 ctx.metadata["source"] = source
                 ctx.metadata["input_rows"] = len(ctx.df)
             except Exception as e:
