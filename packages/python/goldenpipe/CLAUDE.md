@@ -177,6 +177,13 @@ result = goldenmatch.dedupe_df(df, config=config)
 - Railway custom domains need Cloudflare DNS Only (not proxied) — proxy breaks domain verification
 - Cloudflare CNAME record IDs change when toggling proxy — must re-fetch IDs before patching
 - `next-mdx-remote` v5/v6 requires React 19 — use `react-markdown` + `remark-gfm` for React 18
+- Hardcoded version in `tests/test_pipeline.py::test_public_api` — must update when bumping version
+- `server.json` version must match PyPI — update and `mcp-publisher publish` after every release
+- `mcp-publisher login github` required before publish (JWT expires)
+- Railway Docker caches pip install layer — add a comment change to Dockerfile to bust cache on new releases
+- `gp.run(path)` for demos, NOT `gp.run_df(df)` — GoldenCheck needs file extension
+- `publish.yml` should have `skip-existing: true` to handle manual+workflow publish conflicts
+- Polars schema mismatch: mixed-type columns (birth_year as i64 vs string) crash GoldenMatch — cast to string before dedup
 
 ## DQBench Integration
 
