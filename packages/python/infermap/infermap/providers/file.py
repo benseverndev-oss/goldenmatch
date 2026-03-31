@@ -81,7 +81,7 @@ class FileProvider:
 
         suffix = path.suffix.lower()
         if suffix == ".csv":
-            df = pl.read_csv(path, encoding="utf8", ignore_errors=True)
+            df = pl.read_csv(path, encoding="utf8-lossy", ignore_errors=True)
         elif suffix == ".parquet":
             df = pl.read_parquet(path)
         elif suffix in (".xlsx", ".xls"):
