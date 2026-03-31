@@ -1,8 +1,12 @@
 """GoldenFlow adapter -- wraps transform_df()."""
 from __future__ import annotations
 
+import logging
+
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import StageInfo
+
+logger = logging.getLogger(__name__)
 
 try:
     from goldenflow import transform_df as _transform
@@ -26,4 +30,13 @@ class TransformStage:
             ctx.df = result.df
         if hasattr(result, "manifest"):
             ctx.artifacts["manifest"] = result.manifest
+
+            # Enrich column contexts with transform information (best-effort)
+            if "column_contexts" in ctx.artifacts:
+                try:
+                    from goldenpipe.models.column_context import enrich_contexts_from_flow
+                    enrich_contexts_from_flow(ctx.artifacts["column_contexts"], result.manifest)
+                except Exception:
+                    logger.exception("Failed to enrich column contexts from flow manifest")
+
         return StageResult(status=StageStatus.SUCCESS)
