@@ -43,6 +43,12 @@ class DedupeStage:
             ctx.artifacts["clusters"] = result.clusters
         if hasattr(result, "golden"):
             ctx.artifacts["golden"] = result.golden
+        if hasattr(result, "unique"):
+            ctx.artifacts["unique"] = result.unique
+        if hasattr(result, "dupes"):
+            ctx.artifacts["dupes"] = result.dupes
+        if hasattr(result, "stats"):
+            ctx.artifacts["match_stats"] = result.stats
         return StageResult(status=StageStatus.SUCCESS)
 
 
