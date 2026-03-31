@@ -56,4 +56,4 @@ class TestImports:
         assert hasattr(gp, "PipeResult")
         assert hasattr(gp, "stage")
         assert hasattr(gp, "__version__")
-        assert gp.__version__ == "1.0.2"
+        assert gp.__version__ == "1.0.3"

@@ -1,5 +1,5 @@
 """GoldenPipe -- pluggable pipeline framework for data quality."""
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 from goldenpipe._api import run, run_df, run_stages
 from goldenpipe.pipeline import Pipeline
