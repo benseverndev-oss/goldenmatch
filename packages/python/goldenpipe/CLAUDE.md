@@ -162,6 +162,22 @@ config = GoldenMatchConfig(
 result = goldenmatch.dedupe_df(df, config=config)
 ```
 
+## Column Context Pipeline
+- `goldenpipe/models/column_context.py` — ColumnType/CardinalityBand enums, context builders
+- ScanStage builds ColumnContext from GoldenCheck profile + name heuristics
+- TransformStage enriches contexts (date_iso8601 confirms date type)
+- DedupeStage builds targeted GoldenMatch config from contexts
+- Cardinality IQR bands: mid=identifier, low=attribute, high=unique ID
+- All enrichment is best-effort (try/except) — failures never break existing stages
+- `golden` records != total output. `unique + golden = total distinct people`
+
+## Gotchas
+- Never run Polars tools while parallel subagents/Next.js builds are active — OOM/segfault
+- `utf8-lossy` encoding required for all CSV reads (government data has Latin-1 chars)
+- Railway custom domains need Cloudflare DNS Only (not proxied) — proxy breaks domain verification
+- Cloudflare CNAME record IDs change when toggling proxy — must re-fetch IDs before patching
+- `next-mdx-remote` v5/v6 requires React 19 — use `react-markdown` + `remark-gfm` for React 18
+
 ## DQBench Integration
 
 GoldenPipe is benchmarked by DQBench Pipeline category:
