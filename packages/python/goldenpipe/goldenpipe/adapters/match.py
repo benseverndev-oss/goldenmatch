@@ -72,7 +72,6 @@ def _build_config_from_contexts(contexts: list, df) -> object | None:
 
     name_cols = [c for c in contexts if c.inferred_type == ColumnType.NAME and c.is_identifier]
     email_cols = [c for c in contexts if c.inferred_type == ColumnType.EMAIL]
-    phone_cols = [c for c in contexts if c.inferred_type == ColumnType.PHONE and c.null_rate < 0.2]
 
     matchkeys = []
 
