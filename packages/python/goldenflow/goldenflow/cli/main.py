@@ -87,7 +87,7 @@ def transform(
         is_stdin = str(path) == "-"
         if is_stdin:
             stdin_bytes = sys.stdin.buffer.read()
-            df = pl.read_csv(io.BytesIO(stdin_bytes))
+            df = pl.read_csv(io.BytesIO(stdin_bytes), encoding="utf8-lossy")
             engine = TransformEngine(config=cfg)
             result = engine.transform_df(df)
             if output_dir is None:

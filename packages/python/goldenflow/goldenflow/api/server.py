@@ -61,8 +61,8 @@ def create_app() -> FastAPI:
         s_content = await source.read()
         t_content = await target.read()
 
-        s_df = pl.read_csv(io.BytesIO(s_content))
-        t_df = pl.read_csv(io.BytesIO(t_content))
+        s_df = pl.read_csv(io.BytesIO(s_content), encoding="utf8-lossy")
+        t_df = pl.read_csv(io.BytesIO(t_content), encoding="utf8-lossy")
 
         mapper = SchemaMapper()
         mappings = mapper.map(s_df, t_df)
