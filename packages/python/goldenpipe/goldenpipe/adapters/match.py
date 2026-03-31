@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+import polars as pl
+
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import StageInfo
 
@@ -25,12 +27,19 @@ class DedupeStage:
             raise RuntimeError("GoldenMatch not installed. Run: pip install goldenpipe[match]")
 
     def run(self, ctx: PipeContext) -> StageResult:
+        # Cast all columns to string to prevent schema mismatch errors
+        # when mixed-type columns (e.g. birth_year as i64 vs str) reach GoldenMatch
+        ctx.df = ctx.df.cast({col: pl.Utf8 for col in ctx.df.columns})
+
         column_contexts = ctx.artifacts.get("column_contexts")
 
         if column_contexts:
             config = _build_config_from_contexts(column_contexts, ctx.df)
             if config is not None:
                 logger.info("Built match config from pipeline column contexts")
+                logger.debug("Config matchkeys: %s", [(mk.name, mk.type, [f.field for f in mk.fields]) for mk in config.matchkeys])
+                if config.blocking:
+                    logger.debug("Config blocking: strategy=%s, keys=%s", config.blocking.strategy, [(k.fields, k.transforms) for k in config.blocking.keys])
                 result = _dedupe(ctx.df, config=config)
             else:
                 logger.info("Column contexts insufficient for config; using GoldenMatch auto-configure")
@@ -139,11 +148,13 @@ def _build_config_from_contexts(contexts: list, df) -> object | None:
                 BlockingKeyConfig(fields=[last_name_cols[0].name], transforms=["lowercase", "substring:0:3"]),
             ],
             max_block_size=500,
+            skip_oversized=True,
         )
     elif name_cols:
         blocking = BlockingConfig(
             keys=[BlockingKeyConfig(fields=[name_cols[0].name], transforms=["lowercase", "soundex"])],
             max_block_size=500,
+            skip_oversized=True,
         )
 
     # If we still have no blocking, let GoldenMatch auto-suggest

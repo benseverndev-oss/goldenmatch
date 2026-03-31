@@ -1,7 +1,10 @@
 """Pipeline runner -- execute stages with error handling and routing."""
 from __future__ import annotations
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.engine.resolver import ExecutionPlan
@@ -47,6 +50,8 @@ class Runner:
                     )
 
             except Exception as e:
+                import traceback as _tb
+                logger.error("Stage %s failed:\n%s", planned.name, _tb.format_exc())
                 elapsed = time.perf_counter() - start
                 ctx.timing[planned.name] = elapsed
                 result = StageResult(status=StageStatus.FAILED, error=str(e))
