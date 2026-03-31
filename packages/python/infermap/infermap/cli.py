@@ -133,7 +133,7 @@ def apply(
     # Read source CSV
     try:
         import polars as pl
-        df = pl.read_csv(source)
+        df = pl.read_csv(source, encoding="utf8-lossy")
     except Exception as exc:
         typer.echo(f"Error reading source file: {exc}", err=True)
         raise typer.Exit(code=1)
