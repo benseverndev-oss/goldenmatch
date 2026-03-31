@@ -5,7 +5,8 @@ Usage:
     python examples/scan_and_profile.py
 """
 from __future__ import annotations
-import csv, tempfile
+import csv
+import tempfile
 from pathlib import Path
 
 def create_sample_data() -> Path:
