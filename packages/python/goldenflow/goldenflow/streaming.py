@@ -47,7 +47,7 @@ class StreamProcessor:
         """Stream a file in chunks, yielding TransformResult per chunk."""
         path = Path(path)
         # Read full file and split into batches
-        full_df = pl.read_csv(path)
+        full_df = pl.read_csv(path, encoding="utf8-lossy")
         for start in range(0, full_df.shape[0], chunk_size):
             batch = full_df.slice(start, chunk_size)
             self._batch_count += 1
