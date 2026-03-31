@@ -62,12 +62,11 @@ def _build_config_from_contexts(contexts: list, df) -> object | None:
         )
         return None
 
-    from goldenpipe.models.column_context import ColumnContext
+    from goldenpipe.models.column_context import ColumnType
 
-    # Classify columns by role
-    name_cols = [c for c in contexts if c.inferred_type == "name" and c.is_identifier]
-    email_cols = [c for c in contexts if c.inferred_type == "email"]
-    phone_cols = [c for c in contexts if c.inferred_type == "phone" and c.null_rate < 0.2]
+    name_cols = [c for c in contexts if c.inferred_type == ColumnType.NAME and c.is_identifier]
+    email_cols = [c for c in contexts if c.inferred_type == ColumnType.EMAIL]
+    phone_cols = [c for c in contexts if c.inferred_type == ColumnType.PHONE and c.null_rate < 0.2]
 
     matchkeys = []
 
@@ -98,7 +97,7 @@ def _build_config_from_contexts(contexts: list, df) -> object | None:
 
     # Fallback: if no identifier columns found, use all string columns
     if not matchkeys:
-        string_cols = [c for c in contexts if c.inferred_type in ("string", "name")]
+        string_cols = [c for c in contexts if c.inferred_type in (ColumnType.STRING, ColumnType.NAME)]
         fallback_fields = []
         for col in string_cols[:3]:
             fallback_fields.append(MatchkeyField(
