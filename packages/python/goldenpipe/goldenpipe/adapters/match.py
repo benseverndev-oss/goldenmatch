@@ -31,22 +31,27 @@ class DedupeStage:
         # when mixed-type columns (e.g. birth_year as i64 vs str) reach GoldenMatch
         ctx.df = ctx.df.cast({col: pl.Utf8 for col in ctx.df.columns})
 
-        column_contexts = ctx.artifacts.get("column_contexts")
-
-        if column_contexts:
-            config = _build_config_from_contexts(column_contexts, ctx.df)
-            if config is not None:
-                logger.info("Built match config from pipeline column contexts")
-                logger.debug("Config matchkeys: %s", [(mk.name, mk.type, [f.field for f in mk.fields]) for mk in config.matchkeys])
-                if config.blocking:
-                    logger.debug("Config blocking: strategy=%s, keys=%s", config.blocking.strategy, [(k.fields, k.transforms) for k in config.blocking.keys])
-                result = _dedupe(ctx.df, config=config)
-            else:
-                logger.info("Column contexts insufficient for config; using GoldenMatch auto-configure")
-                result = _dedupe(ctx.df)
+        # Priority 1: explicit stage config from YAML/PipelineConfig
+        stage_cfg = ctx.stage_config
+        if stage_cfg:
+            from goldenmatch.config.schemas import GoldenMatchConfig
+            config = GoldenMatchConfig(**stage_cfg)
+            logger.info("Using explicit GoldenMatch config from stage spec")
+            result = _dedupe(ctx.df, config=config)
         else:
-            # No upstream context — let GoldenMatch auto-configure
-            result = _dedupe(ctx.df)
+            # Priority 2: build config from upstream column contexts
+            column_contexts = ctx.artifacts.get("column_contexts")
+            if column_contexts:
+                config = _build_config_from_contexts(column_contexts, ctx.df)
+                if config is not None:
+                    logger.info("Built match config from pipeline column contexts")
+                    result = _dedupe(ctx.df, config=config)
+                else:
+                    logger.info("Column contexts insufficient for config; using GoldenMatch auto-configure")
+                    result = _dedupe(ctx.df)
+            else:
+                # Priority 3: let GoldenMatch auto-configure
+                result = _dedupe(ctx.df)
 
         if hasattr(result, "clusters"):
             ctx.artifacts["clusters"] = result.clusters

@@ -25,7 +25,12 @@ class TransformStage:
             raise RuntimeError("GoldenFlow not installed. Run: pip install goldenpipe[flow]")
 
     def run(self, ctx: PipeContext) -> StageResult:
-        result = _transform(ctx.df)
+        stage_cfg = ctx.stage_config
+        if stage_cfg:
+            logger.info("Passing stage config to GoldenFlow transform")
+            result = _transform(ctx.df, **stage_cfg)
+        else:
+            result = _transform(ctx.df)
         if hasattr(result, "df"):
             ctx.df = result.df
         if hasattr(result, "manifest"):

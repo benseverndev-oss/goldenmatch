@@ -37,6 +37,9 @@ class Runner:
 
             start = time.perf_counter()
             try:
+                # Make stage-level config available to the adapter via context
+                ctx.stage_config = planned.config
+
                 if hasattr(planned.stage, "validate") and callable(planned.stage.validate):
                     planned.stage.validate(ctx)
                 result = planned.stage.run(ctx)
