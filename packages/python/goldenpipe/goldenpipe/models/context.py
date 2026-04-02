@@ -45,6 +45,7 @@ class PipeContext:
     metadata: dict[str, Any] = field(default_factory=dict)
     timing: dict[str, float] = field(default_factory=dict)
     reasoning: dict[str, str] = field(default_factory=dict)
+    stage_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

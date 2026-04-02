@@ -26,7 +26,12 @@ class ScanStage:
 
     def run(self, ctx: PipeContext) -> StageResult:
         source = ctx.metadata.get("source", "")
-        result = _scan(source)
+        stage_cfg = ctx.stage_config
+        if stage_cfg:
+            logger.info("Passing stage config to GoldenCheck scan")
+            result = _scan(source, **stage_cfg)
+        else:
+            result = _scan(source)
 
         # scan_file returns (findings, profile) tuple
         if isinstance(result, tuple) and len(result) >= 2:
