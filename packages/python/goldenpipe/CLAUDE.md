@@ -193,6 +193,10 @@ GoldenPipe is benchmarked by DQBench Pipeline category:
 - Run: `pip install dqbench && dqbench run goldenpipe`
 - The adapter runs GoldenFlow + GoldenMatch directly (not Pipeline.run()) because PipeResult doesn't expose the DataFrame
 
+## External Benchmarks (GoldenMatch component)
+
+- **BPID (EMNLP 2024, PII deduplication):** GoldenMatch scores 75.0% F1 on 10K adversarial PII pairs — matches Ditto (75.2%) with zero training data. DOB parsing was the biggest lever (+0.08 F1). LLM boost hurt on adversarial data. See `D:\show_case\bpid_bench\` and blog post at bensevern.dev.
+
 ## Examples
 - `examples/full_suite_demo.py` — each tool individually + pipeline
 - `examples/benchmark_suite.py` — DQBench scores for all 4 tools
