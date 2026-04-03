@@ -291,9 +291,9 @@ goldenflow transform listings.csv --domain real_estate
 
 ---
 
-## Transform Library (43+ transforms)
+## Transform Library (76 transforms)
 
-### Text Transforms
+### Text Transforms (18)
 | Transform | What It Does |
 |-----------|-------------|
 | `strip` | Trim whitespace |
@@ -303,52 +303,104 @@ goldenflow transform listings.csv --domain real_estate
 | `normalize_quotes` | Smart/curly quotes -> straight quotes |
 | `collapse_whitespace` | Multiple spaces -> single space |
 | `truncate:N` | Limit to N characters |
+| `remove_punctuation` | Strip punctuation characters |
+| `remove_html_tags` | Strip HTML markup from scraped data |
+| `remove_urls` | Strip URLs from free-text fields |
+| `remove_digits` | Strip numeric characters from text |
+| `remove_emojis` | Strip emoji characters |
+| `fix_mojibake` | Fix common UTF-8/Latin-1 encoding garbling |
+| `normalize_line_endings` | Normalize \r\n and \r to \n |
+| `extract_numbers` | Pull numeric values from mixed text |
+| `pad_left:N` / `pad_right:N` | Pad to fixed width (account numbers, IDs) |
 
-### Phone Transforms
+### Phone Transforms (5)
 | Transform | What It Does |
 |-----------|-------------|
 | `phone_e164` | Any format -> +15550123456 |
 | `phone_national` | Any format -> (555) 012-3456 |
 | `phone_digits` | Strip to digits only |
 | `phone_validate` | Flag invalid numbers |
+| `phone_country_code` | Extract country calling code |
 
-### Name Transforms
+### Name Transforms (8)
 | Transform | What It Does |
 |-----------|-------------|
 | `split_name` | "John Smith" -> first: "John", last: "Smith" |
 | `split_name_reverse` | "Smith, John" -> first: "John", last: "Smith" |
-| `strip_titles` | Remove Mr., Mrs., Dr., Jr., Sr. |
-| `name_proper` | "mcdonald" -> "McDonald" |
+| `strip_titles` / `strip_suffixes` | Remove Mr., Mrs., Dr., MD, PhD, etc. |
+| `name_proper` | "mcdonald" -> "McDonald", "o'brien" -> "O'Brien" |
+| `initial_expand` | Flag names with initials for review |
+| `nickname_standardize` | "Bob" -> "Robert", "Bill" -> "William" |
+| `merge_name` | Combine first_name + last_name into full_name |
 
-### Address Transforms
+### Address Transforms (8)
 | Transform | What It Does |
 |-----------|-------------|
 | `address_standardize` | "Street" -> "St", "Avenue" -> "Ave" |
-| `state_abbreviate` | "Pennsylvania" -> "PA" |
+| `address_expand` | "St" -> "Street", "Ave" -> "Avenue" |
+| `state_abbreviate` / `state_expand` | "Pennsylvania" <-> "PA" |
 | `zip_normalize` | Zero-pad, strip +4, validate |
 | `split_address` | Single line -> street, city, state, zip |
+| `country_standardize` | "United States" / "USA" -> "US" (ISO 3166) |
+| `unit_normalize` | "Apt" / "Apartment" / "#" -> "Unit" |
 
-### Date Transforms
+### Date Transforms (13)
 | Transform | What It Does |
 |-----------|-------------|
 | `date_iso8601` | Any format -> 2024-03-15 |
+| `datetime_iso8601` | Any format -> 2024-03-15T15:30:00 |
 | `date_us` / `date_eu` | Regional format output |
+| `date_parse` | Auto-detect and normalize to ISO 8601 |
 | `age_from_dob` | Date of birth -> age in years |
+| `extract_year` / `extract_month` / `extract_day` | Decompose dates |
+| `extract_quarter` | Date -> Q1/Q2/Q3/Q4 |
+| `extract_day_of_week` | Date -> Monday, Tuesday, etc. |
+| `date_shift` | Add/subtract days (anonymization) |
+| `date_validate` | Flag invalid dates as boolean |
 
-### Categorical Transforms
+### Categorical Transforms (6)
 | Transform | What It Does |
 |-----------|-------------|
 | `category_auto_correct` | Fuzzy-match misspellings to canonical values |
 | `category_standardize` | Map variants to canonical values |
+| `category_from_file` | Load mapping from CSV/YAML file |
 | `boolean_normalize` | "Yes"/"Y"/"1"/"True" -> true |
+| `gender_standardize` | "Male"/"M"/"Female"/"F" -> M/F |
 | `null_standardize` | "N/A"/"NULL"/"none" -> null |
 
-### Numeric Transforms
+### Numeric Transforms (9)
 | Transform | What It Does |
 |-----------|-------------|
 | `currency_strip` | "$1,234.56" -> 1234.56 |
 | `percentage_normalize` | "85%" -> 0.85 |
 | `round:N` | Round to N decimal places |
+| `clamp` | Constrain values to a min/max range |
+| `to_integer` | Parse string to int, truncating decimals |
+| `abs_value` | Absolute value |
+| `fill_zero` | Replace nulls with 0 |
+| `comma_decimal` | European format "1.234,56" -> 1234.56 |
+| `scientific_to_decimal` | "1.5e3" -> 1500.0 |
+
+### Email Transforms (4)
+| Transform | What It Does |
+|-----------|-------------|
+| `email_lowercase` | Normalize to lowercase |
+| `email_normalize` | Strip +tags, strip Gmail dots, lowercase |
+| `email_extract_domain` | user@example.com -> example.com |
+| `email_validate` | Flag invalid email format |
+
+### Identifier Transforms (3)
+| Transform | What It Does |
+|-----------|-------------|
+| `ssn_format` | Normalize to XXX-XX-XXXX |
+| `ssn_mask` | Redact to \*\*\*-\*\*-1234 |
+| `ein_format` | Normalize to XX-XXXXXXX |
+
+### URL Transforms (2)
+| Transform | What It Does |
+|-----------|-------------|
+| `url_normalize` | Lowercase domain, ensure scheme, strip trailing slash |
+| `url_extract_domain` | Extract domain from URL |
 
 ---
 
@@ -617,7 +669,7 @@ dqbench run goldenflow
 | | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
 |---|---|---|---|---|---|
 | Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
-| 43+ built-in transforms | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| 76 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
 | Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
 | Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
 | Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |
