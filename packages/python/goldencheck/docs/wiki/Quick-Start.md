@@ -91,9 +91,54 @@ result  # Rich HTML table in notebooks
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
+## Baseline and Drift Detection
+
+Create a statistical baseline from a known-good dataset, then scan future data to detect drift:
+
+```bash
+pip install goldencheck[baseline]
+
+# Step 1: profile your reference data
+goldencheck baseline data.csv
+# Saves goldencheck_baseline.yaml
+
+# Step 2: later, scan new data for drift
+goldencheck scan new_data.csv --baseline goldencheck_baseline.yaml --no-tui
+```
+
+GoldenCheck runs 13 drift checks across 6 analysis dimensions and reports findings tagged `baseline_drift`:
+
+```
+ERROR   amount  bound_violation      42/5000 values (0.8%) outside baseline p01/p99
+WARN    status  entropy_drift        Entropy increased from 1.23 to 2.87 (delta=1.64)
+WARN    email   pattern_drift        Dominant pattern coverage dropped from 98% to 71%
+INFO    revenue new_correlation      New strong correlation with 'discount': r=0.82
+```
+
+### Python API
+
+```python
+from goldencheck import create_baseline, load_baseline, scan_file
+
+# Create and save
+baseline = create_baseline("data.csv")
+baseline.save("goldencheck_baseline.yaml")
+
+# Later: scan with drift detection
+baseline = load_baseline("goldencheck_baseline.yaml")
+findings, profile = scan_file("new_data.csv", baseline=baseline)
+
+drift = [f for f in findings if f.source == "baseline_drift"]
+for f in drift:
+    print(f"{f.severity.name}: [{f.column}] {f.check} — {f.message}")
+```
+
+---
+
 ## Next Steps
 
 - [CLI Reference](CLI) — all commands and flags
 - [Profilers](Profilers) — what each check detects
+- [Baseline](Baseline) — deep analysis techniques and drift detection
 - [Configuration](Configuration) — `goldencheck.yml` reference
 - [MCP Server](MCP-Server) — Claude Desktop integration

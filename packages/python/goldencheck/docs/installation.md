@@ -60,12 +60,45 @@ This adds:
 
 See [MCP Server]({% link mcp-server.md %}) for setup instructions.
 
+## With Deep Profiling Baseline
+
+To use `goldencheck baseline` for learn-once drift detection:
+
+```bash
+pip install goldencheck[baseline]
+```
+
+This adds:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| scipy | >=1.10 | Statistical analysis (Pearson/Spearman correlation, quantiles) |
+| numpy | >=1.24 | Numerical operations for baseline profiling |
+
+See [Deep Profiling Baseline]({% link baseline.md %}) for setup and usage.
+
+## With Semantic Baseline
+
+To enable embedding-based semantic type detection in the baseline:
+
+```bash
+pip install goldencheck[semantic]
+```
+
+This adds:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| sentence-transformers | >=2.0 | Embedding-based semantic type detection |
+
+This extra is optional — the baseline works without it, using name-hint and format-based detection instead.
+
 ## All Extras
 
 Install everything:
 
 ```bash
-pip install goldencheck[llm,mcp]
+pip install goldencheck[llm,mcp,baseline,semantic]
 ```
 
 ## Verify Installation
@@ -82,7 +115,7 @@ Clone the repository and install in editable mode with dev dependencies:
 ```bash
 git clone https://github.com/benzsevern/goldencheck.git
 cd goldencheck
-pip install -e ".[dev,llm,mcp]"
+pip install -e ".[dev,llm,mcp,baseline,semantic]"
 ```
 
 Dev dependencies include:

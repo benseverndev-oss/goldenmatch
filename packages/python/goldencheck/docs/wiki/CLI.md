@@ -127,6 +127,47 @@ Requires `goldencheck[llm]` installed and an API key in the environment.
 
 ---
 
+### `baseline`
+
+Profile a data file with 6 deep-analysis techniques and save the result as a YAML baseline. The baseline is later used by `goldencheck scan --baseline` to detect drift.
+
+```bash
+goldencheck baseline <file> [flags]
+```
+
+Requires `goldencheck[baseline]` installed:
+
+```bash
+pip install goldencheck[baseline]
+```
+
+**Examples:**
+
+```bash
+# Create baseline with all 6 techniques
+goldencheck baseline data.csv
+
+# Save to a custom path
+goldencheck baseline data.csv --output baselines/production.yaml
+
+# Skip the semantic-embedding technique (faster, no sentence-transformers needed)
+goldencheck baseline data.csv --skip semantic
+
+# Then scan for drift against the saved baseline
+goldencheck scan data.csv --baseline goldencheck_baseline.yaml --no-tui
+```
+
+**Flags:**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output`, `-o` | path | `goldencheck_baseline.yaml` | Output path for the YAML baseline |
+| `--skip <technique>` | string | — | Technique name to omit. Repeatable. Values: `statistical`, `constraints`, `semantic`, `correlation`, `patterns`, `priors` |
+
+See [Baseline](Baseline) for a full description of the 6 techniques and the YAML format.
+
+---
+
 ### `mcp-serve`
 
 Start the MCP (Model Context Protocol) server for Claude Desktop integration.
@@ -157,6 +198,8 @@ All flags are available on `scan` and `review`. `validate` supports `--no-tui`, 
 | `--llm-boost` | bool | false | Run an LLM enhancement pass after profiling |
 | `--llm-provider <name>` | string | `anthropic` | LLM provider to use. Values: `anthropic`, `openai` |
 | `--config <path>` | path | `goldencheck.yml` | Path to config file (validate and review only) |
+| `--baseline <path>` | path | — | Path to a YAML baseline file. Enables 13-type drift detection after profiling. Requires `goldencheck[baseline]` |
+| `--no-baseline` | bool | false | Suppress drift checks even if a `goldencheck_baseline.yaml` file exists in the current directory |
 | `--verbose` | bool | false | Show INFO-level log messages |
 | `--debug` | bool | false | Show DEBUG-level log messages |
 | `--version`, `-V` | bool | — | Print version and exit |

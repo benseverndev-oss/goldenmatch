@@ -331,6 +331,90 @@ validate that they are both populated or both absent together.
 
 ---
 
+## Baseline Profilers
+
+The 6 baseline profilers run when you execute `goldencheck baseline <file>`. Each profiler analyses the dataset deeply and writes its findings into a `BaselineProfile` YAML file. On a subsequent `goldencheck scan --baseline` the saved profile is compared against the current data to detect drift.
+
+All baseline profilers require `goldencheck[baseline]` (`scipy` + `numpy`). The `semantic` profiler additionally uses `sentence-transformers` when available (`goldencheck[semantic]`).
+
+---
+
+### StatisticalProfiler
+
+**File:** `goldencheck/baseline/statistical.py`
+
+Fits the best-matching parametric distribution to every numeric column and records percentile bounds and Shannon entropy. Optionally applies Benford's law to financial/count columns.
+
+**Techniques per column:**
+
+| Technique | What is stored |
+|-----------|---------------|
+| Distribution fit | Best-fit distribution name (`normal`, `log_normal`, `exponential`, `uniform`) and its parameters, chosen by KS-test p-value |
+| Percentile bounds | p01 and p99 values for outlier-boundary comparison |
+| Shannon entropy | Approximate entropy computed from a histogram (numeric) or value frequencies (categorical) |
+| Benford's law | Chi-squared p-value for first-digit conformance (financial/count columns only) |
+
+---
+
+### ConstraintsProfiler
+
+**File:** `goldencheck/baseline/constraints.py`
+
+Mines structural constraints from the data.
+
+**Techniques:**
+
+| Technique | What is stored |
+|-----------|---------------|
+| Functional dependencies | Pairs (or groups) of columns where one set of values uniquely determines another, stored with a confidence score |
+| Candidate keys | Single or composite column combinations that are 100% unique, stored as lists |
+| Temporal orders | Pairs of date/time columns where one is consistently earlier than the other, stored with observed violation rate |
+
+---
+
+### SemanticProfiler
+
+**File:** `goldencheck/baseline/semantic.py`
+
+Classifies each column's semantic type using keyword heuristics and — when `sentence-transformers` is installed — embedding-based similarity. Types are stored as a `column → type` mapping in the baseline.
+
+**Requires `goldencheck[semantic]`** for embedding-based classification (falls back to keyword heuristics when not installed).
+
+---
+
+### CorrelationProfiler
+
+**File:** `goldencheck/baseline/correlation.py`
+
+Computes pairwise correlations between columns and stores the strong ones.
+
+**Measures used:**
+
+| Measure | Column pair type |
+|---------|-----------------|
+| Pearson r | Numeric–numeric |
+| Cramér's V | Categorical–categorical |
+
+Only correlations classified as `"strong"` (Pearson `|r| >= 0.7`, Cramér's V `>= 0.3`) are saved to the baseline.
+
+---
+
+### PatternsProfiler
+
+**File:** `goldencheck/baseline/patterns.py`
+
+Induces a regex grammar for each string column. Values are generalised to pattern tokens (`D` for digit, `L` for letter, punctuation preserved), then the most-common grammar is selected as the dominant pattern along with its coverage fraction.
+
+---
+
+### PriorsProfiler
+
+**File:** `goldencheck/baseline/priors.py`
+
+Runs a full `scan_file()` pass on the data and converts the resulting findings into Bayesian-style `ConfidencePrior` objects. These priors adjust the confidence of future scan findings for the same check/column combination, reducing false positives on known quirks.
+
+---
+
 ## Severity Levels
 
 | Level | Integer value | Meaning |

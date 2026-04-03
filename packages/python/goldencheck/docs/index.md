@@ -63,7 +63,8 @@ goldencheck data.csv
 | [Quick Start]({% link quick-start.md %}) | Get started in 60 seconds |
 | [CLI Reference]({% link cli.md %}) | 14 commands, flags, and exit codes |
 | [Interactive TUI]({% link interactive-tui.md %}) | 4-tab interactive terminal interface |
-| [Profilers]({% link profilers.md %}) | 10 column + 4 cross-column profilers |
+| [Profilers]({% link profilers.md %}) | 10 column + 4 cross-column profilers + 6 baseline techniques |
+| [Deep Profiling Baseline]({% link baseline.md %}) | Learn-once statistical baseline, 13-type drift detection |
 | [Configuration]({% link configuration.md %}) | `goldencheck.yml` reference |
 | [Domain Packs]({% link domain-packs.md %}) | Healthcare, finance, e-commerce type definitions |
 | [Schema Diff]({% link schema-diff.md %}) | Compare data versions, detect drift |

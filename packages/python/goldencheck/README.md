@@ -40,6 +40,18 @@ With LLM boost support:
 pip install goldencheck[llm]
 ```
 
+With deep profiling & baseline support (scipy, numpy):
+
+```bash
+pip install goldencheck[baseline]
+```
+
+With semantic type inference for baseline (sentence-transformers):
+
+```bash
+pip install goldencheck[baseline,semantic]
+```
+
 ## Quick Start
 
 ```bash
@@ -57,6 +69,12 @@ goldencheck validate data.csv
 
 # JSON output for CI integration
 goldencheck data.csv --no-tui --json
+
+# Learn baseline (one-time, deep analysis)
+goldencheck baseline data.csv
+
+# Scan with drift detection (fast, uses saved baseline)
+goldencheck scan new_data.csv
 ```
 
 ## How It Works
@@ -100,6 +118,27 @@ goldencheck data.csv --no-tui --json
 | **Null correlation** | Columns that are null together (e.g., address + city + zip) |
 | **Numeric cross-column** | value > max violations (e.g., claim_amount > policy_max) |
 | **Age vs DOB** | Age column doesn't match calculated age from date_of_birth |
+
+### Baseline Deep Profiling & Drift Detection
+
+Run `goldencheck baseline` once to build a statistical profile of healthy data. On every subsequent scan, GoldenCheck compares the new data against the saved baseline and reports drift across 13 check types:
+
+| Check Type | What It Catches |
+|------------|----------------|
+| `distribution_drift` | Value distribution has shifted significantly |
+| `entropy_drift` | Entropy of column values has changed |
+| `bound_violation` | Values exceed historical min/max bounds |
+| `benford_drift` | Leading-digit distribution deviates from Benford's Law |
+| `fd_violation` | Functional dependency between columns is broken |
+| `key_uniqueness_loss` | Previously unique column now has duplicates |
+| `temporal_order_drift` | Historical column ordering constraint violated |
+| `type_drift` | Dominant semantic type of column has changed |
+| `correlation_break` | Previously correlated columns are no longer correlated |
+| `new_correlation` | New unexpected correlation appeared |
+| `pattern_drift` | Value format/pattern distribution has shifted |
+| `new_pattern` | New structural patterns appeared in a column |
+
+The baseline is built using 6 techniques: statistical profiler (distributions, Benford's Law, entropy), constraint miner (functional dependencies, temporal orders), semantic type inferrer (embeddings + keywords), correlation analyzer (Pearson, Cramér's V), pattern grammar inducer, and confidence prior builder.
 
 ## Domain Packs
 
@@ -249,6 +288,7 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `goldencheck diff <file> [file2]` | Compare two files or against git HEAD |
 | `goldencheck watch <dir>` | Poll directory, re-scan on change |
 | `goldencheck fix <file>` | Auto-fix data quality issues |
+| `goldencheck baseline <file>` | Deep-profile data and save statistical baseline to YAML |
 | `goldencheck learn <file>` | Generate LLM validation rules |
 | `goldencheck history` | Show scan history and trends |
 | `goldencheck serve` | Start REST API server |
@@ -271,6 +311,11 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `--guided` | Walk through findings one-by-one |
 | `--webhook <url>` | POST findings to Slack/PagerDuty/any URL |
 | `--notify-on <trigger>` | Webhook trigger: `grade-drop`, `any-error`, `any-warning` |
+| `--baseline <path>` | Path to baseline YAML for drift detection |
+| `--no-baseline` | Skip auto-discovery of `goldencheck_baseline.yaml` |
+| `--skip <technique>` | Skip a baseline technique (can repeat) |
+| `--update` | Update existing baseline instead of overwriting |
+| `-o <path>` | Output path for baseline file (default: `goldencheck_baseline.yaml`) |
 | `--version` | Show version |
 
 ## Benchmarks
@@ -330,7 +375,7 @@ Tested on a custom benchmark with 341 planted data quality issues across 9 categ
 | [Rich](https://rich.readthedocs.io/) | CLI output formatting |
 | [Pydantic 2](https://docs.pydantic.dev/) | Config validation |
 
-**Optional:** [Anthropic SDK](https://docs.anthropic.com/) / [OpenAI SDK](https://platform.openai.com/) for LLM Boost | [MCP SDK](https://modelcontextprotocol.io/) for MCP server
+**Optional:** [Anthropic SDK](https://docs.anthropic.com/) / [OpenAI SDK](https://platform.openai.com/) for LLM Boost | [MCP SDK](https://modelcontextprotocol.io/) for MCP server | [scipy](https://scipy.org/) + [numpy](https://numpy.org/) for deep baseline profiling (`[baseline]`) | [sentence-transformers](https://www.sbert.net/) for semantic type inference in baseline (`[semantic]`)
 
 ## MCP Server (Claude Desktop)
 

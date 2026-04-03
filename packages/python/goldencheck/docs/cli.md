@@ -100,6 +100,48 @@ goldencheck review data.csv --config configs/staging.yml
 
 ---
 
+### `baseline`
+
+Create a deep statistical baseline from a known-good data file. The baseline is saved as YAML and picked up automatically on future scans.
+
+```bash
+goldencheck baseline <file> [flags]
+```
+
+Requires `goldencheck[baseline]` installed:
+
+```bash
+pip install goldencheck[baseline]
+```
+
+**Examples:**
+
+```bash
+# Create baseline (saved to goldencheck_baseline.yaml)
+goldencheck baseline data.csv
+
+# Save to a custom path
+goldencheck baseline data.csv --output baselines/production.yaml
+
+# Update an existing baseline
+goldencheck baseline data.csv --update
+
+# Skip specific techniques
+goldencheck baseline data.csv --skip correlation,patterns
+```
+
+**Flags:**
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output`, `-o` | path | `goldencheck_baseline.yaml` | Output path for the baseline YAML |
+| `--update` | bool | false | Merge new statistics into an existing baseline instead of overwriting |
+| `--skip <techniques>` | string | — | Comma-separated techniques to skip: `statistical`, `constraints`, `semantic`, `correlation`, `patterns`, `priors` |
+
+See [Deep Profiling Baseline]({% link baseline.md %}) for full documentation.
+
+---
+
 ### `learn`
 
 Generate domain-specific validation rules using LLM analysis of your data.
@@ -155,6 +197,8 @@ All flags are available on `scan` and `review`. `validate` supports `--no-tui`, 
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--baseline <path>` | path | `goldencheck_baseline.yaml` | Path to baseline file. Auto-loaded if the file exists at the default path |
+| `--no-baseline` | bool | false | Disable automatic baseline loading even if `goldencheck_baseline.yaml` exists |
 | `--no-tui` | bool | false | Disable the interactive TUI and print Rich console output instead |
 | `--json` | bool | false | Output results as JSON to stdout. Implies `--no-tui` |
 | `--fail-on <level>` | string | `error` | Exit code 1 when findings at or above this severity exist. Values: `error`, `warning` |

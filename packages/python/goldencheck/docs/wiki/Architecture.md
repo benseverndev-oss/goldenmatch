@@ -36,6 +36,19 @@ goldencheck/
 │
 ├── notebook.py              # ScanResult wrapper + HTML renderers for Jupyter/Colab
 │
+├── baseline/
+│   ├── __init__.py          # create_baseline(), load_baseline() public API
+│   ├── models.py            # Pydantic models: BaselineProfile, StatProfile, etc.
+│   ├── statistical.py       # Distribution fitting, Benford's law, entropy, bounds
+│   ├── constraints.py       # Functional dependencies, candidate keys, temporal orders
+│   ├── semantic.py          # Semantic type inference (keyword + optional embeddings)
+│   ├── correlation.py       # Pearson / Cramér's V correlation mining
+│   ├── patterns.py          # Regex grammar induction per string column
+│   └── priors.py            # Bayesian confidence priors from scan findings
+│
+├── drift/
+│   └── detector.py          # run_drift_checks() — 13 drift check types
+│
 ├── profilers/
 │   ├── base.py              # BaseProfiler ABC
 │   ├── cardinality.py
@@ -101,6 +114,9 @@ goldencheck data.csv
          │
          ├─ RELATION_PROFILERS (2 profilers) → list[Finding]
          │
+         ├─ baseline/priors.py  (if --baseline)
+         │    apply_prior() → adjust confidence on matching findings
+         │
          ├─ semantic/classifier.py
          │    SemanticTypeClassifier → annotate findings with semantic context
          │
@@ -109,6 +125,12 @@ goldencheck data.csv
          │
          ├─ confidence scoring pipeline
          │    assign H/M/L confidence to each Finding
+         │
+         ├─ drift/detector.py  (if --baseline)
+         │    run_drift_checks(df, baseline) → list[Finding] with source="baseline_drift"
+         │    13 check types: distribution_drift, entropy_drift, bound_violation,
+         │    benford_drift, fd_violation, key_uniqueness_loss, temporal_order_drift,
+         │    pattern_drift, new_pattern, correlation_break, new_correlation, type_drift
          │
          └─ sort by severity → (list[Finding], DatasetProfile)
                   │
@@ -119,6 +141,39 @@ goldencheck data.csv
          │  reporters/json_reporter│
          │  tui/app.py             │
          └─────────────────────────┘
+```
+
+### Baseline Creation
+
+```
+goldencheck baseline data.csv
+         │
+         ▼
+    cli/main.py  →  _do_baseline()
+         │
+         ▼
+    baseline/__init__.py  create_baseline(path)
+         │
+         ├─ baseline/semantic.py
+         │    infer_semantic_types(df) → dict[type, list[col]]
+         │
+         ├─ baseline/statistical.py
+         │    profile_statistical(df) → dict[col, StatProfile]
+         │    (distribution fit, bounds, entropy, Benford's law)
+         │
+         ├─ baseline/constraints.py
+         │    mine_constraints(df) → (FDs, candidate_keys, temporal_orders)
+         │
+         ├─ baseline/correlation.py
+         │    analyze_correlations(df) → list[CorrelationEntry]
+         │
+         ├─ baseline/patterns.py
+         │    induce_patterns(df) → dict[col, PatternGrammar]
+         │
+         ├─ engine/scanner.py  scan_file(path)
+         │    baseline/priors.py  build_priors(findings) → ConfidencePrior map
+         │
+         └─ BaselineProfile.save("goldencheck_baseline.yaml")
 ```
 
 ### Scan with LLM Boost
