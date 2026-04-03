@@ -1,6 +1,12 @@
 import polars as pl
 
-from goldenflow.transforms.phone import phone_digits, phone_e164, phone_national, phone_validate
+from goldenflow.transforms.phone import (
+    phone_country_code,
+    phone_digits,
+    phone_e164,
+    phone_national,
+    phone_validate,
+)
 
 
 def test_phone_e164():
@@ -32,3 +38,13 @@ def test_phone_validate():
     assert result[0] is True
     assert result[1] is False
     assert result[2] is False
+
+
+def test_phone_country_code():
+    s = pl.Series("ph", ["+15551234567", "+44201234567", "+61412345678", "invalid", None])
+    result = phone_country_code(s)
+    assert result[0] == 1       # US
+    assert result[1] == 44      # UK
+    assert result[2] == 61      # Australia
+    assert result[3] is None
+    assert result[4] is None
