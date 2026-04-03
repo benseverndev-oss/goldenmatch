@@ -1,6 +1,6 @@
 # GoldenFlow — Full API Reference
 
-> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms.
+> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms. 76 transforms across 11 categories.
 > See also: [llms.txt](llms.txt) for a concise overview.
 
 ## Install
