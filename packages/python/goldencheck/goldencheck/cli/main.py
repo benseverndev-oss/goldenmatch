@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 import polars as pl
 import typer
+from rich.console import Console
 from typer.core import TyperGroup
 from goldencheck.engine.scanner import scan_file, scan_file_with_llm
 from goldencheck.engine.confidence import apply_confidence_downgrade
@@ -57,6 +58,8 @@ class _DefaultCommandGroup(TyperGroup):
         return result
 
 
+console = Console()
+
 app = typer.Typer(
     name="goldencheck",
     help="Data validation that discovers rules from your data so you don't have to write them.\n\nExit codes: 0 = pass, 1 = findings at/above --fail-on, 2 = usage error.",
@@ -107,6 +110,8 @@ def main(
     webhook = None
     notify_on = "grade-drop"
     html = None
+    baseline_path = None
+    no_baseline = False
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
@@ -146,6 +151,13 @@ def main(
                 typer.echo("Error: '--html' requires a value.", err=True)
                 raise typer.Exit(code=2)
             html = Path(args.pop(0))
+        elif arg == "--baseline":
+            if not args:
+                typer.echo("Error: '--baseline' requires a value.", err=True)
+                raise typer.Exit(code=2)
+            baseline_path = Path(args.pop(0))
+        elif arg == "--no-baseline":
+            no_baseline = True
         elif not arg.startswith("-"):
             files.append(Path(arg))
         else:
@@ -161,6 +173,7 @@ def main(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
+            baseline_path=baseline_path, no_baseline=no_baseline,
         )
 
 
@@ -178,6 +191,8 @@ def scan(
     webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
     notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
     html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report at this path."),
+    baseline_path: Optional[Path] = typer.Option(None, "--baseline", help="Path to baseline YAML"),
+    no_baseline: bool = typer.Option(False, "--no-baseline", help="Ignore baseline files"),
 ) -> None:
     """Profile one or more data files and report findings."""
     if smart and guided:
@@ -188,6 +203,7 @@ def scan(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
+            baseline_path=baseline_path, no_baseline=no_baseline,
         )
 
 
@@ -708,6 +724,37 @@ def demo(
     _do_scan(path, no_tui=True, json_output=False, domain=domain)
 
 
+@app.command()
+def baseline(
+    file: Path = typer.Argument(..., help="CSV/Parquet/Excel file to profile"),
+    output: Path = typer.Option(None, "-o", "--output", help="Output YAML path"),
+    skip: list[str] = typer.Option([], "--skip", help="Techniques to skip"),
+    update: bool = typer.Option(False, "--update", help="Update existing baseline"),
+) -> None:
+    """Create a deep profiling baseline for drift detection."""
+    with _cli_error_handler():
+        try:
+            from goldencheck.baseline import create_baseline, load_baseline
+        except ImportError:
+            console.print("[red]Install goldencheck[baseline]: pip install goldencheck[baseline][/]")
+            raise typer.Exit(1)
+
+        out_path = output or Path("goldencheck_baseline.yaml")
+
+        if update and out_path.exists():
+            console.print(f"[yellow]Updating existing baseline: {out_path}[/]")
+            existing = load_baseline(out_path)
+            new_baseline = create_baseline(file, skip=skip)
+            existing.update_from(new_baseline)
+            existing.save(out_path)
+        else:
+            console.print(f"[cyan]Creating baseline for {file}...[/]")
+            profile = create_baseline(file, skip=skip)
+            profile.save(out_path)
+
+        console.print(f"[green]Baseline saved to {out_path}[/]")
+
+
 def _do_scan(
     file: Path,
     *,
@@ -722,13 +769,28 @@ def _do_scan(
     webhook: str | None = None,
     notify_on: str = "grade-drop",
     html: Path | None = None,
+    baseline_path: Path | None = None,
+    no_baseline: bool = False,
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
+        baseline = None
+        if not no_baseline:
+            if baseline_path:
+                from goldencheck.baseline import load_baseline
+                baseline = load_baseline(baseline_path)
+            else:
+                for candidate in [Path("goldencheck_baseline.yaml"), file.parent / "goldencheck_baseline.yaml"]:
+                    if candidate.exists():
+                        from goldencheck.baseline import load_baseline
+                        baseline = load_baseline(candidate)
+                        console.print(f"[dim]Using auto-detected baseline: {candidate}[/]", highlight=False)
+                        break
+
         if llm_boost:
             findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain)
         else:
-            findings, profile = scan_file(file, domain=domain)
+            findings, profile = scan_file(file, domain=domain, baseline=baseline)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
 
         # Progress message (to stderr so it doesn't pollute --json)

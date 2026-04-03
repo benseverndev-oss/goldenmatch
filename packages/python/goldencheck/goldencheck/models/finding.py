@@ -30,7 +30,12 @@ class Finding:
         color = colors.get(self.severity, "#888")
         label = labels.get(self.severity, "?")
         conf = "H" if self.confidence >= 0.8 else "M" if self.confidence >= 0.5 else "L"
-        source = " [LLM]" if self.source == "llm" else ""
+        if self.source == "llm":
+            source = ' <span style="color:#9b59b6;font-weight:bold">[LLM]</span>'
+        elif self.source == "baseline_drift":
+            source = ' <span style="color:#e67e22;font-weight:bold">[DRIFT]</span>'
+        else:
+            source = ""
         return (
             f'<div style="font-family:monospace;font-size:13px;padding:4px 8px;'
             f'border-left:3px solid {color};margin:2px 0">'
