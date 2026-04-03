@@ -63,6 +63,13 @@ mcp = [
 agent = [
     "aiohttp>=3.9",
 ]
+baseline = [
+    "scipy>=1.10",
+    "numpy>=1.24",
+]
+semantic = [
+    "sentence-transformers>=2.0",
+]
 
 [tool.ruff]
 line-length = 100
