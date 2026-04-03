@@ -138,3 +138,85 @@ def split_address(df: pl.DataFrame, column: str) -> pl.DataFrame:
         pl.Series("state", states),
         pl.Series("zip", zips),
     )
+
+
+_COUNTRIES: dict[str, str] = {
+    "united states": "US", "united states of america": "US", "usa": "US", "us": "US",
+    "u.s.a.": "US", "u.s.": "US", "america": "US",
+    "united kingdom": "GB", "uk": "GB", "great britain": "GB", "england": "GB",
+    "scotland": "GB", "wales": "GB", "northern ireland": "GB",
+    "canada": "CA", "ca": "CA",
+    "australia": "AU", "au": "AU",
+    "germany": "DE", "deutschland": "DE", "de": "DE",
+    "france": "FR", "fr": "FR",
+    "italy": "IT", "italia": "IT", "it": "IT",
+    "spain": "ES", "espana": "ES", "es": "ES",
+    "mexico": "MX", "mx": "MX",
+    "brazil": "BR", "brasil": "BR", "br": "BR",
+    "japan": "JP", "jp": "JP",
+    "china": "CN", "cn": "CN",
+    "india": "IN", "in": "IN",
+    "south korea": "KR", "korea": "KR", "kr": "KR",
+    "netherlands": "NL", "holland": "NL", "nl": "NL",
+    "sweden": "SE", "se": "SE",
+    "norway": "NO", "no": "NO",
+    "denmark": "DK", "dk": "DK",
+    "switzerland": "CH", "ch": "CH",
+    "ireland": "IE", "ie": "IE",
+    "new zealand": "NZ", "nz": "NZ",
+    "singapore": "SG", "sg": "SG",
+    "portugal": "PT", "pt": "PT",
+    "argentina": "AR", "ar": "AR",
+    "colombia": "CO", "co": "CO",
+    "philippines": "PH", "ph": "PH",
+    "poland": "PL", "pl": "PL",
+    "belgium": "BE", "be": "BE",
+    "austria": "AT", "at": "AT",
+}
+
+
+@register_transform(
+    name="country_standardize",
+    input_types=["country", "string"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def country_standardize(series: pl.Series) -> pl.Series:
+    """Normalize country names to ISO 3166-1 alpha-2 codes."""
+
+    def _std(val: str | None) -> str | None:
+        if val is None:
+            return None
+        lookup = val.strip().lower()
+        return _COUNTRIES.get(lookup, val)
+
+    return series.map_elements(_std, return_dtype=pl.Utf8)
+
+
+_UNIT_PATTERNS = [
+    (re.compile(r"^(?:Apt|Apartment)\.?\s+", re.IGNORECASE), "Unit "),
+    (re.compile(r"^(?:Ste|Suite)\.?\s+", re.IGNORECASE), "Ste "),
+    (re.compile(r"^#\s*", re.IGNORECASE), "Unit "),
+]
+
+
+@register_transform(
+    name="unit_normalize",
+    input_types=["address", "string"],
+    auto_apply=False,
+    priority=45,
+    mode="series",
+)
+def unit_normalize(series: pl.Series) -> pl.Series:
+    """Normalize unit/apartment/suite designations."""
+
+    def _norm(val: str | None) -> str | None:
+        if val is None:
+            return None
+        result = val.strip()
+        for pattern, replacement in _UNIT_PATTERNS:
+            result = pattern.sub(replacement, result)
+        return result
+
+    return series.map_elements(_norm, return_dtype=pl.Utf8)

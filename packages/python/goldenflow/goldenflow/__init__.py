@@ -48,6 +48,9 @@ import goldenflow.transforms.dates  # noqa: F401
 import goldenflow.transforms.categorical  # noqa: F401
 import goldenflow.transforms.numeric  # noqa: F401
 import goldenflow.transforms.auto_correct  # noqa: F401
+import goldenflow.transforms.email  # noqa: F401
+import goldenflow.transforms.identifiers  # noqa: F401
+import goldenflow.transforms.url  # noqa: F401
 import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 
 

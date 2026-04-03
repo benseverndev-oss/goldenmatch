@@ -117,3 +117,80 @@ def initial_expand(series: pl.Series) -> tuple[pl.Series, list[int]]:
         if val and _INITIAL_PATTERN.search(val):
             flagged.append(i)
     return series, flagged
+
+
+_NICKNAMES: dict[str, str] = {
+    "bob": "Robert", "rob": "Robert", "robby": "Robert", "robbie": "Robert",
+    "bobby": "Robert",
+    "bill": "William", "billy": "William", "will": "William", "willy": "William",
+    "jim": "James", "jimmy": "James", "jamie": "James",
+    "mike": "Michael", "mikey": "Michael", "mick": "Michael",
+    "dick": "Richard", "rick": "Richard", "rich": "Richard", "ricky": "Richard",
+    "tom": "Thomas", "tommy": "Thomas",
+    "joe": "Joseph", "joey": "Joseph",
+    "jack": "John", "johnny": "John", "jon": "Jonathan",
+    "dave": "David", "davy": "David",
+    "steve": "Steven", "stevie": "Steven",
+    "dan": "Daniel", "danny": "Daniel",
+    "pat": "Patrick", "patty": "Patricia", "patsy": "Patricia",
+    "chris": "Christopher", "kit": "Christopher",
+    "tony": "Anthony",
+    "ed": "Edward", "eddie": "Edward", "ted": "Edward", "teddy": "Edward",
+    "al": "Albert", "bert": "Albert",
+    "charlie": "Charles", "chuck": "Charles",
+    "sam": "Samuel", "sammy": "Samuel",
+    "ben": "Benjamin", "benny": "Benjamin",
+    "matt": "Matthew",
+    "andy": "Andrew", "drew": "Andrew",
+    "nick": "Nicholas",
+    "alex": "Alexander",
+    "liz": "Elizabeth", "beth": "Elizabeth", "betty": "Elizabeth",
+    "kate": "Katherine", "kathy": "Katherine", "katie": "Katherine",
+    "sue": "Susan", "susie": "Susan",
+    "meg": "Margaret", "maggie": "Margaret", "peggy": "Margaret",
+    "jenny": "Jennifer", "jen": "Jennifer",
+    "debbie": "Deborah", "deb": "Deborah",
+    "barb": "Barbara",
+    "cindy": "Cynthia",
+    "sandy": "Sandra",
+}
+
+
+@register_transform(
+    name="nickname_standardize",
+    input_types=["name"],
+    auto_apply=False,
+    priority=42,
+    mode="series",
+)
+def nickname_standardize(series: pl.Series) -> pl.Series:
+    """Map common nicknames to formal first names."""
+
+    def _standardize(val: str | None) -> str | None:
+        if val is None:
+            return None
+        return _NICKNAMES.get(val.strip().lower(), val)
+
+    return series.map_elements(_standardize, return_dtype=pl.Utf8)
+
+
+@register_transform(
+    name="merge_name",
+    input_types=["name"],
+    auto_apply=False,
+    priority=45,
+    mode="dataframe",
+)
+def merge_name(
+    df: pl.DataFrame, column: str, last_name_col: str = "last_name"
+) -> pl.DataFrame:
+    """Merge first_name and last_name columns into a full_name column."""
+    if last_name_col not in df.columns:
+        return df
+    full_names = []
+    first_list = df[column].to_list()
+    last_list = df[last_name_col].to_list()
+    for first, last in zip(first_list, last_list):
+        parts = [p for p in (first, last) if p is not None and p.strip()]
+        full_names.append(" ".join(parts) if parts else None)
+    return df.with_columns(pl.Series("full_name", full_names))

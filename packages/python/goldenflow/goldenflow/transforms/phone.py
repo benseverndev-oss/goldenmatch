@@ -72,3 +72,24 @@ def phone_validate(series: pl.Series) -> pl.Series:
         return phonenumbers.is_possible_number(parsed)
 
     return series.map_elements(_validate, return_dtype=pl.Boolean)
+
+
+@register_transform(
+    name="phone_country_code",
+    input_types=["phone"],
+    auto_apply=False,
+    priority=45,
+    mode="series",
+)
+def phone_country_code(series: pl.Series) -> pl.Series:
+    """Extract the country calling code as an integer."""
+
+    def _code(val: str | None) -> int | None:
+        if val is None:
+            return None
+        parsed = _parse_phone(val)
+        if parsed is None:
+            return None
+        return parsed.country_code
+
+    return series.map_elements(_code, return_dtype=pl.Int64)

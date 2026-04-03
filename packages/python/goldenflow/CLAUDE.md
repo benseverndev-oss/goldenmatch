@@ -28,7 +28,7 @@ pip install -e ".[dev]"             # Dev install
 pip install -e ".[check]"           # With GoldenCheck integration
 pip install -e ".[mcp]"             # With MCP server
 pip install -e ".[all]"             # Everything
-pytest --tb=short -v                # Run tests (158 passing)
+pytest --tb=short -v                # Run tests (220 passing)
 ruff check .                        # Lint
 ruff check . --fix                  # Auto-fix lint
 
@@ -61,7 +61,7 @@ goldenflow mcp-serve                             # MCP server for Claude Desktop
 goldenflow/
 ├── cli/           # Typer CLI (main.py -- all 14 commands; errors.py, init_wizard.py, watch.py, schedule.py)
 ├── engine/        # TransformEngine, Manifest, profiler_bridge, selector, differ
-├── transforms/    # Transform library: text, phone, names, address, dates, categorical, numeric, auto_correct
+├── transforms/    # Transform library: text, phone, names, address, dates, categorical, numeric, auto_correct, email, identifiers, url
 ├── mapping/       # Schema mapping: name_similarity, profile_similarity, schema_mapper
 ├── config/        # GoldenFlowConfig (Pydantic), YAML loader, config learner
 ├── connectors/    # file.py (CSV/Excel/Parquet), database.py (connectorx), s3.py, gcs.py
@@ -248,7 +248,7 @@ goldencheck scan data.csv | goldenflow transform --from-findings | goldenmatch d
 ## Testing
 
 - TDD: tests first, then implementation
-- 158 tests passing
+- 220 tests passing
 - Fixtures: `tests/fixtures/` (CSV files gitignored; add `!tests/fixtures/*.csv` exception if needed)
 - Convention: `tests/{module}/test_{file}.py`
 - Integration tests: `tests/test_integration.py`, `tests/test_public_api.py`
@@ -294,6 +294,7 @@ Hosted on Railway, registered on Smithery:
 
 ## Gotchas
 
+- `utf8-lossy` encoding on CSV reads (streaming.py, cli/main.py, api/server.py)
 - `*.csv` is in `.gitignore` -- test fixtures need `!tests/fixtures/*.csv` exception
 - `__version__` is defined ONLY in `goldenflow/__init__.py` -- don't add a second copy in `cli/main.py`
 - Transform module imports in `__init__.py` are load-order sensitive -- modules that depend on others (e.g. `auto_correct` depends on `categorical`) must be imported after
@@ -338,14 +339,17 @@ result.manifest.records     # list[TransformRecord]
 result.manifest.created_at  # str
 ```
 
-### Available transforms (43+)
-**Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate
-**Phone:** phone_e164, phone_national, phone_digits, phone_validate
-**Name:** split_name, split_name_reverse, strip_titles, name_proper
-**Address:** address_standardize, state_abbreviate, zip_normalize, split_address
-**Date:** date_iso8601, date_us, date_eu, age_from_dob
-**Categorical:** category_auto_correct, category_standardize, boolean_normalize, null_standardize
-**Numeric:** currency_strip, percentage_normalize, round
+### Available transforms (76)
+**Text:** strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
+**Phone:** phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
+**Name:** split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
+**Address:** address_standardize, address_expand, state_abbreviate, state_expand, zip_normalize, split_address, country_standardize, unit_normalize
+**Date:** date_iso8601, date_us, date_eu, date_parse, age_from_dob, datetime_iso8601, extract_year, extract_month, extract_day, extract_quarter, extract_day_of_week, date_shift, date_validate
+**Categorical:** category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
+**Numeric:** currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
+**Email:** email_lowercase, email_normalize, email_extract_domain, email_validate
+**Identifiers:** ssn_format, ssn_mask, ein_format
+**URL:** url_normalize, url_extract_domain
 
 ### Zero-config vs Configured — when to use which
 - **Zero-config:** great for interactive exploration, finding what's wrong

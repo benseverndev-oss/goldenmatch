@@ -2,7 +2,9 @@ import polars as pl
 
 from goldenflow.transforms.names import (
     initial_expand,
+    merge_name,
     name_proper,
+    nickname_standardize,
     split_name,
     split_name_reverse,
     strip_suffixes,
@@ -54,3 +56,31 @@ def test_initial_expand():
     assert result[1] == "John Smith"
     assert 0 in flagged  # row 0 flagged for review
     assert 2 in flagged
+
+
+def test_nickname_standardize():
+    s = pl.Series("n", ["Bob", "Bill", "Jim", "Mike", "John", None])
+    result = nickname_standardize(s)
+    assert result[0] == "Robert"
+    assert result[1] == "William"
+    assert result[2] == "James"
+    assert result[3] == "Michael"
+    assert result[4] == "John"  # not a nickname, preserved
+    assert result[5] is None
+
+
+def test_nickname_standardize_case_insensitive():
+    s = pl.Series("n", ["bob", "BOB", "Bob"])
+    result = nickname_standardize(s)
+    assert result[0] == "Robert"
+    assert result[1] == "Robert"
+    assert result[2] == "Robert"
+
+
+def test_merge_name():
+    df = pl.DataFrame({
+        "first_name": ["John", "Jane", None],
+        "last_name": ["Smith", "Doe", "Wilson"],
+    })
+    result = merge_name(df, column="first_name", last_name_col="last_name")
+    assert result["full_name"].to_list() == ["John Smith", "Jane Doe", "Wilson"]

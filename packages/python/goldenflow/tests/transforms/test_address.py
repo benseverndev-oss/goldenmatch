@@ -3,9 +3,11 @@ import polars as pl
 from goldenflow.transforms.address import (
     address_expand,
     address_standardize,
+    country_standardize,
     split_address,
     state_abbreviate,
     state_expand,
+    unit_normalize,
     zip_normalize,
 )
 
@@ -58,3 +60,54 @@ def test_split_address():
     assert "city" in result.columns
     assert "state" in result.columns
     assert "zip" in result.columns
+
+
+def test_country_standardize():
+    s = pl.Series("c", [
+        "United States",
+        "united states of america",
+        "USA",
+        "UK",
+        "United Kingdom",
+        "Great Britain",
+        "Canada",
+        "Deutschland",
+        None,
+    ])
+    result = country_standardize(s)
+    assert result[0] == "US"
+    assert result[1] == "US"
+    assert result[2] == "US"
+    assert result[3] == "GB"
+    assert result[4] == "GB"
+    assert result[5] == "GB"
+    assert result[6] == "CA"
+    assert result[7] == "DE"
+    assert result[8] is None
+
+
+def test_country_standardize_preserves_unknown():
+    s = pl.Series("c", ["Narnia", "XY"])
+    result = country_standardize(s)
+    assert result[0] == "Narnia"
+    assert result[1] == "XY"
+
+
+def test_unit_normalize():
+    s = pl.Series("a", [
+        "Apt 5",
+        "Apartment 5",
+        "Suite 200",
+        "Ste 200",
+        "Unit 3B",
+        "#12",
+        None,
+    ])
+    result = unit_normalize(s)
+    assert result[0] == "Unit 5"
+    assert result[1] == "Unit 5"
+    assert result[2] == "Ste 200"
+    assert result[3] == "Ste 200"
+    assert result[4] == "Unit 3B"
+    assert result[5] == "Unit 12"
+    assert result[6] is None

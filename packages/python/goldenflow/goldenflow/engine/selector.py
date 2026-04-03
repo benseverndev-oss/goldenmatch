@@ -5,12 +5,24 @@ from goldenflow.transforms import TransformInfo, list_transforms
 
 
 # Finding check → transform mapping for --from-findings integration
+# Keys are real GoldenCheck check names (14 total from column + relation profilers)
 FINDING_TRANSFORM_MAP: dict[str, list[str]] = {
-    "format_inconsistency": ["date_iso8601", "phone_e164"],
-    "whitespace_issues": ["strip", "collapse_whitespace"],
-    "mixed_case": ["lowercase", "title_case"],
-    "null_variants": ["null_standardize"],
-    "unicode_issues": ["normalize_unicode"],
+    # Column-level checks
+    "type_inference": ["strip", "to_integer"],
+    "nullability": ["null_standardize"],
+    "uniqueness": ["strip", "collapse_whitespace", "email_normalize"],
+    "format_detection": ["phone_e164", "email_normalize", "date_iso8601", "zip_normalize"],
+    "range_distribution": ["clamp"],
+    "cardinality": ["category_auto_correct", "category_standardize"],
+    "pattern_consistency": ["phone_e164", "date_iso8601", "zip_normalize", "ssn_format"],
+    "encoding_detection": ["normalize_unicode", "normalize_quotes", "fix_mojibake"],
+    "sequence_detection": ["pad_left"],
+    "drift_detection": [],  # Detection-only, no automatic fix
+    # Cross-column / relation checks
+    "temporal_order": ["date_iso8601", "date_validate"],
+    "null_correlation": [],  # Detection-only, no automatic fix
+    "cross_column_validation": ["clamp"],
+    "cross_column": ["date_validate", "age_from_dob"],
 }
 
 
