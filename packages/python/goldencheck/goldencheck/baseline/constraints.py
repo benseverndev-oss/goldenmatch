@@ -157,8 +157,8 @@ def _mine_temporal_orders(
     for i, col_a in enumerate(present):
         for col_b in present[i + 1 :]:
             try:
-                a = df[col_a].cast(pl.Datetime) if df[col_a].dtype not in (pl.Date, pl.Datetime) else df[col_a]
-                b = df[col_b].cast(pl.Datetime) if df[col_b].dtype not in (pl.Date, pl.Datetime) else df[col_b]
+                a = df[col_a] if df[col_a].dtype in (pl.Date, pl.Datetime) else df[col_a].cast(pl.Date)
+                b = df[col_b] if df[col_b].dtype in (pl.Date, pl.Datetime) else df[col_b].cast(pl.Date)
             except Exception as exc:
                 logger.debug("Date cast failed for (%s, %s): %s", col_a, col_b, exc)
                 continue
