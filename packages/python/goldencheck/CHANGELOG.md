@@ -2,6 +2,21 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.1.0] - 2026-04-03
+
+### Added
+- Deep Profiling & Baseline System — `goldencheck baseline` discovers statistical properties from data, saves to `goldencheck_baseline.yaml`
+- Drift Detection — `goldencheck scan --baseline` detects distribution shifts, constraint violations, type changes, correlation breaks, pattern drift (13 check types)
+- 6 baseline techniques: statistical profiler, constraint miner, semantic type inferrer, correlation analyzer, pattern grammar inducer, confidence prior builder
+- CLI: `goldencheck baseline data.csv` with `--skip`, `--update`, `-o` flags
+- Python API: `create_baseline()`, `load_baseline()`, `baseline=` param on `scan_file()`
+- Optional `[baseline]` extras (scipy, numpy); optional `[semantic]` extras (sentence-transformers)
+- 139 new tests across baseline/ and drift/ modules
+
+### Changed
+- `scan_file()` accepts `baseline: BaselineProfile | Path | None` parameter
+- Auto-discovers `goldencheck_baseline.yaml` next to data file
+
 ## [1.0.2] - 2026-03-29
 
 ### Added

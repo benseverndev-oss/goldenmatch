@@ -8,6 +8,9 @@ Data validation that discovers rules from your data. DQBench Score: 88.40.
 pip install -e ".[dev]"          # Dev install
 pip install -e ".[llm]"          # With LLM boost
 pip install -e ".[mcp]"          # With MCP server
+pip install -e ".[baseline]"     # With deep profiling baseline
+goldencheck baseline data.csv    # Create statistical baseline
+goldencheck scan data.csv --baseline goldencheck_baseline.yaml  # Drift detection
 pytest --tb=short -v             # Run tests (189+ passing)
 ruff check .                     # Lint
 ruff check . --fix               # Auto-fix lint
@@ -27,6 +30,8 @@ goldencheck/
 ├── cli/           # Typer CLI (9 commands: scan, validate, review, diff, watch, fix, learn, mcp-serve)
 ├── engine/        # Scanner, validator, confidence, fixer, differ, watcher
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
+├── baseline/      # Deep profiling: statistical, constraints, semantic, correlation, patterns, priors
+├── drift/         # Drift detector (13 check types against saved baseline)
 ├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation)
 ├── semantic/      # Type classifier + suppression engine + domain packs (healthcare, finance, ecommerce)
 ├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
@@ -41,8 +46,9 @@ goldencheck/
 ## Pipeline Flow
 
 ```
-read_file → maybe_sample → run profilers → classify semantic types
-→ apply suppression → corroboration boost → sort by severity
+read_file → maybe_sample → run profilers → (apply baseline priors if present)
+→ classify semantic types → apply suppression → corroboration boost
+→ (run drift checks if baseline) → sort by severity
 → (optional) LLM boost → confidence downgrade → report/TUI
 ```
 
@@ -127,6 +133,20 @@ for f in findings:
     print(f"[{f.severity}] {f.column}: {f.check} — {f.message}")
 ```
 
+### create_baseline() — Learn dataset statistical properties
+```python
+from goldencheck import create_baseline, load_baseline
+
+baseline = create_baseline("data.csv")
+baseline.save("goldencheck_baseline.yaml")
+```
+
+### scan_file() with baseline — Detect drift
+```python
+findings, profile = scan_file("data.csv", baseline="goldencheck_baseline.yaml")
+drift_findings = [f for f in findings if f.source == "baseline_drift"]
+```
+
 ### health_score() — Get a letter grade + numeric score
 ```python
 score = goldencheck.health_score("data.csv")
@@ -135,6 +155,8 @@ print(score)  # e.g. "B (78/100)"
 
 ### CLI commands
 ```bash
+goldencheck baseline data.csv                                       # create statistical baseline
+goldencheck scan data.csv --baseline goldencheck_baseline.yaml      # drift detection
 goldencheck scan data.csv              # scan for issues
 goldencheck profile data.csv           # column-level stats
 goldencheck health-score data.csv      # health grade

@@ -40,6 +40,37 @@ This adds:
 
 You only need one provider installed, but both are included in the extras group.
 
+## With Baseline
+
+To use `goldencheck baseline` and `goldencheck scan --baseline` for deep-profiling and drift detection:
+
+```bash
+pip install goldencheck[baseline]
+```
+
+This adds:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| scipy | >=1.10 | Distribution fitting, KS-test, chi-squared test |
+| numpy | >=1.24 | Numeric array operations for statistical analysis |
+
+## With Semantic Embeddings
+
+For embedding-based semantic type classification inside the baseline profiler:
+
+```bash
+pip install goldencheck[semantic]
+```
+
+This adds:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| sentence-transformers | >=2.0 | Column name embedding similarity for semantic typing |
+
+The `[semantic]` extra is optional. When not installed, the baseline's semantic profiler falls back to keyword heuristics.
+
 ## With MCP Server
 
 To use `goldencheck mcp-serve` for Claude Desktop integration:
@@ -61,7 +92,7 @@ See [MCP Server](MCP-Server) for setup instructions.
 Install everything:
 
 ```bash
-pip install goldencheck[llm,mcp]
+pip install goldencheck[llm,mcp,baseline,semantic]
 ```
 
 ## Verify Installation

@@ -12,9 +12,10 @@
 |------|-------------|
 | [Installation](Installation) | Install GoldenCheck and optional extras |
 | [Quick Start](Quick-Start) | Get started in 60 seconds |
-| [CLI Reference](CLI) | 9 commands, flags, and exit codes |
+| [CLI Reference](CLI) | 11 commands, flags, and exit codes |
 | [Interactive TUI](Interactive-TUI) | 4-tab interactive terminal interface |
 | [Profilers](Profilers) | 10 column + 4 cross-column profilers |
+| [Baseline](Baseline) | Deep analysis, drift detection, YAML profiles |
 | [Configuration](Configuration) | `goldencheck.yml` reference |
 | [Domain Packs](Domain-Packs) | Healthcare, finance, e-commerce type definitions |
 | [Schema Diff](Schema-Diff) | Compare data versions, detect drift |
@@ -54,7 +55,8 @@ GoldenCheck's zero-config discovery outperforms every competitor — even when t
 
 ## Integration Points
 
-- **CLI** — 14 commands: scan, validate, review, diff, watch, fix, learn, init, history, serve, scan-db, schedule, mcp-serve
+- **CLI** — 15 commands: scan, validate, review, diff, watch, fix, learn, init, history, serve, scan-db, schedule, mcp-serve, baseline
+- **Baseline** — `goldencheck baseline data.csv` creates a YAML profile; `goldencheck scan --baseline` detects 13 types of drift
 - **CI/CD** — `goldencheck-action@v1` for GitHub, `--json` + exit codes for any CI
 - **MCP** — 9 tools for Claude Desktop integration
 - **Domain Packs** — `--domain healthcare|finance|ecommerce`

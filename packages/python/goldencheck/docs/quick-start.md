@@ -95,9 +95,31 @@ result  # Rich HTML table in notebooks
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
+## Baseline & Drift Detection
+
+Track drift against a known-good dataset by creating a statistical baseline:
+
+```bash
+pip install goldencheck[baseline]
+
+# Step 1: Build a baseline from clean data
+goldencheck baseline data.csv
+# Saves goldencheck_baseline.yaml
+
+# Step 2: Scan new data — drift surfaces automatically
+goldencheck scan new_data.csv
+```
+
+GoldenCheck runs 6 deep analysis techniques (statistical profiler, constraint miner, semantic type inferrer, correlation analyzer, pattern grammar inducer, confidence prior builder) and saves a human-readable YAML baseline. On every subsequent scan it checks 13 drift types — null rate changes, mean shifts, enum violations, semantic type changes, and more.
+
+See [Deep Profiling Baseline]({% link baseline.md %}) for full documentation.
+
+---
+
 ## Next Steps
 
 - [CLI Reference]({% link cli.md %}) — all commands and flags
 - [Profilers]({% link profilers.md %}) — what each check detects
+- [Deep Profiling Baseline]({% link baseline.md %}) — learn-once drift detection
 - [Configuration]({% link configuration.md %}) — `goldencheck.yml` reference
 - [MCP Server]({% link mcp-server.md %}) — Claude Desktop integration

@@ -53,6 +53,17 @@ goldencheck/
 │   ├── type_inference.py
 │   └── uniqueness.py
 │
+├── baseline/
+│   ├── statistical.py       # StatisticalProfiler — mean, std, percentiles
+│   ├── constraints.py       # ConstraintMiner — NOT NULL, UNIQUE, range, enum, regex
+│   ├── semantic.py          # SemanticTypeInferrer — lock in semantic types
+│   ├── correlation.py       # CorrelationAnalyzer — Pearson / Spearman pairs
+│   ├── patterns.py          # PatternGrammarInducer — structural pattern shapes
+│   └── priors.py            # ConfidencePriorBuilder — per-check confidence weights
+│
+├── drift/
+│   └── detector.py          # DriftDetector — 13 check types vs saved baseline
+│
 ├── relations/
 │   ├── null_correlation.py
 │   └── temporal.py
@@ -124,6 +135,73 @@ goldencheck data.csv
          │  tui/app.py             │
          └─────────────────────────┘
 ```
+
+### Baseline Creation
+
+```
+goldencheck baseline data.csv
+         │
+         ▼
+    cli/main.py  →  _do_baseline()
+         │
+         ▼
+    engine/reader.py  read_file(path)  →  pl.DataFrame
+         │
+         ├─ baseline/statistical.py   StatisticalProfiler
+         │    └─ mean, std, percentiles per numeric column
+         │
+         ├─ baseline/constraints.py   ConstraintMiner
+         │    └─ NOT NULL, UNIQUE, range, enum, regex constraints
+         │
+         ├─ baseline/semantic.py      SemanticTypeInferrer
+         │    └─ lock in semantic types + format match rates
+         │
+         ├─ baseline/correlation.py   CorrelationAnalyzer
+         │    └─ Pearson/Spearman for |r| >= 0.7 pairs
+         │
+         ├─ baseline/patterns.py      PatternGrammarInducer
+         │    └─ dominant structural pattern per string column
+         │
+         └─ baseline/priors.py        ConfidencePriorBuilder
+              └─ confidence weights from evidence strength
+                       │
+                       ▼
+              goldencheck_baseline.yaml  (human-readable YAML)
+```
+
+### Scan with Baseline (Drift Detection)
+
+```
+goldencheck scan new_data.csv
+         │
+         ▼
+    [standard scan pipeline — all profilers run as normal]
+         │
+         ├─ goldencheck_baseline.yaml detected / --baseline flag
+         │
+         └─ drift/detector.py  DriftDetector
+              │
+              ├─ null_rate_increase / null_rate_introduced
+              ├─ enum_violation
+              ├─ range_min_violation / range_max_violation
+              ├─ mean_shift / std_increase
+              ├─ semantic_type_change / format_rate_drop
+              ├─ pattern_drift / new_pattern_appeared
+              ├─ correlation_broken
+              └─ cardinality_explosion
+                       │
+                       ▼
+              drift findings merged into standard findings list
+              (source = "baseline")
+```
+
+---
+
+## Baseline and Drift Modules
+
+See [Deep Profiling Baseline]({% link baseline.md %}) for full documentation on the baseline workflow.
+
+---
 
 ### Scan with LLM Boost
 

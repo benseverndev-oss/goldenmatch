@@ -335,6 +335,74 @@ validate that they are both populated or both absent together.
 
 ---
 
+## Baseline Profilers
+
+Baseline profilers live in `goldencheck/baseline/` and run only when you execute `goldencheck baseline <file>`. They produce a persistent YAML profile rather than `Finding` objects. Each technique is independent and can be skipped individually with `--skip`.
+
+Requires `goldencheck[baseline]` installed.
+
+---
+
+### StatisticalProfiler
+
+**File:** `goldencheck/baseline/statistical.py`
+
+Records the distributional shape of every numeric column: mean, standard deviation, min, max, and the 5th, 25th, 50th, 75th, and 95th percentiles.
+
+**Used for drift checks:** `mean_shift`, `std_increase`, `range_min_violation`, `range_max_violation`
+
+---
+
+### ConstraintMiner
+
+**File:** `goldencheck/baseline/constraints.py`
+
+Infers hard constraints by observing what is universally true across all rows: NOT NULL, UNIQUE, range bounds, enum sets, and structural regex patterns.
+
+**Used for drift checks:** `null_rate_introduced`, `enum_violation`, `range_min_violation`, `range_max_violation`
+
+---
+
+### SemanticTypeInferrer
+
+**File:** `goldencheck/baseline/semantic.py`
+
+Locks in the detected semantic type for each column and records the format match rate. Requires `goldencheck[semantic]` for embedding-based detection; falls back to name-hint and format detection otherwise.
+
+**Used for drift checks:** `semantic_type_change`, `format_rate_drop`
+
+---
+
+### CorrelationAnalyzer
+
+**File:** `goldencheck/baseline/correlation.py`
+
+Records Pearson and Spearman correlations for column pairs where |r| ≥ 0.7. Captures the expected correlation structure of the dataset.
+
+**Used for drift checks:** `correlation_broken`
+
+---
+
+### PatternGrammarInducer
+
+**File:** `goldencheck/baseline/patterns.py`
+
+Generalises string columns to structural patterns (digits → `D`, letters → `L`, punctuation preserved) and records the dominant pattern and its coverage percentage.
+
+**Used for drift checks:** `pattern_drift`, `new_pattern_appeared`
+
+---
+
+### ConfidencePriorBuilder
+
+**File:** `goldencheck/baseline/priors.py`
+
+Assigns a confidence weight to each inferred constraint based on evidence strength (row count, consistency rate). These priors calibrate drift finding severity on future scans.
+
+**Used for drift checks:** All checks — priors modulate whether a drift finding surfaces as WARNING or ERROR.
+
+---
+
 ## Severity Levels
 
 | Level | Integer value | Meaning |
