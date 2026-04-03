@@ -27,7 +27,7 @@ goldencheck scan data.csv --domain healthcare  # Domain-specific types
 
 ```
 goldencheck/
-├── cli/           # Typer CLI (9 commands: scan, validate, review, diff, watch, fix, learn, mcp-serve)
+├── cli/           # Typer CLI (15 commands incl. baseline, scan, validate, review, diff, watch, fix, learn, mcp-serve)
 ├── engine/        # Scanner, validator, confidence, fixer, differ, watcher
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
 ├── baseline/      # Deep profiling: statistical, constraints, semantic, correlation, patterns, priors
@@ -64,7 +64,7 @@ read_file → maybe_sample → run profilers → (apply baseline priors if prese
 
 ## Testing
 
-- TDD: tests first, then implementation
+- TDD: tests first, then implementation — 550+ tests total
 - Fixtures: `tests/fixtures/simple.csv`, `tests/fixtures/messy.csv`
 - Convention: `tests/{module}/test_{file}.py`
 - Commit messages: conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`)
@@ -121,6 +121,14 @@ Hosted on Railway, registered on Smithery:
 - Domain pack loading priority: user types > domain types > base types (dict insertion order matters)
 - Cross-column findings: use only the "violating" column name to avoid FP on clean columns in benchmarks
 - DQBench adapter does NOT call `apply_confidence_downgrade` — raw `scan_file()` output is scored
+- `baseline/` and `drift/` modules may use numpy/scipy — keep isolated there, existing profilers stay numpy-free
+- CI workflow (`test.yml`) installs `.[dev,baseline]` — baseline tests import numpy/scipy directly at module level
+- String date columns cast to `pl.Date` (not `pl.Datetime`) — `pl.Datetime` cast fails on date-only strings like `"2024-01-01"`
+- Benford's Law drift check requires values spanning 2+ orders of magnitude — test data must cover a wide range
+- `source="baseline_drift"` on drift findings — distinct from `None` (profiler) and `"llm"` (LLM-generated)
+- `goldencheck_baseline.yaml` auto-detected by scanner — user gets a `[dim]` console notice when this happens
+- Version tests should use `from goldencheck import __version__` — never hardcode the version string
+- GitHub repo has 20 topic limit — swap topics when adding new ones, don't try to add beyond 20
 
 ## API Quick Reference
 
