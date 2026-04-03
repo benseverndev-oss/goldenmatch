@@ -24,7 +24,8 @@ def test_help():
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "1.0.1" in result.stdout
+    from goldencheck import __version__
+    assert __version__ in result.stdout
 
 
 def test_llm_boost_without_key(monkeypatch):

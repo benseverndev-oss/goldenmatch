@@ -493,8 +493,8 @@ def _check_temporal_order_drift(df: pl.DataFrame, baseline: BaselineProfile) -> 
             continue
 
         try:
-            a = df[col_before].cast(pl.Datetime) if df[col_before].dtype not in (pl.Date, pl.Datetime) else df[col_before]
-            b = df[col_after].cast(pl.Datetime) if df[col_after].dtype not in (pl.Date, pl.Datetime) else df[col_after]
+            a = df[col_before] if df[col_before].dtype in (pl.Date, pl.Datetime) else df[col_before].cast(pl.Date)
+            b = df[col_after] if df[col_after].dtype in (pl.Date, pl.Datetime) else df[col_after].cast(pl.Date)
         except Exception as exc:
             logger.debug("Temporal cast failed for (%s, %s): %s", col_before, col_after, exc)
             continue

@@ -504,9 +504,15 @@ def test_detects_benford_drift():
     )
     baseline = _make_baseline(stat_profiles={"total_amount": sp})
 
-    # Current: uniform values that do NOT follow Benford's law
-    # All values start with digit 5 — violates Benford's distribution
-    values = rng.uniform(500_000, 599_999, size=500).tolist()
+    # Current: values that span 2+ orders of magnitude but all start with digit 5
+    # This violates Benford's law (which expects ~30% starting with 1)
+    values = (
+        rng.uniform(5, 9.99, size=100).tolist()
+        + rng.uniform(50, 99.9, size=100).tolist()
+        + rng.uniform(500, 999, size=100).tolist()
+        + rng.uniform(5000, 9999, size=100).tolist()
+        + rng.uniform(50000, 99999, size=100).tolist()
+    )
     df = pl.DataFrame({"total_amount": values})
 
     findings = run_drift_checks(df, baseline)
