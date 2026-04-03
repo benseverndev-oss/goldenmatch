@@ -1,8 +1,13 @@
 """Scanner — orchestrates all profilers and collects findings."""
 from __future__ import annotations
+import dataclasses
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 import polars as pl
+
+if TYPE_CHECKING:
+    from goldencheck.baseline.models import BaselineProfile
 from goldencheck.engine.reader import read_file
 from goldencheck.engine.sampler import maybe_sample
 from goldencheck.engine.confidence import apply_corroboration_boost
@@ -211,6 +216,7 @@ def scan_file(
     sample_size: int = 100_000,
     return_sample: bool = False,
     domain: str | None = None,
+    baseline: "BaselineProfile | Path | None" = None,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     row_count = len(df)
@@ -274,7 +280,43 @@ def scan_file(
         except Exception as e:
             logger.warning("Failed to apply learned rules: %s", e)
 
+    # Apply baseline confidence priors BEFORE corroboration boost
+    if baseline is not None:
+        # Load if path was supplied
+        if isinstance(baseline, (Path, str)):
+            from goldencheck.baseline import load_baseline
+            baseline = load_baseline(baseline)
+        # Blend raw confidence toward learned priors
+        if hasattr(baseline, "confidence_priors") and baseline.confidence_priors:
+            from goldencheck.baseline.priors import apply_prior
+            for i, finding in enumerate(all_findings):
+                check_priors = baseline.confidence_priors.get(finding.check, {})
+                prior = check_priors.get(finding.column)
+                if prior:
+                    new_conf = apply_prior(finding.confidence, prior)
+                    all_findings[i] = dataclasses.replace(finding, confidence=new_conf)
+
     all_findings = apply_corroboration_boost(all_findings)
+
+    # Run drift detection AFTER corroboration boost
+    if baseline is not None:
+        from goldencheck.drift import run_drift_checks
+        if baseline.source_filename and baseline.source_filename != path.name:
+            logger.warning(
+                "Baseline source '%s' doesn't match scan file '%s'",
+                baseline.source_filename, path.name,
+            )
+        drift_findings = run_drift_checks(sample, baseline)
+        all_findings.extend(drift_findings)
+
+    # Suppress PatternConsistencyProfiler findings for baseline-covered columns
+    if baseline is not None and baseline.patterns:
+        baseline_pattern_cols = set(baseline.patterns.keys())
+        all_findings = [
+            f for f in all_findings
+            if not (f.check == "pattern_consistency" and f.column in baseline_pattern_cols)
+        ]
+
     all_findings.sort(key=lambda f: f.severity, reverse=True)
     profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
     if return_sample:
