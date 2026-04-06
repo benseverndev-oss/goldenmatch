@@ -305,7 +305,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8150):
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenFlow",
-            "description": "Data transformation toolkit — standardize, reshape, and normalize messy data automatically. 43+ built-in transforms for phones, dates, addresses, names, categoricals. 10 MCP tools for transforming, profiling, mapping schemas, and applying domain packs. DQBench Transform Score: 100/100. Built on Polars.",
+            "description": "Data transformation toolkit — standardize, reshape, and normalize messy data automatically. 76 built-in transforms across 11 categories (text, phone, name, address, date, categorical, numeric, email, identifiers, URL, auto-correct). 10 MCP tools for transforming, profiling, mapping schemas, and applying domain packs. DQBench Transform Score: 100/100. Built on Polars.",
             "homepage": "https://github.com/benzsevern/goldenflow",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
