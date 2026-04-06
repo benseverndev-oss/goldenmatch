@@ -66,6 +66,14 @@ class TestDedupeStage:
             s.validate(PipeContext())
 
 
+try:
+    import goldenmatch.config.schemas  # noqa: F401
+    HAS_GOLDENMATCH = True
+except ImportError:
+    HAS_GOLDENMATCH = False
+
+
+@pytest.mark.skipif(not HAS_GOLDENMATCH, reason="goldenmatch not installed")
 class TestBuildConfigFromContexts:
     """Tests for _build_config_from_contexts geo-compound blocking."""
 
