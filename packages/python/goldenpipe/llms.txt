@@ -1,6 +1,6 @@
 # GoldenPipe
 
-> Pipeline framework for data quality — compose Check, Flow, Match stages with pluggable routing and YAML config.
+> Golden Suite orchestrator — chains data validation (GoldenCheck), transformation (GoldenFlow), and entity resolution (GoldenMatch) into a single pluggable pipeline. DQBench Pipeline Score: 88.07.
 
 ## Interfaces
 - MCP Server: `goldenpipe mcp-serve` (4 tools: run_pipeline, validate_pipeline, list_stages, explain_pipeline)
@@ -11,8 +11,82 @@
 - REST API: `goldenpipe serve` on port 8000
 
 ## Install
-- `pip install goldenpipe` (standalone) or `pip install goldenpipe[golden-suite]` (with all tools)
+- `pip install goldenpipe` — standalone orchestrator
+- `pip install goldenpipe[golden-suite]` — with all three tools (goldencheck, goldenflow, goldenmatch)
+
+## Quick Examples
+
+### Run the full pipeline (one command)
+```python
+import goldenpipe as gp
+
+result = gp.run("customers.csv")
+
+print(result.status)        # "success"
+print(result.check)         # Quality findings
+print(result.transform)     # What was fixed
+print(result.match)         # Deduplicated clusters
+print(result.reasoning)     # Why each decision was made
+```
+
+### CLI
+```bash
+goldenpipe run data.csv                    # full pipeline
+goldenpipe run data.csv --skip-check       # skip validation
+goldenpipe validate pipeline.yaml          # validate config
+goldenpipe stages                          # list available stages
+```
+
+### Custom pipeline config
+```python
+from goldenpipe import Pipeline, PipelineConfig, StageSpec
+
+config = PipelineConfig(
+    pipeline="check-and-flow-only",
+    stages=[
+        StageSpec(use="goldencheck.scan"),
+        StageSpec(use="goldenflow.transform"),
+        # omit goldenmatch.dedupe to skip dedup
+    ],
+)
+pipeline = Pipeline(config=config)
+result = pipeline.run(source="data.csv")
+```
+
+## Pipeline Flow
+
+```
+Raw Data
+  | GoldenCheck   -- profile & discover quality issues
+  | GoldenFlow    -- fix issues, standardize, reshape
+  | GoldenMatch   -- deduplicate, match, create golden records
+  v
+Golden Records
+```
+
+Adaptive logic:
+- **Skips** transformation if no quality issues found
+- **Routes** to privacy-preserving matching if sensitive fields detected
+- **Reports** reasoning for every decision
+
+## Key Types
+
+- `PipeResult` — `.status` (SUCCESS/PARTIAL/FAILED), `.stages`, `.artifacts`, `.errors`, `.reasoning`, `.timing`, `.skipped`, `.input_rows`
+- `PipelineConfig` — YAML-loadable config with stage specs
+- `StageSpec` — `use` (stage entry point) + optional config
+
+## Available Stages
+- `goldencheck.scan` — validate data quality
+- `goldenflow.transform` — fix issues and standardize
+- `goldenmatch.dedupe` — deduplicate and match records
 
 ## Docs
-- [Architecture](CLAUDE.md): Framework design, stage system, engine layers
-- [GitHub](https://github.com/benzsevern/goldenpipe): Source
+- [Full API reference](docs/llms-full.txt): 222-line guide with all patterns
+- [PyPI](https://pypi.org/project/goldenpipe/)
+- [GitHub](https://github.com/benzsevern/goldenpipe)
+
+## Part of the Golden Suite
+- [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile (DQBench: 88.40)
+- [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize (DQBench: 100/100)
+- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — Deduplicate & match (DQBench: 95.30)
+- [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline (DQBench: 88.07)
