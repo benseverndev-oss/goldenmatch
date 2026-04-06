@@ -248,7 +248,7 @@ goldencheck scan data.csv | goldenflow transform --from-findings | goldenmatch d
 ## Testing
 
 - TDD: tests first, then implementation
-- 220 tests passing
+- 234 tests passing
 - Fixtures: `tests/fixtures/` (CSV files gitignored; add `!tests/fixtures/*.csv` exception if needed)
 - Convention: `tests/{module}/test_{file}.py`
 - Integration tests: `tests/test_integration.py`, `tests/test_public_api.py`
@@ -300,6 +300,8 @@ Hosted on Railway, registered on Smithery:
 - Transform module imports in `__init__.py` are load-order sensitive -- modules that depend on others (e.g. `auto_correct` depends on `categorical`) must be imported after
 - `mode="dataframe"` transforms receive the **entire** DataFrame and must return one with the same or more columns -- do not drop columns silently
 - `category_auto_correct` is suppressed for high-cardinality columns (>10% unique values) by `selector.py` -- this is intentional
+- GoldenCheck `FINDING_TRANSFORM_MAP` uses real check names (14 total) -- keys must match `goldencheck/profilers/*.py` check names exactly
+- Transform count source of truth: `python -c "from goldenflow.transforms import registry; print(len(registry()))"`
 - Ruff line length: 100 chars
 - `config/learner.py` generates a YAML config from profiles; `config/loader.py` reads it back -- keep the Pydantic schema in `config/schema.py` as the single source of truth
 - Cloud connectors (s3.py, gcs.py) have optional dependencies -- `pip install goldenflow[s3]` or `pip install goldenflow[gcs]`; they raise `ImportError` with a helpful message if the dependency is missing
