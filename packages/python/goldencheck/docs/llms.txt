@@ -1,19 +1,152 @@
 # GoldenCheck
 
-> Data quality validation — profile columns, detect issues, classify types, and fix problems with optional LLM boost.
+> Data validation that discovers rules from your data. Zero-config profiling, drift detection, and LLM-enhanced scanning. DQBench Score: 88.40.
 
 ## Interfaces
-- MCP Server: `goldencheck mcp-serve` (19 tools: scan, validate, fix, audit, learn, explain, review, agent orchestration)
+- MCP Server: `goldencheck mcp-serve` (19 tools: scan, validate, fix, profile, health score, explain, review, domain packs, agent orchestration)
 - Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
-- A2A Server: `goldencheck agent-serve --port 8100` (9 skills)
+- A2A Server: `goldencheck agent-serve --port 8100` (10 skills)
 - CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
-- Python API: `from goldencheck import scan_file, validate_file`
+- Python API: `from goldencheck import scan_file, validate_file, health_score, create_baseline`
 - REST API: `goldencheck serve` on port 8000
 
 ## Install
-- `pip install goldencheck`
+- `pip install goldencheck` — core scanning
+- `pip install goldencheck[llm]` — LLM boost (~$0.01/scan)
+- `pip install goldencheck[baseline]` — deep profiling & drift detection
+- `pip install goldencheck[mcp]` — MCP server for Claude Desktop
+
+## Quick Examples
+
+### Scan a file (zero-config)
+```python
+import goldencheck
+
+findings = goldencheck.scan_file("data.csv")
+for f in findings:
+    print(f"[{f.severity}] {f.column}: {f.check} — {f.message}")
+```
+
+### Health score (A-F grade)
+```python
+score = goldencheck.health_score("data.csv")
+print(score)  # e.g. "B (78/100)"
+```
+
+### Create baseline and detect drift
+```python
+from goldencheck import create_baseline, scan_file
+
+# One-time: learn what "healthy" looks like
+baseline = create_baseline("data.csv")
+baseline.save("goldencheck_baseline.yaml")
+
+# Subsequent scans detect drift automatically
+findings, profile = scan_file("new_data.csv", baseline="goldencheck_baseline.yaml")
+drift = [f for f in findings if f.source == "baseline_drift"]
+```
+
+### Validate against pinned rules
+```python
+from goldencheck import validate_file
+
+result = validate_file("data.csv")  # uses goldencheck.yml
+print(f"Pass: {result.passed}, Errors: {len(result.errors)}")
+```
+
+### Auto-fix data quality issues
+```bash
+goldencheck fix data.csv                   # safe: trim, normalize, fix encoding
+goldencheck fix data.csv --mode moderate   # + standardize case
+goldencheck fix data.csv --dry-run         # preview changes
+```
+
+## Config Template (goldencheck.yml)
+
+```yaml
+version: 1
+
+settings:
+  sample_size: 100000
+  fail_on: error
+
+columns:
+  email:
+    type: string
+    required: true
+    format: email
+    unique: true
+
+  age:
+    type: integer
+    range: [0, 120]
+
+  status:
+    type: string
+    enum: [active, inactive, pending, closed]
+
+relations:
+  - type: temporal_order
+    columns: [start_date, end_date]
+
+ignore:
+  - column: notes
+    check: nullability
+```
+
+## What It Detects
+
+### Column-Level (10 profilers)
+- Type inference, nullability, uniqueness, format detection (email/phone/URL/date)
+- Range & distribution, cardinality, pattern consistency, sequence detection
+- Encoding issues, mixed formats
+
+### Cross-Column (4 profilers)
+- Temporal ordering (start_date > end_date)
+- Null correlation (columns null together)
+- Numeric cross-column (value > max)
+- Age vs DOB validation
+
+### Baseline Drift (13 checks)
+- distribution_drift, entropy_drift, bound_violation, benford_drift
+- fd_violation, key_uniqueness_loss, temporal_order_drift, type_drift
+- correlation_break, new_correlation, pattern_drift, new_pattern
+
+## Key Types
+
+- `Finding` — `.severity` (ERROR/WARNING/INFO), `.column`, `.check`, `.message`, `.confidence` (0-1), `.rows_affected`, `.source` (None/llm/baseline_drift)
+- `Profile` — column-level stats from scanning
+- `ScanResult` — Jupyter wrapper with HTML rendering
+
+## Performance
+- 1M rows in 2.07s (482K rows/sec)
+- LLM boost: ~$0.01 per scan
+- 3 domain packs: healthcare, finance, ecommerce
+
+## CLI Commands
+```bash
+goldencheck data.csv                    # scan + TUI
+goldencheck scan data.csv --no-tui      # CLI output
+goldencheck validate data.csv           # check rules
+goldencheck baseline data.csv           # create baseline
+goldencheck scan data.csv --baseline goldencheck_baseline.yaml  # drift
+goldencheck diff old.csv new.csv        # schema diff
+goldencheck fix data.csv                # auto-fix
+goldencheck watch data/                 # monitor directory
+goldencheck health-score data.csv       # A-F grade
+goldencheck mcp-serve                   # MCP server (19 tools)
+goldencheck serve                       # REST API
+goldencheck scan-db "postgresql://..."  # database scanning
+```
 
 ## Docs
-- [Architecture](CLAUDE.md): Full codebase guide with profiler system, semantic types, LLM integration
-- [GitHub](https://github.com/benzsevern/goldencheck): Source
-- [Full API Reference](llms-full.txt): Extended documentation with all function signatures and usage patterns
+- [Full docs](https://benzsevern.github.io/goldencheck/): GitHub Pages
+- [Wiki](https://github.com/benzsevern/goldencheck/wiki): 40 pages
+- [PyPI](https://pypi.org/project/goldencheck/)
+- [GitHub](https://github.com/benzsevern/goldencheck)
+
+## Part of the Golden Suite
+- [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize
+- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — Deduplicate & match
+- [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline
