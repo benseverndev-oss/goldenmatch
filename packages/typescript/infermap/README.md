@@ -1,5 +1,11 @@
 # infermap
 
+[![npm](https://img.shields.io/npm/v/infermap?color=cb3837)](https://www.npmjs.com/package/infermap)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/infermap?label=min%2Bgzip)](https://bundlephobia.com/package/infermap)
+[![types](https://img.shields.io/npm/types/infermap)](https://www.npmjs.com/package/infermap)
+[![install size](https://packagephobia.com/badge?p=infermap)](https://packagephobia.com/result?p=infermap)
+[![license](https://img.shields.io/npm/l/infermap)](./LICENSE)
+
 **Inference-driven schema mapping for TypeScript.** TS port of the [Python `infermap` library](https://pypi.org/project/infermap/) with full parity — same scorer pipeline, same Hungarian assignment, same mapping decisions, verified by shared golden tests.
 
 ```bash
