@@ -1,17 +1,31 @@
 [![PyPI](https://img.shields.io/pypi/v/infermap?color=d4a017)](https://pypi.org/project/infermap/)
+[![npm](https://img.shields.io/npm/v/infermap?color=cb3837&label=npm)](https://www.npmjs.com/package/infermap)
 [![CI](https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/infermap/actions/workflows/test.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-green)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 # infermap
 
-Inference-driven schema mapping engine — automatically maps source fields to target fields using a composable scorer pipeline.
+Inference-driven schema mapping engine — automatically maps source fields to target fields using a composable scorer pipeline. **Available as a Python package on PyPI and a TypeScript package on npm**, with identical mapping behavior verified by a shared golden-test parity suite.
 
 ## Install
+
+**Python:**
 
 ```bash
 pip install infermap
 ```
+
+**TypeScript / Next.js:**
+
+```bash
+npm install infermap
+```
+
+The TypeScript port has zero runtime dependencies in its core entrypoint and is compatible with Next.js Server Components, Route Handlers, and the Edge Runtime. See [`packages/infermap-js/README.md`](./packages/infermap-js/README.md) and the [TypeScript examples](./examples/typescript/) for usage.
+
+### Python extras
 
 Install extras for additional database support:
 

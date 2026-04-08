@@ -2,6 +2,11 @@
 
 Hands-on examples to try infermap. Each example is self-contained — just run it.
 
+**Two languages:**
+
+- **Python examples** (below, and in this directory) — the original implementation. Run with `python examples/01_basic_mapping.py`.
+- **[TypeScript examples](./typescript/)** — for the `infermap` npm package, including a Next.js Edge Runtime route handler, custom scorer, and SQLite → JSON schema-definition mapping.
+
 ## Quick Start
 
 ```bash
