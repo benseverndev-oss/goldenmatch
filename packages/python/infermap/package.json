@@ -1,0 +1,12 @@
+{
+  "name": "infermap-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Root orchestrator for the infermap Python package and infermap-js TypeScript port. Not a real npm workspace — each package installs independently to avoid Windows symlink issues.",
+  "scripts": {
+    "install:js": "npm --prefix packages/infermap-js install",
+    "build:js": "npm --prefix packages/infermap-js run build",
+    "test:js": "npm --prefix packages/infermap-js run test",
+    "typecheck:js": "npm --prefix packages/infermap-js run typecheck"
+  }
+}

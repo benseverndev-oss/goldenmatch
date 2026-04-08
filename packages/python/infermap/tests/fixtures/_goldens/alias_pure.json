@@ -1,0 +1,32 @@
+{
+  "min_confidence": 0.3,
+  "mappings": [
+    {
+      "source": "email_addr",
+      "target": "email",
+      "confidence": 0.6896
+    },
+    {
+      "source": "fname",
+      "target": "first_name",
+      "confidence": 0.437
+    },
+    {
+      "source": "lname",
+      "target": "last_name",
+      "confidence": 0.4836
+    },
+    {
+      "source": "tel",
+      "target": "phone",
+      "confidence": 0.3895
+    },
+    {
+      "source": "zipcode",
+      "target": "zip_code",
+      "confidence": 0.7002
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

@@ -73,3 +73,43 @@ jobs:
 
       - name: Smoke test
         run: infermap --help
+
+  infermap-js:
+    # TypeScript port: full build + typecheck + test + parity.
+    # Parity requires Python to regenerate goldens first so drift is caught.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python package (for parity goldens)
+        run: pip install -e ".[dev]"
+
+      - name: Regenerate parity goldens
+        run: python scripts/gen_parity_goldens.py
+
+      - name: Verify goldens unchanged (detects Python drift)
+        run: git diff --exit-code tests/fixtures/_goldens/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS package
+        working-directory: packages/infermap-js
+        run: npm install
+
+      - name: Typecheck
+        working-directory: packages/infermap-js
+        run: npm run typecheck
+
+      - name: Test (includes parity suite)
+        working-directory: packages/infermap-js
+        run: npm run test
+
+      - name: Build
+        working-directory: packages/infermap-js
+        run: npm run build
