@@ -78,6 +78,10 @@ jobs:
     # TypeScript port: full build + typecheck + test + parity.
     # Parity requires Python to regenerate goldens first so drift is caught.
     runs-on: ubuntu-latest
+    env:
+      # Opt into Node.js 24 for JavaScript actions (actions/checkout,
+      # actions/setup-node). Node 20 support in runners ends Sept 2026.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v4
 

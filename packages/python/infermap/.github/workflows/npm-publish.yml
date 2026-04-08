@@ -24,6 +24,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      # Opt into Node.js 24 for JavaScript actions; Node 20 runners end Sept 2026.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     defaults:
       run:
         working-directory: packages/infermap-js
