@@ -1,0 +1,86 @@
+{
+  "description": "Shared parity manifest. Both the Python golden generator and the TypeScript parity suite load this file. Each case defines a deterministic source→target mapping problem with fixed config; the golden stores the normalized MapResult (rounded confidences, stable key order).",
+  "version": "1",
+  "cases": [
+    {
+      "name": "alias_pure",
+      "description": "Canonical alias resolution — CRM field names → canonical customer schema.",
+      "source": {
+        "kind": "records",
+        "records": [
+          {"fname": "John", "lname": "Doe", "email_addr": "john@example.com", "tel": "555-0100", "zipcode": "10001"},
+          {"fname": "Jane", "lname": "Smith", "email_addr": "jane@test.org", "tel": "(555) 020-0200", "zipcode": "90210"},
+          {"fname": "Bob", "lname": "Johnson", "email_addr": "bob.j@mail.com", "tel": "+15550300", "zipcode": "30301"}
+        ]
+      },
+      "target": {
+        "kind": "records",
+        "records": [
+          {"first_name": "Sarah", "last_name": "Connor", "email": "sarah@example.com", "phone": "555-9001", "zip_code": "90001"},
+          {"first_name": "Mike", "last_name": "Ross", "email": "mike@test.org", "phone": "(555) 900-2000", "zip_code": "10002"}
+        ]
+      },
+      "min_confidence": 0.3
+    },
+    {
+      "name": "fuzzy_and_alias",
+      "description": "Mixed alias + fuzzy — healthcare source, canonical patient target. Tests DOB alias and Gender alias.",
+      "source": {
+        "kind": "records",
+        "records": [
+          {"PID": "001", "PatientName": "John Smith", "DOB": "1980-01-15", "MRN": "MRN001", "Gender": "M"},
+          {"PID": "002", "PatientName": "Jane Doe", "DOB": "1992-06-30", "MRN": "MRN002", "Gender": "F"},
+          {"PID": "003", "PatientName": "Bob Wilson", "DOB": "1975-11-22", "MRN": "MRN003", "Gender": "M"}
+        ]
+      },
+      "target": {
+        "kind": "records",
+        "records": [
+          {"patient_id": "A1", "name": "Alice", "date_of_birth": "1990-01-01", "medical_record_number": "X1", "sex": "F"},
+          {"patient_id": "A2", "name": "Carol", "date_of_birth": "1988-04-12", "medical_record_number": "X2", "sex": "F"},
+          {"patient_id": "A3", "name": "Dave", "date_of_birth": "1979-09-03", "medical_record_number": "X3", "sex": "M"}
+        ]
+      },
+      "min_confidence": 0.3
+    },
+    {
+      "name": "ambiguous_low_signal",
+      "description": "Gibberish-ish source + structured target. Most mappings should fall below threshold, producing unmapped lists.",
+      "source": {
+        "kind": "records",
+        "records": [
+          {"ref": "ABC-123", "code": "E001", "val": "42.50", "desc": "Widget type A"},
+          {"ref": "DEF-456", "code": "E002", "val": "18.99", "desc": "Widget type B"},
+          {"ref": "GHI-789", "code": "E003", "val": "105.00", "desc": "Gadget type C"}
+        ]
+      },
+      "target": {
+        "kind": "records",
+        "records": [
+          {"customer_id": "100", "product_code": "P1", "amount": "99.99", "description": "alpha"},
+          {"customer_id": "101", "product_code": "P2", "amount": "49.95", "description": "beta"},
+          {"customer_id": "102", "product_code": "P3", "amount": "12.00", "description": "gamma"}
+        ]
+      },
+      "min_confidence": 0.5
+    },
+    {
+      "name": "exact_identity",
+      "description": "Sanity case — source and target schemas are identical column-for-column. Every field should map 1:1.",
+      "source": {
+        "kind": "records",
+        "records": [
+          {"id": "1", "email": "a@b.co", "first_name": "Alice", "last_name": "Smith"},
+          {"id": "2", "email": "c@d.co", "first_name": "Bob", "last_name": "Jones"}
+        ]
+      },
+      "target": {
+        "kind": "records",
+        "records": [
+          {"id": "99", "email": "x@y.co", "first_name": "Zoe", "last_name": "Zed"}
+        ]
+      },
+      "min_confidence": 0.3
+    }
+  ]
+}

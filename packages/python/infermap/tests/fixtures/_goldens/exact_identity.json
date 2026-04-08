@@ -1,0 +1,27 @@
+{
+  "min_confidence": 0.3,
+  "mappings": [
+    {
+      "source": "email",
+      "target": "email",
+      "confidence": 0.9796
+    },
+    {
+      "source": "first_name",
+      "target": "first_name",
+      "confidence": 0.7789
+    },
+    {
+      "source": "id",
+      "target": "id",
+      "confidence": 0.7754
+    },
+    {
+      "source": "last_name",
+      "target": "last_name",
+      "confidence": 0.7768
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

@@ -1,0 +1,58 @@
+name: npm-publish
+
+# Publishes packages/infermap-js to npm when a tag matching infermap-js-v*
+# is pushed. Uses the NPM_TOKEN repository secret.
+#
+# After the first successful publish, consider switching to OIDC trusted
+# publishing (npmjs.com → package → Settings → Publishing access) so future
+# releases don't need a long-lived token.
+
+on:
+  push:
+    tags:
+      - "infermap-js-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run publish in --dry-run mode"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/infermap-js
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            npm publish --access public --dry-run
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
