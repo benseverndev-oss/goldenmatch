@@ -1,33 +1,59 @@
-[![PyPI](https://img.shields.io/pypi/v/infermap?color=d4a017)](https://pypi.org/project/infermap/)
-[![npm](https://img.shields.io/npm/v/infermap?color=cb3837&label=npm)](https://www.npmjs.com/package/infermap)
-[![CI](https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/infermap/actions/workflows/test.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Node 20+](https://img.shields.io/badge/node-20%2B-green)](https://nodejs.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+<h1 align="center">infermap</h1>
 
-# infermap
+<p align="center"><strong>Inference-driven schema mapping engine.</strong><br>
+Map messy source columns to a known target schema — accurately, explainably, with zero config.</p>
 
-Inference-driven schema mapping engine — automatically maps source fields to target fields using a composable scorer pipeline. **Available as a Python package on PyPI and a TypeScript package on npm**, with identical mapping behavior verified by a shared golden-test parity suite.
+<p align="center">
+  <a href="https://pypi.org/project/infermap/"><img src="https://img.shields.io/pypi/v/infermap?color=d4a017&label=PyPI" alt="PyPI"></a>
+  <a href="https://www.npmjs.com/package/infermap"><img src="https://img.shields.io/npm/v/infermap?color=cb3837&label=npm" alt="npm"></a>
+  <a href="https://pypi.org/project/infermap/"><img src="https://img.shields.io/pypi/dm/infermap?color=d4a017&label=PyPI%20downloads" alt="PyPI downloads"></a>
+  <a href="https://www.npmjs.com/package/infermap"><img src="https://img.shields.io/npm/dw/infermap?color=cb3837&label=npm%20downloads" alt="npm downloads"></a>
+  <a href="https://github.com/benzsevern/infermap/actions/workflows/test.yml"><img src="https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg?branch=main" alt="CI"></a>
+</p>
+
+<p align="center">
+  <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white" alt="Python 3.11+"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-20%2B-339933?logo=node.js&logoColor=white" alt="Node 20+"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://nextjs.org/docs/app/api-reference/edge"><img src="https://img.shields.io/badge/edge%20runtime-compatible-000000?logo=vercel&logoColor=white" alt="Edge runtime"></a>
+  <a href="https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript"><img src="https://img.shields.io/badge/parity-Python%20%E2%86%94%20TypeScript-d4a017" alt="Parity"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/benzsevern/infermap?color=green" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/benzsevern/infermap/wiki">📖 Wiki</a> ·
+  <a href="https://benzsevern.github.io/infermap/">🌐 Docs</a> ·
+  <a href="examples/">🧪 Examples</a> ·
+  <a href="https://github.com/benzsevern/infermap/discussions">💬 Discussions</a> ·
+  <a href="https://github.com/benzsevern/infermap/issues">🐛 Issues</a>
+</p>
+
+---
+
+`infermap` is a schema-mapping engine. Give it any two field collections (CSVs, DataFrames, database tables, in-memory records) and it figures out which source field corresponds to which target field, with confidence scores and human-readable reasoning. Available as a **Python package on PyPI** and a **TypeScript package on npm**, with mapping decisions verified bit-for-bit by a shared golden-test parity suite.
+
+## Table of contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Which package should I use?](#which-package-should-i-use)
+- [Custom scorers](#custom-scorers)
+- [CLI examples](#cli-examples)
+- [Config reference](#config-reference)
+- [Documentation](#documentation)
+- [License](#license)
 
 ## Install
 
-**Python:**
+### Python
 
 ```bash
 pip install infermap
 ```
 
-**TypeScript / Next.js:**
-
-```bash
-npm install infermap
-```
-
-The TypeScript port has zero runtime dependencies in its core entrypoint and is compatible with Next.js Server Components, Route Handlers, and the Edge Runtime. See [`packages/infermap-js/README.md`](./packages/infermap-js/README.md) and the [TypeScript examples](./examples/typescript/) for usage.
-
-### Python extras
-
-Install extras for additional database support:
+Optional database extras:
 
 ```bash
 pip install infermap[postgres]   # psycopg2-binary
@@ -36,7 +62,17 @@ pip install infermap[duckdb]     # duckdb
 pip install infermap[all]        # all extras
 ```
 
-## Quick Start
+### TypeScript / Next.js
+
+```bash
+npm install infermap
+```
+
+Zero runtime dependencies in the core entrypoint. Compatible with Next.js Server Components, Route Handlers, Server Actions, and the Edge Runtime out of the box. See the [package README](./packages/infermap-js/README.md) for the full reference.
+
+## Quick start
+
+### Python
 
 ```python
 import infermap
@@ -62,93 +98,202 @@ result.to_config("my_mapping.yaml")
 saved = infermap.from_config("my_mapping.yaml")
 ```
 
-## CLI Examples
+### TypeScript
 
-```bash
-# Map two files and print a report
-infermap map crm_export.csv canonical_customers.csv
+```ts
+import { map } from "infermap";
 
-# Map and save the config
-infermap map crm_export.csv canonical_customers.csv --save mapping.yaml
+const crm = [
+  { fname: "John", lname: "Doe", email_addr: "j@d.co" },
+  { fname: "Jane", lname: "Smith", email_addr: "j@s.co" },
+];
 
-# Apply a saved mapping config to a DataFrame (prints renamed column list)
-infermap apply crm_export.csv mapping.yaml
+const canonical = [
+  { first_name: "", last_name: "", email: "" },
+];
 
-# Inspect the schema of a file or database table
-infermap inspect crm_export.csv
-infermap inspect sqlite:///mydb.db --table customers
+const result = map({ records: crm }, { records: canonical });
 
-# Validate a mapping config file
-infermap validate mapping.yaml
+for (const m of result.mappings) {
+  console.log(`${m.source} → ${m.target}  (${m.confidence.toFixed(2)})`);
+}
+// fname       → first_name  (0.44)
+// lname       → last_name   (0.48)
+// email_addr  → email       (0.69)
 ```
 
-## How It Works
+For Next.js, drop it directly into a Route Handler — works on Edge Runtime with zero config:
 
-infermap runs each field pair through a pipeline of **5 scorers**. Each scorer returns a score between 0.0 and 1.0 (or abstains with `None`). The engine combines scores via weighted average (requiring at least 2 contributing scorers), then uses the Hungarian algorithm for optimal one-to-one assignment.
+```ts
+// app/api/infer/route.ts
+import { map } from "infermap";
+export const runtime = "edge";
+
+export async function POST(req: Request) {
+  const { sourceCsv, targetCsv } = await req.json();
+  const result = map({ csvText: sourceCsv }, { csvText: targetCsv });
+  return Response.json(result);
+}
+```
+
+## How it works
+
+Each field pair runs through a pipeline of **6 scorers**. Each scorer returns a score in `[0.0, 1.0]` or abstains (`None`/`null`). The engine combines scores via weighted average (requiring at least 2 contributors), then uses the **Hungarian algorithm** for optimal one-to-one assignment.
 
 | Scorer | Weight | What it detects |
 |---|---|---|
 | **ExactScorer** | 1.0 | Case-insensitive exact name match |
-| **AliasScorer** | 0.9 | Known field aliases (e.g. `fname` == `first_name`, `tel` == `phone`) |
+| **AliasScorer** | 0.95 | Known field aliases (`fname` ↔ `first_name`, `tel` ↔ `phone`) |
 | **PatternTypeScorer** | 0.7 | Semantic type from sample values — email, date_iso, phone, uuid, url, zip, currency |
-| **ProfileScorer** | 0.6 | Statistical profile similarity — null rate, unique rate, value count |
-| **FuzzyNameScorer** | 0.5 | Token-level fuzzy string similarity on field names |
+| **ProfileScorer** | 0.5 | Statistical profile similarity — dtype, null rate, unique rate, length, cardinality |
+| **FuzzyNameScorer** | 0.4 | Jaro-Winkler similarity on normalized field names |
+| **LLMScorer** | 0.8 | Pluggable LLM-backed scorer (stubbed by default) |
+
+[Read the full architecture →](https://github.com/benzsevern/infermap/wiki/Architecture)
 
 ## Features
 
-- Maps CSV, Parquet, XLSX, Polars DataFrames, Pandas DataFrames, SQLite, and schema YAML files
-- Composable scorer pipeline — disable, reweight, or add custom scorers via config or code
-- Optimal one-to-one assignment via the Hungarian algorithm
-- `required` parameter warns when critical target fields go unmapped
-- `MapResult.apply()` renames DataFrame columns in one call
-- `to_config()` / `from_config()` roundtrip for repeatable pipelines
-- CLI for quick inspection, mapping, and validation
+| | Python | TypeScript |
+|---|---|---|
+| 6 built-in scorers | ✅ | ✅ |
+| Hungarian assignment | ✅ (scipy) | ✅ (vendored) |
+| Custom scorers | `@infermap.scorer` | `defineScorer()` |
+| In-memory data | Polars, Pandas, `list[dict]` | `Array<Record>` |
+| File providers | CSV, Parquet, XLSX | CSV, JSON |
+| Schema definition files | YAML + JSON | JSON |
+| Database providers | SQLite, Postgres, DuckDB | SQLite, Postgres, DuckDB |
+| Engine config | YAML | JSON |
+| Saved mapping format | YAML | JSON |
+| CLI | ✅ (Typer) | ✅ (`node:util`) |
+| Apply to DataFrame | ✅ | ❌ (CSV rewrite via CLI) |
+| Edge-runtime compatible | ❌ | ✅ |
+| Zero runtime deps | n/a | ✅ |
 
-## Custom Scorers
+[Full feature parity matrix →](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript)
 
-Register a scorer function with the `@infermap.scorer` decorator:
+## Which package should I use?
+
+| If you are… | Use |
+|---|---|
+| Building a Python data pipeline or notebook | **Python** |
+| Building a Next.js app, Node service, or browser tool | **TypeScript** |
+| Running mapping in a serverless edge function | **TypeScript** (zero Node built-ins) |
+| Doing ad-hoc CSV exploration on the command line | **Python CLI** has more features; **TS CLI** is leaner |
+| Both — Python backend + Next.js admin UI | **Both** — outputs are interoperable via the JSON config format |
+
+## Custom scorers
+
+### Python
 
 ```python
 import infermap
 from infermap.types import FieldInfo, ScorerResult
 
-@infermap.scorer("my_prefix_scorer", weight=0.8)
-def my_prefix_scorer(source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
-    src = source.name.lower()
-    tgt = target.name.lower()
-    # Abstain if neither name starts with a common prefix
-    if not (src[:3] == tgt[:3]):
+@infermap.scorer("prefix_scorer", weight=0.8)
+def prefix_scorer(source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
+    if source.name[:3].lower() != target.name[:3].lower():
         return None
-    return ScorerResult(score=0.85, reasoning=f"Shared prefix '{src[:3]}'")
+    return ScorerResult(score=0.85, reasoning=f"Shared prefix '{source.name[:3]}'")
 
 from infermap.engine import MapEngine
 from infermap.scorers import default_scorers
 
-engine = MapEngine(scorers=[*default_scorers(), my_prefix_scorer])
-result = engine.map("source.csv", "target.csv")
+engine = MapEngine(scorers=[*default_scorers(), prefix_scorer])
 ```
 
-You can also use a plain class with `name`, `weight`, and `score()`:
+### TypeScript
 
-```python
-class DomainScorer:
-    name = "DomainScorer"
-    weight = 0.75
+```ts
+import { MapEngine, defaultScorers, defineScorer, makeScorerResult } from "infermap";
 
-    def score(self, source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
-        ...
+const prefixScorer = defineScorer(
+  "prefix_scorer",
+  (source, target) => {
+    if (source.name.slice(0, 3).toLowerCase() !== target.name.slice(0, 3).toLowerCase()) {
+      return null;
+    }
+    return makeScorerResult(0.85, `Shared prefix '${source.name.slice(0, 3)}'`);
+  },
+  0.8 // weight
+);
+
+const engine = new MapEngine({
+  scorers: [...defaultScorers(), prefixScorer],
+});
 ```
 
-## Config Reference
+## CLI examples
 
-Load an `infermap.yaml` at engine creation to override scorer weights, disable scorers, or add domain aliases:
+The CLI works the same way in both packages:
 
-```python
-engine = MapEngine(config_path="infermap.yaml")
+```bash
+# Map two files and print a report
+infermap map crm_export.csv canonical_customers.csv
+
+# Map and save the config (Python: --save, TS: -o)
+infermap map crm_export.csv canonical_customers.csv -o mapping.json
+
+# Apply a saved mapping to rename columns
+infermap apply crm_export.csv --config mapping.json --output renamed.csv
+
+# Inspect the schema of a file or DB table
+infermap inspect crm_export.csv
+infermap inspect "sqlite:///mydb.db" --table customers
+
+# Validate a saved config against a source
+infermap validate crm_export.csv --config mapping.json --required email,id --strict
 ```
 
-See `infermap.yaml.example` for a full annotated example.
+## Config reference
+
+Both packages accept an engine config (scorer weight overrides + alias extensions). Python uses YAML, TypeScript uses JSON; the **shape is identical**.
+
+```yaml
+# Python: infermap.yaml
+scorers:
+  LLMScorer:
+    enabled: false
+  FuzzyNameScorer:
+    weight: 0.3
+aliases:
+  order_id:
+    - order_num
+    - ord_no
+```
+
+```json
+// TypeScript: infermap.config.json
+{
+  "scorers": {
+    "LLMScorer":       { "enabled": false },
+    "FuzzyNameScorer": { "weight": 0.3 }
+  },
+  "aliases": {
+    "order_id": ["order_num", "ord_no"]
+  }
+}
+```
+
+See [`infermap.yaml.example`](./infermap.yaml.example) for a full annotated reference.
+
+## Documentation
+
+- 📖 **[Wiki](https://github.com/benzsevern/infermap/wiki)** — full reference for both languages
+  - [Getting Started](https://github.com/benzsevern/infermap/wiki/Getting-Started)
+  - [Python API](https://github.com/benzsevern/infermap/wiki/Python-API)
+  - [TypeScript API](https://github.com/benzsevern/infermap/wiki/TypeScript-API)
+  - [Python vs TypeScript](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript) — migration guide
+  - [Scorers](https://github.com/benzsevern/infermap/wiki/Scorers)
+  - [Architecture](https://github.com/benzsevern/infermap/wiki/Architecture)
+  - [FAQ](https://github.com/benzsevern/infermap/wiki/FAQ)
+- 🌐 **[Documentation site](https://benzsevern.github.io/infermap/)**
+- 🧪 **Examples**
+  - [Python examples](./examples/) — 7 numbered scripts + sample data
+  - [TypeScript examples](./examples/typescript/) — basic mapping, Next.js Edge Runtime, custom scorer, SQLite, save/reuse
+- 📓 **[Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)** — Python notebook
+- 💬 **[GitHub Discussions](https://github.com/benzsevern/infermap/discussions)**
+- 🐛 **[Issue tracker](https://github.com/benzsevern/infermap/issues)**
 
 ## License
 
-MIT
+[MIT](LICENSE)
