@@ -48,6 +48,7 @@ export interface MapResult {
   unmappedTarget: string[];
   warnings: string[];
   metadata: Record<string, unknown>;
+  scoreMatrix?: Record<string, Record<string, number>>;
 }
 
 // ---------- factories + normalization ----------

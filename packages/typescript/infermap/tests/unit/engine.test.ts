@@ -143,4 +143,40 @@ describe("MapEngine.mapSchemas", () => {
     expect(result.metadata["min_confidence"]).toBe(0.3);
     expect(typeof result.metadata["elapsed_seconds"]).toBe("number");
   });
+
+  it("omits scoreMatrix by default", () => {
+    const engine = new MapEngine();
+    const src = schema(["fname", "lname"]);
+    const tgt = schema(["first_name", "last_name"]);
+    const result = engine.mapSchemas(src, tgt);
+    expect(result.scoreMatrix).toBeUndefined();
+  });
+
+  it("populates scoreMatrix when returnScoreMatrix flag is set", () => {
+    const engine = new MapEngine({ returnScoreMatrix: true });
+    const src = schema(["fname", "lname"]);
+    const tgt = schema(["first_name", "last_name"]);
+    const result = engine.mapSchemas(src, tgt);
+    expect(result.scoreMatrix).toBeDefined();
+    expect(Object.keys(result.scoreMatrix!)).toEqual(["fname", "lname"]);
+    for (const row of Object.values(result.scoreMatrix!)) {
+      expect(Object.keys(row)).toEqual(["first_name", "last_name"]);
+      for (const score of Object.values(row)) {
+        expect(score).toBeGreaterThanOrEqual(0);
+        expect(score).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("scoreMatrix scores match assigned mapping confidences", () => {
+    const engine = new MapEngine({ returnScoreMatrix: true, minConfidence: 0 });
+    const src = schema(["fname", "email_addr"]);
+    const tgt = schema(["first_name", "email"]);
+    const result = engine.mapSchemas(src, tgt);
+    expect(result.scoreMatrix).toBeDefined();
+    for (const m of result.mappings) {
+      const smScore = result.scoreMatrix![m.source]![m.target]!;
+      expect(Math.abs(smScore - m.confidence)).toBeLessThan(0.01);
+    }
+  });
 });
