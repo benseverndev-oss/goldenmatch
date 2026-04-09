@@ -8,7 +8,7 @@ from pathlib import Path
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, Resource, Prompt
 
 from goldencheck.engine.scanner import scan_file, scan_file_with_llm
 from goldencheck.engine.confidence import apply_confidence_downgrade
@@ -571,6 +571,14 @@ def create_server() -> Server:
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return TOOLS
+
+    @server.list_resources()
+    async def list_resources() -> list[Resource]:
+        return []
+
+    @server.list_prompts()
+    async def list_prompts() -> list[Prompt]:
+        return []
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
