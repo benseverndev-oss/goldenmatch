@@ -12,9 +12,10 @@ def test_demo_command(tmp_path):
 
 
 def test_version():
+    from goldenflow import __version__
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "1.1.0" in result.stdout
+    assert __version__ in result.stdout
 
 
 def test_strict_mode_passes(sample_csv, tmp_path):
