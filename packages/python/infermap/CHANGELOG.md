@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-04-09
+
+### Added
+- **Cross-language accuracy benchmark** (`benchmark/`) — manifest-driven case corpus, hand-anchored metrics (F1, top-1, MRR, ECE), Python and TypeScript runners with bit-identical scoring on the v0.1 scorer set, and a self-test corpus that gates CI.
+- **`MapEngine.map_schemas()`** (Python) / **`MapEngine.mapSchemas()`** (TypeScript) — pre-extracted-schema entry point that bypasses provider re-extraction. Use this when you already hold a `SchemaInfo`.
+- **`return_score_matrix=True`** flag — exposes the full M×N candidate score matrix on `MapResult.score_matrix`, enabling MRR computation, runner-up inspection, and override UIs.
+- Synthetic case generator with deterministic seeding (Python is canonical; TypeScript loads the committed JSON).
+- Regression-gating CI: PRs that drop F1 by more than the threshold require an explicit `regression-ack` label.
+- New examples: `08_benchmark_introspection.py` and `typescript/08_score_matrix_introspection.ts`.
+- Documentation: `docs/benchmark.md` (rendered on the docs site).
+
+### Fixed
+- Cross-language drift on the synthetic slice (~25pp F1 gap → 0.3pp): the Python engine was round-tripping `SchemaInfo` through polars and re-inferring dtypes; `map_schemas()` is the supported way to avoid that.
+- `MapEngine.map_schemas()` now deep-copies the target schema before merging schema-file aliases (no caller mutation).
+
 ## [0.1.0] - 2026-03-30
 
 ### Added
