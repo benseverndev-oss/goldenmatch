@@ -3,7 +3,7 @@
   "name": "io.github.benzsevern/goldencheck",
   "title": "GoldenCheck",
   "description": "Data validation that discovers rules from your data — scan, profile, health score, domain packs",
-  "version": "1.0.2",
+  "version": "1.1.1",
   "repository": {
     "url": "https://github.com/benzsevern/goldencheck.git",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldencheck",
-      "version": "1.0.2",
+      "version": "1.1.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
