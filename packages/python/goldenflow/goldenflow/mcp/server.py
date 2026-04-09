@@ -265,6 +265,14 @@ def create_server():
         from mcp.types import Tool
         return [Tool(**t) for t in TOOLS]
 
+    @server.list_resources()
+    async def list_resources():
+        return []
+
+    @server.list_prompts()
+    async def list_prompts():
+        return []
+
     @server.call_tool()
     async def call_tool(name: str, arguments: dict):
         result = handle_tool(name, arguments)

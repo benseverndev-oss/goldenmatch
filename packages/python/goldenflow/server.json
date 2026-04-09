@@ -3,7 +3,7 @@
   "name": "io.github.benzsevern/goldenflow",
   "title": "GoldenFlow",
   "description": "Data transformation toolkit — standardize, reshape, and normalize messy data",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "repository": {
     "url": "https://github.com/benzsevern/goldenflow.git",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenflow",
-      "version": "1.0.0",
+      "version": "1.1.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
