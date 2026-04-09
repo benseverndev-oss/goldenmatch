@@ -1,0 +1,14 @@
+{
+  "id": "self-test/zero",
+  "category": "valentine",
+  "subcategory": "self-test",
+  "source": {
+    "name": "self-test-zero",
+    "url": "local",
+    "license": "MIT",
+    "attribution": "infermap project"
+  },
+  "tags": ["no_match", "smoke"],
+  "expected_difficulty": "hard",
+  "notes": "No shared semantic or lexical overlap between source and target columns. Engine should correctly leave everything unmapped. Perfect-negative case: F1=1.0 because tp=fp=fn=0."
+}

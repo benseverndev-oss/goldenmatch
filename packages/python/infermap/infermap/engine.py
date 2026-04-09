@@ -1,6 +1,7 @@
 """MapEngine — orchestrates schema extraction, scoring, and assignment."""
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from pathlib import Path
@@ -30,10 +31,12 @@ class MapEngine:
         sample_size: int = 500,
         scorers=None,
         config_path: str | None = None,
+        return_score_matrix: bool = False,
     ) -> None:
         self.min_confidence = min_confidence
         self.sample_size = sample_size
         self.scorers = scorers if scorers is not None else default_scorers()
+        self.return_score_matrix = return_score_matrix
         if config_path is not None:
             self._apply_config(config_path)
 
@@ -100,21 +103,50 @@ class MapEngine:
         **kwargs:
             Forwarded to ``extract_schema``.
         """
-        t0 = time.perf_counter()
-
         # 1. Extract schemas
         src_schema: SchemaInfo = extract_schema(source, sample_size=self.sample_size, **kwargs)
         tgt_schema: SchemaInfo = extract_schema(target, sample_size=self.sample_size, **kwargs)
 
-        # 2. Merge required fields
+        # 2. Optional schema_file aliases (only applicable when paths are provided;
+        # callers who already have SchemaInfo use map_schemas directly).
+        sf_schema: SchemaInfo | None = None
+        if schema_file is not None:
+            sf_schema = extract_schema(schema_file, **kwargs)
+
+        return self.map_schemas(
+            src_schema,
+            tgt_schema,
+            required=required,
+            schema_file_schema=sf_schema,
+        )
+
+    def map_schemas(
+        self,
+        src_schema: SchemaInfo,
+        tgt_schema: SchemaInfo,
+        required: list[str] | None = None,
+        schema_file_schema: SchemaInfo | None = None,
+    ) -> MapResult:
+        """Map pre-extracted source and target schemas.
+
+        Mirrors TypeScript's ``MapEngine.mapSchemas``. Use this when you already
+        have ``SchemaInfo`` objects and don't need extraction. The benchmark runner
+        uses this path to avoid round-tripping through ``extract_schema`` (which
+        would re-infer dtypes from sample strings and cause drift between runners).
+        """
+        t0 = time.perf_counter()
+
+        # 1. Merge required fields
         required_set: set[str] = set(tgt_schema.required_fields)
         if required:
             required_set.update(required)
 
-        # 3. Merge schema_file aliases into target fields
-        if schema_file is not None:
-            sf_schema: SchemaInfo = extract_schema(schema_file, **kwargs)
-            sf_by_name = {f.name: f for f in sf_schema.fields}
+        # 2. Merge schema_file aliases into target fields.
+        # Deep-copy tgt_schema first so we don't mutate the caller's object
+        # (we write into tgt_field.metadata["aliases"]).
+        if schema_file_schema is not None:
+            tgt_schema = copy.deepcopy(tgt_schema)
+            sf_by_name = {f.name: f for f in schema_file_schema.fields}
             for tgt_field in tgt_schema.fields:
                 if tgt_field.name in sf_by_name:
                     sf_field = sf_by_name[tgt_field.name]
@@ -124,9 +156,9 @@ class MapEngine:
                     if merged:
                         tgt_field.metadata["aliases"] = merged
             # Also propagate required from schema_file
-            required_set.update(sf_schema.required_fields)
+            required_set.update(schema_file_schema.required_fields)
 
-        # 4. Build M x N score matrix
+        # 3. Build M x N score matrix
         src_fields = src_schema.fields
         tgt_fields = tgt_schema.fields
         M = len(src_fields)
@@ -154,12 +186,10 @@ class MapEngine:
                     if result is not None:
                         results[sc.name] = (result, sc.weight)
 
-                # 5. Score combination: weighted average, min 2 contributors
+                # 4. Score combination: weighted average, min 2 contributors
                 if len(results) < _MIN_CONTRIBUTORS:
                     combined = 0.0
                 else:
-                    total_weight = sum(w for _, (_, w) in enumerate(results.values()) if True)
-                    # rebuild properly
                     total_weight = sum(w for (_, w) in results.values())
                     weighted_sum = sum(r.score * w for (r, w) in results.values())
                     combined = weighted_sum / total_weight if total_weight > 0 else 0.0
@@ -167,10 +197,21 @@ class MapEngine:
                 score_matrix[i, j] = combined
                 breakdown_matrix[i][j] = {name: r for name, (r, _) in results.items()}
 
-        # 6. Optimal assignment
+        # Optional: expose the full score matrix for MRR computation in the benchmark
+        score_matrix_dict: dict[str, dict[str, float]] | None = None
+        if self.return_score_matrix:
+            score_matrix_dict = {
+                src_fields[i].name: {
+                    tgt_fields[j].name: float(score_matrix[i, j])
+                    for j in range(N)
+                }
+                for i in range(M)
+            }
+
+        # 5. Optimal assignment
         assignments = optimal_assign(score_matrix, self.min_confidence)
 
-        # 7. Build MapResult
+        # 6. Build MapResult
         assigned_src = {r for r, _, _ in assignments}
         assigned_tgt = {c for _, c, _ in assignments}
 
@@ -194,7 +235,7 @@ class MapEngine:
         unmapped_source = [src_fields[i].name for i in range(M) if i not in assigned_src]
         unmapped_target = [tgt_fields[j].name for j in range(N) if j not in assigned_tgt]
 
-        # 8. Warnings for required unmapped target fields
+        # 7. Warnings for required unmapped target fields
         warnings: list[str] = []
         mapped_targets = {m.target for m in mappings}
         for req_field in required_set:
@@ -222,7 +263,7 @@ class MapEngine:
                         f"Required target field '{req_field}' is unmapped and no candidate found."
                     )
 
-        # 9. Metadata with timing
+        # 8. Metadata with timing
         elapsed = time.perf_counter() - t0
         metadata = {
             "elapsed_seconds": round(elapsed, 4),
@@ -238,4 +279,5 @@ class MapEngine:
             unmapped_target=unmapped_target,
             warnings=warnings,
             metadata=metadata,
+            score_matrix=score_matrix_dict,
         )

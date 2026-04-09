@@ -1,0 +1,14 @@
+{
+  "id": "self-test/adversarial",
+  "category": "valentine",
+  "subcategory": "self-test",
+  "source": {
+    "name": "self-test-adversarial",
+    "url": "local",
+    "license": "MIT",
+    "attribution": "infermap project"
+  },
+  "tags": ["fuzzy_dominant", "short_names", "smoke"],
+  "expected_difficulty": "hard",
+  "notes": "Short abbreviated source columns (code, ref, status) that need to resolve against verbose target columns (order_code, reference_no, state). No exact matches, no aliases in the default table — the engine must lean on FuzzyNameScorer (prefix-match 'code'→'order_code', 'ref'→'reference_no') plus PatternTypeScorer if sample patterns help. 'status'→'state' is the hardest because neither samples nor name overlap cleanly. Expect this case to score low but not zero — it exercises the scorer pipeline's graceful degradation."
+}

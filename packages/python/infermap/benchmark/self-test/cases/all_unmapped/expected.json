@@ -1,0 +1,5 @@
+{
+  "mappings": [],
+  "unmapped_source": ["kappa_nonsense", "lambda_gobbledygook"],
+  "unmapped_target": ["mu_thingummy", "nu_whatchamacallit"]
+}
