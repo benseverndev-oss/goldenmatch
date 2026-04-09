@@ -7,7 +7,7 @@ from typing import Any
 try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent
+    from mcp.types import Tool, TextContent, Resource, Prompt
     HAS_MCP = True
 except ImportError:
     HAS_MCP = False
@@ -99,6 +99,14 @@ def create_server() -> "Server":
                      "config_path": {"type": "string"},
                  }, "required": ["config_path"]}),
         ]
+
+    @server.list_resources()
+    async def handle_list_resources() -> list[Resource]:
+        return []
+
+    @server.list_prompts()
+    async def handle_list_prompts() -> list[Prompt]:
+        return []
 
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict):
