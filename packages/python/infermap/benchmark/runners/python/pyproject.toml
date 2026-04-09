@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infermap-bench"
+version = "0.1.0"
+description = "Accuracy benchmark runner for the infermap schema-mapping engine."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "bsevern" }]
+dependencies = [
+    "infermap>=0.1.0",
+    "click>=8.1",
+    "numpy>=1.26",
+    "jsonschema>=4.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=4"]
+
+[project.scripts]
+infermap-bench = "infermap_bench.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["infermap_bench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

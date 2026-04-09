@@ -58,6 +58,7 @@ class MapResult:
     unmapped_target: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    score_matrix: dict[str, dict[str, float]] | None = None
 
     def report(self) -> dict:
         return {

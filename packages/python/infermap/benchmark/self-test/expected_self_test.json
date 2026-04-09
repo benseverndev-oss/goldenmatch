@@ -1,0 +1,20 @@
+{
+  "description": "Baseline scorecard for the 5-case self-test corpus. CI uses `infermap-bench run --self-test --assert-against <this file>` to catch runner regressions. Tolerance is 1e-4 per metric; if this gate trips, either the scorer pipeline changed (regenerate after review) or the runner has a real bug.",
+  "generated_from_commit": "4157987",
+  "scorecard": {
+    "overall": {
+      "f1": 0.857143,
+      "top1": 0.866667,
+      "mrr": 1.0,
+      "ece": 0.365133,
+      "n": 5
+    }
+  },
+  "per_case_expectations": {
+    "self-test/perfect":       {"f1": 1.0000, "top1": 1.0000, "mrr": 1.0000, "tp": 3, "fp": 0, "fn": 0, "notes": "Identical schemas; exact-match on every column."},
+    "self-test/zero":          {"f1": 1.0000, "top1": 1.0000, "mrr": 1.0000, "tp": 0, "fp": 0, "fn": 0, "notes": "Perfect negative — nothing expected, nothing predicted."},
+    "self-test/mixed":         {"f1": 1.0000, "top1": 1.0000, "mrr": 1.0000, "tp": 2, "fp": 0, "fn": 0, "notes": "Alias lookups resolve fname→first_name, lname→last_name. The two unmapped columns on each side stay unmapped."},
+    "self-test/all_unmapped":  {"f1": 1.0000, "top1": 1.0000, "mrr": 1.0000, "tp": 0, "fp": 0, "fn": 0, "notes": "Perfect negative — nothing should map and nothing does."},
+    "self-test/adversarial":   {"f1": 0.5000, "top1": 0.3333, "mrr": 1.0000, "tp": 1, "fp": 0, "fn": 2, "notes": "Short abbreviated source columns (code, ref, status) against verbose target columns (order_code, reference_no, state). Engine picks up one fuzzy match and correctly abstains on the other two rather than false-matching. 'Graceful degradation' signal — non-zero but not perfect."}
+  }
+}

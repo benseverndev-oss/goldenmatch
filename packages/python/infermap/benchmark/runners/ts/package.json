@@ -1,0 +1,28 @@
+{
+  "name": "@infermap/bench",
+  "version": "0.1.0",
+  "description": "TypeScript benchmark runner for infermap.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "infermap-bench": "./dist/cli.cjs"
+  },
+  "dependencies": {
+    "ajv": "^8",
+    "ajv-formats": "^3",
+    "commander": "^12",
+    "infermap": "file:../../../packages/infermap-js"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8",
+    "typescript": "^5.4",
+    "vitest": "^1.5"
+  }
+}

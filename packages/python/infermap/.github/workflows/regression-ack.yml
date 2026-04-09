@@ -1,0 +1,73 @@
+# Regression acknowledgment gate. This workflow is a **required status check**
+# (configured in branch protection) that reads the latest benchmark.yml run
+# for the PR's head SHA and decides whether merge should be blocked.
+#
+# CRITICAL: passthrough behavior for unrelated PRs.
+#
+# The benchmark workflow has a path filter — PRs that don't touch scorer code,
+# benchmark code, or dependency manifests don't run it at all. When there is
+# no benchmark run for the current head SHA, this workflow passes immediately
+# with a notice. This is load-bearing: without the passthrough, the required
+# check would block every unrelated PR (README fixes, docs, etc.) from merging.
+#
+# Spec §10.3 covers the manual QA step: open a README-only PR and confirm that
+# benchmark.yml does NOT run (path filter excludes README), this workflow DOES
+# run and exits 0 with "benchmark not applicable to this PR" notice, and the
+# PR is mergeable.
+
+name: regression-ack
+
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
+
+permissions:
+  pull-requests: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Check benchmark job status for head SHA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+
+          # Look for a benchmark.yml run at this SHA
+          runs=$(gh api repos/$REPO/actions/workflows/benchmark.yml/runs \
+            --jq ".workflow_runs | map(select(.head_sha == \"$HEAD_SHA\"))")
+
+          if [ "$(echo "$runs" | jq 'length')" = "0" ]; then
+            echo "::notice::No benchmark run for head SHA $HEAD_SHA — benchmark not applicable to this PR. Passing."
+            exit 0
+          fi
+
+          # Take the most recent run's conclusion
+          conclusion=$(echo "$runs" | jq -r '.[0].conclusion')
+          echo "Latest benchmark run conclusion: $conclusion"
+
+          # Only a concrete `failure` conclusion gates merge. Anything else
+          # (success, skipped, cancelled, neutral, null/in-progress) passes
+          # through without requiring the regression-ack label — otherwise
+          # cancelled or skipped runs would block unrelated PRs.
+          if [ "$conclusion" != "failure" ]; then
+            echo "Benchmark conclusion '$conclusion' is not a failure — passing."
+            exit 0
+          fi
+
+          # Regression detected (conclusion == failure) — require the label
+          labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')
+          if echo "$labels" | grep -qx "regression-acked"; then
+            echo "::notice::Benchmark regression detected, but 'regression-acked' label is present. Allowing merge."
+            exit 0
+          else
+            echo "::error::Benchmark regression detected on $HEAD_SHA. Add the 'regression-acked' label to the PR to acknowledge and proceed, or fix the regression."
+            exit 1
+          fi

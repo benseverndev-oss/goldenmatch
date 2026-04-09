@@ -1,0 +1,9 @@
+{
+  "mappings": [
+    {"source": "code", "target": "order_code"},
+    {"source": "ref", "target": "reference_no"},
+    {"source": "status", "target": "state"}
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}
