@@ -27,6 +27,8 @@ export interface MapEngineOptions {
     target: string;
     error: unknown;
   }) => void;
+  /** If true, attach the full MxN score matrix to MapResult.scoreMatrix. */
+  returnScoreMatrix?: boolean;
 }
 
 export interface MapSchemasOptions {
@@ -39,11 +41,13 @@ export interface MapSchemasOptions {
 export class MapEngine {
   readonly minConfidence: number;
   readonly scorers: readonly Scorer[];
+  readonly returnScoreMatrix: boolean;
   private readonly onScorerError: NonNullable<MapEngineOptions["onScorerError"]>;
 
   constructor(options: MapEngineOptions = {}) {
     this.minConfidence = options.minConfidence ?? 0.3;
     this.scorers = options.scorers ?? defaultScorers();
+    this.returnScoreMatrix = options.returnScoreMatrix ?? false;
     this.onScorerError =
       options.onScorerError ??
       (({ scorer, source, target, error }) => {
@@ -214,6 +218,19 @@ export class MapEngine {
       }
     }
 
+    // Optional: expose the full score matrix for MRR computation in the benchmark.
+    let scoreMatrixDict: Record<string, Record<string, number>> | undefined;
+    if (this.returnScoreMatrix) {
+      scoreMatrixDict = {};
+      for (let i = 0; i < M; i++) {
+        const row: Record<string, number> = {};
+        for (let j = 0; j < N; j++) {
+          row[tgtFields[j]!.name] = scoreMatrix[i]![j]!;
+        }
+        scoreMatrixDict[srcFields[i]!.name] = row;
+      }
+    }
+
     const elapsed = (performance.now() - t0) / 1000;
     return {
       mappings,
@@ -227,6 +244,7 @@ export class MapEngine {
         mapping_count: mappings.length,
         min_confidence: this.minConfidence,
       },
+      ...(scoreMatrixDict !== undefined ? { scoreMatrix: scoreMatrixDict } : {}),
     };
   }
 }
