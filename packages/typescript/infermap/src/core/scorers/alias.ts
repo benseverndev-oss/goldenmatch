@@ -1,61 +1,40 @@
 // Alias scorer — matches fields that are known synonyms of each other.
 // Mirrors infermap/scorers/alias.py.
+//
+// The module-level DEFAULT_ALIASES is seeded from the shipped `generic`
+// domain. The scorer supports two modes:
+//
+//   * `new AliasScorer()` or `new AliasScorer({ extra: ... })` — merges
+//     extras into DEFAULT_ALIASES (backward compatible with TS callers
+//     that pre-date the domain-dictionaries feature).
+//   * `new AliasScorer({ aliases: dict })` — per-instance alias dict that
+//     replaces the defaults entirely. Mirrors the Python `aliases=` param
+//     and is what `MapEngine({ domains: [...] })` uses internally.
 import type { FieldInfo, ScorerResult } from "../types.js";
 import { makeScorerResult } from "../types.js";
+import { DOMAIN as GENERIC } from "../dictionaries/generic.js";
 import type { Scorer } from "./base.js";
 
-/**
- * Canonical-name → list-of-aliases table. Extended by config via
- * AliasScorer constructor arg (matching Python's config behavior).
- */
-export const DEFAULT_ALIASES: Record<string, readonly string[]> = {
-  first_name: ["fname", "first", "given_name", "first_nm", "forename"],
-  last_name: ["lname", "last", "surname", "family_name", "last_nm"],
-  email: ["email_address", "e_mail", "email_addr", "mail", "contact_email"],
-  phone: ["phone_number", "ph", "telephone", "tel", "mobile", "cell"],
-  address: [
-    "addr",
-    "street_address",
-    "addr_line_1",
-    "address_line_1",
-    "mailing_address",
-  ],
-  city: ["town", "municipality"],
-  state: ["st", "province", "region"],
-  zip: ["zipcode", "zip_code", "postal_code", "postal", "postcode"],
-  name: [
-    "full_name",
-    "fullname",
-    "customer_name",
-    "display_name",
-    "contact_name",
-  ],
-  company: [
-    "organization",
-    "org",
-    "business",
-    "employer",
-    "firm",
-    "company_name",
-  ],
-  dob: ["date_of_birth", "birth_date", "birthdate", "birthday"],
-  country: ["nation", "country_code"],
-  gender: ["sex"],
-  id: ["identifier", "record_id", "uid"],
-  created_at: ["signup_date", "create_date", "date_created"],
-};
+/** Default alias dict, seeded from the shipped `generic` domain. */
+export const DEFAULT_ALIASES: Record<string, readonly string[]> = { ...GENERIC };
 
-function buildLookup(
+/** Build a reverse lookup: every alias (and canonical) -> canonical key. */
+export function buildLookup(
   aliases: Record<string, readonly string[]>
 ): Map<string, string> {
   const lookup = new Map<string, string>();
   for (const [canonical, list] of Object.entries(aliases)) {
-    lookup.set(canonical, canonical);
+    lookup.set(canonical.trim().toLowerCase(), canonical);
     for (const alias of list) {
-      lookup.set(alias, canonical);
+      lookup.set(alias.trim().toLowerCase(), canonical);
     }
   }
   return lookup;
+}
+
+export interface AliasScorerOptions {
+  /** Per-instance alias dict that REPLACES defaults. */
+  aliases?: Record<string, readonly string[]>;
 }
 
 export class AliasScorer implements Scorer {
@@ -64,10 +43,25 @@ export class AliasScorer implements Scorer {
 
   private readonly lookup: Map<string, string>;
 
-  constructor(extraAliases: Record<string, readonly string[]> = {}) {
-    // Merge defaults with user-provided extras (extras win on canonical collisions).
+  constructor(
+    arg?: Record<string, readonly string[]> | AliasScorerOptions
+  ) {
+    // Two shapes supported:
+    //   AliasScorer({ aliases: {...} })  -> replace defaults (new Python path)
+    //   AliasScorer({ foo: [...] })      -> extras merged into defaults (legacy)
+    //   AliasScorer(undefined)           -> defaults
+    if (
+      arg &&
+      typeof arg === "object" &&
+      "aliases" in arg &&
+      (arg as AliasScorerOptions).aliases
+    ) {
+      this.lookup = buildLookup((arg as AliasScorerOptions).aliases!);
+      return;
+    }
+    const extras = (arg ?? {}) as Record<string, readonly string[]>;
     const merged: Record<string, readonly string[]> = { ...DEFAULT_ALIASES };
-    for (const [canonical, list] of Object.entries(extraAliases)) {
+    for (const [canonical, list] of Object.entries(extras)) {
       merged[canonical] = list;
     }
     this.lookup = buildLookup(merged);
@@ -84,7 +78,6 @@ export class AliasScorer implements Scorer {
     const srcCanonical = this.canonical(srcName);
     const tgtCanonical = this.canonical(tgtName);
 
-    // Schema-file declared aliases on target
     const declaredRaw = target.metadata["aliases"];
     const declaredAliases: string[] = Array.isArray(declaredRaw)
       ? (declaredRaw as unknown[]).filter((x): x is string => typeof x === "string")
@@ -99,7 +92,6 @@ export class AliasScorer implements Scorer {
       );
     }
 
-    // Abstain if neither field has a known alias and target has none declared
     if (
       srcCanonical === undefined &&
       tgtCanonical === undefined &&
