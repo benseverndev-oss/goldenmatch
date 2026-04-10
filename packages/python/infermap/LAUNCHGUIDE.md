@@ -28,6 +28,8 @@ Schema mapping, Column matching, Data integration, ETL field mapping, Schema mig
 - Apply mappings to rename DataFrame columns
 - F1 0.84 on 162 real-world schema-matching cases
 - Available in both Python and TypeScript with cross-language parity
+- 3 MCP Resources: supported domains, scorer pipeline info, last mapping report
+- 3 MCP Prompts: map-walkthrough, compare-schemas, domain-mapping
 
 ## Getting Started
 - "Map the columns in my CRM export to our canonical customer schema"
@@ -44,3 +46,6 @@ schema-mapping, column-matching, data-integration, etl, field-mapping, hungarian
 
 ## Documentation URL
 https://benzsevern.github.io/infermap/
+
+## Health Check URL
+https://infermap-mcp-production.up.railway.app/.well-known/mcp/server-card.json
