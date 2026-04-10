@@ -1,51 +1,79 @@
-"""Alias scorer — matches fields that are known synonyms of each other."""
+"""Alias scorer — matches fields that are known synonyms of each other.
+
+The ``ALIASES`` module-level dict is seeded from
+``infermap/dictionaries/generic.yaml`` at import time and can be extended
+via ``infermap.yaml`` config (see ``MapEngine._apply_config``).
+
+For domain-specific aliases (healthcare, finance, ecommerce, ...), pass
+``MapEngine(domains=[...])`` — the engine builds an alias dict that merges
+generic + requested domains and constructs a per-engine AliasScorer with
+it. The module-level ``ALIASES`` is unchanged in that case, so code that
+imports it directly keeps working.
+"""
 from __future__ import annotations
 
+from infermap.dictionaries import load_domain
 from infermap.types import FieldInfo, ScorerResult
 
-ALIASES: dict[str, list[str]] = {
-    "first_name": ["fname", "first", "given_name", "first_nm", "forename"],
-    "last_name": ["lname", "last", "surname", "family_name", "last_nm"],
-    "email": ["email_address", "e_mail", "email_addr", "mail", "contact_email"],
-    "phone": ["phone_number", "ph", "telephone", "tel", "mobile", "cell"],
-    "address": ["addr", "street_address", "addr_line_1", "address_line_1", "mailing_address"],
-    "city": ["town", "municipality"],
-    "state": ["st", "province", "region"],
-    "zip": ["zipcode", "zip_code", "postal_code", "postal", "postcode"],
-    "name": ["full_name", "fullname", "customer_name", "display_name", "contact_name"],
-    "company": ["organization", "org", "business", "employer", "firm", "company_name"],
-    "dob": ["date_of_birth", "birth_date", "birthdate", "birthday"],
-    "country": ["nation", "country_code"],
-    "gender": ["sex"],
-    "id": ["identifier", "record_id", "uid"],
-    "created_at": ["signup_date", "create_date", "date_created"],
-}
 
-# Build reverse lookup: every alias (and canonical) maps to its canonical key
-_ALIAS_LOOKUP: dict[str, str] = {}
-for _canonical, _aliases in ALIASES.items():
-    _ALIAS_LOOKUP[_canonical] = _canonical
-    for _alias in _aliases:
-        _ALIAS_LOOKUP[_alias] = _canonical
+def build_lookup(aliases: dict[str, list[str]]) -> dict[str, str]:
+    """Build a reverse lookup: every alias (and canonical) -> canonical key."""
+    lookup: dict[str, str] = {}
+    for canonical, alias_list in aliases.items():
+        lookup[canonical] = canonical
+        for alias in alias_list:
+            lookup[alias.strip().lower()] = canonical
+    return lookup
+
+
+# Default alias dict, seeded from the shipped `generic` domain YAML.
+# Kept as a module-level mutable dict so existing code that imports and
+# mutates ALIASES (tests, user configs, engine._apply_config) keeps working.
+ALIASES: dict[str, list[str]] = load_domain("generic")
+_ALIAS_LOOKUP: dict[str, str] = build_lookup(ALIASES)
 
 
 def _get_canonical(name: str) -> str | None:
-    """Return the canonical form of *name*, or None if not in the alias table."""
+    """Return the canonical form of *name* per the module-level lookup.
+
+    Used by AliasScorer instances that don't have their own per-instance
+    lookup (i.e. the default constructed by ``default_scorers()``).
+    """
     return _ALIAS_LOOKUP.get(name.strip().lower())
 
 
 class AliasScorer:
-    """Scores 0.95 when both fields resolve to the same canonical name via the alias table."""
+    """Scores 0.95 when both fields resolve to the same canonical name.
+
+    Parameters
+    ----------
+    aliases:
+        Optional per-instance alias dict. When provided, the scorer builds
+        its own lookup and does not read the module-level ``ALIASES``.
+        When ``None`` (default), uses the module-level dict so any
+        mutations (e.g. ``engine._apply_config``) are picked up live.
+    """
 
     name: str = "AliasScorer"
     weight: float = 0.95
+
+    def __init__(self, aliases: dict[str, list[str]] | None = None):
+        if aliases is not None:
+            self._lookup: dict[str, str] | None = build_lookup(aliases)
+        else:
+            self._lookup = None
+
+    def _canonical(self, name: str) -> str | None:
+        if self._lookup is not None:
+            return self._lookup.get(name.strip().lower())
+        return _get_canonical(name)
 
     def score(self, source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
         src_name = source.name.strip().lower()
         tgt_name = target.name.strip().lower()
 
-        src_canonical = _get_canonical(src_name)
-        tgt_canonical = _get_canonical(tgt_name)
+        src_canonical = self._canonical(src_name)
+        tgt_canonical = self._canonical(tgt_name)
 
         # Check schema-file declared aliases on target
         declared_aliases: list[str] = target.metadata.get("aliases", [])

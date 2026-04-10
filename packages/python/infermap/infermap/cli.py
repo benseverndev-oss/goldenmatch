@@ -61,7 +61,7 @@ def map(
     schema_file: Optional[str] = typer.Option(None, "--schema-file", help="Path to schema YAML file"),
     format: str = typer.Option("table", "--format", help="Output format: table, json, or yaml"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Save mapping config to this YAML file"),
-    min_confidence: float = typer.Option(0.3, "--min-confidence", help="Minimum confidence threshold"),
+    min_confidence: float = typer.Option(0.2, "--min-confidence", help="Minimum confidence threshold (default 0.2, was 0.3 before v0.3)"),
     verbose: bool = typer.Option(False, "--verbose/--no-verbose", help="Enable verbose logging"),
     debug: bool = typer.Option(False, "--debug/--no-debug", help="Enable debug logging"),
 ) -> None:

@@ -9,12 +9,12 @@
     {
       "source": "fname",
       "target": "first_name",
-      "confidence": 0.437
+      "confidence": 0.4994
     },
     {
       "source": "lname",
       "target": "last_name",
-      "confidence": 0.4836
+      "confidence": 0.5421
     },
     {
       "source": "tel",

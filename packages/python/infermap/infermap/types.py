@@ -20,6 +20,11 @@ class FieldInfo:
     unique_rate: float = 0.0
     value_count: int = 0
     metadata: dict = field(default_factory=dict)
+    # Name with common schema-wide affixes stripped. Populated by
+    # MapEngine.map_schemas() before scoring so scorers like FuzzyNameScorer
+    # can compare `City` vs `City` instead of `City` vs `prospect_City`.
+    # Defaults to None; scorers should fall back to `name` if unset.
+    canonical_name: str | None = None
 
     def __post_init__(self):
         if self.dtype not in VALID_DTYPES:

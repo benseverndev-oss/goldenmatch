@@ -18,8 +18,13 @@ class FuzzyNameScorer:
     weight: float = 0.4
 
     def score(self, source: FieldInfo, target: FieldInfo) -> ScorerResult:
-        src_norm = _normalize(source.name)
-        tgt_norm = _normalize(target.name)
+        # Prefer canonical names (schema-wide common affixes stripped) so e.g.
+        # `City` vs `City` wins over `City` vs `prospectcity`. Falls back to
+        # raw name when MapEngine hasn't populated canonical_name.
+        src_name = source.canonical_name or source.name
+        tgt_name = target.canonical_name or target.name
+        src_norm = _normalize(src_name)
+        tgt_norm = _normalize(tgt_name)
         similarity = JaroWinkler.similarity(src_norm, tgt_norm)
         return ScorerResult(
             score=similarity,
