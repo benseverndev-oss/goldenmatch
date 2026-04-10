@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "updated_at": "2026-04-10T11:08:16.402105Z",
-  "commit": "0113aa164c513f20f5a89c14e2d470e904fcd5f0",
+  "updated_at": "2026-04-10T11:13:44.329188Z",
+  "commit": "602f0eecec06d851c9e8423ce05771bd795e55e0",
   "python": {
     "version": 1,
     "language": "python",
-    "infermap_version": "0.2.0",
+    "infermap_version": "0.3.0",
     "runner_version": "0.1.0",
-    "ran_at": "2026-04-10T11:07:46.568226Z",
-    "duration_seconds": 21.078945376000007,
+    "ran_at": "2026-04-10T11:13:18.935934Z",
+    "duration_seconds": 27.093234460999994,
     "scorecard": {
       "overall": {
         "f1": 0.839894,
@@ -2347,10 +2347,10 @@
   "typescript": {
     "version": 1,
     "language": "typescript",
-    "infermap_version": "0.2.0",
+    "infermap_version": "0.3.0",
     "runner_version": "0.1.0",
-    "ran_at": "2026-04-10T11:07:19.164Z",
-    "duration_seconds": 3.6905,
+    "ran_at": "2026-04-10T11:12:48.948Z",
+    "duration_seconds": 3.658,
     "scorecard": {
       "overall": {
         "f1": 0.839447,
