@@ -3,7 +3,7 @@
   "name": "io.github.benzsevern/infermap",
   "title": "infermap",
   "description": "Inference-driven schema mapping engine — map messy source columns to a known target schema",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "repository": {
     "url": "https://github.com/benzsevern/infermap.git",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "infermap",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

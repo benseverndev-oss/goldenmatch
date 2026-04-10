@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.benzsevern/infermap -->
 <h1 align="center">infermap</h1>
 
 <p align="center"><strong>Inference-driven schema mapping engine.</strong><br>
