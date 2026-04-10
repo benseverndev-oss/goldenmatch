@@ -13,8 +13,8 @@ export class FuzzyNameScorer implements Scorer {
   readonly weight = 0.4;
 
   score(source: FieldInfo, target: FieldInfo): ScorerResult {
-    const srcNorm = normalize(source.name);
-    const tgtNorm = normalize(target.name);
+    const srcNorm = normalize(source.canonicalName ?? source.name);
+    const tgtNorm = normalize(target.canonicalName ?? target.name);
     const sim = jaroWinklerSimilarity(srcNorm, tgtNorm);
     return makeScorerResult(
       sim,

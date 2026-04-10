@@ -34,7 +34,7 @@ Common options:
   --format <fmt>         output format: table | json  (default: table)
   --required <fields>    comma-separated required target field names
   --schema-file <path>   JSON schema definition file merged into target
-  --min-confidence <n>   minimum confidence threshold (default 0.3)
+  --min-confidence <n>   minimum confidence threshold (default 0.2)
   -o, --output <path>    write config JSON to this path
   --config <path>        input config (for apply/validate)
   --strict               exit 1 if required fields unmapped (validate)
@@ -99,7 +99,7 @@ async function cmdMap(argv: string[]): Promise<number> {
       "schema-file": { type: "string" },
       format: { type: "string", default: "table" },
       output: { type: "string", short: "o" },
-      "min-confidence": { type: "string", default: "0.3" },
+      "min-confidence": { type: "string", default: "0.2" },
     },
   });
   const [source, target] = positionals;

@@ -134,7 +134,7 @@ export interface ScoreAssignment {
 
 export function optimalAssign(
   scoreMatrix: number[][],
-  minConfidence = 0.3
+  minConfidence = 0.2
 ): ScoreAssignment[] {
   if (scoreMatrix.length === 0) return [];
   const cols = scoreMatrix[0]?.length ?? 0;

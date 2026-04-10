@@ -140,7 +140,7 @@ describe("MapEngine.mapSchemas", () => {
     expect(result.metadata["source_field_count"]).toBe(1);
     expect(result.metadata["target_field_count"]).toBe(1);
     expect(result.metadata["mapping_count"]).toBe(1);
-    expect(result.metadata["min_confidence"]).toBe(0.3);
+    expect(result.metadata["min_confidence"]).toBe(0.2);
     expect(typeof result.metadata["elapsed_seconds"]).toBe("number");
   });
 

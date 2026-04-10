@@ -21,6 +21,8 @@ export interface FieldInfo {
   uniqueRate: number;
   valueCount: number;
   metadata: Record<string, unknown>;
+  /** Affix-stripped canonical form populated by the engine. Optional. */
+  canonicalName?: string;
 }
 
 export interface SchemaInfo {

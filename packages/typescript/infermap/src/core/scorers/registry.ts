@@ -7,6 +7,7 @@ import { AliasScorer } from "./alias.js";
 import { PatternTypeScorer } from "./pattern-type.js";
 import { ProfileScorer } from "./profile.js";
 import { FuzzyNameScorer } from "./fuzzy-name.js";
+import { InitialismScorer } from "./initialism.js";
 
 export function defaultScorers(): Scorer[] {
   return [
@@ -15,6 +16,7 @@ export function defaultScorers(): Scorer[] {
     new PatternTypeScorer(),
     new ProfileScorer(),
     new FuzzyNameScorer(),
+    new InitialismScorer(),
   ];
 }
 

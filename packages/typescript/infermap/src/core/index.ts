@@ -19,7 +19,23 @@ export {
   jaroWinklerSimilarity,
   levenshteinDistance,
 } from "./util/string-distance.js";
-export { MapEngine, MIN_CONTRIBUTORS } from "./engine.js";
+export { InitialismScorer } from "./scorers/initialism.js";
+export { buildLookup } from "./scorers/alias.js";
+export {
+  IdentityCalibrator,
+  IsotonicCalibrator,
+  PlattCalibrator,
+  loadCalibrator,
+  saveCalibrator,
+} from "./calibration.js";
+export type { Calibrator, CalibratorJSON } from "./calibration.js";
+export {
+  availableDomains,
+  loadDomain,
+  mergeDomains,
+  UnknownDomainError,
+} from "./dictionaries/index.js";
+export { MapEngine, MIN_CONTRIBUTORS, commonAffixTokens, populateCanonicalNames } from "./engine.js";
 export type { MapEngineOptions, MapSchemasOptions } from "./engine.js";
 
 // Providers (edge-safe: operate on in-memory data or text)
