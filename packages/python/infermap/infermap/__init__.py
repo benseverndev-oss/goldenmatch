@@ -1,6 +1,6 @@
 """infermap — inference-driven schema mapping engine."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
 from infermap.errors import ApplyError, ConfigError, InferMapError

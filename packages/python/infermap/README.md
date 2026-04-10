@@ -138,16 +138,19 @@ export async function POST(req: Request) {
 
 ## How it works
 
-Each field pair runs through a pipeline of **6 scorers**. Each scorer returns a score in `[0.0, 1.0]` or abstains (`None`/`null`). The engine combines scores via weighted average (requiring at least 2 contributors), then uses the **Hungarian algorithm** for optimal one-to-one assignment.
+Each field pair runs through a pipeline of **7 scorers**. Each scorer returns a score in `[0.0, 1.0]` or abstains (`None`/`null`). The engine combines scores via weighted average (requiring at least 2 contributors), then uses the **Hungarian algorithm** for optimal one-to-one assignment.
 
 | Scorer | Weight | What it detects |
 |---|---|---|
 | **ExactScorer** | 1.0 | Case-insensitive exact name match |
-| **AliasScorer** | 0.95 | Known field aliases (`fname` ↔ `first_name`, `tel` ↔ `phone`) |
+| **AliasScorer** | 0.95 | Known field aliases (`fname` ↔ `first_name`, `tel` ↔ `phone`) + domain dictionaries |
+| **InitialismScorer** | 0.75 | Abbreviation-style names (`assay_id` ↔ `ASSI`, `confidence_score` ↔ `CONSC`) |
 | **PatternTypeScorer** | 0.7 | Semantic type from sample values — email, date_iso, phone, uuid, url, zip, currency |
 | **ProfileScorer** | 0.5 | Statistical profile similarity — dtype, null rate, unique rate, length, cardinality |
-| **FuzzyNameScorer** | 0.4 | Jaro-Winkler similarity on normalized field names |
+| **FuzzyNameScorer** | 0.4 | Jaro-Winkler similarity on normalized field names (with common-prefix canonicalization) |
 | **LLMScorer** | 0.8 | Pluggable LLM-backed scorer (stubbed by default) |
+
+The engine also applies **common-prefix canonicalization** — automatically stripping schema-wide prefixes like `prospect_` so that `City` vs `prospect_City` is compared as `City` vs `City`. And **optional confidence calibration** transforms raw scores into calibrated probabilities post-assignment (ECE from 0.46 to 0.005 on real-world data).
 
 [Read the full architecture →](https://github.com/benzsevern/infermap/wiki/Architecture)
 
@@ -155,9 +158,12 @@ Each field pair runs through a pipeline of **6 scorers**. Each scorer returns a 
 
 | | Python | TypeScript |
 |---|---|---|
-| 6 built-in scorers | ✅ | ✅ |
+| 7 built-in scorers | ✅ | ✅ |
 | Hungarian assignment | ✅ (scipy) | ✅ (vendored) |
 | Custom scorers | `@infermap.scorer` | `defineScorer()` |
+| Domain dictionaries | ✅ (YAML) | ✅ (inlined) |
+| Confidence calibration | ✅ (Identity/Isotonic/Platt) | ✅ |
+| Score matrix inspection | ✅ | ✅ |
 | In-memory data | Polars, Pandas, `list[dict]` | `Array<Record>` |
 | File providers | CSV, Parquet, XLSX | CSV, JSON |
 | Schema definition files | YAML + JSON | JSON |
@@ -168,6 +174,7 @@ Each field pair runs through a pipeline of **6 scorers**. Each scorer returns a 
 | Apply to DataFrame | ✅ | ❌ (CSV rewrite via CLI) |
 | Edge-runtime compatible | ❌ | ✅ |
 | Zero runtime deps | n/a | ✅ |
+| Accuracy benchmark | ✅ (162 cases, F1 0.84) | ✅ (parity within 0.0005) |
 
 [Full feature parity matrix →](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript)
 
@@ -180,6 +187,25 @@ Each field pair runs through a pipeline of **6 scorers**. Each scorer returns a 
 | Running mapping in a serverless edge function | **TypeScript** (zero Node built-ins) |
 | Doing ad-hoc CSV exploration on the command line | **Python CLI** has more features; **TS CLI** is leaner |
 | Both — Python backend + Next.js admin UI | **Both** — outputs are interoperable via the JSON config format |
+
+## What's new in v0.3
+
+**+18.3pp F1 on real-world data** from four compounding improvements:
+
+```
+v0.2 baseline    F1 0.657
++ min_conf 0.2   F1 0.765  (+10.8pp — empirically tuned threshold)
++ prefix-strip   F1 0.821  (+5.6pp  — City vs prospect_City now works)
++ InitialismScorer F1 0.840 (+1.9pp  — ASSI, CONSC, RELATIT now work)
+```
+
+New features:
+- **Domain dictionaries** — `MapEngine(domains=["healthcare"])` loads curated aliases for your domain. Ships: `generic` (default), `healthcare`, `finance`, `ecommerce`. See [`examples/09_domain_dictionaries.py`](./examples/09_domain_dictionaries.py).
+- **Confidence calibration** — `MapEngine(calibrator=cal)` transforms raw scores into calibrated probabilities. Ships: `IsotonicCalibrator`, `PlattCalibrator`. Valentine ECE: 0.46 → 0.005. See [`examples/10_calibration.py`](./examples/10_calibration.py).
+- **InitialismScorer** — matches abbreviation-style column names (`assay_id ↔ ASSI`). ChEMBL F1: 0.524 → 0.819.
+- **Common-prefix canonicalization** — automatically strips `prospect_`, `assays_`, etc. before fuzzy matching.
+- **Valentine corpus** — 82 real-world schema-matching cases from the Valentine benchmark for accuracy testing.
+- **Full TypeScript parity** — all new features ported. 186 TS tests. Benchmark F1 within 0.0005 of Python.
 
 ## Custom scorers
 
@@ -250,6 +276,9 @@ Both packages accept an engine config (scorer weight overrides + alias extension
 
 ```yaml
 # Python: infermap.yaml
+domains:
+  - healthcare
+  - finance
 scorers:
   LLMScorer:
     enabled: false
@@ -288,8 +317,8 @@ See [`infermap.yaml.example`](./infermap.yaml.example) for a full annotated refe
   - [FAQ](https://github.com/benzsevern/infermap/wiki/FAQ)
 - 🌐 **[Documentation site](https://benzsevern.github.io/infermap/)**
 - 🧪 **Examples**
-  - [Python examples](./examples/) — 7 numbered scripts + sample data
-  - [TypeScript examples](./examples/typescript/) — basic mapping, Next.js Edge Runtime, custom scorer, SQLite, save/reuse
+  - [Python examples](./examples/) — 10 numbered scripts covering basic mapping, databases, custom scorers, config, domain dictionaries, calibration, and score-matrix introspection
+  - [TypeScript examples](./examples/typescript/) — basic mapping, Next.js Edge Runtime, custom scorer, databases, domain dictionaries, save/reuse
 - 📓 **[Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)** — Python notebook
 - 💬 **[GitHub Discussions](https://github.com/benzsevern/infermap/discussions)**
 - 🐛 **[Issue tracker](https://github.com/benzsevern/infermap/issues)**
