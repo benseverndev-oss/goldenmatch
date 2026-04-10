@@ -1,0 +1,139 @@
+# Finance domain dictionary — banking, payments, accounting, trading.
+#
+# Scope: accounts, transactions, counterparties, instruments, ledger
+# postings. Modeled on ISO 20022 message fields plus common core banking
+# and accounting system conventions.
+#
+# Sources consulted:
+#   - ISO 20022 (pain, pacs, camt message families)
+#   - FpML (financial products markup)
+#   - Common general-ledger column names (SAP, Oracle EBS, NetSuite)
+
+account_id:
+  - acct_id
+  - account_number
+  - acct_num
+  - acct_no
+  - iban
+  - account_ref
+account_name:
+  - acct_name
+  - holder_name
+  - account_holder
+  - acct_owner
+  - beneficiary_name
+amount:
+  - amt
+  - txn_amount
+  - transaction_amount
+  - value_amt
+  - instructed_amount
+  - settlement_amount
+currency:
+  - ccy
+  - currency_code
+  - iso_currency
+  - curr
+  - currency_iso
+transaction_id:
+  - txn_id
+  - tx_id
+  - transaction_ref
+  - payment_id
+  - end_to_end_id
+  - instr_id
+transaction_date:
+  - txn_date
+  - trade_date
+  - value_date
+  - booking_date
+  - posting_date
+  - effective_date
+settlement_date:
+  - settle_date
+  - settlement_dt
+  - value_date
+  - val_dt
+debit:
+  - dr
+  - debit_amt
+  - debit_amount
+  - db
+credit:
+  - cr
+  - credit_amt
+  - credit_amount
+balance:
+  - bal
+  - current_balance
+  - avail_balance
+  - available_balance
+  - closing_balance
+counterparty:
+  - cpty
+  - counter_party
+  - other_party
+  - cpty_name
+  - beneficiary
+counterparty_id:
+  - cpty_id
+  - counterparty_ref
+  - bic
+  - swift_code
+instrument:
+  - instr
+  - security
+  - asset
+  - product
+isin:
+  - security_id
+  - instrument_id
+  - isin_code
+cusip:
+  - cusip_id
+  - security_cusip
+ticker:
+  - symbol
+  - ticker_symbol
+  - trading_symbol
+  - stock_symbol
+quantity:
+  - qty
+  - shares
+  - units
+  - nominal
+  - face_value
+price:
+  - px
+  - unit_price
+  - trade_price
+  - market_price
+  - quoted_price
+fee:
+  - commission
+  - charges
+  - fees
+  - fee_amt
+  - commission_amt
+tax:
+  - tax_amt
+  - vat
+  - sales_tax
+  - withholding_tax
+interest_rate:
+  - int_rate
+  - rate
+  - coupon
+  - coupon_rate
+  - apr
+  - apy
+ledger_entry_id:
+  - gl_entry_id
+  - journal_id
+  - posting_id
+  - entry_ref
+gl_account:
+  - gl_code
+  - gl_acct
+  - account_code
+  - chart_of_accounts

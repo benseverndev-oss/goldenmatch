@@ -11,9 +11,10 @@ import numpy as np
 import yaml
 
 from infermap.assignment import optimal_assign
+from infermap.dictionaries import merge_domains
 from infermap.providers import extract_schema
 from infermap.scorers import default_scorers
-from infermap.scorers.alias import ALIASES, _ALIAS_LOOKUP
+from infermap.scorers.alias import ALIASES, _ALIAS_LOOKUP, AliasScorer
 from infermap.calibration import Calibrator
 from infermap.types import FieldMapping, MapResult, SchemaInfo
 
@@ -23,21 +24,116 @@ logger = logging.getLogger("infermap")
 _MIN_CONTRIBUTORS = 2
 
 
+_DELIMITERS = ("_", "-", ".", " ")
+
+
+def _common_affix_tokens(names: list[str], *, at_start: bool) -> str:
+    """Find a common delimiter-bounded affix across *names*, else "".
+
+    The affix must end (for prefix) or start (for suffix) at a delimiter
+    boundary so we don't over-strip shared substrings like "em" from
+    ["email", "employee"]. At least 2 names required; affix must be >= 2 chars.
+    """
+    if len(names) < 2:
+        return ""
+    # Find raw common substring at the chosen edge.
+    if at_start:
+        shortest = min(len(n) for n in names)
+        i = 0
+        while i < shortest and all(n[i] == names[0][i] for n in names):
+            i += 1
+        candidate = names[0][:i]
+    else:
+        shortest = min(len(n) for n in names)
+        i = 0
+        while i < shortest and all(n[-1 - i] == names[0][-1 - i] for n in names):
+            i += 1
+        candidate = names[0][-i:] if i > 0 else ""
+
+    if len(candidate) < 2:
+        return ""
+    # Truncate candidate to the last delimiter boundary (prefix) or first
+    # delimiter boundary (suffix) so we only strip whole tokens.
+    if at_start:
+        for pos in range(len(candidate) - 1, -1, -1):
+            if candidate[pos] in _DELIMITERS:
+                return candidate[: pos + 1]
+        return ""
+    else:
+        for pos in range(len(candidate)):
+            if candidate[pos] in _DELIMITERS:
+                return candidate[pos:]
+        return ""
+
+
+def _default_scorers_with_domains(domains: list[str]) -> list:
+    """Build the default scorer list with an AliasScorer that knows about
+    the requested domains in addition to the generic defaults.
+
+    `generic` is always included (prepended if the caller didn't ask for
+    it) so users who pass `domains=["healthcare"]` still get common PII
+    aliases like `email`/`phone`.
+    """
+    ordered: list[str] = []
+    if "generic" not in domains:
+        ordered.append("generic")
+    ordered.extend(domains)
+    merged_aliases = merge_domains(ordered)
+    # Build the default list, then swap out the AliasScorer for one that
+    # holds the merged dict. Keeps ordering stable with default_scorers().
+    scorers = default_scorers()
+    for i, sc in enumerate(scorers):
+        if isinstance(sc, AliasScorer):
+            scorers[i] = AliasScorer(aliases=merged_aliases)
+            break
+    return scorers
+
+
+def _populate_canonical_names(schema: SchemaInfo) -> None:
+    """Strip the common prefix + suffix (if any) from each field name and
+    populate ``FieldInfo.canonical_name``. Mutates the schema in place.
+
+    If stripping would leave a name empty (e.g. all fields are literally the
+    prefix), canonical_name falls back to the original name.
+    """
+    names = [f.name for f in schema.fields]
+    prefix = _common_affix_tokens(names, at_start=True)
+    suffix = _common_affix_tokens(names, at_start=False)
+    for f in schema.fields:
+        canonical = f.name
+        if prefix and canonical.startswith(prefix):
+            canonical = canonical[len(prefix):]
+        if suffix and canonical.endswith(suffix):
+            canonical = canonical[: -len(suffix)]
+        f.canonical_name = canonical if canonical else f.name
+
+
 class MapEngine:
     """Orchestrates the full field-mapping pipeline."""
 
     def __init__(
         self,
-        min_confidence: float = 0.3,
+        min_confidence: float = 0.2,
         sample_size: int = 500,
         scorers=None,
         config_path: str | None = None,
         return_score_matrix: bool = False,
         calibrator: Calibrator | None = None,
+        domains: list[str] | None = None,
     ) -> None:
         self.min_confidence = min_confidence
         self.sample_size = sample_size
-        self.scorers = scorers if scorers is not None else default_scorers()
+        # Domain dictionaries: when set, build a per-engine AliasScorer whose
+        # lookup merges `generic` plus the requested domains. When None
+        # (default), scorers use the module-level ALIASES so the existing
+        # infermap.yaml-based alias extension path still works.
+        self.domains = domains
+        if scorers is not None:
+            self.scorers = scorers
+        elif domains is not None:
+            self.scorers = _default_scorers_with_domains(domains)
+        else:
+            self.scorers = default_scorers()
         self.return_score_matrix = return_score_matrix
         # Optional post-assignment confidence calibrator. Applied AFTER
         # optimal_assign has picked mappings, so it never changes which
@@ -57,6 +153,16 @@ class MapEngine:
         cfg_path = Path(path)
         with open(cfg_path, encoding="utf-8") as fh:
             cfg = yaml.safe_load(fh) or {}
+
+        # Apply domain dictionaries from config (additive: merges into the
+        # current AliasScorer's alias dict, or builds a per-engine one if
+        # the default is still in use).
+        domains_cfg = cfg.get("domains")
+        if domains_cfg:
+            if not isinstance(domains_cfg, list):
+                raise ValueError("`domains` in config must be a list of strings")
+            self.domains = list(domains_cfg)
+            self.scorers = _default_scorers_with_domains(self.domains)
 
         # Apply scorer overrides
         scorers_cfg: dict = cfg.get("scorers", {})
@@ -165,6 +271,16 @@ class MapEngine:
                         tgt_field.metadata["aliases"] = merged
             # Also propagate required from schema_file
             required_set.update(schema_file_schema.required_fields)
+
+        # 2b. Populate canonical_name on each field (affix-stripped). Mutates
+        # the schemas, so deep-copy first if we haven't already.
+        if schema_file_schema is None:
+            src_schema = copy.deepcopy(src_schema)
+            tgt_schema = copy.deepcopy(tgt_schema)
+        else:
+            src_schema = copy.deepcopy(src_schema)
+        _populate_canonical_names(src_schema)
+        _populate_canonical_names(tgt_schema)
 
         # 3. Build M x N score matrix
         src_fields = src_schema.fields

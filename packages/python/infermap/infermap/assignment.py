@@ -4,11 +4,14 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 
-def optimal_assign(score_matrix: np.ndarray, min_confidence: float = 0.3) -> list[tuple[int, int, float]]:
+def optimal_assign(score_matrix: np.ndarray, min_confidence: float = 0.2) -> list[tuple[int, int, float]]:
     """Find optimal 1:1 assignment from score matrix.
     Args:
         score_matrix: M x N matrix of combined scores (higher = better).
-        min_confidence: Minimum score to keep a mapping.
+        min_confidence: Minimum score to keep a mapping. Default 0.2 (was 0.3
+            before v0.3). The lower default was chosen empirically: on the
+            combined Valentine + synthetic benchmark corpus, 0.2 gives
+            combined F1 0.765 vs 0.657 at 0.3. See docs/benchmark.md.
     Returns:
         List of (source_idx, target_idx, score) tuples, filtered by min_confidence.
     """

@@ -25,7 +25,7 @@ export class FailureBudgetExceededError extends Error {
 }
 
 const DEFAULTS: Required<RunOptions> = {
-  minConfidence: 0.3,
+  minConfidence: 0.2,
   sampleSize: 500,
   failureBudget: 0.10,
 };

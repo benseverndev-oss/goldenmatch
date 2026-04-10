@@ -23,7 +23,7 @@ logger = logging.getLogger("infermap_bench.runner")
 
 @dataclass
 class RunOptions:
-    min_confidence: float = 0.3
+    min_confidence: float = 0.2
     sample_size: int = 500
     failure_budget: float = 0.10
     calibrator: object | None = None  # infermap.calibration.Calibrator | None

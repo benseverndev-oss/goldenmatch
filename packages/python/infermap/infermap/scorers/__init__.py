@@ -11,6 +11,7 @@ from .alias import AliasScorer
 from .pattern_type import PatternTypeScorer
 from .profile import ProfileScorer
 from .fuzzy_name import FuzzyNameScorer
+from .initialism import InitialismScorer
 from .llm import LLMScorer
 
 _REGISTRY: dict[str, Scorer] = {}
@@ -24,6 +25,7 @@ def default_scorers() -> list[Scorer]:
         PatternTypeScorer(),
         ProfileScorer(),
         FuzzyNameScorer(),
+        InitialismScorer(),
     ]
 
 
@@ -72,6 +74,7 @@ __all__ = [
     "PatternTypeScorer",
     "ProfileScorer",
     "FuzzyNameScorer",
+    "InitialismScorer",
     "LLMScorer",
     "default_scorers",
     "scorer",
