@@ -9,7 +9,7 @@ description = "Inference-driven schema mapping engine"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "Ben Severn" }]
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
 keywords = ["schema", "mapping", "etl", "data-engineering"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -44,6 +44,7 @@ Repository = "https://github.com/benzsevern/infermap"
 Issues = "https://github.com/benzsevern/infermap/issues"
 Documentation = "https://benzsevern.github.io/infermap/"
 Changelog = "https://github.com/benzsevern/infermap/blob/main/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
