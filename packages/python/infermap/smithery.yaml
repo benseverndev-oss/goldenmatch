@@ -1,7 +1,7 @@
 name: infermap
 description: Map messy source columns to a known target schema using a transparent multi-pass scoring pipeline. Zero config, explainable results.
 icon: "\U0001F5FA"
-startCommand: infermap serve
+startCommand: infermap mcp-serve
 tools:
   - name: map
     description: Map source columns to target schema using weighted scorer pipeline with optimal assignment.

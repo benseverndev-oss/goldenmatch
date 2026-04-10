@@ -6,7 +6,10 @@ import logging
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import (
+    Tool, TextContent, Resource, Prompt,
+    PromptArgument, PromptMessage,
+)
 
 logger = logging.getLogger("infermap.mcp")
 
@@ -231,6 +234,9 @@ HANDLERS = {
 # Server factory
 # ---------------------------------------------------------------------------
 
+_last_mapping_result: dict | None = None
+
+
 def create_server() -> Server:
     server = Server("infermap")
 
@@ -240,17 +246,200 @@ def create_server() -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict):
+        global _last_mapping_result
         handler = HANDLERS.get(name)
         if not handler:
             result = {"error": f"Unknown tool: {name}"}
         else:
             try:
                 result = handler(arguments)
+                if name == "map":
+                    _last_mapping_result = result
             except Exception as exc:
                 logger.exception("Tool %s failed", name)
                 result = {"error": str(exc)}
 
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
+
+    # -------------------------------------------------------------------
+    # Resources
+    # -------------------------------------------------------------------
+    @server.list_resources()
+    async def list_resources() -> list[Resource]:
+        resources = [
+            Resource(
+                uri="infermap://supported-domains",
+                name="Supported Domains",
+                description="List of available domain dictionaries (healthcare, finance, etc.)",
+                mimeType="application/json",
+            ),
+            Resource(
+                uri="infermap://scorer-info",
+                name="Scorer Pipeline",
+                description="Available scorers with names, weights, and descriptions",
+                mimeType="application/json",
+            ),
+        ]
+        if _last_mapping_result is not None:
+            resources.append(Resource(
+                uri="infermap://last-mapping/report",
+                name="Last Mapping Report",
+                description="Full report from the most recent map operation",
+                mimeType="application/json",
+            ))
+        return resources
+
+    @server.read_resource()
+    async def read_resource(uri: str) -> str:
+        if uri == "infermap://supported-domains":
+            from infermap.dictionaries import list_domains
+            domains = list_domains()
+            return json.dumps({"domains": domains}, indent=2)
+        elif uri == "infermap://scorer-info":
+            from infermap.scorers import default_scorers
+            scorers = default_scorers()
+            info = [
+                {"name": s.name, "weight": s.weight}
+                for s in scorers
+            ]
+            return json.dumps({"scorers": info}, indent=2)
+        elif uri == "infermap://last-mapping/report":
+            if _last_mapping_result is None:
+                return json.dumps({"error": "No mapping has been run yet"})
+            return json.dumps(_last_mapping_result, indent=2, default=str)
+        return json.dumps({"error": f"Unknown resource: {uri}"})
+
+    # -------------------------------------------------------------------
+    # Prompts
+    # -------------------------------------------------------------------
+    @server.list_prompts()
+    async def list_prompts() -> list[Prompt]:
+        return [
+            Prompt(
+                name="map-walkthrough",
+                description="Guided schema mapping workflow: inspect both sources, run mapping, review results, validate, apply.",
+                arguments=[
+                    PromptArgument(
+                        name="source",
+                        description="Path to source data file",
+                        required=True,
+                    ),
+                    PromptArgument(
+                        name="target",
+                        description="Path to target data/schema",
+                        required=True,
+                    ),
+                ],
+            ),
+            Prompt(
+                name="compare-schemas",
+                description="Inspect two data sources side-by-side and highlight structural differences before mapping.",
+                arguments=[
+                    PromptArgument(
+                        name="source_a",
+                        description="Path to first data source",
+                        required=True,
+                    ),
+                    PromptArgument(
+                        name="source_b",
+                        description="Path to second data source",
+                        required=True,
+                    ),
+                ],
+            ),
+            Prompt(
+                name="domain-mapping",
+                description="Map data using domain-specific dictionaries for better accuracy on industry data.",
+                arguments=[
+                    PromptArgument(
+                        name="source",
+                        description="Path to source data",
+                        required=True,
+                    ),
+                    PromptArgument(
+                        name="target",
+                        description="Path to target schema",
+                        required=True,
+                    ),
+                    PromptArgument(
+                        name="domain",
+                        description="Domain name (e.g. 'healthcare', 'finance')",
+                        required=True,
+                    ),
+                ],
+            ),
+        ]
+
+    @server.get_prompt()
+    async def get_prompt(name: str, arguments: dict | None = None) -> list[PromptMessage]:
+        args = arguments or {}
+
+        if name == "map-walkthrough":
+            source = args.get("source", "<source>")
+            target = args.get("target", "<target>")
+            return [PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text=(
+                        f"I want to map columns from '{source}' to the schema in '{target}'. Walk me through it:\n\n"
+                        f"1. Call `inspect` on '{source}' to see its fields, types, and sample values.\n"
+                        f"2. Call `inspect` on '{target}' to see the target schema.\n"
+                        "3. Review both schemas and note any obvious matches or potential issues.\n"
+                        f"4. Call `map` with source='{source}' and target='{target}' to run the mapping.\n"
+                        "5. Review the results — show me each mapping with its confidence score and reasoning.\n"
+                        "6. Flag any low-confidence mappings or unmapped fields that need attention.\n"
+                        "7. If the mapping looks good, save the config and call `validate` to check it.\n"
+                        "8. Finally, call `apply` to produce the remapped output file.\n\n"
+                        "Start with step 1 now."
+                    ),
+                ),
+            )]
+
+        elif name == "compare-schemas":
+            a = args.get("source_a", "<source_a>")
+            b = args.get("source_b", "<source_b>")
+            return [PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text=(
+                        f"Compare these two data sources side-by-side:\n\n"
+                        f"1. Call `inspect` on '{a}' to get its schema.\n"
+                        f"2. Call `inspect` on '{b}' to get its schema.\n"
+                        "3. Compare them:\n"
+                        "   - Which fields are likely the same (by name or type)?\n"
+                        "   - Which fields exist in one but not the other?\n"
+                        "   - Are there type mismatches on likely-matching fields?\n"
+                        "   - Are there naming convention differences (camelCase vs snake_case, prefixes, etc.)?\n"
+                        "4. Summarize in a table: source_a field → likely source_b match → confidence (high/medium/low/none)."
+                    ),
+                ),
+            )]
+
+        elif name == "domain-mapping":
+            source = args.get("source", "<source>")
+            target = args.get("target", "<target>")
+            domain = args.get("domain", "generic")
+            return [PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text=(
+                        f"Map '{source}' to '{target}' using the '{domain}' domain dictionary for better accuracy:\n\n"
+                        f"1. Call `inspect` on '{source}' to see the data.\n"
+                        f"2. Call `map` with source='{source}', target='{target}', domains=['{domain}'].\n"
+                        "3. Review the mappings — the domain dictionary should resolve industry-specific aliases.\n"
+                        "4. Highlight which mappings were improved by the domain dictionary.\n"
+                        "5. If any important fields are still unmapped, suggest additional aliases to add."
+                    ),
+                ),
+            )]
+
+        return [PromptMessage(
+            role="user",
+            content=TextContent(type="text", text=f"Unknown prompt: {name}"),
+        )]
 
     return server
 
@@ -276,7 +465,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         json_response=False,
-        stateless=False,
+        stateless=True,
     )
 
     @contextlib.asynccontextmanager
