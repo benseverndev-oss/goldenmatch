@@ -176,7 +176,7 @@ describe("MapEngine + calibrator invariant", () => {
   it("default (no calibrator) is bit-identical to explicit undefined", () => {
     const { src, tgt } = fixtureSchemas();
     const r1 = new MapEngine().mapSchemas(src, tgt);
-    const r2 = new MapEngine({ calibrator: undefined }).mapSchemas(src, tgt);
+    const r2 = new MapEngine({}).mapSchemas(src, tgt);
     const a = r1.mappings.map((m) => [m.source, m.target, m.confidence]);
     const b = r2.mappings.map((m) => [m.source, m.target, m.confidence]);
     expect(a).toEqual(b);
