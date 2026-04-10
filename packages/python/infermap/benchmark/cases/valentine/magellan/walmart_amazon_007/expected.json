@@ -1,0 +1,30 @@
+{
+  "mappings": [
+    {
+      "source": "id",
+      "target": "id"
+    },
+    {
+      "source": "title",
+      "target": "title"
+    },
+    {
+      "source": "category",
+      "target": "category"
+    },
+    {
+      "source": "brand",
+      "target": "brand"
+    },
+    {
+      "source": "modelno",
+      "target": "modelno"
+    },
+    {
+      "source": "price",
+      "target": "price"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

@@ -1,0 +1,210 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "fsclr"
+    },
+    {
+      "source": "Project number",
+      "target": "prjctnmbr"
+    },
+    {
+      "source": "Status",
+      "target": "stts"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "mxmmcdcntrbtn(prjct-lvl)"
+    },
+    {
+      "source": "Branch ID",
+      "target": "brnchd"
+    },
+    {
+      "source": "Branch name",
+      "target": "brnchnm"
+    },
+    {
+      "source": "Division ID",
+      "target": "dvsnd"
+    },
+    {
+      "source": "Division name",
+      "target": "dvsnnm"
+    },
+    {
+      "source": "Section ID",
+      "target": "sctnd"
+    },
+    {
+      "source": "Section name",
+      "target": "sctnnm"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "rgnlprgrm(mrkr)"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "fndcntrd"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "fndcntrnm"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "ntdmnt(prjct-lvlbdgt)"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "fstcprcnt"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "rtcprcnt"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "cfl(mrkr)"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "cdbsnssdlvrmdl(ld)"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "prgrmmngprcss(nw)"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "bltrld(ntrntnlmrkr)"
+    },
+    {
+      "source": "PBA type",
+      "target": "pbtp"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "nvrmntlsstnblt(mrkr)"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "clmtchngdpttn(mrkr)"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "clmtchngmtgtn(mrkr)"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "dsrtfctn(mrkr)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "prtcptrdvlpmntndgdgvrnnc"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "trddvlpmnt(mrkr)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "bdvrst(mrkr)"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "rbnsss(mrkr)"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "chldrnsss(mrkr)"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "thsss(mrkr)"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "ndgnssss(mrkr)"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "dsbltsss(mrkr)"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ctstlfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "knwldgfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "gndrqlt(mrkr)"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "rgnstnd"
+    },
+    {
+      "source": "Organisation name",
+      "target": "rgnstnnm"
+    },
+    {
+      "source": "Organisation type",
+      "target": "rgnstntp"
+    },
+    {
+      "source": "Organisation class",
+      "target": "rgnstnclss"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "rgnstnsb-clss"
+    },
+    {
+      "source": "Continent ID",
+      "target": "cntnntd"
+    },
+    {
+      "source": "Continent name",
+      "target": "cntnntnm"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "prjctbrwsrcntrd"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "cntrrgnd"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "cntrrgnnm"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "cntrrgnprcnt"
+    },
+    {
+      "source": "Sector ID",
+      "target": "sctrd"
+    },
+    {
+      "source": "Sector name",
+      "target": "sctrnm"
+    },
+    {
+      "source": "Sector percent",
+      "target": "sctrprcnt"
+    },
+    {
+      "source": "Amount spent",
+      "target": "mntspnt"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

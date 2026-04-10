@@ -1,0 +1,79 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "ASSI"
+    },
+    {
+      "source": "doc_id",
+      "target": "DOI"
+    },
+    {
+      "source": "assay_type",
+      "target": "ASST"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "ASSCT"
+    },
+    {
+      "source": "tissue_id",
+      "target": "TISI"
+    },
+    {
+      "source": "tid",
+      "target": "Ti"
+    },
+    {
+      "source": "description",
+      "target": "Descr"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "ASTI"
+    },
+    {
+      "source": "confidence_score",
+      "target": "CONFISC"
+    },
+    {
+      "source": "cell_id",
+      "target": "CEI"
+    },
+    {
+      "source": "assay_organism",
+      "target": "ASORG"
+    },
+    {
+      "source": "src_id",
+      "target": "SI"
+    },
+    {
+      "source": "assay_tax_id",
+      "target": "ASSTAI"
+    },
+    {
+      "source": "relationship_type",
+      "target": "RELAT"
+    },
+    {
+      "source": "curated_by",
+      "target": "CUB"
+    },
+    {
+      "source": "assay_strain",
+      "target": "ASSST"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_subcellular_fraction",
+    "assay_test_type"
+  ],
+  "unmapped_target": [
+    "BFOR",
+    "CHEI",
+    "SRASI",
+    "VAI"
+  ]
+}

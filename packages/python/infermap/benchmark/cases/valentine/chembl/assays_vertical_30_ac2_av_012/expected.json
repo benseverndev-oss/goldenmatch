@@ -1,0 +1,49 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "ASI"
+    },
+    {
+      "source": "description",
+      "target": "Des"
+    },
+    {
+      "source": "cell_id",
+      "target": "CI"
+    },
+    {
+      "source": "bao_format",
+      "target": "BFO"
+    },
+    {
+      "source": "curated_by",
+      "target": "CURAB"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "ASSSUBCELFR"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_strain",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_tissue",
+    "assay_type",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "ASCT",
+    "CHEI",
+    "CONFSC",
+    "RELAT",
+    "SASSI",
+    "SRI",
+    "T",
+    "TISI",
+    "VAI"
+  ]
+}

@@ -1,0 +1,101 @@
+id,name,addr,city,phone,type,class
+0,` apple pan the ',' 10801 w. pico blvd. ',` west la ',310-475-3585,american,534
+4,` benita \ 's frites ',' 1433 third st. promenade ',` santa monica ',310-458-2889,` fast food ',538
+9,` bristol farms market cafe ',' 1570 rosecrans ave. s. ',pasadena,310-643-5229,californian,543
+19,` feast from the east ',' 1949 westwood blvd. ',` west la ',310-475-0400,chinese,553
+21,` hollywood hills coffee shop ',' 6145 franklin ave. ',hollywood,213-467-7678,` coffee shops ',555
+25,` jody maroni \ 's sausage kingdom ',' 2011 ocean front walk ',venice,310-306-1995,` hot dogs ',559
+27,` john o \ ` groats ',' 10516 w. pico blvd. ',` west la ',310-204-0692,` coffee shops ',561
+29,` johnny reb \ 's southern smokehouse ',' 4663 long beach blvd. ',` long beach ',310-423-7327,southern/soul,563
+30,` johnny rockets ( la ) ',' 7507 melrose ave. ',la,213-651-3361,american,564
+31,` killer shrimp ',' 4000 colfax ave. ',` studio city ',818-508-1570,seafood,565
+32,` kokomo cafe ',' 6333 w. third st. ',la,213-933-0773,american,566
+36,` la serenata de garibaldi ',' 1842 e. first ',` st. boyle hts . ',213-265-2887,mexican/tex-mex,570
+37,` langer \ 's ',' 704 s. alvarado st. ',la,213-483-8050,delis,571
+39,` main course the ',' 10509 w. pico blvd. ',` rancho park ',310-475-7564,american,573
+41,` martha \ 's ',' 22nd street grill 25 22nd ',` st. hermosa beach ',310-376-7786,american,575
+42,` maxwell \ 's cafe ',' 13329 washington blvd. ',` marina del rey ',310-306-7829,american,576
+44,mishima,' 8474 w. third st. ',la,213-782-0181,` noodle shops ',578
+48,` ocean star ',' 145 n. atlantic blvd. ',` monterey park ',818-308-2128,seafood,582
+49,` original pantry bakery ',' 875 s. figueroa st. downtown ',la,213-627-6879,diners,583
+52,` pink \ 's famous chili dogs ',' 709 n. la brea ave. ',la,213-931-4223,` hot dogs ',586
+54,r-23,' 923 e. third st. ',` los angeles ',213-687-7178,japanese,588
+58,` russell \ 's burgers ',' 1198 pch ',` seal beach ',310-596-9556,hamburgers,592
+63,taiko,' 11677 san vicente blvd. ',brentwood,310-207-7782,` noodle shops ',597
+64,` tommy \ 's ',' 2575 beverly blvd. ',la,213-389-9060,hamburgers,598
+65,` uncle bill \ 's pancake house ',' 1305 highland ave. ',` manhattan beach ',310-545-5177,diners,599
+73,` cucina della fontana ',' 368 bleecker st. ',` new york city ',212-242-0636,italian,607
+78,` elias corner ',' 24-02 31st st. ',queens,718-932-1510,greek,612
+82,` jackson diner ',' 37-03 74th st. ',queens,718-672-1232,indian,616
+84,` john \ 's pizzeria ','48 w. 65th st. ',` new york city ',212-721-7001,pizza,618
+85,` kelley & ping ',' 127 greene st. ',` new york city ',212-228-1212,pan-asian,619
+86,kiev,' 117 second ave. ',` new york city ',212-674-4040,ukrainian,620
+90,` lemongrass grill ',' 61a seventh ave. ',brooklyn,718-399-7100,thai,624
+93,menchanko-tei,'39 w. 55th st. ',` new york city ',212-247-1585,japanese,627
+95,` monsoon ( ny ) ',' 435 amsterdam ave. ',` new york city ',212-580-8686,thai,629
+108,` stick to your ribs ',' 5-16 51st ave. ',queens,718-937-3030,bbq,642
+113,` teresa \ 's ','80 montague st. ',queens,718-520-2910,polish,647
+137,` steakhouse the ',' 128 e. fremont st. ',` las vegas ',702-382-1600,steakhouses,671
+139,` sterling brunch ',' 3645 las vegas blvd. s. ',` las vegas ',702-739-4651,eclectic,673
+140,` tre visi ',' 3799 las vegas blvd. s. ',` las vegas ',702-891-7331,italian,674
+146,` bobby & june \ 's kountry kitchen ',' 375 14th st. ',atlanta,404-876-3872,southern/soul,680
+150,canoe,' 4199 paces ferry rd. ',atlanta,770-432-2663,` american ( new ) ',684
+151,` carey \ 's ',' 1021 cobb pkwy . se ',marietta,770-422-8042,hamburgers,685
+152,` carey \ 's corner ',' 1215 powers ferry rd. ',marietta,770-933-0909,hamburgers,686
+157,` flying biscuit the ',' 1655 mclendon ave. ',atlanta,404-687-8888,eclectic,691
+163,` indian delights ',' 3675 satellite blvd. ',duluth,100-813-8212,indian,697
+169,majestic,' 1031 ponce de leon ave. ',atlanta,404-875-0276,diners,703
+176,` rainbow restaurant ',' 2118 n. decatur rd. ',decatur,404-633-3538,vegetarian,710
+183,veggieland,' 220 sandy springs circle ',atlanta,404-231-3111,vegetarian,718
+185,zab-e-lee,' 4837 old national hwy . ',` college park ',404-768-2705,thai,720
+188,` caffe greco ',' 423 columbus ave. ',` san francisco ',415-397-6261,continental,723
+189,` campo santo ',' 240 columbus ave. ',` san francisco ',415-433-9623,mexican,724
+190,` cha cha cha \ 's ',' 1805 haight st. ',` san francisco ',415-386-5758,caribbean,725
+192,` dottie \ 's true blue cafe ',' 522 jones st. ',` san francisco ',415-885-2767,diners,727
+197,` hamburger mary \ 's ',' 1582 folsom st. ',` san francisco ',415-626-1985,hamburgers,732
+198,` kelly \ 's on trinity ',' 333 bush st. ',` san francisco ',415-362-4454,californian,733
+199,` la cumbre ',' 515 valencia st. ',` san francisco ',415-863-8205,mexican,734
+201,` la taqueria ',' 2889 mission st. ',` san francisco ',415-285-7117,mexican,736
+202,` mario \ 's bohemian cigar store cafe ',' 2209 polk st. ',` san francisco ',415-776-8226,italian,737
+210,` slanted door ',' 584 valencia st. ',` san francisco ',415-861-8032,vietnamese,745
+211,` swan oyster depot ',' 1517 polk st. ',` san francisco ',415-673-1101,seafood,746
+212,` thep phanom ',' 400 waller st. ',` san francisco ',415-431-2526,thai,747
+221,` cafe bizou ',' 14016 ventura blvd. ',` sherman oaks ',818-788-3536,` french bistro ',3
+222,campanile,' 624 s. la brea ave. ',` los angeles ',213-938-1447,californian,4
+224,citrus,' 6703 melrose ave. ',` los angeles ',213-857-0034,californian,6
+226,granita,' 23725 w. malibu rd. ',malibu,310-456-0488,californian,8
+231,` locanda veneta ',' 8638 w. third st. ',` los angeles ',310-274-1893,italian,13
+232,matsuhisa,' 129 n. la cienega blvd. ',` beverly hills ',310-659-9639,seafood,14
+234,patina,' 5955 melrose ave. ',` los angeles ',213-467-1108,californian,16
+236,` pinot bistro ',' 12969 ventura blvd. ',` studio city ',818-990-0500,` french bistro ',18
+242,aquavit,'13 w. 54th st. ',` new york city ',212-307-7311,scandinavian,24
+244,` cafe lalo ',' 201 w. 83rd st. ',` new york city ',212-496-6031,coffeehouses,26
+253,` gotham bar & grill ','12 e. 12th st. ',` new york city ',212-620-4020,` american ( new ) ',35
+254,` gramercy tavern ','42 e. 20th st. ',` new york city ',212-477-0777,` american ( new ) ',36
+255,` island spice ',' 402 w. 44th st. ',` new york city ',212-765-1737,caribbean,37
+259,` le bernardin ',' 155 w. 51st st. ',` new york city ',212-489-1515,seafood,41
+262,lutece,' 249 e. 50th st. ',` new york city ',212-752-2225,` french ( classic ) ',44
+263,` manhattan ocean club ','57 w. 58th st. ',` new york city ',212-371-7777,seafood,45
+267,montrachet,' 239 w. broadway ',` new york city ',212-219-2777,` french bistro ',49
+270,petrossian,' 182 w. 58th st. ',` new york city ',212-245-2214,russian,52
+271,picholine,'35 w. 64th st. ',` new york city ',212-724-8585,mediterranean,53
+272,pisces,'95 ave. a ',` new york city ',212-260-6660,seafood,54
+280,` smith & wollensky ',' 797 third ave. ',` new york city ',212-753-1530,steakhouses,62
+281,` tavern on the green ',` central park west ',` new york city ',212-873-3200,` american ( new ) ',63
+284,` virgil \ 's real bbq ',' 152 w. 44th st. ',` new york city ',212-921-9494,bbq,66
+291,'till erman the ',' 2245 e. flamingo rd. ',` las vegas ',702-731-4036,steakhouses,73
+292,abruzzi,' 2355 peachtree rd. ne ',atlanta,404-261-8186,italian,74
+293,bacchanalia,' 3125 piedmont rd. ',atlanta,404-365-0410,californian,75
+294,` bone \ 's restaurant ',' 3130 piedmont rd. ne ',atlanta,404-237-2663,steakhouses,76
+295,` brasserie le coze ',' 3393 peachtree rd. ',atlanta,404-266-1440,` french bistro ',77
+298,delectables,' 1 margaret mitchell sq. ',atlanta,404-681-2909,cafeterias,80
+302,` indigo coastal grill ',' 1397 n. highland ave. ',atlanta,404-876-0676,eclectic,84
+303,` la grotta ',' 2637 peachtree rd. ne ',atlanta,404-231-1368,italian,85
+306,` pano \ 's & paul \ 's ',' 1232 w. paces ferry rd. ',atlanta,404-261-3662,` american ( new ) ',88
+307,` ritz-carlton cafe ( buckhead ) ',' 3434 peachtree rd. ne ',atlanta,404-237-2700,` american ( new ) ',89
+308,` ritz-carlton dining room ( buckhead ) ',' 3434 peachtree rd. ne ',atlanta,404-237-2700,` american ( new ) ',90
+311,` veni vidi vici ','41 14th st. ',atlanta,404-875-8424,italian,93
+314,boulevard,' 1 mission st. ',` san francisco ',415-543-6084,` american ( new ) ',96
+317,` chez michel ',' 804 north point st. ',` san francisco ',415-775-7036,californian,99
+320,` hawthorne lane ','22 hawthorne st. ',` san francisco ',415-777-9779,californian,102
+325,mifune,' 1737 post st. ',` san francisco ',415-922-0337,japanese,107

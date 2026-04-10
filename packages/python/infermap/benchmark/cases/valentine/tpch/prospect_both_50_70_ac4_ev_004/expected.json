@@ -1,0 +1,75 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_AgeID"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "prospect_MaSta"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "prospect_NumChil"
+    },
+    {
+      "source": "Phone",
+      "target": "prospect_Ph"
+    },
+    {
+      "source": "State",
+      "target": "prospect_Sta"
+    },
+    {
+      "source": "Income",
+      "target": "prospect_In"
+    },
+    {
+      "source": "NetWorth",
+      "target": "prospect_NeWo"
+    },
+    {
+      "source": "Gender",
+      "target": "prospect_Ge"
+    },
+    {
+      "source": "FirstName",
+      "target": "prospect_FiNa"
+    },
+    {
+      "source": "CreditRating",
+      "target": "prospect_CreRa"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_Emp"
+    },
+    {
+      "source": "City",
+      "target": "prospect_Ci"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "prospect_MiInit"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_PosCo"
+    },
+    {
+      "source": "Age",
+      "target": "prospect_Ag"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "LastName"
+  ],
+  "unmapped_target": [
+    "prospect_Co",
+    "prospect_NumC",
+    "prospect_NumCrCa",
+    "prospect_OOReF"
+  ]
+}

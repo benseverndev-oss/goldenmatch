@@ -1,0 +1,164 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "fsclr"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "rgnstnd"
+    },
+    {
+      "source": "Branch name",
+      "target": "brnchnm"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "dsbltsss(mrkr)"
+    },
+    {
+      "source": "Amount spent",
+      "target": "mntspnt"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "bltrld(ntrntnlmrkr)"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "prjctbrwsrcntrd"
+    },
+    {
+      "source": "Sector ID",
+      "target": "sctrd"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "cntrrgnprcnt"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "rbnsss(mrkr)"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "clmtchngmtgtn(mrkr)"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "chldrnsss(mrkr)"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ctstlfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Section name",
+      "target": "sctnnm"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "cntrrgnnm"
+    },
+    {
+      "source": "PBA type",
+      "target": "pbtp"
+    },
+    {
+      "source": "Continent name",
+      "target": "cntnntnm"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "thsss(mrkr)"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "fstcprcnt"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "cdbsnssdlvrmdl(ld)"
+    },
+    {
+      "source": "Division ID",
+      "target": "dvsnd"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "fndcntrnm"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "knwldgfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Sector percent",
+      "target": "sctrprcnt"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "rgnstnsb-clss"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "ndgnssss(mrkr)"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "rtcprcnt"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "ntdmnt(prjct-lvlbdgt)"
+    },
+    {
+      "source": "Project number",
+      "target": "prjctnmbr"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "trddvlpmnt(mrkr)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "bdvrst(mrkr)"
+    },
+    {
+      "source": "Section ID",
+      "target": "sctnd"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "mxmmcdcntrbtn(prjct-lvl)"
+    },
+    {
+      "source": "Organisation class",
+      "target": "rgnstnclss"
+    },
+    {
+      "source": "Sector name",
+      "target": "sctrnm"
+    }
+  ],
+  "unmapped_source": [
+    "Branch ID",
+    "CFLI (marker)",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "Fund centre ID",
+    "Programming process (new)",
+    "Regional program (marker)",
+    "Status"
+  ],
+  "unmapped_target": [
+    "clmtchngdpttn(mrkr)",
+    "cntnntd",
+    "cntrrgnd",
+    "dsrtfctn(mrkr)",
+    "gndrqlt(mrkr)",
+    "prtcptrdvlpmntndgdgvrnnc",
+    "rgnstnnm",
+    "rgnstntp"
+  ]
+}

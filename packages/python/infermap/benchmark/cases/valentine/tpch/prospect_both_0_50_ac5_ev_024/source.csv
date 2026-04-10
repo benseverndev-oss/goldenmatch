@@ -1,0 +1,101 @@
+AgencyID,NumberChildren,NumberCars,City,CreditRating,NetWorth,Gender,OwnOrRentFlag,NumberCreditCards,PostalCode,FirstName,LastName,MiddleInitial,AddressLine1,AddressLine2,State
+Van53,4.0,4.0,San Jose,381.0,,m,O,8.0,B8b 1z5,Janson,Van der,,16176 vernon drive,,NJ
+Pas204,3.0,2.0,Rochester,,2617116.0,,R,8.0,84092,TINO,Pascal,,20871 dewdrop street,APT. 630,WI
+Mcb217,1.0,5.0,Anaheim,642.0,2869995.0,M,O,10.0,06603,FARID,Mcbeth,S,18833 3rd park,,CO
+TAM244,0.0,0.0,Dawson City,492.0,1487009.0,F,O,1.0,H2f 1z1,NADYA,TAMARELLI,W,15621 yaupon lower,,NC
+Ami260,4.0,4.0,Santa Rosa,383.0,1014586.0,f,O,10.0,92711,Lavinia,Amini,P,24268 hayden west,,MI
+RAU355,4.0,1.0,Plano,319.0,1052954.0,,R,10.0,90150,Aloysia,RAUD,L,18313 5TH LANE,,ME
+zim376,4.0,0.0,Chicago,558.0,661877.0,m,O,,10017,KALI,zimmermann,K,20405 DOWLEN NORTH,,Saskatchewan
+Too570,2.0,3.0,Fargo,,2689466.0,,O,9.0,77268,Hortense,Toothman,B,291 sheriden street,,MI
+Sni646,2.0,3.0,Tempe,817.0,385398.0,,O,6.0,90148,Duncan,Snider,L,9902 altamesa park,,Alberta
+don654,1.0,1.0,Richmond,,1993033.0,m,,3.0,78222,Mirabelle,donleycott,D,13456 stan hope upper,,NH
+ban714,1.0,3.0,Charlotte,608.0,,,O,10.0,E7n 1j4,FANNI,bankhead,A,11057 andrews west,,ID
+Wic761,3.0,1.0,Plano,,18237.0,,O,9.0,60707,ISSI,Wichman,,3406 kiel north,,WV
+HOC769,3.0,1.0,Lexington,815.0,2535269.0,,O,9.0,94499,Bart,HOCUTT,,6097 SCOTCH BOULEVARD,,MD
+sch794,5.0,2.0,Hialeah,300.0,1972593.0,,O,8.0,v6e 1q7,FERIDOUN,schmadtke,X,16279 anaconda drive,,NV
+and829,4.0,5.0,Fort Collins,363.0,2815906.0,F,O,7.0,H5i 1r5,Nenad,andreasen,,17261 alpine upper,suite 292,IL
+Ala839,5.0,4.0,Mobile,488.0,3163906.0,,R,,16508,DENNI,Alary,H,6156 HOLMES COURT,,NE
+Pkd841,,0.0,San Bernardino,835.0,,d,,4.0,V6j 1s6,Jean-pierre,Pkdcd,,7458 denton boulevard,,NM
+WIG914,0.0,1.0,Huntington,671.0,2632755.0,M,O,3.0,94350,Samaria,WIGGS,U,18699 potomac boulevard,,MI
+TRA1024,4.0,0.0,Costa Mesa,669.0,1577238.0,F,U,1.0,v6y 1u9,Dorthea,TRANSLATIONS,,1524 drexel north,,AZ
+rai1145,5.0,5.0,Whitehorse,603.0,1241392.0,F,O,6.0,85080,MARY-JO,rainsforth,Q,18591 CHAPIN ROAD,,KY
+ste1275,4.0,5.0,Salinas,472.0,2578863.0,,R,10.0,35895,KESSLEY,sterian,,16047 linwood north,,NM
+fle1309,3.0,2.0,Dayton,477.0,1272562.0,,O,5.0,v6r 1v9,Christoph,flewelling,,18395 bledsoe boulevard,,LA
+Van1334,3.0,4.0,St. Louis,309.0,3234538.0,f,R,9.0,78231,Arabel,Van kessel,,14705 waldemar boulevard,,NC
+Mar1578,0.0,5.0,Windsor,825.0,644582.0,F,O,5.0,B8B 1Z8,Reg,Marlow,V,23684 decatur street,,MI
+TUC1631,2.0,4.0,Fairbanks,847.0,2269303.0,,U,8.0,60612,ernesto,TUCKER,C,24683 meadowlark boulevard,,WA
+Bou1719,4.0,1.0,Paterson,807.0,2173372.0,,O,7.0,v6q 1s4,aniko,Bourlet,,12416 lenwood lane,,Prince Edward Island
+TOD1766,4.0,4.0,El Monte,432.0,352144.0,f,O,2.0,M5g 1w6,KIAL,TODO,M,24985 royal avenue,,TN
+att1794,3.0,0.0,Brownsville,386.0,1959769.0,,O,8.0,H6B 1X6,Chrissie,attanasio,,11287 oasis north,,TX
+you1808,1.0,3.0,Naperville,445.0,2161886.0,m,O,6.0,V6X 1S8,Elwira,younes,,22494 chimney rock avenue,,TN
+Hun1831,0.0,,Montreal,774.0,1298229.0,m,O,3.0,94289,annemarie,Hunter,U,15713 conier upper,,Ontario
+lei1869,0.0,0.0,Hampton,800.0,1643864.0,f,R,6.0,74158,Dominica,leitrick,C,10079 palm lane,,Manitoba
+llo1908,4.0,0.0,Kitchener,340.0,3899231.0,,O,8.0,80158,Marci,lloyd,,2923 navarro lower,,NV
+Iko1910,,3.0,Nashville,830.0,2757498.0,,O,6.0,93813,Georgette,Ikotin,I,20166 PRESIDO PARK,,MT
+Cro2009,1.0,3.0,Toledo,475.0,1904325.0,,U,9.0,B8a 1y6,hsieh,Crowle,,3690 plumb boulevard,,DE
+Kuc2169,5.0,0.0,Warwick,761.0,425846.0,,R,10.0,t6d 1b2,Enrico,Kuchelmeister,D,16336 norwalk road,,KY
+Whi2256,2.0,4.0,Des Moines,,707793.0,M,,5.0,99533,Blake,Whitt,,12957 midway park,,HI
+Gon2279,5.0,3.0,Lewiston,504.0,3514932.0,,O,9.0,77072,franz,Goniotakis,,15768 crestline east,,IA
+TEE2280,4.0,3.0,Alexandria,,2224454.0,F,O,0.0,20016,Zia,TEERDHALA,X,15339 mccann road,,ID
+Nos2281,4.0,0.0,Rapid City,364.0,,,O,1.0,60725,Erik,Noseworthy,N,22506 shelter drive,,Saskatchewan
+SHE2374,3.0,0.0,Cleveland,324.0,3255930.0,m,R,,h2f 1v9,Marie-jeanne,SHERARD,,493 day lane,suite 267,TX
+VID2405,5.0,4.0,Riverside,385.0,1838539.0,,O,2.0,V6o 1v4,onida,VIDMER,,7455 clint rue,Apt. 707,WA
+tyd2761,3.0,5.0,Greensboro,403.0,2702576.0,M,O,6.0,19152,amelita,tyda,,13904 MAHONIA BOULEVARD,,WY
+por2791,1.0,0.0,Jacksonville,497.0,709004.0,M,O,1.0,91766,Carolina,porterfield,J,7216 gates avenue,,OH
+gay2821,2.0,4.0,Abilene,363.0,335576.0,,O,7.0,64123,bibbye,gaylord,,453 RIVER TERRACE WEST,,MD
+Nag2914,2.0,,Portland,584.0,612503.0,,U,4.0,V5b 1m5,AGGIE,Nagle,,21889 TERRACE COURT,,PA
+sch2944,0.0,5.0,Norfolk,,3625645.0,,O,5.0,95185,Mohamed,schittl,T,2546 ashley way,,Nova Scotia
+GOR2966,2.0,4.0,Erie,669.0,,,O,0.0,13203,previn,GORES,,24185 SHALLOWFORD LANE,,AZ
+HOF2992,,3.0,Missoula,634.0,1682874.0,,O,6.0,A2B 1V1,MARYLIN,HOFSTEDE,G,20916 california north,,OK
+Cop3036,0.0,0.0,Modesto,700.0,3219328.0,,O,2.0,M1H 1Q3,Marget,Copello,,4633 palm east,,Quebec
+DEC3104,0.0,3.0,Sandy,335.0,1073970.0,,O,,y5c 1n8,Beatriz,DECAPUA,,11867 davie north,,UT
+Bob3116,4.0,4.0,Dallas,568.0,807993.0,,O,0.0,73182,LISE,Bobar,,23007 wakeforest way,,ME
+REI3117,0.0,1.0,Salem,635.0,1949317.0,m,O,2.0,H7E 1T5,DOMENICK,REILLY,,24368 rutgers way,suite 465,Alberta
+bug3441,4.0,4.0,St. Louis,786.0,613433.0,,O,3.0,90272,ROBERTO,bugajski,V,24160 star drive,,IN
+Dem3461,1.0,4.0,San Diego,459.0,1238475.0,M,O,8.0,H5L 1O2,Correy,Dempsey,,20870 charthouse lane,,NJ
+Rio3467,5.0,2.0,Gary,424.0,2413294.0,,R,10.0,E7o 1o8,GENERAL,Riou,,22986 norfolk lane,,MA
+BAI3685,2.0,1.0,Baton Rouge,602.0,2621848.0,F,O,3.0,33198,Madonna,BAILLARGEON,,7936 altamesa lane,,Saskatchewan
+che3720,1.0,1.0,Salt Lake City,482.0,3401242.0,,O,1.0,02120,ailina,chenier,I,18417 voss park,,Prince Edward Island
+Dal3769,5.0,0.0,Fresno,503.0,17438.0,,O,4.0,V6f 1u2,Katharina,Dallas,,13276 westella upper,,OR
+PER4145,1.0,3.0,Cleveland,789.0,1156747.0,,O,9.0,V6N 1S8,korry,PERENYI,,12818 strand park,,British Columbia
+Aza4399,1.0,0.0,Alexandria,538.0,446039.0,,R,5.0,77223,CRISTIAN,Azarshahi,,23057 broken oak avenue,,CT
+Mus4471,4.0,2.0,Casper,587.0,1756876.0,m,O,5.0,C2a 4w2,MERRIDIE,Mussar,F,19412 broad lower,,TX
+BVW4474,0.0,4.0,Madison,802.0,3166324.0,,U,,M4j 1n1,Felice,BVWORKS,Y,20433 sun tree upper,,IL
+TOR4529,0.0,0.0,Dallas,635.0,33980.0,,R,1.0,78415,DUSAN,TORRES,Q,13892 jennings road,,SC
+Mcn4604,3.0,1.0,Tampa,325.0,1602611.0,,O,10.0,48153,sinh,Mcnabb,U,1899 malden way,,SD
+Rjv4736,4.0,3.0,St. Catharines,767.0,433506.0,f,O,6.0,TEFRQKN,Jvihmkmpsvdmqkgnzwkhpvdgr,Rjvooicbxegkmjlnaccxeumxdsujfv,,chdxkvytntfhqjfqugzbukbonpndnh,Itggndsphrkvilxupsbnjnsbjklhtixiqygscqyhimnpgxcnyueisiwjwsejakkj,NH
+Kez4834,,4.0,Halifax,692.0,1498851.0,,O,,LGIPYZJJ,futpzvh,Kezwsyhhhjclxcqkz,I,xpimvrlmetevybrgpbni,yevvwqszvpekemvracrctbzuysj,CT
+PFW4844,4.0,0.0,El Monte,331.0,3386054.0,M,R,,QEWEBOAJI,evnco,PFWPECZU,N,aaixdeiiwlnphzxgpero,eafgykwjiqhbuwnffovfuspxtevcxsi,MT
+Usz4938,1.0,,San Diego,667.0,508936.0,F,O,2.0,cdcfav,Sqwtkjenrhqjzembqhivkclz,Uszguzjwu,h,RIFDDFZJNTLUT,ljzlzxwebaeodpkiimvwkhibsevglnavdjtmcntbpwcuwppjyrsidiovydtstb,OH
+YTH4952,4.0,4.0,St. Catharines,798.0,470109.0,,O,4.0,DYWUEY,Cwbtdbhuebfmstkwrw,YTHEHL,j,ygygkdwhhwmghblmyndptzrosuweqfjhet,AULAKNUCMXFJVAI,TX
+Hnl5073,0.0,5.0,Inglewood,848.0,2645367.0,M,O,8.0,dgkjvzgkg,Kcfrmajcdfbijvmy,Hnlnlzgadhmfwwgptrdktrzgbf,,Nvhdavrubspkpqtgahxwclvcy,HUCKNFMKAVMRIRZ,Saskatchewan
+tns5156,5.0,4.0,Chicago,603.0,1062995.0,F,O,9.0,Kiwmozrkfz,Jrlywhtrwdjzwvzmdqjlsx,tnsxth,,PPWZVLVIJWOUFVWZLYPEWAKRCGUCUUJJBPDJOHVHNSPO,GNPYVXMDDGFNRJHDPBUSSCZQ,Saskatchewan
+jlt5215,2.0,2.0,Edmonton,825.0,228730.0,,O,7.0,Ixbbwawn,UOGBHVCQYPBSZXXIQKJOW,jlteoggrnpobsogrghv,J,PSOBMXUGOTBWTBTGHG,Hotwbeyujqfluygveilngbginevjqpxfnq,CO
+ykv5246,1.0,,Garland,332.0,390153.0,,O,1.0,XWKWDUVOCZKD,Fejgpfgqevzwiwe,ykvtzurgqqhoeowhorjujdidalrbj,z,Jfebvioyvxyazjyn,KPYRHCIXKILKQSDXQXOPXGUJDUCQO,IN
+gdz5331,5.0,3.0,Memphis,331.0,2831356.0,,O,10.0,Cidlghq,Zvknx,gdzqldzmpquuucg,t,DKKNYFGWNLPQWXVKECFMUCKJUVSNMPJEPIT,Yymszthnqlnqyhfzvfzwa,TN
+NBO5425,4.0,2.0,Savannah,570.0,708356.0,,O,7.0,gyigyehw,LVMQBRVPVXZPQVDEABNINUBSLADE,NBOQHTAXKINNKHFETFCU,t,jenvikbjsdnsvzpildqvrxulnrlvfrfgvfbikpkkswichfjtllnckew,fvdvfsxhbwyeenlbsrzuuqbqieubbbjqtnseogydmkhvvdsrlxsxyptmch,MN
+KFT5498,4.0,2.0,Spokane,758.0,2993705.0,m,O,0.0,Behtpv,wpsjxjfqigcrzuuqfdlzxufvqti,KFTFNBVAQGQKVDISGCD,B,LASVVRVHKUMLEPEHFCZTXAEEUCKPJZJXDRK,Uubslmeqyiylhdzvndmvxbqxselulpdjskekhac,Quebec
+Mcl5551,4.0,1.0,Miami,491.0,2961107.0,m,O,3.0,LSGDWXXO,iblegikv,Mclurdsmjirewkckr,,Fskrommjcqjkodz,Ohbhsikemecvyiajfafhenlwaxvvfdcumhuzxvbnihozjqyvljmthrahpktqymkmgcdhbroyqruafvbq,RI
+Wpl5727,4.0,2.0,Allentown,403.0,2497821.0,M,O,1.0,Xhuivx,Lixelqavfnhrjikiatnxadbjzkvw,Wplfqgwfiruaobmivfbrnk,E,edvccmrurkreengrvqtasudevvcl,VTWVVKPGS,NJ
+the5753,4.0,5.0,Ann Arbor,522.0,2945807.0,,R,,abaag,Yzwhwnqzgta,themerazogddazied,D,Ytfnyqdyiamxdblro,qsgedxlezabyntuetawgjwqhyzualjgjzyewvplmrwqcawuq,VT
+Jhe5779,5.0,2.0,Charlottetown,652.0,3561382.0,,O,4.0,Oqqidyxs,FJSAKNRGVVRBILDNILSVSOSOKLFC,Jhevhqsnejvox,m,Rtjohqidpdo,HWIAXOQMTPORZDTBFBGJLOTRIAXGTMDKSEUIOMJCALJDRTBKNJCESKKJZVGAKUEEEYLJVTMOETLEME,FL
+elz5873,0.0,3.0,New Haven,322.0,546973.0,F,O,7.0,Tocdzt,Ncputqewohoiazebg,elzhhjxxoyimurcntbrgue,,Ivhxuvksrkofqnmqkpblylhhpkbgpikevhmzqkywflbuaddnwjytpvknlzqli,Xyxdhnridgvlbjlxphrqyyntuwykefhfhlejdzrsxoqtpkjtjlrctlkbgqpvxnler,NC
+kkx5985,1.0,0.0,Berkeley,726.0,,m,O,6.0,Rklhgkdq,yewixmdus,kkxamohwoyailmbj,,Pctwqwyqskapesqifwhkemizmbnlzyaitpuldboei,NQCLPDCDGVGBEFEFZBEECFNRWWMZCELT,UT
+Xtp6042,2.0,4.0,Thousand Oaks,757.0,1548310.0,m,O,8.0,ibgkddhejuka,ZRZLMLDQSRLA,Xtpafjcpibnrtrbvvf,c,bhhuvrzcujbupwwodomrfunsymfmccsyxwiueglxiwpilvppxajtnjefbjyvnjlpzkojvkcuqdmqkur,KEBMNKMLOSCGSWYSZEMEAUVLQFGHIQYHLSBMDNKYGPLWEZYUTNRNBPJLIIHSJELOPIFXHLUFQIHFMS,HI
+Xsb6076,4.0,3.0,Carrollton,668.0,363114.0,,U,7.0,eptkmqhdpv,NIVCCWMASHCW,Xsbffwqjpyqsltqrr,H,rbwhbny,ZUKZVAWXIXA,NH
+Vel6083,3.0,3.0,Atlanta,740.0,2006916.0,,O,5.0,Qdsmciqjm,vtwnwdafmzlvozjwhwgiaximvyrqso,Velmwadtiy,d,Dzqepldsszkrdpgafsmuohjqqtjdmswgpncuwwsqkxskvuednydknscrsppfmdnzb,PDHHJAMV,AL
+Xuc6225,4.0,2.0,Providence,574.0,904387.0,,O,4.0,nrlhr,ytizmtfhbrwygkcpiuixsy,Xucbgtynarvqvgbortywovilwi,,AFNTVBLRGELSZGBQBPEKIHWPZEWTODEQRRP,GZHJWJXSSFHUL,VT
+Zrk6263,5.0,0.0,Tulsa,309.0,3510023.0,,O,10.0,Jqkwfbpujvn,Yyetziuznzaozkvt,Zrkuobqusxs,,Invrvahpylfbmuikjfmigjurqzuovdgjjgwukwwdofqf,Otafhmfgoqtxojgpmkfddhwtndcjhlisubt,NH
+ufp6341,3.0,3.0,Riverside,781.0,1181474.0,,R,9.0,Bezufzk,TETWMLQXYQHIZAJNLNL,ufpsol,u,gquajwtkdprqytdbjeyeqofyoxxlrbqeiyvpwwvnjhpzhdzwpepowcaxgdhxdmsmucstdrssblv,Ptklvbywvba,NH
+Vvv6610,2.0,1.0,Columbus,556.0,2050148.0,,O,8.0,,Uoxmwvcopbvdqfgblz,Vvvtcddmyguezxfeguebioja,y,Ajwiyowvaikldfsowemhmncnvtrhvfsqqi,Wlvybamrkmydtnarzuexntwaeorbgoniiqponugwdcptknsbvanelbqeklbicwvnaqkiakuwq,New Brunswick
+omc6620,,,Anchorage,730.0,3014807.0,m,U,7.0,Bzmdrhtjn,STKSJRYYVVJBFMKXSACLLYXEMOX,omcwigjwkmdtblp,,Wkzmbgglvtfhbu,lxwkkkyhuttlelwudbqghcwgwhjaezregbxpyaesevcaqbjbwiukiq,ID
+Bwc6639,1.0,1.0,Erie,668.0,1149966.0,f,O,9.0,JXMBZQSHSLB,Lsiqkgbwdigdbqamzwulfqeps,Bwculhdqszgnc,,PCESCVQLPZEANVZGNIKJOCNQUSPAPOMAFNIPXESXHSMNDLFSXJLPFGCWAT,Seilsrjb,WV
+Yux6803,,4.0,Yellow Knife,303.0,2680913.0,,R,0.0,Apewuvg,QBEIRQMGVF,Yuxxr,,Stlwhrmszxuhfunvxuxbtiramjceubmdaxmcwuqrrbholvbrhfnmqrutof,SWUALLJUUJOCVDPMOFVHWUPPFAICEGQOAGJTNHSJKWNPFRHPQIXKJXASNGGCCPN,VT
+Wmb6842,0.0,,Arlington,373.0,,f,U,5.0,XXYXDW,Wtcviciljgenqje,Wmbyq,A,nxmifmlsjguvynypcidpuhpntpvspssoejnqitbugpvmqaonxzc,ISZPCOFKPXDZCHZPCGYMRIQH,NC
+Vws6951,3.0,2.0,Regina,527.0,3765194.0,,,2.0,Ifstorwqgm,ASMBWGSJJ,Vwsesrcuq,G,Vbmfkrqyljfhfydbesqpgixirwertd,tztsrzbhutxy,VT
+Ijt7015,5.0,3.0,Providence,506.0,3470844.0,,R,0.0,Nhlgdxedbpme,Fpygaob,Ijtoee,,Zclrgjhzeugrifkwqmfaanla,VZWIRBYGBTQJWNDIMFUGCHFVMEIAMAJVBZBFCKPZFAGOCNYSKPIBZRSXPVYVNEIWJNQULIPMWLMXMNHG,Nova Scotia
+Ngv7068,4.0,1.0,Pueblo,343.0,921227.0,M,O,5.0,Qwallozjzfl,kconyemepudbamkpazxvxkgtpneop,Ngvnswvxwdukzmpmhrrjmjphquap,,Slfzarexmtalgfnaluhdqrbpwshfrqkfapcrxibqxohkdghbtbahegjjeoosbezayrqnkvfzgrxn,Xpljcwguihbnaprstpygodsvbsogcdxylrkhmjmjbvnhjgsrypppkspliryhmymjskaqosdfnyldzpd,Newfoundland
+JMC7107,2.0,1.0,Flint,384.0,353120.0,,O,,Cosnoypyfgd,wzbaogabhvyanb,JMCRJRDZITBPDGKXHIIANKDZFJX,,Jguinppekjarmwbinyflpnmvtoexpqfdfguqu,FSINLUZAAKKGCOOJNZKQ,MA
+heh7130,5.0,,Torrance,491.0,246840.0,,O,0.0,LGLJBXLL,Ulgcnbfqjcpp,hehwwwtceerrwijpvfbeiwi,q,jigwizmlcltxngvrnavtgfzxmmeormtmupbsktdptujajxjonhsxulayqrbkfe,CYEDXQOYDQDRWGAK,DC
+Xow7263,4.0,0.0,Bellevue,406.0,2994819.0,,R,,xdzuocaej,VHADIPNEWPUSYHIKN,Xowfx,L,Ngtmddzbuvdwwhfpehoxcqcmvllifyouommtjlonb,Njidomzu,TX
+vuc7318,3.0,3.0,Billings,441.0,2175928.0,,O,,ZVZAB,qzmmcxwcjliczddkj,vucrytje,R,zkrxucbgudwzjbdi,amjeudkxbmsrphvymhmigbdzwsuemswlawcxqatqljslemsfzhxtqunhzjtbjjmf,AZ

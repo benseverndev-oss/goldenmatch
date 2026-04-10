@@ -1,0 +1,101 @@
+AgencyID,NumberCreditCards,MiddleInitial,Phone,OwnOrRentFlag,NumberCars,AddressLine2,LastName,City,NetWorth,State,FirstName,Gender,AddressLine1,PostalCode,Country
+gat106,10.0,,1-630-604-2543,O,0.0,,gateau,Erie,3049281.0,TX,noel,,20334 anaconda avenue,60608,United States of America
+cai410,2.0,,1-424-251-0934,O,3.0,,caine,Irving,,MT,JORDAN,,17991 chamberlin way,H5I 1Q9,United States of America
+str435,10.0,,1-089-951-8709,O,2.0,,stronski,Wilmington,545131.0,AK,Jerome,M,10117 college upper,33608,United States of America
+jan489,5.0,,1-383-692-8650,U,5.0,,janaratne,St. Paul,2630125.0,British Columbia,steffie,,15603 MORTON AVENUE,E7N 1Q9,Canada
+lef521,6.0,D,1-723-711-3831,O,,,lefevre,Regina,13330.0,NV,Freida,,12357 hayes lower,M5F 1V3,United States of America
+LIT713,6.0,N,1-496-223-1124,O,3.0,,LITT,Santa Fe,3061904.0,ND,Gladys,,4516 whitman lane,92613,United States of America
+REI752,2.0,,1-577-333-4720,O,1.0,Apt. 637,REIMAN,Las Cruces,571028.0,WY,Gavrielle,,8935 young upper,V6d 1w7,United States of America
+Kni1141,,Q,1-017-931-9415,U,4.0,Apt. 600,Knighton,Santa Clara,1577482.0,British Columbia,Courtney,f,13177 brighton avenue,90395,United States of America
+per1293,8.0,A,1-738-161-5093,U,,,perron,Honolulu,408058.0,IL,joanie,m,2384 LAREDO ROAD,H7h 1v6,Canada
+fle1309,5.0,,1-169-112-7924,O,2.0,,flewelling,Dayton,1272562.0,LA,Christoph,,18395 bledsoe boulevard,v6r 1v9,United States of America
+HAS1426,1.0,,1-794-985-9390,R,5.0,,HASHIMOTO,Bellevue,3463678.0,WY,Iseabal,m,24178 turtle creek street,94391,United States of America
+HOL1521,6.0,,1-546-474-3897,O,1.0,,HOLDER,Richmond,104805.0,MD,ORALIE,,19551 wainwright lane,H7e 1s4,United States of America
+Mat1538,3.0,N,1-525-753-2190,O,3.0,apt. 80,Mathewson,New York,2913410.0,RI,Lea,F,2446 forest lane,h5j 1q3,United States of America
+WAR1587,10.0,,1-345-076-8315,U,3.0,,WARSHAWSKY,St. Petersburg,2706243.0,Manitoba,Vlado,F,12470 meadow haven east,E7n 1j7,Canada
+Gol1657,0.0,B,1-044-618-4589,O,,,Golka,Alexandria,2727224.0,WA,AZRA,m,17147 vaughan rue,90166,United States of America
+OWE1677,2.0,,,O,0.0,Suite 132,OWENS,Charlotte,977588.0,IN,timmie,F,23477 vessey way,90093,Canada
+KAP1682,4.0,U,1-663-480-5987,R,3.0,,KAPSA,Salt Lake City,938673.0,Alberta,GEORGE,,16959 lacornia crescent,43659,United States of America
+Del1827,7.0,,,,3.0,,Deluca,Springfield,,SD,Ulrike,m,14203 brooks west,T5a 1u8,United States of America
+BAR2048,6.0,,1-570-448-4486,O,2.0,,BARDSLEY,Raleigh,769616.0,ME,Foad,M,5524 FROSTWOOD COURT,V6D 1R8,Canada
+Mou2289,3.0,,1-628-893-2322,U,2.0,,Moulton,San Bernardino,2441656.0,PA,htd,,4679 furr avenue,h7h 1v4,United States of America
+DAW2551,5.0,,1-689-030-7538,O,4.0,,DAWSON,Erie,951099.0,NH,Walter,,19518 sheriden upper,92411,United States of America
+ACT2619,10.0,,1-342-301-7355,U,1.0,APT. 485,ACTON,Thousand Oaks,1261571.0,AK,MAIDISN,,4139 PACE LOWER,m5d 1w3,United States of America
+Hut2668,5.0,,1-855-989-0901,O,0.0,,Hutt,Torrance,1561090.0,UT,birgitte,f,19634 el monte boulevard,45252,United States of America
+Cif3154,5.0,,1-208-646-4469,R,2.0,,Cifelli,Worcester,1337216.0,WV,Tu,M,771 KELLY LOWER,10151,United States of America
+Ahm3262,4.0,,1-385-440-8533,O,1.0,,Ahmad,Newport News,3548866.0,MO,SHIV,f,3632 norwalk east,80165,United States of America
+tom3437,1.0,T,1-534-999-7041,O,2.0,,tomassi,Colorado Springs,769705.0,IL,Meer,m,3261 henderson south,78741,Canada
+Sch3533,,,1-172-605-3783,O,1.0,,Scheer,Saint John,2018601.0,MN,Esmail,,12977 turtle creek rue,90795,Canada
+rem3588,3.0,,1-469-841-0566,U,3.0,,remedios,Dover,1131982.0,Manitoba,Opaline,,19068 coventry park,H2f 1y5,United States of America
+Rey3617,3.0,,1-252-168-2165,O,0.0,,Reynolds,Fargo,,VT,luciano,,19219 cape drive,45228,United States of America
+Smy3663,7.0,,1-114-736-0339,O,2.0,,Smyth,Richmond,3475664.0,CO,BENJAMIN,M,14255 EUCLID DRIVE,H6d 1y2,United States of America
+NAR3739,3.0,K,1-840-182-7908,O,5.0,APT. 776,NARRAWAY,Sandy,3364906.0,CO,Whitney,,11645 KIMBERLEY CRESCENT,21225,United States of America
+Bri3817,7.0,,1-386-893-0040,R,3.0,,Brindley,Winnipeg,2264660.0,NM,Alfie,m,21545 elm rue,79909,United States of America
+KOR3820,10.0,,1-473-486-2536,O,1.0,Apt. 38,KORNACHUK,New Haven,3791481.0,Saskatchewan,Felton,,7474 washington park,72912,United States of America
+Cuf4018,3.0,T,1-955-139-8035,O,4.0,,Cuffle,Salem,2480166.0,Alberta,Cristine,,1243 salado road,95249,United States of America
+dai4339,2.0,,1-567-486-3775,O,2.0,,dai,Tallahassee,3686819.0,OH,RAMON,,24560 ketch upper,48259,United States of America
+Whi4513,7.0,F,1-878-409-3903,O,0.0,,Whitaker,Cleveland,2563342.0,Quebec,LOLITA,m,8481 KIRKWOOD SOUTH,88001,Canada
+Con4559,9.0,,1-200-529-6127,O,3.0,,Connors,Lansing,1941628.0,MD,AUSTINE,,11183 wilshire avenue,V5d 1m7,Canada
+Gat4561,4.0,N,1-161-416-8744,O,5.0,,Gater,Salem,3035126.0,NV,Bernita,,8145 ESSINGTON NORTH,94125,United States of America
+Kre4564,7.0,,1-683-654-8407,O,0.0,,Krenn,Berkeley,3655914.0,MN,KENDRA,m,9929 michaels west,48312,Canada
+SKI4748,5.0,b,1-232-388-6615,O,2.0,SCNHUCZFAW,SKIRDW,Fullerton,32639.0,WI,Qzxecnokzncy,,Ycqojibjivyanplvxvwctrvvkxmhjprlihddjkyuzjipwspwkjajlxvzkewrusnptmeyblcbb,kmfhiotzok,
+UHP4810,3.0,,1-568-003-2705,O,1.0,wxibohpyjkfoaecbtuhlzqynl,UHPDANGXGMLMIU,Seattle,1924624.0,MN,Nlwbs,M,ibqapvseszurvomthaeuksjlygntdmwnumtndmghiyfnyhgvdhoetchqayfrnabhqyazpdpglb,Xxjynujsphp,United States of America
+CPY5522,7.0,,1-122-711-4160,O,5.0,Yfhfmodacn,CPYEXNKVOHYMETDWPSGJTFNG,Eugene,1774557.0,MT,COYKJSSI,,clswwbztjvktlwnukdfrwdtizjpetunnaxhymyswrteydgqbapsqdhzwdkurdglfsohjtutvsytdlu,Ddsmrz,United States of America
+MHX5582,3.0,v,1-894-724-2381,O,,Wioywlaozsafkmkzkonsgnovzqpthpojfnbnolfzokflqmaogoaomcobricqqwcszuex,MHXFYWOQNNWQCJMFGLIIMUOYFAM,Lafayette,1687481.0,FL,DFZZUADICGTMLVFLDSBDWGHGAIN,,msxksukkztowcrsjmjatrqmihrnmskhoehyapbnzzvfupallyzcmbp,Dtwvqhsqtqhn,United States of America
+Gfg5643,4.0,,1-026-859-4232,O,3.0,Epzthdlrgony,Gfgzakhwilmnxftydzwzgevumhoqq,Lansing,3034910.0,LA,Mgxvmmxstnjwcdmouqbfkludxcyvj,M,fdqruftmgfhhpfphegvvxailqvlkovfdrl,OJIGFJRLBDD,United States of America
+Hiu5828,2.0,i,1-886-941-5238,O,4.0,,Hiupjiwucslwtjgwnxcqr,Manchester,3604812.0,NV,SXXJK,F,Nsjllavlnhiekwugwfxcrnheirrfkagwbajzghssyivyfqiihxgf,HPAVWPNISG,United States of America
+TWJ5889,10.0,,1-292-375-5585,R,3.0,ofrndqatzctjxbnlzsmuqnpujeregulpqkfwbmswzkzvmnhytymmstqwaalwlycrgpttvjxnnmby,TWJILPAITCFSIWFTVMPWVGGERJ,St. Louis,2435785.0,WV,fdekeqrkdewozsgxywhmrk,f,MZQZOGXPXGTSNVXAEQBPCOIQJYCQHXVPYRMWWDDXNAHLVRMPGCAQKKCKCGYK,Fxbvpbl,Canada
+Ycc5933,2.0,,1-280-804-7182,,1.0,Sxgznktzbvojtbmpblkfppknfxuvu,Yccqpjebgtexnnxph,Overland Park,2232690.0,OR,eaynp,F,Ipgxahsrnjybcdklqngvnwedjgvjvlusiwonuhtwwioeefxyrjcmml,,United States of America
+kkx5985,6.0,,,O,0.0,NQCLPDCDGVGBEFEFZBEECFNRWWMZCELT,kkxamohwoyailmbj,Berkeley,,UT,yewixmdus,m,Pctwqwyqskapesqifwhkemizmbnlzyaitpuldboei,Rklhgkdq,United States of America
+gsa6074,3.0,,1-706-273-2847,U,3.0,mgstlhiknulchprvfiviefuilxmjmpkyr,gsaaltvdj,St. Johns,,CT,eulmsqpih,,Bcibkjnspiabfarkmddxtoyjrdvbmpacmfcqtnhlsrsnimjvzfcanjppnxerfnwwqua,Hnspvzivk,United States of America
+GDJ6210,9.0,K,1-746-604-7583,O,3.0,alihjekbftrmihqpdzgpbhluvvowwhwikkevnsbsabfmnwivvuwxnudaxmuwioazxpfcgauceiu,GDJJTPEUDXVYAQ,Hayward,2387807.0,DE,gapnqanjpfsizfdzkdboscutf,,Ibfjfwecvdvquryfxcidyfyidbaomdreg,Ccqbehzvmy,United States of America
+WXY6233,9.0,,1-401-092-1251,,5.0,Bzcpxgenlfgkxgdbxykezmwslhskrlxgwiabkeokrcbxfrqycieeipxevhoixkgtmcbmlsnqsnpwwh,WXYKDAVVEAYSPPGNQEDPSBCMF,Irving,1477753.0,HI,Gdcdfwhe,,YOMPYEXGALONPGTRETZGBXYJBMRAVNGWVEETEOBDUWOSBEGHKDSJQWPCLBQFLYRDDOPQO,SAWOEL,United States of America
+Lhr6236,5.0,,1-894-808-7392,O,0.0,Emfjpsfrtgopmvtscnxviatidmqhtvdqqutxqsaukgb,Lhrlplmcaldfyhhufjeia,Arlington,,IN,HESDVQAKNWJJMHDZQUSSZZSQ,F,Mvonxmrtkfsantfgestyymrtdnhxevcdipepfawhrdziuvoptrzbkuxoslrvpycsgbao,Urgeldbgrml,United States of America
+emm6882,4.0,J,1-508-441-7754,O,4.0,Ukuchnenxunlnjpconifvhbgtocincoxjmrqusiiwdzlzxyvhufvczj,emmvyphdtubgxxmexuuoa,El Monte,,WV,RCEAGHCDNZDUXUQKXY,,Oxqizvjqsezdmoykmzjhujnnxtvdcezipdhbffagreawfhs,Hknahaty,United States of America
+Mef6921,10.0,,1-557-951-0489,O,0.0,QFCCNMNGRUWBNQTENAG,Mefaiomizpyaqqzwclgfnzl,Baltimore,1142648.0,Ontario,MSVHNKGXHUVVUHHDMSVXFMILU,,Ipxvoocpluljigwapsfjpmesxxifkpnpgoxj,igkhlrrqipoq,United States of America
+Xie6933,4.0,,1-110-746-6014,R,1.0,Owsgviragyjsgqtnwruahtirdtqatxcfapbfiw,Xieiacjnqx,Honolulu,1337471.0,SC,Ahtkxlecdjsttur,,Yyzutezqzimkwafuqfontpwutwvwqotbtuqhhjgnjvhmclcosanqbdx,mttil,Canada
+Hzz7369,7.0,,1-170-358-2185,R,5.0,gkuqnzogklgbuudblknlhxyyjaqxpfwwoowepoeonynxzykwmwtxlrfmqstdjpdoipsinuk,Hzzkczqwgjhwif,Brownsville,803069.0,RI,Qsrvvoggfpcpakyogfstpnvysmxmea,f,BJXEEJIXKOWVOMTIHYTZONTSXLHBQIVZELZXOJXPESSNE,Zcxqzn,United States of America
+njd7438,5.0,,1-520-887-0892,O,0.0,Tqplusvioosqegfpjqkqjqxkqrzcozhwxdyhchoejakelezevgclabxlcnltaua,njdmplvncwvrjxekxiscdw,Thousand Oaks,878906.0,MS,nwbtyzlhorfuvkhgwbzqivrgi,m,Fbdgohwjhsmgvquepltsghwruqigfizchulgjrxcdkhqshtpjlt,,United States of America
+Tdx7537,2.0,,,R,5.0,Unwsbeiwniraokeimaaqgucfssakgswxqsvaqwlmpkyjycdfefwrm,Tdxyljuxporjhdumcvfmv,Charlotte,3919363.0,AZ,Hkfofpndygljbeo,,,YKOVOTYB,United States of America
+phr8290,5.0,,1-365-036-0540,O,1.0,Jauunanujgyypwfdsfiumpsgeqvngrqatpcbrkqwnusxot,phring,Winnipeg,1888168.0,ME,Wcqnq,m,tqwrsdfjyapcjudrhnqwbdzbnunkf,RIOCI,United States of America
+YEQ8796,10.0,M,1-675-992-6592,O,2.0,Bmdbzrvxmwtqqbubqhdcwjpscmdqejsjnxbmncivviassxozweqmtr,YEQNFTNKEBKVCITDQVD,Mount Pearl,1045356.0,NJ,Feirdtuilxhux,m,Xkrwzlqeuiybhrnwjwhfivtpoequxqf,Bqngmpqyoqrl,United States of America
+WTB8940,1.0,J,1-548-292-1165,O,2.0,Jezzupl,WTBGDOOKGJHACGPYGDP,Salt Lake City,1593753.0,Alberta,Eozeayfqszhdnccluivoc,F,Fcxvfzpwlmfpoacms,Nzzbmzajwk,United States of America
+Gxo8947,2.0,,1-195-810-2427,,2.0,txhcjcmtvfxhhoygcckpmlxpkadufkjxeibslgudhzgblurjqrqavjghczs,Gxoyjotyjuvpb,Greensboro,38287.0,AR,RLKYNMTLCJTEAUR,,Nqxgfraounagyvdebmsybpefaetnrpqmtmndiqksgacvmxmacvmdtlmndvnk,KEQLKJUT,United States of America
+GCZ9056,1.0,h,1-527-338-9953,O,1.0,Ekxhegmiuqpnjtdrheimkgasuncwinbcwf,GCZDDEXMLCVOVJFGANDGIC,Nashua,3879319.0,MD,Hlcpsrsrfuj,,Lrworylpvgsoumvsmdauxeflatxdjzvseeghjtrbnkqmcagljh,BKBVLPJI,
+QMR9207,5.0,T,,R,1.0,Xamoxktrwbnngemfubfrwmgbxqdcidjdfjiljxiwmvnypow,QMRKVW,Bridgeport,3526238.0,MA,Hwikiasiunleribe,,Lwurmahnzytlddungywasfjvswcqwodnezjbpzgktzcbmt,ngwnhrzbm,United States of America
+shm9471,7.0,,1-205-906-8735,O,3.0,EPCSYSOPZXTAHMKAASXQKHUUHHWQWHKCGGQMTOWWUDNOWHMYASOLT,shmux,Burlington,2596913.0,CA,Qbvltihnnmdbuqsu,M,hlwrmniqomhffksgsaimapviuvphmobcxbnjtzfajlymxrsxmbqjuwrnflknaemfgakagcxh,Qajvkl,United States of America
+Dqw9666,2.0,,1-745-910-7040,O,3.0,Cmtfjhxazegmmbvtubsqtdpqhlcwiqriwedknfkylhrdmwqccjvlrfjgzrtaxqsdfjkpkbd,Dqwdkkbrbmhriaoseyofjwizj,Memphis,1898220.0,Alberta,Skdatqeay,,OSQTIJOMCMPBEEHJZNDSMLUQADPYJQOSVTOZEFTGILUDIQXZA,Qcdyewmngkxa,United States of America
+BVB9686,10.0,,1-663-637-9407,R,1.0,kjyohttautindomqpzboscfugxtwa,BVBNXVKY,Naperville,890225.0,AR,Zqaqqhfmex,,CBCWBFHKXPUAACGMFABK,Ukbhyktiegtx,Canada
+Gez9875,10.0,,1-889-695-7999,U,1.0,FHSSPBEAMOZMYZXKFGAWHVAHBUNJKCVBRROOUGGQESRUXSTXPVGJHOQIIRZHSRQCRK,Gezpnywjipqekgyjwywsny,Sacramento,3528220.0,GA,MTVROYES,,Huumfhewrwfvlxglorxrtrae,xneikr,United States of America
+Rss9903,9.0,u,1-794-707-6361,O,5.0,Kwmhgrueplwtswggppwcijknrsviujrjqmodgpzlhffcbxgjnklcipvxywtnnhcymkaa,Rssxdvqjuwloiadoyon,Salem,3478614.0,NM,Nvxywjxxptxv,,OYZKRWEQKMKPLKX,jnuadqdor,United States of America
+oti10146,8.0,x,1-435-007-2518,O,3.0,ZWNWATUTVLHVUSQGJXTIERFESLOVAKGWCZDSRLSZXXLNTKKNAJOTDOWZBQMIFZ,otisjxymjpvyofbcuewbtqdeaqi,Stamford,1163933.0,GA,Qtdumjboqkedszlexranse,,Gzrsngiqrlgkk,aihxzmukxuck,United States of America
+Jse10312,2.0,,,O,2.0,Iqifigghurncuwvuvagsuetdhkreifgzakdsqmgqwhoxbca,Jsevxpsak,Minneapolis,935104.0,AR,SKVZCUNMKQWTNMZQPAIKW,m,LSWBYXAGWEBB,XCGWBGUUZOZD,United States of America
+xjj10428,8.0,,1-150-785-4368,O,4.0,ayzufdkwhdfugknngbknbofapfhrslxguxquutnjvacsgpidabltzkgbhsooilcvuhvsuhwlrcqhvhb,xjjvcmrsdanruwimkzh,Jacksonville,67395.0,SD,ipdivmbwhkvdcsvjukbigmyfkfckoe,,PNJMEAXNEPTFKUAJPZYJEXRCJ,Vgwuef,Canada
+dbm10489,1.0,A,1-440-019-3506,O,5.0,Dmvvvkahdeptwdksnoxlxnczuyduuwxelmcqfe,dbmgrkxfqawypsfjfuvkehypb,Fullerton,1256546.0,WI,CFGNGBMDASKUJVXQP,,Rovyrdhrslxslassjxxijzavayoqflqqfuuxoqipxkvaeihutmhxqhoshehwflyeejnwmrvqhfpefqfy,Qdtzptupft,
+Jgq10660,10.0,u,1-934-194-6264,,5.0,IKCWGQAYORHMKJTETCBEKBOAN,Jgqyjatlx,Paterson,2766792.0,WY,MGGAXCQBOKL,f,Gadabxiymyvkeebwjnlqcjjwvejotfpeikbxfmpjnlelpqiytularznwkhyqije,ldpmqgtg,Canada
+hkj10847,0.0,j,,O,1.0,Xkaufgligad,hkjhrnevmbfd,Norfolk,414056.0,NE,Jmfmuynmblfotbwhx,,qtdgpshhufcgjbxvvtmlkjcqrdsfqinukouogujntfvfkggvtkuqlqobsejrzuwdo,ahstukmzpjed,United States of America
+INO10994,2.0,,1-223-074-7524,O,5.0,Ensagkucbfsewevwnjloyjsauwoggetcdacwqdwwefxicaeiddpsdpvb,INOBKKQUWOEBH,Oxnard,2632165.0,Prince Edward Island,Nyaqns,,ipofizkrojuhuxikswemcpqdz,Hgjnxamvejxw,United States of America
+mcy11101,10.0,e,1-561-520-7660,,3.0,PEKCKXAZEPLNTQBGWDXTQZOTVLEXYPMMRKMOKMMMULLDBMTVIPXRZJVMFZLFZ,mcykjafmdipsnhvmgihuhpmundpmj,Chula Vista,1024745.0,NJ,qkarligpsqn,,ZKVJZNTXKCZQUJNSGDIJIKUUKFPKCTHBH,Ihzfpkfsojcu,
+Gxc11452,1.0,f,1-412-175-8636,O,5.0,,Gxcfvwonbtzgdqrro,Garland,3765988.0,SC,Zvcrjrwumkwpnwfhln,R,Fxrjpfgqhtnlwyjpusiommtglqdxhxomfjofgyolshmtsrfxtpzeoksnlkqdicoezelqqksealj,GMCZAIC,Canada
+fjs11504,9.0,,1-803-159-6616,O,0.0,Qwasqnlgnjunwghmoywngppnavchzdvsqbngsjqhrrrtlytzeqdfovhmo,fjshrigbpcgxspbctlfceydha,Great Falls,29043.0,HI,Ocrjqbxcrzrhhmrotdrtgjzxcn,,Lbxijbxtcwrdzkonxerjmvsnmcndorhyjojrbr,GNEMMHDHAAF,United States of America
+Fxr11557,6.0,,1-997-853-8154,,3.0,fvxmytpaudkexkhjdhitqyeaqjlwrcvlykujpdwcafcjewjdl,Fxrvwebfanekd,Seattle,1293547.0,VT,Igjbgcrohfjykr,,Kuzofyrosjtkgduwxkikiwyvolwcgshcitzugdsfmmkjusino,dfhyhxh,United States of America
+blo11746,1.0,,1-861-294-4700,R,5.0,ufgmvmhczcpbliqyedcsiesuplgvpxtwectntiqxrwbtgcdsioqulopfxuiqpjkuwpmjhtwqb,bloqtqwcqlixlljeizvno,Fullerton,2969927.0,MN,Hujensnbrrsorvigkwugamev,,Xwtqglblvvdsmznaarpduevcnigfhmdngwtpgufddoqztkebippohk,NFDLLYQCMNVX,United States of America
+ifq11970,3.0,,1-137-518-3286,,5.0,lvcbocrxwslagtntjrnu,ifqjdwiaiak,Tucson,2574158.0,Prince Edward Island,Iqvewcs,F,Zhabyatagiltypqfmtssscovigsofwnjnejvndnzqivuvbpiwaxnayopcdzqixhvvxegz,Itecivsq,United States of America
+VIV12081,9.0,,1-353-448-9364,O,4.0,Hgyloizsgonuonxlnlldeibuposkhjrtjvasmxhfowcbexobg,VIVKBVWII,Little Rock,523385.0,NE,Qvicswzeiqtzqmlnbscjiygrjezqwy,m,IMMPAQ,uixreodgdjuj,
+Jak12150,10.0,C,1-026-287-3810,O,2.0,QWFYPVEXIAPXBDGTXAROGSSCVSYOTJRZTGYGRSFKQGCBFUXX,Jakckjdqlssxoxwlq,Wichita,3893183.0,NJ,misjd,,Jfwogktgwqajtbxclawp,Drtovw,United States of America
+ifd12164,3.0,l,1-767-162-5204,O,1.0,Yuptngmeracfowbohkliclnznwnhzilwsmcqbqsxh,ifdhtgxwoqzgkxfol,Oklahoma City,2954390.0,Saskatchewan,Ppehjjvhqjnw,,Hiqolqluiojobsqaroekwhexlcsaikjen,Ynsybjq,United States of America
+Geo12447,1.0,V,1-726-767-0135,O,5.0,Kitabcelnhpavuxvsawgfoldw,Geoejmiduhbguoqedstbhmobhats,Dayton,1396132.0,Ontario,Wwvslueanbtgzplsikqwuilipaitp,f,Xpttptxrsepgoidbbdsnovodmqsgfbauprjrrujxiytssnrqlaniiubnihynbdoewqvqwmvjgqrwflpy,nmskxkrfx,United States of America
+jnr12524,6.0,,,R,4.0,Qkeqguhiwwxorruewtindo,jnruituyoqbpnwztmmaaol,Denver,2391953.0,OH,LWSCBC,F,kgtanwgpuphxibewofnaxnsxxaoizhjkkreupjchkdqupvocbxektobiz,nayasqmlwh,United States of America
+Ssb12680,9.0,B,,O,3.0,Jibvfamtybgwiatzlpfwbvhrdajvcoqthfcuwnqrmecpzhhthp,Ssbipyhunvhwxrzxius,Hayward,13255.0,ID,JMOZWDTQXXMCOE,,XUDWEOOSWVBAMLOVCUR,Yfvrfh,United States of America
+WPV13218,0.0,M,1-272-432-5472,O,4.0,lmrkgxnmyqrxxybfwzavagtsafidxftanxyuwxismshaxuokhtyg,WPVFPQBCQEPOPFZ,Allentown,3275283.0,Alberta,Qrwvog,m,xvmyenuhkwodiasuxgsxhgvnclmvuyiyvfvegvtxcsvuqcaaujlsjhnr,Yptcomjeu,United States of America
+Hwc13239,2.0,I,1-929-532-9507,O,4.0,Bvcwxzzwt,Hwctvq,Fullerton,3380249.0,OH,Lcsquwnwwgzomqs,,Ohxaxaeybmikhrox,nuzjxsbm,United States of America
+FJJ13277,10.0,X,1-333-190-4296,O,1.0,Ounbuuw,FJJESBSIEQT,Anchorage,382858.0,VA,Tjbbkbjmlptxizyzqpimqcqadjwn,,LURSEVMDXREGMVCBAPNTNVCOSDTJOHCDJXVBZJZ,qnhkhbnconz,Canada
+Gjt13604,,u,1-674-621-9872,O,1.0,ROTAHDCCSCUWOTSVXTVPARXZKOMVVOMUBQS,Gjtbzpgsmgbd,Bridgeport,2144088.0,VT,Jbdjqzbpwxganavqurvaomgf,F,Biebodupglsxjxwsegvxsfhjiuu,Rbexc,United States of America
+Udv13682,6.0,,1-946-038-0776,R,5.0,,Udvndnvmbccyvdmnwbijwmniuw,Whitehorse,3946646.0,Newfoundland,skynflbasvqcqtgmiaqnqdwnxftbz,f,Kazzqivbzwndohczgedjkmesnlgriifgooimhgrdqz,Xphbrvlx,United States of America
+Qfj13902,0.0,f,1-603-145-1501,U,4.0,WPYKPDHGLPYTDXXFEHMBDNFGKHRDSXGBWKOGKIQMJLXFEWGGKQZROWN,Qfjjhqicfmbqplmjbrfuvxjnqvpnj,St. Louis,3564386.0,NC,Mwosxwsgefitizn,m,JKLDTDUYWIXQAVWNHLXOFFCFYJJFTEFHBVWJXHXYIK,JXGEIW,United States of America
+GUB14030,8.0,,1-974-947-9947,R,5.0,Mfsquwplgtboihzvqildnxdrfokbwigvygjlwqnc,GUBGVOOFSQDCVF,Pomona,32033.0,Prince Edward Island,Numeihpwex,,Kdmxatiwedgitjxmejsrslgoda,zydkcnmmr,United States of America
+BMM14135,2.0,,1-949-886-5971,O,0.0,SBSRJGCOKGGRRHGR,BMMYBJWDWBXWYZGFJJWUENF,Inglewood,2973996.0,NC,Vcmeaglvsoqhlosu,,vrclvglwpvyhddchebsnxniozrtrdlvcvvbtwqlk,MRKDWYJD,Canada
+zvv14213,3.0,Q,1-966-813-9095,O,1.0,Pxamrvixhcviyherozgulgnrojsvsligwxmghhvkvmrhezrknhmjfknittlqheibwskrukqdsat,zvvfkqvqwqnvowcwunjbtgdbz,Carrollton,2161260.0,WI,Fwoinzhgazorqcunfvfilhs,f,Ctkxjkvgvqgepyybklwrwylbesuumikyomnzswsfrbnqqeruwddsmkd,Twfobm,United States of America
+fer14259,3.0,,1-170-377-8645,,0.0,rgfcfagm,feraqkhqxsuquklmt,Escondido,3150667.0,AR,Tsdlnfpdveop,M,Hvxlrcnhrsmacsuxeqpiufsoovcbgfdmujkvqqjrdescylzrka,Mpjguuv,United States of America
+Mcg14524,1.0,,1-951-273-9355,U,5.0,Eyfmqaiotgnhcixfqvepoxpebiiquumsnsyjqsybrunftp,Mcgfanbig,Charleston,1784386.0,FL,Bmghqapqhrmravigrps,,TGRYLOSJQBHVKVUBDYEBVSFLUWDDTEG,FBFSELDT,United States of America
+txm14635,6.0,w,1-739-658-4605,O,5.0,Qttexg,txmsmyckoh,Phoenix,,TX,XWSQWKJGQYSBK,,Ytcpdeswtbmqmglfwsjmwhcgvzavqwxqjuefeamwfwwrjbmpwf,KOZBOG,United States of America

@@ -1,0 +1,101 @@
+assays_ss_d,assays_cnfdnc_scr,assays_vrnt_d,assays_ss_ctgr,assays_tss_d,assays_ss_sbclllr_frctn,assays_ss_tst_tp,assays_ss_rgnsm,assays_src_ss_d,assays_src_d,assays_rltnshp_tp,assays_ss_cll_tp,assays_td,assays_crtd_b,assays_chmbl_d,assays_cll_d,assays_b_frmt
+7680,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626137,,BAO_0000218
+7839,1,,,,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL621086,,BAO_0000218
+7924,1,,,948.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621208,,BAO_0000218
+7934,1,,,948.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621217,,BAO_0000218
+7996,1,,,1969.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL622472,,BAO_0000218
+8024,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL618265,,BAO_0000218
+8025,1,,,1969.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL618266,,BAO_0000218
+8027,1,,,1088.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL618450,,BAO_0000218
+8044,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL618466,,BAO_0000218
+8155,1,,,2107.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621263,,BAO_0000218
+8180,1,,,2106.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623220,,BAO_0000218
+8294,1,,,,,,Mus musculus,,1,N,,50594,Intermediate,CHEMBL623540,,BAO_0000218
+8308,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621874,,BAO_0000218
+8312,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621878,,BAO_0000218
+8368,1,,,160.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621488,,BAO_0000218
+8403,1,,,2037.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL620179,,BAO_0000218
+8544,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL620307,,BAO_0000218
+8558,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL620321,,BAO_0000218
+8578,1,,,178.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621194,,BAO_0000218
+8703,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627601,,BAO_0000218
+8781,1,,,955.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621449,,BAO_0000218
+8839,1,,,2048.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627078,,BAO_0000218
+8882,0,,,,Microsomes,,Sus scrofa,,1,U,,22224,Autocuration,CHEMBL625381,,BAO_0000251
+8891,0,,,2107.0,,,Sus scrofa,,1,U,,22224,Autocuration,CHEMBL623573,,BAO_0000221
+8968,1,,,948.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624110,,BAO_0000218
+9014,1,,,2107.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL621943,,BAO_0000218
+9048,0,,,,,In vivo,Oryctolagus cuniculus,,1,U,,22224,Autocuration,CHEMBL626571,,BAO_0000218
+9053,0,,,,,,Oryctolagus cuniculus,,1,U,,22224,Autocuration,CHEMBL626576,,BAO_0000218
+9721,1,,,2106.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL622347,,BAO_0000218
+9752,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627650,,BAO_0000218
+9780,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626253,,BAO_0000218
+9868,1,,,1969.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL622077,,BAO_0000218
+9951,1,,,2385.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624067,,BAO_0000218
+10142,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623160,,BAO_0000218
+10229,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626070,,BAO_0000218
+10238,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626745,,BAO_0000218
+10540,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623081,,BAO_0000218
+10555,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623094,,BAO_0000218
+10575,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625169,,BAO_0000218
+10604,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624661,,BAO_0000218
+10612,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625205,,BAO_0000218
+10694,1,,,2385.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624843,,BAO_0000218
+10752,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL620473,,BAO_0000218
+11067,1,,,2107.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624764,,BAO_0000218
+11080,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624777,,BAO_0000218
+11119,0,,,,,In vivo,,,1,U,,22224,Autocuration,CHEMBL624852,,BAO_0000218
+11237,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL875053,,BAO_0000218
+11272,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624816,,BAO_0000218
+11314,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL622260,,BAO_0000218
+11588,1,,,,,In vivo,Mus musculus,,1,N,,50594,Intermediate,CHEMBL632166,,BAO_0000218
+11606,1,,,,,In vivo,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL632184,,BAO_0000218
+11675,1,,,,,,Mustela putorius furo,,1,N,,50506,Intermediate,CHEMBL624551,,BAO_0000218
+11722,1,,,,,,Mus musculus,,1,N,,50594,Intermediate,CHEMBL627216,,BAO_0000218
+11736,1,,,2107.0,,,Mus musculus,,1,N,,50594,Intermediate,CHEMBL618805,,BAO_0000218
+11803,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL628060,,BAO_0000218
+11857,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL625803,,BAO_0000218
+12005,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623985,,BAO_0000218
+12236,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL631880,,BAO_0000218
+12248,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL630259,,BAO_0000218
+12270,1,,,2106.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL630151,,BAO_0000218
+12312,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL628180,,BAO_0000218
+12369,1,,,1969.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL622301,,BAO_0000218
+12417,1,,,178.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL629514,,BAO_0000218
+12430,1,,,178.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL631291,,BAO_0000218
+12476,1,,,178.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627246,,BAO_0000218
+12513,1,,,948.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL624872,,BAO_0000218
+12626,1,,,1969.0,,In vivo,Macaca fascicularis,,1,N,,100710,Intermediate,CHEMBL625970,,BAO_0000218
+12632,1,,,1969.0,,In vivo,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL625976,,BAO_0000218
+12640,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625425,,BAO_0000218
+12826,0,,,,,In vivo,Simiiformes,,1,U,,22224,Autocuration,CHEMBL625521,,BAO_0000218
+12847,1,,,,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL624026,,BAO_0000218
+12882,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL874415,,BAO_0000218
+12965,1,,,,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL629202,,BAO_0000218
+13027,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL631442,,BAO_0000019
+13029,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL627168,,BAO_0000019
+13089,1,,,2037.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL876654,,BAO_0000218
+13228,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623458,,BAO_0000218
+13246,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627397,,BAO_0000218
+13268,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625062,,BAO_0000218
+13451,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL626835,,BAO_0000019
+13491,0,,,1088.0,,,Simiiformes,,1,U,,22224,Autocuration,CHEMBL626277,,BAO_0000218
+13712,1,,,,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL631149,,BAO_0000218
+13772,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL623195,,BAO_0000218
+13851,1,,,10000000.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625879,,BAO_0000218
+13921,1,,,1088.0,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL627419,,BAO_0000218
+13971,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL627603,,BAO_0000218
+14020,1,,,,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL628361,,BAO_0000218
+14189,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL625985,,BAO_0000019
+14244,1,,,,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626503,,BAO_0000218
+14361,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL631159,,BAO_0000019
+14398,0,,,,,,,,1,U,,22224,Autocuration,CHEMBL630135,,BAO_0000019
+14445,1,,,,,,Mus musculus,,1,N,,50594,Intermediate,CHEMBL629763,,BAO_0000218
+14474,1,,,1088.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL875611,,BAO_0000218
+14495,1,,,1088.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL626681,,BAO_0000218
+14506,1,,,1088.0,,,Canis lupus familiaris,,1,N,,50588,Intermediate,CHEMBL624982,,BAO_0000218
+14534,1,,,10000000.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL628252,,BAO_0000218
+14704,1,,,1898.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL631913,,BAO_0000218
+14787,0,,,1898.0,,,,,1,U,,22224,Autocuration,CHEMBL631529,,BAO_0000019
+14805,1,,,948.0,,In vivo,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL625642,,BAO_0000218
+14888,1,,,1088.0,,,Rattus norvegicus,,1,N,,50597,Intermediate,CHEMBL628714,,BAO_0000218

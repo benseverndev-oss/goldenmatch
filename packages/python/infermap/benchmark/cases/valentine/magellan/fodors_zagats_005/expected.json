@@ -1,0 +1,34 @@
+{
+  "mappings": [
+    {
+      "source": "id",
+      "target": "id"
+    },
+    {
+      "source": "name",
+      "target": "name"
+    },
+    {
+      "source": "addr",
+      "target": "addr"
+    },
+    {
+      "source": "city",
+      "target": "city"
+    },
+    {
+      "source": "phone",
+      "target": "phone"
+    },
+    {
+      "source": "type",
+      "target": "type"
+    },
+    {
+      "source": "class",
+      "target": "class"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

@@ -1,0 +1,63 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "gncd"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "mrtlstts"
+    },
+    {
+      "source": "Age",
+      "target": "g"
+    },
+    {
+      "source": "Income",
+      "target": "ncm"
+    },
+    {
+      "source": "CreditRating",
+      "target": "crdtrtng"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "ddrssln1"
+    },
+    {
+      "source": "Phone",
+      "target": "phn"
+    },
+    {
+      "source": "Gender",
+      "target": "gndr"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "nmbrchldrn"
+    },
+    {
+      "source": "City",
+      "target": "ct"
+    },
+    {
+      "source": "Country",
+      "target": "cntr"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine2",
+    "FirstName",
+    "LastName",
+    "MiddleInitial",
+    "PostalCode"
+  ],
+  "unmapped_target": [
+    "mplr",
+    "nmbrcrdtcrds",
+    "nmbrcrs",
+    "ntwrth",
+    "stt",
+    "wnrrntflg"
+  ]
+}

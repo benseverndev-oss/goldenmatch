@@ -1,0 +1,48 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_AgeID"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "prospect_AddrL1"
+    },
+    {
+      "source": "City",
+      "target": "prospect_Ci"
+    },
+    {
+      "source": "NetWorth",
+      "target": "prospect_NeWor"
+    },
+    {
+      "source": "Country",
+      "target": "prospect_Coun"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_Em"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine2",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "MiddleInitial",
+    "Phone",
+    "PostalCode",
+    "State"
+  ],
+  "unmapped_target": [
+    "prospect_A",
+    "prospect_CrRat",
+    "prospect_Inc",
+    "prospect_MarSta",
+    "prospect_NuChil",
+    "prospect_NuCreCar",
+    "prospect_NumCa",
+    "prospect_OORF"
+  ]
+}

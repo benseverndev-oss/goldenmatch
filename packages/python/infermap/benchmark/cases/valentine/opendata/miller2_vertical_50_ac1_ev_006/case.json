@@ -1,0 +1,18 @@
+{
+  "category": "valentine",
+  "expected_difficulty": "medium",
+  "id": "valentine/opendata/miller2_vertical_50_ac1_ev_006",
+  "notes": "Valentine OpenData/Joinable/miller2_vertical_50_ac1_ev. Sampled to <= 100 rows (seed=42).",
+  "source": {
+    "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+    "license": "BSD-3-Clause",
+    "name": "valentine-opendata-miller2_vertical_50_ac1_ev",
+    "url": "https://github.com/delftdata/valentine"
+  },
+  "subcategory": "opendata",
+  "tags": [
+    "joinable",
+    "opendata",
+    "valentine"
+  ]
+}

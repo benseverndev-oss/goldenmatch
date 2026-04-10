@@ -1,0 +1,33 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "gncd"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "City",
+    "Country",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "MiddleInitial",
+    "PostalCode",
+    "State"
+  ],
+  "unmapped_target": [
+    "crdtrtng",
+    "g",
+    "mplr",
+    "mrtlstts",
+    "ncm",
+    "nmbrchldrn",
+    "nmbrcrdtcrds",
+    "nmbrcrs",
+    "ntwrth",
+    "phn",
+    "wnrrntflg"
+  ]
+}

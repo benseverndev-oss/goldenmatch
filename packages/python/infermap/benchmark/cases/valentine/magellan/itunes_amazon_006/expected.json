@@ -1,0 +1,42 @@
+{
+  "mappings": [
+    {
+      "source": "id",
+      "target": "id"
+    },
+    {
+      "source": "Song_Name",
+      "target": "Song_Name"
+    },
+    {
+      "source": "Artist_Name",
+      "target": "Artist_Name"
+    },
+    {
+      "source": "Album_Name",
+      "target": "Album_Name"
+    },
+    {
+      "source": "Genre",
+      "target": "Genre"
+    },
+    {
+      "source": "Price",
+      "target": "Price"
+    },
+    {
+      "source": "CopyRight",
+      "target": "CopyRight"
+    },
+    {
+      "source": "Time",
+      "target": "Time"
+    },
+    {
+      "source": "Released",
+      "target": "Released"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

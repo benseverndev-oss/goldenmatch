@@ -1,0 +1,9 @@
+{
+  "count": 82,
+  "per_subcategory": {
+    "chembl": 25,
+    "magellan": 7,
+    "opendata": 25,
+    "tpch": 25
+  }
+}

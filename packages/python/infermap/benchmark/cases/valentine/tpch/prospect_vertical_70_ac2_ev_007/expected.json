@@ -1,0 +1,75 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "AgID"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "OwORFl"
+    },
+    {
+      "source": "LastName",
+      "target": "LaNa"
+    },
+    {
+      "source": "City",
+      "target": "Ci"
+    },
+    {
+      "source": "CreditRating",
+      "target": "CreRa"
+    },
+    {
+      "source": "Income",
+      "target": "Inc"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "MiInit"
+    },
+    {
+      "source": "Employer",
+      "target": "Empl"
+    },
+    {
+      "source": "Phone",
+      "target": "Ph"
+    },
+    {
+      "source": "Age",
+      "target": "A"
+    },
+    {
+      "source": "Country",
+      "target": "Cou"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "AddLi1"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "NumChi"
+    },
+    {
+      "source": "PostalCode",
+      "target": "PosC"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "NumCreCar"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine2",
+    "FirstName",
+    "Gender"
+  ],
+  "unmapped_target": [
+    "MaSt",
+    "NeWor",
+    "NuC",
+    "Sta"
+  ]
+}
