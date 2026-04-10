@@ -4,9 +4,9 @@
   "title": "InferMap",
   "description": "Map messy columns to a known schema — 7 scorers, domain dictionaries, F1 0.84. Zero config.",
   "websiteUrl": "https://benzsevern.github.io/infermap/",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "repository": {
-    "url": "https://github.com/benzsevern/infermap.git",
+    "url": "https://github.com/benzsevern/infermap",
     "source": "github"
   },
   "packages": [
