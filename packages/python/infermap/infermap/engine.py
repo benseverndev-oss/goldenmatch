@@ -14,6 +14,7 @@ from infermap.assignment import optimal_assign
 from infermap.providers import extract_schema
 from infermap.scorers import default_scorers
 from infermap.scorers.alias import ALIASES, _ALIAS_LOOKUP
+from infermap.calibration import Calibrator
 from infermap.types import FieldMapping, MapResult, SchemaInfo
 
 logger = logging.getLogger("infermap")
@@ -32,11 +33,18 @@ class MapEngine:
         scorers=None,
         config_path: str | None = None,
         return_score_matrix: bool = False,
+        calibrator: Calibrator | None = None,
     ) -> None:
         self.min_confidence = min_confidence
         self.sample_size = sample_size
         self.scorers = scorers if scorers is not None else default_scorers()
         self.return_score_matrix = return_score_matrix
+        # Optional post-assignment confidence calibrator. Applied AFTER
+        # optimal_assign has picked mappings, so it never changes which
+        # mappings are chosen — only the confidence attached to each.
+        # `min_confidence` filtering happens during assignment on RAW scores;
+        # calibration is about user-facing trust, not assignment behavior.
+        self.calibrator = calibrator
         if config_path is not None:
             self._apply_config(config_path)
 
@@ -231,6 +239,13 @@ class MapEngine:
                     reasoning=reasoning,
                 )
             )
+
+        # 5b. Apply post-assignment calibration (opt-in).
+        if self.calibrator is not None and mappings:
+            raw = np.array([m.confidence for m in mappings], dtype=float)
+            cal = self.calibrator.transform(raw)
+            for m, c in zip(mappings, cal):
+                m.confidence = float(c)
 
         unmapped_source = [src_fields[i].name for i in range(M) if i not in assigned_src]
         unmapped_target = [tgt_fields[j].name for j in range(N) if j not in assigned_tgt]

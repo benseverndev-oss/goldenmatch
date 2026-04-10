@@ -40,10 +40,13 @@ def main(verbose: bool):
 @click.option("--self-test", "self_test", is_flag=True, help="Run against self-test corpus instead of full benchmark")
 @click.option("--assert-against", type=click.Path(exists=True), default=None,
               help="Expected scorecard file for self-test assertion")
-def run(output: str, seed: int, only: str | None, self_test: bool, assert_against: str | None):
+@click.option("--calibrator", "calibrator_path", type=click.Path(exists=True), default=None,
+              help="Path to a fitted calibrator JSON (see `infermap-bench calibrate`)")
+def run(output: str, seed: int, only: str | None, self_test: bool, assert_against: str | None, calibrator_path: str | None):
     """Run the benchmark and write a report.json."""
     import time
     import infermap
+    from infermap.calibration import load_calibrator
 
     root = SELF_TEST_ROOT if self_test else BENCHMARK_ROOT
     manifest_path = root / "manifest.json"
@@ -77,8 +80,12 @@ def run(output: str, seed: int, only: str | None, self_test: bool, assert_agains
         )
         raise SystemExit(2)
 
+    calibrator = load_calibrator(calibrator_path) if calibrator_path else None
+    if calibrator is not None:
+        click.echo(f"using calibrator: {calibrator_path} (kind={calibrator.kind})")
+
     t0 = time.perf_counter()
-    results = run_cases(cases, RunOptions())
+    results = run_cases(cases, RunOptions(calibrator=calibrator))
     duration = time.perf_counter() - t0
 
     report = build_report(
@@ -221,6 +228,43 @@ def report(report_path: str):
     click.echo(f"top-1:    {sc['top1']:.4f}")
     click.echo(f"MRR:      {sc['mrr']:.4f}")
     click.echo(f"ECE:      {sc['ece']:.4f}")
+
+
+# ---------------------------------------------------------------------------
+# calibrate — fit a confidence calibrator from labeled cases
+# ---------------------------------------------------------------------------
+
+
+@main.command("calibrate")
+@click.option("--only", default=None, help="Filter cases (e.g. category:valentine)")
+@click.option("--method", type=click.Choice(["identity", "isotonic", "platt"]),
+              default="isotonic")
+@click.option("--output", required=True, type=click.Path(), help="Where to write calibrator JSON")
+@click.option("--holdout", default=0.3, type=float, help="Holdout fraction for ECE reporting")
+@click.option("--seed", default=42, type=int, help="Train/holdout split seed")
+@click.option("--self-test", "self_test", is_flag=True, help="Use self-test corpus")
+def calibrate(only: str | None, method: str, output: str, holdout: float, seed: int,
+              self_test: bool):
+    """Fit a confidence calibrator and save it as JSON.
+
+    Runs the engine uncalibrated on the selected corpus, collects
+    (confidence, correct) pairs, splits into train/holdout, fits the
+    requested calibrator, and prints before/after ECE on both the holdout
+    split and the full dataset (for overfit inspection).
+    """
+    from .calibrate import run_calibrate_command
+
+    report = run_calibrate_command(
+        only=only, method=method, output=output,
+        holdout=holdout, seed=seed, self_test=self_test,
+    )
+    click.echo(f"method:    {report.method}")
+    click.echo(f"n_total:   {report.n_total}")
+    click.echo(f"n_train:   {report.n_train}")
+    click.echo(f"n_holdout: {report.n_holdout}")
+    click.echo(f"ECE holdout raw -> cal: {report.ece_holdout_raw:.4f} -> {report.ece_holdout_cal:.4f}")
+    click.echo(f"ECE all     raw -> cal: {report.ece_all_raw:.4f} -> {report.ece_all_cal:.4f}")
+    click.echo(f"wrote {output}")
 
 
 # ---------------------------------------------------------------------------

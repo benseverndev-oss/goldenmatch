@@ -26,6 +26,7 @@ class RunOptions:
     min_confidence: float = 0.3
     sample_size: int = 500
     failure_budget: float = 0.10
+    calibrator: object | None = None  # infermap.calibration.Calibrator | None
 
 
 class FailureBudgetExceededError(RuntimeError):
@@ -38,6 +39,7 @@ def _make_engine(options: RunOptions) -> MapEngine:
         min_confidence=options.min_confidence,
         sample_size=options.sample_size,
         return_score_matrix=True,
+        calibrator=options.calibrator,
     )
 
 
