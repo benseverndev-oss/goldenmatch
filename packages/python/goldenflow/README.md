@@ -2,6 +2,7 @@
 # GoldenFlow
 
 **Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.**
+Built by [Ben Severn](https://bensevern.dev).
 
 Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs.
 
@@ -695,5 +696,6 @@ Long-running operations (streaming, watch mode, scheduling) display a Rich progr
 ---
 
 **GitHub:** [github.com/benzsevern/goldenflow](https://github.com/benzsevern/goldenflow)
+**Author:** [Ben Severn](https://bensevern.dev)
 **License:** MIT
 **Python:** 3.11+
