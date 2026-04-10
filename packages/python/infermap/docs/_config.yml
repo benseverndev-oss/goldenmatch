@@ -13,7 +13,7 @@ aux_links:
 
 aux_links_new_tab: true
 nav_sort: case_insensitive
-footer_content: "infermap &mdash; MIT License"
+footer_content: "infermap &mdash; MIT License &mdash; Built by <a href=\"https://bensevern.dev\">Ben Severn</a>"
 search_enabled: true
 back_to_top: true
 back_to_top_text: Back to top

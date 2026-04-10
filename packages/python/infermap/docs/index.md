@@ -68,3 +68,4 @@ Each scorer returns a confidence score and human-readable reasoning. The engine 
 - [PyPI](https://pypi.org/project/infermap/)
 - [npm](https://www.npmjs.com/package/infermap)
 - [Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)
+- [Author -- Ben Severn](https://bensevern.dev)

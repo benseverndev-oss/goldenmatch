@@ -1,7 +1,8 @@
 <h1 align="center">infermap</h1>
 
 <p align="center"><strong>Inference-driven schema mapping engine.</strong><br>
-Map messy source columns to a known target schema — accurately, explainably, with zero config.</p>
+Map messy source columns to a known target schema — accurately, explainably, with zero config.<br>
+Built by <a href="https://bensevern.dev">Ben Severn</a>.</p>
 
 <p align="center">
   <a href="https://pypi.org/project/infermap/"><img src="https://img.shields.io/pypi/v/infermap?color=d4a017&label=PyPI" alt="PyPI"></a>
@@ -322,6 +323,10 @@ See [`infermap.yaml.example`](./infermap.yaml.example) for a full annotated refe
 - 📓 **[Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)** — Python notebook
 - 💬 **[GitHub Discussions](https://github.com/benzsevern/infermap/discussions)**
 - 🐛 **[Issue tracker](https://github.com/benzsevern/infermap/issues)**
+
+## Author
+
+[Ben Severn](https://bensevern.dev)
 
 ## License
 
