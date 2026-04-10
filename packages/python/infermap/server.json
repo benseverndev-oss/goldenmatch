@@ -4,7 +4,7 @@
   "title": "InferMap",
   "description": "Map messy columns to a known schema — 7 scorers, domain dictionaries, F1 0.84. Zero config.",
   "websiteUrl": "https://benzsevern.github.io/infermap/",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "repository": {
     "url": "https://github.com/benzsevern/infermap.git",
     "source": "github"
@@ -18,6 +18,12 @@
       "transport": {
         "type": "stdio"
       }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://infermap-mcp-production.up.railway.app/mcp/"
     }
   ]
 }
