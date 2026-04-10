@@ -1,9 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.benzsevern/infermap",
-  "title": "infermap",
-  "description": "Inference-driven schema mapping engine — map messy source columns to a known target schema",
-  "version": "0.3.1",
+  "title": "InferMap",
+  "description": "Map messy columns to a known schema — 7 scorers, domain dictionaries, F1 0.84. Zero config.",
+  "websiteUrl": "https://benzsevern.github.io/infermap/",
+  "version": "0.3.2",
   "repository": {
     "url": "https://github.com/benzsevern/infermap.git",
     "source": "github"
