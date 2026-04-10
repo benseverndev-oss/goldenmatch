@@ -1,0 +1,210 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_fsclr"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_prjctnmbr"
+    },
+    {
+      "source": "Status",
+      "target": "miller2_stts"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "miller2_mxmmcdcntrbtn(prjct-lvl)"
+    },
+    {
+      "source": "Branch ID",
+      "target": "miller2_brnchd"
+    },
+    {
+      "source": "Branch name",
+      "target": "miller2_brnchnm"
+    },
+    {
+      "source": "Division ID",
+      "target": "miller2_dvsnd"
+    },
+    {
+      "source": "Division name",
+      "target": "miller2_dvsnnm"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_sctnd"
+    },
+    {
+      "source": "Section name",
+      "target": "miller2_sctnnm"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_rgnlprgrm(mrkr)"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_fndcntrd"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "miller2_fndcntrnm"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_ntdmnt(prjct-lvlbdgt)"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "miller2_fstcprcnt"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "miller2_rtcprcnt"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "miller2_cfl(mrkr)"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "miller2_cdbsnssdlvrmdl(ld)"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_prgrmmngprcss(nw)"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "miller2_bltrld(ntrntnlmrkr)"
+    },
+    {
+      "source": "PBA type",
+      "target": "miller2_pbtp"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "miller2_nvrmntlsstnblt(mrkr)"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "miller2_clmtchngdpttn(mrkr)"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "miller2_clmtchngmtgtn(mrkr)"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "miller2_dsrtfctn(mrkr)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "miller2_prtcptrdvlpmntndgdgvrnnc"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "miller2_trddvlpmnt(mrkr)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_bdvrst(mrkr)"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "miller2_rbnsss(mrkr)"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "miller2_chldrnsss(mrkr)"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "miller2_thsss(mrkr)"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "miller2_ndgnssss(mrkr)"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "miller2_dsbltsss(mrkr)"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "miller2_ctstlfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_knwldgfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "miller2_gndrqlt(mrkr)"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "miller2_rgnstnd"
+    },
+    {
+      "source": "Organisation name",
+      "target": "miller2_rgnstnnm"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_rgnstntp"
+    },
+    {
+      "source": "Organisation class",
+      "target": "miller2_rgnstnclss"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_rgnstnsb-clss"
+    },
+    {
+      "source": "Continent ID",
+      "target": "miller2_cntnntd"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_cntnntnm"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "miller2_prjctbrwsrcntrd"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "miller2_cntrrgnd"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "miller2_cntrrgnnm"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "miller2_cntrrgnprcnt"
+    },
+    {
+      "source": "Sector ID",
+      "target": "miller2_sctrd"
+    },
+    {
+      "source": "Sector name",
+      "target": "miller2_sctrnm"
+    },
+    {
+      "source": "Sector percent",
+      "target": "miller2_sctrprcnt"
+    },
+    {
+      "source": "Amount spent",
+      "target": "miller2_mntspnt"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

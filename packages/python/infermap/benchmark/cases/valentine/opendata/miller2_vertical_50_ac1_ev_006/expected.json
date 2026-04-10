@@ -1,0 +1,134 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FiscalYear"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_ProgrammingProcess(new)"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_SectionID"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "miller2_EnviromentalSustainability(marker)"
+    },
+    {
+      "source": "Sector name",
+      "target": "miller2_SectorName"
+    },
+    {
+      "source": "Status",
+      "target": "miller2_Status"
+    },
+    {
+      "source": "Branch ID",
+      "target": "miller2_BranchID"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_ContinentName"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "miller2_ChildrenIssues(marker)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "miller2_ParticipatoryDevelopmentAndGoodGovernance"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "miller2_FSTCPercent"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "miller2_UrbanIssues(marker)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_KnowledgeForDevelopment(marker)"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_OrganisationSub-class"
+    },
+    {
+      "source": "Organisation class",
+      "target": "miller2_OrganisationClass"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "miller2_DisabilityIssues(marker)"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "miller2_BilateralAid(internationalMarker)"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "miller2_CIDABusinessDeliveryModel(old)"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "miller2_ClimateChangeAdaptation(marker)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_Biodiversity(marker)"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_OrganisationType"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "miller2_GenderEquality(marker)"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_UntiedAmount(Project-levelBudget)"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "miller2_CountryRegionID"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_FundCentreID"
+    }
+  ],
+  "unmapped_source": [
+    "Branch name",
+    "CFLI (marker)",
+    "Climate change mitigation (marker)",
+    "Desertification (marker)",
+    "Division ID",
+    "Division name",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Project number",
+    "Regional program (marker)",
+    "Section name"
+  ],
+  "unmapped_target": [
+    "miller2_AmountSpent",
+    "miller2_ContinentID",
+    "miller2_CountryRegionName",
+    "miller2_CountryRegionPercent",
+    "miller2_ICTAsAToolForDevelopment(marker)",
+    "miller2_IndigenousIssues(marker)",
+    "miller2_OrganisationID",
+    "miller2_OrganisationName",
+    "miller2_ProjectBrowserCountryID",
+    "miller2_SectorID",
+    "miller2_SectorPercent",
+    "miller2_TradeDevelopment(marker)",
+    "miller2_YouthIssues(marker)"
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_fsclr"
+    },
+    {
+      "source": "Status",
+      "target": "miller2_stts"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "miller2_clmtchngdpttn(mrkr)"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_rgnlprgrm(mrkr)"
+    },
+    {
+      "source": "Division ID",
+      "target": "miller2_dvsnd"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "miller2_prtcptrdvlpmntndgdgvrnnc"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "miller2_nvrmntlsstnblt(mrkr)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_bdvrst(mrkr)"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_cntnntnm"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "miller2_clmtchngmtgtn(mrkr)"
+    },
+    {
+      "source": "Branch name",
+      "target": "miller2_brnchnm"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_rgnstnsb-clss"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "miller2_chldrnsss(mrkr)"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "miller2_trddvlpmnt(mrkr)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_knwldgfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "miller2_mxmmcdcntrbtn(prjct-lvl)"
+    },
+    {
+      "source": "PBA type",
+      "target": "miller2_pbtp"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "miller2_fndcntrnm"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_prjctnmbr"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "miller2_cdbsnssdlvrmdl(ld)"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "miller2_cfl(mrkr)"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_prgrmmngprcss(nw)"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_ntdmnt(prjct-lvlbdgt)"
+    },
+    {
+      "source": "Sector ID",
+      "target": "miller2_sctrd"
+    },
+    {
+      "source": "Branch ID",
+      "target": "miller2_brnchd"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Desertification (marker)",
+    "Disability issues (marker)",
+    "Division name",
+    "FSTC percent",
+    "Fund centre ID",
+    "ICT as a tool for development (marker)",
+    "IRTC percent",
+    "Indigenous issues (marker)",
+    "Section ID",
+    "Section name",
+    "Urban issues (marker)",
+    "Youth issues (marker)"
+  ],
+  "unmapped_target": [
+    "miller2_cntnntd",
+    "miller2_cntrrgnd",
+    "miller2_cntrrgnnm",
+    "miller2_cntrrgnprcnt",
+    "miller2_gndrqlt(mrkr)",
+    "miller2_mntspnt",
+    "miller2_prjctbrwsrcntrd",
+    "miller2_rgnstnclss",
+    "miller2_rgnstnd",
+    "miller2_rgnstnnm",
+    "miller2_rgnstntp",
+    "miller2_sctrnm",
+    "miller2_sctrprcnt"
+  ]
+}

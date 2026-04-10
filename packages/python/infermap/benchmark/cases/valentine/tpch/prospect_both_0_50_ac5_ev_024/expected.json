@@ -1,0 +1,63 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_gncd"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "prospect_nmbrchldrn"
+    },
+    {
+      "source": "NumberCars",
+      "target": "prospect_nmbrcrs"
+    },
+    {
+      "source": "City",
+      "target": "prospect_ct"
+    },
+    {
+      "source": "CreditRating",
+      "target": "prospect_crdtrtng"
+    },
+    {
+      "source": "NetWorth",
+      "target": "prospect_ntwrth"
+    },
+    {
+      "source": "Gender",
+      "target": "prospect_gndr"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "prospect_wnrrntflg"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "prospect_nmbrcrdtcrds"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_pstlcd"
+    },
+    {
+      "source": "FirstName",
+      "target": "prospect_frstnm"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "LastName",
+    "MiddleInitial",
+    "State"
+  ],
+  "unmapped_target": [
+    "prospect_cntr",
+    "prospect_g",
+    "prospect_mplr",
+    "prospect_mrtlstts",
+    "prospect_ncm",
+    "prospect_phn"
+  ]
+}

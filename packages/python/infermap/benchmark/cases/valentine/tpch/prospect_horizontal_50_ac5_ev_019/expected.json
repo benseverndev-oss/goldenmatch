@@ -1,0 +1,94 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_gncd"
+    },
+    {
+      "source": "LastName",
+      "target": "prospect_lstnm"
+    },
+    {
+      "source": "FirstName",
+      "target": "prospect_frstnm"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "prospect_mddlntl"
+    },
+    {
+      "source": "Gender",
+      "target": "prospect_gndr"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "prospect_ddrssln1"
+    },
+    {
+      "source": "AddressLine2",
+      "target": "prospect_ddrssln2"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_pstlcd"
+    },
+    {
+      "source": "City",
+      "target": "prospect_ct"
+    },
+    {
+      "source": "State",
+      "target": "prospect_stt"
+    },
+    {
+      "source": "Country",
+      "target": "prospect_cntr"
+    },
+    {
+      "source": "Phone",
+      "target": "prospect_phn"
+    },
+    {
+      "source": "Income",
+      "target": "prospect_ncm"
+    },
+    {
+      "source": "NumberCars",
+      "target": "prospect_nmbrcrs"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "prospect_nmbrchldrn"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "prospect_mrtlstts"
+    },
+    {
+      "source": "Age",
+      "target": "prospect_g"
+    },
+    {
+      "source": "CreditRating",
+      "target": "prospect_crdtrtng"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "prospect_wnrrntflg"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_mplr"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "prospect_nmbrcrdtcrds"
+    },
+    {
+      "source": "NetWorth",
+      "target": "prospect_ntwrth"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

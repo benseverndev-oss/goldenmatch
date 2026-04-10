@@ -1,0 +1,64 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "ss_d"
+    },
+    {
+      "source": "chembl_id",
+      "target": "chmbl_d"
+    },
+    {
+      "source": "curated_by",
+      "target": "crtd_b"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "ss_tss"
+    },
+    {
+      "source": "tissue_id",
+      "target": "tss_d"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "ss_sbclllr_frctn"
+    },
+    {
+      "source": "doc_id",
+      "target": "dc_d"
+    },
+    {
+      "source": "cell_id",
+      "target": "cll_d"
+    },
+    {
+      "source": "bao_format",
+      "target": "b_frmt"
+    },
+    {
+      "source": "variant_id",
+      "target": "vrnt_d"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "ss_cll_tp"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_type",
+    "description"
+  ],
+  "unmapped_target": [
+    "cnfdnc_scr",
+    "rltnshp_tp",
+    "src_d",
+    "src_ss_d",
+    "ss_strn",
+    "td"
+  ]
+}

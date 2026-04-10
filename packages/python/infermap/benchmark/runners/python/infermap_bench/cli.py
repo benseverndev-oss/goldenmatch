@@ -104,8 +104,66 @@ def run(output: str, seed: int, only: str | None, self_test: bool, assert_agains
 
 @main.command("rebuild-manifest")
 def rebuild_manifest():
-    """Scan cases/ and rewrite manifest.json from each case.json. (Stub until Phase 11.)"""
-    click.echo("rebuild-manifest: stub — will be implemented when the real corpus lands")
+    """Scan cases/ and rewrite manifest.json from each case.json.
+
+    Walks benchmark/cases/<category>/**/case.json (excluding the synthetic
+    directory, which is generated from generated.json), loads each case's
+    schema via FileProvider to compute field_counts, and writes a fresh
+    manifest.json sorted by case id for deterministic diffs.
+    """
+    import datetime as _dt
+
+    from infermap.providers.file import FileProvider
+
+    cases_root = BENCHMARK_ROOT / "cases"
+    provider = FileProvider()
+    entries: list[dict] = []
+    for case_json_path in sorted(cases_root.rglob("case.json")):
+        case_dir = case_json_path.parent
+        # Skip synthetic generator output (single flat file, no case.json).
+        if "synthetic" in case_dir.relative_to(cases_root).parts[:1]:
+            continue
+        try:
+            case = json.loads(case_json_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            click.echo(f"skip {case_json_path}: invalid JSON — {exc}", err=True)
+            continue
+
+        src_csv = case_dir / "source.csv"
+        tgt_csv = case_dir / "target.csv"
+        if not (src_csv.exists() and tgt_csv.exists()):
+            click.echo(f"skip {case_json_path}: missing source/target CSV", err=True)
+            continue
+
+        src_schema = provider.extract(src_csv)
+        tgt_schema = provider.extract(tgt_csv)
+
+        rel_path = case_dir.relative_to(BENCHMARK_ROOT).as_posix()
+        entries.append({
+            "id": case["id"],
+            "path": rel_path,
+            "category": case["category"],
+            "subcategory": case["subcategory"],
+            "source": case["source"],
+            "tags": list(case.get("tags", [])),
+            "expected_difficulty": case["expected_difficulty"],
+            "field_counts": {
+                "source": len(src_schema.fields),
+                "target": len(tgt_schema.fields),
+            },
+        })
+
+    entries.sort(key=lambda e: e["id"])
+    manifest = {
+        "version": MANIFEST_VERSION,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "cases": entries,
+    }
+    manifest_path = BENCHMARK_ROOT / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    click.echo(f"wrote {manifest_path} ({len(entries)} cases)")
 
 
 # ---------------------------------------------------------------------------

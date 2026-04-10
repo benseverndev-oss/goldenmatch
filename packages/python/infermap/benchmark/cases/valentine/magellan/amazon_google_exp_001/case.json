@@ -1,0 +1,18 @@
+{
+  "category": "valentine",
+  "expected_difficulty": "easy",
+  "id": "valentine/magellan/amazon_google_exp_001",
+  "notes": "Valentine Magellan/pair/amazon_google_exp. Sampled to <= 100 rows (seed=42).",
+  "source": {
+    "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+    "license": "BSD-3-Clause",
+    "name": "valentine-magellan-amazon_google_exp",
+    "url": "https://github.com/delftdata/valentine"
+  },
+  "subcategory": "magellan",
+  "tags": [
+    "magellan",
+    "pair",
+    "valentine"
+  ]
+}

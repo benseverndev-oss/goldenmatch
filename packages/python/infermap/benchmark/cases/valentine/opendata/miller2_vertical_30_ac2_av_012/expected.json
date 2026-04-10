@@ -1,0 +1,104 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "FiYe"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "Biod"
+    },
+    {
+      "source": "Continent ID",
+      "target": "ContID"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "ParticDevAnGoGov"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "RegiProg"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "FCeNa"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "IndIss"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "CouRegPe"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "Deserti"
+    },
+    {
+      "source": "Amount spent",
+      "target": "AmoSp"
+    },
+    {
+      "source": "Continent name",
+      "target": "ContiN"
+    },
+    {
+      "source": "Branch name",
+      "target": "BraNa"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "ProProc"
+    },
+    {
+      "source": "Organisation class",
+      "target": "OrganiCla"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "KnowFDev"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Division ID",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Fund centre ID",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Project number",
+    "Section ID",
+    "Section name",
+    "Status",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "ChiIs",
+    "ClimChaMiti",
+    "CoRegNa",
+    "CouRegID",
+    "DisIss",
+    "GenEq",
+    "ICTAAToFDevel",
+    "OrgID",
+    "OrgT",
+    "OrganN",
+    "OrganiS",
+    "ProjBroCoID",
+    "SeID",
+    "SeNa",
+    "SePer",
+    "TraDevel",
+    "UrbIs",
+    "YouIs"
+  ]
+}

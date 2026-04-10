@@ -1,0 +1,134 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "fsclr"
+    },
+    {
+      "source": "Sector name",
+      "target": "sctrnm"
+    },
+    {
+      "source": "Continent ID",
+      "target": "cntnntd"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "rtcprcnt"
+    },
+    {
+      "source": "Sector percent",
+      "target": "sctrprcnt"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "bltrld(ntrntnlmrkr)"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "cntrrgnd"
+    },
+    {
+      "source": "Organisation class",
+      "target": "rgnstnclss"
+    },
+    {
+      "source": "Division ID",
+      "target": "dvsnd"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "prjctbrwsrcntrd"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "prgrmmngprcss(nw)"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "chldrnsss(mrkr)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "knwldgfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "prtcptrdvlpmntndgdgvrnnc"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "fndcntrnm"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "fndcntrd"
+    },
+    {
+      "source": "Branch ID",
+      "target": "brnchd"
+    },
+    {
+      "source": "Project number",
+      "target": "prjctnmbr"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "dsbltsss(mrkr)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "bdvrst(mrkr)"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "cfl(mrkr)"
+    },
+    {
+      "source": "Division name",
+      "target": "dvsnnm"
+    },
+    {
+      "source": "Sector ID",
+      "target": "sctrd"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "dsrtfctn(mrkr)"
+    },
+    {
+      "source": "Organisation name",
+      "target": "rgnstnnm"
+    }
+  ],
+  "unmapped_source": [
+    "Branch name",
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Regional program (marker)",
+    "Section ID",
+    "Section name",
+    "Status",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "cntnntnm",
+    "cntrrgnnm",
+    "cntrrgnprcnt",
+    "ctstlfrdvlpmnt(mrkr)",
+    "gndrqlt(mrkr)",
+    "mntspnt",
+    "ndgnssss(mrkr)",
+    "rbnsss(mrkr)",
+    "rgnstnd",
+    "rgnstnsb-clss",
+    "rgnstntp",
+    "thsss(mrkr)",
+    "trddvlpmnt(mrkr)"
+  ]
+}

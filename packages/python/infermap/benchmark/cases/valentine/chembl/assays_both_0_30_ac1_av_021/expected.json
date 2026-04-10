@@ -1,0 +1,49 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_assay_id"
+    },
+    {
+      "source": "cell_id",
+      "target": "assays_cell_id"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_curated_by"
+    },
+    {
+      "source": "assay_category",
+      "target": "assays_assay_category"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_variant_id"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "assays_assay_tissue"
+    }
+  ],
+  "unmapped_source": [
+    "assay_cell_type",
+    "assay_organism",
+    "assay_strain",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_assay_subcellular_fraction",
+    "assays_bao_format",
+    "assays_chembl_id",
+    "assays_confidence_score",
+    "assays_relationship_type",
+    "assays_src_assay_id",
+    "assays_src_id",
+    "assays_tid",
+    "assays_tissue_id"
+  ]
+}

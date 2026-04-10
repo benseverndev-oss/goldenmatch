@@ -1,0 +1,62 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "fsclr"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Branch name",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Desertification (marker)",
+    "Division ID",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Fund centre ID",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Participatory development and good governance",
+    "Programming process (new)",
+    "Project number",
+    "Regional program (marker)",
+    "Section ID",
+    "Section name",
+    "Status",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "bdvrst(mrkr)",
+    "chldrnsss(mrkr)",
+    "cntnntd",
+    "cntnntnm",
+    "cntrrgnd",
+    "cntrrgnnm",
+    "cntrrgnprcnt",
+    "ctstlfrdvlpmnt(mrkr)",
+    "dsbltsss(mrkr)",
+    "gndrqlt(mrkr)",
+    "knwldgfrdvlpmnt(mrkr)",
+    "mntspnt",
+    "ndgnssss(mrkr)",
+    "prjctbrwsrcntrd",
+    "rbnsss(mrkr)",
+    "rgnstnclss",
+    "rgnstnd",
+    "rgnstnnm",
+    "rgnstnsb-clss",
+    "rgnstntp",
+    "sctrd",
+    "sctrnm",
+    "sctrprcnt",
+    "thsss(mrkr)",
+    "trddvlpmnt(mrkr)"
+  ]
+}

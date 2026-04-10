@@ -1,0 +1,26 @@
+{
+  "mappings": [
+    {
+      "source": "id",
+      "target": "id"
+    },
+    {
+      "source": "title",
+      "target": "title"
+    },
+    {
+      "source": "authors",
+      "target": "authors"
+    },
+    {
+      "source": "venue",
+      "target": "venue"
+    },
+    {
+      "source": "year",
+      "target": "year"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

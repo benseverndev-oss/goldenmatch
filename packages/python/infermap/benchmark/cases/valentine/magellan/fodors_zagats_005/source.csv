@@ -1,0 +1,101 @@
+id,name,addr,city,phone,type,class
+5,` chinois on main ',' 2709 main st. ',` santa monica ',310/392 -9025,french,5
+21,valentino,' 3115 pico blvd. ',` santa monica ',310/829 -4313,italian,21
+22,` yujean kang \ 's gourmet chinese cuisine ','67 n. raymond ave. ',` los angeles ',818/585 -0855,asian,22
+24,aquavit,'13 w. 54th st. ',` new york ',212/307 -7311,continental,24
+26,` cafe lalo ',' 201 w. 83rd st. ',` new york ',212/496 -6031,` coffee bar ',26
+29,` carnegie deli ',' 854 7th ave. between 54th and 55th sts . ',` new york ',212/757 -2245,delicatessen,29
+31,daniel,'20 e. 76th st. ',` new york ',212/288 -0033,french,31
+34,` four seasons grill room ','99 e. 52nd st. ',` new york ',212/754 -9494,american,34
+35,` gotham bar & grill ','12 e. 12th st. ',` new york ',212/620 -4020,american,35
+39,` la caravelle ','33 w. 55th st. ',` new york ',212/586 -4252,french,39
+46,march,' 405 e. 58th st. ',` new york ',212/754 -6272,american,46
+48,` mi cocina ','57 jane st. off hudson st. ',` new york ',212/627 -8273,mexican,48
+50,oceana,'55 e. 54th st. ',` new york ',212/759 -5941,seafood,50
+51,` park avenue cafe ',' 100 e. 63rd st. ',` new york ',212/644 -1900,american,51
+62,` smith & wollensky ',' 201 e. 49th st. ',` new york ',212/753 -1530,american,62
+78,` buckhead diner ',' 3073 piedmont road ',atlanta,404/262 -3336,american,78
+82,` hedgerose heights inn ',' 490 e. paces ferry rd. ',atlanta,404/233 -7673,international,82
+86,` mary mac \ 's tea room ',' 224 ponce de leon ave. ',atlanta,404/876 -1800,southern,86
+88,` pano \ 's and paul \ 's ',' 1232 w. paces ferry rd. ',atlanta,404/261 -3662,international,88
+94,` alain rondelli ',' 126 clement st. ',` san francisco ',415/387 -0408,french,94
+97,` cafe claude ',' 7 claude la . ',` san francisco ',415/392 -3505,french,97
+103,` khan toke thai house ',' 5937 geary blvd. ',` san francisco ',415/668 -6654,asian,103
+106,` masa \ 's ',' 648 bush st. ',` san francisco ',415/989 -7154,french,106
+109,postrio,' 545 post st. ',` san francisco ',415/776 -7825,american,109
+113,` il nido ',' 251 e. 53rd st. ',` new york ',212/753 -8450,italian,267
+115,` adriano \ 's ristorante ',' 2930 beverly glen circle ',` los angeles ',310/475 -9807,italian,112
+118,` bistro garden ',' 176 n. canon dr. ',` los angeles ',310/550 -3900,californian,115
+124,` california pizza kitchen ',' 207 s. beverly dr. ',` los angeles ',310/275 -1101,californian,121
+134,` dynasty room ',' 930 hilgard ave. ',` los angeles ',310/208 -8765,continental,131
+135,eclipse,' 8800 melrose ave. ',` los angeles ',310/724 -5959,californian,132
+137,` el cholo ',' 1121 s. western ave. ',` los angeles ',213/734 -2773,mexican,134
+141,` harry \ 's bar & american grill ',' 2020 ave. of the stars ',` los angeles ',310/277 -2333,italian,138
+147,` le colonial ',' 8783 beverly blvd. ',` los angeles ',310/289 -0660,asian,144
+149,` louise \ 's trattoria ',' 4500 los feliz blvd. ',` los angeles ',213/667 -0777,italian,146
+162,remi,' 3rd st. promenade ',` santa monica ',310/393 -6545,italian,159
+171,` tra di noi ',' 3835 cross creek rd. ',` los angeles ',310/456 -0169,italian,168
+173,vida,' 1930 north hillhurst ave. ',` los feliz ',213/660 -4446,american,170
+175,'20 mott ','20 mott st. between bowery and pell st. ',` new york ',212/964 -0380,asian,172
+180,alamo,' 304 e. 48th st. ',` new york ',' 212 / 759-0590 ',mexican,177
+182,` ambassador grill ',' 1 united nations plaza at 44th st. ',` new york ',212/702 -5014,american,179
+184,` anche vivolo ',' 222 e. 58th st. between 2nd and 3rd aves . ',` new york ',212/308 -0112,italian,181
+185,arizona,' 206 206 e. 60th st. ',` new york ',212/838 -0440,american,182
+188,` bar anise ',' 1022 3rd ave. between 60th and 61st sts . ',` new york ',212/355 -1112,mediterranean,185
+192,` billy \ 's ',' 948 1st ave. between 52nd and 53rd sts . ',` new york ',212/753 -1870,american,189
+193,` boca chica ','13 1st ave. near 1st st. ',` new york ',212/473 -0108,` latin american ',190
+202,` cafe botanica ',' 160 central park s ',` new york ',212/484 -5120,french,200
+215,` capsouto freres ',' 451 washington st. near watts st. ',` new york ',212/966 -4900,french,213
+222,cite,' 120 w. 51st st. ',` new york ',212/956 -7100,french,220
+224,` columbus bakery ',' 53rd sts . ',` new york ',212/421 -0334,` coffee bar ',222
+227,` da nico ',' 164 mulberry st. between grand and broome sts . ',` new york ',212/343 -1212,italian,225
+231,docks,' 633 3rd ave. at 40th st. ',` new york ',' 212 / 986-8080 ',seafood,229
+234,'em ily \ 's ',' 1325 5th ave. at 111th st. ',` new york ',212/996 -1212,american,232
+235,'em pire korea ',' 6 e. 32nd st. ',` new york ',212/725 -1333,asian,233
+237,` evergreen cafe ',' 1288 1st ave. at 69th st. ',` new york ',212/744 -3266,asian,235
+249,follonico,' 6 w. 24th st. ',` new york ',212/691 -6359,italian,247
+272,ipanema,'13 w. 46th st. ',` new york ',212/730 -5848,` latin american ',271
+273,` jean lafitte ','68 w. 58th st. ',` new york ',212/751 -2323,french,272
+280,` l \ ` auberge du midi ',' 310 w. 4th st. between w. 12th and bank sts . ',` new york ',212/242 -4705,french,279
+281,` l \ ` udo ',' 432 lafayette st. near astor pl . ',` new york ',212/388 -0978,french,280
+283,` lanza restaurant ',' 168 1st ave. between 10th and 11th sts . ',` new york ',212/674 -7014,italian,282
+294,` les halles ',' 411 park ave. s between 28th and 29th sts . ',` new york ',212/679 -4111,french,293
+308,` milan cafe and coffee bar ',' 120 w. 23rd st. ',` new york ',212/807 -1801,` coffee bar ',307
+310,montien,' 1134 1st ave. between 62nd and 63rd sts . ',` new york ',212/421 -4433,asian,309
+315,newsbar,' 2 w. 19th st. ',` new york ',212/255 -3996,` coffee bar ',314
+320,pacifica,' 138 lafayette st. between canal and howard sts . ',` new york ',212/941 -4168,asian,319
+324,patria,' 250 park ave. s at 20th st. ',` new york ',212/777 -6211,` latin american ',323
+326,` pen & pencil ',' 205 e. 45th st. ',` new york ',212/682 -8660,american,325
+330,pomaire,' 371 w. 46th st. off 9th ave. ',` new york ',' 212 / 956-3055 ',` latin american ',329
+337,` rosa mexicano ',' 1063 1st ave. at 58th st. ',` new york ',212/753 -7407,mexican,337
+342,` san pietro ','18 e. 54th st. ',` new york ',212/753 -9015,italian,342
+348,sfuzzi,'58 w. 65th st. ',` new york ',212/873 -3700,american,348
+351,` spring street natural restaurant & bar ','62 spring st. at lafayette st. ',` new york ',212/966 -0290,american,351
+356,` tang pavillion ','65 w. 55th st. ',` new york ',212/956 -6888,asian,356
+358,` teresa \ 's ',' 103 1st ave. between 6th and 7th sts . ',` new york ',212/228 -0604,` east european ',358
+359,terrace,' 400 w. 119th st. between amsterdam and morningside aves . ',` new york ',212/666 -9490,continental,359
+372,` vince & eddie \ 's ','70 w. 68th st. ',` new york ',212/721 -0068,american,372
+389,cassis,' 3300 peachtree rd. . grand hyatt ',atlanta,404/365 -8100,mediterranean,389
+394,` dante \ 's down the hatch ',` underground underground mall underground atlanta ',atlanta,404/577 -1800,continental,394
+412,pricci,' 500 pharr rd. ',atlanta,404/237 -2941,italian,412
+423,` antonio \ 's ',' 3700 w. flamingo ',` las vegas ',702/252 -7737,italian,423
+426,` battista \ 's hole in the wall ',' 4041 audrie st. at flamingo rd. ',` las vegas ',702/732 -1424,italian,426
+428,` binion \ 's coffee shop ',' 128 fremont st. ',` las vegas ',702/382 -1600,` coffee shops/diners ',428
+431,` bugsy \ 's diner ',' 3555 las vegas blvd. s ',` las vegas ',702/733 -3111,` coffee shops/diners ',431
+432,` cafe michelle ',' 1350 e. flamingo rd. ',` las vegas ',702/735 -8686,american,432
+436,` center stage plaza hotel ',' 1 main st. ',` las vegas ',702/386 -2512,american,436
+440,` golden nugget hotel ',' 129 e. fremont st. ',` las vegas ',702/385 -7111,buffets,440
+442,` lillie langtry \ 's ',' 129 e. fremont st. ',` las vegas ',702/385 -7111,asian,442
+452,` yolie \ 's ',' 3900 paradise rd. ',` las vegas ',702/794 -0700,` steak houses ',452
+454,acquarello,' 1722 sacramento st. ',` san francisco ',415/567 -5432,italian,454
+457,` bistro roti ',' 155 steuart st. ',` san francisco ',415/495 -6500,french,457
+458,bix,'56 gold st. ',` san francisco ',415/433 -6300,american,458
+460,` buca giovanni ',' 800 greenwich st. ',` san francisco ',415/776 -7766,italian,460
+471,` garden court ',` market and new montgomery sts . ',` san francisco ',415/546 -5011,` old san francisco ',471
+483,` il fornaio levi \ 's plaza ',' 1265 battery st. ',` san francisco ',415/986 -0100,italian,483
+489,` kyo-ya . sheraton palace hotel ',' 2 new montgomery st. at market st. ',` san francisco ',415/546 -5000,asian,489
+498,` moose \ 's ',' 1652 stockton st. ',` san francisco ',415/989 -7800,mediterranean,498
+503,` palio d \ ` asti ',' 640 sacramento st. ',` san francisco ',415/395 -9800,italian,503
+506,` perry \ 's ',' 1944 union st. ',` san francisco ',415/922 -9022,american,506
+516,` stoyanof \ 's cafe ',' 1240 9th ave. ',` san francisco ',415/664 -3664,` greek and middle eastern ',516
+527,` wu kong ',' 101 spear st. ',` san francisco ',415/957 -9300,asian,527

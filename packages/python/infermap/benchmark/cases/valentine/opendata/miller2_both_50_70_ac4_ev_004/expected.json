@@ -1,0 +1,164 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FisYe"
+    },
+    {
+      "source": "Division name",
+      "target": "miller2_DivNa"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "miller2_CFLI"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "miller2_MaxiCIDACon"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "miller2_YouIs"
+    },
+    {
+      "source": "Section name",
+      "target": "miller2_SeN"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_FCeID"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "miller2_ICTAAToFDevel"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "miller2_BilaAiMa"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "miller2_UrbIss"
+    },
+    {
+      "source": "Status",
+      "target": "miller2_Sta"
+    },
+    {
+      "source": "Amount spent",
+      "target": "miller2_AmSpe"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_KnowlFDeve"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "miller2_DisaIs"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "miller2_FSTCPe"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_SecID"
+    },
+    {
+      "source": "Branch name",
+      "target": "miller2_BraNa"
+    },
+    {
+      "source": "Sector ID",
+      "target": "Sector ID"
+    },
+    {
+      "source": "Branch ID",
+      "target": "miller2_BrID"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_ProgProc"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_Biod"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "miller2_Desert"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_ContNa"
+    },
+    {
+      "source": "Continent ID",
+      "target": "miller2_ContiID"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "miller2_CoRePerc"
+    },
+    {
+      "source": "Sector percent",
+      "target": "miller2_SePerc"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_OrgaS"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_RegiProg"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_UntAmoProBu"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "miller2_EnvSust"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_ProjNum"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "miller2_PrBrCouID"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "miller2_FCeN"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_OrganTy"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "miller2_OrganID"
+    }
+  ],
+  "unmapped_source": [
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Division ID",
+    "IRTC percent",
+    "PBA type",
+    "Participatory development and good governance",
+    "Trade development (marker)"
+  ],
+  "unmapped_target": [
+    "miller2_ChilIss",
+    "miller2_CoRegN",
+    "miller2_CouReID",
+    "miller2_GeEqu",
+    "miller2_IndiIss",
+    "miller2_OrgN",
+    "miller2_OrgaCla",
+    "miller2_SecN"
+  ]
+}

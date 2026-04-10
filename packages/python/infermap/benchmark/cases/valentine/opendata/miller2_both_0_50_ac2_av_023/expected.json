@@ -1,0 +1,134 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "FiY"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "UrIs"
+    },
+    {
+      "source": "Sector ID",
+      "target": "SecID"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ICTAAToFoDeve"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "OrganiSu"
+    },
+    {
+      "source": "Sector name",
+      "target": "SecNa"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "FCeID"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "IRTCPerc"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "Dese"
+    },
+    {
+      "source": "Division name",
+      "target": "DivN"
+    },
+    {
+      "source": "Organisation class",
+      "target": "OrgCl"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "BilaAMar"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "GenEqua"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "TraDevel"
+    },
+    {
+      "source": "Sector percent",
+      "target": "SecPerc"
+    },
+    {
+      "source": "Status",
+      "target": "Sta"
+    },
+    {
+      "source": "Project number",
+      "target": "ProjNu"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "IndIss"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "RegProg"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "ProBroCouID"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "ClChaAdap"
+    },
+    {
+      "source": "Branch ID",
+      "target": "BrID"
+    },
+    {
+      "source": "Section name",
+      "target": "SeN"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "FuCenN"
+    },
+    {
+      "source": "Section ID",
+      "target": "SeID"
+    }
+  ],
+  "unmapped_source": [
+    "Biodiversity (marker)",
+    "Branch name",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Climate change mitigation (marker)",
+    "Division ID",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Participatory development and good governance",
+    "Programming process (new)",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "AmSp",
+    "ChIss",
+    "ConN",
+    "ContID",
+    "CouReNa",
+    "CouRegID",
+    "CounRegPerc",
+    "DisabIss",
+    "KnowlFDeve",
+    "OrgaID",
+    "OrganiN",
+    "OrganiTy",
+    "YouIss"
+  ]
+}

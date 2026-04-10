@@ -1,0 +1,64 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ss_d"
+    },
+    {
+      "source": "assay_test_type",
+      "target": "assays_ss_tst_tp"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_vrnt_d"
+    },
+    {
+      "source": "bao_format",
+      "target": "assays_b_frmt"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "assays_ss_cll_tp"
+    },
+    {
+      "source": "src_id",
+      "target": "assays_src_d"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_crtd_b"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "assays_src_ss_d"
+    },
+    {
+      "source": "tid",
+      "target": "assays_td"
+    },
+    {
+      "source": "cell_id",
+      "target": "assays_cll_d"
+    },
+    {
+      "source": "assay_strain",
+      "target": "assays_ss_strn"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_tax_id",
+    "assay_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_chmbl_d",
+    "assays_cnfdnc_scr",
+    "assays_rltnshp_tp",
+    "assays_ss_sbclllr_frctn",
+    "assays_ss_tss",
+    "assays_tss_d"
+  ]
+}

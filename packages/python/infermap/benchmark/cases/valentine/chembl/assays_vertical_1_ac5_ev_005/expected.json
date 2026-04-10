@@ -1,0 +1,34 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ss_d"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_cell_type",
+    "assay_organism",
+    "assay_strain",
+    "assay_subcellular_fraction",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_tissue",
+    "assay_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_b_frmt",
+    "assays_chmbl_d",
+    "assays_cll_d",
+    "assays_cnfdnc_scr",
+    "assays_crtd_b",
+    "assays_rltnshp_tp",
+    "assays_src_d",
+    "assays_src_ss_d",
+    "assays_td",
+    "assays_tss_d",
+    "assays_vrnt_d"
+  ]
+}
