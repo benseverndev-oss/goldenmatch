@@ -2,8 +2,9 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.benzsevern/goldenflow",
   "title": "GoldenFlow",
-  "description": "Data transformation toolkit — standardize, reshape, and normalize messy data",
-  "version": "1.1.1",
+  "description": "Standardize, reshape, and normalize messy data — CSV, Excel, Parquet, S3, databases.",
+  "websiteUrl": "https://benzsevern.github.io/goldenflow/",
+  "version": "1.1.2",
   "repository": {
     "url": "https://github.com/benzsevern/goldenflow.git",
     "source": "github"
