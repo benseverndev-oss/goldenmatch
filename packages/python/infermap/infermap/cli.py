@@ -246,6 +246,38 @@ def validate(
         typer.echo("All required fields are mapped.")
 
 
+@app.command(name="mcp-serve")
+def mcp_serve(
+    transport: str = typer.Option("stdio", help="Transport: 'stdio' or 'http'"),
+    host: str = typer.Option("0.0.0.0", help="Host for HTTP transport"),
+    port: int = typer.Option(8100, help="Port for HTTP transport"),
+) -> None:
+    """Start the MCP server for Claude Desktop (stdio) or remote deployment (http)."""
+    if transport == "http":
+        try:
+            from infermap.mcp.server import run_server_http
+        except ImportError:
+            typer.echo(
+                "Error: MCP dependencies not installed. Run: pip install infermap[mcp]",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        run_server_http(host=host, port=port)
+    else:
+        try:
+            from infermap.mcp.server import run_server
+        except ImportError:
+            typer.echo(
+                "Error: MCP dependencies not installed. Run: pip install infermap[mcp]",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        import asyncio
+        asyncio.run(run_server())
+
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
     """infermap CLI."""
