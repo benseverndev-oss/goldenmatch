@@ -9,7 +9,7 @@ description = "Data validation that discovers rules from your data so you don't 
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
 keywords = ["data-validation", "data-quality", "profiling", "data-checks", "data-profiling", "llm", "tui", "csv", "parquet", "baseline", "drift-detection", "statistical-profiling"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -40,6 +40,7 @@ Repository = "https://github.com/benzsevern/goldencheck"
 Issues = "https://github.com/benzsevern/goldencheck/issues"
 Documentation = "https://benzsevern.github.io/goldencheck/"
 Changelog = "https://github.com/benzsevern/goldencheck/blob/main/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [project.scripts]
 goldencheck = "goldencheck.cli.main:app"
