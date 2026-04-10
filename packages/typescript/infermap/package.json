@@ -1,6 +1,6 @@
 {
   "name": "infermap",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Schema-to-schema field mapping engine. TypeScript port of the infermap Python library.",
   "keywords": [
     "schema",
