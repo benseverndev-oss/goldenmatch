@@ -9,7 +9,7 @@ description = "Data transformation toolkit — standardize, reshape, and normali
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "Ben Severn" }]
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
 keywords = ["data-transformation", "data-quality", "etl", "standardization", "normalization", "data-cleaning", "polars"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -56,6 +56,7 @@ Repository = "https://github.com/benzsevern/goldenflow"
 Issues = "https://github.com/benzsevern/goldenflow/issues"
 Documentation = "https://benzsevern.github.io/goldenflow/"
 Changelog = "https://github.com/benzsevern/goldenflow/blob/main/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [tool.ruff]
 line-length = 100
