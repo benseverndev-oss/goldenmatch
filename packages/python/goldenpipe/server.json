@@ -4,7 +4,7 @@
   "title": "GoldenPipe",
   "description": "One command to validate, transform, and deduplicate — chain GoldenCheck + Flow + Match.",
   "websiteUrl": "https://benzsevern.github.io/goldenpipe/",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "repository": {
     "url": "https://github.com/benzsevern/goldenpipe",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenpipe",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

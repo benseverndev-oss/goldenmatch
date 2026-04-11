@@ -1,6 +1,6 @@
 [project]
 name = "goldenpipe"
-version = "1.0.5"
+version = "1.0.6"
 description = "Pluggable pipeline framework for data quality workflows"
 readme = "README.md"
 license = {text = "MIT"}
@@ -20,7 +20,7 @@ dependencies = [
     "polars>=1.0",
     "typer>=0.12",
     "rich>=13.0",
-    "pydantic>=2.0",
+    "pydantic>=2.7",
     "pyyaml>=6.0",
 ]
 
