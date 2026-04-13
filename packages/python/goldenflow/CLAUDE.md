@@ -55,6 +55,27 @@ goldenflow serve                                 # REST API for real-time transf
 goldenflow mcp-serve                             # MCP server for Claude Desktop
 ```
 
+## TypeScript Package (packages/goldenflow-js/)
+
+Full TS port with feature parity. Edge-safe core (`goldenflow/core`) + Node layer (`goldenflow/node`).
+
+```bash
+cd packages/goldenflow-js
+npm install                      # Install deps
+npm run typecheck                # tsc --noEmit (0 errors required)
+npm run test                     # vitest (71 tests)
+npm run build                    # tsup: ESM + CJS + .d.ts
+npx goldenflow-js transform data.csv  # CLI
+```
+
+- 54 source files, ~5,200 LOC, 83 transforms (76 core + 7 domain)
+- Strict TS: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
+- Tests: `tests/smoke.test.ts`, `tests/parity/`, `tests/unit/`
+- npm package name: `goldenflow`
+- CLI binary: `goldenflow-js`
+- Publish: tag `goldenflow-js-vX.Y.Z` triggers `.github/workflows/npm-publish.yml`
+- `NPM_TOKEN` secret is set on the GitHub repo
+
 ## Architecture
 
 ```
@@ -307,6 +328,14 @@ Hosted on Railway, registered on Smithery:
 - Cloud connectors (s3.py, gcs.py) have optional dependencies -- `pip install goldenflow[s3]` or `pip install goldenflow[gcs]`; they raise `ImportError` with a helpful message if the dependency is missing
 - `streaming.py` reads the full file before batching (currently) -- for truly out-of-core processing, use Polars LazyFrame directly
 - `history.py` stores runs in `~/.goldenflow/history/` -- this directory is created on first run and is not cleaned up automatically
+- GitHub push protection will block commits containing NPM tokens -- never hardcode tokens in docs/code
+- `packages/goldenflow-js/node_modules/` and `dist/` are gitignored -- don't `git add packages/goldenflow-js/` without the .gitignore in place
+- TS date transforms must use UTC methods (`getUTCFullYear` etc.) -- local timezone methods produce different results across environments
+- TS CSV parser must NOT coerce leading-zero strings to numbers (`"01234"` is a zip code, not `1234`)
+- TS `TabularData.column()` converts "N/A" to null -- use `rawColumn()` when profiling to avoid inflating null counts
+- TS history module lives in `src/node/` (not `src/core/`) -- it uses `node:fs`
+- TS REST API and MCP server must sanitize file paths to prevent traversal
+- `PORTING_GUIDE.md` has the master playbook for porting Golden Suite repos to TypeScript
 
 ## API Quick Reference
 
