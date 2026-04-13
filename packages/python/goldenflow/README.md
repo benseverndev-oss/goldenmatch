@@ -4,21 +4,28 @@
 **Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.**
 Built by [Ben Severn](https://bensevern.dev).
 
-Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs.
+Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs. **Available in Python and TypeScript** with full feature parity.
 
 [![PyPI](https://img.shields.io/pypi/v/goldenflow?color=d4a017)](https://pypi.org/project/goldenflow/)
+[![npm](https://img.shields.io/npm/v/goldenflow?color=d4a017)](https://www.npmjs.com/package/goldenflow)
 [![CI](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldenflow/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenflow)
 [![Downloads](https://static.pepy.tech/badge/goldenflow/month)](https://pepy.tech/project/goldenflow)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-339933)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benzsevern.github.io/goldenflow/)
 [![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenflow/blob/main/scripts/goldenflow_demo.ipynb)
 
 ```bash
+# Python
 pip install goldenflow
 goldenflow transform data.csv
+
+# TypeScript / Node.js
+npm install goldenflow
+npx goldenflow-js transform data.csv
 ```
 
 ---
@@ -42,6 +49,8 @@ GoldenFlow makes the transforms reusable, composable, and automatic.
 
 ## Quick Start
 
+### Python
+
 ```bash
 pip install goldenflow
 
@@ -63,6 +72,38 @@ goldenflow map --source system_a.csv --target system_b.csv
 goldencheck scan data.csv
 goldenflow transform data.csv
 goldenmatch dedupe data_transformed.csv
+```
+
+### TypeScript / Node.js
+
+```bash
+npm install goldenflow
+
+# Auto-transform (zero-config)
+npx goldenflow-js transform messy_data.csv
+
+# Try the demo first
+npx goldenflow-js demo
+npx goldenflow-js transform demo_data.csv -c demo_config.yaml
+
+# With config
+npx goldenflow-js learn messy_data.csv -o config.yaml
+npx goldenflow-js transform messy_data.csv -c config.yaml
+
+# Schema mapping
+npx goldenflow-js map -s system_a.csv -t system_b.csv
+```
+
+### Programmatic (TypeScript)
+
+```typescript
+import { TransformEngine } from "goldenflow";
+
+const result = new TransformEngine().transformDf([
+  { name: "  JOHN  ", phone: "(555) 123-4567", email: "John@Example.COM" },
+]);
+console.log(result.rows[0]);
+// { name: "JOHN", phone: "+15551234567", email: "john@example.com" }
 ```
 
 ---
@@ -520,6 +561,126 @@ result.manifest  # renders transform audit trail
 
 ---
 
+## TypeScript / JavaScript
+
+GoldenFlow has a full TypeScript port with feature parity — same 83 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI.
+
+### Install
+
+```bash
+npm install goldenflow
+```
+
+### CLI
+
+```bash
+npx goldenflow-js transform data.csv              # Zero-config
+npx goldenflow-js transform data.csv -c config.yaml  # With config
+npx goldenflow-js profile data.csv                 # Column profiles
+npx goldenflow-js learn data.csv -o config.yaml    # Generate config
+npx goldenflow-js diff before.csv after.csv        # Compare files
+npx goldenflow-js map -s source.csv -t target.csv  # Schema mapping
+npx goldenflow-js stream large.csv --chunk-size 50000  # Streaming
+npx goldenflow-js demo                             # Generate sample data
+npx goldenflow-js history                          # Show recent runs
+```
+
+### TypeScript API
+
+```typescript
+import { TransformEngine, makeConfig } from "goldenflow";
+
+// Zero-config — auto-detect and fix
+const engine = new TransformEngine();
+const result = engine.transformDf([
+  { name: "  John Smith  ", email: "JOHN@EXAMPLE.COM", phone: "(555) 123-4567" },
+  { name: "DR. JANE DOE", email: "  jane+work@gmail.com  ", phone: "555.987.6543" },
+]);
+
+console.log(result.rows);
+// [
+//   { name: "John Smith", email: "john@example.com", phone: "+15551234567" },
+//   { name: "Jane Doe", email: "jane@gmail.com", phone: "+15559876543" },
+// ]
+console.log(result.manifest.records.length); // transforms applied
+```
+
+```typescript
+// Configured — explicit transforms per column
+const engine = new TransformEngine({
+  transforms: [
+    { column: "phone", ops: ["phone_e164"] },
+    { column: "email", ops: ["strip", "email_normalize"] },
+    { column: "name", ops: ["strip", "title_case"] },
+    { column: "state", ops: ["state_abbreviate"] },
+    { column: "price", ops: ["currency_strip"] },
+    { column: "signup_date", ops: ["date_iso8601"] },
+  ],
+  renames: { email_address: "email" },
+  drop: ["internal_id"],
+  dedup: { columns: ["email"], keep: "first" },
+});
+const result = engine.transformDf(rows);
+```
+
+```typescript
+// Schema mapping
+import { SchemaMapper } from "goldenflow";
+
+const mapper = new SchemaMapper();
+const mappings = mapper.map(
+  [{ fname: "John", lname: "Smith", email_address: "j@e.com" }],
+  [{ first_name: "", last_name: "", email: "" }],
+);
+// [{ source: "fname", target: "first_name", confidence: 0.95 }, ...]
+```
+
+```typescript
+// Streaming large datasets
+import { StreamProcessor } from "goldenflow";
+
+const processor = new StreamProcessor({ transforms: [{ column: "name", ops: ["strip"] }] });
+for (const result of processor.streamRows(largeDataset, 10_000)) {
+  await writeChunk(result.rows);
+}
+```
+
+```typescript
+// Profiling
+import { profileDataframe } from "goldenflow";
+
+const profile = profileDataframe(rows, "customers.csv");
+for (const col of profile.columns) {
+  console.log(`${col.name}: ${col.inferredType}, ${col.nullCount} nulls, ${col.uniqueCount} unique`);
+}
+```
+
+```typescript
+// Edge-safe import (browsers, Workers, Edge Runtime)
+import { TransformEngine } from "goldenflow/core";
+
+// Node-only import (includes file I/O, MCP, CLI)
+import { readFile, TransformEngine } from "goldenflow/node";
+```
+
+### MCP Server (TypeScript)
+
+```typescript
+import { TOOL_DEFINITIONS, handleTool } from "goldenflow/node";
+
+// TOOL_DEFINITIONS: 10 MCP tools for Claude Desktop
+// handleTool("transform", { path: "data.csv" }) → JSON string
+```
+
+### REST API (TypeScript)
+
+```typescript
+import { runServer } from "goldenflow/node";
+runServer(8000); // Starts HTTP server with /health, /transforms, /transform
+```
+
+---
+
 ## Public API (34 exports)
 
 ```python
@@ -604,12 +765,12 @@ goldenflow mcp-serve
 
 ## Part of the Golden Suite
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
-| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
-| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
+| Tool | Purpose | Python | TypeScript |
+|------|---------|--------|------------|
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` | `npm install goldencheck` |
+| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` | `npm install goldenflow` |
+| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` | — |
+| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` | — |
 
 ```
 Raw Data
@@ -698,4 +859,4 @@ Long-running operations (streaming, watch mode, scheduling) display a Rich progr
 **GitHub:** [github.com/benzsevern/goldenflow](https://github.com/benzsevern/goldenflow)
 **Author:** [Ben Severn](https://bensevern.dev)
 **License:** MIT
-**Python:** 3.11+
+**Python:** 3.11+ | **Node.js:** 20+ | **npm:** [goldenflow](https://www.npmjs.com/package/goldenflow) | **PyPI:** [goldenflow](https://pypi.org/project/goldenflow/)

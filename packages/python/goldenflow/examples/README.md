@@ -1,5 +1,7 @@
 # GoldenFlow Examples
 
+## Python
+
 | Script | Description | Prerequisites |
 |--------|-------------|---------------|
 | `zero_config.py` | Zero-config transform on messy data -- auto-detect and fix | `goldenflow` |
@@ -10,21 +12,28 @@
 | `config_based.py` | Transform with a YAML config for explicit control | `goldenflow` |
 | `domain_pack.py` | Healthcare domain transforms for clinical data | `goldenflow` |
 
-## Quick Start
-
 ```bash
 pip install goldenflow
-
-# Zero-config -- just point at messy data
 python examples/zero_config.py
+```
 
-# Configured -- explicit control per column
-python examples/configured_transform.py
+## TypeScript
 
-# Schema mapping -- match columns across schemas
-python examples/schema_mapping.py
+| Script | Description | Prerequisites |
+|--------|-------------|---------------|
+| `typescript/zero-config.ts` | Zero-config transform -- auto-detect and fix | `goldenflow` (npm) |
+| `typescript/configured-transform.ts` | Explicit transforms per column with dedup | `goldenflow` (npm) |
+| `typescript/schema-mapping.ts` | Auto-map columns between source and target | `goldenflow` (npm) |
+| `typescript/streaming.ts` | Stream-process large datasets in chunks | `goldenflow` (npm) |
+| `typescript/profiling.ts` | Profile data + auto-generate config | `goldenflow` (npm) |
+| `typescript/edge-safe.ts` | Edge-safe usage (browsers, Workers, Edge Runtime) | `goldenflow` (npm) |
 
-# DQBench benchmark (requires dqbench)
-pip install dqbench
-python examples/benchmark.py
+```bash
+npm install goldenflow
+npx tsx examples/typescript/zero-config.ts
+npx tsx examples/typescript/configured-transform.ts
+npx tsx examples/typescript/schema-mapping.ts
+npx tsx examples/typescript/streaming.ts
+npx tsx examples/typescript/profiling.ts
+npx tsx examples/typescript/edge-safe.ts
 ```
