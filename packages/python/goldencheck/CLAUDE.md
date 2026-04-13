@@ -185,3 +185,43 @@ goldencheck scan data.csv --domain ecommerce
 - **DQBench Detect Score: 88.40**
 - Adapter: `dqbench/adapters/goldencheck.py`
 - Run: `pip install dqbench && dqbench run goldencheck`
+
+## TypeScript Port (packages/goldencheck-js/)
+
+```bash
+cd packages/goldencheck-js
+npm install                      # Install deps
+npm run typecheck                # tsc --noEmit
+npm run test                     # vitest (144+ tests)
+npm run build                    # tsup (ESM + CJS + .d.ts)
+npm run dev                      # tsup --watch
+```
+
+### Architecture
+- `src/core/` — edge-safe, zero Node.js deps (browsers, Workers, Edge Runtime)
+- `src/node/` — Node 20+ only (file I/O, MCP, A2A, TUI, DB scanner)
+- `src/cli.ts` — Commander.js CLI (`goldencheck-js`)
+- Build: tsup (4 entry points: index, core/index, node/index, cli)
+- Tests: vitest, `tests/unit/` + `tests/parity/`
+- Package: `goldencheck` on npm, dual ESM/CJS exports
+
+### Key Patterns
+- **TabularData** wraps `Record<string, unknown>[]` — edge-safe Polars replacement
+- **Never use `Math.min(...array)` or `Math.max(...array)`** — crashes on >65K elements; use loop-based min/max
+- **Never import `node:fs`/`node:path`/`process` in `src/core/`** — breaks edge-safety guarantee
+- CSV reader coerces values via `coerceValue()` (strings to numbers/booleans) to match Polars auto-inference
+- `nodejs-polars` is optional peer dep — only for Parquet reading in Node layer
+- Profiler interface: `profile(data: TabularData, column: string, context?: Record<string, unknown>): Finding[]`
+- Findings are immutable — use `replaceFinding()` (spread), never mutate
+- Mulberry32 PRNG (not Mersenne Twister) — deterministic but NOT matching Python's `random.Random(seed)`
+
+### Publishing
+- npm publish: push tag `goldencheck-js-v*` triggers `.github/workflows/npm-publish.yml`
+- Requires `NPM_TOKEN` GitHub secret
+- Root `package.json` is orchestrator only (not a workspace): `npm run build:js`, `npm run test:js`
+
+### Gotchas
+- `src/core/engine/history.ts` and `scheduler.ts` use `node:fs` — function exports are in `node/index.ts`, only types re-exported from `core/index.ts`
+- Bare `catch {}` blocks are prohibited — always log the error or let it propagate
+- `ksTwoSample()` returns `pValue: 1` when `maxD === 0` (identical distributions)
+- Differ groups findings by `(column, check)` arrays — supports multiple findings per key
