@@ -46,3 +46,28 @@ jobs:
       - run: pip install .
       - run: goldencheck tests/fixtures/simple.csv --no-tui
       - run: goldencheck --version
+
+  goldencheck-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: packages/goldencheck-js
+        run: npm install
+
+      - name: Type check
+        working-directory: packages/goldencheck-js
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: packages/goldencheck-js
+        run: npm run test
+
+      - name: Build
+        working-directory: packages/goldencheck-js
+        run: npm run build

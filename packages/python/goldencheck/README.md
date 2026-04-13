@@ -53,6 +53,22 @@ With semantic type inference for baseline (sentence-transformers):
 pip install goldencheck[baseline,semantic]
 ```
 
+### JavaScript / TypeScript
+
+```bash
+npm install goldencheck
+```
+
+**Edge-safe core** (browsers, Cloudflare Workers, Vercel Edge):
+```typescript
+import { scanData, TabularData } from "goldencheck/core";
+```
+
+**Node.js** (file reading, CLI, MCP):
+```typescript
+import { readFile, scanData } from "goldencheck/node";
+```
+
 ## Quick Start
 
 ```bash
@@ -76,6 +92,86 @@ goldencheck baseline data.csv
 
 # Scan with drift detection (fast, uses saved baseline)
 goldencheck scan new_data.csv
+```
+
+## TypeScript Quick Start
+
+```typescript
+// Scan an array of records (edge-safe — works anywhere)
+import { scanData, TabularData, Severity } from "goldencheck";
+
+const data = new TabularData([
+  { id: 1, email: "alice@example.com", age: 30, status: "active" },
+  { id: 2, email: "bob@test.com", age: -5, status: "inactive" },
+  { id: 3, email: "not-an-email", age: 25, status: "active" },
+]);
+
+const { findings, profile } = scanData(data);
+for (const f of findings) {
+  console.log(`[${f.severity === Severity.ERROR ? "ERROR" : "WARNING"}] ${f.column}: ${f.message}`);
+}
+```
+
+```typescript
+// Scan a CSV file (Node.js)
+import { readFile, scanData, applyConfidenceDowngrade, healthScore } from "goldencheck/node";
+
+const data = readFile("data.csv");
+const result = scanData(data, { domain: "healthcare" });
+const findings = applyConfidenceDowngrade(result.findings, false);
+
+// Health score
+const byCol = {};
+for (const f of findings) {
+  if (f.severity >= 2) {
+    byCol[f.column] ??= { errors: 0, warnings: 0 };
+    byCol[f.column][f.severity === 3 ? "errors" : "warnings"]++;
+  }
+}
+const { grade, points } = healthScore(byCol);
+console.log(`Health: ${grade} (${points}/100)`);
+```
+
+```typescript
+// Validate against pinned rules
+import { readFile, scanData, validateConfig, validateData } from "goldencheck/node";
+import { readFileSync } from "node:fs";
+import YAML from "yaml";
+
+const config = validateConfig(YAML.parse(readFileSync("goldencheck.yml", "utf-8")));
+const data = readFile("data.csv");
+const findings = validateData(data, config);
+```
+
+```typescript
+// Create baseline and detect drift
+import { readFile, createBaseline, serializeBaseline, scanData } from "goldencheck/node";
+import { runDriftChecks, deserializeBaseline } from "goldencheck";
+import { writeFileSync, readFileSync } from "node:fs";
+
+// Learn baseline
+const data = readFile("reference.csv");
+const baseline = createBaseline(data);
+writeFileSync("baseline.json", serializeBaseline(baseline));
+
+// Later: detect drift
+const newData = readFile("production.csv");
+const saved = deserializeBaseline(readFileSync("baseline.json", "utf-8"));
+const driftFindings = runDriftChecks(newData, saved);
+```
+
+```typescript
+// LLM-enhanced scanning (edge-safe)
+import { scanData, TabularData, callLlm, parseLlmResponse, mergeLlmFindings, buildSampleBlocks } from "goldencheck";
+
+const data = new TabularData(records);
+const result = scanData(data, { returnSample: true });
+const blocks = buildSampleBlocks(result.sample, result.findings);
+const { text } = await callLlm("anthropic", JSON.stringify(blocks));
+const llmResponse = parseLlmResponse(text);
+if (llmResponse) {
+  const enhanced = mergeLlmFindings(result.findings, llmResponse);
+}
 ```
 
 ## How It Works
@@ -319,6 +415,44 @@ Only pinned rules appear in this file — not every finding. The `ignore` list p
 | `-o <path>` | Output path for baseline file (default: `goldencheck_baseline.yaml`) |
 | `--version` | Show version |
 
+## TypeScript CLI
+
+```bash
+npx goldencheck-js scan data.csv --json
+npx goldencheck-js scan data.csv --domain healthcare
+npx goldencheck-js health-score data.csv
+npx goldencheck-js profile data.csv
+npx goldencheck-js validate data.csv --config goldencheck.yml
+npx goldencheck-js baseline data.csv --output baseline.json
+npx goldencheck-js fix data.csv --mode safe
+npx goldencheck-js diff old.csv new.csv
+npx goldencheck-js demo
+```
+
+## TypeScript Architecture
+
+```
+goldencheck (npm)
+├── goldencheck/core    # Edge-safe: browsers, Workers, Edge Runtime
+│   ├── types           # Finding, Severity, DatasetProfile, Config types
+│   ├── data            # TabularData — zero-dep columnar abstraction
+│   ├── profilers       # 10 column profilers + 4 relation profilers
+│   ├── semantic        # Type classifier, suppression, 3 domain packs
+│   ├── engine          # Scanner, confidence, validator, triage, differ, fixer
+│   ├── baseline        # Statistical profiling, constraints, correlation, patterns
+│   ├── drift           # 13 drift checks against saved baseline
+│   ├── llm             # Anthropic + OpenAI via fetch(), merger, budget
+│   ├── agent           # Strategy, handoff, review queue
+│   └── reporters       # JSON, CI
+└── goldencheck/node    # Node.js >= 20
+    ├── reader          # CSV, Parquet (via nodejs-polars)
+    ├── mcp             # MCP server (7 tools)
+    ├── a2a             # Agent-to-Agent HTTP server
+    ├── tui             # ANSI terminal output
+    ├── db-scanner      # Postgres, MySQL, SQLite
+    └── watcher         # Directory polling
+```
+
 ## Benchmarks
 
 ### Speed
@@ -377,6 +511,15 @@ Tested on a custom benchmark with 341 planted data quality issues across 9 categ
 | [Pydantic 2](https://docs.pydantic.dev/) | Config validation |
 
 **Optional:** [Anthropic SDK](https://docs.anthropic.com/) / [OpenAI SDK](https://platform.openai.com/) for LLM Boost | [MCP SDK](https://modelcontextprotocol.io/) for MCP server | [scipy](https://scipy.org/) + [numpy](https://numpy.org/) for deep baseline profiling (`[baseline]`) | [sentence-transformers](https://www.sbert.net/) for semantic type inference in baseline (`[semantic]`)
+
+### TypeScript / Node.js
+
+| Dependency | Purpose |
+|-----------|---------|
+| Zero runtime deps | Core package has no dependencies (edge-safe) |
+| [nodejs-polars](https://github.com/pola-rs/nodejs-polars) | Parquet reading (optional, Node.js only) |
+| [csv-parse](https://csv.js.org/) | CSV reading (Node.js only) |
+| [@modelcontextprotocol/sdk](https://modelcontextprotocol.io/) | MCP server (Node.js only) |
 
 ## MCP Server (Claude Desktop)
 
@@ -451,6 +594,77 @@ ScanResult(findings=findings, profile=profile)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
+## API Quick Reference
+
+### Python
+
+```python
+import goldencheck
+
+# Scan a CSV for quality issues
+findings = goldencheck.scan_file("data.csv")
+for f in findings:
+    print(f"[{f.severity}] {f.column}: {f.check} — {f.message}")
+
+# Create baseline and detect drift
+from goldencheck import create_baseline, scan_file
+baseline = create_baseline("data.csv")
+baseline.save("goldencheck_baseline.yaml")
+findings, profile = scan_file("data.csv", baseline="goldencheck_baseline.yaml")
+
+# Health score
+score = goldencheck.health_score("data.csv")
+print(score)  # e.g. "B (78/100)"
+```
+
+### TypeScript
+
+```typescript
+import { scanData, TabularData, Severity } from "goldencheck";
+
+// Scan records (edge-safe)
+const data = new TabularData(records);
+const { findings, profile } = scanData(data);
+for (const f of findings) {
+  console.log(`[${f.severity === Severity.ERROR ? "ERROR" : "WARNING"}] ${f.column}: ${f.message}`);
+}
+```
+
+```typescript
+import { readFile, scanData, applyConfidenceDowngrade, healthScore } from "goldencheck/node";
+
+// Scan a CSV file (Node.js)
+const data = readFile("data.csv");
+const result = scanData(data, { domain: "healthcare" });
+const findings = applyConfidenceDowngrade(result.findings, false);
+
+// Health score
+const byCol = {};
+for (const f of findings) {
+  if (f.severity >= 2) {
+    byCol[f.column] ??= { errors: 0, warnings: 0 };
+    byCol[f.column][f.severity === 3 ? "errors" : "warnings"]++;
+  }
+}
+const { grade, points } = healthScore(byCol);
+console.log(`Health: ${grade} (${points}/100)`);
+```
+
+```typescript
+import { readFile, createBaseline, serializeBaseline } from "goldencheck/node";
+import { runDriftChecks, deserializeBaseline } from "goldencheck";
+import { writeFileSync, readFileSync } from "node:fs";
+
+// Create baseline and detect drift
+const data = readFile("reference.csv");
+const baseline = createBaseline(data);
+writeFileSync("baseline.json", serializeBaseline(baseline));
+
+const newData = readFile("production.csv");
+const saved = deserializeBaseline(readFileSync("baseline.json", "utf-8"));
+const driftFindings = runDriftChecks(newData, saved);
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
@@ -469,7 +683,7 @@ MIT — see [LICENSE](LICENSE)
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` / `npm install goldencheck` |
 | [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
 | [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
 | [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
