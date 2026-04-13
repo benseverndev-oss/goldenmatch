@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "Not a real npm workspace — each package installs independently to avoid Windows symlink issues.",
+  "scripts": {
+    "install:js": "npm --prefix packages/goldencheck-js install",
+    "build:js": "npm --prefix packages/goldencheck-js run build",
+    "test:js": "npm --prefix packages/goldencheck-js run test",
+    "typecheck:js": "npm --prefix packages/goldencheck-js run typecheck"
+  }
+}
