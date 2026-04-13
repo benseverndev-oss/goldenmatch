@@ -25,3 +25,10 @@ venv/
 .cursorrules
 .windsurfrules
 docs/superpowers/
+
+# Node
+node_modules/
+packages/goldencheck-js/dist/
+packages/goldencheck-js/node_modules/
+package-lock.json
+packages/goldencheck-js/package-lock.json
