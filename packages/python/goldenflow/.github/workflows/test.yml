@@ -73,3 +73,28 @@ jobs:
 
       - name: Smoke test
         run: goldenflow --help
+
+  goldenflow-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: packages/goldenflow-js
+        run: npm install
+
+      - name: Typecheck
+        working-directory: packages/goldenflow-js
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: packages/goldenflow-js
+        run: npm run test
+
+      - name: Build
+        working-directory: packages/goldenflow-js
+        run: npm run build
