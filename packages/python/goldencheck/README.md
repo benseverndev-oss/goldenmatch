@@ -4,14 +4,18 @@
 Data validation that discovers rules from your data so you don't have to write them.
 Built by [Ben Severn](https://bensevern.dev).
 
-[![PyPI](https://img.shields.io/pypi/v/goldencheck?color=d4a017)](https://pypi.org/project/goldencheck/)
-[![CI](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/benzsevern/goldencheck/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldencheck)
-[![Downloads](https://static.pepy.tech/badge/goldencheck/month)](https://pepy.tech/project/goldencheck)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017)](https://benzsevern.github.io/goldencheck/)
-[![DQBench](https://img.shields.io/badge/DQBench-88.40-gold)](https://github.com/benzsevern/dqbench)
+[![PyPI](https://img.shields.io/pypi/v/goldencheck?logo=pypi&logoColor=white&label=PyPI&color=d4a017)](https://pypi.org/project/goldencheck/)
+[![npm](https://img.shields.io/npm/v/goldencheck?logo=npm&logoColor=white&label=npm&color=cb3837)](https://www.npmjs.com/package/goldencheck)
+[![CI](https://img.shields.io/github/actions/workflow/status/benzsevern/goldencheck/test.yml?logo=github&label=CI)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
+[![codecov](https://img.shields.io/codecov/c/gh/benzsevern/goldencheck?logo=codecov&logoColor=white)](https://codecov.io/gh/benzsevern/goldencheck)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/goldencheck?logo=python&logoColor=white&label=PyPI%20downloads&color=3776ab)](https://pepy.tech/project/goldencheck)
+[![npm Downloads](https://img.shields.io/npm/dm/goldencheck?logo=npm&logoColor=white&label=npm%20downloads&color=cb3837)](https://www.npmjs.com/package/goldencheck)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://python.org)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-5fa04e?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.4%2B-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![DQBench](https://img.shields.io/badge/DQBench-88.40-gold?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHRleHQgeD0iMCIgeT0iMTQiIGZvbnQtc2l6ZT0iMTQiPuKtkTwvdGV4dD48L3N2Zz4=)](https://github.com/benzsevern/dqbench)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017?logo=github&logoColor=white)](https://benzsevern.github.io/goldencheck/)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
