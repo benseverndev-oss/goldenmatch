@@ -1,0 +1,14 @@
+{
+  "id": "self-test/perfect",
+  "category": "valentine",
+  "subcategory": "self-test",
+  "source": {
+    "name": "self-test-perfect",
+    "url": "local",
+    "license": "MIT",
+    "attribution": "infermap project"
+  },
+  "tags": ["exact_match", "smoke"],
+  "expected_difficulty": "easy",
+  "notes": "Source and target schemas are identical. Every column should exact-match. Engine should produce F1=1.0."
+}

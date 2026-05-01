@@ -1,0 +1,104 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FiscalYear"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "miller2_IndigenousIssues(marker)"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "miller2_CFLI(marker)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_Biodiversity(marker)"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_RegionalProgram(marker)"
+    },
+    {
+      "source": "Division name",
+      "target": "miller2_DivisionName"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_UntiedAmount(Project-levelBudget)"
+    },
+    {
+      "source": "Sector percent",
+      "target": "miller2_SectorPercent"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_OrganisationSub-class"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_FundCentreID"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_ProjectNumber"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "miller2_FundCentreName"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_OrganisationType"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_KnowledgeForDevelopment(marker)"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "miller2_GenderEquality(marker)"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Branch name",
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Desertification (marker)",
+    "Division ID",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Participatory development and good governance",
+    "Programming process (new)",
+    "Section ID",
+    "Section name",
+    "Status"
+  ],
+  "unmapped_target": [
+    "miller2_AmountSpent",
+    "miller2_ChildrenIssues(marker)",
+    "miller2_ContinentID",
+    "miller2_ContinentName",
+    "miller2_CountryRegionID",
+    "miller2_CountryRegionName",
+    "miller2_CountryRegionPercent",
+    "miller2_DisabilityIssues(marker)",
+    "miller2_ICTAsAToolForDevelopment(marker)",
+    "miller2_OrganisationClass",
+    "miller2_OrganisationID",
+    "miller2_OrganisationName",
+    "miller2_ProjectBrowserCountryID",
+    "miller2_SectorID",
+    "miller2_SectorName",
+    "miller2_TradeDevelopment(marker)",
+    "miller2_UrbanIssues(marker)",
+    "miller2_YouthIssues(marker)"
+  ]
+}

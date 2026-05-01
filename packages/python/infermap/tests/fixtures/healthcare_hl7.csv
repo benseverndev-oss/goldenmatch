@@ -1,0 +1,4 @@
+PID,PatientName,DOB,MRN,Gender
+001,John Smith,1980-01-15,MRN001,M
+002,Jane Doe,1992-06-30,MRN002,F
+003,Bob Wilson,1975-11-22,MRN003,M

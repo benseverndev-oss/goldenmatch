@@ -1,0 +1,14 @@
+{
+  "id": "self-test/all_unmapped",
+  "category": "valentine",
+  "subcategory": "self-test",
+  "source": {
+    "name": "self-test-all-unmapped",
+    "url": "local",
+    "license": "MIT",
+    "attribution": "infermap project"
+  },
+  "tags": ["no_match", "smoke"],
+  "expected_difficulty": "hard",
+  "notes": "Both sides use Greek-letter + nonsense column names with random-string samples. No known aliases, no fuzzy overlap, no semantic patterns. Engine must correctly produce zero mappings. This is the 'hands off' test — F1=1.0 comes from correctly identifying that nothing should map."
+}

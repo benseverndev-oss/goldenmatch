@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "seed": 42,
+  "variants_per_schema": 10,
+  "difficulty_distribution": { "easy": 0.3, "medium": 0.4, "hard": 0.3 },
+  "transforms": {
+    "easy":   ["case_change", "snake_camel_swap"],
+    "medium": ["case_change", "snake_camel_swap", "abbreviate", "prefix_add", "suffix_add", "column_reorder"],
+    "hard":   ["case_change", "snake_camel_swap", "abbreviate", "prefix_add", "suffix_add", "column_reorder", "drop_columns", "add_distractors", "dtype_string_cast", "sample_typos"]
+  },
+  "transform_counts": { "easy": 2, "medium": 3, "hard": 5 },
+  "abbreviations": {
+    "first_name": "fname",
+    "last_name": "lname",
+    "email": "mail",
+    "email_address": "email_addr",
+    "phone_number": "phone",
+    "telephone": "tel",
+    "address": "addr",
+    "customer": "cust",
+    "product": "prod",
+    "identifier": "id",
+    "number": "num",
+    "date": "dt",
+    "timestamp": "ts",
+    "created_at": "created_dt",
+    "updated_at": "updated_dt",
+    "description": "desc",
+    "category": "cat",
+    "organization": "org",
+    "department": "dept"
+  },
+  "prefixes": ["cust", "sys", "legacy", "ext", "internal"],
+  "suffixes": ["v1", "v2", "raw", "clean", "norm"],
+  "schemas": [
+    {
+      "name": "customer",
+      "fields": [
+        { "name": "customer_id", "dtype": "integer", "samples": ["1001", "1002", "1003", "1004", "1005"] },
+        { "name": "first_name",  "dtype": "string",  "samples": ["Alice", "Bob", "Carol", "Dave", "Eve"] },
+        { "name": "last_name",   "dtype": "string",  "samples": ["Smith", "Jones", "Lee", "Patel", "Kim"] },
+        { "name": "email",       "dtype": "string",  "samples": ["a@x.co", "b@y.co", "c@z.co", "d@w.co", "e@v.co"] },
+        { "name": "phone",       "dtype": "string",  "samples": ["555-0001", "555-0002", "555-0003", "555-0004", "555-0005"] },
+        { "name": "created_at",  "dtype": "date",    "samples": ["2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", "2024-05-01"] },
+        { "name": "status",      "dtype": "string",  "samples": ["active", "active", "churned", "active", "trial"] }
+      ]
+    },
+    {
+      "name": "order",
+      "fields": [
+        { "name": "order_id",    "dtype": "integer", "samples": ["5001", "5002", "5003", "5004", "5005"] },
+        { "name": "customer_id", "dtype": "integer", "samples": ["1001", "1002", "1001", "1003", "1002"] },
+        { "name": "product_sku", "dtype": "string",  "samples": ["W-001", "W-002", "G-001", "W-003", "G-002"] },
+        { "name": "quantity",    "dtype": "integer", "samples": ["1", "2", "1", "5", "3"] },
+        { "name": "total",       "dtype": "float",   "samples": ["9.99", "19.95", "4.50", "99.00", "14.75"] },
+        { "name": "placed_at",   "dtype": "date",    "samples": ["2024-06-01", "2024-06-02", "2024-06-03", "2024-06-04", "2024-06-05"] }
+      ]
+    },
+    {
+      "name": "patient",
+      "fields": [
+        { "name": "patient_id",            "dtype": "string", "samples": ["P001", "P002", "P003", "P004", "P005"] },
+        { "name": "first_name",            "dtype": "string", "samples": ["John", "Jane", "Bob", "Alice", "Carl"] },
+        { "name": "last_name",             "dtype": "string", "samples": ["Doe", "Roe", "Smith", "Brown", "Davis"] },
+        { "name": "date_of_birth",         "dtype": "date",   "samples": ["1980-01-15", "1992-06-30", "1975-11-22", "1988-04-12", "1965-09-03"] },
+        { "name": "medical_record_number", "dtype": "string", "samples": ["MRN001", "MRN002", "MRN003", "MRN004", "MRN005"] },
+        { "name": "sex",                   "dtype": "string", "samples": ["M", "F", "M", "F", "M"] }
+      ]
+    },
+    {
+      "name": "product",
+      "fields": [
+        { "name": "sku",         "dtype": "string", "samples": ["W-001", "W-002", "G-001", "G-002", "T-001"] },
+        { "name": "name",        "dtype": "string", "samples": ["Widget A", "Widget B", "Gadget A", "Gadget B", "Thing A"] },
+        { "name": "category",    "dtype": "string", "samples": ["widgets", "widgets", "gadgets", "gadgets", "things"] },
+        { "name": "price",       "dtype": "float",  "samples": ["9.99", "19.95", "4.50", "14.75", "99.00"] },
+        { "name": "in_stock",    "dtype": "boolean","samples": ["true", "true", "false", "true", "true"] },
+        { "name": "created_at",  "dtype": "date",   "samples": ["2023-01-01", "2023-02-01", "2023-03-01", "2023-04-01", "2023-05-01"] }
+      ]
+    },
+    {
+      "name": "employee",
+      "fields": [
+        { "name": "employee_id", "dtype": "integer", "samples": ["7001", "7002", "7003", "7004", "7005"] },
+        { "name": "first_name",  "dtype": "string",  "samples": ["Sam", "Sue", "Tim", "Tina", "Uma"] },
+        { "name": "last_name",   "dtype": "string",  "samples": ["Adams", "Baker", "Clark", "Davis", "Evans"] },
+        { "name": "department",  "dtype": "string",  "samples": ["eng", "sales", "eng", "hr", "sales"] },
+        { "name": "hired_on",    "dtype": "date",    "samples": ["2020-01-01", "2020-06-01", "2021-03-15", "2022-09-01", "2023-02-15"] },
+        { "name": "salary",      "dtype": "float",   "samples": ["50000.00", "65000.00", "72000.00", "55000.00", "80000.00"] }
+      ]
+    },
+    {
+      "name": "transaction",
+      "fields": [
+        { "name": "transaction_id", "dtype": "string",   "samples": ["txn_001", "txn_002", "txn_003", "txn_004", "txn_005"] },
+        { "name": "amount",         "dtype": "float",    "samples": ["100.00", "250.50", "1000.00", "45.75", "899.99"] },
+        { "name": "currency",       "dtype": "string",   "samples": ["USD", "EUR", "USD", "GBP", "USD"] },
+        { "name": "type",           "dtype": "string",   "samples": ["debit", "credit", "debit", "debit", "credit"] },
+        { "name": "occurred_at",    "dtype": "datetime", "samples": ["2024-01-01T10:00:00Z", "2024-01-01T11:30:00Z", "2024-01-02T09:15:00Z", "2024-01-02T14:00:00Z", "2024-01-03T16:45:00Z"] }
+      ]
+    },
+    {
+      "name": "event",
+      "fields": [
+        { "name": "event_id",    "dtype": "string",   "samples": ["evt_001", "evt_002", "evt_003", "evt_004", "evt_005"] },
+        { "name": "name",        "dtype": "string",   "samples": ["click", "view", "click", "purchase", "view"] },
+        { "name": "user_id",     "dtype": "integer",  "samples": ["1001", "1002", "1001", "1003", "1002"] },
+        { "name": "properties",  "dtype": "string",   "samples": ["{\"k\":1}", "{\"k\":2}", "{\"k\":1}", "{\"k\":3}", "{\"k\":2}"] },
+        { "name": "occurred_at", "dtype": "datetime", "samples": ["2024-06-01T10:00:00Z", "2024-06-01T10:01:00Z", "2024-06-01T10:02:00Z", "2024-06-01T10:03:00Z", "2024-06-01T10:04:00Z"] }
+      ]
+    },
+    {
+      "name": "address",
+      "fields": [
+        { "name": "address_id",  "dtype": "integer", "samples": ["3001", "3002", "3003", "3004", "3005"] },
+        { "name": "street",      "dtype": "string",  "samples": ["100 Main St", "200 Oak Ave", "300 Elm Dr", "400 Pine Rd", "500 Maple Ln"] },
+        { "name": "city",        "dtype": "string",  "samples": ["Springfield", "Shelbyville", "Capital City", "Ogdenville", "North Haverbrook"] },
+        { "name": "state",       "dtype": "string",  "samples": ["IL", "IL", "IL", "NY", "NY"] },
+        { "name": "postal_code", "dtype": "string",  "samples": ["62701", "62702", "62703", "10001", "10002"] },
+        { "name": "country",     "dtype": "string",  "samples": ["US", "US", "US", "US", "US"] }
+      ]
+    }
+  ],
+  "distractors": {
+    "customer":    ["legacy_account_no", "external_ref", "marketing_segment"],
+    "order":       ["coupon_code", "fulfillment_partner", "internal_priority"],
+    "patient":     ["insurance_carrier", "referring_physician", "scheduled_followup"],
+    "product":     ["discontinued_at", "warehouse_bin", "supplier_sku"],
+    "employee":    ["badge_number", "parking_spot", "emergency_contact"],
+    "transaction": ["gateway_ref", "fraud_score", "chargeback_flag"],
+    "event":       ["session_id", "anonymous_id", "ab_bucket"],
+    "address":     ["building_name", "unit_no", "verified_at"],
+    "_universal":  ["created_by", "updated_by", "version", "tenant_id", "_etag"]
+  },
+  "distractor_samples": {
+    "default_string": ["xyz", "abc", "qwe", "rty", "uio"],
+    "default_integer": ["99", "88", "77", "66", "55"],
+    "default_date": ["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04", "2020-01-05"]
+  }
+}

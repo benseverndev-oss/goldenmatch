@@ -1,0 +1,48 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "AgeID"
+    },
+    {
+      "source": "Age",
+      "target": "A"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "NuChi"
+    },
+    {
+      "source": "PostalCode",
+      "target": "PoCo"
+    },
+    {
+      "source": "Country",
+      "target": "Co"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "MariSta"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "City",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "MiddleInitial",
+    "State"
+  ],
+  "unmapped_target": [
+    "CreRat",
+    "Em",
+    "Inc",
+    "NWo",
+    "NuC",
+    "NuCreCa",
+    "OwORF",
+    "Pho"
+  ]
+}

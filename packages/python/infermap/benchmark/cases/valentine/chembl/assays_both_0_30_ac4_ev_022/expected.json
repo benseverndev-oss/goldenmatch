@@ -1,0 +1,49 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ASSI"
+    },
+    {
+      "source": "confidence_score",
+      "target": "assays_CONSC"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_VARI"
+    },
+    {
+      "source": "tissue_id",
+      "target": "assays_TISI"
+    },
+    {
+      "source": "relationship_type",
+      "target": "assays_RELATIT"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_CURAB"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_strain",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_ASSCET",
+    "assays_ASSSUBCELFR",
+    "assays_ASSTIS",
+    "assays_BFO",
+    "assays_CEI",
+    "assays_CHEI",
+    "assays_SI",
+    "assays_SRASI",
+    "assays_Ti"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/benzsevern/infermap/benchmark/report.schema.json",
+  "title": "infermap benchmark report",
+  "type": "object",
+  "required": ["version", "language", "infermap_version", "runner_version", "ran_at", "duration_seconds", "scorecard", "per_case", "failed_cases"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "language": { "enum": ["python", "typescript"] },
+    "infermap_version": { "type": "string" },
+    "runner_version": { "type": "string" },
+    "ran_at": { "type": "string", "format": "date-time" },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "scorecard": {
+      "type": "object",
+      "required": ["overall", "by_difficulty", "by_category", "by_tag"],
+      "properties": {
+        "overall": { "$ref": "#/$defs/metricSet" },
+        "by_difficulty": {
+          "type": "object",
+          "patternProperties": { "^(easy|medium|hard)$": { "$ref": "#/$defs/metricSet" } }
+        },
+        "by_category": {
+          "type": "object",
+          "patternProperties": { "^(valentine|real_world|synthetic)$": { "$ref": "#/$defs/metricSet" } }
+        },
+        "by_tag": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/metricSet" }
+        }
+      }
+    },
+    "per_case": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "f1", "top1", "mrr", "expected_n", "predicted_n", "true_positives", "false_positives", "false_negatives", "failed"],
+        "properties": {
+          "id": { "type": "string" },
+          "f1": { "type": "number", "minimum": 0, "maximum": 1 },
+          "top1": { "type": "number", "minimum": 0, "maximum": 1 },
+          "mrr": { "type": "number", "minimum": 0, "maximum": 1 },
+          "expected_n": { "type": "integer", "minimum": 0 },
+          "predicted_n": { "type": "integer", "minimum": 0 },
+          "true_positives": { "type": "integer", "minimum": 0 },
+          "false_positives": { "type": "integer", "minimum": 0 },
+          "false_negatives": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "boolean" },
+          "failure_reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "failed_cases": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "metricSet": {
+      "type": "object",
+      "required": ["f1", "top1", "mrr", "ece", "n"],
+      "properties": {
+        "f1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "top1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mrr": { "type": "number", "minimum": 0, "maximum": 1 },
+        "ece": { "type": "number", "minimum": 0, "maximum": 1 },
+        "n": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

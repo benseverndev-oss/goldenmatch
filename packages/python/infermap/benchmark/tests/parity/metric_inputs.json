@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "inputs": [
+    {
+      "name": "perfect_small",
+      "hand_computed": true,
+      "input": {
+        "source_fields": ["a", "b"],
+        "target_fields": ["A", "B"],
+        "expected_mappings": [
+          {"source": "a", "target": "A"},
+          {"source": "b", "target": "B"}
+        ],
+        "expected_unmapped_source": [],
+        "expected_unmapped_target": [],
+        "actual_mappings": [
+          {"source": "a", "target": "A", "confidence": 0.95},
+          {"source": "b", "target": "B", "confidence": 0.90}
+        ],
+        "score_matrix": {
+          "a": {"A": 0.95, "B": 0.10},
+          "b": {"A": 0.05, "B": 0.90}
+        },
+        "min_confidence": 0.3
+      }
+    },
+    {
+      "name": "all_wrong_small",
+      "hand_computed": true,
+      "input": {
+        "source_fields": ["a", "b"],
+        "target_fields": ["A", "B"],
+        "expected_mappings": [
+          {"source": "a", "target": "A"},
+          {"source": "b", "target": "B"}
+        ],
+        "expected_unmapped_source": [],
+        "expected_unmapped_target": [],
+        "actual_mappings": [
+          {"source": "a", "target": "B", "confidence": 0.80},
+          {"source": "b", "target": "A", "confidence": 0.70}
+        ],
+        "score_matrix": {
+          "a": {"A": 0.4, "B": 0.8},
+          "b": {"A": 0.8, "B": 0.4}
+        },
+        "min_confidence": 0.3
+      }
+    },
+    {
+      "name": "half_right_triangle",
+      "hand_computed": true,
+      "input": {
+        "source_fields": ["a", "b", "c", "d"],
+        "target_fields": ["A", "B", "C", "D", "X", "Y"],
+        "expected_mappings": [
+          {"source": "a", "target": "A"},
+          {"source": "b", "target": "B"},
+          {"source": "c", "target": "C"},
+          {"source": "d", "target": "D"}
+        ],
+        "expected_unmapped_source": [],
+        "expected_unmapped_target": [],
+        "actual_mappings": [
+          {"source": "a", "target": "A", "confidence": 0.9},
+          {"source": "b", "target": "B", "confidence": 0.9},
+          {"source": "c", "target": "X", "confidence": 0.6},
+          {"source": "d", "target": "Y", "confidence": 0.6}
+        ],
+        "score_matrix": {
+          "a": {"A": 0.9, "B": 0.1, "C": 0.1, "D": 0.1, "X": 0.1, "Y": 0.1},
+          "b": {"A": 0.1, "B": 0.9, "C": 0.1, "D": 0.1, "X": 0.1, "Y": 0.1},
+          "c": {"A": 0.1, "B": 0.1, "C": 0.5, "D": 0.1, "X": 0.8, "Y": 0.1},
+          "d": {"A": 0.1, "B": 0.1, "C": 0.1, "D": 0.5, "X": 0.1, "Y": 0.8}
+        },
+        "min_confidence": 0.3
+      }
+    },
+    {
+      "name": "all_unmapped_perfect",
+      "hand_computed": true,
+      "input": {
+        "source_fields": ["a", "b"],
+        "target_fields": ["A", "B"],
+        "expected_mappings": [],
+        "expected_unmapped_source": ["a", "b"],
+        "expected_unmapped_target": ["A", "B"],
+        "actual_mappings": [],
+        "score_matrix": {
+          "a": {"A": 0.1, "B": 0.1},
+          "b": {"A": 0.1, "B": 0.1}
+        },
+        "min_confidence": 0.3
+      }
+    },
+    {
+      "name": "tie_break_test",
+      "hand_computed": true,
+      "input": {
+        "source_fields": ["s"],
+        "target_fields": ["A", "B", "C"],
+        "expected_mappings": [
+          {"source": "s", "target": "B"}
+        ],
+        "expected_unmapped_source": [],
+        "expected_unmapped_target": ["A", "C"],
+        "actual_mappings": [
+          {"source": "s", "target": "A", "confidence": 0.5}
+        ],
+        "score_matrix": {
+          "s": {"A": 0.5, "B": 0.5, "C": 0.5}
+        },
+        "min_confidence": 0.3
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "min_confidence": 0.5,
+  "mappings": [],
+  "unmapped_source": [
+    "code",
+    "desc",
+    "ref",
+    "val"
+  ],
+  "unmapped_target": [
+    "amount",
+    "customer_id",
+    "description",
+    "product_code"
+  ]
+}

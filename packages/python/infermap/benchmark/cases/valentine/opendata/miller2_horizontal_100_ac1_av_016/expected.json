@@ -1,0 +1,210 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FiscalYear"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_ProjectNumber"
+    },
+    {
+      "source": "Status",
+      "target": "miller2_Status"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "miller2_MaximumCIDAContribution(project-level)"
+    },
+    {
+      "source": "Branch ID",
+      "target": "miller2_BranchID"
+    },
+    {
+      "source": "Branch name",
+      "target": "miller2_BranchName"
+    },
+    {
+      "source": "Division ID",
+      "target": "miller2_DivisionID"
+    },
+    {
+      "source": "Division name",
+      "target": "miller2_DivisionName"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_SectionID"
+    },
+    {
+      "source": "Section name",
+      "target": "miller2_SectionName"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_RegionalProgram(marker)"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_FundCentreID"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "miller2_FundCentreName"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "miller2_UntiedAmount(Project-levelBudget)"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "miller2_FSTCPercent"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "miller2_IRTCPercent"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "miller2_CFLI(marker)"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "miller2_CIDABusinessDeliveryModel(old)"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_ProgrammingProcess(new)"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "miller2_BilateralAid(internationalMarker)"
+    },
+    {
+      "source": "PBA type",
+      "target": "miller2_PBAType"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "miller2_EnviromentalSustainability(marker)"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "miller2_ClimateChangeAdaptation(marker)"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "miller2_ClimateChangeMitigation(marker)"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "miller2_Desertification(marker)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "miller2_ParticipatoryDevelopmentAndGoodGovernance"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "miller2_TradeDevelopment(marker)"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_Biodiversity(marker)"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "miller2_UrbanIssues(marker)"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "miller2_ChildrenIssues(marker)"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "miller2_YouthIssues(marker)"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "miller2_IndigenousIssues(marker)"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "miller2_DisabilityIssues(marker)"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "miller2_ICTAsAToolForDevelopment(marker)"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_KnowledgeForDevelopment(marker)"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "miller2_GenderEquality(marker)"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "miller2_OrganisationID"
+    },
+    {
+      "source": "Organisation name",
+      "target": "miller2_OrganisationName"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_OrganisationType"
+    },
+    {
+      "source": "Organisation class",
+      "target": "miller2_OrganisationClass"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "miller2_OrganisationSub-class"
+    },
+    {
+      "source": "Continent ID",
+      "target": "miller2_ContinentID"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_ContinentName"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "miller2_ProjectBrowserCountryID"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "miller2_CountryRegionID"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "miller2_CountryRegionName"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "miller2_CountryRegionPercent"
+    },
+    {
+      "source": "Sector ID",
+      "target": "miller2_SectorID"
+    },
+    {
+      "source": "Sector name",
+      "target": "miller2_SectorName"
+    },
+    {
+      "source": "Sector percent",
+      "target": "miller2_SectorPercent"
+    },
+    {
+      "source": "Amount spent",
+      "target": "miller2_AmountSpent"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

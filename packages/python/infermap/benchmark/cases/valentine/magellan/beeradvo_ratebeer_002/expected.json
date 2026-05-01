@@ -1,0 +1,26 @@
+{
+  "mappings": [
+    {
+      "source": "id",
+      "target": "id"
+    },
+    {
+      "source": "Beer_Name",
+      "target": "Beer_Name"
+    },
+    {
+      "source": "Brew_Factory_Name",
+      "target": "Brew_Factory_Name"
+    },
+    {
+      "source": "Style",
+      "target": "Style"
+    },
+    {
+      "source": "ABV",
+      "target": "ABV"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

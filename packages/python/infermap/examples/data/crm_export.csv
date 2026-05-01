@@ -1,0 +1,11 @@
+cust_id,fname,lname,email_addr,tel,addr,zipcode,signup_dt,company_name,gender
+C001,John,Doe,john.doe@acme.com,555-0100,123 Main St,10001,2024-01-15,Acme Corp,M
+C002,Jane,Smith,jane.smith@globex.com,(555) 020-0200,456 Oak Ave,90210,2024-02-20,Globex Inc,F
+C003,Bob,Johnson,bob.j@initech.com,+15550300,789 Pine Rd,30301,2024-03-10,Initech,M
+C004,Alice,Williams,alice.w@umbrella.net,555.0400,321 Elm Dr,60601,2024-04-05,Umbrella Corp,F
+C005,Charlie,Brown,charlie@wayneent.com,15550500,654 Birch Ln,02101,2024-05-18,Wayne Enterprises,M
+C006,Diana,Prince,diana.p@stark.com,555-0600,987 Cedar Ct,94102,2024-06-22,Stark Industries,F
+C007,Edward,Norton,ed.norton@oscorp.com,(555) 070-0700,147 Spruce Way,33101,2024-07-30,Oscorp,M
+C008,Fiona,Apple,fiona@lexcorp.com,+15550800,258 Maple Blvd,98101,2024-08-14,LexCorp,F
+C009,George,Martin,george.m@hooli.com,555.0900,369 Walnut Pl,78701,2024-09-01,Hooli,M
+C010,Hannah,Baker,hannah.b@piedpiper.com,15551000,741 Cherry St,80202,2024-10-12,Pied Piper,F

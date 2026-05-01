@@ -1,0 +1,48 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_AgeID"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "prospect_MidInit"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_PoCo"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "prospect_NuCreCa"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "prospect_MariSta"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_Em"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "City",
+    "Country",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "State"
+  ],
+  "unmapped_target": [
+    "prospect_A",
+    "prospect_CreRa",
+    "prospect_In",
+    "prospect_NeWor",
+    "prospect_NuC",
+    "prospect_NumCh",
+    "prospect_OORF",
+    "prospect_Ph"
+  ]
+}

@@ -1,0 +1,101 @@
+assay_id,assay_test_type,variant_id,bao_format,assay_cell_type,src_id,curated_by,src_assay_id,tid,cell_id,assay_strain,doc_id,description,assay_type,assay_category,assay_organism,assay_tax_id
+54,,,BAO0000e5u,,1,zutocurxtion,,11512,,,912,Compound was tested for the inhibition of 17-beta-hydroxysteroid dehydrogenase type 1(17-beta-HSD type 1) at 10 uM concentration,B,,,
+205,,,fxO0000019,,1,Auticuratoon,,11134,,,13622,Compound at 100 uM was tested in vitro for inhibition of 12-LO human platelet,B,,,
+218,,,BAO00o0919,,1,Autocufa5ion,,12052,,,10997,Inhibitory activity against 12-lipoxygenase in rat platelet rich plasma,B,,,
+245,,,BAO00po357,,1,A8tocuratiln,,11303,,,7587,"Percent inhibition was measured against 5,10-Methylene Tetrahydrofolate Cyclohydrolase (L1210 tumor tissue) enzyme at 10E-6 M inhibitory concentration",B,,Sus scrofa,9823.0
+261,,,gqO0000019,,1,Autocurahi0n,,22226,,,7662,Ability for reversible inhibition of Walker 256 5-Fluoro-2'-deoxyuridine Phosphorylase,B,,Rattus norvegicus,10116.0
+356,,,fAO0090357,,1,Autocurariin,,19690,,,166,Inhibition constant against 3-dehydroquinate synthase,B,,,
+376,,,BAO0p0021o,3y77melagpmqcellline,1,Intrgmediate,,80616,831.0,,6072,Cytotoxicity on 3677 melanoma cells in combination with L-49-sFv-bL,F,,Homo sapiens,9606.0
+570,,,BAO000922w,,1,Aurpcuration,,51,,,11799,"Compound was tested for binding affinity against 5-hydroxytryptamine 1A receptor from bovine hippocampus, used [3H]8-OH-DPAT as radioligand",B,,,
+646,,,BA900002w9,CHO,1,Ex9ert,,51,1037.0,,17624,Agonistic effect against 5-hydroxytryptamine 1A receptor using [35S]GTP-gamma-S as radioligand in CHO cells relative to 5-HT,F,,,
+654,,,BAp9000019,,1,Expeft,,51,,,6876,"Evaluated for stimulation at 1 uM concentration expressed as percent of the maximal [35S]GTP-gamma-S, binding induced by 5-hydroxytryptamine",F,,Homo sapiens,9606.0
+713,,,BAO0090p19,,1,Autocufa5ion,,105093,,,11440,Affinity in displacing [125I](R)-DOI from rat cortical homogenate 5-HT2 receptor.,B,,,
+760,,,BAO00090w9,,1,zutocuratiln,,22226,,,13047,Binding affinity against 5-hydroxytryptamine 1 receptor using rabbit saphenous vein assay.,B,,Oryctolagus cuniculus,9986.0
+768,,,BAOp000o19,,1,Autocu5atiom,,104744,,,9806,Binding affinity towards 5-hydroxytryptamine 1 receptor in rat frontal cortex homogenates using [3H]5-HT as a radioligand,B,,Rattus norvegicus,10116.0
+793,,,hAO000022w,,1,Aut9curati8n,,104744,,,1344,Compound was evaluated for its binding affinity to 5-hydroxytryptamine 1 receptor in rat brain using [3H]HT radioligand assay,B,,,
+828,,,BAO000p24p,,1,Exlert,,10576,,,13508,Binding affinity against serotonin 5-hydroxytryptamine 1A receptor in rat hippocampus membrane using [3H]8-OH-DPAT as radioligand,B,,,
+838,,,BAO9090019,,1,Espert,,10576,,,11049,Binding affinity to 5-hydroxytryptamine 1A receptor in the rat brain using [3H]8-hydroxy-2-(di-n-propylamine)tetralin as radioligand; ND-Not determined,B,,Rattus norvegicus,10116.0
+840,,,BzO0000o19,,1,Aktofuration,,10576,,,11473,Compound was evaluated for binding affinity towards 5-hydroxytryptamine 1A receptor in rat cortex using [3H]-8-OH-DPAT as radioligand,B,,,
+913,,,BAO000o367,,1,A8tocudation,,51,,,16209,Binding affinity towards human 5-hydroxytryptamine 1A receptor was determined using [3H]-5-HT as radioligand,B,,,
+1023,,,BAO000pp19,,1,Expdrt,,51,,,16394,Binding affinity at human 5-hydroxytryptamine 1A receptor by inhibition of [3H]8-OH-DPAT binding in Chinese hamster ovary cell line,B,,,
+1144,,,nAO000o019,,1,zutocurat8on,,10576,,,10444,Binding affinity was determined against 5-hydroxytryptamine 1A receptor was determined in male Sprague-Dawley rat brain.,B,,,
+1274,,,BAO0o000w9,,1,Expedt,,10576,,,13630,Effect on 5-hydroxytryptamine 1A receptor mediated inhibition of VIP-stimulated cAMP production at dose of 10 uM,F,,,
+1308,,,BAOp00p221,,1,Ahrocuration,,10576,,,14093,Ability to displace [3H]-8-OH-DPAT from rat hippocampal homogenate 5-hydroxytryptamine 1A receptor; Not tested,B,,,
+1333,,,BAk000035y,,1,sutoxuration,,106,,,2391,The compound was evaluated for intrinsic activity against human cloned 5-hydroxytryptamine 1B receptor,B,,,
+1576,,,BAO000p228,,1,Auykcuration,,11863,,,2613,In vivo binding affinity was evaluated against 5-hydroxytryptamine 1A receptor,B,,,
+1629,,,BAO0po0357,,1,Exlert,,105,,,1414,Ability to bind to 5-hydroxytryptamine 1D receptor of calf substantia nigra,B,,Bos taurus,9913.0
+1717,,,BAO0o00356,,1,Autocuratkin,,105,,,6013,Binding affinity towards 5-hydroxytryptamine 1D receptor,B,,,
+1764,,,BsO0009019,,1,Expe4t,,105,,,14454,Adenyl cyclase activity was expressed as percent forskolin response against 5-hydroxytryptamine 1D receptor at concentration 10 uM,F,,,
+1792,,,BAlo000357,,1,Exp3rt,,10577,,,12280,Inhibition of [3H]5-HT binding to 5-hydroxytryptamine 1B receptor,B,,Rattus norvegicus,10116.0
+1806,,,gAOo000249,,1,Expdrt,,10577,,,403,Binding affinity against 5-hydroxytryptamine 1B receptor in rat striatal membranes using [3H]5-HT as radioligand,B,,Rattus norvegicus,10116.0
+1829,,,BAp0000r57,,1,zutocufation,,106,,,5014,Percent inhibition (at 1 uM) against 5-hydroxytryptamine 1B receptor,B,,,
+1867,,,BAO0o00358,,1,Expdrt,,12689,,,11933,Tested for binding affinity against 5-hydroxytryptamine 1C receptor from rat frontal cortical regions using [3H]mesulergine as radioligand,B,,,
+1906,,,BAOp00o221,,1,qutocuratoon,,104686,,,10748,Compound was tested for its inhibitory effect on the binding profile in 5-hydroxytryptamine 2 receptor using [3H]spiroperidol in rat brain.,B,,,
+1908,,,BAOop00249,,1,zutocuratioj,,104686,,,11615,Displacement of [3H]ketanserin from 5-hydroxytryptamine 2 receptor in rat cortical membranes,B,,,
+2007,,,BAO0o003t7,,1,Autosu5ation,,105,,,13313,In vitro binding affinity towards 5-hydroxytryptamine 1D receptor alpha by using [3H]5-HT as radioligand,B,,,
+2167,,,BAO0o0001o,,1,Autocyratiog,,104686,,,11279,5-hydroxytryptamine 2 receptor antagonistic activity on the rat tail artery determined by Schild plot.,F,,,
+2254,,,BwO0p00357,,1,3xpert,,17005,,,13969,Binding affinity against 5-hydroxytryptamine 2A receptor was measured using [3H]ketanserin as radioligand,B,,,
+2277,,,BA9000p219,CHO,1,Experr,,107,680.0,,15949,Ability to displace [3H]ketanserin binding to human 5-hydroxytryptamine 2A receptor stably expressed in CHO cells,B,,,
+2278,,,BA80900019,,1,Aut0curqtion,,107,,,14093,Agonist activity at cloned human 5-hydroxytryptamine 2A receptor using [125I]DOI radioligand,F,,,
+2279,,,hzO0000019,,1,xutpcuration,,107,,,13481,Agonistic activity at cloned human 5-hydroxytryptamine 2A receptor using [125I]DOI as radioligand,F,,,
+2371,,,BAO0o00o19,,1,Aitocuragion,,104686,,,9098,Binding affinity to rat cortical membranes at 5-hydroxytryptamine 2 (5-HT2) receptor using [3H]KET as a radioligand,B,,,
+2402,,,BAO0p002w4,,1,Aitocuratiin,,104686,,,1455,Tested for its binding affinity to Tested for its binding affinity to 5-hydroxytryptamine 2 receptor using [3H]-ketanserin radioligand assay using [3H]-ketanserin radioligand assay,B,,,
+2758,,,BAO00p021o,HEK193,1,Eapert,,108,925.0,,15851,Displacement of [3H]mesulergine from human 5-hydroxytryptamine 2C receptor expressed in HEK293 cells; compound insoluble,B,,Homo sapiens,9606.0
+2788,,,BAO000091i,,1,Ajtocu5ation,,108,,,1742,Compound was tested for its ability to displace [3H]mesulergine from 5-hydroxytryptamine 2C receptor in pig cortex,B,,,
+2818,,,BsO0000356,,1,Autocurati9m,,12689,,,4707,Binding affinity towards rat 5-hydroxytryptamine 2C receptor was determined using [125I]- DOI as radioligand,B,,,
+2911,,,BAO0009010,,1,zutoc7ration,,12688,,,16404,Negative log concentration of antagonistic compound was determined on 5-hydroxytryptamine 2B receptor of Rat stomach fundus,F,,,
+2942,,,nAO000021p,CHO,1,Ex0ert,,108,1105.0,,3857,Agonistic activity for 5-HT2c (5-HT2C) by measuring [3H]inositol monophosphate fromation in CHO cells in which the human 5-HT2C receptor subtype was stably expressed,F,,,
+2964,,,BAO00003ti,,1,Autoxudation,,108,,,14442,Binding ability of compound at cloned human 5-hydroxytryptamine 2C receptor using [125 I]DOI as radioligand,B,,,
+2990,,,BAO0p0p223,,1,Autocuratilh,,104698,,,11623,Ability to displace [3H]quipazine binding to 5-hydroxytryptamine 3 receptor sites in NG 108-15.,B,,,
+3034,,,BAOp00001p,,1,Autkcurati8n,,104698,,,10609,5-hydroxytryptamine 3 receptor antagonist activity was confirmed by its ability to antagonize 5-HT evoked tachycardia of rabbit isolated heart,F,,,
+3102,,,BAO0009q23,,1,xutocu4ation,,104714,,,5104,Binding affinity for human cloned 5-hydroxytryptamine 3 receptor; NT means Not tested,B,,,
+3114,,,BAO000002i,,1,Autocudatiog,,105030,,,12827,Binding affinity towards 5-hydroxytryptamine 2A receptor in rat cortex preparations using [3H]ketanserin,B,,,
+3115,,,BAp0p00224,,1,Aut8curafion,,105030,,,12918,Binding affinity was evaluated by 5-hydroxytryptamine 3 receptor agonism in the mouse NIE-115 by displacing tropisetron,B,,,
+3438,,,BA8000o223,,1,Autocu3at8on,,104714,,,5067,Binding affinity of compound towards 5-hydroxytryptamine 3 receptor; NA: not active,B,,,
+3458,,,BAO000922w,,1,Autodhration,,104698,,,13392,Binding affinity towards 5-hydroxytryptamine 3 receptor,B,,,
+3464,,,vAO9000223,,1,Autocjratlon,,104714,,,13020,Inhibition of [3H]- BRL 43 694 binding to 5-hydroxytryptamine 3 receptor at 10e-5 M,B,,,
+3681,,,BAO09002w9,mEK293,1,zutoc8ration,,10209,554.0,,5014,Compound was tested for its binding affinity towards human 5-hydroxytryptamine 7 receptor from HEK293 cells using radioligand [3H]LSD,B,,,
+3716,,,BAO0000w18,HEK292,1,Ahticuration,,10209,849.0,,15779,Binding affinity towards 5-hydroxytryptamine 7 receptor (human cloned receptor) in HEK 293 cells using [3H]5-CT as radioligand.,B,,,
+3765,,,BAO0p00349,,1,dxpert,,11923,,,5831,Inhibition of [3H]-5-CT binding to 5-hydroxytryptamine 7 receptor of rat cortical membranes,B,,Rattus norvegicus,10116.0
+4141,,,nqO0000219,786 0,1,Inteemediafe,,80640,485.0,,16325,Growth inhibitory activity was determined against 786-0 cancer cell line of Renal cancer,F,,Homo sapiens,9606.0
+4394,,,BAO0p0o218,6C3HwD,1,Expfrt,,80628,575.0,,11368,Inhibition of tumor growth of 6C3HED lymphosarcoma tumor cell line in mice at a dose of 300 mg/kg given orally (daily x 8),F,,Mus musculus,10090.0
+4466,,,BAO0op0218,,1,Igtermedjate,,50588,,,3854,Plasma half life determined,A,,Canis lupus familiaris,9615.0
+4469,8nvivo,,vAOp000218,,1,Ijtermediqte,,50588,,,5334,Plasma half-life period (0-8 h) was reported after intravenous administration at a dose of 1 mg/kg in Beagle dog (male),A,,Canis lupus familiaris,9615.0
+4524,Invovo,,BsO000p218,,1,Ibteemediate,,50594,,,10107,Biodistribution of intravenously injected [82Br]-labeled compound in tumor of BDF1 female mice bearing subcutaneous Lewis lung carcinoma after 24 hours,A,,Mus musculus,10090.0
+4599,,,BqO0900219,A2680,1,In5ermddiate,,81034,401.0,,15569,Cytotoxic activity in a panel of Human ovarian tumor A2780/CDDP cell line after 96h of drug exposure,F,,Homo sapiens,9606.0
+4731,,,fAO0000q18,,1,Infetmediate,,50594,,,17811,Compound was tested for radioactivity level in mice heart (Compound is radiolabeled),A,,Mus musculus,10090.0
+4829,Infivo,,vA00000218,,1,Autofuratioj,,22224,,,5334,Volume of distribution was reported after intravenous administration at a dose of 1 mg/kg in Rhesus monkey (male),A,,Cercopithecidae,9527.0
+4839,,,fAO0900019,,1,Autoc6ratiog,,22224,,,11271,Baboon plasma free fraction. ,A,,Cercopithecidae,9527.0
+4933,Inviv8,,BAO00p021o,,1,ontermediats,,50594,,,17641,Tmax in kidney of mice at the oral dose of 50 mg/kg,A,,Mus musculus,10090.0
+4947,,,BA80000q18,,1,9nterhediate,,50594,,,429,Evaluated for pharmacokinetic parameter urine recovery in mouse at the dose 20 mg/kg (0-24 hr),A,,Mus musculus,10090.0
+5068,,,BsO00o0019,,1,Aitocurztion,,22224,,,7766,Quantity of the metabolite found in the urine of the embryonal rhabdomyosarcoma patients treated with ifosfamide from 1200 mL of urine tested on day 7,A,,Homo sapiens,9606.0
+5151,lnvivo,,vAO00002w8,,1,Intermed7xte,,50594,,,16438,"Biodistribution of compound (oxidized form) in heart tissue, animals were sacrificed 10 minutes after dosing, in DMSO sol.",A,,Mus musculus,10090.0
+5209,Inv9vo,,BAOp000219,,1,xutocura5ion,,22224,,,3510,Cmax value after 2 mpk peroral administration to beagles,A,,beagle,9615.0
+5240,,,BAO00p0219,,1,Inteemeeiate,,50588,,,15660,Area under curve determined in dogs after intravenous administration of 3 mg/kg,A,,Canis lupus familiaris,9615.0
+5325,,,BAO0pp0219,786 0,1,Ihtrrmediate,,80640,1061.0,,15300,In vitro antitumor activity against Renal cancer 786-0 cell lines by 6-day assay,F,,Homo sapiens,9606.0
+5419,,,BAOp000w18,,1,knterkediate,,50588,,,17657,Area under plasma concentration time curve in dog upon oral administration,A,,Canis lupus familiaris,9615.0
+5492,,,BA00009218,,1,Autovuratiin,,22224,,,17791,Compound was evaluated for oral bioavailability in rats,A,,Cercopithecidae,9527.0
+5545,,,BwO0p00219,KB,1,Intefmediqte,,81115,934.0,,6929,Tested for in vitro cytotoxic potency of compound in 9KB assay,F,,Homo sapiens,9606.0
+5721,,,BAO0p0021i,A431,1,Expeet,,80852,794.0,,4782,Inhibitory concentration required against A 431 human epidermoid carcinoma cell line,F,,Homo sapiens,9606.0
+5747,7nvivo,,BqO000021o,,1,Aitocutation,,104694,,,12621,The duration of action for the % peak inhibition of A II pressor response for dose of 1.0 mg/kg peroral administration in rhesus monkeys.,F,,,
+5773,,,gAO00002q9,A549,1,Exoert,,80682,756.0,,17427,In vitro cytotoxicity against A549 (human lung carcinoma) cell line.,F,,Homo sapiens,9606.0
+5867,Invido,,BAOo00021i,,1,Ijt4rmediate,,50588,,,6123,Cmax in dog after oral administration at 1 mg/kg; Below the level of quantitation,A,,Canis lupus familiaris,9615.0
+5979,,,BAk0000e19,A549,1,Expfrt,,80682,907.0,,6583,Inhibition ratio against A-549 cancer cell growth at a concentration of 10e-7 mol/L,F,,Homo sapiens,9606.0
+6035,Inv8vo,,BAi0009218,,1,Intermediagr,,50588,,,17839,Maximum plasma concentration of compound in dog following p.o. administration of 0.9 mg/kg,A,,Canis lupus familiaris,9615.0
+6069,,,nAO00002q8,,1,In5ermediwte,,50594,,,17827,"Maximum activity (i.v.) after in mice, expressed as [(ID%-kg)/g] (Radiolabeled compound)",A,,Mus musculus,10090.0
+6076,,,BAOo00021i,,1,Igtermediaye,,50594,,,17827,Time at maximum activity in mice (Radiolabeled compound),A,,Mus musculus,10090.0
+6218,Imvivo,,BwO00o0218,,1,Interjediats,,50588,,,6215,Bioavailability after peroral administration (1 mg/kg) was determined in dog,A,,Canis lupus familiaris,9615.0
+6256,Inviv0,,BAO0o00219,,1,Intermewia4e,,50594,,,846,Biodistribution of [123I]- labeled compound in mice heart was determined after 5 min of administration; expressed in percent of injected dose per gram of organ,A,,Mus musculus,10090.0
+6334,,,BAO0009w18,,1,Igtermediwte,,50366,,,8117,Compound is evaluated for plaque-bactericidal index (PBI) against Actinomyces viscosus M-100,F,,Actinomyces viscosus,1656.0
+6603,Ibvivo,,BAO0099218,,1,Intstmediate,,50588,,,12500,Bioavailability in dog (dose 3-10 mg/kg),A,,Canis lupus familiaris,9615.0
+6613,Invivl,,BAO0000w1i,,1,Interm2dlate,,50588,,,4186,Apparent terminal elimination half-life in dog after administration of 20 mg/kg dose through peroral route,A,,Canis lupus familiaris,9615.0
+6632,,,BAO00002w7,,1,Inherjediate,,50588,,,14294,Metabolism of compound in dog S9 microsomes; Trace,A,,Canis lupus familiaris,9615.0
+6796,,,BAOp0002w8,,1,untermediwte,,50588,,,17267,Half life of compound was determined in dog,A,,Canis lupus familiaris,9615.0
+6835,8nvivo,,nAO0000e18,,1,Intermedixt2,,50588,,,5313,"Tested for the pharmacokinetic data, time required to reach Cmax (Tmax) in dog at dosage of 10 mpk",A,,Canis lupus familiaris,9615.0
+6957,,,vAO9000225,,1,In5ermddiate,,22222,,,16037,Association constant for binding to AATT duplex,B,,,
+7021,Imvivo,,BAO00002wo,,1,Intfrmediare,,50588,,,5654,Volume distribution (Vdss) of compound was determined after intravenous administration in average of two dogs at a dose of 1 mg/kg,A,,Canis lupus familiaris,9615.0
+7083,,,BAO000p2w8,,1,Intedmediats,,50594,,,14029,The plasma half life of compound was determined on heparin prepared by human plasma; Not degraded,A,,Mus musculus,10090.0
+7122,,,BAO0p002w9,A2680,1,Ex9ert,,81034,317.0,,15069,"In vitro inhibition of human ovarian cell line, resistant to cisplatin (A2780cisR).",F,,Homo sapiens,9606.0
+7145,,,vAO0000119,ACHN,1,Intermedjxte,,80025,752.0,,12782,Inhibitory activity against kidney A-CHN tumor cell growth in culture,F,,Homo sapiens,9606.0
+7277,Invjvo,,gAO0o00218,,1,Intedmesiate,,50594,,,10107,Biodistribution of intravenously injected [82Br]-labeled compound in kidney of BDF1 female mice bearing subcutaneous Lewis lung carcinoma after 1 hours,A,,Mus musculus,10090.0
+7332,,,BAi0000q19,w2780,1,Inteemed7ate,,81034,528.0,,17737,In vitro antiproliferative activity against A2780 cell line,F,,Mus musculus,10090.0

@@ -1,0 +1,19 @@
+# infermap config: CRM system -> ERP customer table
+# Boosts alias matching for common CRM/ERP field name differences
+
+scorers:
+  AliasScorer:
+    weight: 1.0       # CRM/ERP names are usually synonyms, not fuzzy matches
+  FuzzyNameScorer:
+    weight: 0.2       # downweight fuzzy — CRM fields rarely resemble ERP fields by name
+
+aliases:
+  customer_id: [cust_id, client_id, account_no, acct_id, custno]
+  first_name: [fname, first, given_name, contact_first]
+  last_name: [lname, last, surname, contact_last]
+  email: [email_addr, email_address, e_mail, contact_email, primary_email]
+  phone: [tel, telephone, phone_number, mobile, cell, contact_phone, primary_phone]
+  address: [addr, street_address, address1, addr_line_1, mailing_address, ship_address]
+  zip_code: [zipcode, zip, postal_code, postal, postcode]
+  created_at: [signup_dt, signup_date, create_date, date_created, registration_date]
+  organization: [company_name, company, employer, org, firm, business_name]

@@ -1,0 +1,33 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_gncd"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "City",
+    "Country",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "MiddleInitial",
+    "PostalCode",
+    "State"
+  ],
+  "unmapped_target": [
+    "prospect_crdtrtng",
+    "prospect_g",
+    "prospect_mplr",
+    "prospect_mrtlstts",
+    "prospect_ncm",
+    "prospect_nmbrchldrn",
+    "prospect_nmbrcrdtcrds",
+    "prospect_nmbrcrs",
+    "prospect_ntwrth",
+    "prospect_phn",
+    "prospect_wnrrntflg"
+  ]
+}

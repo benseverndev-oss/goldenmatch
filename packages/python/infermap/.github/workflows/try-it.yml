@@ -1,0 +1,98 @@
+name: "Try infermap"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "URL to source CSV (raw GitHub URL, public URL, or gist)"
+        required: true
+        type: string
+      target_url:
+        description: "URL to target CSV (raw GitHub URL, public URL, or gist)"
+        required: true
+        type: string
+      required_fields:
+        description: "Comma-separated required target fields (optional)"
+        required: false
+        type: string
+      min_confidence:
+        description: "Minimum confidence threshold (0.0-1.0)"
+        required: false
+        default: "0.3"
+        type: string
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install infermap
+        run: pip install infermap
+
+      - name: Download source CSV
+        env:
+          SOURCE_URL: ${{ github.event.inputs.source_url }}
+        run: |
+          curl -fsSL "$SOURCE_URL" -o source.csv
+          echo "=== Source (first 5 rows) ==="
+          head -6 source.csv
+
+      - name: Download target CSV
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url }}
+        run: |
+          curl -fsSL "$TARGET_URL" -o target.csv
+          echo "=== Target (first 5 rows) ==="
+          head -6 target.csv
+
+      - name: Inspect source schema
+        run: infermap inspect source.csv
+
+      - name: Inspect target schema
+        run: infermap inspect target.csv
+
+      - name: Run mapping
+        env:
+          REQUIRED: ${{ github.event.inputs.required_fields }}
+          MIN_CONF: ${{ github.event.inputs.min_confidence }}
+        run: |
+          ARGS="infermap map source.csv target.csv --min-confidence $MIN_CONF -o mapping.yaml"
+          if [ -n "$REQUIRED" ]; then
+            ARGS="$ARGS --required $REQUIRED"
+          fi
+          echo "Running: $ARGS"
+          eval $ARGS
+
+      - name: Show mapping results (table)
+        env:
+          MIN_CONF: ${{ github.event.inputs.min_confidence }}
+        run: infermap map source.csv target.csv --min-confidence "$MIN_CONF"
+
+      - name: Show mapping results (JSON)
+        env:
+          MIN_CONF: ${{ github.event.inputs.min_confidence }}
+        run: infermap map source.csv target.csv --min-confidence "$MIN_CONF" --format json
+
+      - name: Show saved config
+        run: cat mapping.yaml
+
+      - name: Apply mapping
+        run: |
+          infermap apply source.csv --config mapping.yaml -o remapped.csv
+          echo "=== Remapped (first 5 rows) ==="
+          head -6 remapped.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: infermap-results
+          path: |
+            mapping.yaml
+            remapped.csv
+          retention-days: 30

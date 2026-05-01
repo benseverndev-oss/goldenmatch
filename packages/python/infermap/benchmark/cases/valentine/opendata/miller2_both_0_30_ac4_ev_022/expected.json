@@ -1,0 +1,104 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FiYe"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "miller2_CouReN"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "miller2_OrgaID"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "miller2_IndigIs"
+    },
+    {
+      "source": "Branch name",
+      "target": "miller2_BrN"
+    },
+    {
+      "source": "Sector percent",
+      "target": "miller2_SecPer"
+    },
+    {
+      "source": "Organisation type",
+      "target": "miller2_OrganTy"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_SecID"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "miller2_ChIss"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "miller2_ProBroCounID"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "miller2_Biodiv"
+    },
+    {
+      "source": "Continent name",
+      "target": "miller2_ConNa"
+    },
+    {
+      "source": "Sector ID",
+      "target": "Sector ID"
+    },
+    {
+      "source": "Organisation class",
+      "target": "miller2_OrganiCl"
+    },
+    {
+      "source": "Division ID",
+      "target": "miller2_DiID"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Fund centre ID",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Programming process (new)",
+    "Project number",
+    "Regional program (marker)",
+    "Section name",
+    "Status",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "miller2_AmSp",
+    "miller2_ClChaMiti",
+    "miller2_CliChaAda",
+    "miller2_ContiID",
+    "miller2_CouRegID",
+    "miller2_CouRegPer",
+    "miller2_Deser",
+    "miller2_DisIs",
+    "miller2_GeEqu",
+    "miller2_ICTAATFoDeve",
+    "miller2_KnoFDevelo",
+    "miller2_OrgN",
+    "miller2_OrgSu",
+    "miller2_PartiDevAGoGov",
+    "miller2_SecNa",
+    "miller2_TrDevelo",
+    "miller2_UrIs",
+    "miller2_YoIss"
+  ]
+}

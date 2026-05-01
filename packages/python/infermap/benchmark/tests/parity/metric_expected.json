@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "expected": [
+    {
+      "name": "perfect_small",
+      "hand_computed": true,
+      "top1": 1.0,
+      "f1_per_case": {"tp": 2, "fp": 0, "fn": 0},
+      "mrr": 1.0,
+      "ece": 0.075
+    },
+    {
+      "name": "all_wrong_small",
+      "hand_computed": true,
+      "top1": 0.0,
+      "f1_per_case": {"tp": 0, "fp": 2, "fn": 2},
+      "mrr": 0.5,
+      "ece": 0.75
+    },
+    {
+      "name": "half_right_triangle",
+      "hand_computed": true,
+      "top1": 0.5,
+      "f1_per_case": {"tp": 2, "fp": 2, "fn": 2},
+      "mrr": 0.75,
+      "ece": 0.35
+    },
+    {
+      "name": "all_unmapped_perfect",
+      "hand_computed": true,
+      "top1": 1.0,
+      "f1_per_case": {"tp": 0, "fp": 0, "fn": 0},
+      "mrr": 1.0,
+      "ece": 0.0
+    },
+    {
+      "name": "tie_break_test",
+      "hand_computed": true,
+      "top1": 0.0,
+      "f1_per_case": {"tp": 0, "fp": 1, "fn": 1},
+      "mrr": 0.5,
+      "ece": 0.5
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+prospect_AgencyID,prospect_NumberCreditCards,prospect_MiddleInitial,prospect_Phone,prospect_OwnOrRentFlag,prospect_NumberCars,prospect_AddressLine2,prospect_LastName,prospect_City,prospect_NetWorth,prospect_State,prospect_Income,prospect_NumberChildren,prospect_MaritalStatus,prospect_Age,prospect_CreditRating,prospect_Employer
+Ger313,,P,1-451-999-0585,O,2.0,,Gerlt,Lakewood,3632370.0,MA,379475.0,3.0,S,66.0,734.0,Arkansas Best
+inn632,3.0,,1-024-023-6087,R,2.0,,innes,Lafayette,789945.0,DC,58829.0,5.0,M,17.0,456.0,Universal Health Services
+END803,8.0,,1-322-455-4531,R,3.0,,ENDSLEY,Anaheim,684788.0,UT,477833.0,0.0,W,69.0,414.0,Advanced Micro Devices
+Ake822,9.0,G,1-128-837-1248,O,2.0,,Akens,New York,604198.0,MS,332075.0,1.0,M,46.0,565.0,Frontier Communications
+MAA947,9.0,,1-229-310-1203,U,5.0,,MAAS,Jackson,1003490.0,GA,16610.0,5.0,U,98.0,335.0,HNI
+vel1002,10.0,A,1-979-333-1341,R,1.0,,veloz,Pembroke Pines,403069.0,UT,42795.0,3.0,W,42.0,845.0,WGL Holdings
+Bou1004,,I,1-931-796-7793,O,5.0,,Boucher,Chula Vista,3287404.0,VA,331313.0,4.0,U,85.0,463.0,Starwood Hotels & Resorts
+Pei1008,1.0,,1-807-945-8305,R,5.0,,Peiser,San Diego,634672.0,RI,269134.0,2.0,M,72.0,752.0,Smurfit-Stone Container
+NAM1042,1.0,,1-462-837-6507,O,5.0,,NAMONT,Wichita,3372164.0,MT,495523.0,3.0,U,58.0,619.0,MetLife
+Dru1264,5.0,,1-367-411-5545,O,5.0,,Drummond,Orlando,2476124.0,GA,285802.0,4.0,,29.0,794.0,Collective Brands
+TAH1315,4.0,,1-519-379-3422,O,3.0,,TAHARUDDIN,Augusta,1528063.0,AL,439539.0,5.0,U,41.0,710.0,Boise Cascade Holdings
+spi1544,5.0,,1-195-535-4681,O,4.0,,spieker,Independence,1275045.0,TN,87172.0,5.0,U,18.0,463.0,BJ Services
+kah1571,5.0,,1-869-700-6220,R,4.0,,kahan,Huntington Beach,468253.0,IL,481240.0,5.0,M,28.0,803.0,Celanese
+O'c1580,10.0,,,U,4.0,,O'colmain,San Antonio,1204969.0,HI,172891.0,5.0,M,49.0,735.0,Dean Foods
+Bov1691,8.0,,1-698-328-4742,O,0.0,,Bovenizer,Iqaluit,2372376.0,Saskatchewan,66545.0,4.0,U,99.0,727.0,Mirant
+Gue1761,8.0,,1-896-942-9504,R,2.0,,Guerette,Mesa,2266559.0,ND,75233.0,1.0,S,49.0,354.0,Unified Grocers
+lin2043,1.0,D,1-211-696-3346,R,2.0,,lindstrom,Wilmington,2137917.0,Nova Scotia,5462.0,2.0,D,55.0,488.0,Thor Industries
+Mor2072,0.0,,1-694-022-9430,O,3.0,,Morey,Tempe,1364798.0,FL,301522.0,3.0,W,12.0,590.0,Philip Morris International
+Pas2111,5.0,,1-666-464-1272,O,1.0,,Pastorek,Pittsburgh,1996495.0,WY,37429.0,5.0,M,0.0,389.0,Sanderson Farms
+Mck2361,10.0,,1-198-881-4667,O,3.0,,Mckay,Mesquite,439741.0,NE,497702.0,5.0,U,44.0,575.0,Cypress Semiconductor
+SAV2518,10.0,Y,1-984-474-2371,O,2.0,,SAVARIMUTHU,Boise,1611675.0,OK,224196.0,3.0,M,96.0,392.0,Systemax
+O'n2635,2.0,,1-826-078-8447,U,0.0,,O'neil,Quebec,266532.0,RI,402436.0,2.0,M,26.0,813.0,LifePoint Hospitals
+Tsc2719,9.0,G,1-009-000-6688,O,2.0,,Tschaja,Brownsville,1406816.0,LA,331919.0,5.0,M,95.0,582.0,HealthSouth
+BLU2737,2.0,,1-226-650-8062,R,2.0,,BLUMENFELD,Mesa,3739836.0,MA,98279.0,0.0,M,1.0,520.0,Newell Rubbermaid
+DAN2890,3.0,S,1-071-853-3289,R,3.0,,DANILOWICZ,Corona,449606.0,Quebec,168657.0,5.0,W,49.0,400.0,Group 1 Automotive
+TUR2983,6.0,,1-621-215-3506,O,2.0,,TURNER,Lafayette,1752738.0,GA,189463.0,4.0,S,24.0,512.0,Visteon
+Fed3051,10.0,C,1-307-275-7773,U,5.0,,Feder,Santa Clara,1792215.0,OK,115045.0,1.0,S,5.0,718.0,Spectra Energy
+GOD3061,10.0,T,1-148-531-2413,O,1.0,,GODCHARLES,Winnipeg,3948680.0,Alberta,44842.0,0.0,U,40.0,,Verizon Communications
+Aza4399,5.0,,,R,0.0,,Azarshahi,Alexandria,446039.0,CT,351059.0,1.0,U,82.0,538.0,Wesco International
+lov4462,,,1-721-411-5225,O,4.0,,lovatt,Sudbury,2961203.0,MA,328939.0,3.0,S,,679.0,NuStar Energy
+Tol4517,4.0,,1-889-959-3037,U,,,Tolson,Mount Pearl,656689.0,KS,422529.0,0.0,S,90.0,528.0,Capital One Financial
+kop4694,10.0,M,1-287-838-5198,O,5.0,,kopke,Las Vegas,1140761.0,MN,75217.0,5.0,M,78.0,807.0,Emerson Electric
+Rmn4859,3.0,,1-657-436-3994,,2.0,,Rmnsmghbbzgvklxyhjfdjpy,London,,DE,201771.0,0.0,W,29.0,340.0,Colgate-Palmolive
+Tij5243,7.0,,1-937-268-3237,O,2.0,JOEYORUDFSSWBHGIIGEMROLXBUWOEFEITXXWUIAPEKQAEIEOSXQMNEVNZRUJKBVJC,Tijddfobwapoujtyigxz,Charlottetown,130481.0,MD,228899.0,3.0,D,85.0,336.0,
+Bmh5417,3.0,F,1-938-625-9297,R,4.0,XNMEPUNLKYAPSWSTLWFGNOZQUPKPAMSJFB,Bmhyyskvg,Des Moines,3625553.0,OH,384605.0,1.0,D,,726.0,Costco Wholesale
+Qah5435,2.0,Q,1-779-275-3016,O,3.0,QYALERAEXLIJKDNGOPKQAMDXJIUQISPWYOZJTFKZHLUKWNUXGMNKQEZBLMTXSCRUAQYWH,Qahwyafzljxdxarlhickpyz,Newark,692674.0,Quebec,437953.0,2.0,S,62.0,347.0,Psychiatric Solutions
+Lkj6039,10.0,,1-851-285-4289,R,4.0,voghdskpdsp,Lkjtfwzvjfdjqsawjptt,Sunnyvale,178210.0,ND,448438.0,0.0,M,64.0,443.0,Sun Microsystems
+Obc6069,10.0,,1-067-526-4224,R,1.0,Jlebphbpseculeqtdxvmbihajkxbnmzozw,Obcyfpeyi,Hilo,1317572.0,UT,365995.0,3.0,M,42.0,799.0,Verso Paper
+nem6109,0.0,,1-314-409-0183,R,,Iaumttusffdstcrwuwxvkthxm,nemijfeivey,Richmond,2542811.0,NM,200695.0,5.0,M,84.0,742.0,
+Fmx6167,5.0,k,1-106-554-8386,O,1.0,ividkmuqhsatvkrbjxwxgpysueiwfmhalsrzchnqyiwoqyovzyrmnwhumrojdjomcp,Fmxwgkthdgwpdrwnuonlmmb,New Haven,2290354.0,SD,331562.0,1.0,S,73.0,746.0,Centex
+iat6184,0.0,,1-865-208-8997,,0.0,Fqfpabuhoqnagzdpvauccbumwbhofvtzjdecfwiumpbhlqcutyrqvllqavs,iattsugaz,Corona,3870650.0,CA,444525.0,3.0,W,90.0,502.0,Foot Locker
+jqi6347,3.0,,1-293-302-9458,O,1.0,wyueyphpiuocwsrttklxeoxvxzoofmtmwadqvcpjigjovxouvdgaepjpnfbubhpyvycwozhl,jqikedaxaq,Oshawa,954510.0,MT,190064.0,4.0,M,,605.0,Reynolds American
+Nzp6463,4.0,,1-891-278-6615,O,4.0,pwzertbsckquqxdxyjiftqypobppedvomezto,Nzpxm,Charleston,3610572.0,OR,13829.0,3.0,M,63.0,696.0,Family Dollar Stores
+vpo7093,10.0,,1-293-023-5397,R,5.0,Ivcmifbgqefs,vpoycendzdnpaijtmulqtigtcupg,Wichita,304641.0,FL,92995.0,4.0,W,11.0,703.0,ConocoPhillips
+Kiz7120,1.0,j,1-244-822-5596,O,0.0,gwopsifrjtnjhpsgwftgvziqpkttepowdwmnxtwyhgoqqkuhyqlnod,Kizwkbwttbikwaycqalkvsn,Miami,2622354.0,RI,498148.0,1.0,M,61.0,705.0,Cinemark Holdings
+Isf7199,10.0,,1-648-498-9730,U,5.0,rbkfcwuglqtxifkmxpuchrvqemosasgiwqlwjzjfodrfdtqcztzibiyaqeywjb,Isfmmxsxhetnwt,Sandy,1542479.0,CT,342971.0,4.0,U,36.0,371.0,T. Rowe Price
+Oht7435,3.0,,,R,5.0,,Ohtqwaajovhpq,Durham,2965150.0,NY,450418.0,0.0,W,21.0,729.0,J.B. Hunt Transport Services
+PJQ7504,9.0,,1-642-299-6655,U,4.0,WKSBVOFGJHQGAEKUYRZHHPH,PJQSPMBUHYQKBOZ,Berkeley,3899461.0,UT,76681.0,5.0,W,29.0,818.0,
+pfz7588,10.0,e,1-622-866-0937,,1.0,dkloiwbnfvzdahunlhpjrogccxqvumqnusxtgmumlgkqbfeavzoqjurkuzwgviv,pfzjoarqopfjtzjalxxxeq,Montpelier,3428495.0,Saskatchewan,,1.0,M,56.0,345.0,State Farm Insurance Cos.
+Fif8137,6.0,j,1-297-916-2199,O,4.0,Ztancthniyxotwiwdunybxhnwrflvsje,Fifckjehkgbphvdfydlmyromk,Shreveport,117995.0,MI,271286.0,5.0,U,57.0,618.0,JohnsonDiversey
+qfx8174,8.0,,1-707-823-6520,,1.0,XJUJFHUPUISDCZPHZWPLMHNZUIKKSYADMEHAVTWUCDMCIJYFHPQQUEVJTZAGGARCWDB,qfxoosd,Atlanta,2189380.0,NC,312166.0,5.0,W,81.0,717.0,Volt Information Sciences
+kjt8312,0.0,,1-383-665-2314,O,1.0,CJBOAJD,kjtvzrmdyriip,Albuquerque,3028301.0,OK,119573.0,0.0,M,53.0,693.0,Paychex
+Gnx8406,1.0,,1-621-293-7749,O,0.0,Kyvvcqsxpmfruwcqmsefienrnnwreessopvlicyvgbsrrkluncwbxzljfrizfbvlqvcvpieqkkysgbom,Gnxcpekaoavtafalndszen,Hampton,1456507.0,Alberta,494763.0,,,6.0,541.0,Pulte Homes
+Swy8433,4.0,,1-407-766-2137,O,0.0,Xsqrkkyamkgdvadmpwujihe,Swyzwuiijmxqufig,Springfield,631885.0,SD,303962.0,1.0,,,711.0,Pentair
+Vtc8567,7.0,,1-709-908-2801,O,0.0,lsysoem,Vtcsb,St. Louis,2385565.0,NJ,133766.0,4.0,U,,708.0,Commercial Metals
+xxu8676,8.0,p,1-161-099-3879,O,0.0,Bqygdgvozxooxhxzqpkreiatjcszflqcqbpdvczgzdgiwnthhlzgxuwxxtcdlwzmmyewxzuchuqffj,xxuehkozdnaagxp,Savannah,1597163.0,Saskatchewan,403347.0,4.0,M,3.0,496.0,Sysco
+jrh8973,0.0,J,1-636-511-8748,R,2.0,BKEVZAZSADEPKICBOZUISHDNZXVSRBOCIPDPGRIANRWYUUEJOAEABFOOFM,jrhorvtcmekuenwdie,Honolulu,,MS,145525.0,1.0,W,95.0,662.0,El Paso
+OQK9435,4.0,k,1-179-752-3528,O,1.0,Nraxrxliiotaymrybq,OQKWFFLWNULPTXOUZTOLG,Rockford,1121482.0,CO,213252.0,5.0,M,32.0,404.0,FedEx
+ufh9459,1.0,N,1-250-092-6595,O,0.0,FLTBIOLOV,ufhrukyazauhneec,Hull,191154.0,VT,38251.0,2.0,,34.0,496.0,Integrys Energy Group
+wgw9502,,f,1-293-053-3055,O,0.0,trfsawnznjpeqncwyxg,wgwtntknbftkvzrhqumibzmqxvhqpg,Columbus,2102334.0,Ontario,311882.0,5.0,U,82.0,693.0,Cintas
+Oxi9586,2.0,,1-998-953-3901,O,,tddjhwydgidvepwfxkrywjfolmq,Oxiaooaibcbbockq,Charleston,3024522.0,MI,365389.0,4.0,M,3.0,714.0,Philip Morris International
+uyo9701,,l,1-168-431-2457,O,2.0,Iwknmhengae,uyoxbaxfrnpqds,Fullerton,2595389.0,DC,131135.0,2.0,S,,544.0,Cracker Barrel Old Country
+kqr9796,0.0,,1-038-099-3417,O,0.0,Rvgdxfvxlcpjeyajokzffejmi,kqraiarz,Salem,1353495.0,OR,250390.0,5.0,S,99.0,798.0,Beckman Coulter
+Uax9822,,Z,,O,2.0,jlrncrjhmmeinduhnmgfbuiwqcdbquapaogubbugrmwzcpijphmnnevfqvdtpgmyusucbsg,Uaxubjtupwcipuhegkyn,Manchester,,Quebec,310092.0,0.0,M,87.0,397.0,Coca-Cola Enterprises
+lfz9915,10.0,,1-182-809-0312,O,4.0,OCORLMNMVNTHUUOK,lfzzr,Lancaster,1873427.0,HI,246734.0,3.0,,99.0,642.0,Gap
+rnd9989,5.0,S,1-224-654-1813,O,2.0,Cgonstohcaiwzjxvhdprauxebakoakfaetzxgc,rndesjpggsqsd,Amarillo,3364901.0,SD,321254.0,3.0,S,4.0,321.0,PHH
+twk10216,,,1-989-550-9428,O,0.0,Tlbtztwqifwlttfurfrptsyngeldjdegwmuouynixnazgqraojssnxhhfatnyvorwjlqvag,twkfhohotdwpakuzscfakrvpgxofbc,Salt Lake City,694599.0,KS,288645.0,1.0,M,55.0,521.0,Microsoft
+YCW10228,5.0,,1-730-960-9835,R,1.0,LXOYVYWMWKQNAIPOFZVPANRRRMIONMMMJOPJOGJEWY,YCWVGCIR,Kitchener,67168.0,IL,37890.0,3.0,U,15.0,780.0,Con-way
+Uhj10244,10.0,,,O,3.0,ecurmxecpvwflymapwd,Uhjdgtmqtfmwfrqfgheobshjkmdqta,Oxnard,934449.0,GA,491342.0,0.0,,86.0,317.0,NTK Holdings
+Xiy10615,2.0,Q,1-087-846-1491,U,2.0,Jqskdmpsdkilklmtojymcvdszeqggcjqcixnt,Xiyppwxkokulxad,Naperville,3121707.0,AR,172623.0,,W,,764.0,ServiceMaster
+Zdi10658,9.0,L,1-277-150-2005,R,3.0,Rhddu,Zdilm,Mesquite,2140609.0,IN,314789.0,1.0,S,32.0,812.0,Texas Instruments
+dhc10727,6.0,Y,1-584-645-0903,O,2.0,kccssevyztvilrspwhqxalpqzpywfvovgxfbubimhbievclrsxd,dhcsjmvaeedkwjjxcf,Charlottetown,881584.0,MD,351830.0,3.0,M,14.0,493.0,MeadWestvaco
+Jef10894,4.0,,,O,2.0,,Jefueehbaxnrkbzqvotkotc,St. Paul,242007.0,TN,291759.0,3.0,M,80.0,489.0,LifePoint Hospitals
+poi11018,6.0,M,1-703-059-8730,O,2.0,oobdujfkmwstgsyexocrfxevjsrcogumservfrjtwnqrquggxogbtfhdgbhkmcvrq,poikivdweeuf,Salem,57285.0,OH,196672.0,3.0,S,90.0,631.0,Bed Bath & Beyond
+uof11022,6.0,,1-766-928-4387,O,1.0,Vbfmfskyqiwadtuaaywgdxxmptysjokuuaqfuebh,uoflixknvtgxz,Richmond,,VT,472144.0,5.0,S,,459.0,U.S. Bancorp
+MTX11142,0.0,,1-501-406-1681,,5.0,tlugnthmeqfqolgbxgkhcdxdwayqdawwhpeghfnrgemevoittfnssp,MTXGRQNFQIUCP,Cheyenne,1238464.0,AZ,233605.0,0.0,U,48.0,639.0,BlackRock
+Btd11420,0.0,,1-765-984-9770,O,2.0,Krizncumdmpvbsmcsqdkchhonlzvsqphqpqmfdbbvadegecjnmzrjbsjafdwpzfcilnpzl,Btduzcqujtbngeuv,Indianapolis,3417428.0,IL,236265.0,4.0,M,86.0,310.0,CSX
+NUY11457,7.0,N,1-679-937-7757,O,1.0,hfdhf,NUYXUF,Sandy,391600.0,ID,245433.0,4.0,W,27.0,594.0,Sara Lee
+sih11501,8.0,,1-088-114-5997,O,3.0,Dxxwsnhylyibcdrwyxhhfvxbgjkkpsnfksqqgdmmrgmwufesttfyyucpgmcty,sihwnydoosaazxaczfge,Lubbock,2245593.0,WI,50503.0,1.0,W,14.0,305.0,Asbury Automotive Group
+WBA11867,9.0,O,,U,0.0,Epkosdlztxaiyemkneavgnxaeonlapequwftoxtzjvangxtjvszrnklspuc,WBASBLQFRPQEAJUKYADJUKBLT,New Orleans,3588182.0,KY,136570.0,1.0,M,33.0,509.0,Motorola
+ATF11947,9.0,,1-061-449-9792,O,1.0,ntcrrnblttaenxgjyqrjqmngdaklvgtcprbdssswfwmodnpmillzwkpdaoffrl,ATFGPXUMCRKPPLWRROJVH,Edmonton,120044.0,UT,294346.0,2.0,W,1.0,,Key Energy Services
+Qol12390,10.0,,1-738-319-9493,O,2.0,Xqgmtscooiritmddrnthxnvhslxhvivftmidvwdfgkryapuilxxhagjcenqqawlfqsnqxnpnmhqritfi,Qolzvi,Modesto,,TX,231999.0,4.0,U,46.0,,State Farm Insurance Cos.
+ujj12510,1.0,E,1-247-295-5648,O,1.0,Dnqltxxovzvbiqvpgqupzuofsrhvcqnnbahbshpxyszocqoudyuyuhknuvfrmrvelabmpgugtqie,ujjaxiqkkzqsvzfvncmqbxrdj,Amarillo,1520421.0,OH,213338.0,1.0,M,37.0,,Ingles Markets
+NBY12668,6.0,y,1-680-715-8462,O,0.0,GWFUJJHDUVRPQXFAHDGJTSXUWCGIVAPOXGNPTKQZPOJSBOBLJSTFGQCFWLQT,NBYTRSNBQFWXBXEYE,Montpelier,,Saskatchewan,220331.0,2.0,S,57.0,570.0,W.R. Berkley
+Pdr12808,3.0,A,1-645-678-6379,O,1.0,Nkatbekqniugyfkkvbruchyiwhfsncnbstjjrnkpywk,Pdrvpfugzngjgwedgllvziyiocaf,Huntington Beach,569710.0,ME,240823.0,4.0,S,6.0,787.0,Kla-Tencor
+Xyl12908,5.0,,1-948-440-4183,O,3.0,ypxbefsxeyczbsjxystvgxovztbg,Xylstjdqxirzjw,Mesa,158030.0,DC,294444.0,2.0,D,61.0,375.0,Corn Products International
+Buw13007,7.0,,1-162-274-8226,R,1.0,Lioesagcbfygoscd,Buwqprgjue,Kitchener,2509945.0,Prince Edward Island,267166.0,1.0,M,82.0,521.0,Unisys
+ZVG13345,0.0,,1-549-916-9929,R,1.0,Vummdmhbujbvyzzvdnfgnopgpgnexkxg,ZVGFEVPNHUCBKH,Aurora,1048082.0,SD,166958.0,1.0,S,19.0,405.0,Harman International Ind.
+fjh13454,4.0,,1-173-080-2680,R,4.0,Zdezocstixxswfqhgqwbianpgtwdobatppjhkqfnozkidwlcltqkvii,fjhhsa,Columbus,663678.0,NH,423148.0,,W,22.0,571.0,Unified Grocers
+Pro13688,4.0,F,1-896-526-5251,,0.0,LVEVQHKWELLGLLRD,Promkty,West Covina,,NH,,4.0,M,91.0,,
+UOA13764,5.0,,1-821-630-1765,O,4.0,cfuefcefeuxotpjkj,UOAZXWFWJEXOVMVYJOLP,Topeka,172690.0,CA,463486.0,3.0,U,35.0,373.0,Family Dollar Stores
+GYF13858,0.0,G,1-058-746-3310,O,0.0,Yqeprcaahuzjqgzybeylddors,GYFXIHONBNGCFYCWCEDTORJ,Santa Clarita,2981392.0,MO,479617.0,1.0,U,82.0,810.0,Nicor
+Tzo13916,2.0,H,1-981-003-4317,O,0.0,xtudhosmypdwlwtojvukminuoqwtcxjfrkqnedvas,Tzosfik,Great Falls,2308599.0,IA,58149.0,5.0,U,46.0,542.0,Sprint Nextel
+Qql13957,8.0,M,1-974-185-9652,O,3.0,Fqekvhjymhvjtsijzjemhrmqwpejqopxbwybxonoojmnfkdnuydmymcecsrhqcpihegkqrabxzohp,Qqlxahfkoxtqa,Tacoma,3152565.0,Nova Scotia,244172.0,4.0,S,29.0,641.0,State Farm Insurance Cos.
+Lol13980,7.0,K,1-099-824-6833,U,0.0,Xymozlfha,Loldqbhhtaawnwitthrcajzt,Lowell,2057569.0,NE,5313.0,2.0,M,51.0,591.0,Metals USA Holdings
+Jub14036,10.0,,1-236-642-3891,O,4.0,Qegkjbhjhlpwvcoadrlibwtdttpbchjcumduvvtgbvfniuqti,Jubdnxksaciggsia,Berkeley,,WV,211821.0,4.0,U,33.0,322.0,
+Lsp14375,2.0,,1-905-293-8200,R,0.0,ehxtgrzqgljieciwvbzybeivoblervdkbgdcsgpaoayjuzfxgcmf,Lspxpmojrelsdhwqgkoopycqty,Jersey City,3877401.0,WY,439973.0,0.0,U,72.0,627.0,BB&T Corp.
+uwk14542,5.0,,1-475-348-8492,R,3.0,NKRKXWJNGJXWPJ,uwkgpmawbtshf,Fresno,2256649.0,VT,386973.0,1.0,S,19.0,581.0,Sprint Nextel
+Eis14579,4.0,M,1-531-614-9290,O,4.0,CARRPCLGMZMSYFIZXGJWINRTGECIAAOVDJVVLVXSUETTITPMFBNQVT,Eiswjqnqdrrlwgjypsquohaarst,Hollywood,2191968.0,NH,249823.0,3.0,M,41.0,684.0,Hanesbrands
+Xyn14745,6.0,v,1-600-016-9310,O,5.0,,Xynuratqisuwuawtxmpswepmq,Evansville,702192.0,Quebec,359842.0,3.0,S,2.0,560.0,

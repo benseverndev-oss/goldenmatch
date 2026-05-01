@@ -1,0 +1,101 @@
+assay_id,src_id,description,assay_tissue,bao_format,src_assay_id,assay_organism,assay_category,curated_by,doc_id,assay_test_type,assay_type,assay_tax_id,assay_strain,assay_cell_type,assay_subcellular_fraction,tid
+107,1,In vitro anti-HBV activity in 2.2.15 cells,,BAO_0000218,,Homo sapiens,,Intermediate,1593,,F,9606.0,,2.2.15,,50587
+410,1,accumulation of compound in 3LL cells was measured without DFMO by HPLC at 10 uM dose,,BAO_0000219,,Mus musculus,,Intermediate,16169,,F,10090.0,,3LL cell line,,80620
+435,1,Effective dose required against Trypanosoma cruzi amastigotes in 3T3 Fibroblasts,,BAO_0000219,,Mus musculus,,Intermediate,4504,,F,10090.0,,NIH3T3,,80951
+489,1,Effect on GLUT 1 glucose transporter expression in 3T3-L1 adipocytes at dose of 30 uM,,BAO_0000219,,Mus musculus,,Intermediate,11902,,F,10090.0,,3T3-L1,,80006
+521,1,Compound was tested for insulin-sensitizing activity by measuring triglyceride accumulation from insulin regulated differentiation of 3T3-L1 cells at 10 uM expressed as percent activity of pioglitazone,,BAO_0000219,,Mus musculus,,Intermediate,3966,,F,10090.0,,3T3-L1,,80006
+712,1,Effective dose for half-maximal decrease in the accumulation of 5-hydroxytryptophan (5-HTP) in reserpinized rat brain hemispheral area by po administration,,BAO_0000218,,Rattus norvegicus,,Autocuration,12058,In vivo,F,10116.0,,,,22226
+751,1,Percent inhibition was measured against 5-amino-4-imidazolecarboxamide ribotide transformylase(pigeon liver) enzyme at 10E-5 M inhibitory concentration,,BAO_0000019,,Columba livia,,Autocuration,7587,,B,8932.0,,,,22226
+1140,1,Binding affinity towards 5-hydroxytryptamine 1A receptor in rat frontal cortex homogenates,,BAO_0000019,,,,Expert,16616,,B,,,,,10576
+1292,1,Inhibitory activity against rat hippocampal tissue 5-hydroxytryptamine 1A receptor at 0.1 uM concentration,Hippocampus,BAO_0000221,,,,Autocuration,15260,,B,,,,,10576
+1308,1,Ability to displace [3H]-8-OH-DPAT from rat hippocampal homogenate 5-hydroxytryptamine 1A receptor; Not tested,Hippocampus,BAO_0000221,,,,Autocuration,14093,,B,,,,,10576
+1425,1,Displacement of [3H]8-OH-DPAT from rat hippocampal 5-hydroxytryptamine 1A receptor,Hippocampus,BAO_0000221,,Rattus norvegicus,,Expert,14356,,B,10116.0,,,,10576
+1520,1,"Binding affinity for rat cortex 5-hydroxytryptamine 1A receptor, by displacement of 0.2 nM [3H]8-OH-DPAT radioligand",,BAO_0000019,,,,Expert,14748,,B,,,,,10576
+1536,1,Compound was tested for binding affinity against 5-hydroxytryptamine 1A receptor,,BAO_0000357,,,,Autocuration,4639,,B,,,,,51
+1585,1,The compound was tested for CNS binding affinity towards 5-hydroxytryptamine 1B receptor from cloned gorilla membranes expressed in cultured HEK 293 cells,,BAO_0000219,,Gorilla gorilla,,Intermediate,14447,,B,9593.0,,HEK293,,105571
+1655,1,Oral effective dose against hypothermia in the guinea pig caused by stimulation of central 5-hydroxytryptamine 1D receptors by the agonist GR-46611; range is 2-9,,BAO_0000019,,Cavia porcellus,,Intermediate,12409,,F,10141.0,,,,105570
+1675,1,"Compound was evaluated for the stimulation of [35S]GTP-gamma-S, binding in CHO cells expressing the 5-hydroxytryptamine 1D receptor.",,BAO_0000219,,,,Autocuration,14159,,F,,,CHO,,105
+1680,1,"Stimulation of [35S]GTP-gamma-S, binding in CHO cells expressing the human 5-hydroxytryptamine 1D receptor.",,BAO_0000219,,,,Expert,15332,,F,,,CHO,,105
+1825,1,Compound was tested for binding affinity against 5-hydroxytryptamine 1B receptor,,BAO_0000357,,,,Autocuration,4639,,B,,,,,106
+2046,1,Compound was tested for the displacement of [3H]5-HT binding to cloned human 5-hydroxytryptamine 1E receptor stably expressed in CHO cells,,BAO_0000219,,,,Autocuration,15250,,B,,,CHO,,10618
+2287,1,Binding activity against cloned human 5-hydroxytryptamine 2A receptor using [125I]DOI as the radioligand.,,BAO_0000357,,,,Autocuration,14755,,B,,,,,107
+2548,1,Ability to displace [3H]ketanserin radioligand from porcine 5-hydroxytryptamine 2A receptor; ND denotes not determined,,BAO_0000357,,,,Autocuration,4921,,B,,,,,10621
+2616,1,Binding affinity against 5-hydroxytryptamine 2A receptor using [125I]DOI as radioligand,,BAO_0000357,,,,Autocuration,16633,,B,,,,,12687
+2665,1,In vitro binding affinity at 5-hydroxytryptamine 2A receptor by displacement of [3H]ketanserin from rat cortex,,BAO_0000019,,Rattus norvegicus,,Expert,15535,,B,10116.0,,,,12687
+3152,1,"Antagonistic activity of compound towards 5-hydroxytryptamine 3 receptor in Von Bezold-Jarisch reflex in rats at 60(ug/kg), evaluated as percent inhibition of bradycardia",,BAO_0000019,,,,Autocuration,13392,,F,,,,,104698
+3259,1,Displacement of [3H]GR-113808 from 5-hydroxytryptamine 4 receptor in guinea pig striatum,,BAO_0000357,,Cavia porcellus,,Intermediate,15034,,B,10141.0,,,,20033
+3434,1,Intrinsic activity towards CNS 5-hydroxytryptamine 3 receptor was determined; PA: Partial agonist,,BAO_0000019,,,,Autocuration,5067,,F,,,,,104714
+3529,1,Inhibition of [3H]5-HT uptake in HEK cells expressing human SERT,,BAO_0000219,,Homo sapiens,,Expert,5963,In vitro,B,9606.0,,,,121
+3584,1,Binding affinity towards human 5-hydroxytryptamine 5A receptor using LSD as radioligand,,BAO_0000357,,,,Expert,17175,,B,,,,,10624
+3613,1,Binding affinity towards human 5-hydroxytryptamine 6 receptor,,BAO_0000357,,Homo sapiens,,Expert,17066,,B,9606.0,,,,10627
+3659,1,Binding affinity as displacement of [3H]5-HT binding to 5-hydroxytryptamine 6 receptor in HeLa cells,,BAO_0000219,,Homo sapiens,,Autocuration,16190,,B,9606.0,,HeLa,,10627
+3735,1,The dissociation equilibrium constant (pKB=-log KB) of compound was determined against the vascular 5-hydroxytryptamine 7 receptor in the endothelium denuded rabbit jugular vein.,,BAO_0000019,,Oryctolagus cuniculus,,Autocuration,14025,,B,9986.0,,,,10209
+3813,1,Inhibition of 5-lipoxygenase activity of compound evaluated as determined by the inhibition of calcium ionophore-induced leukotriene B4 production in human blood.,,BAO_0000019,,,,Autocuration,5364,,F,,,,,55
+3816,1,Inhibition of 5-lipoxygenase was evaluated in human polymorphonuclear leukocytes stimulated by calcium ionophore A-23187 for formation of LTB4,,BAO_0000219,,,,Autocuration,951,,B,,,,,55
+4014,1,"Ex vivo inhibition of 5-lipoxygenase was determined by the measurement of A-23187-stimulated LTB4 production in dog blood at 3.0h, following intravenous administration at the dose of 1.0 mg/kg",Blood,BAO_0000218,,Canis lupus familiaris,,Autocuration,12832,In vivo,F,9615.0,,,,55
+4335,1,In vitro anticancer activity against 6 NCI ovarian cancer cell lines; inactive,,BAO_0000019,,,,Intermediate,1229,,F,,,,,22226
+4508,1,Partition coefficient was measured as -log (counts per min ),,BAO_0000019,,Cavia porcellus,,Autocuration,5689,,A,10141.0,,,,22224
+4554,1,Biodistribution of the injected compound in spleen of female BALB/C mice for 5 hours,Spleen,BAO_0000218,,Mus musculus,,Intermediate,3655,In vivo,A,10090.0,,,,50594
+4556,1,Biodistribution of the injected compound in stomach of female BALB/C mice for 2.5 hours,Stomach,BAO_0000218,,Mus musculus,,Intermediate,3655,In vivo,A,10090.0,,,,50594
+4559,1,At a dose 50 mg/kg (114 umol/kg) was administered intraperitoneally to mice and was evaluated for MRT,,BAO_0000218,,Mus musculus,,Intermediate,16597,In vivo,F,10090.0,,,,50594
+4743,1,Half life after intraperitoneal administration in mice at 25 uM/kg,,BAO_0000218,,Mus musculus,,Intermediate,17764,In vivo,F,10090.0,,,,50594
+4805,1,Inhibition of cell growth in (A375) melan cell line,,BAO_0000219,,Homo sapiens,,Expert,15313,,F,9606.0,,A-375,,80018
+5516,1,Effect on protein synthesis was determined by incorporation of radioligand into 8226 human myeloma cells at a concentration of 0.01 ug/mL,,BAO_0000219,,Homo sapiens,,Intermediate,9424,,F,9606.0,,RPMI-8226,,80433
+5576,1,Growth inhibitory activity against A549 human solid tumor cell line using MTT assay,,BAO_0000219,,Homo sapiens,,Intermediate,16558,,F,9606.0,,A549,,80682
+5637,1,Tested for systemic clearance upon intravenous administration of 5.0 mg/Kg dose in dog,,BAO_0000218,,Canis lupus familiaris,,Intermediate,1466,In vivo,A,9615.0,,,,50588
+5822,1,Clearance in dogs,,BAO_0000218,,Canis lupus familiaris,,Intermediate,6305,In vivo,A,9615.0,,,,50588
+5883,1,Biodistribution in kidney was determined in mice after iv administration at 2 hr; Value expressed as percent injected dose per gram,Kidney,BAO_0000218,,Mus musculus,,Intermediate,7767,In vivo,A,10090.0,,,,50594
+5927,1,In vitro cytotoxic activity against A-498 (human kidney carcinoma) cell line,,BAO_0000219,,Homo sapiens,,Intermediate,4450,,F,9606.0,,A498,,80021
+5979,1,Inhibition ratio against A-549 cancer cell growth at a concentration of 10e-7 mol/L,,BAO_0000219,,Homo sapiens,,Expert,6583,,F,9606.0,,A549,,80682
+6067,1,Compound was evaluated for washout rate in mice (Radiolabeled compound),,BAO_0000218,,Mus musculus,,Intermediate,17827,,A,10090.0,,,,50594
+6203,1,"Tested for the pharmacokinetic data, maximum concentration (Cmax) in dog",,BAO_0000218,,Canis lupus familiaris,,Intermediate,5313,In vivo,A,9615.0,,,,50588
+6226,1,Bioavailability,,BAO_0000218,,Canis lupus familiaris,,Intermediate,5006,In vivo,A,9615.0,,,,50588
+6229,1,Bioavailability in dog,,BAO_0000218,,Canis lupus familiaris,,Intermediate,3771,In vivo,A,9615.0,,,,50588
+6876,1,Concentration in plasma (systemic) following oral dose in mouse at 6 hr,,BAO_0000218,,Mus musculus,,Intermediate,3535,,A,10090.0,,,,50594
+6927,1,Growth inhibition of human squamous cell carcinoma A253 cells during continuous Exposure (0-12 h); ND means not determined,,BAO_0000219,,Homo sapiens,,Intermediate,15564,,F,9606.0,,A253 cell line,,80657
+6939,1,cytotoxic activity toward A2780 ovarian human cell line resistant (R) to cisplatin in experiment 2,,BAO_0000219,,Homo sapiens,,Intermediate,15608,,F,9606.0,,A2780,,81034
+7383,1,The total clearance was determined after oral administration in cynomolgus monkeys; NA means Not applicable,,BAO_0000218,,Cercopithecidae,,Autocuration,5355,In vivo,A,9527.0,,,,22224
+7452,1,Biodistribution of intravenously injected [82Br]-labeled compound in lung of BDF1 female mice bearing subcutaneous Lewis lung carcinoma after 8 hours,Lung,BAO_0000218,,Mus musculus,,Intermediate,10107,In vivo,A,10090.0,,,,50594
+7551,1,T 1/2 at a dose of 10 mg/Kg administered perorally in female hanover-wistar rat,,BAO_0000218,,Rattus norvegicus,,Intermediate,17260,In vivo,A,10116.0,,,,50597
+8303,1,In vitro clearance in rat liver microsomes,Liver,BAO_0000218,,Rattus norvegicus,,Intermediate,17538,In vitro,A,10116.0,,,Microsomes,50597
+8809,1,Uptake of radioligand [125I]FIDA1 by striatum in rat after 30 minutes after an intravenous injection is given (average of 2 rats),Striatum,BAO_0000218,,Rattus norvegicus,,Intermediate,11977,,A,10116.0,,,,50597
+8953,1,Radioactivity distribution in heart of normal fischer rat after injection of [18F]fluoro-2-methylpropanoic acid after 120 min.,Heart,BAO_0000218,,Rattus norvegicus,,Intermediate,16434,,A,10116.0,,,,50597
+8960,1,Radioactivity distribution in heart of normal fischer rat after injection of anti-[18F]FMACBC after 60 min.,Heart,BAO_0000218,,Rattus norvegicus,,Intermediate,16435,,A,10116.0,,,,50597
+9069,1,Volume of distribution after intravenous administration of 1 mg/kg/h in dog,,BAO_0000218,,Oryctolagus cuniculus,,Autocuration,4137,In vivo,A,9986.0,,,,22224
+9220,1,Half life tested in mature male rat at a dose of 30 mg/kg,,BAO_0000218,,Rattus norvegicus,,Intermediate,5160,In vivo,A,10116.0,,,,50597
+9484,1,Concentration in rat plasma after 5 mg/kg oral gavage for 8 hours,,BAO_0000218,,Rattus norvegicus,,Intermediate,6567,,A,10116.0,,,,50597
+9679,1,"Distribution of the radioiodinated compound expressed as percent dose per organ, in thyroid of unfasted rats after 60 mins of intravenous administration (10.7 uCi/animal); value ranges from 2.16-2.39% dose/g",Thyroid gland,BAO_0000218,,Rattus norvegicus,,Intermediate,11450,,A,10116.0,,,,50597
+9699,1,"Biodistribution in Sprague-Dawley rat kidneys(2) 2 minutes after intravenous administration, [99mTc]/[125I]IAP ratio)",Kidney,BAO_0000218,,Rattus norvegicus,,Intermediate,8677,In vivo,A,10116.0,,,,50597
+9888,1,"Biodistribution in Sprague-Dawley rat thyroid 15 minutes after intravenous administration, [99mTc]/[125I] IAP ratio)",Thyroid gland,BAO_0000218,,Rattus norvegicus,,Intermediate,8677,In vivo,A,10116.0,,,,50597
+9916,1,Biodistribution of compound in rat muscle after 5 min of administration.,Muscle tissue,BAO_0000218,,Rattus norvegicus,,Intermediate,10839,In vivo,A,10116.0,,,,50597
+10158,1,Momoamine and metabolic levels observed 1 week following acute dosing against at a dose of 10 mg/kg Hippocampus HVA; below the levels of detection,,BAO_0000218,,Rattus norvegicus,,Intermediate,11020,,A,10116.0,,,,50597
+10324,1,Oral bioavailability in rat,,BAO_0000218,,Rattus norvegicus,,Intermediate,1094,In vivo,A,10116.0,,,,50597
+10440,1,Fraction of 88Y (%) released from chelate after incubation in serum for 15 hours,,BAO_0000019,,,,Autocuration,14583,,A,,,,,22224
+10501,1,Oral bioavailability of compound (25 mg/kg) after po administration was determined in Sprague-Dawley rat,,BAO_0000218,,Rattus norvegicus,,Intermediate,5978,In vivo,A,10116.0,,,,50597
+10672,1,Area under curve of acid 2a was determined by HPLC at a dosage of 2.27 mg/kg administered intravenously by bolus method in dog,,BAO_0000218,,Canis lupus familiaris,,Intermediate,12923,,A,9615.0,,,,50588
+10859,1,Distribution of radioactivity in kidney tissues of Sprague-Dawley rats after 15 min injection by intravenously; value ranges from 1.42-1.82,Kidney,BAO_0000218,,Rattus norvegicus,,Intermediate,8418,,A,10116.0,,,,50597
+11005,1,Maximum blood level reached after an dose of 10.6 uM/kg intravenously,Blood,BAO_0000218,,,,Autocuration,12767,In vivo,A,,,,,22224
+11112,1,Oral diuretic activity was evaluated by measuring Na+ excretion in dog at 2 mg/kg after ip administration,,BAO_0000218,,Canis lupus familiaris,,Intermediate,6996,,A,9615.0,,,,50588
+11463,1,"Distribution in rat pancreas 4 hr after intravenous administration, injected dose/gm",,BAO_0000218,,Rattus norvegicus,,Intermediate,8684,,A,10116.0,,,,50597
+11515,1,Biodistribution in Rat lung after 24 hours of iv administration; per g of tissue,Lung,BAO_0000218,,Rattus norvegicus,,Intermediate,8829,In vivo,A,10116.0,,,,50597
+11568,1,Pharmacokinetic parameter Cmax determined after intravenous administration of 60 mg/kg to rat,,BAO_0000218,,Rattus norvegicus,,Intermediate,13465,In vivo,A,10116.0,,,,50597
+11756,1,The maximum plasma concentration (Cmax) is the observed peak plasma concentration after an oral dose on rat.,Plasma,BAO_0000218,,Rattus norvegicus,,Intermediate,14906,In vivo,A,10116.0,,,,50597
+11980,1,"Evaluated for the distribution of radioactivity in tissues of female Fischer rats heart after 30 minutes intravenous administration; dose/g, range 2.67-3.69",,BAO_0000218,,Rattus norvegicus,,Intermediate,8608,,A,10116.0,,,,50597
+12091,1,"Biodistribution in kidney of mature female Dawley rat after 5min, expressed as percent injected dose/g",Kidney,BAO_0000218,,Rattus norvegicus,,Intermediate,13751,In vivo,A,10116.0,,,,50597
+12160,1,"Evaluated for the distribution of radioactivity in tissues of female Fischer rats liver after 5 minutes intravenous administration; dose/g, range 0.93-1.20",Liver,BAO_0000218,,Rattus norvegicus,,Intermediate,8608,,A,10116.0,,,,50597
+12174,1,"Evaluated for the distribution of radioactivity in tissues of female Fischer rats lungs after 30 minutes intravenous administration; dose/g, range 0.91-1.74",Lung,BAO_0000218,,Rattus norvegicus,,Intermediate,8608,,A,10116.0,,,,50597
+12457,1,Concentration 1 detected in blood of rat 1 hr after an oral dose of 200 mg/kg; ND is Not Detected.,Blood,BAO_0000218,,Rattus norvegicus,,Intermediate,8374,,A,10116.0,,,,50597
+12534,1,Concentration was measured in liver tissue f unfasted Fischer 344 rats administered intravenously after 10 minute (radiolabeled with [125I]-,Liver,BAO_0000218,,Rattus norvegicus,,Intermediate,8594,,A,10116.0,,,,50597
+12690,1,Distribution in female dog adipose 24 hours after administration.,,BAO_0000218,,Canis lupus familiaris,,Intermediate,8170,,A,9615.0,,,,50588
+13227,1,Compound was evaluated for the clearance in rat,,BAO_0000218,,Rattus norvegicus,,Intermediate,12797,In vivo,A,10116.0,,,,50597
+13248,1,Biodistribution of [11C]-CGP- 12388 (60 minutes post injection) in intestine bone of male wistar rats,Bone,BAO_0000218,,Rattus norvegicus,,Intermediate,14198,In vivo,A,10116.0,,,,50597
+13286,1,Average max percent decrease in RVR (renal vascular resistance) was determined.,,BAO_0000019,,,,Autocuration,8204,,A,,,,,22224
+13613,1,plasma clearance in preclinical species was measured after Intravenous administration at the given dose (0.01 mg/kg) in monkey,Plasma,BAO_0000218,,Simiiformes,,Autocuration,15604,In vivo,A,314293.0,,,,22224
+13691,1,Oral diuretic activity was evaluated by measuring Cl- excretion in Rat at 3 mg/kg after ip administration ( 0-5 hr),,BAO_0000218,,Rattus norvegicus,,Intermediate,6996,,A,10116.0,,,,50597
+13910,1,Total electrolytic excretion of chlorine in urine of dogs after intravenous administration of 3.03 uM/Kg of drug,Urine,BAO_0000218,,Canis lupus familiaris,,Intermediate,12582,,A,9615.0,,,,50588
+14038,1,Biodistribution in rest of brain of rat at 1440 minutes after dose administration.,Brain,BAO_0000218,,Rattus norvegicus,,Intermediate,13100,In vivo,A,10116.0,,,,50597
+14143,1,"Percentage biodistribution in mouse intestine, 60 minutes post injection",Intestine,BAO_0000218,,Mus musculus,,Intermediate,14045,,A,10090.0,,,,50594
+14221,1,Efficacy was evaluated against Oraficial HSV-1 infection in mice with lesions administered topically at a dose 1 mg/kg per day; Tested mice 10,,BAO_0000218,,Human herpesvirus 1,,Intermediate,8613,,A,10298.0,,,,50602
+14267,1,Total electrolytic excretion of chlorine in urine of rats after peroral administration of 80.9 uM/Kg of drug,Urine,BAO_0000218,,Rattus norvegicus,,Intermediate,12582,,A,10116.0,,,,50597
+14532,1,Biodistribution of the Radiolabeled FBWAY compound in rat cortex at 30 min co-injected with 200 nmol of WAY 100635,,BAO_0000218,,Rattus norvegicus,,Intermediate,15413,In vivo,A,10116.0,,,,50597
+14642,1,"10 mg/kg of [14C]- radiolabeled compound was intravenously injected in rabbit, and radioactivity content in urine was estimated at 6-24 h",Urine,BAO_0000218,,Oryctolagus cuniculus,,Intermediate,7132,,A,9986.0,,,,50592

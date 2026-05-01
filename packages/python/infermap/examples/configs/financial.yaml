@@ -1,0 +1,29 @@
+# infermap config: Financial / banking / fintech systems
+# Account, transaction, and customer data across core banking, payment processors, CRMs
+
+scorers:
+  AliasScorer:
+    weight: 1.0
+  PatternTypeScorer:
+    weight: 0.9       # account numbers, dates, and currency are distinctive
+  FuzzyNameScorer:
+    weight: 0.2       # financial field names are usually exact or aliased, not fuzzy
+
+aliases:
+  account_id: [acct_id, account_no, account_number, acct_number, client_id, portfolio_id]
+  customer_name: [account_holder, client_name, full_name, party_name, beneficial_owner]
+  first_name: [fname, given_name, first, contact_first]
+  last_name: [lname, surname, family_name, last, contact_last]
+  email: [email_address, contact_email, primary_email, notification_email]
+  phone: [phone_number, telephone, mobile, contact_phone, primary_phone]
+  address: [mailing_address, street_address, billing_address, correspondence_address]
+  zip_code: [postal_code, zipcode, zip, postcode]
+  date_of_birth: [dob, birth_date, birthdate]
+  ssn: [tax_id, tin, social_security, national_id, government_id]
+  transaction_id: [txn_id, trans_id, reference_no, confirmation_no, payment_id]
+  transaction_date: [txn_date, trans_date, posting_date, value_date, effective_date]
+  amount: [transaction_amount, txn_amount, payment_amount, debit_amount, credit_amount]
+  currency: [currency_code, ccy, iso_currency, denomination]
+  balance: [account_balance, available_balance, current_balance, ledger_balance]
+  routing_number: [aba_number, sort_code, bank_code, swift_code, bic]
+  status: [account_status, transaction_status, payment_status]

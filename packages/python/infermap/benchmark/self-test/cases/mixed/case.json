@@ -1,0 +1,14 @@
+{
+  "id": "self-test/mixed",
+  "category": "valentine",
+  "subcategory": "self-test",
+  "source": {
+    "name": "self-test-mixed",
+    "url": "local",
+    "license": "MIT",
+    "attribution": "infermap project"
+  },
+  "tags": ["alias_dominant", "partial", "smoke"],
+  "expected_difficulty": "medium",
+  "notes": "Two known-alias mappings (fname→first_name, lname→last_name); two fields on each side that should remain unmapped (phone/unused on source, email/missing on target). Tests that the engine correctly identifies partial coverage and does not force-match unrelated columns."
+}

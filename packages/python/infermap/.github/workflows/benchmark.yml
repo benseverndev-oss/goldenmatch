@@ -1,0 +1,240 @@
+# Benchmark workflow — runs Python and TS bench runners in parallel, aggregates
+# their reports into a sticky PR comment, and auto-updates the committed
+# baseline on merges to main.
+#
+# Path filter includes every file whose content could affect benchmark scores:
+# the two package sources, benchmark/ itself, dependency manifests, and the
+# two benchmark workflow files. README changes, docs, and unrelated tests are
+# excluded so the benchmark doesn't run on every PR.
+#
+# The baseline-update job uses the default GITHUB_TOKEN specifically because
+# its commits do NOT retrigger downstream workflows. Replacing this with a PAT
+# would introduce an infinite push → benchmark → baseline-update → push loop.
+
+name: benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infermap/**'
+      - 'packages/infermap-js/**'
+      - 'benchmark/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'uv.lock'
+      - 'packages/infermap-js/package.json'
+      - 'packages/infermap-js/package-lock.json'
+      - '.github/workflows/benchmark.yml'
+      - '.github/workflows/regression-ack.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infermap/**'
+      - 'packages/infermap-js/**'
+      - 'benchmark/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'uv.lock'
+      - 'packages/infermap-js/package.json'
+      - 'packages/infermap-js/package-lock.json'
+      - '.github/workflows/benchmark.yml'
+      - '.github/workflows/regression-ack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install infermap + bench runner
+        run: |
+          pip install -e .
+          pip install -e "benchmark/runners/python[dev]"
+
+      - name: Validate synthetic cases in sync with config
+        run: |
+          python -m infermap_bench regenerate-synthetic
+          if ! git diff --exit-code benchmark/cases/synthetic/generated.json; then
+            echo "::error::benchmark/cases/synthetic/generated.json is out of sync with benchmark/synthetic.config.json. Run 'python -m infermap_bench regenerate-synthetic' locally and commit."
+            exit 1
+          fi
+
+      - name: Unit + fixture tests
+        working-directory: benchmark/runners/python
+        run: pytest --tb=short
+
+      - name: Self-test smoke gate
+        run: python -m infermap_bench run --self-test --assert-against benchmark/self-test/expected_self_test.json --output /tmp/self-test.json
+
+      - name: Full benchmark
+        run: python -m infermap_bench run --output python-report.json --seed 42
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-report
+          path: python-report.json
+          retention-days: 30
+
+  typescript:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install + build main TS package
+        working-directory: packages/infermap-js
+        run: npm install && npm run build
+
+      - name: Install + build bench runner
+        working-directory: benchmark/runners/ts
+        run: npm install --install-links && npm run build
+
+      - name: Unit + parity tests
+        working-directory: benchmark/runners/ts
+        run: npm run test
+
+      - name: Self-test smoke gate
+        working-directory: benchmark/runners/ts
+        run: node dist/cli.cjs run --self-test --assert-against ../../self-test/expected_self_test.json --output /tmp/self-test.json
+
+      - name: Full benchmark
+        working-directory: benchmark/runners/ts
+        run: node dist/cli.cjs run --output ../../../ts-report.json --seed 42
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-report
+          path: ts-report.json
+          retention-days: 30
+
+  aggregate:
+    needs: [python, typescript]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bench runner (provides infermap_bench.compare for aggregate.py)
+        run: |
+          pip install -e .
+          pip install -e benchmark/runners/python
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-report
+          path: ./
+        continue-on-error: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ts-report
+          path: ./
+        continue-on-error: true
+
+      - name: Aggregate
+        id: aggregate
+        run: |
+          python benchmark/aggregate.py \
+            --python python-report.json \
+            --ts ts-report.json \
+            --baseline benchmark/baselines/main.json \
+            --markdown comment.md \
+            --output delta.json \
+            --regression-threshold 0.02
+
+      - name: Post sticky comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: infermap-benchmark
+          path: comment.md
+
+      - name: Check for large regression
+        run: python benchmark/check_regression.py delta.json --fail-over 0.02
+
+  baseline-update:
+    needs: [python, typescript]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      # CRITICAL: uses default GITHUB_TOKEN. Does NOT trigger downstream workflows —
+      # this is what prevents a push→benchmark→baseline-update→push loop.
+      # Never replace with a PAT or GitHub App token.
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-report
+          path: ./
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ts-report
+          path: ./
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bench runner
+        run: |
+          pip install -e .
+          pip install -e benchmark/runners/python
+
+      - name: Build baseline
+        run: |
+          python benchmark/build_baseline.py \
+            --python python-report.json \
+            --ts ts-report.json \
+            --commit "${{ github.sha }}" \
+            --output benchmark/baselines/main.json
+
+      - name: Commit updated baseline
+        run: |
+          set -euo pipefail
+          # Refuse to commit an empty or missing baseline — build_baseline.py
+          # must have produced a non-zero-byte file before we touch git.
+          test -s benchmark/baselines/main.json
+          git config user.name "infermap-bot"
+          git config user.email "noreply@github.com"
+          git add benchmark/baselines/main.json benchmark/baselines/main.metadata.json
+          if git diff --cached --quiet; then
+            echo "No baseline changes"
+          else
+            git commit -m "chore(bench): update baseline to ${{ github.sha }} [skip ci]"
+            git push
+          fi

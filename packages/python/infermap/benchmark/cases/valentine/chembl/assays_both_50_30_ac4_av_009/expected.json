@@ -1,0 +1,49 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ASI"
+    },
+    {
+      "source": "chembl_id",
+      "target": "assays_CHEI"
+    },
+    {
+      "source": "assay_organism",
+      "target": "assays_ASORGA"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "assays_ASSTIS"
+    },
+    {
+      "source": "assay_type",
+      "target": "assays_ASSTY"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_CURB"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_cell_type",
+    "assay_strain",
+    "assay_subcellular_fraction",
+    "assay_tax_id",
+    "assay_test_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_BFO",
+    "assays_CI",
+    "assays_CONFSCO",
+    "assays_RELATY",
+    "assays_SASI",
+    "assays_SI",
+    "assays_T",
+    "assays_TII",
+    "assays_VAI"
+  ]
+}

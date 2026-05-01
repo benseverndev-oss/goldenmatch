@@ -1,0 +1,3 @@
+customer_id,first_name,last_name,email,phone,address,zip_code,created_at,organization,sex
+ERP001,Sarah,Connor,sarah@skynet.com,555-9001,100 Future Blvd,90001,2024-01-01,Cyberdyne,F
+ERP002,Mike,Ross,mike@pearson.com,(555) 900-2000,200 Legal Ave,10002,2024-02-01,Pearson Hardman,M

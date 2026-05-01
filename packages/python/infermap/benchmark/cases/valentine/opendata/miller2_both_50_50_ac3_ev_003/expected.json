@@ -1,0 +1,134 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "fsclr"
+    },
+    {
+      "source": "Organisation name",
+      "target": "rgnstnnm"
+    },
+    {
+      "source": "Division name",
+      "target": "dvsnnm"
+    },
+    {
+      "source": "Amount spent",
+      "target": "mntspnt"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "dsrtfctn(mrkr)"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "prgrmmngprcss(nw)"
+    },
+    {
+      "source": "Division ID",
+      "target": "dvsnd"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "prjctbrwsrcntrd"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "rgnlprgrm(mrkr)"
+    },
+    {
+      "source": "PBA type",
+      "target": "pbtp"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "ntdmnt(prjct-lvlbdgt)"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "prtcptrdvlpmntndgdgvrnnc"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "fstcprcnt"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "gndrqlt(mrkr)"
+    },
+    {
+      "source": "Sector percent",
+      "target": "sctrprcnt"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ctstlfrdvlpmnt(mrkr)"
+    },
+    {
+      "source": "Branch name",
+      "target": "brnchnm"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "rgnstnsb-clss"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "cntrrgnnm"
+    },
+    {
+      "source": "Section name",
+      "target": "sctnnm"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "cdbsnssdlvrmdl(ld)"
+    },
+    {
+      "source": "Continent ID",
+      "target": "cntnntd"
+    },
+    {
+      "source": "Section ID",
+      "target": "sctnd"
+    },
+    {
+      "source": "Organisation type",
+      "target": "rgnstntp"
+    },
+    {
+      "source": "Status",
+      "target": "stts"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Biodiversity (marker)",
+    "Branch ID",
+    "CFLI (marker)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Enviromental sustainability (marker)",
+    "Fund centre ID",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "Project number",
+    "Trade development (marker)"
+  ],
+  "unmapped_target": [
+    "chldrnsss(mrkr)",
+    "cntnntnm",
+    "cntrrgnd",
+    "cntrrgnprcnt",
+    "dsbltsss(mrkr)",
+    "knwldgfrdvlpmnt(mrkr)",
+    "ndgnssss(mrkr)",
+    "rbnsss(mrkr)",
+    "rgnstnclss",
+    "rgnstnd",
+    "sctrd",
+    "sctrnm",
+    "thsss(mrkr)"
+  ]
+}

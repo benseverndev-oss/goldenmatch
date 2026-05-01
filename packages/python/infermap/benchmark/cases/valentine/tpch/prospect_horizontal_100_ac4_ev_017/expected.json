@@ -1,0 +1,94 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_AgeID"
+    },
+    {
+      "source": "LastName",
+      "target": "prospect_LN"
+    },
+    {
+      "source": "FirstName",
+      "target": "prospect_FirNa"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "prospect_MiIn"
+    },
+    {
+      "source": "Gender",
+      "target": "prospect_Ge"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "prospect_AddrL1"
+    },
+    {
+      "source": "AddressLine2",
+      "target": "prospect_AddrL2"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_PosCo"
+    },
+    {
+      "source": "City",
+      "target": "prospect_C"
+    },
+    {
+      "source": "State",
+      "target": "prospect_Sta"
+    },
+    {
+      "source": "Country",
+      "target": "prospect_Cou"
+    },
+    {
+      "source": "Phone",
+      "target": "prospect_Pho"
+    },
+    {
+      "source": "Income",
+      "target": "prospect_Inc"
+    },
+    {
+      "source": "NumberCars",
+      "target": "prospect_NumC"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "prospect_NuChil"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "prospect_MariSt"
+    },
+    {
+      "source": "Age",
+      "target": "prospect_Ag"
+    },
+    {
+      "source": "CreditRating",
+      "target": "prospect_CreRat"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "prospect_OwORFl"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_Empl"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "prospect_NuCrCar"
+    },
+    {
+      "source": "NetWorth",
+      "target": "prospect_NeWor"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}
