@@ -74,6 +74,9 @@
     "pg": { "optional": true },
     "@duckdb/node-api": { "optional": true }
   },
+  "dependencies": {
+    "goldencheck-types": "file:../../../.vendor/goldencheck-types-0.1.0.tgz"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "rimraf": "^5.0.0",
