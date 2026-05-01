@@ -1,0 +1,7 @@
+description: "Test fixture for confidence_threshold parsing"
+types:
+  ssn:
+    name_hints: ["ssn"]
+    value_signals: {}
+    suppress: []
+    confidence_threshold: 0.85

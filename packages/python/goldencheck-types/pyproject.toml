@@ -1,0 +1,22 @@
+[project]
+name = "goldencheck-types"
+version = "0.1.0"
+description = "Shared canonical field types for the Golden Suite"
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["goldencheck_types/**", "domains/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["goldencheck_types"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../typescript/goldencheck-types/domains" = "goldencheck_types/_domains"

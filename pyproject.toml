@@ -14,6 +14,7 @@ goldenflow = { workspace = true }
 goldenpipe = { workspace = true }
 infermap = { workspace = true }
 goldensuite-mcp = { workspace = true }
+goldencheck-types = { workspace = true }
 
 [dependency-groups]
 dev = [
