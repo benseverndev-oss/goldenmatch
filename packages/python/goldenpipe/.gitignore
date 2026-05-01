@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.testing/
+.env
+*.env
+.goldenpipe/
+
+.mypy_cache/
+.tox/
+*.egg
+htmlcov/
+.venv/
+venv/
+
+# AI editor configs
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/

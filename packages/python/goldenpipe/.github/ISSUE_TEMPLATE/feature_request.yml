@@ -1,0 +1,36 @@
+name: Feature Request
+description: Suggest an enhancement or new feature
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for GoldenPipe? We'd love to hear it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: "What are you trying to do that GoldenPipe doesn't support well?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: "How would you like this to work? Config examples, CLI usage, etc."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Pipeline Orchestration
+        - Decision Logic
+        - CLI / UX
+        - Performance
+        - A2A / API
+        - Documentation
+        - Other
+    validations:
+      required: true

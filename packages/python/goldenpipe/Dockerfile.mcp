@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+# cache-bust: v1.0.5 (empty resources/prompts handlers)
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir ".[mcp]"
+EXPOSE 8250
+CMD ["goldenpipe", "mcp-serve", "--transport", "http", "--port", "8250"]
