@@ -18,9 +18,12 @@ import { MapEngine } from "../../src/core/engine.js";
 import { inferSchemaFromRecords } from "../../src/core/providers/in-memory.js";
 import type { MapResult } from "../../src/core/types.js";
 
-const REPO_ROOT = resolve(__dirname, "../../../..");
-const MANIFEST_PATH = resolve(REPO_ROOT, "tests/fixtures/parity_cases.json");
-const GOLDENS_DIR = resolve(REPO_ROOT, "tests/fixtures/_goldens");
+// Parity fixtures are owned by the Python package and shared cross-language.
+// In the monorepo, the Python infermap lives at packages/python/infermap/,
+// sibling to this TS package at packages/typescript/infermap/.
+const PY_INFERMAP_ROOT = resolve(__dirname, "../../../../python/infermap");
+const MANIFEST_PATH = resolve(PY_INFERMAP_ROOT, "tests/fixtures/parity_cases.json");
+const GOLDENS_DIR = resolve(PY_INFERMAP_ROOT, "tests/fixtures/_goldens");
 
 const CONFIDENCE_PRECISION = 4;
 

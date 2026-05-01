@@ -1,0 +1,10 @@
+# Stub profile used only for `dbt parse` in CI. The goldencheck dbt package
+# is data-source-agnostic — consumers supply their own profile in their dbt
+# project. This file lets CI verify the package parses cleanly without
+# requiring a real warehouse connection.
+goldencheck:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: ':memory:'

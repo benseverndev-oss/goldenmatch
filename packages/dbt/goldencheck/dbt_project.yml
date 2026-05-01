@@ -2,6 +2,8 @@ name: 'goldencheck'
 version: '0.1.0'
 config-version: 2
 
+profile: 'goldencheck'
+
 require-dbt-version: [">=1.5.0"]
 
 macro-paths: ["macros"]
