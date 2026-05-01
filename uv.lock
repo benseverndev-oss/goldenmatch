@@ -1534,6 +1534,7 @@ name = "infermap"
 version = "0.3.2"
 source = { editable = "packages/python/infermap" }
 dependencies = [
+    { name = "goldencheck-types" },
     { name = "polars" },
     { name = "pyyaml" },
     { name = "rapidfuzz" },
@@ -1579,6 +1580,7 @@ postgres = [
 requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.30" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
+    { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
     { name = "infermap", extras = ["postgres", "mysql", "duckdb", "excel", "llm"], marker = "extra == 'all'", editable = "packages/python/infermap" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "mysql-connector-python", marker = "extra == 'mysql'", specifier = ">=8.0" },
