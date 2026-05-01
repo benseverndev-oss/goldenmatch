@@ -1,0 +1,17 @@
+# Build artifacts
+target/
+dist/
+build/
+*.egg-info/
+node_modules/
+__pycache__/
+.venv/
+.uv-cache/
+
+# Generated outputs
+*_lineage.json
+*_clusters.csv
+
+# IDE
+.vscode/
+.idea/
