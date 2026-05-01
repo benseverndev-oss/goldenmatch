@@ -1,0 +1,100 @@
+name: "GoldenCheck"
+description: "Data validation that discovers rules from your data. Scans data files, posts PR comments, and provides pass/fail status checks."
+author: "Ben Severn"
+
+branding:
+  icon: "check-circle"
+  color: "yellow"
+
+inputs:
+  files:
+    description: "Glob pattern for data files to scan"
+    required: true
+  fail-on:
+    description: "Severity threshold for failure: error or warning"
+    required: false
+    default: "error"
+  config:
+    description: "Path to goldencheck.yml config file"
+    required: false
+    default: ""
+  llm-boost:
+    description: "Enable LLM enhancement (requires API key in env)"
+    required: false
+    default: "false"
+  llm-provider:
+    description: "LLM provider: anthropic or openai"
+    required: false
+    default: "anthropic"
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.12"
+  version:
+    description: "GoldenCheck version to install (default: latest)"
+    required: false
+    default: ""
+
+outputs:
+  errors:
+    description: "Total error count across all files"
+    value: ${{ steps.scan.outputs.errors }}
+  warnings:
+    description: "Total warning count across all files"
+    value: ${{ steps.scan.outputs.warnings }}
+  health-grade:
+    description: "Worst health grade across all files"
+    value: ${{ steps.scan.outputs.health_grade }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: goldencheck-pip-${{ inputs.python-version }}-${{ inputs.version || 'latest' }}
+
+    - name: Install GoldenCheck
+      shell: bash
+      env:
+        GC_VERSION: ${{ inputs.version }}
+        GC_LLM: ${{ inputs.llm-boost }}
+      run: |
+        if [ "$GC_LLM" = "true" ]; then
+          EXTRAS="[llm]"
+        else
+          EXTRAS=""
+        fi
+        if [ -n "$GC_VERSION" ]; then
+          pip install -q "goldencheck${EXTRAS}==${GC_VERSION}"
+        else
+          pip install -q "goldencheck${EXTRAS}"
+        fi
+
+    - name: Run scans
+      id: scan
+      shell: bash
+      env:
+        GC_FILES: ${{ inputs.files }}
+        GC_FAIL_ON: ${{ inputs.fail-on }}
+        GC_CONFIG: ${{ inputs.config }}
+        GC_LLM_BOOST: ${{ inputs.llm-boost }}
+        GC_LLM_PROVIDER: ${{ inputs.llm-provider }}
+      run: |
+        bash "${{ github.action_path }}/scripts/run.sh"
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        python "${{ github.action_path }}/scripts/comment.py"
