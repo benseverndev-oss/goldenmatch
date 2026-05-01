@@ -1,0 +1,134 @@
+name: publish-containers
+
+# Builds and pushes 7 container images to ghcr.io/benzsevern/*:
+#   goldensuite-mcp, goldenmatch-mcp, goldencheck-mcp, goldenflow-mcp,
+#   goldenpipe-mcp, infermap-mcp, goldenmatch-extensions
+#
+# Triggers:
+#   - push to main           -> all 7 images, tagged :latest and :main-<sha7>
+#   - tag <name>-v<X.Y.Z>    -> only that image, tagged :v<X.Y.Z>, :v<X.Y>, :latest
+#                              where <name> is one of: goldensuite-mcp, goldenmatch-mcp,
+#                              goldencheck-mcp, goldenflow-mcp, goldenpipe-mcp,
+#                              infermap-mcp, goldenmatch-extensions
+#
+# Multi-arch: linux/amd64 + linux/arm64 (QEMU emulation for arm64 on GH runners).
+# Auth: GITHUB_TOKEN (built-in, no PAT needed for ghcr.io).
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'goldensuite-mcp-v*'
+      - 'goldenmatch-mcp-v*'
+      - 'goldencheck-mcp-v*'
+      - 'goldenflow-mcp-v*'
+      - 'goldenpipe-mcp-v*'
+      - 'infermap-mcp-v*'
+      - 'goldenmatch-extensions-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: goldensuite-mcp
+            dockerfile: packages/python/goldensuite-mcp/Dockerfile.mcp
+            context: .
+          - image: goldenmatch-mcp
+            dockerfile: packages/python/goldenmatch/Dockerfile.mcp
+            context: packages/python/goldenmatch
+          - image: goldencheck-mcp
+            dockerfile: packages/python/goldencheck/Dockerfile.mcp
+            context: packages/python/goldencheck
+          - image: goldenflow-mcp
+            dockerfile: packages/python/goldenflow/Dockerfile.mcp
+            context: packages/python/goldenflow
+          - image: goldenpipe-mcp
+            dockerfile: packages/python/goldenpipe/Dockerfile.mcp
+            context: packages/python/goldenpipe
+          - image: infermap-mcp
+            dockerfile: packages/python/infermap/Dockerfile.mcp
+            context: packages/python/infermap
+          - image: goldenmatch-extensions
+            dockerfile: packages/rust/extensions/Dockerfile
+            context: packages/rust/extensions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # If this is a tag push, skip jobs whose image doesn't match the tag prefix.
+      # We do this with an `if:` on the steps below by comparing matrix.image to
+      # the prefix extracted from the ref. workflow_dispatch and push-to-main
+      # always run all images.
+      - name: Determine whether to build this image
+        id: gate
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # tag push: only build if matrix image prefix matches the tag
+            prefix="${ref%-v*}"
+            if [[ "$prefix" == "${{ matrix.image }}" ]]; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping ${{ matrix.image }}: tag $ref targets $prefix"
+            fi
+          else
+            # main push or workflow_dispatch: build everything
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        if: steps.gate.outputs.build == 'true'
+        id: tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=main-{{sha}},enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=match,pattern=^${{ matrix.image }}-v(.*)$,group=1
+            type=match,pattern=^${{ matrix.image }}-v(\d+\.\d+)\.\d+$,group=1
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max

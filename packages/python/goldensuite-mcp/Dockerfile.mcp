@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy the entire monorepo so workspace deps resolve via uv. The build context
+# for this image is the repository root (set in the publish workflow).
+COPY . /app
+
+# Install the goldensuite-mcp package and all sub-packages it depends on.
+# Use uv for workspace-aware install; fall back to pip if uv isn't present.
+RUN pip install --no-cache-dir uv \
+    && uv pip install --system --no-cache \
+        ./packages/python/goldenmatch \
+        ./packages/python/goldencheck \
+        ./packages/python/goldenflow \
+        ./packages/python/goldenpipe \
+        ./packages/python/infermap \
+        ./packages/python/goldensuite-mcp
+
+EXPOSE 8300
+
+CMD ["goldensuite-mcp", "serve", "--transport", "http", "--port", "8300"]

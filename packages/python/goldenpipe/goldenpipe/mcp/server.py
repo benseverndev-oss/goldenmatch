@@ -72,6 +72,40 @@ def explain_pipeline_tool(config_path: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+def _build_tools() -> list:
+    """Build the Tool list. Lazy so import doesn't fail without mcp installed."""
+    return [
+        Tool(name="list_stages", description="List all discovered pipeline stages",
+             inputSchema={"type": "object", "properties": {}}),
+        Tool(name="validate_pipeline", description="Validate pipeline wiring",
+             inputSchema={"type": "object", "properties": {
+                 "pipeline": {"type": "string"},
+                 "stages": {"type": "array", "items": {"type": "string"}},
+             }, "required": ["pipeline", "stages"]}),
+        Tool(name="run_pipeline", description="Run a pipeline on a file",
+             inputSchema={"type": "object", "properties": {
+                 "source": {"type": "string"},
+                 "config_path": {"type": "string"},
+             }, "required": ["source"]}),
+        Tool(name="explain_pipeline", description="Explain what a pipeline config does",
+             inputSchema={"type": "object", "properties": {
+                 "config_path": {"type": "string"},
+             }, "required": ["config_path"]}),
+    ]
+
+
+# Module-level surfaces for goldensuite-mcp (the in-process aggregator).
+# TOOLS is a list of mcp.types.Tool objects; HANDLERS maps tool name -> callable
+# that takes the arguments dict and returns a JSON-serializable result.
+TOOLS = _build_tools() if HAS_MCP else []
+HANDLERS = {
+    "list_stages": lambda args: list_stages_tool(),
+    "validate_pipeline": lambda args: validate_pipeline_tool(**args),
+    "run_pipeline": lambda args: run_pipeline_tool(**args),
+    "explain_pipeline": lambda args: explain_pipeline_tool(**args),
+}
+
+
 def create_server() -> "Server":
     """Create and configure the MCP server instance."""
     if not HAS_MCP:
@@ -81,24 +115,7 @@ def create_server() -> "Server":
 
     @server.list_tools()
     async def handle_list_tools():
-        return [
-            Tool(name="list_stages", description="List all discovered pipeline stages",
-                 inputSchema={"type": "object", "properties": {}}),
-            Tool(name="validate_pipeline", description="Validate pipeline wiring",
-                 inputSchema={"type": "object", "properties": {
-                     "pipeline": {"type": "string"},
-                     "stages": {"type": "array", "items": {"type": "string"}},
-                 }, "required": ["pipeline", "stages"]}),
-            Tool(name="run_pipeline", description="Run a pipeline on a file",
-                 inputSchema={"type": "object", "properties": {
-                     "source": {"type": "string"},
-                     "config_path": {"type": "string"},
-                 }, "required": ["source"]}),
-            Tool(name="explain_pipeline", description="Explain what a pipeline config does",
-                 inputSchema={"type": "object", "properties": {
-                     "config_path": {"type": "string"},
-                 }, "required": ["config_path"]}),
-        ]
+        return TOOLS
 
     @server.list_resources()
     async def handle_list_resources() -> list[Resource]:
@@ -110,17 +127,14 @@ def create_server() -> "Server":
 
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict):
-        if name == "list_stages":
-            result = list_stages_tool()
-        elif name == "validate_pipeline":
-            result = validate_pipeline_tool(**arguments)
-        elif name == "run_pipeline":
-            result = run_pipeline_tool(**arguments)
-        elif name == "explain_pipeline":
-            result = explain_pipeline_tool(**arguments)
-        else:
+        handler = HANDLERS.get(name)
+        if handler is None:
             result = {"error": f"Unknown tool: {name}"}
-
+        else:
+            try:
+                result = handler(arguments)
+            except Exception as exc:
+                result = {"error": str(exc)}
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
 
     return server
