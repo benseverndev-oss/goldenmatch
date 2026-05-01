@@ -1,0 +1,42 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'goldencheck-js-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        working-directory: packages/goldencheck-js
+        run: npm install
+
+      - name: Type check
+        working-directory: packages/goldencheck-js
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: packages/goldencheck-js
+        run: npm run test
+
+      - name: Build
+        working-directory: packages/goldencheck-js
+        run: npm run build
+
+      - name: Publish
+        working-directory: packages/goldencheck-js
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

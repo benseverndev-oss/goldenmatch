@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.benzsevern/goldencheck",
+  "title": "GoldenCheck",
+  "description": "Auto-discover validation rules from data — scan, profile, health-score. No rules to write.",
+  "websiteUrl": "https://benzsevern.github.io/goldencheck/",
+  "version": "1.1.4",
+  "repository": {
+    "url": "https://github.com/benzsevern/goldencheck",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "goldencheck",
+      "version": "1.1.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://goldencheck-mcp-production.up.railway.app/mcp/"
+    }
+  ]
+}

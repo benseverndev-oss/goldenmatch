@@ -1,0 +1,50 @@
+description: "Finance — account numbers, routing numbers, CUSIP/ISIN, currency codes, transactions"
+
+types:
+  account_number:
+    name_hints: ["account_number", "acct_num", "account_id", "acct_id"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  routing_number:
+    name_hints: ["routing", "aba", "swift", "bic"]
+    value_signals:
+      short_strings: true
+    suppress: ["uniqueness", "pattern_consistency"]
+
+  cusip:
+    name_hints: ["cusip", "isin", "sedol", "ticker", "symbol"]
+    value_signals:
+      short_strings: true
+    suppress: ["type_inference", "cardinality"]
+
+  currency_code:
+    name_hints: ["currency", "ccy", "currency_code"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
+
+  transaction_type:
+    name_hints: ["transaction_type", "txn_type", "tx_type", "payment_method"]
+    value_signals:
+      max_unique: 20
+    suppress: ["uniqueness", "range_distribution"]
+
+  merchant:
+    name_hints: ["merchant", "vendor", "payee", "counterparty"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency"]
+
+  transaction_amount:
+    name_hints: ["transaction_amount", "txn_amount", "debit", "credit"]
+    value_signals:
+      numeric: true
+    suppress: ["pattern_consistency"]
+
+  reference_number:
+    name_hints: ["reference", "ref_number", "confirmation", "trace"]
+    value_signals:
+      min_unique_pct: 0.95
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]

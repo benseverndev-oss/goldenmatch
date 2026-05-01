@@ -1,0 +1,62 @@
+description: "Healthcare — NPI, ICD codes, insurance IDs, patient demographics, CPT, DRG"
+
+types:
+  npi:
+    name_hints: ["npi", "npi_number", "provider_npi", "referring_npi"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency"]
+
+  icd_code:
+    name_hints: ["diagnosis", "dx", "icd", "primary_dx", "secondary_dx", "procedure_code"]
+    value_signals:
+      short_strings: true
+    suppress: ["type_inference", "cardinality"]
+
+  insurance_id:
+    name_hints: ["insurance_id", "policy_number", "member_id", "subscriber_id"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality"]
+
+  patient_name:
+    name_hints: ["patient_name", "patient_first", "patient_last", "attending_physician"]
+    value_signals:
+      mixed_case: true
+    suppress: ["pattern_consistency", "cardinality"]
+
+  medical_record:
+    name_hints: ["record_number", "mrn", "medical_record", "chart_number"]
+    value_signals:
+      min_unique_pct: 0.95
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  cpt_code:
+    name_hints: ["cpt", "procedure", "hcpcs"]
+    value_signals:
+      short_strings: true
+    suppress: ["type_inference", "cardinality"]
+
+  drg_code:
+    name_hints: ["drg", "drg_code"]
+    value_signals:
+      max_unique: 50
+    suppress: ["uniqueness"]
+
+  facility_code:
+    name_hints: ["facility_code", "place_of_service", "service_type"]
+    value_signals:
+      max_unique: 30
+    suppress: ["uniqueness", "range_distribution"]
+
+  claim_status:
+    name_hints: ["claim_status", "adjudication", "auth_status"]
+    value_signals:
+      max_unique: 15
+    suppress: ["uniqueness", "range_distribution"]
+
+  clinical_notes:
+    name_hints: ["claim_notes", "clinical_notes", "diagnosis_desc", "provider_notes"]
+    value_signals:
+      avg_length_min: 15
+    suppress: ["pattern_consistency", "cardinality", "type_inference", "drift_detection"]
