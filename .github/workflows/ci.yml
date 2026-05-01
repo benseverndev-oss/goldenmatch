@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run pytest packages/python
+      - run: uv run ruff check packages/python
+
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: [goldenmatch, goldencheck, goldencheck-types, goldenflow, infermap]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm --prefix packages/typescript/${{ matrix.pkg }} install
+      - run: npm --prefix packages/typescript/${{ matrix.pkg }} test --if-present
+      - run: npm --prefix packages/typescript/${{ matrix.pkg }} run build --if-present
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/rust/extensions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace -- -D warnings
+
+  dbt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install dbt-core dbt-postgres
+      - run: cd packages/dbt/goldencheck && dbt parse --no-version-check
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"

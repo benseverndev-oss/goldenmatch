@@ -1,0 +1,11 @@
+{
+  "name": "goldenmatch-monorepo",
+  "private": true,
+  "description": "Not a real npm workspace — each package installs independently to avoid Windows symlink issues.",
+  "scripts": {
+    "install:all": "for d in packages/typescript/*; do npm --prefix \"$d\" install; done",
+    "test:all": "for d in packages/typescript/*; do npm --prefix \"$d\" test; done",
+    "build:all": "for d in packages/typescript/*; do npm --prefix \"$d\" run build; done",
+    "lint:all": "for d in packages/typescript/*; do npm --prefix \"$d\" run lint; done"
+  }
+}
