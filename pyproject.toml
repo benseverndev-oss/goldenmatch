@@ -1,0 +1,8 @@
+[project]
+name = "goldenmatch-monorepo"
+version = "0.0.0"
+description = "Golden Suite monorepo"
+requires-python = ">=3.11"
+
+[tool.uv.workspace]
+members = ["packages/python/*"]
