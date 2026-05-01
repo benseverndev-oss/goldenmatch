@@ -1,0 +1,280 @@
+# GoldenFlow — Full API Reference
+
+> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms. 76 transforms across 11 categories.
+> See also: [llms.txt](llms.txt) for a concise overview.
+
+## Install
+
+```bash
+pip install goldenflow
+pip install goldenflow[check]  # With GoldenCheck integration
+pip install goldenflow[mcp]    # With MCP server
+pip install goldenflow[s3]     # With S3 connector
+pip install goldenflow[gcs]    # With GCS connector
+pip install goldenflow[all]    # Everything
+```
+
+## Quick Start
+
+```python
+import goldenflow as gf
+
+# Zero-config: auto-detect and fix
+result = gf.transform_file("messy_data.csv")
+print(f"Applied {len(result.manifest.records)} transforms")
+
+# Transform a DataFrame
+result = gf.transform_df(df)
+clean_df = result.df
+
+# With config
+result = gf.transform_file("data.csv", config="goldenflow.yaml")
+
+# Learn config from data
+config = gf.learn_config("data.csv")
+gf.save_config(config, "goldenflow.yaml")
+```
+
+## Convenience Functions
+
+```python
+from goldenflow import (
+    transform_file,  # transform_file(path, config=None, output_dir=None) -> TransformResult
+    transform_df,    # transform_df(df, config=None) -> TransformResult
+)
+```
+
+## Core Engine
+
+```python
+from goldenflow import (
+    TransformEngine,   # TransformEngine(config=None) -- .transform_file(), .transform_df()
+    TransformResult,   # TransformResult: .df (clean DataFrame), .manifest (audit trail)
+)
+```
+
+## Config Schema
+
+```python
+from goldenflow import (
+    GoldenFlowConfig,  # Root config model (Pydantic)
+    TransformSpec,      # Per-column transform spec: column, ops (list of transform names)
+    SplitSpec,          # Column split spec: column, into (list of output columns)
+    FilterSpec,         # Row filter spec: column, condition, value
+    DedupSpec,          # Deduplication spec: columns, keep (first/last)
+    MappingSpec,        # Column rename spec: from_col, to_col
+    load_config,        # load_config(path) -> GoldenFlowConfig
+    save_config,        # save_config(config, path) -> None
+    merge_configs,      # merge_configs(base, override) -> GoldenFlowConfig
+    learn_config,       # learn_config(path_or_df) -> GoldenFlowConfig
+)
+```
+
+## Engine Internals
+
+```python
+from goldenflow import (
+    Manifest,           # Manifest: records (list of TransformRecord)
+    TransformRecord,    # TransformRecord: column, transform, rows_affected, before, after
+    TransformError,     # TransformError: column, transform, message
+    DatasetProfile,     # DatasetProfile: row_count, column_count, columns
+    ColumnProfile,      # ColumnProfile: name, dtype, null_pct, unique_pct, inferred_type
+    select_transforms,  # select_transforms(profile) -> list[TransformSpec]
+    diff_dataframes,    # diff_dataframes(before, after) -> DiffResult
+    DiffResult,         # DiffResult: changed_columns, added_rows, removed_rows
+)
+```
+
+## Transform Registry
+
+```python
+from goldenflow import (
+    TransformInfo,         # TransformInfo: name, input_types, auto_apply, priority, mode
+    register_transform,    # @register_transform(name, input_types, ...) decorator
+    get_transform,         # get_transform(name) -> TransformInfo
+    list_transforms,       # list_transforms() -> list[TransformInfo]
+    parse_transform_name,  # parse_transform_name("truncate:50") -> ("truncate", ["50"])
+)
+```
+
+Built-in transform modules:
+- `text` — strip, lowercase, uppercase, titlecase, truncate, remove_punctuation
+- `phone` — phone_e164 (E.164 normalization)
+- `names` — split_name, normalize_name, titlecase_name
+- `address` — normalize_address, split_address
+- `dates` — parse_date, normalize_date, extract_year/month/day
+- `categorical` — category_auto_correct, standardize_categories
+- `numeric` — parse_numeric, round_numeric, clamp
+- `auto_correct` — spelling correction via edit distance
+
+## Mapping
+
+```python
+from goldenflow import (
+    SchemaMapper,    # SchemaMapper() -- .map(source_df, target_df) -> list[ColumnMapping]
+    ColumnMapping,   # ColumnMapping: source, target, confidence, method
+)
+```
+
+## Domains
+
+```python
+from goldenflow import (
+    DomainPack,    # Base class for domain packs
+    load_domain,   # load_domain(name) -> DomainPack | None
+)
+# Built-in domains: people_hr, healthcare, finance, ecommerce, real_estate
+```
+
+## Connectors
+
+```python
+from goldenflow import (
+    read_file,   # read_file(path) -> pl.DataFrame  (CSV, Excel, Parquet, s3://, gs://)
+    write_file,  # write_file(df, path) -> None
+)
+```
+
+## Common Usage Patterns
+
+### Zero-config transformation
+```python
+import goldenflow as gf
+result = gf.transform_file("messy_customers.csv")
+result.df.write_csv("clean_customers.csv")
+```
+
+### Domain-specific transforms
+```bash
+goldenflow transform patients.csv --domain healthcare
+```
+
+### Learn and reuse config
+```python
+import goldenflow as gf
+config = gf.learn_config("sample.csv")
+gf.save_config(config, "goldenflow.yaml")
+
+# Apply to new data
+result = gf.transform_file("new_data.csv", config="goldenflow.yaml")
+```
+
+### Schema mapping between files
+```python
+from goldenflow import SchemaMapper
+
+mapper = SchemaMapper()
+mappings = mapper.map(source_df, target_df)
+for m in mappings:
+    print(f"  {m.source} -> {m.target} (confidence: {m.confidence:.2f})")
+```
+
+### Integration with GoldenCheck findings
+```bash
+# Fix issues discovered by GoldenCheck
+goldenflow transform data.csv --from-findings findings.json
+```
+
+### Custom transform registration
+```python
+from goldenflow import register_transform
+import polars as pl
+
+@register_transform(
+    name="my_custom_clean",
+    input_types=["text"],
+    auto_apply=False,
+    priority=50,
+    mode="series",
+)
+def my_custom_clean(series: pl.Series) -> pl.Series:
+    return series.str.strip_chars().str.to_lowercase()
+```
+
+### Streaming large files
+```python
+from goldenflow.streaming import StreamProcessor
+
+processor = StreamProcessor(config)
+for result in processor.stream_file("large_file.csv", chunk_size=10_000):
+    result.df.write_csv(f"chunk_{processor.batches_processed}.csv")
+```
+
+### Diff before and after
+```python
+from goldenflow import diff_dataframes
+
+diff = diff_dataframes(original_df, transformed_df)
+print(f"Changed columns: {diff.changed_columns}")
+```
+
+## Configuration Example (goldenflow.yaml)
+
+```yaml
+source: customers.csv
+output: customers_clean.csv
+
+transforms:
+  - column: phone
+    ops: [phone_e164]
+  - column: full_name
+    ops: [titlecase_name]
+  - column: email
+    ops: [strip, lowercase]
+
+renames:
+  email_address: email
+  phone_number: phone
+
+drop: [internal_id, temp_field]
+
+dedup:
+  columns: [email]
+  keep: first
+```
+
+## Transform Mode System
+
+| Mode        | Input          | Output         | Use Case                        |
+|-------------|----------------|----------------|---------------------------------|
+| `"expr"`    | `pl.Expr`      | `pl.Expr`      | Pure Polars ops (fastest)       |
+| `"series"`  | `pl.Series`    | `pl.Series`    | Python logic per column         |
+| `"dataframe"` | `pl.DataFrame` | `pl.DataFrame` | Multi-column transforms         |
+
+## CLI Commands
+
+```bash
+goldenflow transform data.csv                      # Zero-config transform
+goldenflow transform data.csv -c config.yaml       # Apply saved config
+goldenflow transform data.csv --domain healthcare  # Domain-specific
+goldenflow transform data.csv --llm                # LLM-enhanced
+goldenflow transform data.csv --strict             # Fail on any error
+goldenflow map -s source.csv -t target.csv         # Schema mapping
+goldenflow learn data.csv -o config.yaml           # Learn config from data
+goldenflow validate data.csv                       # Dry-run
+goldenflow diff before.csv after.csv               # Compare files
+goldenflow profile data.csv                        # Show column profiles
+goldenflow watch ./data/                           # Auto-transform on change
+goldenflow schedule data.csv --every 1h            # Scheduled transforms
+goldenflow stream large_file.csv                   # Stream processing
+goldenflow init data.csv                           # Interactive setup
+goldenflow demo                                    # Generate sample data
+goldenflow history                                 # Recent runs
+goldenflow interactive data.csv                    # Launch TUI
+goldenflow serve                                   # REST API
+goldenflow mcp-serve                               # MCP server
+```
+
+## Interfaces
+
+- **MCP Server**: `goldenflow mcp-serve` — 4 tools for Claude Desktop
+- **Remote MCP**: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
+- **REST API**: `goldenflow serve` on port 8000
+- **CLI**: 14+ Typer commands
+- **Python API**: `import goldenflow` — 40+ exports
+- **TUI**: Textual interactive interface
+
+## Links
+
+- [GitHub](https://github.com/benzsevern/goldenflow)
+- [Concise overview](llms.txt)

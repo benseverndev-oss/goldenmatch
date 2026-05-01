@@ -1,0 +1,7 @@
+name,email,phone,address,city,state,zip,signup_date,price,active
+  John Smith  ,JOHN@EXAMPLE.COM,(555) 123-4567,123 Main Street,Philadelphia,Pennsylvania,19103,03/15/2024,"$1,234.56",Yes
+jane doe,jane@example.com ,555.987.6543,456 Oak Ave,Los Angeles,CA,90001,2024-01-20,$99.99,Y
+ROBERT JOHNSON III,bob@test.com,+1-555-456-7890,789 Elm St.,New York,new york,10001,Jan 5 2023,$0.50,true
+  Mary McDonald ,mary@sample.com,5554567890,321 Pine Avenue,Chicago,IL,60601,12/25/2022,"$5,000.00",1
+Dr. James Wilson Jr.,jwilson@email.com,(555)111-2222,654 Maple Dr,Houston,TX,77001,2023-06-15,$250.00,True
+,invalid-email,not-a-phone,,,ZZ,abcde,not-a-date,$NaN,maybe

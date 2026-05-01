@@ -1,0 +1,30 @@
+# GoldenFlow
+
+> Data transformation — standardize, clean, and normalize data with auto-detection and domain-aware transforms. 76 transforms across 11 categories.
+
+## Interfaces
+- MCP Server: `goldenflow mcp-serve` (10 tools: transform, map, profile, learn, diff, validate, stream, history, domain, demo)
+- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
+- CLI: `goldenflow transform`, `goldenflow map`, + 13 more commands
+- Python API: `from goldenflow import transform_file, transform_df`
+- REST API: `goldenflow serve` on port 8000
+
+## Transform Categories (76 transforms)
+- **Text** (18): strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
+- **Phone** (5): phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
+- **Name** (8): split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
+- **Address** (8): address_standardize, address_expand, state_abbreviate, state_expand, zip_normalize, split_address, country_standardize, unit_normalize
+- **Date** (13): date_iso8601, datetime_iso8601, date_us, date_eu, date_parse, age_from_dob, extract_year, extract_month, extract_day, extract_quarter, extract_day_of_week, date_shift, date_validate
+- **Categorical** (6): category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
+- **Numeric** (9): currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
+- **Email** (4): email_lowercase, email_normalize, email_extract_domain, email_validate
+- **Identifiers** (3): ssn_format, ssn_mask, ein_format
+- **URL** (2): url_normalize, url_extract_domain
+
+## Install
+- `pip install goldenflow`
+
+## Docs
+- [Architecture](CLAUDE.md): Full codebase guide with transform registry, domain packs, engine pipeline
+- [GitHub](https://github.com/benzsevern/goldenflow): Source
+- [Full API Reference](llms-full.txt): Extended documentation with all function signatures and usage patterns

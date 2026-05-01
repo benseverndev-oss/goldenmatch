@@ -1,0 +1,862 @@
+<!-- mcp-name: io.github.benzsevern/goldenflow -->
+# GoldenFlow
+
+**Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.**
+Built by [Ben Severn](https://bensevern.dev).
+
+Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases. Zero-config mode auto-detects what needs fixing. One command to clean what GoldenCheck found and prep what GoldenMatch needs. **Available in Python and TypeScript** with full feature parity.
+
+[![PyPI](https://img.shields.io/pypi/v/goldenflow?color=d4a017)](https://pypi.org/project/goldenflow/)
+[![npm](https://img.shields.io/npm/v/goldenflow?color=d4a017)](https://www.npmjs.com/package/goldenflow)
+[![CI](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/benzsevern/goldenflow/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenflow)
+[![Downloads](https://static.pepy.tech/badge/goldenflow/month)](https://pepy.tech/project/goldenflow)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-339933)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benzsevern.github.io/goldenflow/)
+[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenflow/blob/main/scripts/goldenflow_demo.ipynb)
+
+```bash
+# Python
+pip install goldenflow
+goldenflow transform data.csv
+
+# TypeScript / Node.js
+npm install goldenflow
+npx goldenflow-js transform data.csv
+```
+
+---
+
+## The Problem
+
+Your data arrives broken in predictable ways:
+
+- Phone numbers come in 15 different formats
+- Dates are mixed between MM/DD/YYYY and YYYY-MM-DD
+- Addresses have inconsistent abbreviations
+- Column names don't match between systems ("fname" vs "first_name" vs "given_name")
+- Values have leading whitespace, unicode garbage, smart quotes
+- Categoricals are inconsistent ("USA", "US", "United States")
+
+Every data engineer writes throwaway scripts to fix these. Every script is slightly different. None of them are reusable.
+
+GoldenFlow makes the transforms reusable, composable, and automatic.
+
+---
+
+## Quick Start
+
+### Python
+
+```bash
+pip install goldenflow
+
+# Auto-transform (zero-config)
+goldenflow transform messy_data.csv
+
+# Try the demo first
+goldenflow demo
+goldenflow transform demo_data.csv -c demo_config.yaml
+
+# With config
+goldenflow learn messy_data.csv -o config.yaml
+goldenflow transform messy_data.csv -c config.yaml
+
+# Schema mapping
+goldenflow map --source system_a.csv --target system_b.csv
+
+# Full pipeline
+goldencheck scan data.csv
+goldenflow transform data.csv
+goldenmatch dedupe data_transformed.csv
+```
+
+### TypeScript / Node.js
+
+```bash
+npm install goldenflow
+
+# Auto-transform (zero-config)
+npx goldenflow-js transform messy_data.csv
+
+# Try the demo first
+npx goldenflow-js demo
+npx goldenflow-js transform demo_data.csv -c demo_config.yaml
+
+# With config
+npx goldenflow-js learn messy_data.csv -o config.yaml
+npx goldenflow-js transform messy_data.csv -c config.yaml
+
+# Schema mapping
+npx goldenflow-js map -s system_a.csv -t system_b.csv
+```
+
+### Programmatic (TypeScript)
+
+```typescript
+import { TransformEngine } from "goldenflow";
+
+const result = new TransformEngine().transformDf([
+  { name: "  JOHN  ", phone: "(555) 123-4567", email: "John@Example.COM" },
+]);
+console.log(result.rows[0]);
+// { name: "JOHN", phone: "+15551234567", email: "john@example.com" }
+```
+
+---
+
+## Zero-Config Mode
+
+```bash
+goldenflow transform customers.csv
+# or just:
+goldenflow customers.csv
+```
+
+GoldenFlow profiles every column and applies safe transforms automatically:
+
+- Strips whitespace and normalizes unicode
+- Standardizes phone numbers to E.164 format
+- Normalizes email casing
+- Parses and standardizes date formats to ISO 8601
+- Normalizes zip codes (zero-padding, strip +4)
+- Replaces smart/curly quotes with straight quotes
+- Auto-corrects categorical misspellings via fuzzy matching
+
+Output: a clean CSV with a sidecar manifest showing every transform applied.
+
+```
+customers.csv           -> customers_transformed.csv
+                        -> customers_manifest.json
+```
+
+The manifest is an audit trail — what changed, why, and which rows were affected.
+
+---
+
+## CLI Commands
+
+GoldenFlow has 14 commands. The most common ones:
+
+```bash
+# Core transforms
+goldenflow transform data.csv                    # Zero-config: auto-detect and fix
+goldenflow transform data.csv -c config.yaml     # Apply saved config
+goldenflow transform data.csv --domain healthcare # Use a domain pack
+goldenflow transform data.csv --strict           # Fail on any transform error
+goldenflow transform data.csv --llm              # Enable LLM-enhanced corrections
+goldenflow data.csv                              # Shorthand: auto-routes to transform
+
+# Schema & profiling
+goldenflow map -s a.csv -t b.csv                 # Auto-map schemas between files
+goldenflow profile data.csv                      # Show column profiles
+goldenflow learn data.csv -o config.yaml         # Generate config from data patterns
+goldenflow validate data.csv                     # Dry-run: show what would change
+goldenflow diff before.csv after.csv             # Compare pre/post transform
+
+# Continuous & scheduled
+goldenflow watch ./data/                         # Auto-transform new/changed files
+goldenflow schedule data.csv --every 1h          # Run on a schedule (5m, 1h, 30s...)
+goldenflow stream large_file.csv --chunk-size 50000  # Stream-process in batches
+
+# Discovery & history
+goldenflow init data.csv                         # Interactive setup wizard
+goldenflow demo                                  # Generate sample data to try
+goldenflow history                               # Show recent transform runs
+goldenflow history -n 50                         # Last 50 runs
+
+# Integrations
+goldenflow interactive data.csv                  # Launch TUI
+goldenflow serve                                 # REST API for real-time transforms
+goldenflow mcp-serve                             # MCP server for Claude Desktop
+```
+
+### Default Routing
+
+Running `goldenflow <file>` without a subcommand auto-routes to `transform`:
+
+```bash
+goldenflow customers.csv       # equivalent to: goldenflow transform customers.csv
+goldenflow -                   # read from stdin, write to stdout
+```
+
+---
+
+## Streaming
+
+For files too large to load into memory, use `StreamProcessor` or the `stream` command:
+
+```bash
+goldenflow stream large_file.csv --chunk-size 50000
+```
+
+```python
+from goldenflow.streaming import StreamProcessor
+
+processor = StreamProcessor(config=config)
+
+# Process a single record
+result = processor.transform_one({"name": "  John  ", "phone": "(555) 123-4567"})
+
+# Process a batch
+result = processor.transform_batch(df_batch)
+
+# Stream a large file in chunks
+for result in processor.stream_file("large_data.csv", chunk_size=10_000):
+    write_to_output(result.df)
+
+print(f"Processed {processor.batches_processed} batches")
+```
+
+---
+
+## Cloud Connectors
+
+GoldenFlow reads from and writes to S3 and Google Cloud Storage transparently:
+
+```bash
+# S3
+goldenflow transform s3://my-bucket/raw/customers.csv -o s3://my-bucket/clean/
+
+# GCS
+goldenflow transform gs://my-bucket/data/records.csv
+```
+
+```python
+from goldenflow.connectors.s3 import read_s3, write_s3
+from goldenflow.connectors.gcs import read_gcs, write_gcs
+
+df = read_s3("s3://my-bucket/raw/customers.csv")
+df = read_gcs("gs://my-bucket/data/records.csv")
+```
+
+Cloud paths are detected automatically — no extra flags needed.
+
+---
+
+## Watch Mode
+
+Auto-transform files as they arrive in a directory:
+
+```bash
+goldenflow watch ./data/
+goldenflow watch ./incoming/ -c config.yaml -o ./processed/
+```
+
+GoldenFlow polls the directory and applies transforms to any new or changed files.
+
+---
+
+## Scheduling
+
+Run transforms on a repeating schedule:
+
+```bash
+goldenflow schedule data.csv --every 1h
+goldenflow schedule data.csv --every 30m -c config.yaml -o ./output/
+```
+
+Supported intervals: `30s`, `5m`, `1h`, `2h`, etc.
+
+---
+
+## Setup Wizard
+
+Generate a YAML config interactively:
+
+```bash
+goldenflow init data.csv
+```
+
+The wizard profiles your data, suggests transforms, and saves a `goldenflow.yaml` ready to use.
+
+---
+
+## History
+
+GoldenFlow tracks every transform run in `~/.goldenflow/history/`:
+
+```bash
+goldenflow history         # Last 20 runs
+goldenflow history -n 50   # Last 50 runs
+```
+
+Each run record captures: source file, row count, transforms applied, errors, and duration.
+
+---
+
+## Schema Mapping
+
+When you need to merge data from different systems:
+
+```bash
+goldenflow map --source crm_export.csv --target warehouse_schema.csv
+```
+
+GoldenFlow auto-maps columns between schemas using name similarity and data profiling:
+
+```
+crm_export.csv              warehouse schema
+-----                       -----
+email_address      ->       email (rename)
+phone_number       ->       phone (rename)
+fname              ->       first_name (alias match)
+st                 ->       state (alias match)
+```
+
+Ambiguous mappings get flagged for human review. Confident mappings apply automatically.
+
+---
+
+## Domain Packs
+
+Pre-configured transform sets for common industries. All 5 are now implemented:
+
+```bash
+goldenflow transform patients.csv --domain healthcare
+goldenflow transform employees.csv --domain people_hr
+goldenflow transform transactions.csv --domain finance
+goldenflow transform orders.csv --domain ecommerce
+goldenflow transform listings.csv --domain real_estate
+```
+
+| Domain Pack | What It Covers |
+|-------------|---------------|
+| **People/HR** | Name parsing, SSN formatting, employment dates, gender/boolean standardization |
+| **Healthcare** | Patient IDs, diagnosis codes, clinical dates, HIPAA-sensitive field handling |
+| **Finance** | Currency normalization, account numbers, transaction dates, amount parsing |
+| **E-commerce** | SKU normalization, price parsing, order dates, address standardization |
+| **Real Estate** | Property addresses, listing dates, price normalization, geo fields |
+
+---
+
+## Transform Library (76 transforms)
+
+### Text Transforms (18)
+| Transform | What It Does |
+|-----------|-------------|
+| `strip` | Trim whitespace |
+| `lowercase` / `uppercase` | Case conversion |
+| `title_case` | Proper casing ("john smith" -> "John Smith") |
+| `normalize_unicode` | NFKD normalization, strip accents |
+| `normalize_quotes` | Smart/curly quotes -> straight quotes |
+| `collapse_whitespace` | Multiple spaces -> single space |
+| `truncate:N` | Limit to N characters |
+| `remove_punctuation` | Strip punctuation characters |
+| `remove_html_tags` | Strip HTML markup from scraped data |
+| `remove_urls` | Strip URLs from free-text fields |
+| `remove_digits` | Strip numeric characters from text |
+| `remove_emojis` | Strip emoji characters |
+| `fix_mojibake` | Fix common UTF-8/Latin-1 encoding garbling |
+| `normalize_line_endings` | Normalize \r\n and \r to \n |
+| `extract_numbers` | Pull numeric values from mixed text |
+| `pad_left:N` / `pad_right:N` | Pad to fixed width (account numbers, IDs) |
+
+### Phone Transforms (5)
+| Transform | What It Does |
+|-----------|-------------|
+| `phone_e164` | Any format -> +15550123456 |
+| `phone_national` | Any format -> (555) 012-3456 |
+| `phone_digits` | Strip to digits only |
+| `phone_validate` | Flag invalid numbers |
+| `phone_country_code` | Extract country calling code |
+
+### Name Transforms (8)
+| Transform | What It Does |
+|-----------|-------------|
+| `split_name` | "John Smith" -> first: "John", last: "Smith" |
+| `split_name_reverse` | "Smith, John" -> first: "John", last: "Smith" |
+| `strip_titles` / `strip_suffixes` | Remove Mr., Mrs., Dr., MD, PhD, etc. |
+| `name_proper` | "mcdonald" -> "McDonald", "o'brien" -> "O'Brien" |
+| `initial_expand` | Flag names with initials for review |
+| `nickname_standardize` | "Bob" -> "Robert", "Bill" -> "William" |
+| `merge_name` | Combine first_name + last_name into full_name |
+
+### Address Transforms (8)
+| Transform | What It Does |
+|-----------|-------------|
+| `address_standardize` | "Street" -> "St", "Avenue" -> "Ave" |
+| `address_expand` | "St" -> "Street", "Ave" -> "Avenue" |
+| `state_abbreviate` / `state_expand` | "Pennsylvania" <-> "PA" |
+| `zip_normalize` | Zero-pad, strip +4, validate |
+| `split_address` | Single line -> street, city, state, zip |
+| `country_standardize` | "United States" / "USA" -> "US" (ISO 3166) |
+| `unit_normalize` | "Apt" / "Apartment" / "#" -> "Unit" |
+
+### Date Transforms (13)
+| Transform | What It Does |
+|-----------|-------------|
+| `date_iso8601` | Any format -> 2024-03-15 |
+| `datetime_iso8601` | Any format -> 2024-03-15T15:30:00 |
+| `date_us` / `date_eu` | Regional format output |
+| `date_parse` | Auto-detect and normalize to ISO 8601 |
+| `age_from_dob` | Date of birth -> age in years |
+| `extract_year` / `extract_month` / `extract_day` | Decompose dates |
+| `extract_quarter` | Date -> Q1/Q2/Q3/Q4 |
+| `extract_day_of_week` | Date -> Monday, Tuesday, etc. |
+| `date_shift` | Add/subtract days (anonymization) |
+| `date_validate` | Flag invalid dates as boolean |
+
+### Categorical Transforms (6)
+| Transform | What It Does |
+|-----------|-------------|
+| `category_auto_correct` | Fuzzy-match misspellings to canonical values |
+| `category_standardize` | Map variants to canonical values |
+| `category_from_file` | Load mapping from CSV/YAML file |
+| `boolean_normalize` | "Yes"/"Y"/"1"/"True" -> true |
+| `gender_standardize` | "Male"/"M"/"Female"/"F" -> M/F |
+| `null_standardize` | "N/A"/"NULL"/"none" -> null |
+
+### Numeric Transforms (9)
+| Transform | What It Does |
+|-----------|-------------|
+| `currency_strip` | "$1,234.56" -> 1234.56 |
+| `percentage_normalize` | "85%" -> 0.85 |
+| `round:N` | Round to N decimal places |
+| `clamp` | Constrain values to a min/max range |
+| `to_integer` | Parse string to int, truncating decimals |
+| `abs_value` | Absolute value |
+| `fill_zero` | Replace nulls with 0 |
+| `comma_decimal` | European format "1.234,56" -> 1234.56 |
+| `scientific_to_decimal` | "1.5e3" -> 1500.0 |
+
+### Email Transforms (4)
+| Transform | What It Does |
+|-----------|-------------|
+| `email_lowercase` | Normalize to lowercase |
+| `email_normalize` | Strip +tags, strip Gmail dots, lowercase |
+| `email_extract_domain` | user@example.com -> example.com |
+| `email_validate` | Flag invalid email format |
+
+### Identifier Transforms (3)
+| Transform | What It Does |
+|-----------|-------------|
+| `ssn_format` | Normalize to XXX-XX-XXXX |
+| `ssn_mask` | Redact to \*\*\*-\*\*-1234 |
+| `ein_format` | Normalize to XX-XXXXXXX |
+
+### URL Transforms (2)
+| Transform | What It Does |
+|-----------|-------------|
+| `url_normalize` | Lowercase domain, ensure scheme, strip trailing slash |
+| `url_extract_domain` | Extract domain from URL |
+
+---
+
+## Special Modes
+
+### Strict Mode
+
+Fail immediately if any transform error occurs — useful in CI or production pipelines:
+
+```bash
+goldenflow transform data.csv --strict
+```
+
+Exits with code 1 and prints the first 5 errors if any transform fails.
+
+### LLM Mode
+
+Use an LLM to enhance categorical corrections and handle edge cases that fuzzy matching misses:
+
+```bash
+goldenflow transform data.csv --llm
+```
+
+Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in your environment. Falls back to standard transforms gracefully.
+
+### Auto-Correct
+
+`category_auto_correct` uses fuzzy matching to fix misspelled categorical values automatically. It is suppressed on high-cardinality columns (>10% unique values) to avoid false positives.
+
+```
+"actve" -> "active"
+"Pennsylvnia" -> "Pennsylvania"
+"Unted States" -> "United States"
+```
+
+---
+
+## YAML Config
+
+For repeatable pipelines:
+
+```yaml
+# goldenflow.yaml
+source: customers.csv
+output: customers_clean.csv
+
+transforms:
+  - column: name
+    ops: [strip, title_case]
+  - column: email
+    ops: [lowercase, strip]
+  - column: phone
+    ops: [phone_e164]
+  - column: state
+    ops: [state_abbreviate]
+  - column: signup_date
+    ops: [date_iso8601]
+
+renames:
+  email_address: email
+  phone_number: phone
+
+drop: [internal_id, temp_notes]
+
+dedup:
+  columns: [email]
+  keep: first
+```
+
+```bash
+goldenflow transform customers.csv -c goldenflow.yaml
+```
+
+Generate a config from your data automatically:
+
+```bash
+goldenflow learn data.csv -o config.yaml
+```
+
+---
+
+## Python API
+
+```python
+import goldenflow
+
+# Zero-config
+result = goldenflow.transform_file("messy_data.csv")
+print(result.df)          # Clean Polars DataFrame
+print(result.manifest)    # Audit trail
+
+# With config
+from goldenflow import GoldenFlowConfig, TransformSpec, TransformEngine
+
+config = GoldenFlowConfig(
+    transforms=[
+        TransformSpec(column="phone", ops=["phone_e164"]),
+        TransformSpec(column="date", ops=["date_iso8601"]),
+    ]
+)
+engine = TransformEngine(config=config)
+result = engine.transform_df(df)
+```
+
+### Jupyter Notebook Support
+
+`TransformResult`, `Manifest`, and `DatasetProfile` all have `_repr_html_()` — they render as rich HTML tables automatically in Jupyter:
+
+```python
+import goldenflow
+
+result = goldenflow.transform_file("messy_data.csv")
+result           # renders as HTML table in Jupyter
+result.manifest  # renders transform audit trail
+```
+
+---
+
+## TypeScript / JavaScript
+
+GoldenFlow has a full TypeScript port with feature parity — same 83 transforms, same engine, same config format. The core is **edge-safe** (runs in browsers, Cloudflare Workers, Vercel Edge) with a Node layer for file I/O and CLI.
+
+### Install
+
+```bash
+npm install goldenflow
+```
+
+### CLI
+
+```bash
+npx goldenflow-js transform data.csv              # Zero-config
+npx goldenflow-js transform data.csv -c config.yaml  # With config
+npx goldenflow-js profile data.csv                 # Column profiles
+npx goldenflow-js learn data.csv -o config.yaml    # Generate config
+npx goldenflow-js diff before.csv after.csv        # Compare files
+npx goldenflow-js map -s source.csv -t target.csv  # Schema mapping
+npx goldenflow-js stream large.csv --chunk-size 50000  # Streaming
+npx goldenflow-js demo                             # Generate sample data
+npx goldenflow-js history                          # Show recent runs
+```
+
+### TypeScript API
+
+```typescript
+import { TransformEngine, makeConfig } from "goldenflow";
+
+// Zero-config — auto-detect and fix
+const engine = new TransformEngine();
+const result = engine.transformDf([
+  { name: "  John Smith  ", email: "JOHN@EXAMPLE.COM", phone: "(555) 123-4567" },
+  { name: "DR. JANE DOE", email: "  jane+work@gmail.com  ", phone: "555.987.6543" },
+]);
+
+console.log(result.rows);
+// [
+//   { name: "John Smith", email: "john@example.com", phone: "+15551234567" },
+//   { name: "Jane Doe", email: "jane@gmail.com", phone: "+15559876543" },
+// ]
+console.log(result.manifest.records.length); // transforms applied
+```
+
+```typescript
+// Configured — explicit transforms per column
+const engine = new TransformEngine({
+  transforms: [
+    { column: "phone", ops: ["phone_e164"] },
+    { column: "email", ops: ["strip", "email_normalize"] },
+    { column: "name", ops: ["strip", "title_case"] },
+    { column: "state", ops: ["state_abbreviate"] },
+    { column: "price", ops: ["currency_strip"] },
+    { column: "signup_date", ops: ["date_iso8601"] },
+  ],
+  renames: { email_address: "email" },
+  drop: ["internal_id"],
+  dedup: { columns: ["email"], keep: "first" },
+});
+const result = engine.transformDf(rows);
+```
+
+```typescript
+// Schema mapping
+import { SchemaMapper } from "goldenflow";
+
+const mapper = new SchemaMapper();
+const mappings = mapper.map(
+  [{ fname: "John", lname: "Smith", email_address: "j@e.com" }],
+  [{ first_name: "", last_name: "", email: "" }],
+);
+// [{ source: "fname", target: "first_name", confidence: 0.95 }, ...]
+```
+
+```typescript
+// Streaming large datasets
+import { StreamProcessor } from "goldenflow";
+
+const processor = new StreamProcessor({ transforms: [{ column: "name", ops: ["strip"] }] });
+for (const result of processor.streamRows(largeDataset, 10_000)) {
+  await writeChunk(result.rows);
+}
+```
+
+```typescript
+// Profiling
+import { profileDataframe } from "goldenflow";
+
+const profile = profileDataframe(rows, "customers.csv");
+for (const col of profile.columns) {
+  console.log(`${col.name}: ${col.inferredType}, ${col.nullCount} nulls, ${col.uniqueCount} unique`);
+}
+```
+
+```typescript
+// Edge-safe import (browsers, Workers, Edge Runtime)
+import { TransformEngine } from "goldenflow/core";
+
+// Node-only import (includes file I/O, MCP, CLI)
+import { readFile, TransformEngine } from "goldenflow/node";
+```
+
+### MCP Server (TypeScript)
+
+```typescript
+import { TOOL_DEFINITIONS, handleTool } from "goldenflow/node";
+
+// TOOL_DEFINITIONS: 10 MCP tools for Claude Desktop
+// handleTool("transform", { path: "data.csv" }) → JSON string
+```
+
+### REST API (TypeScript)
+
+```typescript
+import { runServer } from "goldenflow/node";
+runServer(8000); // Starts HTTP server with /health, /transforms, /transform
+```
+
+---
+
+## Public API (34 exports)
+
+```python
+from goldenflow import (
+    # Core engine
+    TransformEngine, TransformResult,
+    # Config
+    GoldenFlowConfig, TransformSpec, SplitSpec, FilterSpec, DedupSpec, MappingSpec,
+    # Convenience
+    transform_file, transform_df,
+    # Manifest
+    Manifest, TransformRecord, TransformError,
+    # Profiler
+    DatasetProfile, ColumnProfile,
+    # Selector & differ
+    select_transforms, diff_dataframes, DiffResult,
+    # Transform registry
+    TransformInfo, register_transform, get_transform, list_transforms, parse_transform_name,
+    # Mapping
+    SchemaMapper, ColumnMapping,
+    # Config helpers
+    load_config, save_config, merge_configs, learn_config,
+    # Domains
+    DomainPack, load_domain,
+    # Connectors
+    read_file, write_file,
+)
+```
+
+---
+
+## Integrations
+
+### REST API
+
+```bash
+goldenflow serve --host 0.0.0.0 --port 8000
+```
+
+POST CSV data, get transformed CSV back. Built with FastAPI.
+
+### MCP Server
+
+```bash
+goldenflow mcp-serve
+```
+
+Exposes GoldenFlow as an MCP tool for Claude Desktop. Configure in your Claude Desktop settings.
+
+### TUI
+
+```bash
+goldenflow interactive data.csv
+```
+
+Full-featured terminal UI built with Textual. Browse profiles, apply transforms, preview results.
+
+## Remote MCP Server
+
+GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenflow) — connect from any MCP client without installing anything.
+
+**Claude Desktop / Claude Code:**
+```json
+{
+  "mcpServers": {
+    "goldenflow": {
+      "url": "https://goldenflow-mcp-production.up.railway.app/mcp/"
+    }
+  }
+}
+```
+
+**Local server:**
+```bash
+pip install goldenflow[mcp]
+goldenflow mcp-serve
+```
+
+10 tools available: transform files, auto-map schemas, profile columns, generate configs, diff before/after, apply domain packs.
+
+---
+
+## Part of the Golden Suite
+
+| Tool | Purpose | Python | TypeScript |
+|------|---------|--------|------------|
+| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` | `npm install goldencheck` |
+| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` | `npm install goldenflow` |
+| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` | — |
+| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` | — |
+
+```
+Raw Data
+   |
+   v
++--------------+
+|  GoldenCheck |  <- Discover quality issues
+|  goldencheck |
+|  scan data   |
++------+-------+
+       | findings
+       v
++--------------+
+|  GoldenFlow  |  <- Fix issues, standardize, reshape
+|  goldenflow  |
+|  transform   |
++------+-------+
+       | clean data
+       v
++--------------+
+|  GoldenMatch |  <- Deduplicate, match, create golden records
+|  goldenmatch |
+|  dedupe      |
++------+-------+
+       | golden records
+       v
+   Clean, deduplicated,
+   production-ready data
+```
+
+Chain them:
+
+```bash
+goldencheck scan data.csv | goldenflow transform --from-findings | goldenmatch dedupe
+```
+
+---
+
+## Performance
+
+Built on [Polars](https://pola.rs/) (Rust-backed DataFrames). Transforms use a hybrid approach: native Polars expressions stay in the Rust engine for simple transforms (strip, lowercase), while complex transforms (phone parsing, date parsing) use optimized Python via `map_batches`.
+
+---
+
+## Benchmarks
+
+GoldenFlow scores **100/100** on the [DQBench](https://github.com/benzsevern/dqbench) transform benchmark across all three tiers (customer database, e-commerce, healthcare claims).
+
+```bash
+pip install dqbench
+dqbench run goldenflow
+```
+
+---
+
+## Why GoldenFlow?
+
+| | GoldenFlow | pandas scripts | [Great Expectations](https://greatexpectations.io/) | [dbt](https://www.getdbt.com/) | [Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/) |
+|---|---|---|---|---|---|
+| Zero-config transforms | Yes (auto-detect) | No | No (validation only) | No (SQL transforms) | Partial |
+| 76 built-in transforms (11 categories) | Yes | Manual | No (validator, not transformer) | Via SQL | ~30 cleaners |
+| Domain packs (healthcare, finance...) | 5 built-in | No | No | No | No |
+| Schema mapping | Auto + manual | Manual | No | Via ref/source | No |
+| Audit trail (manifest) | Automatic JSON | Manual | No | Via logs | No |
+| Streaming / large files | Built-in | Manual chunking | No | Yes (warehouse) | No |
+| MCP server | Yes | No | No | No | No |
+| Polars-native | Yes | No (pandas) | No (pandas/Spark) | No (SQL) | No (pandas) |
+| DQBench transform score | 100/100 | N/A | N/A | N/A | N/A |
+
+GoldenFlow is purpose-built for the transform step between validation and matching — not a general ETL tool. It turns messy data into clean, standardized data automatically.
+
+---
+
+## Error Handling
+
+GoldenFlow catches errors at the CLI boundary and shows friendly, actionable messages — no raw stack traces. Individual transform errors are captured in the manifest rather than crashing the run. Use `--strict` to change this behavior.
+
+---
+
+## Progress Bars
+
+Long-running operations (streaming, watch mode, scheduling) display a Rich progress spinner showing batch count, rows processed, and estimated completion.
+
+---
+
+**GitHub:** [github.com/benzsevern/goldenflow](https://github.com/benzsevern/goldenflow)
+**Author:** [Ben Severn](https://bensevern.dev)
+**License:** MIT
+**Python:** 3.11+ | **Node.js:** 20+ | **npm:** [goldenflow](https://www.npmjs.com/package/goldenflow) | **PyPI:** [goldenflow](https://pypi.org/project/goldenflow/)
