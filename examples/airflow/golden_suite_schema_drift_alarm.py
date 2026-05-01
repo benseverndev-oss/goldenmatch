@@ -22,6 +22,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 CANONICAL_SCHEMA_FILE = "/opt/airflow/dags/golden_suite/canonical_customers.yaml"
 MAPPINGS_TABLE = "warehouse.source_column_mappings"
@@ -73,7 +74,7 @@ def golden_suite_schema_drift_alarm():
         try:
             S3Hook(aws_conn_id="aws_default").get_key(
                 f"incoming/{source['name']}/_latest_sample.csv",
-                "{{ var.value.golden_suite_bucket }}",
+                Variable.get("golden_suite_bucket"),
             ).download_file(Filename=str(local))
         except Exception as exc:  # noqa: BLE001
             return {"source": source["name"], "skipped": True, "reason": str(exc)}

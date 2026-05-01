@@ -22,6 +22,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 NEW_RECORDS_PREFIX = "incoming/customers/"
 CANONICAL_TABLE = "warehouse.customers_canonical"
@@ -55,7 +56,7 @@ def golden_suite_incremental_match():
         from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
         hook = S3Hook(aws_conn_id="aws_default")
-        keys = hook.list_keys(bucket_name="{{ var.value.golden_suite_bucket }}",
+        keys = hook.list_keys(bucket_name=Variable.get("golden_suite_bucket"),
                               prefix=NEW_RECORDS_PREFIX) or []
         # Skip the prefix itself and any already-processed marker.
         return [k for k in keys if not k.endswith("/") and not k.endswith(".processed")]
@@ -93,7 +94,7 @@ def golden_suite_incremental_match():
         local_new = Path(f"/tmp/golden_suite/{new_key}")
         local_new.parent.mkdir(parents=True, exist_ok=True)
         S3Hook(aws_conn_id="aws_default").get_key(
-            new_key, "{{ var.value.golden_suite_bucket }}"
+            new_key, Variable.get("golden_suite_bucket")
         ).download_file(Filename=str(local_new))
 
         new_df = pl.read_csv(local_new, encoding="utf8-lossy", ignore_errors=True)
@@ -180,8 +181,8 @@ def golden_suite_incremental_match():
             s3.copy_object(
                 source_bucket_key=batch["key"],
                 dest_bucket_key=batch["key"] + ".processed",
-                source_bucket_name="{{ var.value.golden_suite_bucket }}",
-                dest_bucket_name="{{ var.value.golden_suite_bucket }}",
+                source_bucket_name=Variable.get("golden_suite_bucket"),
+                dest_bucket_name=Variable.get("golden_suite_bucket"),
             )
 
     new_keys = list_new_keys()

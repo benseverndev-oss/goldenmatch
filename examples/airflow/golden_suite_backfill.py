@@ -25,6 +25,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 BACKFILL_PREFIX_TEMPLATE = "_backfill/{run_id}/customers/{ds}/golden.parquet"
 BACKFILL_METRICS_TABLE = "analytics.golden_suite_backfill_runs"
@@ -74,7 +75,7 @@ def golden_suite_backfill():
         import goldenmatch
         import polars as pl
 
-        bucket = "{{ var.value.golden_suite_bucket }}"
+        bucket = Variable.get("golden_suite_bucket")
         source_key = f"raw/customers/{ds}/customers.csv"
         local = Path(f"/tmp/golden_suite/backfill/{ds}/customers.csv")
         local.parent.mkdir(parents=True, exist_ok=True)

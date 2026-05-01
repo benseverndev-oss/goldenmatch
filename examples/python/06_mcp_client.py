@@ -19,7 +19,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.session import ClientSession
 
 
-SERVER_URL = "http://localhost:8300/mcp"
+SERVER_URL = "http://localhost:8300/mcp/"
 
 
 async def main() -> None:

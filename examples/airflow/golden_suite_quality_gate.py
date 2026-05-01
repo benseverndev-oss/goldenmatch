@@ -28,6 +28,7 @@ from typing import Any
 import pendulum
 from airflow.datasets import Dataset
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 WATCH_KEY_TEMPLATE = "raw/customers/{{ ds }}/customers.csv"
 
@@ -64,7 +65,7 @@ def golden_suite_quality_gate():
         local = Path(f"/tmp/golden_suite/gate/{key}")
         local.parent.mkdir(parents=True, exist_ok=True)
         S3Hook(aws_conn_id="aws_default").get_key(
-            key, "{{ var.value.golden_suite_bucket }}"
+            key, Variable.get("golden_suite_bucket")
         ).download_file(Filename=str(local))
         return str(local)
 

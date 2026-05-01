@@ -20,6 +20,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 PARTY_A_PREFIX = "pprl/inbound/party_a/"
 PARTY_B_PREFIX = "pprl/inbound/party_b/"
@@ -59,14 +60,14 @@ def golden_suite_pprl_linkage():
         local_dir.mkdir(parents=True, exist_ok=True)
 
         hook = S3Hook(aws_conn_id="aws_default")
-        keys = hook.list_keys(bucket_name="{{ var.value.golden_suite_bucket }}",
+        keys = hook.list_keys(bucket_name=Variable.get("golden_suite_bucket"),
                               prefix=prefix) or []
         if not keys:
             raise ValueError(f"No encoded shards for {label} under {prefix}.")
 
         for key in keys:
             local = local_dir / Path(key).name
-            hook.get_key(key, "{{ var.value.golden_suite_bucket }}").download_file(
+            hook.get_key(key, Variable.get("golden_suite_bucket")).download_file(
                 Filename=str(local)
             )
         return str(local_dir)
@@ -119,9 +120,9 @@ def golden_suite_pprl_linkage():
         out_key = results_prefix.rstrip("/") + "/matches.parquet"
         s3.load_file(filename=str(local),
                      key=out_key,
-                     bucket_name="{{ var.value.golden_suite_bucket }}",
+                     bucket_name=Variable.get("golden_suite_bucket"),
                      replace=True)
-        return f"s3://{{ var.value.golden_suite_bucket }}/{out_key}"
+        return f"s3://{Variable.get("golden_suite_bucket")}/{out_key}"
 
     @task
     def audit(linkage: dict[str, Any], result_uri: str, **context) -> None:

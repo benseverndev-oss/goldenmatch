@@ -5,8 +5,8 @@ into Bloom filters locally, then a third party (or one of the two, if mutually
 trusted for the linkage step only) compares the encoded sets.
 
 This script simulates both parties locally for demonstration. In a real
-deployment each party runs `auto_configure_pprl` + bloom encoding on their
-own machines and ships only the encoded shards.
+deployment each party runs encoding on their own machines and ships only the
+encoded shards.
 
 Run:
     pip install goldenmatch[pprl] polars
@@ -21,7 +21,7 @@ from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
 # Two parties with overlapping but messy PII.
 party_a = pl.DataFrame({
-    "id_a":       [1, 2, 3, 4],
+    "id":         [1, 2, 3, 4],
     "first_name": ["Jane", "Robert", "Alice", "Mark"],
     "last_name":  ["Smith", "Jones", "Lee", "Davis"],
     "dob":        ["1990-03-15", "1985-07-22", "1992-11-30", "1978-01-05"],
@@ -29,7 +29,7 @@ party_a = pl.DataFrame({
 })
 
 party_b = pl.DataFrame({
-    "id_b":       [101, 102, 103, 104, 105],
+    "id":         [101, 102, 103, 104, 105],
     "first_name": ["Jane", "Bob", "Alicia", "Mark", "Jenny"],
     "last_name":  ["Smithe", "Jones", "Li", "Davis", "Wong"],
     "dob":        ["1990-03-15", "1985-07-22", "1992-11-30", "1978-01-05", "1995-06-10"],
@@ -44,20 +44,37 @@ def main() -> None:
         security_level="high",  # standard | high | paranoid
     )
 
-    # In production each party encodes locally and ships only the encoded
-    # bloom-filter columns. run_pprl handles the encoding here for demo.
-    result = run_pprl(party_a=party_a, party_b=party_b, config=config)
+    # Each party encodes locally; run_pprl handles encoding here for the demo.
+    result = run_pprl(
+        df_a=party_a, df_b=party_b, config=config,
+        party_a_id="hospital_a", party_b_id="hospital_b",
+    )
 
-    print(f"matched pairs: {len(result.matches)}")
-    for a_id, b_id, score in result.matches[:10]:
-        a_row = party_a.filter(pl.col("id_a") == a_id).to_dicts()[0]
-        b_row = party_b.filter(pl.col("id_b") == b_id).to_dicts()[0]
-        print(f"  {a_id:3d} ↔ {b_id:3d}  score={score:.3f}  "
-              f"{a_row['first_name']} {a_row['last_name']} ↔ "
-              f"{b_row['first_name']} {b_row['last_name']}")
+    print(f"linked clusters:   {len(result.clusters)}")
+    print(f"matched-pair count: {result.match_count}")
+    print(f"comparisons total:  {result.total_comparisons}")
+    print()
 
-    rate_a = len(result.matches) / party_a.height
-    print(f"\n{rate_a:.0%} of party_a records found a match in party_b")
+    # Each cluster is a list of (party_id, record_id) tuples.
+    # Show the first 10 cross-party clusters.
+    shown = 0
+    for cluster_id, members in result.clusters.items():
+        a_member = next((m for m in members if m[0] == "hospital_a"), None)
+        b_member = next((m for m in members if m[0] == "hospital_b"), None)
+        if not (a_member and b_member):
+            continue
+        a_rec = party_a.filter(pl.col("id") == a_member[1]).to_dicts()[0]
+        b_rec = party_b.filter(pl.col("id") == b_member[1]).to_dicts()[0]
+        print(f"  cluster {cluster_id}:  "
+              f"a:{a_member[1]} ↔ b:{b_member[1]}  "
+              f"{a_rec['first_name']} {a_rec['last_name']} ↔ "
+              f"{b_rec['first_name']} {b_rec['last_name']}")
+        shown += 1
+        if shown >= 10:
+            break
+
+    rate_a = result.match_count / max(party_a.height, 1)
+    print(f"\n{rate_a:.0%} of party_a records linked into a cross-party cluster")
 
 
 if __name__ == "__main__":

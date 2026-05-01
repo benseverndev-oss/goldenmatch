@@ -25,11 +25,12 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 # -----------------------------------------------------------------------------
 # Knobs — adjust per environment
 # -----------------------------------------------------------------------------
-S3_BUCKET = "{{ var.value.golden_suite_bucket }}"  # Airflow Variable
+S3_BUCKET = Variable.get("golden_suite_bucket")  # Airflow Variable
 SOURCE_KEY_TEMPLATE = "raw/customers/{{ ds }}/customers.csv"
 GOLDEN_KEY_TEMPLATE = "golden/customers/{{ ds }}/golden.parquet"
 METRICS_TABLE = "analytics.golden_suite_runs"
