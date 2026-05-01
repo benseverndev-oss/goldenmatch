@@ -8,12 +8,16 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: [goldenmatch, goldencheck, goldenflow, goldenpipe, infermap]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - run: uv sync --all-packages
-      - run: uv run pytest packages/python
-      - run: uv run ruff check packages/python
+      - run: uv run pytest packages/python/${{ matrix.pkg }}
+      - run: uv run ruff check packages/python/${{ matrix.pkg }}
 
   typescript:
     runs-on: ubuntu-latest

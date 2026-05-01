@@ -18,4 +18,6 @@ infermap = { workspace = true }
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+    # transitive test deps surfaced across workspace packages:
+    "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
