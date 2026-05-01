@@ -22,6 +22,8 @@ dependencies = [
     "rich>=13.0",
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    "goldencheck-types",
+    "infermap",
 ]
 
 [project.optional-dependencies]
