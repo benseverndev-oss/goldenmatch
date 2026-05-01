@@ -1,0 +1,110 @@
+# GoldenFlow
+
+> Data transformation toolkit — standardize, clean, and normalize messy data with auto-detection and domain-aware transforms. 76 transforms across 11 categories. DQBench Transform Score: 100/100.
+
+## Interfaces
+- MCP Server: `goldenflow mcp-serve` (10 tools: transform, map, profile, learn, diff, validate, stream, history, domain, demo)
+- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
+- A2A Server: `goldenflow agent-serve --port 8150` (6 skills)
+- CLI: `goldenflow transform`, `goldenflow map`, + 12 more commands
+- Python API: `from goldenflow import transform_file, transform_df`
+- REST API: `goldenflow serve` on port 8000
+
+## Install
+- `pip install goldenflow` — core transforms
+- `pip install goldenflow[check]` — GoldenCheck integration
+- `pip install goldenflow[mcp]` — MCP server for Claude Desktop
+
+## Quick Examples
+
+### Zero-config transform (auto-detect and fix)
+```python
+import goldenflow
+
+result = goldenflow.transform_df(df)
+cleaned = result.df
+print(f"Applied {len(result.manifest.records)} transforms")
+```
+
+### Configured transforms
+```python
+from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+
+config = GoldenFlowConfig(transforms=[
+    TransformSpec(column="phone", ops=["strip", "phone_e164"]),
+    TransformSpec(column="email", ops=["strip", "email_lowercase"]),
+    TransformSpec(column="first_name", ops=["strip", "title_case"]),
+])
+result = goldenflow.transform_df(df, config=config)
+```
+
+### CLI
+```bash
+goldenflow transform data.csv                     # zero-config
+goldenflow transform data.csv --domain healthcare  # domain pack
+goldenflow map -s source.csv -t target.csv         # schema mapping
+goldenflow learn data.csv -o config.yaml           # generate config
+```
+
+## Config Template (goldenflow.yaml)
+```yaml
+source: customers.csv
+output: customers_clean.csv
+
+transforms:
+  - column: phone
+    ops: [phone_e164]
+  - column: email
+    ops: [strip, email_lowercase]
+  - column: first_name
+    ops: [strip, title_case]
+
+renames:
+  email_address: email
+
+drop: [internal_id]
+
+dedup:
+  columns: [email]
+  keep: first
+```
+
+## Transform Categories (76 transforms)
+- **Text** (18): strip, lowercase, uppercase, title_case, normalize_unicode, normalize_quotes, collapse_whitespace, truncate, remove_punctuation, remove_html_tags, remove_urls, remove_digits, remove_emojis, fix_mojibake, normalize_line_endings, extract_numbers, pad_left, pad_right
+- **Phone** (5): phone_e164, phone_national, phone_digits, phone_validate, phone_country_code
+- **Name** (8): split_name, split_name_reverse, strip_titles, strip_suffixes, name_proper, initial_expand, nickname_standardize, merge_name
+- **Address** (8): address_standardize, address_expand, state_abbreviate, state_expand, zip_normalize, split_address, country_standardize, unit_normalize
+- **Date** (13): date_iso8601, datetime_iso8601, date_us, date_eu, date_parse, age_from_dob, extract_year, extract_month, extract_day, extract_quarter, extract_day_of_week, date_shift, date_validate
+- **Categorical** (6): category_auto_correct, category_standardize, category_from_file, boolean_normalize, gender_standardize, null_standardize
+- **Numeric** (9): currency_strip, percentage_normalize, round, clamp, to_integer, abs_value, fill_zero, comma_decimal, scientific_to_decimal
+- **Email** (4): email_lowercase, email_normalize, email_extract_domain, email_validate
+- **Identifiers** (3): ssn_format, ssn_mask, ein_format
+- **URL** (2): url_normalize, url_extract_domain
+
+## Key Types
+- `TransformResult` — `.df` (DataFrame), `.manifest` (Manifest with audit trail)
+- `Manifest` — `.records` (list[TransformRecord]) — column, transform name, rows affected, before/after samples
+- `GoldenFlowConfig` — Pydantic model, loadable from YAML
+
+## Domain Packs (5)
+- `healthcare` — patient IDs, diagnosis codes, clinical dates
+- `finance` — currency, account numbers, transaction dates
+- `ecommerce` — SKUs, prices, order dates, addresses
+- `people_hr` — names, SSNs, employment dates, gender
+- `real_estate` — property addresses, listing dates, prices
+
+## Performance
+- Zero-config mode auto-detects column types and applies safe transforms
+- DQBench Transform Score: 100/100 (perfect across all tiers)
+
+## Docs
+- [Full docs](https://benzsevern.github.io/goldenflow/)
+- [Full API reference](docs/llms-full.txt)
+- [PyPI](https://pypi.org/project/goldenflow/)
+- [GitHub](https://github.com/benzsevern/goldenflow)
+
+## Part of the Golden Suite
+- [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize
+- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — Deduplicate & match
+- [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline
