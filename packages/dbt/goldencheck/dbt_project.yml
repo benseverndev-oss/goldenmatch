@@ -1,9 +1,11 @@
 name: 'goldencheck'
-version: '0.1.0'
+version: '0.2.0'
 config-version: 2
 
 profile: 'goldencheck'
 
-require-dbt-version: [">=1.5.0"]
+# 1.7+ for `subdirectory:` support in packages.yml + dispatch (we don't dispatch
+# yet but staying current avoids forcing consumers onto a stale floor).
+require-dbt-version: [">=1.7.0"]
 
 macro-paths: ["macros"]
