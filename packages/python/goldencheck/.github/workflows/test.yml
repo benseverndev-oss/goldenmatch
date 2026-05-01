@@ -1,0 +1,73 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev,baseline]"
+      - run: pytest --tb=short -v
+      - run: ruff check .
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,baseline]"
+      - run: pytest --cov=goldencheck --cov-report=xml --tb=short
+      - uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - run: goldencheck tests/fixtures/simple.csv --no-tui
+      - run: goldencheck --version
+
+  goldencheck-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: packages/goldencheck-js
+        run: npm install
+
+      - name: Type check
+        working-directory: packages/goldencheck-js
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: packages/goldencheck-js
+        run: npm run test
+
+      - name: Build
+        working-directory: packages/goldencheck-js
+        run: npm run build

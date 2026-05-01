@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.csv
+*.parquet
+*.xlsx
+# But keep test fixtures
+!tests/fixtures/*.csv
+goldencheck.yml
+.ruff_cache/
+.testing/
+benchmarks/results.json
+.firecrawl/
+.goldencheck/
+.mypy_cache/
+.tox/
+*.egg
+htmlcov/
+venv/
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/
+
+# Node
+node_modules/
+packages/goldencheck-js/dist/
+packages/goldencheck-js/node_modules/
+package-lock.json
+packages/goldencheck-js/package-lock.json
