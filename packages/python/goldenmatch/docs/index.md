@@ -8,6 +8,8 @@ nav_order: 1
 
 **Entity resolution that finds duplicates in your data so you don't have to define the rules yourself.**
 
+> 🟡 **Now part of the Golden Suite monorepo.** This site documents GoldenMatch (entity resolution). The same repository hosts GoldenCheck (data quality), GoldenFlow (transforms), GoldenPipe (orchestrator), InferMap (schema mapping), the Rust SQL extensions, the dbt package, and the GitHub Action — plus a master MCP server (`goldensuite-mcp`), seven `ghcr.io` container images, and 12 drop-in Airflow DAGs. See the [repository README](https://github.com/benzsevern/goldenmatch#readme) and [`examples/`](https://github.com/benzsevern/goldenmatch/tree/main/examples) for the suite-wide picture.
+
 [![PyPI](https://img.shields.io/pypi/v/goldenmatch?color=d4a017)](https://pypi.org/project/goldenmatch/)
 [![Downloads](https://static.pepy.tech/badge/goldenmatch/month)](https://pepy.tech/projects/goldenmatch)
 [![Tests](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions)

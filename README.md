@@ -28,7 +28,8 @@
 [![GitHub stars](https://img.shields.io/github/stars/benzsevern/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benzsevern/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
-[![Docs](https://img.shields.io/badge/docs-github.io-d4a017)](https://benzsevern.github.io/goldenmatch/)
+[![Docs](https://img.shields.io/badge/docs-bensevern.dev-d4a017)](https://bensevern.dev/)
+[![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benzsevern/goldenmatch/wiki)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/scripts/gpu_colab_notebook.ipynb)
 
@@ -92,7 +93,7 @@ Each tool stands alone, but they compose into a single pipeline:
 |---|---|
 | Deduplicate a CSV right now | [`packages/python/goldenmatch`](packages/python/goldenmatch/README.md#quick-start) |
 | Use from Claude Desktop / Code | [`packages/python/goldenmatch` — MCP](packages/python/goldenmatch/README.md#remote-mcp-server) |
-| Build AI agents that deduplicate | [GoldenMatch A2A agent](https://benzsevern.github.io/goldenmatch/agent) |
+| Build AI agents that deduplicate | [ER Agent / A2A wiki page](https://github.com/benzsevern/goldenmatch/wiki/ER-Agent) |
 | Profile data quality before matching | [`packages/python/goldencheck`](packages/python/goldencheck/README.md) |
 | Standardize messy fields (phone, date, address) | [`packages/python/goldenflow`](packages/python/goldenflow/README.md) |
 | Run the full pipeline declaratively | [`packages/python/goldenpipe`](packages/python/goldenpipe/README.md) |
