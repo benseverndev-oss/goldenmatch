@@ -101,6 +101,9 @@ Each tool stands alone, but they compose into a single pipeline:
 | Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
 | Add data-quality gates to dbt | [`packages/dbt/goldencheck`](packages/dbt/goldencheck/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
+| Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
+| Run from a single MCP container | [`docker run ghcr.io/benzsevern/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
+| Pull every Suite container | [GitHub Packages](https://github.com/benzsevern?tab=packages) |
 
 ---
 
@@ -149,6 +152,11 @@ result = pipeline.run("customers.csv")
 result.report.write_html("report.html")
 ```
 
+**More**: [`examples/`](examples/README.md) has runnable demos for every Suite scenario:
+[Python](examples/python/README.md) (quickstart, full pipeline, customer 360, PPRL, review workflow, MCP client) ·
+[TypeScript](examples/typescript/README.md) (quickstart, Vercel Edge route, MCP client) ·
+[Airflow DAGs](examples/airflow/README.md) (12 production-shaped pipelines).
+
 ---
 
 ## Install variants
@@ -196,6 +204,50 @@ GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers
 
 ---
 
+## Container images
+
+Every Suite package ships as a multi-arch container image (linux/amd64 + linux/arm64) on GitHub Container Registry. Pull anonymously, no auth needed:
+
+```bash
+# One container, every Suite tool — the convenience option
+docker run -p 8300:8300 ghcr.io/benzsevern/goldensuite-mcp:latest
+
+# Per-package containers — narrower deployments
+docker run -p 8200:8200 ghcr.io/benzsevern/goldenmatch-mcp:latest
+docker run -p 8100:8100 ghcr.io/benzsevern/goldencheck-mcp:latest
+docker run -p 8150:8150 ghcr.io/benzsevern/goldenflow-mcp:latest
+docker run -p 8250:8250 ghcr.io/benzsevern/goldenpipe-mcp:latest
+docker run -p 8400:8400 ghcr.io/benzsevern/infermap-mcp:latest
+
+# Postgres + extension preinstalled
+docker run -e POSTGRES_PASSWORD=secret ghcr.io/benzsevern/goldenmatch-extensions:latest
+```
+
+Tags:
+- `:latest` — current `main`
+- `:main-<sha7>` — every push to main, immutable
+- `:vX.Y.Z` and `:vX.Y` — pushed when a `<package>-vX.Y.Z` tag is created
+
+See [`packages/python/goldensuite-mcp/README.md`](packages/python/goldensuite-mcp/README.md) for the aggregator's tool-collision behaviour.
+
+---
+
+## Airflow
+
+12 drop-in DAGs at [`examples/airflow/`](examples/airflow/README.md), grouped by lifecycle stage:
+
+| Group | DAGs |
+|---|---|
+| **Core pipeline** | `daily_dedupe`, `incremental_match`, `warehouse_native` (Snowflake), `customer_360` (multi-source) |
+| **Privacy** | `pprl_linkage` (two-party PPRL) |
+| **Onboarding & monitoring** | `schema_align_and_load`, `schema_drift_alarm`, `quality_gate` |
+| **Feedback loop** | `review_worker`, `active_learning` |
+| **Operationalize** | `reverse_etl` (Salesforce/HubSpot), `backfill` |
+
+TaskFlow API, Airflow 2.7+ (compatible with 3.x). Each DAG has tunable knobs at the top, idempotent retries, and is marker-protected against double-processing. Drop the file you want into your Airflow `dags/` folder.
+
+---
+
 ## Repository layout
 
 ```
@@ -215,8 +267,13 @@ goldenmatch/
 │   │   └── infermap/         # TS schema mapping
 │   ├── rust/
 │   │   └── extensions/       # Postgres pgrx + DuckDB UDFs (own Cargo workspace)
+│   ├── python/goldensuite-mcp/ # aggregator MCP server (one container, all tools)
 │   ├── dbt/goldencheck/      # dbt package
 │   └── actions/goldencheck/  # GitHub Action
+├── examples/
+│   ├── python/               # 6 runnable Python scripts (quickstart → MCP)
+│   ├── typescript/           # 3 TS scripts (quickstart, Vercel Edge, MCP)
+│   └── airflow/              # 12 drop-in Airflow DAGs
 ├── docs/superpowers/         # design specs and implementation plans
 ├── justfile                  # install / test / lint / build, all languages
 ├── pyproject.toml            # uv workspace (root)
