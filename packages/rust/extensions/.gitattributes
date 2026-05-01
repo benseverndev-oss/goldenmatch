@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf

@@ -1,0 +1,16 @@
+# goldenmatch-extensions
+
+> SQL extensions for GoldenMatch — run entity resolution from Postgres and DuckDB queries.
+
+## Components
+- Postgres extension: `goldenmatch_pg` — 16 SQL functions for in-database ER
+- DuckDB UDFs: `goldenmatch-duckdb` — 7 UDFs for analytical queries
+- Rust bridge: `goldenmatch-bridge` — pyo3 bindings for Rust consumers
+
+## Install
+- Postgres: install extension via CI-built binary
+- DuckDB: `pip install goldenmatch-duckdb`
+
+## Docs
+- [Architecture](CLAUDE.md): Rust/SQL bridge, pgrx patterns, DuckDB UDF system
+- [GitHub](https://github.com/benzsevern/goldenmatch-extensions): Source
