@@ -13,3 +13,9 @@ goldencheck = { workspace = true }
 goldenflow = { workspace = true }
 goldenpipe = { workspace = true }
 infermap = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
