@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.so
+*.dylib
+*.dll
+*.pdb
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/

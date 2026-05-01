@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting (bridge)
+        run: cargo fmt --all -- --check
+      - name: Check formatting (postgres)
+        working-directory: postgres
+        run: cargo fmt --all -- --check
+      - name: Clippy (bridge)
+        run: cargo clippy -p goldenmatch-bridge -- -D warnings
+
+  bridge-tests:
+    name: Bridge Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch
+        run: pip install goldenmatch>=1.1.0
+      - name: Build bridge crate
+        run: cargo build -p goldenmatch-bridge
+      - name: Test bridge crate
+        run: cargo test -p goldenmatch-bridge
+
+  postgres-build:
+    name: Postgres Extension (PG ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+    env:
+      PG_VERSION: ${{ matrix.pg }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
+          sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
+
+      - name: Install goldenmatch
+        run: pip install goldenmatch>=1.1.0
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init "--pg${PG_VERSION}=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config"
+
+      - name: Install extension
+        working-directory: postgres
+        run: |
+          cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
+          cp sql/goldenmatch_pg--0.1.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+
+      - name: Install goldenmatch for Postgres Python
+        run: |
+          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
+          echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
+
+      - name: Test extension via psql
+        run: |
+          # Ensure cluster exists and is running
+          sudo pg_createcluster "${PG_VERSION}" main 2>/dev/null || true
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main start 2>/dev/null || true
+          sleep 2
+          # Connect to the correct port (PG 15=5432, 16=5433, 17=5434 when multiple installed)
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          echo "Using PG ${PG_VERSION} on port ${PGPORT}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
+          sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%';"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('hello'::TEXT, 'hello'::TEXT, 'exact'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE test_customers (name TEXT, email TEXT);
+            INSERT INTO test_customers VALUES
+              ('John Smith', 'john@x.com'),
+              ('JOHN SMITH', 'john@x.com'),
+              ('Jane Doe', 'jane@y.com'),
+              ('Bob Jones', 'bob@z.com');
+            SELECT goldenmatch.goldenmatch_dedupe_table('test_customers'::TEXT, '{"exact": ["email"]}'::TEXT);
+          EOSQL
+          echo "=== PG ${PG_VERSION} tests passed ==="
+
+  duckdb-tests:
+    name: DuckDB Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install goldenmatch>=1.1.0 pyarrow
+          cd duckdb && pip install -e ".[dev]" || pip install -e .
+          pip install pytest
+      - name: Run tests
+        working-directory: duckdb
+        run: python -m pytest tests/ -v
