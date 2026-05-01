@@ -1,0 +1,63 @@
+name: pages
+
+# Builds the Jekyll docs site living at packages/python/goldenmatch/docs/
+# and deploys to https://benzsevern.github.io/goldenmatch/.
+#
+# The site existed pre-fold as a standalone Jekyll site; the fold-in moved
+# the source under packages/python/goldenmatch/docs/ but no Pages workflow
+# came along, so the URL has been broken. This restores it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/python/goldenmatch/docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, but don't cancel in-progress runs —
+# we want the queued build to land.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/python/goldenmatch/docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: packages/python/goldenmatch/docs
+
+      - uses: actions/configure-pages@v5
+
+      - name: Build with Jekyll
+        run: bundle exec jekyll build --baseurl "/goldenmatch"
+        env:
+          JEKYLL_ENV: production
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/python/goldenmatch/docs/_site/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
