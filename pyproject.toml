@@ -6,3 +6,10 @@ requires-python = ">=3.11"
 
 [tool.uv.workspace]
 members = ["packages/python/*"]
+
+[tool.uv.sources]
+goldenmatch = { workspace = true }
+goldencheck = { workspace = true }
+goldenflow = { workspace = true }
+goldenpipe = { workspace = true }
+infermap = { workspace = true }

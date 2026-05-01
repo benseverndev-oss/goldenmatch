@@ -67,9 +67,9 @@ postgres = [
 mcp = [
     "mcp>=1.0",
 ]
-pprl = [
-    "mp-spdz>=0.3",
-]
+# mp-spdz is a research crypto library not published to PyPI; users who need
+# the pprl extra must install mp-spdz separately (see docs/pprl.md).
+pprl = []
 snowflake = [
     "snowflake-connector-python>=3.0",
 ]
