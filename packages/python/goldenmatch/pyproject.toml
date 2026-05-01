@@ -1,0 +1,141 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "goldenmatch"
+
+version = "1.5.0"
+description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+keywords = ["entity-resolution", "deduplication", "record-matching", "golden-record", "data-quality"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+dependencies = [
+    "polars>=1.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "rapidfuzz>=3.0",
+    "jellyfish>=1.0",
+    "numpy>=1.26",
+    "openpyxl>=3.1",
+    "textual>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://benzsevern.github.io/goldenmatch/"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/CHANGELOG.md"
+Author = "https://bensevern.dev"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+embeddings = [
+    "sentence-transformers>=2.2",
+    "faiss-cpu>=1.7",
+]
+llm = [
+    "anthropic>=0.30",
+    "openai>=1.30",
+]
+postgres = [
+    "psycopg2-binary>=2.9",
+]
+mcp = [
+    "mcp>=1.0",
+]
+pprl = [
+    "mp-spdz>=0.3",
+]
+snowflake = [
+    "snowflake-connector-python>=3.0",
+]
+bigquery = [
+    "google-cloud-bigquery>=3.0",
+]
+databricks = [
+    "databricks-sql-connector>=3.0",
+]
+salesforce = [
+    "simple-salesforce>=1.12",
+]
+duckdb = [
+    "duckdb>=0.9",
+]
+ray = [
+    "ray>=2.0",
+]
+agent = [
+    "aiohttp>=3.9",
+]
+quality = [
+    "goldencheck>=0.5.0",
+]
+transform = [
+    "goldenflow>=1.0.0",
+]
+all = [
+    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform]",
+]
+
+[project.scripts]
+goldenmatch = "goldenmatch.cli.main:app"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "benchmark: integration tests against real benchmark datasets (skipped by default; run with `pytest -m benchmark`)",
+]
+
+[tool.coverage.run]
+source = ["goldenmatch"]
+omit = [
+    # Requires Postgres -- tested via test_db.py/test_reconcile.py (ignored in CI)
+    "goldenmatch/db/*",
+    # Requires MCP runtime
+    "goldenmatch/mcp/*",
+    # Requires GCP credentials
+    "goldenmatch/core/vertex_embedder.py",
+    # Requires Textual TUI runtime -- tested via test_tui.py
+    "goldenmatch/tui/screens/*",
+    "goldenmatch/tui/widgets/*",
+    # REST API server -- tested separately
+    "goldenmatch/api/*",
+    # Cloud connectors -- require external credentials
+    "goldenmatch/connectors/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
