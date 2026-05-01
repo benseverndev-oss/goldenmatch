@@ -32,6 +32,7 @@ dependencies = [
     "pydantic>=2.7",
     "openpyxl>=3.1",
     "textual>=1.0",
+    "goldencheck-types",
 ]
 
 [project.urls]
