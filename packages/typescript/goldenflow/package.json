@@ -1,0 +1,83 @@
+{
+  "name": "goldenflow",
+  "version": "0.1.0",
+  "description": "Data transformation toolkit — standardize, reshape, and normalize messy data. TypeScript port of the goldenflow Python library.",
+  "keywords": [
+    "data-transformation",
+    "data-quality",
+    "etl",
+    "csv",
+    "goldenflow",
+    "normalize",
+    "standardize",
+    "edge"
+  ],
+  "license": "MIT",
+  "author": "Ben Severn (https://bensevern.dev)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/benzsevern/goldenflow.git",
+    "directory": "packages/goldenflow-js"
+  },
+  "homepage": "https://benzsevern.github.io/goldenflow/",
+  "bugs": {
+    "url": "https://github.com/benzsevern/goldenflow/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "require": "./dist/core/index.cjs"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "require": "./dist/node/index.cjs"
+    }
+  },
+  "bin": {
+    "goldenflow-js": "./dist/cli.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "peerDependencies": {
+    "yaml": "*"
+  },
+  "peerDependenciesMeta": {
+    "yaml": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.0",
+    "yaml": "^2.7.0"
+  }
+}
