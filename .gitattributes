@@ -1,1 +1,2 @@
 /tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text
+/packages/python/goldenmatch/tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text

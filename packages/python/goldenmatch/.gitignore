@@ -1,0 +1,54 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Pipeline output files (timestamped)
+*_clusters.csv
+*_lineage.json
+
+# Large test fixtures
+tests/fixtures/synthetic_1m.csv
+tests/benchmarks/datasets/
+
+# Credentials and secrets — NEVER commit
+.testing/
+.env
+*.env
+credentials/
+secrets/
+*.json.key
+service-account*.json
+
+# GoldenMatch local state
+.goldenmatch_model.json
+.goldenmatch_finetuned_model/
+.goldenmatch_cross_encoder/
+.goldenmatch_faiss/
+.superpowers/
+tests/benchmarks/datasets/NCVR/
+
+# AI editor config files
+.mypy_cache/
+.tox/
+*.egg
+htmlcov/
+.venv/
+venv/
+.clinerules
+.cursorrules
+.windsurfrules
+docs/superpowers/
+.profile_tmp/
+
+# Node / TypeScript port
+node_modules/
+packages/*/node_modules/
+packages/*/dist/
+packages/*/.tsbuildinfo
+*.tsbuildinfo
