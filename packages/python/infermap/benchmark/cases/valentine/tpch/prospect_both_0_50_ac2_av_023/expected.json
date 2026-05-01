@@ -1,0 +1,63 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "AgID"
+    },
+    {
+      "source": "Income",
+      "target": "Inc"
+    },
+    {
+      "source": "Country",
+      "target": "Co"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "OwOReF"
+    },
+    {
+      "source": "State",
+      "target": "Sta"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "MidIn"
+    },
+    {
+      "source": "NumberCars",
+      "target": "NumCa"
+    },
+    {
+      "source": "LastName",
+      "target": "LNa"
+    },
+    {
+      "source": "Phone",
+      "target": "Ph"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "MarSta"
+    },
+    {
+      "source": "CreditRating",
+      "target": "CrRat"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "FirstName",
+    "Gender",
+    "PostalCode"
+  ],
+  "unmapped_target": [
+    "A",
+    "C",
+    "Empl",
+    "NWor",
+    "NuChil",
+    "NuCreCar"
+  ]
+}

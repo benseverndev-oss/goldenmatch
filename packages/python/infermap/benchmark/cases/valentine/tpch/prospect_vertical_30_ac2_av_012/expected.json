@@ -1,0 +1,48 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "AgeID"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "NuCrCa"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "OwOReF"
+    },
+    {
+      "source": "PostalCode",
+      "target": "PosCo"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "MiInit"
+    },
+    {
+      "source": "NumberCars",
+      "target": "NuC"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "AddressLine2",
+    "City",
+    "Country",
+    "FirstName",
+    "Gender",
+    "LastName",
+    "State"
+  ],
+  "unmapped_target": [
+    "Ag",
+    "CreRat",
+    "Em",
+    "In",
+    "MariSt",
+    "NeWo",
+    "NumChi",
+    "Ph"
+  ]
+}

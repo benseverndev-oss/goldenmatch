@@ -1,0 +1,62 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_fsclr"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Branch name",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Desertification (marker)",
+    "Division ID",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Fund centre ID",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Participatory development and good governance",
+    "Programming process (new)",
+    "Project number",
+    "Regional program (marker)",
+    "Section ID",
+    "Section name",
+    "Status",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "miller2_bdvrst(mrkr)",
+    "miller2_chldrnsss(mrkr)",
+    "miller2_cntnntd",
+    "miller2_cntnntnm",
+    "miller2_cntrrgnd",
+    "miller2_cntrrgnnm",
+    "miller2_cntrrgnprcnt",
+    "miller2_ctstlfrdvlpmnt(mrkr)",
+    "miller2_dsbltsss(mrkr)",
+    "miller2_gndrqlt(mrkr)",
+    "miller2_knwldgfrdvlpmnt(mrkr)",
+    "miller2_mntspnt",
+    "miller2_ndgnssss(mrkr)",
+    "miller2_prjctbrwsrcntrd",
+    "miller2_rbnsss(mrkr)",
+    "miller2_rgnstnclss",
+    "miller2_rgnstnd",
+    "miller2_rgnstnnm",
+    "miller2_rgnstnsb-clss",
+    "miller2_rgnstntp",
+    "miller2_sctrd",
+    "miller2_sctrnm",
+    "miller2_sctrprcnt",
+    "miller2_thsss(mrkr)",
+    "miller2_trddvlpmnt(mrkr)"
+  ]
+}

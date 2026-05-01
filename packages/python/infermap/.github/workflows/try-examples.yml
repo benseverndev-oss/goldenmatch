@@ -1,0 +1,48 @@
+name: "Try Examples"
+
+on:
+  workflow_dispatch:
+    inputs:
+      example:
+        description: "Which example to run"
+        required: true
+        type: choice
+        options:
+          - "01_basic_mapping"
+          - "02_dataframe_mapping"
+          - "03_database_mapping"
+          - "04_schema_file"
+          - "05_custom_scorer"
+          - "06_save_and_reuse"
+          - "all"
+
+jobs:
+  run-example:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install infermap
+        run: pip install -e ".[dev]"
+
+      - name: Run selected example
+        env:
+          EXAMPLE: ${{ github.event.inputs.example }}
+        run: |
+          cd examples
+          if [ "$EXAMPLE" = "all" ]; then
+            for f in 01_basic_mapping.py 02_dataframe_mapping.py 03_database_mapping.py 04_schema_file.py 05_custom_scorer.py 06_save_and_reuse.py; do
+              echo ""
+              echo "========================================"
+              echo "Running: $f"
+              echo "========================================"
+              python "$f"
+            done
+          else
+            python "${EXAMPLE}.py"
+          fi

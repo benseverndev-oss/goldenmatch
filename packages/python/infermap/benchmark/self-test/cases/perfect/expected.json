@@ -1,0 +1,9 @@
+{
+  "mappings": [
+    {"source": "first_name", "target": "first_name"},
+    {"source": "last_name", "target": "last_name"},
+    {"source": "email", "target": "email"}
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

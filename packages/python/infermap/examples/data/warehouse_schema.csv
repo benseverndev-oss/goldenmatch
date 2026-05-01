@@ -1,0 +1,2 @@
+order_id,customer_email,customer_phone,shipping_address,postal_code,product_sku,product_name,quantity,price,order_date
+WH-001,test@warehouse.com,555-0000,1 Warehouse Way,00000,WH-SKU-001,Test Product,1,0.00,2024-01-01

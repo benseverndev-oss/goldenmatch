@@ -1,0 +1,104 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "FisY"
+    },
+    {
+      "source": "Sector name",
+      "target": "SecNa"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "CIDABuDeliMo"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "IndiIss"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "CounRegNa"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "ProgrPro"
+    },
+    {
+      "source": "Section name",
+      "target": "SecN"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "OrganiID"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "OrganiS"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "FCeN"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "FCeID"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "UntAmPrBu"
+    },
+    {
+      "source": "Organisation name",
+      "target": "OrgN"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "Deserti"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "Biodi"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Branch name",
+    "CFLI (marker)",
+    "Climate change adaptation (marker)",
+    "Climate change mitigation (marker)",
+    "Division ID",
+    "Division name",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "PBA type",
+    "Participatory development and good governance",
+    "Project number",
+    "Regional program (marker)",
+    "Section ID",
+    "Status"
+  ],
+  "unmapped_target": [
+    "AmoSp",
+    "ChIs",
+    "ConNa",
+    "ContiID",
+    "CouRePerc",
+    "CounRegID",
+    "DisaIs",
+    "GeEq",
+    "ICTAAToFoDevelo",
+    "KnowlFDev",
+    "OrgaT",
+    "OrganiCl",
+    "ProjBroCoID",
+    "SeID",
+    "SePe",
+    "TraDev",
+    "UrIs",
+    "YoIs"
+  ]
+}

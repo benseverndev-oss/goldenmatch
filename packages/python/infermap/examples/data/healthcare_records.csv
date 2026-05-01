@@ -1,0 +1,6 @@
+PatientID,PatientName,DateOfBirth,MedicalRecordNo,PhoneNumber,EmailAddress,Gender,BloodType,InsuranceProvider
+P001,John Smith,1980-01-15,MRN-10001,555-1001,john.smith@mail.com,Male,A+,BlueCross
+P002,Jane Doe,1992-06-30,MRN-10002,(555) 100-2000,jane.doe@mail.com,Female,O-,Aetna
+P003,Bob Wilson,1975-11-22,MRN-10003,+15551003,bob.wilson@mail.com,Male,B+,Cigna
+P004,Alice Chen,1988-03-14,MRN-10004,555.1004,alice.chen@mail.com,Female,AB+,UnitedHealth
+P005,Carlos Garcia,1995-09-08,MRN-10005,15551005,carlos.g@mail.com,Male,O+,Kaiser

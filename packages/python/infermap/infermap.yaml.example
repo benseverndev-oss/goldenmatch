@@ -1,0 +1,9 @@
+# infermap configuration example
+scorers:
+  FuzzyNameScorer:
+    weight: 0.2
+  LLMScorer:
+    enabled: false
+aliases:
+  mrn: [medical_record_number, patient_id, chart_number]
+  npi: [provider_id, national_provider_identifier]

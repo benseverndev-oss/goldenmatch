@@ -1,0 +1,64 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ss_d"
+    },
+    {
+      "source": "confidence_score",
+      "target": "assays_cnfdnc_scr"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_vrnt_d"
+    },
+    {
+      "source": "assay_category",
+      "target": "assays_ss_ctgr"
+    },
+    {
+      "source": "tissue_id",
+      "target": "assays_tss_d"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "assays_ss_sbclllr_frctn"
+    },
+    {
+      "source": "assay_test_type",
+      "target": "assays_ss_tst_tp"
+    },
+    {
+      "source": "assay_organism",
+      "target": "assays_ss_rgnsm"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "assays_src_ss_d"
+    },
+    {
+      "source": "src_id",
+      "target": "assays_src_d"
+    },
+    {
+      "source": "relationship_type",
+      "target": "assays_rltnshp_tp"
+    }
+  ],
+  "unmapped_source": [
+    "assay_strain",
+    "assay_tax_id",
+    "assay_tissue",
+    "assay_type",
+    "description",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "assays_b_frmt",
+    "assays_chmbl_d",
+    "assays_cll_d",
+    "assays_crtd_b",
+    "assays_ss_cll_tp",
+    "assays_td"
+  ]
+}

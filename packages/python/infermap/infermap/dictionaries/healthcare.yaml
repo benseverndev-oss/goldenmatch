@@ -1,0 +1,112 @@
+# Healthcare domain dictionary — HL7 / FHIR / clinical data conventions.
+#
+# Scope: patient demographics, encounters, observations, medications,
+# diagnoses. Modeled loosely on FHIR resource field names plus common
+# EHR idioms (Epic, Cerner, Allscripts column conventions).
+#
+# Sources consulted:
+#   - HL7 FHIR R5 (https://hl7.org/fhir/R5/)
+#   - ICD-10, SNOMED, LOINC field naming
+#   - Observational Medical Outcomes Partnership (OMOP) CDM v5.4
+
+patient_id:
+  - mrn
+  - medical_record_number
+  - patient_identifier
+  - pat_id
+  - ptid
+  - subject_id
+  - person_id
+encounter_id:
+  - visit_id
+  - admission_id
+  - encounter_num
+  - enc_id
+  - visit_num
+  - admit_id
+date_of_birth:
+  - dob
+  - birth_date
+  - birthdate
+  - date_birth
+  - pat_dob
+admission_date:
+  - admit_date
+  - admit_dt
+  - date_admitted
+  - enc_start_date
+  - encounter_start
+discharge_date:
+  - discharge_dt
+  - date_discharged
+  - dischrg_date
+  - enc_end_date
+  - encounter_end
+diagnosis_code:
+  - dx_code
+  - icd_code
+  - icd10_code
+  - diagnosis
+  - dx
+  - primary_dx
+  - condition_code
+procedure_code:
+  - cpt_code
+  - proc_code
+  - hcpcs_code
+  - procedure
+  - proc
+medication_name:
+  - med_name
+  - drug_name
+  - rx_name
+  - medication
+  - drug
+medication_code:
+  - ndc
+  - rxnorm
+  - rxcui
+  - drug_code
+  - med_code
+allergy:
+  - allergen
+  - allergic_to
+  - adverse_reaction
+provider_id:
+  - npi
+  - doctor_id
+  - physician_id
+  - prescriber_id
+  - practitioner_id
+  - rendering_provider
+payer:
+  - insurance
+  - insurer
+  - health_plan
+  - plan_name
+  - carrier
+loinc_code:
+  - lab_code
+  - test_code
+  - observation_code
+observation_value:
+  - lab_value
+  - result_value
+  - test_result
+  - obs_value
+  - value_num
+observation_unit:
+  - units
+  - unit_of_measure
+  - uom
+  - result_units
+gender:
+  - sex
+  - patient_gender
+  - gender_code
+ethnicity:
+  - ethnic_group
+  - ethnicity_code
+race:
+  - race_code
+  - racial_group

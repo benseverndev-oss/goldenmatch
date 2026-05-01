@@ -1,0 +1,98 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ss_d"
+    },
+    {
+      "source": "doc_id",
+      "target": "assays_dc_d"
+    },
+    {
+      "source": "description",
+      "target": "assays_dscrptn"
+    },
+    {
+      "source": "assay_type",
+      "target": "assays_ss_tp"
+    },
+    {
+      "source": "assay_test_type",
+      "target": "assays_ss_tst_tp"
+    },
+    {
+      "source": "assay_category",
+      "target": "assays_ss_ctgr"
+    },
+    {
+      "source": "assay_organism",
+      "target": "assays_ss_rgnsm"
+    },
+    {
+      "source": "assay_tax_id",
+      "target": "assays_ss_tx_d"
+    },
+    {
+      "source": "assay_strain",
+      "target": "assays_ss_strn"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "assays_ss_tss"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "assays_ss_cll_tp"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "assays_ss_sbclllr_frctn"
+    },
+    {
+      "source": "tid",
+      "target": "assays_td"
+    },
+    {
+      "source": "relationship_type",
+      "target": "assays_rltnshp_tp"
+    },
+    {
+      "source": "confidence_score",
+      "target": "assays_cnfdnc_scr"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_crtd_b"
+    },
+    {
+      "source": "src_id",
+      "target": "assays_src_d"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "assays_src_ss_d"
+    },
+    {
+      "source": "chembl_id",
+      "target": "assays_chmbl_d"
+    },
+    {
+      "source": "cell_id",
+      "target": "assays_cll_d"
+    },
+    {
+      "source": "bao_format",
+      "target": "assays_b_frmt"
+    },
+    {
+      "source": "tissue_id",
+      "target": "assays_tss_d"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_vrnt_d"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

@@ -1,0 +1,4 @@
+code,ref,status
+ABC-123,REF-001,active
+DEF-456,REF-002,pending
+GHI-789,REF-003,closed

@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "generated_at": "2026-04-08T00:00:00Z",
+  "cases": [
+    {
+      "id": "self-test/perfect",
+      "path": "cases/perfect",
+      "category": "valentine",
+      "subcategory": "self-test",
+      "source": {
+        "name": "self-test-perfect",
+        "url": "local",
+        "license": "MIT",
+        "attribution": "infermap project"
+      },
+      "tags": ["exact_match", "smoke"],
+      "expected_difficulty": "easy",
+      "field_counts": {"source": 3, "target": 3}
+    },
+    {
+      "id": "self-test/zero",
+      "path": "cases/zero",
+      "category": "valentine",
+      "subcategory": "self-test",
+      "source": {
+        "name": "self-test-zero",
+        "url": "local",
+        "license": "MIT",
+        "attribution": "infermap project"
+      },
+      "tags": ["no_match", "smoke"],
+      "expected_difficulty": "hard",
+      "field_counts": {"source": 3, "target": 3}
+    },
+    {
+      "id": "self-test/mixed",
+      "path": "cases/mixed",
+      "category": "valentine",
+      "subcategory": "self-test",
+      "source": {
+        "name": "self-test-mixed",
+        "url": "local",
+        "license": "MIT",
+        "attribution": "infermap project"
+      },
+      "tags": ["alias_dominant", "partial", "smoke"],
+      "expected_difficulty": "medium",
+      "field_counts": {"source": 4, "target": 4}
+    },
+    {
+      "id": "self-test/all_unmapped",
+      "path": "cases/all_unmapped",
+      "category": "valentine",
+      "subcategory": "self-test",
+      "source": {
+        "name": "self-test-all-unmapped",
+        "url": "local",
+        "license": "MIT",
+        "attribution": "infermap project"
+      },
+      "tags": ["no_match", "smoke"],
+      "expected_difficulty": "hard",
+      "field_counts": {"source": 2, "target": 2}
+    },
+    {
+      "id": "self-test/adversarial",
+      "path": "cases/adversarial",
+      "category": "valentine",
+      "subcategory": "self-test",
+      "source": {
+        "name": "self-test-adversarial",
+        "url": "local",
+        "license": "MIT",
+        "attribution": "infermap project"
+      },
+      "tags": ["fuzzy_dominant", "short_names", "smoke"],
+      "expected_difficulty": "hard",
+      "field_counts": {"source": 3, "target": 3}
+    }
+  ]
+}

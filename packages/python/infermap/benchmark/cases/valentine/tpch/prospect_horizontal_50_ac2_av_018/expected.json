@@ -1,0 +1,94 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "AgID"
+    },
+    {
+      "source": "LastName",
+      "target": "LN"
+    },
+    {
+      "source": "FirstName",
+      "target": "FirNa"
+    },
+    {
+      "source": "MiddleInitial",
+      "target": "MiIni"
+    },
+    {
+      "source": "Gender",
+      "target": "Gen"
+    },
+    {
+      "source": "AddressLine1",
+      "target": "AddLi1"
+    },
+    {
+      "source": "AddressLine2",
+      "target": "AddrLi2"
+    },
+    {
+      "source": "PostalCode",
+      "target": "PosCo"
+    },
+    {
+      "source": "City",
+      "target": "C"
+    },
+    {
+      "source": "State",
+      "target": "Sta"
+    },
+    {
+      "source": "Country",
+      "target": "Cou"
+    },
+    {
+      "source": "Phone",
+      "target": "Ph"
+    },
+    {
+      "source": "Income",
+      "target": "In"
+    },
+    {
+      "source": "NumberCars",
+      "target": "NuCa"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "NumChi"
+    },
+    {
+      "source": "MaritalStatus",
+      "target": "MariSta"
+    },
+    {
+      "source": "Age",
+      "target": "A"
+    },
+    {
+      "source": "CreditRating",
+      "target": "CrRat"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "OwORF"
+    },
+    {
+      "source": "Employer",
+      "target": "Em"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "NumCreCar"
+    },
+    {
+      "source": "NetWorth",
+      "target": "NeWor"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

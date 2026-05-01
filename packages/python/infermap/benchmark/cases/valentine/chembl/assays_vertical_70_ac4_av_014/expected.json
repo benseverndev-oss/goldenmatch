@@ -1,0 +1,79 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_ASI"
+    },
+    {
+      "source": "description",
+      "target": "assays_Desc"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_CUB"
+    },
+    {
+      "source": "assay_tax_id",
+      "target": "assays_ASSTI"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "assays_SASI"
+    },
+    {
+      "source": "assay_type",
+      "target": "assays_ASSTY"
+    },
+    {
+      "source": "assay_strain",
+      "target": "assays_ASSSTR"
+    },
+    {
+      "source": "bao_format",
+      "target": "assays_BFOR"
+    },
+    {
+      "source": "doc_id",
+      "target": "assays_DI"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "assays_ASSUBCFRAC"
+    },
+    {
+      "source": "cell_id",
+      "target": "assays_CI"
+    },
+    {
+      "source": "src_id",
+      "target": "assays_SI"
+    },
+    {
+      "source": "chembl_id",
+      "target": "assays_CHEI"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "assays_ASSCT"
+    },
+    {
+      "source": "assay_category",
+      "target": "assays_ASSCA"
+    },
+    {
+      "source": "assay_organism",
+      "target": "assays_ASORG"
+    }
+  ],
+  "unmapped_source": [
+    "assay_test_type",
+    "assay_tissue",
+    "tid"
+  ],
+  "unmapped_target": [
+    "assays_CONFISCO",
+    "assays_RELTY",
+    "assays_TII",
+    "assays_VARII"
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "mappings": [
+    {
+      "source": "AgencyID",
+      "target": "prospect_AgID"
+    },
+    {
+      "source": "FirstName",
+      "target": "prospect_FirNa"
+    },
+    {
+      "source": "Country",
+      "target": "prospect_Cou"
+    },
+    {
+      "source": "Employer",
+      "target": "prospect_Emp"
+    },
+    {
+      "source": "Income",
+      "target": "prospect_Inc"
+    },
+    {
+      "source": "Phone",
+      "target": "prospect_Ph"
+    },
+    {
+      "source": "LastName",
+      "target": "prospect_LaNa"
+    },
+    {
+      "source": "PostalCode",
+      "target": "prospect_PosC"
+    },
+    {
+      "source": "OwnOrRentFlag",
+      "target": "prospect_OOReF"
+    },
+    {
+      "source": "AddressLine2",
+      "target": "prospect_AddL2"
+    },
+    {
+      "source": "NumberChildren",
+      "target": "prospect_NumChil"
+    },
+    {
+      "source": "Gender",
+      "target": "prospect_Ge"
+    },
+    {
+      "source": "NumberCreditCards",
+      "target": "prospect_NumCrCa"
+    },
+    {
+      "source": "State",
+      "target": "prospect_Sta"
+    },
+    {
+      "source": "NumberCars",
+      "target": "prospect_NumC"
+    }
+  ],
+  "unmapped_source": [
+    "AddressLine1",
+    "City",
+    "MiddleInitial"
+  ],
+  "unmapped_target": [
+    "prospect_Ag",
+    "prospect_CreRa",
+    "prospect_MaSta",
+    "prospect_NWo"
+  ]
+}

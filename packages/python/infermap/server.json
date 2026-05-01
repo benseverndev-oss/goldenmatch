@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.benzsevern/infermap",
+  "title": "InferMap",
+  "description": "Map messy columns to a known schema — 7 scorers, domain dictionaries, F1 0.84. Zero config.",
+  "websiteUrl": "https://benzsevern.github.io/infermap/",
+  "version": "0.3.5",
+  "repository": {
+    "url": "https://github.com/benzsevern/infermap",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "infermap",
+      "version": "0.3.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://infermap-mcp-production.up.railway.app/mcp/"
+    }
+  ]
+}

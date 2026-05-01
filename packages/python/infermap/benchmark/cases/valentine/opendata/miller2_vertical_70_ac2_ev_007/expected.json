@@ -1,0 +1,164 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "FisYe"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "IRTCPer"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "FSTCPerc"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "IndigIs"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "CliChMit"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "YouIss"
+    },
+    {
+      "source": "Branch name",
+      "target": "BraN"
+    },
+    {
+      "source": "Continent ID",
+      "target": "ConID"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "PrograPr"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "RePr"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "OrgSu"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "CIDABuDeliMo"
+    },
+    {
+      "source": "Sector percent",
+      "target": "SePer"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "UnAmoProjBud"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ICTAAToFDevelo"
+    },
+    {
+      "source": "Section name",
+      "target": "SeN"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "KnoFDeve"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "Deser"
+    },
+    {
+      "source": "Continent name",
+      "target": "ConNa"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "DisabIs"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "ChilIs"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "CoRegPe"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "FCenNa"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "TraDevelo"
+    },
+    {
+      "source": "PBA type",
+      "target": "PBATy"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "GenEq"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "ProjBrCoID"
+    },
+    {
+      "source": "Division ID",
+      "target": "DivID"
+    },
+    {
+      "source": "Organisation name",
+      "target": "OrganN"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "CFLI"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "CouReN"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "OrgaID"
+    },
+    {
+      "source": "Organisation class",
+      "target": "OrgCl"
+    },
+    {
+      "source": "Sector name",
+      "target": "SeNa"
+    },
+    {
+      "source": "Amount spent",
+      "target": "AmoSp"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Division name",
+    "Fund centre ID",
+    "Maximum CIDA contribution (project-level)",
+    "Project number",
+    "Section ID",
+    "Status"
+  ],
+  "unmapped_target": [
+    "Bio",
+    "CliChAda",
+    "CouReID",
+    "EnvSustain",
+    "OrgaT",
+    "ParticiDeveloAnGoGover",
+    "SecID",
+    "UrbIss"
+  ]
+}

@@ -1,0 +1,1810 @@
+{
+  "version": 1,
+  "generated_at": "2026-04-09T21:16:20Z",
+  "cases": [
+    {
+      "id": "valentine/chembl/assays_both_0_1_ac3_av_020",
+      "path": "cases/valentine/chembl/assays_both_0_1_ac3_av_020",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 12,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_0_30_ac1_av_021",
+      "path": "cases/valentine/chembl/assays_both_0_30_ac1_av_021",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_30_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 15
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_0_30_ac4_ev_022",
+      "path": "cases/valentine/chembl/assays_both_0_30_ac4_ev_022",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_30_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 15
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_0_50_ac2_av_023",
+      "path": "cases/valentine/chembl/assays_both_0_50_ac2_av_023",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_0_50_ac5_ev_024",
+      "path": "cases/valentine/chembl/assays_both_0_50_ac5_ev_024",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_0_70_ac3_av_025",
+      "path": "cases/valentine/chembl/assays_both_0_70_ac3_av_025",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_0_70_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 19,
+        "target": 20
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_1_ac1_ev_001",
+      "path": "cases/valentine/chembl/assays_both_50_1_ac1_ev_001",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_1_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 12,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_1_ac3_av_008",
+      "path": "cases/valentine/chembl/assays_both_50_1_ac3_av_008",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 12,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_30_ac2_ev_002",
+      "path": "cases/valentine/chembl/assays_both_50_30_ac2_ev_002",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_30_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 15
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_30_ac4_av_009",
+      "path": "cases/valentine/chembl/assays_both_50_30_ac4_av_009",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_30_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 15
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_50_ac3_ev_003",
+      "path": "cases/valentine/chembl/assays_both_50_50_ac3_ev_003",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_50_ac3_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_50_ac5_av_010",
+      "path": "cases/valentine/chembl/assays_both_50_50_ac5_av_010",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_50_ac5_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_both_50_70_ac4_ev_004",
+      "path": "cases/valentine/chembl/assays_both_50_70_ac4_ev_004",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_both_50_70_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 19,
+        "target": 20
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_horizontal_0_ac3_av_015",
+      "path": "cases/valentine/chembl/assays_horizontal_0_ac3_av_015",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_horizontal_0_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 23,
+        "target": 23
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_horizontal_100_ac1_av_016",
+      "path": "cases/valentine/chembl/assays_horizontal_100_ac1_av_016",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_horizontal_100_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 23,
+        "target": 23
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_horizontal_100_ac4_ev_017",
+      "path": "cases/valentine/chembl/assays_horizontal_100_ac4_ev_017",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_horizontal_100_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 23,
+        "target": 23
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_horizontal_50_ac2_av_018",
+      "path": "cases/valentine/chembl/assays_horizontal_50_ac2_av_018",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_horizontal_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 23,
+        "target": 23
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_horizontal_50_ac5_ev_019",
+      "path": "cases/valentine/chembl/assays_horizontal_50_ac5_ev_019",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_horizontal_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 23,
+        "target": 23
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_1_ac1_av_011",
+      "path": "cases/valentine/chembl/assays_vertical_1_ac1_av_011",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_1_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 12,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_1_ac5_ev_005",
+      "path": "cases/valentine/chembl/assays_vertical_1_ac5_ev_005",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_1_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 12,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_30_ac2_av_012",
+      "path": "cases/valentine/chembl/assays_vertical_30_ac2_av_012",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_30_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 15
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_50_ac1_ev_006",
+      "path": "cases/valentine/chembl/assays_vertical_50_ac1_ev_006",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_50_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_50_ac3_av_013",
+      "path": "cases/valentine/chembl/assays_vertical_50_ac3_av_013",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_50_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 17,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_70_ac2_ev_007",
+      "path": "cases/valentine/chembl/assays_vertical_70_ac2_ev_007",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_70_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 19,
+        "target": 20
+      }
+    },
+    {
+      "id": "valentine/chembl/assays_vertical_70_ac4_av_014",
+      "path": "cases/valentine/chembl/assays_vertical_70_ac4_av_014",
+      "category": "valentine",
+      "subcategory": "chembl",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-chembl-assays_vertical_70_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "chembl",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 19,
+        "target": 20
+      }
+    },
+    {
+      "id": "valentine/magellan/amazon_google_exp_001",
+      "path": "cases/valentine/magellan/amazon_google_exp_001",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-amazon_google_exp",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 4,
+        "target": 4
+      }
+    },
+    {
+      "id": "valentine/magellan/beeradvo_ratebeer_002",
+      "path": "cases/valentine/magellan/beeradvo_ratebeer_002",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-beeradvo_ratebeer",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 5,
+        "target": 5
+      }
+    },
+    {
+      "id": "valentine/magellan/dblp_acm_003",
+      "path": "cases/valentine/magellan/dblp_acm_003",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-dblp_acm",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 5,
+        "target": 5
+      }
+    },
+    {
+      "id": "valentine/magellan/dblp_scholar_004",
+      "path": "cases/valentine/magellan/dblp_scholar_004",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-dblp_scholar",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 5,
+        "target": 5
+      }
+    },
+    {
+      "id": "valentine/magellan/fodors_zagats_005",
+      "path": "cases/valentine/magellan/fodors_zagats_005",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-fodors_zagats",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 7,
+        "target": 7
+      }
+    },
+    {
+      "id": "valentine/magellan/itunes_amazon_006",
+      "path": "cases/valentine/magellan/itunes_amazon_006",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-itunes_amazon",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 9,
+        "target": 9
+      }
+    },
+    {
+      "id": "valentine/magellan/walmart_amazon_007",
+      "path": "cases/valentine/magellan/walmart_amazon_007",
+      "category": "valentine",
+      "subcategory": "magellan",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-magellan-walmart_amazon",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "magellan",
+        "pair",
+        "valentine"
+      ],
+      "expected_difficulty": "easy",
+      "field_counts": {
+        "source": 6,
+        "target": 6
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_1_ac3_av_020",
+      "path": "cases/valentine/opendata/miller2_both_0_1_ac3_av_020",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 26,
+        "target": 26
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_30_ac1_av_021",
+      "path": "cases/valentine/opendata/miller2_both_0_30_ac1_av_021",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_30_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 33,
+        "target": 33
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_30_ac4_ev_022",
+      "path": "cases/valentine/opendata/miller2_both_0_30_ac4_ev_022",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_30_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 33,
+        "target": 33
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_50_ac2_av_023",
+      "path": "cases/valentine/opendata/miller2_both_0_50_ac2_av_023",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_50_ac5_ev_024",
+      "path": "cases/valentine/opendata/miller2_both_0_50_ac5_ev_024",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_0_70_ac3_av_025",
+      "path": "cases/valentine/opendata/miller2_both_0_70_ac3_av_025",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_0_70_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "valentine",
+        "view__unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 43,
+        "target": 43
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_1_ac1_ev_001",
+      "path": "cases/valentine/opendata/miller2_both_50_1_ac1_ev_001",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_1_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 26,
+        "target": 26
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_1_ac3_av_008",
+      "path": "cases/valentine/opendata/miller2_both_50_1_ac3_av_008",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 26,
+        "target": 26
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_30_ac2_ev_002",
+      "path": "cases/valentine/opendata/miller2_both_50_30_ac2_ev_002",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_30_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 33,
+        "target": 33
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_30_ac4_av_009",
+      "path": "cases/valentine/opendata/miller2_both_50_30_ac4_av_009",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_30_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 33,
+        "target": 33
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_50_ac3_ev_003",
+      "path": "cases/valentine/opendata/miller2_both_50_50_ac3_ev_003",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_50_ac3_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_50_ac5_av_010",
+      "path": "cases/valentine/opendata/miller2_both_50_50_ac5_av_010",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_50_ac5_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_both_50_70_ac4_ev_004",
+      "path": "cases/valentine/opendata/miller2_both_50_70_ac4_ev_004",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_both_50_70_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 43,
+        "target": 43
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_horizontal_0_ac3_av_015",
+      "path": "cases/valentine/opendata/miller2_horizontal_0_ac3_av_015",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_horizontal_0_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 51,
+        "target": 51
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_horizontal_100_ac1_av_016",
+      "path": "cases/valentine/opendata/miller2_horizontal_100_ac1_av_016",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_horizontal_100_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 51,
+        "target": 51
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_horizontal_100_ac4_ev_017",
+      "path": "cases/valentine/opendata/miller2_horizontal_100_ac4_ev_017",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_horizontal_100_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 51,
+        "target": 51
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_horizontal_50_ac2_av_018",
+      "path": "cases/valentine/opendata/miller2_horizontal_50_ac2_av_018",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_horizontal_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 51,
+        "target": 51
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_horizontal_50_ac5_ev_019",
+      "path": "cases/valentine/opendata/miller2_horizontal_50_ac5_ev_019",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_horizontal_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 51,
+        "target": 51
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_1_ac1_av_011",
+      "path": "cases/valentine/opendata/miller2_vertical_1_ac1_av_011",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_1_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 26,
+        "target": 26
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_1_ac5_ev_005",
+      "path": "cases/valentine/opendata/miller2_vertical_1_ac5_ev_005",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_1_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 26,
+        "target": 26
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_30_ac2_av_012",
+      "path": "cases/valentine/opendata/miller2_vertical_30_ac2_av_012",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_30_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 33,
+        "target": 33
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_50_ac1_ev_006",
+      "path": "cases/valentine/opendata/miller2_vertical_50_ac1_ev_006",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_50_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_50_ac3_av_013",
+      "path": "cases/valentine/opendata/miller2_vertical_50_ac3_av_013",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_50_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 38,
+        "target": 38
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_70_ac2_ev_007",
+      "path": "cases/valentine/opendata/miller2_vertical_70_ac2_ev_007",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_70_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "opendata",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 43,
+        "target": 43
+      }
+    },
+    {
+      "id": "valentine/opendata/miller2_vertical_70_ac4_av_014",
+      "path": "cases/valentine/opendata/miller2_vertical_70_ac4_av_014",
+      "category": "valentine",
+      "subcategory": "opendata",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-opendata-miller2_vertical_70_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "opendata",
+        "semantically_joinable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 43,
+        "target": 43
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_1_ac3_av_020",
+      "path": "cases/valentine/tpch/prospect_both_0_1_ac3_av_020",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 11,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_30_ac1_av_021",
+      "path": "cases/valentine/tpch/prospect_both_0_30_ac1_av_021",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_30_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 14
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_30_ac4_ev_022",
+      "path": "cases/valentine/tpch/prospect_both_0_30_ac4_ev_022",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_30_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 14
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_50_ac2_av_023",
+      "path": "cases/valentine/tpch/prospect_both_0_50_ac2_av_023",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_50_ac5_ev_024",
+      "path": "cases/valentine/tpch/prospect_both_0_50_ac5_ev_024",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_0_70_ac3_av_025",
+      "path": "cases/valentine/tpch/prospect_both_0_70_ac3_av_025",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_0_70_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "valentine",
+        "view_unionable"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 18,
+        "target": 19
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_1_ac1_ev_001",
+      "path": "cases/valentine/tpch/prospect_both_50_1_ac1_ev_001",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_1_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 11,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_1_ac3_av_008",
+      "path": "cases/valentine/tpch/prospect_both_50_1_ac3_av_008",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_1_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 11,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_30_ac2_ev_002",
+      "path": "cases/valentine/tpch/prospect_both_50_30_ac2_ev_002",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_30_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 14
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_30_ac4_av_009",
+      "path": "cases/valentine/tpch/prospect_both_50_30_ac4_av_009",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_30_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 14
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_50_ac3_ev_003",
+      "path": "cases/valentine/tpch/prospect_both_50_50_ac3_ev_003",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_50_ac3_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_50_ac5_av_010",
+      "path": "cases/valentine/tpch/prospect_both_50_50_ac5_av_010",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_50_ac5_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_both_50_70_ac4_ev_004",
+      "path": "cases/valentine/tpch/prospect_both_50_70_ac4_ev_004",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_both_50_70_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 18,
+        "target": 19
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_horizontal_0_ac3_av_015",
+      "path": "cases/valentine/tpch/prospect_horizontal_0_ac3_av_015",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_horizontal_0_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 22,
+        "target": 22
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_horizontal_100_ac1_av_016",
+      "path": "cases/valentine/tpch/prospect_horizontal_100_ac1_av_016",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_horizontal_100_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 22,
+        "target": 22
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_horizontal_100_ac4_ev_017",
+      "path": "cases/valentine/tpch/prospect_horizontal_100_ac4_ev_017",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_horizontal_100_ac4_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 22,
+        "target": 22
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_horizontal_50_ac2_av_018",
+      "path": "cases/valentine/tpch/prospect_horizontal_50_ac2_av_018",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_horizontal_50_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 22,
+        "target": 22
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_horizontal_50_ac5_ev_019",
+      "path": "cases/valentine/tpch/prospect_horizontal_50_ac5_ev_019",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_horizontal_50_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "tpch",
+        "unionable",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 22,
+        "target": 22
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_1_ac1_av_011",
+      "path": "cases/valentine/tpch/prospect_vertical_1_ac1_av_011",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_1_ac1_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 11,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_1_ac5_ev_005",
+      "path": "cases/valentine/tpch/prospect_vertical_1_ac5_ev_005",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_1_ac5_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 11,
+        "target": 12
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_30_ac2_av_012",
+      "path": "cases/valentine/tpch/prospect_vertical_30_ac2_av_012",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_30_ac2_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "hard",
+      "field_counts": {
+        "source": 14,
+        "target": 14
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_50_ac1_ev_006",
+      "path": "cases/valentine/tpch/prospect_vertical_50_ac1_ev_006",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_50_ac1_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_50_ac3_av_013",
+      "path": "cases/valentine/tpch/prospect_vertical_50_ac3_av_013",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_50_ac3_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 16,
+        "target": 17
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_70_ac2_ev_007",
+      "path": "cases/valentine/tpch/prospect_vertical_70_ac2_ev_007",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_70_ac2_ev",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 18,
+        "target": 19
+      }
+    },
+    {
+      "id": "valentine/tpch/prospect_vertical_70_ac4_av_014",
+      "path": "cases/valentine/tpch/prospect_vertical_70_ac4_av_014",
+      "category": "valentine",
+      "subcategory": "tpch",
+      "source": {
+        "attribution": "Koutras et al., 'Valentine: Evaluating Matching Techniques for Dataset Discovery', ICDE 2021. Data: Zenodo 10.5281/zenodo.5084605.",
+        "license": "BSD-3-Clause",
+        "name": "valentine-tpch-prospect_vertical_70_ac4_av",
+        "url": "https://github.com/delftdata/valentine"
+      },
+      "tags": [
+        "semantically_joinable",
+        "tpch",
+        "valentine"
+      ],
+      "expected_difficulty": "medium",
+      "field_counts": {
+        "source": 18,
+        "target": 19
+      }
+    }
+  ]
+}

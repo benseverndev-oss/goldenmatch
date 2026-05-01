@@ -1,0 +1,210 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "FiYe"
+    },
+    {
+      "source": "Project number",
+      "target": "PrNu"
+    },
+    {
+      "source": "Status",
+      "target": "Sta"
+    },
+    {
+      "source": "Maximum CIDA contribution (project-level)",
+      "target": "MaxCIDAContri"
+    },
+    {
+      "source": "Branch ID",
+      "target": "BrID"
+    },
+    {
+      "source": "Branch name",
+      "target": "BraN"
+    },
+    {
+      "source": "Division ID",
+      "target": "DiviID"
+    },
+    {
+      "source": "Division name",
+      "target": "DivNa"
+    },
+    {
+      "source": "Section ID",
+      "target": "SectID"
+    },
+    {
+      "source": "Section name",
+      "target": "SectN"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "RegProg"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "FuCeID"
+    },
+    {
+      "source": "Fund centre name",
+      "target": "FuCeN"
+    },
+    {
+      "source": "Untied amount(Project-level budget)",
+      "target": "UnAmoPrBu"
+    },
+    {
+      "source": "FSTC percent",
+      "target": "FSTCPer"
+    },
+    {
+      "source": "IRTC percent",
+      "target": "IRTCPer"
+    },
+    {
+      "source": "CFLI (marker)",
+      "target": "CFLI"
+    },
+    {
+      "source": "CIDA business delivery model (old)",
+      "target": "CIDABusDeMo"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "ProgProc"
+    },
+    {
+      "source": "Bilateral aid (international marker)",
+      "target": "BilAiMar"
+    },
+    {
+      "source": "PBA type",
+      "target": "PBAT"
+    },
+    {
+      "source": "Enviromental sustainability (marker)",
+      "target": "EnvirSustai"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "ClChaAdapt"
+    },
+    {
+      "source": "Climate change mitigation (marker)",
+      "target": "ClChaMitig"
+    },
+    {
+      "source": "Desertification (marker)",
+      "target": "Deserti"
+    },
+    {
+      "source": "Participatory development and good governance",
+      "target": "ParticDevelAGGov"
+    },
+    {
+      "source": "Trade development (marker)",
+      "target": "TraDevel"
+    },
+    {
+      "source": "Biodiversity (marker)",
+      "target": "Bio"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "UrbIss"
+    },
+    {
+      "source": "Children issues (marker)",
+      "target": "ChiIs"
+    },
+    {
+      "source": "Youth issues (marker)",
+      "target": "YoIss"
+    },
+    {
+      "source": "Indigenous issues (marker)",
+      "target": "IndIs"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "DisabIs"
+    },
+    {
+      "source": "ICT as a tool for development (marker)",
+      "target": "ICTAATFDev"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "KnoFoDev"
+    },
+    {
+      "source": "Gender equality (marker)",
+      "target": "GenEq"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "OrganiID"
+    },
+    {
+      "source": "Organisation name",
+      "target": "OrganN"
+    },
+    {
+      "source": "Organisation type",
+      "target": "OrgaT"
+    },
+    {
+      "source": "Organisation class",
+      "target": "OrganCla"
+    },
+    {
+      "source": "Organisation sub-class",
+      "target": "OrgSu"
+    },
+    {
+      "source": "Continent ID",
+      "target": "ConID"
+    },
+    {
+      "source": "Continent name",
+      "target": "ContN"
+    },
+    {
+      "source": "Project Browser country ID",
+      "target": "PrBrowCouID"
+    },
+    {
+      "source": "CountryRegion ID",
+      "target": "CouReID"
+    },
+    {
+      "source": "CountryRegion name",
+      "target": "CoRegN"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "CounRePerc"
+    },
+    {
+      "source": "Sector ID",
+      "target": "SeID"
+    },
+    {
+      "source": "Sector name",
+      "target": "SeN"
+    },
+    {
+      "source": "Sector percent",
+      "target": "SecPe"
+    },
+    {
+      "source": "Amount spent",
+      "target": "AmoSp"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

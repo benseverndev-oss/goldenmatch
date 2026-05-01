@@ -1,0 +1,31 @@
+{
+  "min_confidence": 0.3,
+  "mappings": [
+    {
+      "source": "DOB",
+      "target": "date_of_birth",
+      "confidence": 0.683
+    },
+    {
+      "source": "Gender",
+      "target": "sex",
+      "confidence": 0.4514
+    },
+    {
+      "source": "MRN",
+      "target": "medical_record_number",
+      "confidence": 0.3565
+    },
+    {
+      "source": "PID",
+      "target": "patient_id",
+      "confidence": 0.3799
+    }
+  ],
+  "unmapped_source": [
+    "PatientName"
+  ],
+  "unmapped_target": [
+    "name"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "assays_assay_id"
+    },
+    {
+      "source": "doc_id",
+      "target": "assays_doc_id"
+    },
+    {
+      "source": "description",
+      "target": "assays_description"
+    },
+    {
+      "source": "assay_type",
+      "target": "assays_assay_type"
+    },
+    {
+      "source": "assay_test_type",
+      "target": "assays_assay_test_type"
+    },
+    {
+      "source": "assay_category",
+      "target": "assays_assay_category"
+    },
+    {
+      "source": "assay_organism",
+      "target": "assays_assay_organism"
+    },
+    {
+      "source": "assay_tax_id",
+      "target": "assays_assay_tax_id"
+    },
+    {
+      "source": "assay_strain",
+      "target": "assays_assay_strain"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "assays_assay_tissue"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "assays_assay_cell_type"
+    },
+    {
+      "source": "assay_subcellular_fraction",
+      "target": "assays_assay_subcellular_fraction"
+    },
+    {
+      "source": "tid",
+      "target": "assays_tid"
+    },
+    {
+      "source": "relationship_type",
+      "target": "assays_relationship_type"
+    },
+    {
+      "source": "confidence_score",
+      "target": "assays_confidence_score"
+    },
+    {
+      "source": "curated_by",
+      "target": "assays_curated_by"
+    },
+    {
+      "source": "src_id",
+      "target": "assays_src_id"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "assays_src_assay_id"
+    },
+    {
+      "source": "chembl_id",
+      "target": "assays_chembl_id"
+    },
+    {
+      "source": "cell_id",
+      "target": "assays_cell_id"
+    },
+    {
+      "source": "bao_format",
+      "target": "assays_bao_format"
+    },
+    {
+      "source": "tissue_id",
+      "target": "assays_tissue_id"
+    },
+    {
+      "source": "variant_id",
+      "target": "assays_variant_id"
+    }
+  ],
+  "unmapped_source": [],
+  "unmapped_target": []
+}

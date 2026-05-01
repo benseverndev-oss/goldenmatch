@@ -1,0 +1,104 @@
+{
+  "mappings": [
+    {
+      "source": "Fiscal year",
+      "target": "miller2_FisY"
+    },
+    {
+      "source": "Knowledge for development (marker)",
+      "target": "miller2_KnoFoDevelo"
+    },
+    {
+      "source": "Fund centre ID",
+      "target": "miller2_FuCeID"
+    },
+    {
+      "source": "Organisation class",
+      "target": "miller2_OrgaCla"
+    },
+    {
+      "source": "Division name",
+      "target": "miller2_DivNa"
+    },
+    {
+      "source": "Climate change adaptation (marker)",
+      "target": "miller2_ClimChaAdap"
+    },
+    {
+      "source": "Project number",
+      "target": "miller2_ProjNum"
+    },
+    {
+      "source": "CountryRegion percent",
+      "target": "miller2_CouRePe"
+    },
+    {
+      "source": "Regional program (marker)",
+      "target": "miller2_RegPr"
+    },
+    {
+      "source": "Organisation ID",
+      "target": "miller2_OrgaID"
+    },
+    {
+      "source": "Programming process (new)",
+      "target": "miller2_ProgrPro"
+    },
+    {
+      "source": "Disability issues (marker)",
+      "target": "miller2_DisIs"
+    },
+    {
+      "source": "Urban issues (marker)",
+      "target": "miller2_UrbIss"
+    },
+    {
+      "source": "Section ID",
+      "target": "miller2_SectID"
+    },
+    {
+      "source": "PBA type",
+      "target": "miller2_PBATy"
+    }
+  ],
+  "unmapped_source": [
+    "Bilateral aid (international marker)",
+    "Branch ID",
+    "Branch name",
+    "CFLI (marker)",
+    "CIDA business delivery model (old)",
+    "Climate change mitigation (marker)",
+    "Desertification (marker)",
+    "Division ID",
+    "Enviromental sustainability (marker)",
+    "FSTC percent",
+    "Fund centre name",
+    "IRTC percent",
+    "Maximum CIDA contribution (project-level)",
+    "Participatory development and good governance",
+    "Section name",
+    "Status",
+    "Trade development (marker)",
+    "Untied amount(Project-level budget)"
+  ],
+  "unmapped_target": [
+    "miller2_AmSpe",
+    "miller2_Bio",
+    "miller2_ChilIss",
+    "miller2_CoReID",
+    "miller2_CoReNa",
+    "miller2_ContID",
+    "miller2_ContiNa",
+    "miller2_GeEqua",
+    "miller2_ICTAAToFDeve",
+    "miller2_IndigIs",
+    "miller2_OrgTy",
+    "miller2_OrgaNa",
+    "miller2_OrganiSu",
+    "miller2_ProBroCouID",
+    "miller2_SeID",
+    "miller2_SecNa",
+    "miller2_SecPerc",
+    "miller2_YouIss"
+  ]
+}

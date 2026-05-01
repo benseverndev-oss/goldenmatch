@@ -1,0 +1,7 @@
+# Directories that should not be scanned for package metadata.
+# These contain private benchmark/test tooling, not publishable packages.
+benchmark/
+bench-calibrators/
+examples/
+tests/
+docs/

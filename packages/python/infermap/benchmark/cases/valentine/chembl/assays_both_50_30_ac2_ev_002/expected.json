@@ -1,0 +1,49 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "ASI"
+    },
+    {
+      "source": "description",
+      "target": "Des"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "SASI"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "ASCTY"
+    },
+    {
+      "source": "cell_id",
+      "target": "CEI"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "ASTI"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_strain",
+    "assay_subcellular_fraction",
+    "assay_tax_id",
+    "assay_test_type",
+    "assay_type",
+    "doc_id"
+  ],
+  "unmapped_target": [
+    "BAFO",
+    "CHEI",
+    "CONFSCO",
+    "CURAB",
+    "RELATITY",
+    "SRI",
+    "T",
+    "TISI",
+    "VARI"
+  ]
+}

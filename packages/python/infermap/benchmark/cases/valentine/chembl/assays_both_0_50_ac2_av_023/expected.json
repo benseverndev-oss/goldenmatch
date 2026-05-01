@@ -1,0 +1,64 @@
+{
+  "mappings": [
+    {
+      "source": "assay_id",
+      "target": "ASI"
+    },
+    {
+      "source": "bao_format",
+      "target": "BFO"
+    },
+    {
+      "source": "doc_id",
+      "target": "DI"
+    },
+    {
+      "source": "cell_id",
+      "target": "CEI"
+    },
+    {
+      "source": "chembl_id",
+      "target": "CHEI"
+    },
+    {
+      "source": "assay_type",
+      "target": "ASSTY"
+    },
+    {
+      "source": "tissue_id",
+      "target": "TISI"
+    },
+    {
+      "source": "assay_tax_id",
+      "target": "ASTI"
+    },
+    {
+      "source": "assay_cell_type",
+      "target": "ASCT"
+    },
+    {
+      "source": "assay_tissue",
+      "target": "ASTIS"
+    },
+    {
+      "source": "src_assay_id",
+      "target": "SASI"
+    }
+  ],
+  "unmapped_source": [
+    "assay_category",
+    "assay_organism",
+    "assay_strain",
+    "assay_subcellular_fraction",
+    "assay_test_type",
+    "description"
+  ],
+  "unmapped_target": [
+    "CONFISC",
+    "CURAB",
+    "RELATY",
+    "SRI",
+    "Ti",
+    "VARII"
+  ]
+}

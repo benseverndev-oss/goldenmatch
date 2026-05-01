@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "commit": "4bf932efe3a45fbebda9d0c7d38b00a22b2e4df6",
+  "updated_at": "2026-04-11T13:18:49.316114Z",
+  "python_runner": "0.1.0",
+  "ts_runner": "0.1.0",
+  "infermap_python": "0.3.1",
+  "infermap_ts": "0.3.2",
+  "changelog": []
+}

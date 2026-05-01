@@ -1,0 +1,5 @@
+{
+  "mappings": [],
+  "unmapped_source": ["alpha_widget", "bravo_gadget", "charlie_thingamajig"],
+  "unmapped_target": ["delta_sprocket", "echo_doohickey", "foxtrot_whatsit"]
+}
