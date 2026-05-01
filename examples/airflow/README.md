@@ -6,12 +6,42 @@ These are **examples**, not a published DAG library. Read them, adapt them, and 
 
 ## DAGs
 
+### Core pipeline
+
 | File | What it does | Cadence | Trigger |
 |---|---|---|---|
-| `golden_suite_daily_dedupe.py` | Pull CSV from S3 → GoldenCheck scan → GoldenFlow standardize → GoldenMatch dedupe → write golden records back to S3 + summary metrics row to Postgres. | Daily at 04:00 UTC | Scheduled |
-| `golden_suite_incremental_match.py` | Poll an `incoming/` S3 prefix every 15 min. For each new file, match each record against the canonical store using `goldenmatch.match_one`. Auto-merge ≥0.95, queue for review 0.75–0.95, append as new <0.75. | Every 15 min | Scheduled |
-| `golden_suite_pprl_linkage.py` | Trusted-third-party PPRL across two parties. Each party uploads encoded Bloom-filter shards; the DAG runs `goldenmatch.pprl_link` and writes match pairs to a results prefix. Raw PII never crosses the boundary. | Weekly | Scheduled |
-| `golden_suite_schema_align_and_load.py` | Onboard a new partner / source. InferMap aligns its columns to your canonical schema (cached after first run), GoldenFlow standardizes, then upsert into canonical. Fails loudly if column-mapping confidence is below threshold. | None | Manual (`conf` overrides source name + key) |
+| `golden_suite_daily_dedupe.py` | S3 CSV → Check → Flow → Match → S3 + metrics. The bread-and-butter daily ingestion DAG. | Daily 04:00 UTC | Scheduled |
+| `golden_suite_incremental_match.py` | Poll `incoming/` S3 prefix every 15 min. For each new file, `match_one` against canonical. Auto-merge ≥0.95, queue 0.75–0.95, append <0.75. | Every 15 min | Scheduled |
+| `golden_suite_warehouse_native.py` | Snowflake-native variant of daily_dedupe. No S3 hop — read source query, dedupe, write back. Same shape works for BigQuery / Databricks via the goldenmatch connectors. | Daily 04:30 UTC | Scheduled |
+| `golden_suite_customer_360.py` | Multi-source unify: CRM + warehouse + support → one canonical customer table. InferMap aligns each source, multi-pass GoldenMatch dedupes the union, source provenance preserved. | Daily 05:00 UTC | Scheduled |
+
+### Privacy
+
+| File | What it does | Cadence | Trigger |
+|---|---|---|---|
+| `golden_suite_pprl_linkage.py` | Trusted-third-party PPRL across two parties. Encoded Bloom shards in, ID-pair matches out. Raw PII never crosses the boundary. | Weekly | Scheduled |
+
+### Onboarding & monitoring
+
+| File | What it does | Cadence | Trigger |
+|---|---|---|---|
+| `golden_suite_schema_align_and_load.py` | New-source onboarding: InferMap → cache mapping → GoldenFlow → upsert. Fails loudly below confidence threshold. | None | Manual (`conf` overrides) |
+| `golden_suite_schema_drift_alarm.py` | Daily compare current source columns to cached InferMap mapping. Alert + log on new / removed / renamed columns. Never auto-updates the cached mapping. | Daily | Scheduled |
+| `golden_suite_quality_gate.py` | GoldenCheck as **gatekeeper** (not preprocessor). Threshold-based: any check exceeding its budget fails the DAG, blocking dependent Datasets. | Daily 03:00 UTC | Scheduled |
+
+### Feedback loop
+
+| File | What it does | Cadence | Trigger |
+|---|---|---|---|
+| `golden_suite_review_worker.py` | Apply steward decisions on review queue → merge/append in canonical → record into learning memory. Closes the loop on `incremental_match`. | Every 5 min | Scheduled |
+| `golden_suite_active_learning.py` | Retrain GoldenMatch boost classifier from labeled review-queue pairs. Promote to `current.yaml` only if F1 strictly beats the running model. | Weekly Sun 03:00 UTC | Scheduled |
+
+### Operationalize
+
+| File | What it does | Cadence | Trigger |
+|---|---|---|---|
+| `golden_suite_reverse_etl.py` | Push deduped golden records out to Salesforce + HubSpot, watermark-incremental. The "data lake → operational systems" half of the loop. | Every 2 hours | Scheduled |
+| `golden_suite_backfill.py` | Reprocess N days of history with current match config when a tuning change makes existing golden records stale. Dynamic task mapping over date range; cap at MAX_PARALLEL=8. Outputs land in `_backfill/<run-id>/` so daily output isn't disturbed. | None | Manual (`conf` overrides date range) |
 
 ## Prerequisites
 
@@ -29,8 +59,11 @@ Compatible with Airflow 2.7+ via TaskFlow API. Tested at 2.10. Should run on 3.x
 
 | Conn ID | Type | Used by |
 |---|---|---|
-| `aws_default` | Amazon Web Services | All four (S3 read/write) |
-| `postgres_default` | Postgres | daily_dedupe (metrics), incremental_match (canonical store + review queue), pprl_linkage (audit), schema_align (mappings + canonical) |
+| `aws_default` | Amazon Web Services | Most DAGs (S3 read/write, active_learning config snapshots) |
+| `postgres_default` | Postgres | daily_dedupe (metrics), incremental_match + review_worker (canonical + review queue), pprl_linkage (audit), schema_align + drift_alarm (mappings), customer_360 (unified), reverse_etl (watermarks), backfill (audit), schema_drift_alarm (drift events) |
+| `snowflake_default` | Snowflake | warehouse_native only |
+| `salesforce_default` | Salesforce | reverse_etl (CRM destination) |
+| `hubspot_default` | HTTP / generic | reverse_etl (CRM destination — token in the password field) |
 
 ## Variables (Airflow UI → Admin → Variables)
 
@@ -75,12 +108,51 @@ CREATE TABLE audit.pprl_runs (
     created_at timestamptz DEFAULT now()
 );
 
--- InferMap mapping cache (schema_align)
+-- InferMap mapping cache (schema_align, customer_360, schema_drift_alarm)
 CREATE TABLE warehouse.source_column_mappings (
     source_name text primary key,
     mapping jsonb,
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz
+);
+
+-- Multi-source canonical (customer_360)
+CREATE TABLE warehouse.customers_unified (
+    -- canonical columns + per-source IDs the customer_360 DAG preserves
+    -- (e.g., crm_id, warehouse_id, support_id) + last_seen, merge_count, source_ids jsonb
+);
+
+-- Review queue extras (review_worker depends on these columns)
+ALTER TABLE warehouse.customers_review_queue
+    ADD COLUMN claimed_at timestamptz,
+    ADD COLUMN applied_at timestamptz;
+
+-- Reverse ETL watermarks (reverse_etl)
+CREATE TABLE audit.reverse_etl_watermarks (
+    destination text primary key,
+    updated_at timestamptz NOT NULL
+);
+
+-- Backfill audit (backfill)
+CREATE TABLE analytics.golden_suite_backfill_runs (
+    backfill_run_id text, ds date,
+    total_records int, total_clusters int, match_rate float,
+    scan_findings int, out_uri text, skipped boolean, skip_reason text,
+    created_at timestamptz DEFAULT now()
+);
+
+-- Schema drift events (schema_drift_alarm)
+CREATE TABLE audit.schema_drift_events (
+    source_name text, new_columns text[], removed_columns text[],
+    renamed jsonb, detected_at timestamptz DEFAULT now()
+);
+
+-- Warehouse-native runs (warehouse_native — Snowflake DDL)
+CREATE TABLE analytics.golden_suite_warehouse_runs (
+    run_id varchar, ds date,
+    total_records int, total_clusters int, duplicates int,
+    match_rate float, rows_written int,
+    created_at timestamp_tz DEFAULT current_timestamp()
 );
 ```
 
