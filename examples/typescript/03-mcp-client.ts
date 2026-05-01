@@ -11,7 +11,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const SERVER_URL = "http://localhost:8300/mcp";
+const SERVER_URL = "http://localhost:8300/mcp/";
 
 async function main() {
   const transport = new StreamableHTTPClientTransport(new URL(SERVER_URL));

@@ -1,16 +1,21 @@
 """05 — Review queue workflow.
 
-When auto-config can't decide, GoldenMatch surfaces borderline pairs to a
-review queue. A steward decides approve / reject, the decision flows back
-into Learning Memory, and future scoring on similar records improves.
+When matching surfaces borderline pairs, GoldenMatch's review queue captures
+them so a human can decide approve/reject. This script demonstrates the end-
+to-end loop in-process:
 
-This script simulates the full loop in-process so you can see the moving
-parts. In a real deployment the review queue lives in Postgres / a UI, and
-the apply step runs as a separate worker (see
-`examples/airflow/golden_suite_review_worker.py`).
+  1. dedupe a small dataset and collect scored pairs
+  2. partition them into auto-merge / review / auto-reject via gate_pairs()
+  3. enqueue the review-bucket pairs into a ReviewQueue
+  4. simulate a steward approving each pending item
+  5. inspect the queue's stats
+
+In production the queue lives in SQLite/Postgres (`ReviewQueue(backend="sqlite"|"postgres")`)
+and a separate worker applies decisions back to the canonical store — see
+`examples/airflow/golden_suite_review_worker.py`.
 
 Run:
-    pip install goldenmatch[memory] polars
+    pip install goldenmatch polars
     python 05_review_workflow.py
 """
 from __future__ import annotations
@@ -19,9 +24,9 @@ import polars as pl
 
 import goldenmatch
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField, MemoryConfig,
+    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
 )
-from goldenmatch.core.review_queue import ReviewQueue
+from goldenmatch.core.review_queue import ReviewQueue, gate_pairs
 
 
 df = pl.DataFrame({
@@ -33,16 +38,17 @@ df = pl.DataFrame({
                    "alice@example.com", "alice@example.com"],
 })
 
+JOB_NAME = "review-demo"
+
 
 def main() -> None:
     config = GoldenMatchConfig(
-        memory=MemoryConfig(enabled=True, backend="memory"),  # in-process for demo
         matchkeys=[MatchkeyConfig(
             name="identity", type="weighted", threshold=0.65,
             fields=[
-                MatchkeyField(field="first_name", scorer="ensemble",     weight=0.7,
+                MatchkeyField(field="first_name", scorer="ensemble", weight=0.7,
                               transforms=["lowercase", "strip"]),
-                MatchkeyField(field="last_name",  scorer="ensemble",     weight=0.9,
+                MatchkeyField(field="last_name",  scorer="ensemble", weight=0.9,
                               transforms=["lowercase", "strip"]),
                 MatchkeyField(field="email",      scorer="jaro_winkler", weight=1.0,
                               transforms=["lowercase", "strip"]),
@@ -52,29 +58,38 @@ def main() -> None:
 
     result = goldenmatch.dedupe_df(df, config=config)
 
-    # Gate scored pairs into a review queue: high-confidence auto-merge,
-    # mid-confidence to review, low to reject.
-    queue = ReviewQueue(backend="memory")
-    queue.gate_pairs(result.scored_pairs, auto=0.95, review_lo=0.75, reject=0.65)
-
+    # gate_pairs splits scored pairs into 3 buckets by score.
+    auto_merged, review, auto_rejected = gate_pairs(
+        result.scored_pairs,
+        merge_threshold=0.95,
+        review_threshold=0.75,
+    )
     print(f"clusters: {result.total_clusters}")
-    print(f"review queue: {len(queue.list_pending())} borderline pairs awaiting decision")
-    for item in queue.list_pending():
-        a_row = df.filter(pl.col("id") == item.id_a).to_dicts()[0]
-        b_row = df.filter(pl.col("id") == item.id_b).to_dicts()[0]
-        print(f"  {item.id_a} ↔ {item.id_b}  score={item.score:.3f}")
-        print(f"    A: {a_row['first_name']} {a_row['last_name']} <{a_row['email']}>")
-        print(f"    B: {b_row['first_name']} {b_row['last_name']} <{b_row['email']}>")
+    print(f"buckets — auto_merged={len(auto_merged)}  review={len(review)}  "
+          f"auto_rejected={len(auto_rejected)}")
+
+    # Enqueue review-bucket pairs for a human steward.
+    queue = ReviewQueue(backend="memory")
+    for id_a, id_b, score in review:
+        a = df.filter(pl.col("id") == id_a).to_dicts()[0]
+        b = df.filter(pl.col("id") == id_b).to_dicts()[0]
+        explanation = (
+            f"{a['first_name']} {a['last_name']} <{a['email']}> ↔ "
+            f"{b['first_name']} {b['last_name']} <{b['email']}> @ {score:.3f}"
+        )
+        queue.add(JOB_NAME, id_a, id_b, score, explanation)
+
+    pending = queue.list_pending(JOB_NAME)
+    print(f"\nreview queue: {len(pending)} pending")
+    for item in pending:
+        print(f"  [{item.score:.3f}] {item.explanation}")
 
     # Steward decides — in real life via a UI / Slack approval / etc.
     print("\nsimulating steward decisions (approve all):")
-    for item in queue.list_pending():
-        queue.decide(item.pair_id, decision="approve", reviewer="alice")
+    for item in pending:
+        queue.approve(JOB_NAME, item.id_a, item.id_b, decided_by="alice")
 
-    # Apply: the matcher's learning memory now records these as positive labels;
-    # next dedupe run will boost similar pairs above the auto threshold.
-    print(f"\ndecisions applied: {len(queue.list_decided())}")
-    print("Future runs benefit from this feedback via Learning Memory.")
+    print(f"\nstats: {queue.stats(JOB_NAME)}")
 
 
 if __name__ == "__main__":

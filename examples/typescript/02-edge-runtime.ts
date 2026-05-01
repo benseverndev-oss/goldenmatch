@@ -50,17 +50,12 @@ export async function POST(request: Request): Promise<Response> {
   });
 }
 
-// Self-check for local execution (no Vercel runtime).
-if (typeof process !== "undefined" && process.argv[1]?.endsWith("02-edge-runtime.ts")) {
-  const fakeRequest = new Request("http://localhost/api/dedupe?threshold=0.85", {
-    method: "POST",
-    body: JSON.stringify([
-      { id: 1, name: "Jane Smith", email: "jane@example.com" },
-      { id: 2, name: "Jane Smyth", email: "jane@example.com" },
-    ]),
-  });
-  POST(fakeRequest).then(async (r) => {
-    console.log("status:", r.status);
-    console.log("body:", await r.text());
-  });
-}
+// NOTE: the local-self-check that used `process.argv` lived here previously,
+// but `process` is a Node-only global and this file is meant to be edge-safe
+// (importing only from `goldenmatch/core`). Anyone copying the bottom of this
+// file into an actual edge route would hit a build error.
+//
+// To run this handler locally during development, point a tool that gives you
+// a Request-able runtime at it — e.g. `npx tsx --eval` with a small driver
+// script that imports POST and constructs a Request, or `vercel dev` against
+// the route after dropping this file at app/api/dedupe/route.ts.

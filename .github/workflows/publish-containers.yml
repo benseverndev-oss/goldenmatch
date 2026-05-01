@@ -6,8 +6,9 @@ name: publish-containers
 #
 # Triggers:
 #   - push to main           -> all 7 images, tagged :latest and :main-<sha7>
-#   - tag <name>-v<X.Y.Z>    -> only that image, tagged :v<X.Y.Z>, :v<X.Y>, :latest
-#                              where <name> is one of: goldensuite-mcp, goldenmatch-mcp,
+#   - tag <name>-v<X.Y.Z>    -> only that image (matrix gated by tag prefix),
+#                              tagged :v<X.Y.Z>, :v<X.Y>, and :latest.
+#                              <name> is one of: goldensuite-mcp, goldenmatch-mcp,
 #                              goldencheck-mcp, goldenflow-mcp, goldenpipe-mcp,
 #                              infermap-mcp, goldenmatch-extensions
 #
@@ -41,24 +42,33 @@ jobs:
           - image: goldensuite-mcp
             dockerfile: packages/python/goldensuite-mcp/Dockerfile.mcp
             context: .
+            platforms: linux/amd64,linux/arm64
           - image: goldenmatch-mcp
             dockerfile: packages/python/goldenmatch/Dockerfile.mcp
             context: packages/python/goldenmatch
+            platforms: linux/amd64,linux/arm64
           - image: goldencheck-mcp
             dockerfile: packages/python/goldencheck/Dockerfile.mcp
             context: packages/python/goldencheck
+            platforms: linux/amd64,linux/arm64
           - image: goldenflow-mcp
             dockerfile: packages/python/goldenflow/Dockerfile.mcp
             context: packages/python/goldenflow
+            platforms: linux/amd64,linux/arm64
           - image: goldenpipe-mcp
             dockerfile: packages/python/goldenpipe/Dockerfile.mcp
             context: packages/python/goldenpipe
+            platforms: linux/amd64,linux/arm64
           - image: infermap-mcp
             dockerfile: packages/python/infermap/Dockerfile.mcp
             context: packages/python/infermap
+            platforms: linux/amd64,linux/arm64
           - image: goldenmatch-extensions
             dockerfile: packages/rust/extensions/Dockerfile
             context: packages/rust/extensions
+            # arm64 dropped: pgrx + Postgres + cargo build under QEMU emulation
+            # consistently OOMs / times out. Native arm64 runner would fix it.
+            platforms: linux/amd64
 
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +121,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=main-{{sha}},enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=match,pattern=^${{ matrix.image }}-v(.*)$,group=1
             type=match,pattern=^${{ matrix.image }}-v(\d+\.\d+)\.\d+$,group=1
@@ -126,7 +136,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.tags.outputs.labels }}

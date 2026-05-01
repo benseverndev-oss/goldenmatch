@@ -21,6 +21,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 REVIEW_QUEUE_TABLE = "warehouse.customers_review_queue"
 
@@ -141,7 +142,7 @@ def golden_suite_active_learning():
         s3 = S3Hook(aws_conn_id="aws_default")
         try:
             current_yaml = s3.read_key(CURRENT_CONFIG_KEY,
-                                       bucket_name="{{ var.value.golden_suite_bucket }}")
+                                       bucket_name=Variable.get("golden_suite_bucket"))
             current_f1 = yaml.safe_load(current_yaml).get("training_metrics", {}).get("f1", 0.0)
         except Exception:  # noqa: BLE001
             current_f1 = 0.0
@@ -180,13 +181,13 @@ def golden_suite_active_learning():
         snapshot_key = f"{CONFIG_SNAPSHOT_PREFIX}{run_id}.yaml"
         s3.load_string(snapshot_yaml,
                        key=snapshot_key,
-                       bucket_name="{{ var.value.golden_suite_bucket }}",
+                       bucket_name=Variable.get("golden_suite_bucket"),
                        replace=True)
 
         if decision.get("promote"):
             s3.load_string(snapshot_yaml,
                            key=CURRENT_CONFIG_KEY,
-                           bucket_name="{{ var.value.golden_suite_bucket }}",
+                           bucket_name=Variable.get("golden_suite_bucket"),
                            replace=True)
             import logging
             logging.info(

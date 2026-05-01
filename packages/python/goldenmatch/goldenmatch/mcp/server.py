@@ -580,7 +580,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             focus = args.get("focus", "balanced")
             return [PromptMessage(
                 role="user",
-                content=PromptTextContent(
+                content=TextContent(
                     type="text",
                     text=(
                         f"I want to deduplicate my dataset with a '{focus}' focus. Walk me through it step by step:\n\n"
@@ -602,7 +602,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             cluster_id = args.get("cluster_id", "0")
             return [PromptMessage(
                 role="user",
-                content=PromptTextContent(
+                content=TextContent(
                     type="text",
                     text=(
                         f"Investigate cluster {cluster_id} in detail:\n\n"
@@ -622,7 +622,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             rec_b = args.get("record_b", "{}")
             return [PromptMessage(
                 role="user",
-                content=PromptTextContent(
+                content=TextContent(
                     type="text",
                     text=(
                         "Compare these two records and tell me if they're the same entity:\n\n"
@@ -638,7 +638,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
         elif name == "data-quality-audit":
             return [PromptMessage(
                 role="user",
-                content=PromptTextContent(
+                content=TextContent(
                     type="text",
                     text=(
                         "Run a full data quality audit on the loaded dataset:\n\n"
@@ -655,7 +655,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             level = args.get("security_level", "high")
             return [PromptMessage(
                 role="user",
-                content=PromptTextContent(
+                content=TextContent(
                     type="text",
                     text=(
                         f"Help me set up privacy-preserving record linkage at '{level}' security:\n\n"
@@ -670,7 +670,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
         return [PromptMessage(
             role="user",
-            content=PromptTextContent(type="text", text=f"Unknown prompt: {name}"),
+            content=TextContent(type="text", text=f"Unknown prompt: {name}"),
         )]
 
     @server.call_tool()

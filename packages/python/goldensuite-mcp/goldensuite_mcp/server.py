@@ -151,7 +151,16 @@ def _aggregate() -> tuple[list[Tool], dict[str, Callable[[str, dict], dict]]]:
             all_tools.append(tool)
             name_to_dispatch[tool.name] = dispatch
             added += 1
-        logger.info("goldensuite-mcp: registered %d tools from %s", added, source_name)
+        if not tools:
+            # Sub-package import succeeded but its TOOLS list was empty. Most
+            # commonly this means the sub-package's optional [mcp] extra wasn't
+            # installed when it was imported (HAS_MCP=False -> TOOLS=[]).
+            logger.warning(
+                "goldensuite-mcp: %s registered 0 tools — is its [mcp] extra installed?",
+                source_name,
+            )
+        else:
+            logger.info("goldensuite-mcp: registered %d tools from %s", added, source_name)
 
     return all_tools, name_to_dispatch
 

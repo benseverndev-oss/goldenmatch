@@ -21,6 +21,7 @@ from typing import Any
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 CANONICAL_SCHEMA_FILE = "/opt/airflow/dags/golden_suite/canonical_customers.yaml"
 MAPPINGS_TABLE = "warehouse.source_column_mappings"
@@ -58,7 +59,7 @@ def golden_suite_customer_360():
             local_csv = Path(f"/tmp/golden_suite/{source['name']}.csv")
             local_csv.parent.mkdir(parents=True, exist_ok=True)
             S3Hook(aws_conn_id="aws_default").get_key(
-                source["key"], "{{ var.value.golden_suite_bucket }}"
+                source["key"], Variable.get("golden_suite_bucket")
             ).download_file(Filename=str(local_csv))
             df = pl.read_csv(local_csv, encoding="utf8-lossy", ignore_errors=True)
         elif source["kind"] == "postgres":

@@ -24,6 +24,7 @@ from datetime import timedelta
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models import Variable
 
 CANONICAL_SCHEMA_FILE = "/opt/airflow/dags/golden_suite/canonical_customers.yaml"
 MAPPINGS_TABLE = "warehouse.source_column_mappings"
@@ -63,7 +64,7 @@ def golden_suite_schema_align_and_load():
         local = Path(f"/tmp/golden_suite/{params['source_key']}")
         local.parent.mkdir(parents=True, exist_ok=True)
         S3Hook(aws_conn_id="aws_default").get_key(
-            params["source_key"], "{{ var.value.golden_suite_bucket }}"
+            params["source_key"], Variable.get("golden_suite_bucket")
         ).download_file(Filename=str(local))
         return str(local)
 
