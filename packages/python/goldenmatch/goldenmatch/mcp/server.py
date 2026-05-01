@@ -68,6 +68,360 @@ def _initialize(file_paths: list[str], config_path: str | None = None) -> None:
     )
 
 
+
+# Base (non-agent) tools — module-level so goldensuite-mcp aggregator can
+# import the full goldenmatch tool surface without instantiating a Server.
+_BASE_TOOLS = [
+    Tool(
+        name="get_stats",
+        description="Get dataset statistics: record count, cluster count, match rate, cluster sizes.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="find_duplicates",
+        description="Find duplicate matches for a record. Provide field values to search against the loaded dataset.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "record": {
+                    "type": "object",
+                    "description": "Record fields to match (e.g. {\"name\": \"John Smith\", \"zip\": \"10001\"})",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max results to return (default 5)",
+                    "default": 5,
+                },
+            },
+            "required": ["record"],
+        },
+    ),
+    Tool(
+        name="explain_match",
+        description="Explain why two records match or don't match. Shows per-field score breakdown.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "record_a": {
+                    "type": "object",
+                    "description": "First record fields",
+                },
+                "record_b": {
+                    "type": "object",
+                    "description": "Second record fields",
+                },
+            },
+            "required": ["record_a", "record_b"],
+        },
+    ),
+    Tool(
+        name="list_clusters",
+        description="List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "min_size": {
+                    "type": "integer",
+                    "description": "Minimum cluster size to include (default 2)",
+                    "default": 2,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max clusters to return (default 20)",
+                    "default": 20,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="get_cluster",
+        description="Get details of a specific cluster: all member records and their field values.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "cluster_id": {
+                    "type": "integer",
+                    "description": "Cluster ID to look up",
+                },
+            },
+            "required": ["cluster_id"],
+        },
+    ),
+    Tool(
+        name="get_golden_record",
+        description="Get the merged golden (canonical) record for a cluster.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "cluster_id": {
+                    "type": "integer",
+                    "description": "Cluster ID",
+                },
+            },
+            "required": ["cluster_id"],
+        },
+    ),
+    Tool(
+        name="match_record",
+        description=(
+            "Match a single record against the loaded dataset in real-time. "
+            "Paste a record's fields and instantly see if it matches any existing record. "
+            "Uses the configured matchkeys, scorers, and thresholds. "
+            "Example: {\"name\": \"John Smith\", \"email\": \"john@test.com\", \"zip\": \"10001\"}"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "record": {
+                    "type": "object",
+                    "description": "Record fields to match against the dataset",
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Minimum score to consider a match (default: use config threshold)",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max matches to return (default 5)",
+                    "default": 5,
+                },
+            },
+            "required": ["record"],
+        },
+    ),
+    Tool(
+        name="unmerge_record",
+        description=(
+            "Remove a record from its cluster. The record becomes a singleton. "
+            "Remaining cluster members are re-clustered using stored pair scores. "
+            "Use this to fix bad merges."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "integer",
+                    "description": "Row ID of the record to unmerge",
+                },
+            },
+            "required": ["record_id"],
+        },
+    ),
+    Tool(
+        name="shatter_cluster",
+        description=(
+            "Break an entire cluster into individual records. "
+            "All members become singletons. Use when a cluster is completely wrong."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "cluster_id": {
+                    "type": "integer",
+                    "description": "Cluster ID to shatter",
+                },
+            },
+            "required": ["cluster_id"],
+        },
+    ),
+    Tool(
+        name="suggest_config",
+        description=(
+            "Analyze bad merges and suggest config changes. "
+            "Provide examples of incorrect merges (pairs that should NOT have matched) "
+            "and GoldenMatch will identify which fields/thresholds to tighten. "
+            "Example: [{\"record_a\": {...}, \"record_b\": {...}, \"reason\": \"different people\"}]"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "bad_merges": {
+                    "type": "array",
+                    "description": "List of bad merge examples with record_a, record_b, and optional reason",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "record_a": {"type": "object"},
+                            "record_b": {"type": "object"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["record_a", "record_b"],
+                    },
+                },
+            },
+            "required": ["bad_merges"],
+        },
+    ),
+    Tool(
+        name="profile_data",
+        description="Get data quality profile: column types, null rates, unique counts, sample values.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="export_results",
+        description="Export matching results to a file (CSV or JSON).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "output_path": {
+                    "type": "string",
+                    "description": "File path to save results",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["csv", "json"],
+                    "description": "Output format (default csv)",
+                    "default": "csv",
+                },
+            },
+            "required": ["output_path"],
+        },
+    ),
+    Tool(
+        name="list_domains",
+        description="List available domain extraction rulebooks (built-in + user-defined).",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="create_domain",
+        description="Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Domain name (e.g. 'medical_devices', 'automotive_parts')",
+                },
+                "signals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Column name keywords that trigger this domain (e.g. ['ndc', 'fda', 'implant'])",
+                },
+                "identifier_patterns": {
+                    "type": "object",
+                    "description": "Named regex patterns for domain identifiers (e.g. {'ndc': '\\\\b(\\\\d{5}-\\\\d{4}-\\\\d{2})\\\\b'})",
+                },
+                "brand_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Brand/manufacturer names to extract (e.g. ['Medtronic', 'Abbott'])",
+                },
+                "attribute_patterns": {
+                    "type": "object",
+                    "description": "Named regex patterns for domain attributes (e.g. {'size': '\\\\b(\\\\d+mm)\\\\b'})",
+                },
+                "stop_words": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Words to strip during name normalization",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["local", "global"],
+                    "description": "Save locally (.goldenmatch/domains/) or globally (~/.goldenmatch/domains/). Default: local.",
+                    "default": "local",
+                },
+            },
+            "required": ["name", "signals"],
+        },
+    ),
+    Tool(
+        name="test_domain",
+        description="Test a domain extraction rulebook against sample records. Shows what features would be extracted from the loaded data.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "domain_name": {
+                    "type": "string",
+                    "description": "Name of the domain rulebook to test",
+                },
+                "sample_size": {
+                    "type": "integer",
+                    "description": "Number of records to test (default 10)",
+                    "default": 10,
+                },
+            },
+            "required": ["domain_name"],
+        },
+    ),
+    Tool(
+        name="pprl_auto_config",
+        description=(
+            "Analyze the loaded dataset and recommend optimal PPRL (privacy-preserving record linkage) configuration. "
+            "Returns recommended fields, bloom filter parameters, threshold, and explanation."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "security_level": {
+                    "type": "string",
+                    "enum": ["standard", "high", "paranoid"],
+                    "description": "Security level (default: high)",
+                    "default": "high",
+                },
+                "use_llm": {
+                    "type": "boolean",
+                    "description": "Use LLM for enhanced recommendations (requires API key)",
+                    "default": False,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="pprl_link",
+        description=(
+            "Run privacy-preserving record linkage between two parties' data. "
+            "Computes bloom filters, matches records without sharing raw data. "
+            "Specify fields, threshold, and security level."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_a": {
+                    "type": "string",
+                    "description": "Path to party A's CSV file",
+                },
+                "file_b": {
+                    "type": "string",
+                    "description": "Path to party B's CSV file",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Field names to match on (e.g. ['first_name', 'last_name', 'zip_code'])",
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Match threshold (default: auto-detected)",
+                },
+                "security_level": {
+                    "type": "string",
+                    "enum": ["standard", "high", "paranoid"],
+                    "default": "high",
+                },
+            },
+            "required": ["file_a", "file_b", "fields"],
+        },
+    ),
+]
+
+# TOOLS is the union of agent tools + base tools, in the same order list_tools returns.
+TOOLS = AGENT_TOOLS + _BASE_TOOLS
+
+
+def dispatch(name: str, args: dict) -> dict:
+    """Unified dispatcher used by goldensuite-mcp aggregator.
+
+    Routes agent-level tool calls to AgentSession via agent_tools._dispatch, and
+    base tool calls to _handle_tool. Returns a JSON-serializable dict for both.
+    """
+    if name in _AGENT_TOOL_NAMES:
+        from goldenmatch.core.agent import AgentSession
+        from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
+        return _agent_dispatch(name, args, AgentSession)
+    return _handle_tool(name, args)
+
+
 def create_server(file_paths: list[str] | None = None, config_path: str | None = None) -> Server:
     """Create and configure the MCP server."""
 
@@ -78,339 +432,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + [
-            Tool(
-                name="get_stats",
-                description="Get dataset statistics: record count, cluster count, match rate, cluster sizes.",
-                inputSchema={"type": "object", "properties": {}},
-            ),
-            Tool(
-                name="find_duplicates",
-                description="Find duplicate matches for a record. Provide field values to search against the loaded dataset.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "record": {
-                            "type": "object",
-                            "description": "Record fields to match (e.g. {\"name\": \"John Smith\", \"zip\": \"10001\"})",
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max results to return (default 5)",
-                            "default": 5,
-                        },
-                    },
-                    "required": ["record"],
-                },
-            ),
-            Tool(
-                name="explain_match",
-                description="Explain why two records match or don't match. Shows per-field score breakdown.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "record_a": {
-                            "type": "object",
-                            "description": "First record fields",
-                        },
-                        "record_b": {
-                            "type": "object",
-                            "description": "Second record fields",
-                        },
-                    },
-                    "required": ["record_a", "record_b"],
-                },
-            ),
-            Tool(
-                name="list_clusters",
-                description="List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "min_size": {
-                            "type": "integer",
-                            "description": "Minimum cluster size to include (default 2)",
-                            "default": 2,
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max clusters to return (default 20)",
-                            "default": 20,
-                        },
-                    },
-                },
-            ),
-            Tool(
-                name="get_cluster",
-                description="Get details of a specific cluster: all member records and their field values.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "cluster_id": {
-                            "type": "integer",
-                            "description": "Cluster ID to look up",
-                        },
-                    },
-                    "required": ["cluster_id"],
-                },
-            ),
-            Tool(
-                name="get_golden_record",
-                description="Get the merged golden (canonical) record for a cluster.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "cluster_id": {
-                            "type": "integer",
-                            "description": "Cluster ID",
-                        },
-                    },
-                    "required": ["cluster_id"],
-                },
-            ),
-            Tool(
-                name="match_record",
-                description=(
-                    "Match a single record against the loaded dataset in real-time. "
-                    "Paste a record's fields and instantly see if it matches any existing record. "
-                    "Uses the configured matchkeys, scorers, and thresholds. "
-                    "Example: {\"name\": \"John Smith\", \"email\": \"john@test.com\", \"zip\": \"10001\"}"
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "record": {
-                            "type": "object",
-                            "description": "Record fields to match against the dataset",
-                        },
-                        "threshold": {
-                            "type": "number",
-                            "description": "Minimum score to consider a match (default: use config threshold)",
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max matches to return (default 5)",
-                            "default": 5,
-                        },
-                    },
-                    "required": ["record"],
-                },
-            ),
-            Tool(
-                name="unmerge_record",
-                description=(
-                    "Remove a record from its cluster. The record becomes a singleton. "
-                    "Remaining cluster members are re-clustered using stored pair scores. "
-                    "Use this to fix bad merges."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "record_id": {
-                            "type": "integer",
-                            "description": "Row ID of the record to unmerge",
-                        },
-                    },
-                    "required": ["record_id"],
-                },
-            ),
-            Tool(
-                name="shatter_cluster",
-                description=(
-                    "Break an entire cluster into individual records. "
-                    "All members become singletons. Use when a cluster is completely wrong."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "cluster_id": {
-                            "type": "integer",
-                            "description": "Cluster ID to shatter",
-                        },
-                    },
-                    "required": ["cluster_id"],
-                },
-            ),
-            Tool(
-                name="suggest_config",
-                description=(
-                    "Analyze bad merges and suggest config changes. "
-                    "Provide examples of incorrect merges (pairs that should NOT have matched) "
-                    "and GoldenMatch will identify which fields/thresholds to tighten. "
-                    "Example: [{\"record_a\": {...}, \"record_b\": {...}, \"reason\": \"different people\"}]"
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "bad_merges": {
-                            "type": "array",
-                            "description": "List of bad merge examples with record_a, record_b, and optional reason",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "record_a": {"type": "object"},
-                                    "record_b": {"type": "object"},
-                                    "reason": {"type": "string"},
-                                },
-                                "required": ["record_a", "record_b"],
-                            },
-                        },
-                    },
-                    "required": ["bad_merges"],
-                },
-            ),
-            Tool(
-                name="profile_data",
-                description="Get data quality profile: column types, null rates, unique counts, sample values.",
-                inputSchema={"type": "object", "properties": {}},
-            ),
-            Tool(
-                name="export_results",
-                description="Export matching results to a file (CSV or JSON).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "output_path": {
-                            "type": "string",
-                            "description": "File path to save results",
-                        },
-                        "format": {
-                            "type": "string",
-                            "enum": ["csv", "json"],
-                            "description": "Output format (default csv)",
-                            "default": "csv",
-                        },
-                    },
-                    "required": ["output_path"],
-                },
-            ),
-            Tool(
-                name="list_domains",
-                description="List available domain extraction rulebooks (built-in + user-defined).",
-                inputSchema={"type": "object", "properties": {}},
-            ),
-            Tool(
-                name="create_domain",
-                description="Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Domain name (e.g. 'medical_devices', 'automotive_parts')",
-                        },
-                        "signals": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Column name keywords that trigger this domain (e.g. ['ndc', 'fda', 'implant'])",
-                        },
-                        "identifier_patterns": {
-                            "type": "object",
-                            "description": "Named regex patterns for domain identifiers (e.g. {'ndc': '\\\\b(\\\\d{5}-\\\\d{4}-\\\\d{2})\\\\b'})",
-                        },
-                        "brand_patterns": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Brand/manufacturer names to extract (e.g. ['Medtronic', 'Abbott'])",
-                        },
-                        "attribute_patterns": {
-                            "type": "object",
-                            "description": "Named regex patterns for domain attributes (e.g. {'size': '\\\\b(\\\\d+mm)\\\\b'})",
-                        },
-                        "stop_words": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Words to strip during name normalization",
-                        },
-                        "scope": {
-                            "type": "string",
-                            "enum": ["local", "global"],
-                            "description": "Save locally (.goldenmatch/domains/) or globally (~/.goldenmatch/domains/). Default: local.",
-                            "default": "local",
-                        },
-                    },
-                    "required": ["name", "signals"],
-                },
-            ),
-            Tool(
-                name="test_domain",
-                description="Test a domain extraction rulebook against sample records. Shows what features would be extracted from the loaded data.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "domain_name": {
-                            "type": "string",
-                            "description": "Name of the domain rulebook to test",
-                        },
-                        "sample_size": {
-                            "type": "integer",
-                            "description": "Number of records to test (default 10)",
-                            "default": 10,
-                        },
-                    },
-                    "required": ["domain_name"],
-                },
-            ),
-            Tool(
-                name="pprl_auto_config",
-                description=(
-                    "Analyze the loaded dataset and recommend optimal PPRL (privacy-preserving record linkage) configuration. "
-                    "Returns recommended fields, bloom filter parameters, threshold, and explanation."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "security_level": {
-                            "type": "string",
-                            "enum": ["standard", "high", "paranoid"],
-                            "description": "Security level (default: high)",
-                            "default": "high",
-                        },
-                        "use_llm": {
-                            "type": "boolean",
-                            "description": "Use LLM for enhanced recommendations (requires API key)",
-                            "default": False,
-                        },
-                    },
-                },
-            ),
-            Tool(
-                name="pprl_link",
-                description=(
-                    "Run privacy-preserving record linkage between two parties' data. "
-                    "Computes bloom filters, matches records without sharing raw data. "
-                    "Specify fields, threshold, and security level."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "file_a": {
-                            "type": "string",
-                            "description": "Path to party A's CSV file",
-                        },
-                        "file_b": {
-                            "type": "string",
-                            "description": "Path to party B's CSV file",
-                        },
-                        "fields": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Field names to match on (e.g. ['first_name', 'last_name', 'zip_code'])",
-                        },
-                        "threshold": {
-                            "type": "number",
-                            "description": "Match threshold (default: auto-detected)",
-                        },
-                        "security_level": {
-                            "type": "string",
-                            "enum": ["standard", "high", "paranoid"],
-                            "default": "high",
-                        },
-                    },
-                    "required": ["file_a", "file_b", "fields"],
-                },
-            ),
-        ]
+        return AGENT_TOOLS + _BASE_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
