@@ -1,0 +1,31 @@
+{%- comment -%}
+SEO: bensevern.dev is the canonical home for documentation. This Pages site
+serves the same content for discoverability (badges, package links, GitHub-
+indexed search), but tells search engines that bensevern.dev is the source
+of truth so link equity flows there.
+
+Mapping rule: drop the /goldenmatch baseurl prefix from page.url and append
+to https://bensevern.dev. Once bensevern.dev mirrors the same path layout,
+this resolves cleanly. If bensevern.dev hasn't published a given page yet
+the canonical 404s, but Google still treats bensevern.dev as the
+authoritative origin for the content here.
+{%- endcomment -%}
+{%- assign canonical_path = page.url | remove_first: "/goldenmatch" -%}
+{%- if canonical_path == "" -%}{%- assign canonical_path = "/" -%}{%- endif -%}
+<link rel="canonical" href="https://bensevern.dev{{ canonical_path }}">
+
+{%- comment -%}
+Open Graph / Twitter Card: point shares at bensevern.dev too. If a page is
+shared on social media, the preview links to bensevern.dev rather than
+github.io. Falls back to GoldenMatch's site title if page.title is empty.
+{%- endcomment -%}
+<meta property="og:url" content="https://bensevern.dev{{ canonical_path }}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{ page.title | default: site.title }}">
+<meta property="og:site_name" content="bensevern.dev">
+<meta property="og:description" content="{{ page.description | default: site.description }}">
+
+<meta name="twitter:card" content="summary">
+<meta name="twitter:url" content="https://bensevern.dev{{ canonical_path }}">
+<meta name="twitter:title" content="{{ page.title | default: site.title }}">
+<meta name="twitter:description" content="{{ page.description | default: site.description }}">
