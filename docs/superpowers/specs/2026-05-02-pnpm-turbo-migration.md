@@ -16,7 +16,7 @@ Current state (`packages/typescript/{goldenmatch,goldencheck,goldencheck-types,g
 - 5th (`goldencheck-types`) is currently empty — no `package.json`.
 - No package-lock.json files exist anywhere → blocks both `npm ci` and `setup-node`'s `cache: npm`.
 - Root `package.json` uses bash for-loops (`for d in packages/typescript/*; do ...`) to fan-out install/test/build/lint. Sequential, no caching.
-- Comment in root `package.json` claims this is to "avoid Windows symlink issues" — a stale concern. User has Windows Dev Mode enabled, which permits non-admin symlink creation.
+- Comment in root `package.json` claims this is to "avoid Windows symlink issues" — partially stale: Dev Mode permits non-admin symlink creation, but a separate Windows-specific pnpm/turbo platform-binary conflict (`ENOENT during rename` on `@turbo/windows-64`) still surfaces. Handled in this migration via `.npmrc`'s `node-linker=hoisted`.
 - No package currently imports another by name, but the user has confirmed cross-package sharing is planned (B answer in brainstorm).
 
 ## Non-goals
@@ -165,11 +165,16 @@ typescript:
 
 ## Acceptance criteria
 
-- `pnpm install` succeeds on Windows with Dev Mode and on Ubuntu CI.
-- `pnpm turbo run build test typecheck` passes locally and in CI.
-- Second consecutive CI run with no source changes hits the turbo cache (visible in run logs as "FULL TURBO" or per-task `cache hit`).
-- pnpm-store cache hit visible in the `setup-node` step on subsequent CI runs.
+**Verified locally before merge:**
+- `pnpm install` succeeds on Windows with Dev Mode.
+- `pnpm turbo run build test typecheck` passes (20/20 tasks, 991 tests).
+- Second consecutive local run reports "FULL TURBO" cache hits.
 - No regression in any package's test count vs. pre-migration baseline, verified via `pnpm --filter <pkg> test --reporter=verbose`.
+
+**Verified post-merge on CI (deferred):**
+- `pnpm install --frozen-lockfile` succeeds on Ubuntu CI.
+- Second consecutive CI run with no source changes hits the turbo cache.
+- pnpm-store cache hit visible in the `setup-node` step on subsequent CI runs.
 
 ## Working agreement
 

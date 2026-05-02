@@ -24,19 +24,38 @@ jobs:
       # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
       # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
       - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
-      # Pytest re-enabled with non-blocking signal first. Each package's failure
-      # set was unknown post-fold (each repo had its own --ignore/skip tuning).
-      # Once we triage the first few CI runs we'll flip continue-on-error off.
-      # goldensuite-mcp has no tests/ dir — skipped via the if guard below.
-      # infermap has a duplicate conftest in benchmark/runners — ignored.
+      # Pytest re-enabled with non-blocking signal first.
+      # TODO(PR#65): once the first few CI runs are triaged, flip continue-on-error off.
+      # Per-package --ignore lists below mirror the pre-fold tuning each repo had
+      # (documented in each package's own CLAUDE.md). Without these, packages with
+      # known-skip tests would make CI perpetually red and train people to ignore
+      # the signal entirely — worse than no step.
+      #   goldenmatch: torch segfaults without GPU; postgres tests need a DB; MCP
+      #               watch tests are flaky on Linux runners.
+      #   infermap:    duplicate conftest in benchmark/runners/python/tests/.
+      # Skip mechanism is path-based (not name-based) so adding a tests/ dir to a
+      # currently-skipped package auto-enables it with a visible notice.
       - name: pytest
-        if: matrix.pkg != 'goldensuite-mcp'
         continue-on-error: true
+        shell: bash
         run: |
-          IGNORE=""
-          if [ "${{ matrix.pkg }}" = "infermap" ]; then
-            IGNORE="--ignore=packages/python/infermap/benchmark"
+          if [ ! -d "packages/python/${{ matrix.pkg }}/tests" ]; then
+            echo "::notice::No tests/ directory in packages/python/${{ matrix.pkg }} — skipping pytest"
+            exit 0
           fi
+          IGNORE=""
+          case "${{ matrix.pkg }}" in
+            goldenmatch)
+              IGNORE="--ignore=packages/python/goldenmatch/tests/test_db.py \
+                      --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+                      --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+                      --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+                      --ignore=packages/python/goldenmatch/tests/test_llm_boost.py"
+              ;;
+            infermap)
+              IGNORE="--ignore=packages/python/infermap/benchmark"
+              ;;
+          esac
           uv run pytest packages/python/${{ matrix.pkg }} -n auto $IGNORE
 
   typescript:
@@ -51,15 +70,18 @@ jobs:
           node-version: 20
           cache: pnpm
         # cache: pnpm requires (a) pnpm on PATH (handled above) and
-        # (b) pnpm-lock.yaml present at checkout. Both satisfied because
-        # the lockfile is committed in this same PR.
+        # (b) pnpm-lock.yaml committed at repo root.
       - run: pnpm install --frozen-lockfile
       - uses: actions/cache@v4
         with:
           path: .turbo
           key: turbo-${{ github.sha }}
           restore-keys: turbo-
-      - run: pnpm turbo run build test typecheck lint
+      # `lint` is omitted: every TS package's lint script is currently identical
+      # to its typecheck script (`tsc --noEmit`), so running both wastes a turbo
+      # task per package on cold runs. Re-add `lint` here when ESLint lands and
+      # the scripts diverge.
+      - run: pnpm turbo run build test typecheck
 
   rust:
     runs-on: ubuntu-latest

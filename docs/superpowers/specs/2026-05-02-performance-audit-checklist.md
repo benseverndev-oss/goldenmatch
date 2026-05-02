@@ -56,8 +56,9 @@ Items are roughly ordered by ROI within each section. Check off as we go; we wil
 
 ## Monorepo tooling overhead
 
-- [x] **Reassess npm workspaces / adopt Turborepo**
-  - Done via `docs/superpowers/specs/2026-05-02-pnpm-turbo-migration.md` and corresponding plan. Adopted pnpm workspaces + Turborepo. Single root `pnpm-lock.yaml`, single CI typescript job replacing the 4-entry matrix, `.turbo/` cache across runs.
+- [x] **Reassess npm workspaces / adopt Turborepo** — adopted; CI cache verification deferred.
+  - Done via `docs/superpowers/specs/2026-05-02-pnpm-turbo-migration.md` and corresponding plan. Adopted pnpm workspaces + Turborepo. Single root `pnpm-lock.yaml`, single CI typescript job replacing the 4-entry matrix, `.turbo/` cache configured.
+  - [ ] Verify pnpm-store + `.turbo` cache hits on the N+1 CI run after the migration PR merges.
 
 - [ ] **Audit duplicated dependencies across packages**
   - After workspace decision is made, look for redundant installs (typescript, eslint, ruff, etc.) that could be hoisted.
