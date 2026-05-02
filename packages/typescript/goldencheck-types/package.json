@@ -1,0 +1,27 @@
+{
+  "name": "goldencheck-types",
+  "version": "0.1.0",
+  "description": "Shared TypeScript types and domain schemas for the goldencheck data-quality toolkit",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist", "domains"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.0"
+  }
+}

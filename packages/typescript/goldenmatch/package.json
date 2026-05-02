@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "clean": "rimraf dist"
   },
   "dependencies": {
     "commander": "^13.0.0"
@@ -27,7 +28,7 @@
     "hnswlib-node": "^3.0.0",
     "@huggingface/transformers": "^3.0.0",
     "piscina": "^5.0.0",
-    "ink-table": "^4.0.0",
+    "ink-table": "^3.1.0",
     "ink-select-input": "^6.0.0",
     "ink-text-input": "^6.0.0",
     "ink-spinner": "^5.0.0",

@@ -15,29 +15,73 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
       - run: uv sync --all-packages
       # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
       # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
       - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
-      # NOTE: pytest is intentionally not run here yet. Each package had its own
-      # CI tuning (--ignore lists, optional-dep guards, benchmark dataset skips)
-      # in its pre-fold standalone repo. Restoring per-package pytest config is
-      # tracked as a follow-up; until then this job verifies lint cleanliness.
+      # Pytest re-enabled with non-blocking signal first.
+      # TODO(PR#65): once the first few CI runs are triaged, flip continue-on-error off.
+      # Per-package --ignore lists below mirror the pre-fold tuning each repo had
+      # (documented in each package's own CLAUDE.md). Without these, packages with
+      # known-skip tests would make CI perpetually red and train people to ignore
+      # the signal entirely — worse than no step.
+      #   goldenmatch: torch segfaults without GPU; postgres tests need a DB; MCP
+      #               watch tests are flaky on Linux runners.
+      #   infermap:    duplicate conftest in benchmark/runners/python/tests/.
+      # Skip mechanism is path-based (not name-based) so adding a tests/ dir to a
+      # currently-skipped package auto-enables it with a visible notice.
+      - name: pytest
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ ! -d "packages/python/${{ matrix.pkg }}/tests" ]; then
+            echo "::notice::No tests/ directory in packages/python/${{ matrix.pkg }} — skipping pytest"
+            exit 0
+          fi
+          IGNORE=""
+          case "${{ matrix.pkg }}" in
+            goldenmatch)
+              IGNORE="--ignore=packages/python/goldenmatch/tests/test_db.py \
+                      --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+                      --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+                      --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+                      --ignore=packages/python/goldenmatch/tests/test_llm_boost.py"
+              ;;
+            infermap)
+              IGNORE="--ignore=packages/python/infermap/benchmark"
+              ;;
+          esac
+          uv run pytest packages/python/${{ matrix.pkg }} -n auto $IGNORE
 
   typescript:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        pkg: [goldenmatch, goldencheck, goldenflow, infermap]
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        # Reads version from root package.json `packageManager` field.
+        # That field MUST be exact semver (pnpm@9.15.0) — ranges error.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} install
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} test --if-present
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} run build --if-present
+          cache: pnpm
+        # cache: pnpm requires (a) pnpm on PATH (handled above) and
+        # (b) pnpm-lock.yaml committed at repo root.
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ github.sha }}
+          restore-keys: turbo-
+      # `lint` is omitted: every TS package's lint script is currently identical
+      # to its typecheck script (`tsc --noEmit`), so running both wastes a turbo
+      # task per package on cold runs. Re-add `lint` here when ESLint lands and
+      # the scripts diverge.
+      - run: pnpm turbo run build test typecheck
 
   rust:
     runs-on: ubuntu-latest
@@ -47,6 +91,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/rust/extensions
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
 
@@ -55,7 +102,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
+          cache: pip
       - run: pip install dbt-core dbt-duckdb
       - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
 

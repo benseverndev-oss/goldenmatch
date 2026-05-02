@@ -18,7 +18,14 @@ goldensuite-mcp = { workspace = true }
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-xdist>=3.6",
+    "pytest-asyncio>=0.23",  # required by goldenmatch + goldenflow async tests
     "ruff>=0.6",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
+
+# NOTE: pytest-xdist (-n auto) is passed from CI rather than set as a global
+# addopts, because individual packages (e.g. goldensuite-mcp) define their own
+# optional [dev] extras that don't include xdist, and pytest invoked under
+# those package envs would fail with "unrecognized arguments: -n".
