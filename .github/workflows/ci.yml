@@ -15,29 +15,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
       - run: uv sync --all-packages
       # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
       # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
       - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
-      # NOTE: pytest is intentionally not run here yet. Each package had its own
-      # CI tuning (--ignore lists, optional-dep guards, benchmark dataset skips)
-      # in its pre-fold standalone repo. Restoring per-package pytest config is
-      # tracked as a follow-up; until then this job verifies lint cleanliness.
+      # Pytest re-enabled with non-blocking signal first. Each package's failure
+      # set was unknown post-fold (each repo had its own --ignore/skip tuning).
+      # Once we triage the first few CI runs we'll flip continue-on-error off.
+      # goldensuite-mcp has no tests/ dir — skipped via the if guard below.
+      # infermap has a duplicate conftest in benchmark/runners — ignored.
+      - name: pytest
+        if: matrix.pkg != 'goldensuite-mcp'
+        continue-on-error: true
+        run: |
+          IGNORE=""
+          if [ "${{ matrix.pkg }}" = "infermap" ]; then
+            IGNORE="--ignore=packages/python/infermap/benchmark"
+          fi
+          uv run pytest packages/python/${{ matrix.pkg }} -n auto $IGNORE
 
   typescript:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        pkg: [goldenmatch, goldencheck, goldenflow, infermap]
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        # Reads version from root package.json `packageManager` field.
+        # That field MUST be exact semver (pnpm@9.15.0) — ranges error.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} install
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} test --if-present
-      - run: npm --prefix packages/typescript/${{ matrix.pkg }} run build --if-present
+          cache: pnpm
+        # cache: pnpm requires (a) pnpm on PATH (handled above) and
+        # (b) pnpm-lock.yaml present at checkout. Both satisfied because
+        # the lockfile is committed in this same PR.
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ github.sha }}
+          restore-keys: turbo-
+      - run: pnpm turbo run build test typecheck lint
 
   rust:
     runs-on: ubuntu-latest
@@ -47,6 +69,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/rust/extensions
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
 
@@ -55,7 +80,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
+          cache: pip
       - run: pip install dbt-core dbt-duckdb
       - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
 

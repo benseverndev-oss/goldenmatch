@@ -1,11 +1,16 @@
 {
   "name": "goldenmatch-monorepo",
   "private": true,
-  "description": "Not a real npm workspace — each package installs independently to avoid Windows symlink issues.",
+  "packageManager": "pnpm@9.15.0",
+  "engines": { "node": ">=20" },
   "scripts": {
-    "install:all": "for d in packages/typescript/*; do npm --prefix \"$d\" install; done",
-    "test:all": "for d in packages/typescript/*; do npm --prefix \"$d\" test; done",
-    "build:all": "for d in packages/typescript/*; do npm --prefix \"$d\" run build; done",
-    "lint:all": "for d in packages/typescript/*; do npm --prefix \"$d\" run lint; done"
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
   }
 }

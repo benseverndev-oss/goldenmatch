@@ -305,6 +305,21 @@ just build
 - Tests must pass on all three languages where the change applies; the parity harness in `packages/typescript/goldenmatch/tests/parity/` enforces 4-decimal-tolerance Python ↔ TypeScript scorer parity.
 - See `docs/superpowers/specs/` for design rationale on architectural decisions.
 
+### TypeScript dev setup (pnpm + Turborepo)
+
+The TypeScript packages live in a single pnpm workspace orchestrated by Turborepo. From the repo root:
+
+```bash
+corepack enable                               # one-time, picks up pnpm@9.15.0 from package.json
+pnpm install                                  # installs all workspace packages
+pnpm turbo run build test typecheck lint      # full pipeline (cached after first run)
+pnpm --filter goldenmatch test                # single package
+```
+
+**Windows: enable Developer Mode for pnpm.** `pnpm install` creates symlinks under `node_modules/`. Settings → For Developers → Developer Mode → On. If you see `EPERM: operation not permitted, symlink ...` during install, Dev Mode is off.
+
+If `corepack enable` fails (often needs an admin shell on Windows), the fallback is `npm i -g pnpm@9.15.0` — functionally equivalent.
+
 ---
 
 ## History
