@@ -35,6 +35,7 @@ class TestLoadFile:
         assert "first_name" in df.columns
 
     def test_load_excel(self, tmp_path):
+        pytest.importorskip("xlsxwriter")
         path = tmp_path / "test.xlsx"
         df = pl.DataFrame({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
         df.write_excel(path)

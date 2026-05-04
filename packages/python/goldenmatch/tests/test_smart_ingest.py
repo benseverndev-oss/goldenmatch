@@ -494,6 +494,7 @@ class TestLoadFileIntegration:
         assert len(df) == 3
 
     def test_excel_unchanged(self, tmp_path):
+        pytest.importorskip("xlsxwriter")
         p = tmp_path / "test.xlsx"
         df = pl.DataFrame({"id": [1, 2], "name": ["A", "B"]})
         df.write_excel(p)
