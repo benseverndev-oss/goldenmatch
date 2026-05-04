@@ -68,7 +68,7 @@ class TestScanFileWithoutBaseline:
     """scan_file() without a baseline should behave exactly as before."""
 
     def test_returns_two_tuple_by_default(self) -> None:
-        fixture = Path("tests/fixtures/simple.csv")
+        fixture = Path(__file__).parent.parent / "fixtures" / "simple.csv"
         result = scan_file(fixture)
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -76,14 +76,14 @@ class TestScanFileWithoutBaseline:
         assert isinstance(findings, list)
 
     def test_returns_three_tuple_with_return_sample(self) -> None:
-        fixture = Path("tests/fixtures/simple.csv")
+        fixture = Path(__file__).parent.parent / "fixtures" / "simple.csv"
         result = scan_file(fixture, return_sample=True)
         assert len(result) == 3
         findings, profile, sample = result
         assert isinstance(sample, pl.DataFrame)
 
     def test_no_drift_findings_without_baseline(self) -> None:
-        fixture = Path("tests/fixtures/simple.csv")
+        fixture = Path(__file__).parent.parent / "fixtures" / "simple.csv"
         findings, _ = scan_file(fixture)
         drift_sources = [f for f in findings if f.source == "baseline_drift"]
         assert len(drift_sources) == 0
