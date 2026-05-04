@@ -9,11 +9,79 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp.types import Tool, TextContent
 
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.store import MemoryStore
+
 logger = logging.getLogger(__name__)
+
+
+def _write_agent_correction(
+    *,
+    memory_store: "MemoryStore",
+    session: Any,
+    id_a: int,
+    id_b: int,
+    decision: str,
+    reason: str | None,
+    dataset: str | None,
+) -> None:
+    """Write a Correction with source='agent', trust=0.5.
+
+    Hashes are computed from `session.data` when present; otherwise empty.
+    """
+    try:
+        import uuid
+        from datetime import datetime
+
+        from goldenmatch.core.memory.store import Correction, _canon_pair
+
+        ca, cb = _canon_pair(id_a, id_b)
+        field_hash = ""
+        record_hash = ""
+        df = getattr(session, "data", None)
+        if df is not None:
+            try:
+                from goldenmatch.core.memory.corrections import (
+                    build_row_lookup,
+                    compute_field_hash,
+                    compute_record_hash,
+                )
+
+                cols = [c for c in df.columns if not c.startswith("__")]
+                if cols:
+                    lookup = build_row_lookup(df, cols)
+                    if ca in lookup and cb in lookup:
+                        field_hash = compute_field_hash(lookup[ca], lookup[cb])
+                ra = compute_record_hash(df, ca)
+                rb = compute_record_hash(df, cb)
+                if ra and rb:
+                    record_hash = f"{ra}:{rb}"
+            except Exception:
+                # Hash computation failures fall back to empty hashes.
+                field_hash, record_hash = "", ""
+
+        memory_store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=id_a,
+            id_b=id_b,
+            decision=decision,
+            source="agent",
+            trust=0.5,
+            field_hash=field_hash,
+            record_hash=record_hash,
+            original_score=0.0,
+            matchkey_name=None,
+            reason=reason,
+            dataset=dataset,
+            created_at=datetime.now(),
+        ))
+    except Exception as e:
+        logger.warning("agent_approve_reject memory write failed: %s", e)
+
 
 AGENT_TOOLS = [
     Tool(
@@ -265,7 +333,14 @@ def handle_agent_tool(name: str, arguments: dict) -> list[TextContent]:
         )]
 
 
-def _dispatch(name: str, args: dict, session_cls: type) -> dict:
+def _dispatch(
+    name: str,
+    args: dict,
+    session_cls: type,
+    *,
+    memory_store: "MemoryStore | None" = None,
+    dataset: str | None = None,
+) -> dict:
     """Dispatch to the appropriate handler by tool name."""
 
     if name == "analyze_data":
@@ -367,6 +442,17 @@ def _dispatch(name: str, args: dict, session_cls: type) -> dict:
             )
         else:
             return {"error": f"Invalid decision: {decision!r}. Use 'approve' or 'reject'."}
+
+        if memory_store is not None:
+            _write_agent_correction(
+                memory_store=memory_store,
+                session=session,
+                id_a=int(args["id_a"]),
+                id_b=int(args["id_b"]),
+                decision=decision,
+                reason=reason or None,
+                dataset=dataset,
+            )
 
         return {
             "status": "ok",
