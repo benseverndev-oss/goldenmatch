@@ -6,7 +6,7 @@
   },
   "deploy": {
     "startCommand": "goldenmatch mcp-serve --transport http --port 8200",
-    "healthcheckPath": "/mcp/",
+    "healthcheckPath": "/.well-known/mcp/server-card.json",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
