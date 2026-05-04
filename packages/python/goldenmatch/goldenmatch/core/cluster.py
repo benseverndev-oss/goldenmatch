@@ -2,7 +2,47 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from collections import defaultdict
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.store import MemoryStore
+
+_log = logging.getLogger("goldenmatch.memory")
+
+
+def _record_unmerge_corrections(
+    pairs: list[tuple[int, int]],
+    memory_store: "MemoryStore | None",
+    dataset: str | None,
+) -> None:
+    """Write reject corrections with empty hashes for each unmerged pair."""
+    if memory_store is None or not pairs:
+        return
+    try:
+        from goldenmatch.core.memory.store import Correction
+
+        for a, b in pairs:
+            memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=a,
+                id_b=b,
+                decision="reject",
+                source="unmerge",
+                trust=1.0,
+                field_hash="",
+                record_hash="",
+                original_score=0.0,
+                matchkey_name=None,
+                reason=None,
+                dataset=dataset,
+                created_at=datetime.now(),
+            ))
+    except Exception as e:
+        _log.warning("Unmerge memory write failed: %s", e)
 
 
 class UnionFind:
@@ -362,6 +402,9 @@ def unmerge_record(
     record_id: int,
     clusters: dict[int, dict],
     threshold: float = 0.0,
+    *,
+    memory_store: "MemoryStore | None" = None,
+    dataset: str | None = None,
 ) -> dict[int, dict]:
     """Remove a record from its cluster and re-cluster remaining members.
 
@@ -390,6 +433,19 @@ def unmerge_record(
     cinfo = clusters[source_cid]
     if cinfo["size"] <= 1:
         return clusters  # Already a singleton
+
+    # Memory: reject correction for every pair (record_id, other) in this cluster.
+    if memory_store is not None:
+        unmerge_pairs: list[tuple[int, int]] = []
+        for (a, b) in cinfo.get("pair_scores", {}).keys():
+            if a == record_id and b != record_id:
+                unmerge_pairs.append((a, b))
+            elif b == record_id and a != record_id:
+                unmerge_pairs.append((a, b))
+        # Fall back to (record_id, other_member) if pair_scores missing this edge.
+        if not unmerge_pairs:
+            unmerge_pairs = [(record_id, m) for m in cinfo["members"] if m != record_id]
+        _record_unmerge_corrections(unmerge_pairs, memory_store, dataset)
 
     # Extract pair_scores excluding the removed record
     remaining_members = [m for m in cinfo["members"] if m != record_id]
@@ -431,6 +487,9 @@ def unmerge_record(
 def unmerge_cluster(
     cluster_id: int,
     clusters: dict[int, dict],
+    *,
+    memory_store: "MemoryStore | None" = None,
+    dataset: str | None = None,
 ) -> dict[int, dict]:
     """Shatter a cluster back into individual singletons.
 
@@ -448,6 +507,18 @@ def unmerge_cluster(
 
     cinfo = clusters[cluster_id]
     members = cinfo["members"]
+
+    # Memory: reject correction for every pair in this cluster.
+    if memory_store is not None:
+        unmerge_pairs = list(cinfo.get("pair_scores", {}).keys())
+        if not unmerge_pairs:
+            unmerge_pairs = [
+                (members[i], members[j])
+                for i in range(len(members))
+                for j in range(i + 1, len(members))
+            ]
+        _record_unmerge_corrections(unmerge_pairs, memory_store, dataset)
+
     del clusters[cluster_id]
 
     next_cid = max(clusters.keys(), default=0) + 1
