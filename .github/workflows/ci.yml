@@ -56,7 +56,11 @@ jobs:
               IGNORE="--ignore=packages/python/infermap/benchmark"
               ;;
           esac
-          uv run pytest packages/python/${{ matrix.pkg }} -n auto $IGNORE
+          # --timeout=120 surfaces any hung test as a failure with a stack
+          # trace (vs the whole job timing out at 6h with zero diagnostics).
+          # PR #66 hit a goldencheck pytest hang on Linux that didn't
+          # reproduce locally — this converts that into actionable signal.
+          uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread $IGNORE
 
   typescript:
     runs-on: ubuntu-latest
