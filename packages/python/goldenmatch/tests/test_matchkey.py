@@ -103,3 +103,89 @@ class TestComputeMatchkeys:
         assert "__mk_zip_exact__" in result.columns
         assert result["__mk_name_sdx__"].to_list() == ["john", "jane"]
         assert result["__mk_zip_exact__"].to_list() == ["19382", "10001"]
+
+
+# --- Tests for precompute_matchkey_transforms (perf/hoist-matchkey-transforms) ---
+import polars as pl
+from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.core.matchkey import (
+    _xform_sig,
+    precompute_matchkey_transforms,
+)
+
+
+def _mk(name: str, fields: list[MatchkeyField], threshold: float = 0.7) -> MatchkeyConfig:
+    return MatchkeyConfig(name=name, type="weighted", threshold=threshold, fields=fields)
+
+
+def _field(field: str, transforms: list[str], scorer: str = "jaro_winkler",
+           weight: float = 1.0) -> MatchkeyField:
+    return MatchkeyField(field=field, transforms=transforms, scorer=scorer, weight=weight)
+
+
+def test_xform_sig_is_deterministic_across_processes():
+    f1 = _field("name", ["lowercase", "strip"])
+    f2 = _field("name", ["lowercase", "strip"])
+    assert _xform_sig(f1) == _xform_sig(f2)
+    sig = _xform_sig(f1)
+    assert sig.startswith("__xform_name_") and sig.endswith("__")
+    assert len(sig) > len("__xform_name___")
+
+
+def test_precompute_matchkey_transforms_dedups_signatures():
+    df = pl.DataFrame({"name": ["Alice", "BOB"]})
+    mk_a = _mk("a", [_field("name", ["lowercase"])])
+    mk_b = _mk("b", [_field("name", ["lowercase"])])
+    out = precompute_matchkey_transforms(df, [mk_a, mk_b])
+    xform_cols = [c for c in out.columns if c.startswith("__xform_")]
+    assert len(xform_cols) == 1
+
+
+def test_precompute_matchkey_transforms_distinct_transforms_same_field():
+    df = pl.DataFrame({"name": ["Alice"]})
+    mk = _mk("m", [
+        _field("name", ["lowercase"]),
+        _field("name", ["uppercase"]),
+    ])
+    out = precompute_matchkey_transforms(df, [mk])
+    xform_cols = sorted(c for c in out.columns if c.startswith("__xform_"))
+    assert len(xform_cols) == 2
+    assert out[xform_cols[0]].to_list() != out[xform_cols[1]].to_list()
+
+
+def test_precompute_matchkey_transforms_native_chain_path():
+    df = pl.DataFrame({"name": ["  Alice  ", "BOB"]})
+    mk = _mk("m", [_field("name", ["lowercase", "strip"])])
+    out = precompute_matchkey_transforms(df, [mk])
+    sig = _xform_sig(_field("name", ["lowercase", "strip"]))
+    assert out[sig].to_list() == ["alice", "bob"]
+
+
+def test_precompute_matchkey_transforms_python_fallback_path():
+    df = pl.DataFrame({"name": ["Smith", "Smyth"]})
+    mk = _mk("m", [_field("name", ["soundex"])])
+    out = precompute_matchkey_transforms(df, [mk])
+    sig = _xform_sig(_field("name", ["soundex"]))
+    vals = out[sig].to_list()
+    assert vals[0] == vals[1]
+
+
+def test_precompute_matchkey_transforms_skips_record_embedding():
+    df = pl.DataFrame({"name": ["a"], "desc": ["b"]})
+    mk = MatchkeyConfig(name="m", type="weighted", threshold=0.5, fields=[
+        MatchkeyField(field="__record__", transforms=[], scorer="record_embedding",
+                      weight=1.0, columns=["name", "desc"]),
+        _field("name", ["lowercase"]),
+    ])
+    out = precompute_matchkey_transforms(df, [mk])
+    assert "__record__" not in out.columns
+    sig_name = _xform_sig(_field("name", ["lowercase"]))
+    assert sig_name in out.columns
+
+
+def test_precompute_matchkey_transforms_skips_empty_transforms():
+    df = pl.DataFrame({"name": ["Alice"]})
+    mk = _mk("m", [_field("name", [])])
+    out = precompute_matchkey_transforms(df, [mk])
+    xform_cols = [c for c in out.columns if c.startswith("__xform_")]
+    assert xform_cols == []
