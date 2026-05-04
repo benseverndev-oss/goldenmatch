@@ -10,10 +10,13 @@ Items are roughly ordered by ROI within each section. Check off as we go; we wil
 
 ## Runtime — Engine speed
 
-- [ ] **Vectorize `pattern_consistency` profiler**
-  - File: `packages/python/goldencheck/golenmatch/profilers/pattern_consistency.py:38,54-66`
-  - Problem: `_generalize()` runs as a Polars `map_elements()` Python UDF — one boundary crossing per row (~100k for a 100k sample).
-  - Fix: replace with a single vectorized regex pass / native Polars expressions.
+> **Lesson from the first attempt (2026-05-04):** the audit framed the runtime items as ROI-ranked, but framing was based on *static counts of "Python boundary crossings"*, not measured time. When we actually benchmarked the first item below, the speedup was 1.1x–1.4x, not the 10x+ the framing implied. **For every item in this section: measure before designing.** If the measured speedup is <2x, ship is optional, not assumed.
+
+- [~] **Vectorize `pattern_consistency` profiler** — measured, deferred
+  - File: `packages/python/goldencheck/goldencheck/profilers/pattern_consistency.py:38`
+  - Hypothesis: `_generalize()` Python UDF in `map_elements` is the bottleneck.
+  - Reality (measured 2026-05-04): pure generalization step is **1.1x faster** at 100k rows (89ms → 82ms) and **1.4x faster** at 500k high-cardinality (549ms → 393ms). End-to-end profiler call on 100k rows is essentially flat (101ms → 100ms). Polars' `map_elements` releases the GIL and per-call overhead is small — the audit's "100k boundary crossings" framing overstated the cost.
+  - Decision: not worth the churn for a 10-40% speedup on a profiler that's already sub-100ms per column. Reconsider if a column ever measures >1s.
 
 - [ ] **Parallelize column profilers**
   - File: `packages/python/goldencheck/goldencheck/engine/scanner.py:35-53`
@@ -25,9 +28,15 @@ Items are roughly ordered by ROI within each section. Check off as we go; we wil
   - Problem: `call_llm()` is one synchronous `messages.create()` per finding. 50 findings = 50 round-trips.
   - Fix: async parallelism with `asyncio.gather`, or use Anthropic's batch API for offline runs.
 
-- [ ] **Verify the Rust core is actually on the hot path**
-  - Confirm PyO3 bindings are invoked for blocking/scoring/dedup rather than a Python fallback.
-  - Add a smoke benchmark to detect regressions if the fallback path silently re-engages.
+- [x] **Verify the Rust core is actually on the hot path** — diagnosed, N/A
+  - Diagnosis (2026-05-04): no Rust core exists for goldenmatch's Python path. `packages/rust/extensions/` is the *Postgres/DuckDB SQL surface* — Rust calls Python via PyO3, not the other way around. Audit's framing was a misread of the architecture.
+  - Decision: nothing to do. Item closed.
+
+- [x] **Hoist matchkey transforms out of per-block scoring** — measured, shipped
+  - File: `packages/python/goldenmatch/goldenmatch/core/scorer.py:113` + `core/matchkey.py` + `core/pipeline.py`
+  - Hypothesis (cProfile, 2026-05-04): `_get_transformed_values` was 8.97s / 78% of an 11.4s 10k-row dedupe — 7028 redundant Polars `.select()` calls.
+  - Reality (measured 2026-05-04 without cProfile overhead): 5-run median dedupe wall on 10k synthetic dropped from **3127ms → 2567ms (1.22x)**, best-case **2939ms → 2243ms (1.31x)**. cProfile's per-call overhead inflated the function's apparent share of wall — the underlying `select()` calls are individually fast enough that eliminating them yields a real but modest improvement.
+  - Decision: shipped per spec acceptance ("ship if structural cleanup is good even when speedup is smaller than expected"). Spec: `docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md`.
 
 ---
 
