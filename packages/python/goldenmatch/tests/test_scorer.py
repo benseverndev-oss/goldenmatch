@@ -4,11 +4,13 @@ import polars as pl
 import pytest
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.core.matchkey import _xform_sig, precompute_matchkey_transforms
 from goldenmatch.core.scorer import (
-    score_field,
-    score_pair,
+    _get_transformed_values,
     find_exact_matches,
     find_fuzzy_matches,
+    score_field,
+    score_pair,
 )
 
 
@@ -721,3 +723,45 @@ class TestRerankTopPairs:
         })
         result = rerank_top_pairs(pairs, df, mk)
         assert result == pairs
+
+
+# --- Tests for _get_transformed_values fast-path (perf/hoist-matchkey-transforms) ---
+# (Imports moved to top of file per CLAUDE.md guidance.)
+
+
+def test_get_transformed_values_uses_precomputed_column_when_present():
+    field = MatchkeyField(field="name", transforms=["lowercase"],
+                          scorer="jaro_winkler", weight=1.0)
+    sig = _xform_sig(field)
+    block_df = pl.DataFrame({
+        "name": ["Alice", "BOB"],
+        sig: ["PRECOMPUTED_A", "PRECOMPUTED_B"],
+    })
+    assert _get_transformed_values(block_df, field) == ["PRECOMPUTED_A", "PRECOMPUTED_B"]
+
+
+def test_get_transformed_values_falls_back_when_column_absent():
+    field = MatchkeyField(field="name", transforms=["lowercase"],
+                          scorer="jaro_winkler", weight=1.0)
+    block_df = pl.DataFrame({"name": ["Alice", "BOB"]})
+    assert _get_transformed_values(block_df, field) == ["alice", "bob"]
+
+
+def test_find_fuzzy_matches_identical_results_with_and_without_precompute():
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "name": ["Alice Smith", "Alice Smyth", "Bob Jones", "Robert Jones"],
+        "zip": ["10001", "10001", "20002", "20002"],
+    })
+    mk = MatchkeyConfig(
+        name="m", type="weighted", threshold=0.6,
+        fields=[
+            MatchkeyField(field="name", transforms=["lowercase", "strip"],
+                          scorer="jaro_winkler", weight=0.7),
+            MatchkeyField(field="zip", transforms=["strip"],
+                          scorer="exact", weight=0.3),
+        ],
+    )
+    pairs_legacy = sorted(find_fuzzy_matches(df, mk))
+    pairs_precomputed = sorted(find_fuzzy_matches(precompute_matchkey_transforms(df, [mk]), mk))
+    assert pairs_legacy == pairs_precomputed

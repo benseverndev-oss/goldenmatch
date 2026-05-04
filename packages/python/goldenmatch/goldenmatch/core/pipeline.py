@@ -13,7 +13,7 @@ from goldenmatch.core.autofix import auto_fix_dataframe
 from goldenmatch.core.ingest import load_file, validate_columns, apply_column_map
 from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.validate import ValidationRule, validate_dataframe
-from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
 from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel, rerank_top_pairs
@@ -371,7 +371,12 @@ def _run_dedupe_pipeline(
     combined_lf = compute_matchkeys(combined_lf, matchkeys)
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
-    collected_df = combined_lf.collect()
+    # Hoist matchkey transforms onto the materialized df once — eliminates
+    # one .select() per (block × matchkey field) during scoring (folds into
+    # the existing collect; no extra materialization). See spec
+    # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
+    collected_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
+    combined_lf = collected_df.lazy()
     _run_auto_suggest(collected_df, config)
 
     # ── Step 3: BLOCK + COMPARE (cascading: exact first, then fuzzy) ──
@@ -801,7 +806,11 @@ def _run_match_pipeline(
 
     # ── Step 3: Compute matchkeys ──
     combined_lf = compute_matchkeys(combined_lf, matchkeys)
-    combined_df = combined_lf.collect()
+    # Hoist matchkey transforms — eliminates one .select() per (block ×
+    # matchkey field) during scoring. See spec
+    # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
+    combined_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
+    combined_lf = combined_df.lazy()
 
     # ── Step 3.5: AUTO-SUGGEST blocking keys ──
     _run_auto_suggest(combined_df, config)

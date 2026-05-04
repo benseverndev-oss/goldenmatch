@@ -20,6 +20,7 @@ dev = [
     "pytest>=8",
     "pytest-xdist>=3.6",
     "pytest-asyncio>=0.23",  # required by goldenmatch + goldenflow async tests
+    "pytest-timeout>=2.3",  # surfaces hung tests in CI as failures w/ stack traces (vs job timeout)
     "ruff>=0.6",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)

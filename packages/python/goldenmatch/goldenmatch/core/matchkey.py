@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 import polars as pl
 
-from goldenmatch.config.schemas import MatchkeyConfig
+from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.utils.transforms import apply_transforms
 
 
@@ -134,3 +135,74 @@ def compute_matchkeys(
     if exprs:
         lf = lf.with_columns(exprs)
     return lf
+
+
+def _xform_sig(field: MatchkeyField) -> str:
+    """Stable, process-independent signature for a (field, transforms) pair.
+
+    Uses blake2b rather than Python's salted hash() so the resulting column
+    name is deterministic across processes — makes debugging dumps diffable
+    and avoids spooky cross-run differences in error messages.
+    """
+    digest = hashlib.blake2b(
+        repr(field.transforms).encode(), digest_size=8
+    ).hexdigest()
+    return f"__xform_{field.field}_{digest}__"
+
+
+def precompute_matchkey_transforms(
+    df: pl.DataFrame, matchkeys: list[MatchkeyConfig]
+) -> pl.DataFrame:
+    """Add one __xform_<sig>__ column per unique (field, transforms) signature.
+
+    Same field+transforms across multiple matchkeys reuses one column — dedup
+    is automatic via the signature. Native chains use vectorized Polars
+    expressions via `_try_native_chain`; non-native chains fall back to Python
+    per-row `apply_transforms` once.
+
+    Skips fields whose scorer is `record_embedding` (uses multi-column
+    `field.columns`, has its own scoring path that doesn't call
+    `_get_transformed_values`).
+
+    Skips fields with empty transforms list — nothing to precompute, and
+    `_get_transformed_values`' legacy path is already a single `to_list()`
+    call.
+
+    **Caller contract:** downstream code must NOT mutate the source columns
+    referenced by the matchkey fields after this function runs. The fast
+    path in `_get_transformed_values` trusts the precomputed column over
+    re-deriving from source — silently returning stale values if the source
+    is changed later. Today no in-tree caller does this (blocks are sliced
+    from the augmented df, not mutated), but adding a mid-pipeline column
+    rewrite step in the future would violate this assumption.
+
+    Returns the augmented DataFrame. Original columns are untouched.
+    """
+    seen: set[str] = set()
+    new_cols: list[pl.Series] = []
+    for mk in matchkeys:
+        for field in mk.fields:
+            if field.scorer == "record_embedding":
+                continue
+            if not field.transforms:
+                continue
+            sig = _xform_sig(field)
+            if sig in seen or sig in df.columns:
+                continue
+            seen.add(sig)
+
+            native_expr = _try_native_chain(field.field, field.transforms)
+            if native_expr is not None:
+                col = df.select(native_expr.alias(sig))[sig]
+            else:
+                values = df[field.field].to_list()
+                col = pl.Series(
+                    sig,
+                    [apply_transforms(v, field.transforms) if v is not None else None
+                     for v in values],
+                )
+            new_cols.append(col)
+
+    if not new_cols:
+        return df
+    return df.with_columns(new_cols)
