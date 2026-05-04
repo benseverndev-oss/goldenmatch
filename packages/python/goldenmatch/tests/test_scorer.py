@@ -746,3 +746,25 @@ def test_get_transformed_values_falls_back_when_column_absent():
                           scorer="jaro_winkler", weight=1.0)
     block_df = pl.DataFrame({"name": ["Alice", "BOB"]})
     assert _get_transformed_values(block_df, field) == ["alice", "bob"]
+
+
+def test_find_fuzzy_matches_identical_results_with_and_without_precompute():
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField as _MF
+    from goldenmatch.core.scorer import find_fuzzy_matches
+    from goldenmatch.core.matchkey import precompute_matchkey_transforms as _pre
+
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "name": ["Alice Smith", "Alice Smyth", "Bob Jones", "Robert Jones"],
+        "zip": ["10001", "10001", "20002", "20002"],
+    })
+    mk = MatchkeyConfig(
+        name="m", type="weighted", threshold=0.6,
+        fields=[
+            _MF(field="name", transforms=["lowercase", "strip"], scorer="jaro_winkler", weight=0.7),
+            _MF(field="zip", transforms=["strip"], scorer="exact", weight=0.3),
+        ],
+    )
+    pairs_legacy = sorted(find_fuzzy_matches(df, mk))
+    pairs_precomputed = sorted(find_fuzzy_matches(_pre(df, [mk]), mk))
+    assert pairs_legacy == pairs_precomputed
