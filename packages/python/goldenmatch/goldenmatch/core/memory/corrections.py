@@ -24,6 +24,7 @@ class CorrectionStats:
     total_pairs: int = 0
     stale_pairs: list[tuple[int, int]] = field(default_factory=list)
     stale_ambiguous: int = 0
+    stale_unanchorable: int = 0
 
 
 def build_row_lookup(df: pl.DataFrame, fields: list[str]) -> dict[int, tuple]:
@@ -120,10 +121,23 @@ def apply_corrections(
             active[_canon_pair(c.id_a, c.id_b)] = c
             continue
         if not reanchor:
+            stats.stale_unanchorable += 1
+            stats.stale_pairs.append((c.id_a, c.id_b))
+            log.debug(
+                "Correction unanchorable (row IDs gone, no usable record_hash): (%d, %d)",
+                c.id_a, c.id_b,
+            )
             continue
-        parts = (c.record_hash or "").split(":", 1)
-        ha = parts[0] if parts else ""
-        hb = parts[1] if len(parts) > 1 else ""
+        rh = c.record_hash or ""
+        if ":" not in rh:
+            stats.stale_unanchorable += 1
+            stats.stale_pairs.append((c.id_a, c.id_b))
+            log.debug(
+                "Correction unanchorable (row IDs gone, no usable record_hash): (%d, %d)",
+                c.id_a, c.id_b,
+            )
+            continue
+        ha, hb = rh.split(":", 1)
         cands_a = hash_to_rids.get(ha, []) if ha else []
         cands_b = hash_to_rids.get(hb, []) if hb else []
         if len(cands_a) == 1 and len(cands_b) == 1:
@@ -131,6 +145,14 @@ def apply_corrections(
         elif cands_a and cands_b:
             stats.stale_ambiguous += 1
             stats.stale_pairs.append((c.id_a, c.id_b))
+        else:
+            # One or both hash sides have NO match — entity gone.
+            stats.stale_unanchorable += 1
+            stats.stale_pairs.append((c.id_a, c.id_b))
+            log.debug(
+                "Correction unanchorable (row IDs gone, no usable record_hash): (%d, %d)",
+                c.id_a, c.id_b,
+            )
 
     if not active:
         return scored_pairs, stats
@@ -182,6 +204,9 @@ def apply_corrections(
             stats.stale += 1
             stats.stale_pairs.append((id_a, id_b))
 
-    log.info("Corrections: %d applied, %d stale, %d ambiguous, %d total pairs",
-             stats.applied, stats.stale, stats.stale_ambiguous, stats.total_pairs)
+    log.info(
+        "Corrections: %d applied, %d stale, %d ambiguous, %d unanchorable, %d total pairs",
+        stats.applied, stats.stale, stats.stale_ambiguous,
+        stats.stale_unanchorable, stats.total_pairs,
+    )
     return adjusted, stats

@@ -151,6 +151,84 @@ def test_edit_on_non_matchkey_field_still_applies(tmp_path):
     assert stats.stale == 1
 
 
+def test_apply_corrections_empty_store_returns_unchanged(tmp_path):
+    store = MemoryStore(backend="sqlite", path=str(tmp_path / "mem.db"))
+    df = _make_df(
+        [
+            (1, "Acme Corp", "10001"),
+            (2, "Acme LLC", "10001"),
+        ]
+    )
+    scored = [(1, 2, 0.92), (1, 1, 0.5)]
+    adjusted, stats = apply_corrections(
+        scored, store, df, ["name", "zip"], dataset="t"
+    )
+    assert adjusted == scored
+    assert stats.applied == 0
+    assert stats.stale == 0
+    assert stats.total_pairs == len(scored)
+
+
+def test_apply_corrections_missing_row_id_column(tmp_path, caplog):
+    store = MemoryStore(backend="sqlite", path=str(tmp_path / "mem.db"))
+    df_with_row_id = _make_df(
+        [
+            (1, "Acme Corp", "10001"),
+            (2, "Acme LLC", "10001"),
+        ]
+    )
+    _seed_correction(store, df_with_row_id, 1, 2, "reject")
+
+    df_no_row_id = pl.DataFrame(
+        {
+            "name": ["Acme Corp", "Acme LLC"],
+            "zip": ["10001", "10001"],
+        }
+    )
+    scored = [(1, 2, 0.92)]
+    with caplog.at_level("WARNING", logger="goldenmatch.memory"):
+        adjusted, stats = apply_corrections(
+            scored, store, df_no_row_id, ["name", "zip"], dataset="t"
+        )
+    assert adjusted == scored
+    assert stats.applied == 0
+    assert any("__row_id__" in rec.message for rec in caplog.records)
+
+
+def test_unanchorable_corrections_counted(tmp_path):
+    store = MemoryStore(backend="sqlite", path=str(tmp_path / "mem.db"))
+    # Seed correction with empty record_hash (simulating unmerge-collected correction)
+    store.add_correction(
+        Correction(
+            id=str(uuid.uuid4()),
+            id_a=999,
+            id_b=1000,
+            decision="reject",
+            source="unmerge",
+            trust=1.0,
+            field_hash="",
+            record_hash="",
+            original_score=0.92,
+            matchkey_name=None,
+            reason=None,
+            dataset="t",
+            created_at=datetime.now(),
+        )
+    )
+    df = _make_df(
+        [
+            (1, "Acme Corp", "10001"),
+            (2, "Acme LLC", "10001"),
+        ]
+    )
+    scored = [(1, 2, 0.5)]
+    adjusted, stats = apply_corrections(
+        scored, store, df, ["name", "zip"], dataset="t"
+    )
+    assert stats.stale_unanchorable >= 1
+    assert (999, 1000) in stats.stale_pairs
+
+
 def test_reanchor_disabled_falls_back_to_row_id_lookup(tmp_path):
     df1 = _make_df(
         [
