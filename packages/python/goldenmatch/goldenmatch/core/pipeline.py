@@ -372,8 +372,8 @@ def _run_dedupe_pipeline(
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
     # Hoist matchkey transforms onto the materialized df once — eliminates
-    # ~7000 redundant per-block .select() calls during scoring (folds into the
-    # existing collect; no extra materialization). See spec
+    # one .select() per (block × matchkey field) during scoring (folds into
+    # the existing collect; no extra materialization). See spec
     # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
     collected_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
     combined_lf = collected_df.lazy()
@@ -806,7 +806,8 @@ def _run_match_pipeline(
 
     # ── Step 3: Compute matchkeys ──
     combined_lf = compute_matchkeys(combined_lf, matchkeys)
-    # Hoist matchkey transforms — see spec
+    # Hoist matchkey transforms — eliminates one .select() per (block ×
+    # matchkey field) during scoring. See spec
     # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
     combined_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
     combined_lf = combined_df.lazy()

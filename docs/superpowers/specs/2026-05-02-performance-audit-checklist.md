@@ -28,9 +28,9 @@ Items are roughly ordered by ROI within each section. Check off as we go; we wil
   - Problem: `call_llm()` is one synchronous `messages.create()` per finding. 50 findings = 50 round-trips.
   - Fix: async parallelism with `asyncio.gather`, or use Anthropic's batch API for offline runs.
 
-- [x] **Verify the Rust core is actually on the hot path** — diagnosed, N/A
+- [~] **Verify the Rust core is actually on the hot path** — diagnosed, N/A
   - Diagnosis (2026-05-04): no Rust core exists for goldenmatch's Python path. `packages/rust/extensions/` is the *Postgres/DuckDB SQL surface* — Rust calls Python via PyO3, not the other way around. Audit's framing was a misread of the architecture.
-  - Decision: nothing to do. Item closed.
+  - Decision: nothing to do. Item closed (premise was wrong, not "shipped" — using `[~]` to match the pattern_consistency convention for non-shipped items).
 
 - [x] **Hoist matchkey transforms out of per-block scoring** — measured, shipped
   - File: `packages/python/goldenmatch/goldenmatch/core/scorer.py:113` + `core/matchkey.py` + `core/pipeline.py`

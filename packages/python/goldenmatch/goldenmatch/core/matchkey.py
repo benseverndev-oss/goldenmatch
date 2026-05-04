@@ -156,15 +156,25 @@ def precompute_matchkey_transforms(
     """Add one __xform_<sig>__ column per unique (field, transforms) signature.
 
     Same field+transforms across multiple matchkeys reuses one column — dedup
-    is automatic via the signature. Native chains use _try_native_chain (Rust);
-    non-native chains fall back to Python per-row apply_transforms once.
+    is automatic via the signature. Native chains use vectorized Polars
+    expressions via `_try_native_chain`; non-native chains fall back to Python
+    per-row `apply_transforms` once.
 
     Skips fields whose scorer is `record_embedding` (uses multi-column
-    field.columns, has its own scoring path that doesn't call
-    _get_transformed_values).
+    `field.columns`, has its own scoring path that doesn't call
+    `_get_transformed_values`).
 
     Skips fields with empty transforms list — nothing to precompute, and
-    _get_transformed_values' legacy path is already a single to_list() call.
+    `_get_transformed_values`' legacy path is already a single `to_list()`
+    call.
+
+    **Caller contract:** downstream code must NOT mutate the source columns
+    referenced by the matchkey fields after this function runs. The fast
+    path in `_get_transformed_values` trusts the precomputed column over
+    re-deriving from source — silently returning stale values if the source
+    is changed later. Today no in-tree caller does this (blocks are sliced
+    from the augmented df, not mutated), but adding a mid-pipeline column
+    rewrite step in the future would violate this assumption.
 
     Returns the augmented DataFrame. Original columns are untouched.
     """

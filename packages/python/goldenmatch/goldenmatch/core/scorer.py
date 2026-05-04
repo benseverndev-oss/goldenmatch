@@ -115,8 +115,7 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
 
     Fast path: read the precomputed __xform_<sig>__ column populated by
     precompute_matchkey_transforms (called once per pipeline run, eagerly,
-    before blocking). Avoids ~7000 redundant Polars .select() calls per
-    dedupe.
+    before blocking). Avoids one `.select()` per (block × matchkey field).
 
     Fallback path: legacy per-block .select(_try_native_chain(...)) for
     callers that bypass the pipeline (DataFrame entry points, tests calling
