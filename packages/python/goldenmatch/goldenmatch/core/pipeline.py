@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -133,13 +134,40 @@ def _apply_memory_post(
         return all_pairs, None
 
 
-def _enqueue_stale_pairs(memory_stats, all_pairs: list[tuple[int, int, float]]) -> None:
-    """Push stale pairs onto an in-memory ReviewQueue for steward triage."""
+def _derive_review_queue_path(config: GoldenMatchConfig) -> str | None:
+    """Derive review-queue SQLite path as sibling of the memory store path.
+
+    Returns None if memory is disabled or no path is configured.
+    """
+    if not config.memory or not config.memory.enabled:
+        return None
+    mem_path = getattr(config.memory, "path", None)
+    if not mem_path:
+        return None
+    p = Path(mem_path)
+    return str(p.with_name("review_queue.db"))
+
+
+def _enqueue_stale_pairs(
+    memory_stats,
+    all_pairs: list[tuple[int, int, float]],
+    config: GoldenMatchConfig,
+) -> None:
+    """Push stale pairs onto a SQLite-backed ReviewQueue for steward triage.
+
+    The queue is colocated with the memory store (sibling SQLite file) so the
+    next `goldenmatch review` invocation surfaces these pairs across processes.
+    """
     if memory_stats is None or not memory_stats.stale_pairs:
         return
+    rq = None
     try:
         from goldenmatch.core.review_queue import ReviewQueue
-        rq = ReviewQueue()
+        queue_path = _derive_review_queue_path(config)
+        if queue_path is not None:
+            rq = ReviewQueue(backend="sqlite", path=queue_path)
+        else:
+            rq = ReviewQueue()
         score_lookup = {(a, b): s for a, b, s in all_pairs}
         for (a, b) in memory_stats.stale_pairs:
             score = score_lookup.get((a, b), score_lookup.get((b, a), 0.0))
@@ -149,6 +177,12 @@ def _enqueue_stale_pairs(memory_stats, all_pairs: list[tuple[int, int, float]]) 
             )
     except Exception as e:
         logger.warning("Failed to enqueue stale pairs: %s", e)
+    finally:
+        if rq is not None:
+            try:
+                rq.close()
+            except Exception:
+                pass
 
 
 def _apply_postflight(
@@ -733,7 +767,7 @@ def _run_dedupe_pipeline(
     }
 
     try:
-        _enqueue_stale_pairs(memory_stats, all_pairs)
+        _enqueue_stale_pairs(memory_stats, all_pairs, config)
     finally:
         if memory_store is not None:
             memory_store.close()
@@ -1090,7 +1124,7 @@ def _run_match_pipeline(
         write_output(matched_df, directory, run_name, "scores", fmt)
 
     try:
-        _enqueue_stale_pairs(memory_stats, all_pairs)
+        _enqueue_stale_pairs(memory_stats, all_pairs, config)
     finally:
         if memory_store is not None:
             memory_store.close()

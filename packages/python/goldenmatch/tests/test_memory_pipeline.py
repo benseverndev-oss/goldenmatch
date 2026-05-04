@@ -129,6 +129,65 @@ def test_pipeline_no_memory_stats_when_disabled():
     assert result.memory_stats is None
 
 
+def test_pipeline_persists_stale_pairs_to_review_queue(tmp_path):
+    """Stale corrections must be enqueued to a SQLite review queue colocated
+    with the memory store, so the next `goldenmatch review` invocation
+    surfaces them across processes."""
+    import uuid as _uuid
+    from pathlib import Path
+
+    from goldenmatch.core.memory.store import Correction, MemoryStore
+    from goldenmatch.core.review_queue import ReviewQueue
+
+    df = pl.DataFrame(
+        {
+            "name": ["Acme Corp", "Acme LLC", "Beta Inc"],
+            "zip": ["10001", "10001", "20002"],
+        }
+    )
+    db_path = tmp_path / "mem.db"
+    # Seed a correction with non-empty hashes that won't match the test df,
+    # forcing it to be classified as stale.
+    store = MemoryStore(backend="sqlite", path=str(db_path))
+    try:
+        store.add_correction(
+            Correction(
+                id=str(_uuid.uuid4()),
+                id_a=0,
+                id_b=1,
+                decision="reject",
+                source="steward",
+                trust=1.0,
+                field_hash="bogus_field_hash_will_not_match",
+                record_hash="bogus_record_hash_will_not_match",
+                original_score=0.95,
+                matchkey_name=None,
+                reason=None,
+                dataset=None,
+                created_at=datetime.now(),
+            )
+        )
+    finally:
+        store.close()
+
+    config = _build_config(str(db_path))
+    result = dedupe_df(df, config=config)
+
+    assert result.memory_stats is not None
+    assert len(result.memory_stats.stale_pairs) >= 1
+
+    # Sibling SQLite file should appear next to the memory store.
+    queue_path = db_path.with_name("review_queue.db")
+    assert Path(queue_path).exists(), f"queue file not at {queue_path}"
+
+    # Querying the same backend should surface the stale pair.
+    rq = ReviewQueue(backend="sqlite", path=str(queue_path))
+    pending = rq.list_pending("memory_stale")
+    rq.close()
+    pair_ids = {(it.id_a, it.id_b) for it in pending}
+    assert (0, 1) in pair_ids or (1, 0) in pair_ids
+
+
 def test_pipeline_memory_disabled_does_not_open_store(tmp_path):
     df = pl.DataFrame({"name": ["Acme Corp", "Beta Inc"], "zip": ["10001", "20002"]})
     db_path = tmp_path / "mem.db"

@@ -107,10 +107,16 @@ class _MemoryBackend:
 class _SQLiteBackend:
     """SQLite-backed persistent storage for review items."""
 
-    def __init__(self) -> None:
-        db_dir = Path(".goldenmatch")
-        db_dir.mkdir(exist_ok=True)
-        self._db_path = db_dir / "reviews.db"
+    def __init__(self, path: Optional[str] = None) -> None:
+        if path is None:
+            db_dir = Path(".goldenmatch")
+            db_dir.mkdir(exist_ok=True)
+            self._db_path = db_dir / "reviews.db"
+        else:
+            self._db_path = Path(path)
+            parent = self._db_path.parent
+            if str(parent) and parent != Path(""):
+                parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -215,14 +221,18 @@ class ReviewQueue:
         "memory" (default) or "sqlite"
     """
 
-    def __init__(self, backend: str = "memory") -> None:
+    def __init__(self, backend: str = "memory", path: Optional[str] = None) -> None:
         if backend == "memory":
             self._backend = _MemoryBackend()
         elif backend == "sqlite":
-            self._backend = _SQLiteBackend()
+            self._backend = _SQLiteBackend(path=path)
         else:
             raise ValueError(f"Unknown backend: {backend!r}. Use 'memory' or 'sqlite'.")
         self._backend_name = backend
+
+    def close(self) -> None:
+        """Close any backend resources. SQLite uses per-call connections, so this is a no-op."""
+        return None
 
     @property
     def storage_tier(self) -> str:
