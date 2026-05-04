@@ -111,17 +111,29 @@ def find_exact_matches(
 # ---------------------------------------------------------------------------
 
 def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> list:
-    """Get transformed values for a field as a list, using Polars expressions when possible."""
-    from goldenmatch.core.matchkey import _try_native_chain
-    col = field.field
+    """Get transformed values for a field as a list.
 
-    # Try native Polars transforms (fast path)
+    Fast path: read the precomputed __xform_<sig>__ column populated by
+    precompute_matchkey_transforms (called once per pipeline run, eagerly,
+    before blocking). Avoids ~7000 redundant Polars .select() calls per
+    dedupe.
+
+    Fallback path: legacy per-block .select(_try_native_chain(...)) for
+    callers that bypass the pipeline (DataFrame entry points, tests calling
+    find_fuzzy_matches directly).
+    """
+    from goldenmatch.core.matchkey import _xform_sig, _try_native_chain
+
+    sig = _xform_sig(field)
+    if sig in block_df.columns:
+        return block_df[sig].to_list()
+
+    col = field.field
     native_expr = _try_native_chain(col, field.transforms)
     if native_expr is not None:
         result_df = block_df.select(native_expr.alias("__tmp__"))
         return result_df["__tmp__"].to_list()
 
-    # Fallback: Python per-row
     values = block_df[col].to_list()
     return [apply_transforms(v, field.transforms) if v is not None else None for v in values]
 

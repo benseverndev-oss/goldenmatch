@@ -721,3 +721,28 @@ class TestRerankTopPairs:
         })
         result = rerank_top_pairs(pairs, df, mk)
         assert result == pairs
+
+
+# --- Tests for _get_transformed_values fast-path (perf/hoist-matchkey-transforms) ---
+import polars as pl
+from goldenmatch.config.schemas import MatchkeyField
+from goldenmatch.core.matchkey import _xform_sig, precompute_matchkey_transforms
+from goldenmatch.core.scorer import _get_transformed_values
+
+
+def test_get_transformed_values_uses_precomputed_column_when_present():
+    field = MatchkeyField(field="name", transforms=["lowercase"],
+                          scorer="jaro_winkler", weight=1.0)
+    sig = _xform_sig(field)
+    block_df = pl.DataFrame({
+        "name": ["Alice", "BOB"],
+        sig: ["PRECOMPUTED_A", "PRECOMPUTED_B"],
+    })
+    assert _get_transformed_values(block_df, field) == ["PRECOMPUTED_A", "PRECOMPUTED_B"]
+
+
+def test_get_transformed_values_falls_back_when_column_absent():
+    field = MatchkeyField(field="name", transforms=["lowercase"],
+                          scorer="jaro_winkler", weight=1.0)
+    block_df = pl.DataFrame({"name": ["Alice", "BOB"]})
+    assert _get_transformed_values(block_df, field) == ["alice", "bob"]
