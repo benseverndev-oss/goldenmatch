@@ -25,9 +25,72 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from typing import TYPE_CHECKING
+
 import polars as pl
 
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.store import MemoryStore
+
 logger = logging.getLogger(__name__)
+
+
+def _record_llm_corrections(
+    llm_results: dict[int, bool],
+    pairs: list[tuple[int, int, float]],
+    df: pl.DataFrame,
+    memory_store: "MemoryStore | None",
+    matchkey_fields: list[str] | None,
+    matchkey_name: str | None,
+    dataset: str | None,
+    cols: list[str],
+) -> None:
+    """Write Correction rows for each LLM decision (approve/reject)."""
+    if memory_store is None or not llm_results:
+        return
+    try:
+        import uuid
+        from datetime import datetime
+
+        from goldenmatch.core.memory.store import Correction, _canon_pair
+        from goldenmatch.core.memory.corrections import (
+            build_row_lookup,
+            compute_field_hash,
+            compute_record_hash,
+        )
+
+        fields = matchkey_fields or cols
+        lookup = build_row_lookup(df, fields)
+
+        for idx, is_match in llm_results.items():
+            a, b, score = pairs[idx]
+            ca, cb = _canon_pair(a, b)
+            field_hash = ""
+            record_hash = ""
+            if ca in lookup and cb in lookup:
+                field_hash = compute_field_hash(lookup[ca], lookup[cb])
+            ra = compute_record_hash(df, ca)
+            rb = compute_record_hash(df, cb)
+            if ra and rb:
+                record_hash = f"{ra}:{rb}"
+
+            memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=a,
+                id_b=b,
+                decision="approve" if is_match else "reject",
+                source="llm",
+                trust=0.5,
+                field_hash=field_hash,
+                record_hash=record_hash,
+                original_score=score,
+                matchkey_name=matchkey_name,
+                reason=None,
+                dataset=dataset,
+                created_at=datetime.now(),
+            ))
+    except Exception as e:
+        logger.warning("LLM scorer memory write failed: %s", e)
 
 
 def llm_score_pairs(
@@ -44,6 +107,10 @@ def llm_score_pairs(
     display_columns: list[str] | None = None,
     config: "LLMScorerConfig | None" = None,
     return_budget: bool = False,
+    memory_store: "MemoryStore | None" = None,
+    matchkey_fields: list[str] | None = None,
+    matchkey_name: str | None = None,
+    dataset: str | None = None,
 ) -> "list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]":
     """Score borderline pairs with an LLM.
 
@@ -206,6 +273,10 @@ def llm_score_pairs(
             "LLM calibration applied in %.1fs: %d promoted, %d unchanged",
             elapsed, n_promoted + sum(1 for m in llm_results.values() if m), n_unchanged,
         )
+        _record_llm_corrections(
+            llm_results, pairs, df, memory_store,
+            matchkey_fields, matchkey_name, dataset, cols,
+        )
     else:
         # Direct scoring path: few candidates, score them all
         llm_results = _batch_score(
@@ -231,6 +302,11 @@ def llm_score_pairs(
                 a, b, _ = result[i]
                 result[i] = (a, b, 1.0)
             # else: keep original fuzzy score (never demote)
+
+        _record_llm_corrections(
+            llm_results, pairs, df, memory_store,
+            matchkey_fields, matchkey_name, dataset, cols,
+        )
 
     return _return(result)
 
