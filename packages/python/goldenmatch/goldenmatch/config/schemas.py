@@ -407,6 +407,8 @@ class MemoryConfig(BaseModel):
     connection: str | None = None
     trust: dict[str, float] = Field(default_factory=lambda: {"human": 1.0, "agent": 0.5})
     learning: LearningConfig = Field(default_factory=LearningConfig)
+    reanchor: bool = True
+    dataset: str | None = None
 
 
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
