@@ -15,11 +15,14 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
 from goldenmatch.core.autoconfig_verify import PostflightReport
+
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.corrections import CorrectionStats
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ class DedupeResult:
     scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     config: Any = None
     postflight_report: PostflightReport | None = None
+    memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -146,6 +150,7 @@ class MatchResult:
     unmatched: pl.DataFrame | None = None
     stats: dict = field(default_factory=dict)
     postflight_report: PostflightReport | None = None
+    memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str) -> Path:
         """Write matched results to CSV."""
@@ -265,6 +270,7 @@ def dedupe(
         scored_pairs=_extract_pairs(result),
         config=cfg,
         postflight_report=result.get("postflight_report"),
+        memory_stats=result.get("memory_stats"),
     )
 
 
@@ -350,6 +356,7 @@ def dedupe_df(
         scored_pairs=_extract_pairs(result),
         config=config,
         postflight_report=result.get("postflight_report"),
+        memory_stats=result.get("memory_stats"),
     )
 
 
@@ -417,6 +424,7 @@ def match_df(
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
         postflight_report=result.get("postflight_report"),
+        memory_stats=result.get("memory_stats"),
     )
 
 
@@ -595,6 +603,7 @@ def match(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
+        memory_stats=result.get("memory_stats"),
     )
 
 
