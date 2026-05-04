@@ -27,6 +27,7 @@ class TestWriteOutput:
         assert loaded.shape == (2, 2)
 
     def test_write_xlsx(self, tmp_path):
+        pytest.importorskip("xlsxwriter")
         df = pl.DataFrame({"a": [1, 2], "b": ["x", "y"]})
         path = write_output(df, tmp_path, "test_run", "results", "xlsx")
         assert path.exists()

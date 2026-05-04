@@ -64,5 +64,15 @@ def test_parse_transform_name_with_multiple_params():
 
 
 def test_list_transforms_returns_registered():
+    @register_transform(
+        name="_test_list_marker",
+        input_types=["string"],
+        auto_apply=False,
+        priority=10,
+        mode="expr",
+    )
+    def _marker(column: str) -> pl.Expr:
+        return pl.col(column)
+
     transforms = list_transforms()
-    assert "_test_lower" in [t.name for t in transforms]
+    assert "_test_list_marker" in [t.name for t in transforms]

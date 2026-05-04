@@ -24,19 +24,17 @@ jobs:
       # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
       # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
       - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
-      # Pytest re-enabled with non-blocking signal first.
-      # TODO(PR#65): once the first few CI runs are triaged, flip continue-on-error off.
-      # Per-package --ignore lists below mirror the pre-fold tuning each repo had
+      # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
       # the signal entirely — worse than no step.
       #   goldenmatch: torch segfaults without GPU; postgres tests need a DB; MCP
-      #               watch tests are flaky on Linux runners.
+      #               watch tests are flaky on Linux runners; benchmark datasets
+      #               are gitignored (test_autoconfig_benchmarks).
       #   infermap:    duplicate conftest in benchmark/runners/python/tests/.
       # Skip mechanism is path-based (not name-based) so adding a tests/ dir to a
       # currently-skipped package auto-enables it with a visible notice.
       - name: pytest
-        continue-on-error: true
         shell: bash
         run: |
           if [ ! -d "packages/python/${{ matrix.pkg }}/tests" ]; then
@@ -50,7 +48,8 @@ jobs:
                       --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
                       --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
                       --ignore=packages/python/goldenmatch/tests/test_embedder.py \
-                      --ignore=packages/python/goldenmatch/tests/test_llm_boost.py"
+                      --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
+                      --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py"
               ;;
             infermap)
               IGNORE="--ignore=packages/python/infermap/benchmark"
