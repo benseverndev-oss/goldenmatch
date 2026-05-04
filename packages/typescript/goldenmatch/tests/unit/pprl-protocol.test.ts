@@ -163,7 +163,10 @@ describe("runPPRL", () => {
     return { a, b };
   }
 
-  it("finds most shared entities in two datasets with partial overlap", () => {
+  // 30s timeout: PPRL bloom filter generation + dice scoring is CPU-heavy.
+  // Default 5s passes locally and on dedicated runners but consistently times
+  // out under the post-monorepo-fold shared CI runner (per PR #66 CI history).
+  it("finds most shared entities in two datasets with partial overlap", { timeout: 30000 }, () => {
     const { a, b } = twoPartiesWithOverlap();
     const config: PPRLConfig = {
       fields: ["first_name", "last_name", "email"],
@@ -199,7 +202,10 @@ describe("runPPRL", () => {
     expect(hits).toBeGreaterThanOrEqual(7);
   });
 
-  it("runs end-to-end with security_level standard/high/paranoid and finds same true pairs", { timeout: 15000 }, () => {
+  // 45s (was 15s): the multi-level loop runs the full PPRL pipeline 3x. The
+  // 15s ceiling held on dedicated runners but consistently times out after
+  // the monorepo-fold CI consolidated TS + Python onto a shared runner.
+  it("runs end-to-end with security_level standard/high/paranoid and finds same true pairs", { timeout: 45000 }, () => {
     const { a, b } = twoPartiesWithOverlap();
     const baseFields: string[] = ["first_name", "last_name", "email"];
 
