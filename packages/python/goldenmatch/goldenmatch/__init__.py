@@ -44,6 +44,10 @@ from goldenmatch._api import (
     load_config,
     DedupeResult,
     MatchResult,
+    get_memory,
+    add_correction,
+    learn,
+    memory_stats,
 )
 
 # ── Config schemas (for building configs programmatically) ────────────────
@@ -286,4 +290,6 @@ __all__ = [
     # Learning Memory
     "MemoryStore", "Correction", "LearnedAdjustment", "CorrectionStats",
     "MemoryLearner", "apply_corrections",
+    # Learning Memory API
+    "get_memory", "add_correction", "learn", "memory_stats",
 ]
