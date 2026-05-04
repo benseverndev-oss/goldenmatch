@@ -311,6 +311,86 @@ def llm_score_pairs(
     return _return(result)
 
 
+def llm_explain_pair(
+    row_a: dict,
+    row_b: dict,
+    score: float,
+    *,
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    budget: "BudgetTracker | None" = None,
+    max_chars: int = 240,
+) -> str:
+    """Generate a one-sentence prose explanation for a record pair.
+
+    Routes through the configured LLM provider when an API key is available.
+    On ANY error (no key, network failure, budget exhausted, parse failure),
+    returns a short deterministic fallback string. Never raises.
+
+    The output is clipped to ``max_chars`` characters; long LLM responses are
+    truncated to the first sentence (or hard-cut) so the result stays
+    suitable for a UI ``why`` field.
+    """
+    def _fallback() -> str:
+        # Deterministic, no network.
+        cols = sorted(set((row_a or {}).keys()) | set((row_b or {}).keys()))
+        cols = [c for c in cols if not c.startswith("__")]
+        head = ", ".join(cols[:3]) if cols else "the available fields"
+        return f"Pair score {score:.2f} based on {head}."
+
+    try:
+        if not provider or not api_key:
+            detected_provider, detected_key = _detect_provider()
+            provider = provider or detected_provider
+            api_key = api_key or detected_key
+        if not provider or not api_key:
+            return _fallback()
+
+        if budget is not None and budget.budget_exhausted:
+            return _fallback()
+
+        if not model:
+            model = "gpt-4o-mini" if provider == "openai" else "claude-haiku-4-5-20251001"
+
+        cols = sorted(set((row_a or {}).keys()) | set((row_b or {}).keys()))
+        cols = [c for c in cols if not c.startswith("__")]
+        text_a = " | ".join(f"{c}: {row_a.get(c, '')}" for c in cols if row_a.get(c) is not None)[:300]
+        text_b = " | ".join(f"{c}: {row_b.get(c, '')}" for c in cols if row_b.get(c) is not None)[:300]
+        prompt = (
+            "In ONE short sentence (max 25 words), explain why these two records "
+            "could refer to the same entity, citing the most informative field(s). "
+            "Do not restate the question.\n"
+            f"A: {text_a}\nB: {text_b}\nFuzzy score: {score:.2f}"
+        )
+
+        if provider == "openai":
+            text, in_tok, out_tok = _call_openai(prompt, api_key, model, max_tokens=80)
+        else:
+            text, in_tok, out_tok = _call_anthropic(prompt, api_key, model, max_tokens=80)
+
+        if budget is not None:
+            try:
+                budget.record_usage(input_tokens=in_tok, output_tokens=out_tok, model=model)
+            except Exception:
+                pass
+
+        text = (text or "").strip().replace("\n", " ").replace("  ", " ")
+        if not text:
+            return _fallback()
+        # First sentence only.
+        for sep in (". ", "! ", "? "):
+            if sep in text:
+                text = text.split(sep, 1)[0] + sep.strip()
+                break
+        if len(text) > max_chars:
+            text = text[: max_chars - 3].rstrip() + "..."
+        return text
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("llm_explain_pair failed: %s", e)
+        return _fallback()
+
+
 def _detect_provider() -> tuple[str | None, str | None]:
     """Auto-detect LLM provider from environment variables."""
     key = os.environ.get("OPENAI_API_KEY")

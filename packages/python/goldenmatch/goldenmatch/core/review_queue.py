@@ -31,6 +31,7 @@ class ReviewItem:
     decided_by: Optional[str] = None
     decided_at: Optional[str] = None
     reason: Optional[str] = None
+    why: Optional[str] = None
 
     def approve(self, decided_by: str) -> None:
         self.status = "approved"
@@ -42,6 +43,95 @@ class ReviewItem:
         self.decided_by = decided_by
         self.decided_at = datetime.now(timezone.utc).isoformat()
         self.reason = reason
+
+
+_MAX_WHY_CHARS = 240
+
+
+def _row_to_dict(df: "pl.DataFrame", row_id: int, fields: List[str]) -> dict:
+    """Pluck a row's matchkey-field values into a dict; empty if not found."""
+    try:
+        cols = [f for f in fields if f in df.columns]
+        if "__row_id__" not in df.columns or not cols:
+            return {}
+        sub = df.filter(df["__row_id__"] == row_id).select(cols)
+        if sub.is_empty():
+            return {}
+        return sub.row(0, named=True)
+    except Exception:
+        return {}
+
+
+def _llm_enabled() -> bool:
+    import os
+    return bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def why_for_correction(
+    id_a: int,
+    id_b: int,
+    df: "pl.DataFrame | None",
+    matchkey_fields: Optional[List[str]],
+    *,
+    score: float = 0.0,
+    use_llm: bool = False,
+) -> str:
+    """Compute a short ``why`` string for a (id_a, id_b) correction.
+
+    Default path is deterministic (zero cost). When ``use_llm=True`` AND an
+    LLM API key is present in the environment, routes through
+    :func:`goldenmatch.core.llm_scorer.llm_explain_pair`. Falls back to the
+    deterministic path on any error so callers never have to handle
+    exceptions. Output is always non-empty and clipped to one short sentence.
+    """
+    row_a: dict = {}
+    row_b: dict = {}
+    fields = list(matchkey_fields) if matchkey_fields else []
+    if df is not None and fields:
+        row_a = _row_to_dict(df, id_a, fields)
+        row_b = _row_to_dict(df, id_b, fields)
+
+    if use_llm and _llm_enabled():
+        try:
+            from goldenmatch.core.llm_scorer import llm_explain_pair
+            out = llm_explain_pair(row_a or {}, row_b or {}, score)
+            if out:
+                if len(out) > _MAX_WHY_CHARS:
+                    out = out[: _MAX_WHY_CHARS - 3].rstrip() + "..."
+                return out
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("why_for_correction LLM path failed: %s", e)
+
+    # Deterministic path.
+    try:
+        if row_a and row_b and fields:
+            field_scores = []
+            for f in fields:
+                va = row_a.get(f)
+                vb = row_b.get(f)
+                if va is None and vb is None:
+                    continue
+                # Cheap exact-or-not signal; explain_pair_nl knows how to
+                # phrase it. We don't compute fuzzy scores here -- this stays
+                # zero-cost.
+                s = 1.0 if (va is not None and str(va) == str(vb)) else 0.4
+                field_scores.append({
+                    "field": f, "scorer": "exact",
+                    "value_a": va, "value_b": vb,
+                    "score": s, "weight": 1.0,
+                })
+            if field_scores:
+                from goldenmatch.core.explain import explain_pair_nl
+                out = explain_pair_nl(row_a, row_b, field_scores, score)
+                out = (out or "").strip().replace("\n", " ")
+                if out:
+                    if len(out) > _MAX_WHY_CHARS:
+                        out = out[: _MAX_WHY_CHARS - 3].rstrip() + "..."
+                    return out
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning("why_for_correction deterministic path failed: %s", e)
+
+    return f"Pair ({id_a}, {id_b}) flagged at score {score:.2f}."
 
 
 def gate_pairs(
@@ -239,6 +329,7 @@ class ReviewQueue:
         df: "pl.DataFrame | None" = None,
         matchkey_fields: Optional[List[str]] = None,
         dataset: Optional[str] = None,
+        use_llm_explainer: bool = False,
     ) -> None:
         if backend == "memory":
             self._backend = _MemoryBackend()
@@ -251,6 +342,7 @@ class ReviewQueue:
         self._memory_df = df
         self._memory_matchkey_fields = list(matchkey_fields) if matchkey_fields else None
         self._memory_dataset = dataset
+        self._use_llm_explainer = use_llm_explainer
 
     def close(self) -> None:
         """Close any backend resources. SQLite uses per-call connections, so this is a no-op."""
@@ -262,6 +354,15 @@ class ReviewQueue:
 
     def add(self, job_name: str, id_a: int, id_b: int, score: float, explanation: str) -> None:
         item = ReviewItem(job_name=job_name, id_a=id_a, id_b=id_b, score=score, explanation=explanation)
+        # Populate `why` when we have enough context. Never raises.
+        if self._memory_df is not None and self._memory_matchkey_fields:
+            try:
+                item.why = why_for_correction(
+                    id_a, id_b, self._memory_df, self._memory_matchkey_fields,
+                    score=score, use_llm=self._use_llm_explainer,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("ReviewQueue why computation failed: %s", e)
         self._backend.add(item)
 
     def list_pending(self, job_name: str) -> list[ReviewItem]:
