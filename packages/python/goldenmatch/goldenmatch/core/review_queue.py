@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    import polars as pl
+
+    from goldenmatch.core.memory.store import MemoryStore
+
+log = logging.getLogger("goldenmatch.memory")
 
 
 @dataclass
@@ -221,7 +230,16 @@ class ReviewQueue:
         "memory" (default) or "sqlite"
     """
 
-    def __init__(self, backend: str = "memory", path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        backend: str = "memory",
+        path: Optional[str] = None,
+        *,
+        memory_store: "MemoryStore | None" = None,
+        df: "pl.DataFrame | None" = None,
+        matchkey_fields: Optional[List[str]] = None,
+        dataset: Optional[str] = None,
+    ) -> None:
         if backend == "memory":
             self._backend = _MemoryBackend()
         elif backend == "sqlite":
@@ -229,6 +247,10 @@ class ReviewQueue:
         else:
             raise ValueError(f"Unknown backend: {backend!r}. Use 'memory' or 'sqlite'.")
         self._backend_name = backend
+        self._memory_store = memory_store
+        self._memory_df = df
+        self._memory_matchkey_fields = list(matchkey_fields) if matchkey_fields else None
+        self._memory_dataset = dataset
 
     def close(self) -> None:
         """Close any backend resources. SQLite uses per-call connections, so this is a no-op."""
@@ -247,9 +269,61 @@ class ReviewQueue:
 
     def approve(self, job_name: str, id_a: int, id_b: int, decided_by: str) -> None:
         self._backend.approve(job_name, id_a, id_b, decided_by)
+        self._record_correction(id_a, id_b, "approve", reason=None)
 
     def reject(self, job_name: str, id_a: int, id_b: int, decided_by: str, reason: str = "") -> None:
         self._backend.reject(job_name, id_a, id_b, decided_by, reason)
+        self._record_correction(id_a, id_b, "reject", reason=reason or None)
 
     def stats(self, job_name: str) -> dict[str, int]:
         return self._backend.stats(job_name)
+
+    def _record_correction(
+        self,
+        id_a: int,
+        id_b: int,
+        decision: str,
+        reason: Optional[str],
+    ) -> None:
+        """Write a Correction to the optional memory store; never raises."""
+        if self._memory_store is None:
+            return
+        try:
+            from goldenmatch.core.memory.store import Correction
+            from goldenmatch.core.memory.corrections import (
+                build_row_lookup,
+                compute_field_hash,
+                compute_record_hash,
+            )
+
+            from goldenmatch.core.memory.store import _canon_pair
+
+            ca, cb = _canon_pair(id_a, id_b)
+            field_hash = ""
+            record_hash = ""
+            if self._memory_df is not None and self._memory_matchkey_fields:
+                lookup = build_row_lookup(self._memory_df, self._memory_matchkey_fields)
+                if ca in lookup and cb in lookup:
+                    field_hash = compute_field_hash(lookup[ca], lookup[cb])
+                ra = compute_record_hash(self._memory_df, ca)
+                rb = compute_record_hash(self._memory_df, cb)
+                if ra and rb:
+                    record_hash = f"{ra}:{rb}"
+
+            self._memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=id_a,
+                id_b=id_b,
+                decision=decision,
+                source="steward",
+                trust=1.0,
+                field_hash=field_hash,
+                record_hash=record_hash,
+                original_score=0.0,
+                matchkey_name=None,
+                reason=reason,
+                dataset=self._memory_dataset,
+                created_at=datetime.now(),
+            ))
+        except Exception as e:
+            log.warning("ReviewQueue memory write failed: %s", e)
