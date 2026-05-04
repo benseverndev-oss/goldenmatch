@@ -80,6 +80,10 @@ class BoostTab(Static):
         self._batch_pos: int = 0  # current position in batch
         self._labels: dict[int, bool] = {}  # pair_index -> True (match) / False (non-match)
         self._total_labeled: int = 0
+        # Optional learning memory plumbing (additive to LR classifier wiring).
+        self._memory_store = None
+        self._memory_dataset: str | None = None
+        self._memory_matchkey_fields: list[str] | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -268,8 +272,59 @@ class BoostTab(Static):
             pair_idx = self._batch[self._batch_pos]
             self._labels[pair_idx] = is_match
             self._total_labeled += 1
+            self._record_memory_correction(pair_idx, is_match)
         self._batch_pos += 1
         self._show_current_pair()
+
+    def _record_memory_correction(self, pair_idx: int, is_match: bool) -> None:
+        """Mirror the y/n label into the optional learning-memory store."""
+        if self._memory_store is None or self._result is None or self._data is None:
+            return
+        try:
+            import uuid
+            from datetime import datetime
+
+            from goldenmatch.core.memory.store import Correction, _canon_pair
+            from goldenmatch.core.memory.corrections import (
+                build_row_lookup,
+                compute_field_hash,
+                compute_record_hash,
+            )
+
+            a, b, score = self._result.scored_pairs[pair_idx]
+            ca, cb = _canon_pair(a, b)
+            fields = self._memory_matchkey_fields or [
+                c for c in self._data.columns if not c.startswith("__")
+            ]
+
+            field_hash = ""
+            record_hash = ""
+            if fields:
+                lookup = build_row_lookup(self._data, fields)
+                if ca in lookup and cb in lookup:
+                    field_hash = compute_field_hash(lookup[ca], lookup[cb])
+            ra = compute_record_hash(self._data, ca)
+            rb = compute_record_hash(self._data, cb)
+            if ra and rb:
+                record_hash = f"{ra}:{rb}"
+
+            self._memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=a,
+                id_b=b,
+                decision="approve" if is_match else "reject",
+                source="boost",
+                trust=1.0,
+                field_hash=field_hash,
+                record_hash=record_hash,
+                original_score=score,
+                matchkey_name=None,
+                reason=None,
+                dataset=self._memory_dataset,
+                created_at=datetime.now(),
+            ))
+        except Exception as e:
+            logger.warning("BoostTab memory write failed: %s", e)
 
     # ── Button handlers ──────────────────────────────────────────
 
