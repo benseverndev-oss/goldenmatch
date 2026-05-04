@@ -214,12 +214,65 @@ class PostflightReport:
     ``signals`` is the stable schema documented in ``PostflightSignals``.
     ``adjustments`` is the list of auto-applied config tweaks (suppressed in
     strict mode). ``advisories`` are human-readable hints (e.g. "consider
-    --llm-auto").
+    --llm-auto"). ``memory_stats`` is set by the result-build layer when the
+    Learning Memory hook produced a ``CorrectionStats`` for this run; the
+    string render surfaces it as a single ``Memory: ...`` line.
     """
 
     signals: "PostflightSignals" = field(default_factory=_empty_signals)
     adjustments: list[PostflightAdjustment] = field(default_factory=list)
     advisories: list[str] = field(default_factory=list)
+    # Set at result-build time when Learning Memory ran. Kept loosely typed
+    # to avoid an import cycle (corrections.py imports nothing from this
+    # module today, but we don't want to invert that).
+    memory_stats: Any = None
+
+    def __str__(self) -> str:
+        """Human-readable rendering used by CLI/postflight summaries.
+
+        Includes signals, adjustments, advisories and -- when set -- a
+        single Memory line. Returns ASCII only (Windows cp1252-safe).
+        """
+        parts: list[str] = ["PostflightReport:"]
+        if self.signals:
+            parts.append(f"  signals: {dict(self.signals)}")
+        if self.adjustments:
+            parts.append("  adjustments:")
+            for adj in self.adjustments:
+                parts.append(
+                    f"    - {adj.field}: {adj.from_value} -> {adj.to_value} "
+                    f"({adj.signal}) {adj.reason}"
+                )
+        if self.advisories:
+            parts.append("  advisories:")
+            for adv in self.advisories:
+                parts.append(f"    - {adv}")
+        mem_line = _render_memory_line(self.memory_stats)
+        if mem_line:
+            parts.append(f"  {mem_line}")
+        return "\n".join(parts)
+
+
+def _render_memory_line(stats: Any) -> str:
+    """Render the one-line memory section, or '' when nothing to show.
+
+    Returns empty string when ``stats`` is None or every relevant counter
+    (applied/stale/stale_ambiguous/stale_unanchorable) is zero. ASCII only.
+    """
+    if stats is None:
+        return ""
+    applied = int(getattr(stats, "applied", 0) or 0)
+    stale = int(getattr(stats, "stale", 0) or 0)
+    stale_ambig = int(getattr(stats, "stale_ambiguous", 0) or 0)
+    stale_unanch = int(getattr(stats, "stale_unanchorable", 0) or 0)
+    if applied == 0 and stale == 0 and stale_ambig == 0 and stale_unanch == 0:
+        return ""
+    noun = "correction applied" if applied == 1 else "corrections applied"
+    return (
+        f"Memory: {applied} {noun}, {stale} stale, "
+        f"{stale_ambig} stale-ambiguous, {stale_unanch} unanchorable "
+        "(run `goldenmatch review` to re-decide stale pairs)"
+    )
 
 
 class ConfigValidationError(Exception):

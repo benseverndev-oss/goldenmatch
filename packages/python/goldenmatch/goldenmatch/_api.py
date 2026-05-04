@@ -27,6 +27,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _attach_memory_to_postflight(
+    postflight_report: PostflightReport | None,
+    memory_stats: "CorrectionStats | None",
+) -> PostflightReport | None:
+    """Attach memory_stats onto the postflight report so str(report) renders
+    a 'Memory:' line. Creates an empty report when memory ran but no
+    postflight ran (explicit-config path), so the rendering is always
+    reachable via ``result.postflight_report``.
+
+    Returns None only when both the report and memory_stats are absent.
+    """
+    if memory_stats is None:
+        return postflight_report
+    if postflight_report is None:
+        postflight_report = PostflightReport()
+    postflight_report.memory_stats = memory_stats
+    return postflight_report
+
+
 def _detect_llm_provider() -> str | None:
     """Auto-detect LLM provider from environment variables."""
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -261,6 +280,7 @@ def dedupe(
     # Run pipeline
     result = run_dedupe(file_specs, cfg)
 
+    _mem = result.get("memory_stats")
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -269,8 +289,10 @@ def dedupe(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=cfg,
-        postflight_report=result.get("postflight_report"),
-        memory_stats=result.get("memory_stats"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -347,6 +369,7 @@ def dedupe_df(
         auto_config_llm_provider=_auto_config_provider,
     )
 
+    _mem = result.get("memory_stats")
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -355,8 +378,10 @@ def dedupe_df(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=config,
-        postflight_report=result.get("postflight_report"),
-        memory_stats=result.get("memory_stats"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -419,12 +444,15 @@ def match_df(
 
     result = run_match_df(target, reference, config, auto_config=_auto_config)
 
+    _mem = result.get("memory_stats")
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
-        postflight_report=result.get("postflight_report"),
-        memory_stats=result.get("memory_stats"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -599,11 +627,15 @@ def match(
 
     result = run_match(target_spec, ref_specs, cfg)
 
+    _mem = result.get("memory_stats")
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
-        memory_stats=result.get("memory_stats"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
