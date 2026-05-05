@@ -134,6 +134,78 @@ describe("Phase 2.4.3: llmScorePairs collection", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Phase 2.4.4: REST /reviews/decide collection
+// ---------------------------------------------------------------------------
+
+import type { Server } from "node:http";
+import {
+  startApiServer,
+  setServerMemoryStore,
+} from "../../src/node/api/server.js";
+
+describe("Phase 2.4.4: REST /reviews/decide collection", () => {
+  let server: Server;
+  let baseUrl: string;
+  const store = new InMemoryStore();
+
+  it(
+    "/reviews/decide writes steward correction with empty hashes",
+    { timeout: 15000 },
+    async () => {
+      setServerMemoryStore(store);
+      server = startApiServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((r) => {
+        if (server.listening) {
+          r();
+          return;
+        }
+        server.once("listening", () => r());
+      });
+      const addr = server.address();
+      const port =
+        typeof addr === "object" && addr !== null && "port" in addr
+          ? addr.port
+          : 8000;
+      baseUrl = `http://127.0.0.1:${port}`;
+
+      try {
+        // Enqueue then decide.
+        const enq = await fetch(baseUrl + "/reviews/enqueue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id_a: 11,
+            id_b: 22,
+            score: 0.8,
+            row_a: { id: 11 },
+            row_b: { id: 22 },
+          }),
+        });
+        expect(enq.status).toBe(200);
+
+        const dec = await fetch(baseUrl + "/reviews/decide", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: "11:22", accept: false }),
+        });
+        expect(dec.status).toBe(200);
+
+        const all = await store.getCorrections();
+        expect(all.length).toBe(1);
+        expect(all[0]!.source).toBe("steward");
+        expect(all[0]!.trust).toBe(1.0);
+        expect(all[0]!.fieldHash).toBe("");
+        expect(all[0]!.recordHash).toBe("");
+        expect(all[0]!.decision).toBe("reject");
+      } finally {
+        setServerMemoryStore(null);
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    },
+  );
+});
+
 describe("Phase 2.4.2: unmerge collection", () => {
   it(
     "unmergeRecord with memoryStore writes empty-hash unmerge correction",
