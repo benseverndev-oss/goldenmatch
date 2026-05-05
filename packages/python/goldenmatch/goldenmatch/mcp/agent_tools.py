@@ -60,8 +60,12 @@ def _write_agent_correction(
                 rb = compute_record_hash(df, cb)
                 if ra and rb:
                     record_hash = f"{ra}:{rb}"
-            except Exception:
-                # Hash computation failures fall back to empty hashes.
+            except Exception as e:
+                logger.warning(
+                    "agent correction hash computation failed for pair (%s,%s); "
+                    "writing empty hashes - staleness detection degraded: %s",
+                    ca, cb, e,
+                )
                 field_hash, record_hash = "", ""
 
         memory_store.add_correction(Correction(

@@ -493,3 +493,52 @@ def test_e2e_stale_ambiguous_surfaces_in_stats_and_postflight(tmp_path):
     text = str(result.postflight_report) if result.postflight_report else ""
     assert "stale-ambiguous" in text, \
         f"expected 'stale-ambiguous' in postflight, got: {text!r}"
+
+
+def test_unmerge_correction_round_trips_empty_hash(tmp_path):
+    """Integration test for the empty-hash collection path.
+
+    Run dedupe -> call unmerge_record (which writes empty-hash reject
+    corrections) -> re-run dedupe -> assert previously-merged pair has score
+    0.0 (correction applied via empty-hash short-circuit).
+    """
+    from goldenmatch.core.cluster import unmerge_record
+
+    df = _basic_df()
+    db_path = str(tmp_path / "mem.db")
+    config = _build_config(db_path)
+
+    # First run: rows 0 and 1 should match into a cluster.
+    result_1 = dedupe_df(df, config=config)
+    assert result_1.clusters is not None
+    multi_clusters = [
+        c for c in result_1.clusters.values() if c.get("size", 0) > 1
+    ]
+    assert len(multi_clusters) >= 1, "expected at least one multi-member cluster"
+
+    # Unmerge record 0 with a memory_store hooked up so a Correction is written.
+    store = MemoryStore(backend="sqlite", path=db_path)
+    try:
+        unmerge_record(0, result_1.clusters, memory_store=store, dataset=None)
+        items = store.get_corrections()
+        assert any(
+            c.decision == "reject" and c.source == "unmerge"
+            and c.field_hash == "" and c.record_hash == ""
+            for c in items
+        ), f"expected an empty-hash unmerge correction, got: {items}"
+    finally:
+        store.close()
+
+    # Re-run dedupe — the empty-hash correction should override the (0, 1)
+    # score to 0.0.
+    result_2 = dedupe_df(df, config=config)
+    pair_scores_01 = [
+        s for a, b, s in result_2.scored_pairs
+        if {a, b} == {0, 1}
+    ]
+    assert pair_scores_01, "pair (0,1) should still appear in scored_pairs"
+    assert all(s == 0.0 for s in pair_scores_01), (
+        f"expected (0,1) score forced to 0.0, got: {pair_scores_01}"
+    )
+    assert result_2.memory_stats is not None
+    assert result_2.memory_stats.applied >= 1

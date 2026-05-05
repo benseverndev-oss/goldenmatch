@@ -196,3 +196,39 @@ def test_pipeline_memory_disabled_does_not_open_store(tmp_path):
     assert result.memory_stats is None
     # MemoryConfig.enabled=False — the pipeline should never open the store.
     assert not db_path.exists()
+
+
+def test_pipeline_continues_when_store_open_fails(tmp_path, caplog):
+    """Garbage bytes at memory.db path: pipeline still returns valid DedupeResult.
+
+    memory_stats is None (or marked failed) and the regular clusters are
+    populated. A warning is logged describing the failure.
+    """
+    import logging
+
+    df = pl.DataFrame(
+        {
+            "name": ["Acme Corp", "Acme LLC", "Beta Inc"],
+            "zip": ["10001", "10001", "20002"],
+        }
+    )
+    db_path = tmp_path / "mem.db"
+    # Write garbage so sqlite3.connect succeeds but executescript fails.
+    db_path.write_bytes(b"this is not a sqlite database file at all" * 100)
+
+    config = _build_config(str(db_path))
+    with caplog.at_level(logging.WARNING):
+        result = dedupe_df(df, config=config)
+
+    assert result is not None
+    assert result.clusters is not None
+    # memory_stats should be None or marked as failed (commit 2 adds the
+    # failure sentinel).
+    if result.memory_stats is not None:
+        assert getattr(result.memory_stats, "failed", False) is True
+    # A warning should have been logged about the memory failure.
+    assert any(
+        "memory" in rec.message.lower() or "memorystore" in rec.message.lower()
+        for rec in caplog.records
+        if rec.levelname == "WARNING"
+    )

@@ -58,7 +58,8 @@ def _row_to_dict(df: "pl.DataFrame", row_id: int, fields: List[str]) -> dict:
         if sub.is_empty():
             return {}
         return sub.row(0, named=True)
-    except Exception:
+    except Exception as e:
+        log.debug("row lookup for id=%s failed: %s", row_id, e)
         return {}
 
 
