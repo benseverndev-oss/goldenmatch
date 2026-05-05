@@ -172,7 +172,7 @@ async function dispatchSkill(
         opts.fuzzy = f;
       }
       if (typeof input["threshold"] === "number") opts.threshold = input["threshold"];
-      const result = dedupe(rows, opts);
+      const result = await dedupe(rows, opts);
       return {
         stats: {
           total_records: result.stats.totalRecords,
@@ -208,7 +208,7 @@ async function dispatchSkill(
         opts.fuzzy = f;
       }
       if (typeof input["threshold"] === "number") opts.threshold = input["threshold"];
-      const result = match(target, reference, opts);
+      const result = await match(target, reference, opts);
       return {
         matched: result.matched,
         unmatched: result.unmatched,

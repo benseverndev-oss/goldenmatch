@@ -116,12 +116,12 @@ function writeGoldenRecords(
  *
  * @throws if no files are provided or any file cannot be read.
  */
-export function dedupeFile(opts: FileDedupeOptions): DedupeResult {
+export async function dedupeFile(opts: FileDedupeOptions): Promise<DedupeResult> {
   if (!opts.files || opts.files.length === 0) {
     throw new Error("dedupeFile: at least one input file is required");
   }
   const rows = loadRowsWithSource(opts.files);
-  const result = dedupe(rows, buildCoreOptions(opts));
+  const result = await dedupe(rows, buildCoreOptions(opts));
   if (opts.outputPath) {
     writeGoldenRecords(opts.outputPath, result.goldenRecords);
   }
@@ -134,11 +134,11 @@ export function dedupeFile(opts: FileDedupeOptions): DedupeResult {
  * Reads both files, tags with `__source__`, and delegates to `match()`.
  * `opts.files` (if provided) is ignored in favor of the explicit paths.
  */
-export function matchFiles(
+export async function matchFiles(
   targetPath: string,
   referencePath: string,
   opts?: FileDedupeOptions,
-): MatchResult {
+): Promise<MatchResult> {
   const targetRows = readFile(targetPath).map((row) => ({
     ...row,
     __source__: "target",
@@ -148,7 +148,11 @@ export function matchFiles(
     __source__: "reference",
   }));
 
-  const result = match(targetRows, referenceRows, buildCoreOptions(opts ?? {}));
+  const result = await match(
+    targetRows,
+    referenceRows,
+    buildCoreOptions(opts ?? {}),
+  );
   if (opts?.outputPath) {
     writeGoldenRecords(opts.outputPath, result.matched);
   }

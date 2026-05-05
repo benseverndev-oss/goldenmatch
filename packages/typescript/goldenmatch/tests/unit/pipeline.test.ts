@@ -3,7 +3,7 @@ import { runDedupePipeline, runMatchPipeline, makeConfig, makeBlockingConfig } f
 import type { MatchkeyConfig, Row } from "../../src/core/index.js";
 
 describe("runDedupePipeline", () => {
-  it("with exact matchkey catches identical emails", () => {
+  it("with exact matchkey catches identical emails", async () => {
     const rows: Row[] = [
       { id: 1, email: "a@x.com", name: "Alice" },
       { id: 2, email: "a@x.com", name: "A." },
@@ -15,13 +15,13 @@ describe("runDedupePipeline", () => {
       fields: [{ field: "email", transforms: ["lowercase"], scorer: "exact", weight: 1.0 }],
     };
     const config = makeConfig({ matchkeys: [mk] });
-    const result = runDedupePipeline(rows, config);
+    const result = await runDedupePipeline(rows, config);
     expect(result.stats.totalRecords).toBe(3);
     expect(result.scoredPairs.length).toBeGreaterThanOrEqual(1);
     expect(result.dupes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("with weighted matchkey + blocking", () => {
+  it("with weighted matchkey + blocking", async () => {
     const rows: Row[] = [
       { id: 1, name: "John Smith", zip: "111" },
       { id: 2, name: "Jon Smith", zip: "111" },
@@ -38,7 +38,7 @@ describe("runDedupePipeline", () => {
       keys: [{ fields: ["zip"], transforms: [] }],
     });
     const config = makeConfig({ matchkeys: [mk], blocking });
-    const result = runDedupePipeline(rows, config);
+    const result = await runDedupePipeline(rows, config);
     expect(result.stats.totalRecords).toBe(3);
     // John/Jon should match, Zeke should not
     const hasMatch = result.scoredPairs.some((p) =>
@@ -47,13 +47,13 @@ describe("runDedupePipeline", () => {
     expect(hasMatch).toBe(true);
   });
 
-  it("empty input returns empty result", () => {
-    const result = runDedupePipeline([], makeConfig());
+  it("empty input returns empty result", async () => {
+    const result = await runDedupePipeline([], makeConfig());
     expect(result.stats.totalRecords).toBe(0);
     expect(result.stats.totalClusters).toBe(0);
   });
 
-  it("stats are computed correctly", () => {
+  it("stats are computed correctly", async () => {
     const rows: Row[] = [
       { id: 1, email: "a@x.com" },
       { id: 2, email: "a@x.com" },
@@ -65,7 +65,7 @@ describe("runDedupePipeline", () => {
       fields: [{ field: "email", transforms: [], scorer: "exact", weight: 1.0 }],
     };
     const config = makeConfig({ matchkeys: [mk] });
-    const result = runDedupePipeline(rows, config);
+    const result = await runDedupePipeline(rows, config);
     // totalRecords == matchedRecords + uniqueRecords
     expect(result.stats.matchedRecords + result.stats.uniqueRecords).toBe(
       result.stats.totalRecords,
@@ -79,7 +79,7 @@ describe("runDedupePipeline", () => {
 });
 
 describe("runMatchPipeline", () => {
-  it("finds cross-dataset matches", () => {
+  it("finds cross-dataset matches", async () => {
     const target: Row[] = [{ id: 1, email: "a@x.com" }];
     const reference: Row[] = [
       { id: 10, email: "a@x.com" },
@@ -91,18 +91,18 @@ describe("runMatchPipeline", () => {
       fields: [{ field: "email", transforms: ["lowercase"], scorer: "exact", weight: 1.0 }],
     };
     const config = makeConfig({ matchkeys: [mk] });
-    const result = runMatchPipeline(target, reference, config);
+    const result = await runMatchPipeline(target, reference, config);
     expect(result.matched.length).toBe(1);
     expect(result.unmatched.length).toBe(0);
   });
 
-  it("empty target yields no matches", () => {
-    const result = runMatchPipeline([], [{ id: 1, email: "a@x.com" }], makeConfig());
+  it("empty target yields no matches", async () => {
+    const result = await runMatchPipeline([], [{ id: 1, email: "a@x.com" }], makeConfig());
     expect(result.matched).toEqual([]);
     expect(result.unmatched).toEqual([]);
   });
 
-  it("records with no reference match go to unmatched", () => {
+  it("records with no reference match go to unmatched", async () => {
     const target: Row[] = [{ id: 1, email: "no-match@x.com" }];
     const reference: Row[] = [{ id: 10, email: "a@x.com" }];
     const mk: MatchkeyConfig = {
@@ -111,7 +111,7 @@ describe("runMatchPipeline", () => {
       fields: [{ field: "email", transforms: [], scorer: "exact", weight: 1.0 }],
     };
     const config = makeConfig({ matchkeys: [mk] });
-    const result = runMatchPipeline(target, reference, config);
+    const result = await runMatchPipeline(target, reference, config);
     expect(result.matched.length).toBe(0);
     expect(result.unmatched.length).toBe(1);
   });

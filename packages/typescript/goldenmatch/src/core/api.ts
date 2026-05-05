@@ -13,7 +13,9 @@ import type {
   MatchkeyConfig,
   MatchkeyField,
   BlockingKeyConfig,
+  MemoryConfig,
 } from "./types.js";
+import type { MemoryStore } from "./memory/types.js";
 import {
   makeConfig,
   makeMatchkeyConfig,
@@ -41,6 +43,12 @@ export interface DedupeOptions {
   readonly threshold?: number;
   /** Enable LLM scorer for borderline pairs. Requires OPENAI_API_KEY or ANTHROPIC_API_KEY in env. */
   readonly llmScorer?: boolean;
+  /** Optional memory store. Used only when `memoryConfig.enabled` is true. */
+  readonly memoryStore?: MemoryStore | null;
+  /** Memory configuration. When omitted or `enabled: false`, memory is no-op. */
+  readonly memoryConfig?: Partial<MemoryConfig>;
+  /** Dataset label forwarded to memory hooks. Defaults to "<DataFrame>". */
+  readonly derivedDataset?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,7 +56,12 @@ export interface DedupeOptions {
 // ---------------------------------------------------------------------------
 
 function buildConfigFromOptions(options?: DedupeOptions): GoldenMatchConfig {
-  if (options?.config) return options.config;
+  if (options?.config) {
+    if (options.memoryConfig) {
+      return mergeMemory(options.config, options.memoryConfig);
+    }
+    return options.config;
+  }
 
   const matchkeys: MatchkeyConfig[] = [];
   const threshold = options?.threshold ?? 0.85;
@@ -123,7 +136,58 @@ function buildConfigFromOptions(options?: DedupeOptions): GoldenMatchConfig {
       mode: "pairwise",
     };
   }
+  if (options?.memoryConfig) {
+    (partial as Record<string, unknown>).memory = buildMemoryConfig(
+      options.memoryConfig,
+    );
+  }
   return makeConfig(partial);
+}
+
+function buildMemoryConfig(p: Partial<MemoryConfig>): MemoryConfig {
+  return {
+    enabled: p.enabled ?? false,
+    backend: p.backend ?? "memory",
+    ...(p.path !== undefined ? { path: p.path } : {}),
+    ...(p.dataset !== undefined ? { dataset: p.dataset } : {}),
+    ...(p.reanchor !== undefined ? { reanchor: p.reanchor } : {}),
+    ...(p.trust !== undefined ? { trust: p.trust } : {}),
+    learning: p.learning ?? {
+      thresholdMinCorrections: 10,
+      weightsMinCorrections: 50,
+    },
+  };
+}
+
+function mergeMemory(
+  cfg: GoldenMatchConfig,
+  override: Partial<MemoryConfig>,
+): GoldenMatchConfig {
+  const base = cfg.memory ?? buildMemoryConfig({});
+  const merged: MemoryConfig = {
+    enabled: override.enabled ?? base.enabled,
+    backend: override.backend ?? base.backend,
+    ...(override.path ?? base.path
+      ? { path: (override.path ?? base.path) as string }
+      : {}),
+    ...(override.dataset !== undefined
+      ? { dataset: override.dataset }
+      : base.dataset !== undefined
+        ? { dataset: base.dataset }
+        : {}),
+    ...(override.reanchor !== undefined
+      ? { reanchor: override.reanchor }
+      : base.reanchor !== undefined
+        ? { reanchor: base.reanchor }
+        : {}),
+    ...(override.trust !== undefined
+      ? { trust: override.trust }
+      : base.trust !== undefined
+        ? { trust: base.trust }
+        : {}),
+    learning: override.learning ?? base.learning,
+  };
+  return { ...cfg, memory: merged };
 }
 
 // ---------------------------------------------------------------------------
@@ -148,12 +212,19 @@ function buildConfigFromOptions(options?: DedupeOptions): GoldenMatchConfig {
  * const result = dedupe(rows, { config: myConfig });
  * ```
  */
-export function dedupe(
+export async function dedupe(
   rows: readonly Row[],
   options?: DedupeOptions,
-): DedupeResult {
+): Promise<DedupeResult> {
   const config = buildConfigFromOptions(options);
-  return runDedupePipeline(rows, config);
+  return runDedupePipeline(rows, config, {
+    ...(options?.memoryStore !== undefined
+      ? { memoryStore: options.memoryStore }
+      : {}),
+    ...(options?.derivedDataset !== undefined
+      ? { derivedDataset: options.derivedDataset }
+      : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -165,13 +236,20 @@ export function dedupe(
  *
  * Same options as `dedupe()`. Returns matched/unmatched target rows.
  */
-export function match(
+export async function match(
   target: readonly Row[],
   reference: readonly Row[],
   options?: DedupeOptions,
-): MatchResult {
+): Promise<MatchResult> {
   const config = buildConfigFromOptions(options);
-  return runMatchPipeline(target, reference, config);
+  return runMatchPipeline(target, reference, config, {
+    ...(options?.memoryStore !== undefined
+      ? { memoryStore: options.memoryStore }
+      : {}),
+    ...(options?.derivedDataset !== undefined
+      ? { derivedDataset: options.derivedDataset }
+      : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------

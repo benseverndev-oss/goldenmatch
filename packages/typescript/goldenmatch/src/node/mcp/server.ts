@@ -459,7 +459,7 @@ export async function handleTool(
         const path = sanitizePath(String(args["path"]));
         const rows = readFile(path);
         const options = buildDedupeOptions(args);
-        const result = dedupe(rows, options);
+        const result = await dedupe(rows, options);
         let output_written: string | null = null;
         if (typeof args["output"] === "string" && args["output"]) {
           const outPath = sanitizePath(args["output"] as string);
@@ -494,7 +494,7 @@ export async function handleTool(
         const targetRows = readFile(targetPath);
         const referenceRows = readFile(referencePath);
         const options = buildDedupeOptions(args);
-        const result = match(
+        const result = await match(
           targetRows.map((r) => ({ ...r, __source__: "target" })),
           referenceRows.map((r) => ({ ...r, __source__: "reference" })),
           options,
@@ -568,7 +568,7 @@ export async function handleTool(
         }
         const rows = readFile(path);
         const options = buildDedupeOptions(args);
-        const result = dedupe(rows, options);
+        const result = await dedupe(rows, options);
         // Find cluster containing rowId
         let foundId: number | null = null;
         let found: typeof result.clusters extends ReadonlyMap<number, infer V> ? V : never;
@@ -678,7 +678,7 @@ export async function handleTool(
         const rows = readFile(path);
         const gtRows = readFile(gtPath);
         const options = buildDedupeOptions(args);
-        const result = dedupe(rows, options);
+        const result = await dedupe(rows, options);
         const truth = loadGroundTruthPairs(gtRows, idColA, idColB);
         const metrics = evaluatePairs(result.scoredPairs, truth);
         return {
@@ -736,7 +736,7 @@ export async function handleTool(
         const path = sanitizePath(String(args["path"]));
         const options = buildDedupeOptions(args);
         const rows = readFile(path);
-        const result = dedupe(rows, options);
+        const result = await dedupe(rows, options);
         const clusters: Array<{
           cluster_id: number;
           size: number;

@@ -11,7 +11,7 @@ import {
 } from "../src/core/index.js";
 
 describe("smoke", () => {
-  it("imports work", () => {
+  it("imports work", async () => {
     expect(typeof dedupe).toBe("function");
     expect(typeof scoreField).toBe("function");
     expect(typeof scorePair).toBe("function");
@@ -22,13 +22,13 @@ describe("smoke", () => {
     expect(typeof scoreStrings).toBe("function");
   });
 
-  it("basic dedupe works end-to-end", () => {
+  it("basic dedupe works end-to-end", async () => {
     const rows = [
       { id: 1, name: "John Smith", email: "john@example.com", zip: "12345" },
       { id: 2, name: "Jon Smith", email: "jon@example.com", zip: "12345" },
       { id: 3, name: "Jane Doe", email: "jane@example.com", zip: "54321" },
     ];
-    const result = dedupe(rows, {
+    const result = await dedupe(rows, {
       fuzzy: { name: 0.7 },
       blocking: ["zip"],
       threshold: 0.7,
@@ -36,7 +36,7 @@ describe("smoke", () => {
     expect(result.stats.totalRecords).toBe(3);
   });
 
-  it("scoreStrings returns a number between 0 and 1", () => {
+  it("scoreStrings returns a number between 0 and 1", async () => {
     const s = scoreStrings("hello", "hello");
     expect(s).toBe(1.0);
     const s2 = scoreStrings("hello", "world");

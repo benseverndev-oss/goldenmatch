@@ -182,7 +182,7 @@ async function handleRequest(
       const body = await readJsonBody(req);
       const rows = asRowArray(body["rows"], "rows");
       const options = extractShorthand(body);
-      const result = dedupe(rows, options);
+      const result = await dedupe(rows, options);
       sendJson(res, 200, {
         stats: {
           total_records: result.stats.totalRecords,
@@ -203,7 +203,7 @@ async function handleRequest(
       const target = asRowArray(body["target"], "target");
       const reference = asRowArray(body["reference"], "reference");
       const options = extractShorthand(body);
-      const result = match(
+      const result = await match(
         target.map((r) => ({ ...r, __source__: "target" })),
         reference.map((r) => ({ ...r, __source__: "reference" })),
         options,
@@ -293,7 +293,7 @@ async function handleRequest(
       const body = await readJsonBody(req);
       const rows = asRowArray(body["rows"], "rows");
       const options = extractShorthand(body);
-      const result = dedupe(rows, options);
+      const result = await dedupe(rows, options);
       const clusters: Array<{
         cluster_id: number;
         size: number;

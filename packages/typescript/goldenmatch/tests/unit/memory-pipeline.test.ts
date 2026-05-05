@@ -86,7 +86,7 @@ describe("Phase 2.2: pipeline async memory hooks", () => {
           blocking: ["zip"],
           threshold: 0.5,
           memoryStore: store,
-          memoryConfig: { enabled: true },
+          memoryConfig: { enabled: true, dataset: null },
         },
       );
 

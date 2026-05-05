@@ -33,6 +33,13 @@ import type {
   PreflightReport,
   PostflightReport,
 } from "./autoconfigVerify.js";
+import type {
+  CorrectionStats,
+  MemoryStore,
+} from "./memory/types.js";
+import { applyCorrections } from "./memory/corrections.js";
+import type { ScoredPair as ScoredPairTuple } from "./memory/corrections.js";
+import { MemoryLearner } from "./memory/learner.js";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -42,6 +49,10 @@ export interface DedupeOptions {
   readonly outputGolden?: boolean;
   readonly outputReport?: boolean;
   readonly acrossFilesOnly?: boolean;
+  /** Optional memory store. Only consulted when `config.memory?.enabled`. */
+  readonly memoryStore?: MemoryStore | null;
+  /** Dataset label for memory operations. Defaults to "<DataFrame>". */
+  readonly derivedDataset?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +95,124 @@ function assignClusterIds(
     const cid = rowToCluster.get(rowId);
     return cid !== undefined ? { ...row, __cluster_id__: cid } : row;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Memory integration helpers (Phase 2.2).
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-scoring hook: apply learned threshold adjustments to matchkeys.
+ *
+ * Mutates `matchkeys` in place when the learner has a threshold for a
+ * matchkey name (or `_default`). No-op when memory disabled, store missing,
+ * or no new corrections since the last learn pass.
+ */
+async function _applyMemoryPre(
+  config: GoldenMatchConfig,
+  matchkeys: MatchkeyConfig[],
+  store: MemoryStore | null,
+): Promise<void> {
+  if (!store || !config.memory?.enabled) return;
+  try {
+    const learner = new MemoryLearner(store, config.memory.learning);
+    if (!(await learner.hasNewCorrections())) return;
+    const adjustments = await learner.learn();
+    for (const adj of adjustments) {
+      if (adj.threshold == null) continue;
+      for (let i = 0; i < matchkeys.length; i++) {
+        const mk = matchkeys[i]!;
+        // Only weighted/probabilistic carry a threshold.
+        if (mk.type === "exact") continue;
+        // Match by matchkey name, "_default", or null/empty.
+        if (
+          !adj.matchkeyName ||
+          adj.matchkeyName === mk.name ||
+          adj.matchkeyName === "_default"
+        ) {
+          // Mutate in place via type-erased rebuild (interface is readonly).
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (matchkeys[i] as any) = { ...mk, threshold: adj.threshold };
+        }
+      }
+    }
+  } catch (e) {
+    // Swallow learner errors; never block scoring.
+    console.warn(`Memory learner failed: ${String(e)}`);
+  }
+}
+
+/**
+ * Collect distinct field names referenced by matchkeys -- used for record
+ * field-hash recomputation in `applyCorrections`.
+ */
+function collectMatchkeyFields(
+  matchkeys: ReadonlyArray<MatchkeyConfig>,
+): string[] {
+  const seen = new Set<string>();
+  for (const mk of matchkeys) {
+    for (const f of mk.fields) {
+      seen.add(f.field);
+    }
+  }
+  return Array.from(seen);
+}
+
+/**
+ * Post-scoring hook: apply stored corrections to scored pairs. Returns
+ * `[pairs, stats]`. Stats is null when memory disabled. The translation
+ * between the pipeline's object-shaped `ScoredPair` and the corrections
+ * tuple `ScoredPairTuple` happens here so callers don't see two shapes.
+ */
+async function _applyMemoryPost(
+  config: GoldenMatchConfig,
+  scoredPairs: ReadonlyArray<ScoredPair>,
+  df: ReadonlyArray<Row>,
+  matchkeyFields: ReadonlyArray<string>,
+  store: MemoryStore | null,
+  derivedDataset: string,
+): Promise<readonly [ScoredPair[], CorrectionStats | null]> {
+  if (!store || !config.memory?.enabled) {
+    return [scoredPairs.map((p) => ({ ...p })), null];
+  }
+  // Explicit null/string in config wins; undefined falls back to derived.
+  const dataset =
+    config.memory.dataset !== undefined ? config.memory.dataset : derivedDataset;
+  // Translate pipeline object shape -> corrections tuple shape.
+  const tuples: ScoredPairTuple[] = scoredPairs.map(
+    (p) => [p.idA, p.idB, p.score] as ScoredPairTuple,
+  );
+  try {
+    const [adjustedTuples, stats] = await applyCorrections(
+      tuples,
+      store,
+      df,
+      matchkeyFields,
+      { dataset, reanchor: config.memory.reanchor ?? true },
+    );
+    const adjusted: ScoredPair[] = adjustedTuples.map((t) => ({
+      idA: t[0],
+      idB: t[1],
+      score: t[2],
+    }));
+    return [adjusted, stats];
+  } catch (e) {
+    const msg = String(e);
+    console.warn(`Memory applyCorrections failed: ${msg}`);
+    return [
+      scoredPairs.map((p) => ({ ...p })),
+      {
+        applied: 0,
+        stale: 0,
+        staleAmbiguous: 0,
+        staleUnanchorable: 0,
+        stalePairs: [],
+        totalPairs: scoredPairs.length,
+        failed: true,
+        error: msg,
+      },
+    ];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,19 +290,25 @@ function applyPostflight(
  * 9. Compute stats
  * 10. Return DedupeResult
  */
-export function runDedupePipeline(
+export async function runDedupePipeline(
   rows: readonly Row[],
   config: GoldenMatchConfig,
   options?: DedupeOptions,
-): DedupeResult {
+): Promise<DedupeResult> {
   if (rows.length === 0) {
     return _emptyDedupeResult(config);
   }
 
-  const matchkeys = getMatchkeys(config);
+  // Mutable copy: _applyMemoryPre may rewrite thresholds in place.
+  const matchkeys: MatchkeyConfig[] = [...getMatchkeys(config)];
   const goldenRules = config.goldenRules ?? makeGoldenRulesConfig();
   const blockingConfig = config.blocking ?? makeBlockingConfig();
   const acrossFilesOnly = options?.acrossFilesOnly ?? false;
+  const memoryStore = options?.memoryStore ?? null;
+  const derivedDataset = options?.derivedDataset ?? "<DataFrame>";
+
+  // ---- Memory pre-hook: learner adjustments ----
+  await _applyMemoryPre(config, matchkeys, memoryStore);
 
   // ---- Step 1: Add __row_id__ and __source__ ----
   let processed: Row[] = rows.map((r, i) => {
@@ -233,11 +368,20 @@ export function runDedupePipeline(
   }
 
   // ---- Step 5.5: Postflight verification ----
-  const { pairScores: finalPairs, report: postflightReport } = applyPostflight(
-    processed,
+  const { pairScores: postflightPairs, report: postflightReport } =
+    applyPostflight(processed, config, allPairs);
+
+  // ---- Step 5.7: Memory post-hook (apply stored corrections) ----
+  const matchkeyFields = collectMatchkeyFields(matchkeys);
+  const [memoryAdjustedPairs, memoryStats] = await _applyMemoryPost(
     config,
-    allPairs,
+    postflightPairs,
+    processed,
+    matchkeyFields,
+    memoryStore,
+    derivedDataset,
   );
+  const finalPairs: readonly ScoredPair[] = memoryAdjustedPairs;
 
   // ---- Step 6: Cluster ----
   const allIds = collectRowIds(processed);
@@ -328,6 +472,7 @@ export function runDedupePipeline(
     scoredPairs: finalPairs,
     config,
     ...(postflightReport !== undefined ? { postflightReport } : {}),
+    memoryStats,
   };
 }
 
@@ -342,11 +487,12 @@ export function runDedupePipeline(
  * - Assigns __source__ ("target" / "reference")
  * - Runs same pipeline but filters to cross-source pairs only
  */
-export function runMatchPipeline(
+export async function runMatchPipeline(
   targetRows: readonly Row[],
   referenceRows: readonly Row[],
   config: GoldenMatchConfig,
-): MatchResult {
+  options?: DedupeOptions,
+): Promise<MatchResult> {
   if (targetRows.length === 0 || referenceRows.length === 0) {
     return {
       matched: [],
@@ -370,9 +516,15 @@ export function runMatchPipeline(
 
   // Combine and run dedupe pipeline with cross-file filter
   const combined = [...target, ...reference];
-  const result = runDedupePipeline(combined, config, {
+  const result = await runDedupePipeline(combined, config, {
     acrossFilesOnly: true,
     outputGolden: false,
+    ...(options?.memoryStore !== undefined
+      ? { memoryStore: options.memoryStore }
+      : {}),
+    ...(options?.derivedDataset !== undefined
+      ? { derivedDataset: options.derivedDataset }
+      : {}),
   });
 
   // Track which target row IDs got matched
@@ -412,6 +564,7 @@ export function runMatchPipeline(
     ...(result.postflightReport !== undefined
       ? { postflightReport: result.postflightReport }
       : {}),
+    memoryStats: result.memoryStats ?? null,
   };
 }
 

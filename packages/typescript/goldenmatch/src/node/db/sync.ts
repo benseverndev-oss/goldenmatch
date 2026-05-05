@@ -36,7 +36,7 @@ export async function syncDedupe(options: SyncOptions): Promise<DedupeResult> {
   try {
     await conn.connect();
     const rows = await conn.readTable(options.sourceTable);
-    const result = dedupe(rows, { config: options.config });
+    const result = await dedupe(rows, { config: options.config });
 
     await conn.writeTable(options.goldenTable, result.goldenRecords);
 

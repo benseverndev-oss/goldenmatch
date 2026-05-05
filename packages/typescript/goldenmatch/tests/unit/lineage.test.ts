@@ -12,7 +12,7 @@ import {
 } from "../../src/core/types.js";
 import type { Row } from "../../src/core/types.js";
 
-function buildTinyDedupeResult() {
+async function buildTinyDedupeResult() {
   const rows: Row[] = [
     { email: "a@x.com", name: "Alice Brown" },
     { email: "a@x.com", name: "Alice B." },
@@ -30,20 +30,20 @@ function buildTinyDedupeResult() {
     ],
   });
   const config = makeConfig({ matchkeys: [mk] });
-  return runDedupePipeline(rows, config);
+  return await runDedupePipeline(rows, config);
 }
 
 describe("buildLineage", () => {
-  it("produces one edge per cluster in the DedupeResult", () => {
-    const result = buildTinyDedupeResult();
+  it("produces one edge per cluster in the DedupeResult", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result);
     // There is at least one multi-member cluster -> at least one edge.
     expect(bundle.edges.length).toBeGreaterThan(0);
     expect(bundle.recordCount).toBe(bundle.edges.length);
   });
 
-  it("edges carry cluster_id, source_row_ids, golden_row_id, and field provenance", () => {
-    const result = buildTinyDedupeResult();
+  it("edges carry cluster_id, source_row_ids, golden_row_id, and field provenance", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result);
     const edge = bundle.edges[0]!;
     expect(typeof edge.clusterId).toBe("number");
@@ -61,8 +61,8 @@ describe("buildLineage", () => {
     }
   });
 
-  it("does not emit provenance entries for internal __-prefixed keys", () => {
-    const result = buildTinyDedupeResult();
+  it("does not emit provenance entries for internal __-prefixed keys", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result);
     for (const edge of bundle.edges) {
       for (const k of Object.keys(edge.fieldProvenance)) {
@@ -71,8 +71,8 @@ describe("buildLineage", () => {
     }
   });
 
-  it("defaultStrategy override propagates into field provenance", () => {
-    const result = buildTinyDedupeResult();
+  it("defaultStrategy override propagates into field provenance", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result, { defaultStrategy: "first_non_null" });
     const edge = bundle.edges[0];
     if (edge) {
@@ -81,16 +81,16 @@ describe("buildLineage", () => {
     }
   });
 
-  it("does not render naturalLanguage by default", () => {
-    const result = buildTinyDedupeResult();
+  it("does not render naturalLanguage by default", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result);
     for (const edge of bundle.edges) {
       expect(edge.naturalLanguage).toBeUndefined();
     }
   });
 
-  it("renders natural language when naturalLanguage: true", () => {
-    const result = buildTinyDedupeResult();
+  it("renders natural language when naturalLanguage: true", async () => {
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result, { naturalLanguage: true });
     expect(bundle.edges.length).toBeGreaterThan(0);
     const edge = bundle.edges[0]!;
@@ -103,12 +103,12 @@ describe("buildLineage", () => {
     expect(edge.naturalLanguage).toMatch(/Strongest contribution: (email|name)/);
   });
 
-  it("naturalLanguage reports zero-field edges gracefully", () => {
+  it("naturalLanguage reports zero-field edges gracefully", async () => {
     // Force an edge through buildLineage where no non-internal fields exist
     // on the golden record would be contrived; instead validate the template
     // shape for the normal path, and ensure the helper doesn't crash when
     // invoked on an edge with an empty provenance map (regression guard).
-    const result = buildTinyDedupeResult();
+    const result = await buildTinyDedupeResult();
     const bundle = buildLineage(result, { naturalLanguage: true });
     for (const edge of bundle.edges) {
       expect(typeof edge.naturalLanguage).toBe("string");
@@ -118,8 +118,8 @@ describe("buildLineage", () => {
 });
 
 describe("lineageToJson / lineageFromJson", () => {
-  it("round-trips a lineage bundle", () => {
-    const result = buildTinyDedupeResult();
+  it("round-trips a lineage bundle", async () => {
+    const result = await buildTinyDedupeResult();
     const original = buildLineage(result);
     const json = lineageToJson(original);
     const parsed = lineageFromJson(json);
@@ -128,7 +128,7 @@ describe("lineageToJson / lineageFromJson", () => {
     expect(parsed.timestamp).toBe(original.timestamp);
   });
 
-  it("lineageFromJson throws on malformed input", () => {
+  it("lineageFromJson throws on malformed input", async () => {
     expect(() => lineageFromJson("{}")).toThrow(/Invalid lineage bundle/);
     expect(() => lineageFromJson("null")).toThrow(/Invalid lineage bundle/);
   });

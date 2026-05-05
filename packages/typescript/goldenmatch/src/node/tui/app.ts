@@ -648,7 +648,7 @@ export async function startTui(options: TuiOptions = {}): Promise<void> {
       setStatus("Running dedupe...");
       try {
         const { dedupe } = await import("../../core/api.js");
-        const r = dedupe(rows, config ? { config } : {});
+        const r = await dedupe(rows, config ? { config } : {});
         setResult(r);
         setStatus(`Complete: ${r.stats.totalClusters} clusters`);
       } catch (err) {

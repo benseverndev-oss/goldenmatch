@@ -39,7 +39,7 @@ function gauss(rng: () => number, mu: number, sigma: number): number {
 }
 
 describe("postflight: score histogram", () => {
-  it("bimodal distribution triggers threshold adjustment", () => {
+  it("bimodal distribution triggers threshold adjustment", async () => {
     const r = seeded(42);
     const pairScores: { idA: number; idB: number; score: number }[] = [];
     for (let i = 0; i < 500; i++) {
@@ -62,7 +62,7 @@ describe("postflight: score histogram", () => {
     expect(hist.counts.length).toBe(100);
   });
 
-  it("unimodal distribution emits no adjustment", () => {
+  it("unimodal distribution emits no adjustment", async () => {
     const r = seeded(42);
     const pairScores = Array.from({ length: 1000 }, (_, i) => ({
       idA: i, idB: i + 1, score: r(),
@@ -72,14 +72,14 @@ describe("postflight: score histogram", () => {
     expect(report.adjustments.some((a) => a.field === "threshold")).toBe(false);
   });
 
-  it("returns 'deferred' sentinel for blockingRecall", () => {
+  it("returns 'deferred' sentinel for blockingRecall", async () => {
     const rows = Array.from({ length: 500 }, (_, i) => ({ name: `x${i}` }));
     const pairScores = [{ idA: 0, idB: 1, score: 0.9 }];
     const report = postflight(rows, makeCfg(), { pairScores });
     expect(report.signals.blockingRecall).toBe("deferred");
   });
 
-  it("detects oversized cluster of 151 from a pair chain", () => {
+  it("detects oversized cluster of 151 from a pair chain", async () => {
     // Chain: 0-1, 1-2, ..., 149-150 → one component of 151
     const pairScores = Array.from({ length: 150 }, (_, i) => ({
       idA: i, idB: i + 1, score: 0.9,
@@ -100,7 +100,7 @@ describe("postflight: score histogram", () => {
     expect(inputKeys.has(canonKey(bp[0]!, bp[1]!))).toBe(true);
   });
 
-  it("emits llm advisory when >20% of pairs in threshold band and llm disabled", () => {
+  it("emits llm advisory when >20% of pairs in threshold band and llm disabled", async () => {
     const inBand = Array.from({ length: 300 }, (_, i) => ({
       idA: i, idB: i + 10000, score: 0.69,
     }));
@@ -117,7 +117,7 @@ describe("postflight: score histogram", () => {
     ).toBe(true);
   });
 
-  it("signals has exactly the 8 documented keys", () => {
+  it("signals has exactly the 8 documented keys", async () => {
     const rows = Array.from({ length: 50 }, (_, i) => ({ a: String(i) }));
     const cfg: GoldenMatchConfig = {
       matchkeys: [
@@ -149,7 +149,7 @@ describe("postflight: score histogram", () => {
     ]));
   });
 
-  it("strict mode: signal computed, adjustments empty", () => {
+  it("strict mode: signal computed, adjustments empty", async () => {
     const r = seeded(42);
     const pairScores: { idA: number; idB: number; score: number }[] = [];
     for (let i = 0; i < 500; i++) {
@@ -181,7 +181,7 @@ describe("postflight pipeline integration: dedupe", () => {
       zip: "90210",
     }));
     const cfg = autoConfigureRows(rows);
-    const result = dedupe(rows, { config: cfg });
+    const result = await dedupe(rows, { config: cfg });
     expect(result.postflightReport).toBeDefined();
     expect(result.postflightReport!.signals.scoreHistogram.bins.length).toBe(101);
   });
@@ -194,7 +194,7 @@ describe("postflight pipeline integration: dedupe", () => {
     // pipeline guard short-circuits. This documents the contract: a
     // PostflightReport is only attached when the config went through the
     // auto-config preflight layer.
-    const result = dedupe(rows, { fuzzy: { name: 0.7 } });
+    const result = await dedupe(rows, { fuzzy: { name: 0.7 } });
     expect(result.postflightReport).toBeUndefined();
   });
 });
@@ -207,7 +207,7 @@ describe("postflight pipeline integration: strict mode", () => {
       name: i < 50 ? `bob ${i}` : `bob ${i}x`,
     }));
     const cfg = autoConfigureRows(rows, { strict: true });
-    const result = dedupe(rows, { config: cfg });
+    const result = await dedupe(rows, { config: cfg });
     expect(result.postflightReport).toBeDefined();
     expect(result.postflightReport!.adjustments).toHaveLength(0);
   });
@@ -229,7 +229,7 @@ describe("postflight pipeline integration: match", () => {
       { name: "dan brown" },
     ];
     const cfg = autoConfigureRows([...target, ...reference]);
-    const result = match(target, reference, { config: cfg });
+    const result = await match(target, reference, { config: cfg });
     expect(result.postflightReport).toBeDefined();
     const sig = result.postflightReport!.signals;
     expect("scoreHistogram" in sig).toBe(true);
