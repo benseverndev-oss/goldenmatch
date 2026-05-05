@@ -38,7 +38,7 @@ This spec brings the TS port to **full cross-language parity**: a correction wri
 | Parity goal | Full cross-language storage parity | A correction written by either runtime applies identically in the other. Higher bar than behavioral parity but unblocks mixed-runtime users; the test cost amortizes. |
 | Node SQLite driver | `better-sqlite3` as optional peer dep | Sync API matches package style; same C library as Python sqlite3 (true schema interop); matches existing optional-peer convention (`hnswlib-node`, `@huggingface/transformers`). Throws clear "install better-sqlite3" if missing. |
 | Parity verification | JSON canonical form (every test) + committed `.db` fixture (rare schema regen) + apply-outcome golden (every test) | JSON catches hash/field/trust drift cheaply; `.db` fixture catches SQLite schema drift; apply-outcome golden catches algorithmic drift in re-anchor / dual-hash / clamp. |
-| Hash algorithm | SHA-256 truncated to 16 hex chars (matches Python `hashlib.sha256(...).hexdigest()[:16]`) | Cross-language byte-identical requirement. Web Crypto's `crypto.subtle.digest` is available in Node 20+, browsers, and Workers, so it stays edge-safe. Async by necessity. |
+| Hash algorithm | SHA-256 truncated to 16 hex chars (matches Python `hashlib.sha256(s.encode()).hexdigest()[:16]`) | Cross-language byte-identical requirement. Encoding is UTF-8 on both sides (Python's `str.encode()` default; TS uses `new TextEncoder().encode(s)`). Web Crypto's `crypto.subtle.digest` is available in Node 20+, browsers, and Workers, so it stays edge-safe. Async by necessity. |
 | Field naming | snake_case in JSON / SQLite columns; camelCase in TS interface | JSON key parity is required for cross-language; TS code reads idiomatically. One translation point in `toJSON`/`fromJSON`. |
 | Source/decision typing | `as const` literal unions (TS StrEnum equivalent) | TS lacks runtime StrEnums; `type CorrectionSource = "steward" \| "boost" \| ...` plus `HIGH_TRUST_SOURCES: ReadonlySet<CorrectionSource>` and `trustForSource()` helper mirrors Python's centralization. |
 | Versioning | 0.3.1 → 0.4.0 | Pre-1.0 minor bump is the convention for breaking changes in this package family; npm tag pattern `goldenmatch-js-v0.4.0`. |
@@ -173,7 +173,7 @@ interface MemoryStore {
 }
 ```
 
-All methods async because Web Crypto digest is async (TS hashing path) and `better-sqlite3` queries via async wrappers in our usage. Symmetric to Python semantically; parity tests assert outcomes, not call shapes.
+All methods async. The hash module is unavoidably async (Web Crypto). Wrapping `better-sqlite3`'s sync API behind async methods is deliberate: the interface convergence keeps `InMemoryStore` (which calls async `computeRecordHash` during apply) and `SqliteMemoryStore` (sync internally) interchangeable to callers. Pipeline code awaits both. The async wrappers are zero-cost (`Promise.resolve(syncResult)`); the alternative — a split sync/async interface — would push the await/non-await branch into every caller. Symmetric to Python semantically; parity tests assert outcomes, not call shapes.
 
 ### SQLite schema (parity-locked with Python)
 
@@ -209,9 +209,14 @@ Interface declarations only. `Correction`, `LearnedAdjustment`, `CorrectionStats
 
 ### `src/core/memory/hash.ts` (new, ~80 LOC)
 
-`sha256_16(s: string): Promise<string>` (Web Crypto), `computeFieldHash(rowAVals, rowBVals): Promise<string>`, `computeRecordHash(row, columns): Promise<string>` (excludes `__row_id__`, sorts column names). One async batch helper `computeRecordHashes(rows, columns): Promise<Map<rowId, hash>>` for the re-anchor path's vectorized phase.
+Hash input format mirrors Python's `core/memory/corrections.py` exactly. **Values only, no key-name interpolation** — the column names are NOT included in the hashed string. This is the load-bearing parity invariant; `<col>=<val>` formatting would silently break cross-language identity.
 
-Hash agreement with Python is asserted by the JSON parity test: known input → known SHA-256 output, byte-identical.
+- `sha256_16(s: string): Promise<string>` — `bytesToHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).slice(0, 16)`. UTF-8 encoding is mandatory (matches Python's `str.encode()` default).
+- `computeFieldHash(rowAVals, rowBVals): Promise<string>` — `sha256_16(rowAVals.concat(rowBVals).map(String).join("|"))`. Mirrors Python's `compute_field_hash`: `"|".join(str(v) for v in row_a_vals + row_b_vals)`.
+- `computeRecordHash(row, columns): Promise<string>` — sort the column names, exclude `__row_id__`, project values in sorted-column order, stringify, join with `"|"`. Mirrors Python's `compute_record_hash`: `"|".join(str(v) for v in row)` after `df.select(sorted(content_cols)).row(0)`.
+- `computeRecordHashes(rows, columns): Promise<Map<rowId, hash>>` — async batch helper for the re-anchor path. Internal: builds the same per-row stringification then calls `sha256_16` in parallel via `Promise.all`. Mirrors Python's `_build_hash_to_rids` semantics; the implementation is row-loop rather than vectorized polars (no polars in TS), but the output is byte-identical for the same input.
+
+Hash agreement with Python is asserted by the JSON parity test (Section 4) using fixture inputs and known SHA-256 outputs. The fixture suite includes at least one `__row_id__`-exclusion case: two rows with identical content fields but different `__row_id__` values must produce the same `record_hash`.
 
 ### `src/core/memory/store.ts` (rewrite, ~200 LOC)
 
@@ -369,7 +374,12 @@ Five tools, identical input schemas to Python's `mcp/memory_tools.py`:
 
 Module exports: `MEMORY_TOOLS: Tool[]`, `MEMORY_TOOL_NAMES: ReadonlySet<string>`, `handleMemoryTool(name, arguments): Promise<TextContent[]>`. Each handler instantiates its own `MemoryStore` (no shared global state), traps SQLite errors and returns structured TextContent rather than crashing the MCP session.
 
-`server.ts` imports and registers them; tool count description bumped (current count + 5).
+`server.ts` (current header at line 6 reads `~20 tools`) imports and registers `MEMORY_TOOLS` and merges `MEMORY_TOOL_NAMES` into the dispatch chain. PR 3 acceptance criteria includes:
+1. Count the entries in the post-merge `TOOLS` array.
+2. Update the description literal at `server.ts:6` to the exact post-merge count (e.g. `Exposes 25 tools covering ...`).
+3. Add `test_memory_tools_registered` asserting the count matches the description string via regex (`/Exposes (\d+) tools/`).
+
+The current TS server uses a flat `TOOLS: readonly Tool[]` array (not Python's modular registration). PR 3 keeps that shape — `TOOLS = [...EXISTING, ...MEMORY_TOOLS]` — rather than refactoring to a registration model.
 
 ### Explainer integration
 
@@ -381,7 +391,7 @@ Three fixture files committed under `packages/typescript/goldenmatch/tests/parit
 
 1. **`memory_corrections.json`** — canonical 12-correction dataset covering each `CorrectionSource`, both `Decision`s, both empty-hash and full-hash collections, a same-tier latest-wins case, an ambiguous-collision case. Generated by `tests/parity/gen_memory_fixtures.py` (Python source-of-truth).
 
-2. **`memory.db`** — SQLite file written by Python from the same JSON. Regenerated when schema changes via `gen_memory_fixtures.py --rebuild-db`. CI fails if the committed `.db` doesn't match a freshly regenerated one byte-for-byte.
+2. **`memory.db`** — SQLite file written by Python from the same JSON. Regenerated when schema changes via `gen_memory_fixtures.py --rebuild-db`. CI fails if the committed `.db` doesn't match a freshly regenerated one byte-for-byte. **Determinism requirement:** the generator MUST seed all `created_at` values from the JSON fixture (which has fixed ISO-8601 strings) — never `datetime.now()`. The SQLite schema's `DEFAULT CURRENT_TIMESTAMP` is bypassed because `add_correction` always inserts the dataclass's `created_at`. The generator must also call `PRAGMA user_version = N` (a fixed integer) and avoid any other source of nondeterminism (e.g., random UUIDs — fixture UUIDs are pinned in the JSON).
 
 3. **`memory_apply_inputs.json`** — frozen input df + scored-pairs list + expected `(adjustedPairs, stats)` JSON output for the apply-outcome golden.
 
@@ -438,7 +448,7 @@ Coverage target: roughly mirror Python's ~70 new tests / 3,500 LOC of production
 
 Three sequential PRs:
 
-1. **Foundation rewrite + parity harness.** New types, hash module, in-memory store rewrite, `applyCorrections` rewrite, learner rewrite, SQLite-backed store, parity fixtures generator + the three parity tests on both sides. Rewrites the existing 7 unit tests. **No pipeline integration yet.** Mergeable on its own.
+1. **Foundation rewrite + parity harness.** New types, hash module, in-memory store rewrite, `applyCorrections` rewrite, **learner rewrite (`learner.ts:98-171` references the old `verdict`/`feature` shape and must be migrated alongside the field rename)**, SQLite-backed store, parity fixtures generator + the three parity tests on both sides. Rewrites the existing 7 unit tests. **Breaking change:** `src/core/index.ts:303-304` re-exports `MemoryStore` / `Correction` / `MemoryStoreConfig` — every external consumer of these types breaks at v0.4.0. CHANGELOG must call this out under `[0.4.0] Breaking`. **No pipeline integration yet.** Mergeable on its own.
 2. **Pipeline + postflight + collection points.** `_applyMemoryPre`/`_applyMemoryPost`, `memoryStats` on result types, postflight memory line, sibling review queue, six collection points. E2E tests added.
 3. **Surfaces.** Five MCP tools, CLI subgroup, Python API mirror, explainer integration. Wraps with the v0.4.0 release: bump `package.json`, add CHANGELOG entry under `[0.4.0]`, tag `goldenmatch-js-v0.4.0`.
 
@@ -449,8 +459,22 @@ Each PR squash-merges per SOP. Cumulative diff target ~2,000-2,500 LOC.
 - **Web Crypto async overhead.** Hashing every row for re-anchor is one `crypto.subtle.digest` per row. On a 100K-row input that's 100K async calls. Mitigation: batch via `Promise.all` over chunks, or use `node:crypto` synchronous API in the Node-only path (lives behind a `getHasher()` factory in `core/memory/hash.ts` — Node implementation overrides for performance, edge implementation uses Web Crypto). Falls back gracefully on edge.
 - **SQLite schema regeneration friction.** Every schema change requires regenerating the `memory.db` fixture. Mitigation: `gen_memory_fixtures.py --rebuild-db` is a one-line CI-checkable command; CI fails loudly if a committed `.db` doesn't match a fresh regen.
 - **`better-sqlite3` native compile failures on Windows.** Already a known peer-dep risk for the package family. Mitigation: same installation guidance as `hnswlib-node` (works under Visual Studio Build Tools); document in the README's installation section.
-- **TS 5.2 `using` declaration availability.** The package may target older TS. Mitigation: feature-detect at compile time; fall back to `try/finally`. Either is correct; `using` is just nicer.
+- **TS 5.2 `using` declaration availability.** Package's `package.json` declares `"typescript": "^5.4.0"` (≥5.2 satisfied) and `tsconfig.json` targets ES2022, but `lib` lacks `"ESNext.Disposable"`. PR 1 must add `"ESNext.Disposable"` to `compilerOptions.lib` to enable `using`. Fallback `try/finally` works too if you prefer to skip the lib bump.
 - **Existing scaffolding test removal pain.** The 7 tests in the current `tests/unit/memory.test.ts` reference the old `verdict`/`feature` shape. Mitigation: rewrite the file in PR 1 alongside the field rename; don't try to migrate.
+
+## Review notes (2026-05-05)
+
+This spec went through one review pass against the actual Python source and TS port code. Findings folded in:
+
+- **Hash format corrected.** Original draft said `<col1>=<v1>|<col2>=<v2>|...`; Python actually hashes values only, joined by `|`, with no key-name interpolation. The `core/memory/hash.ts` section now mirrors Python verbatim.
+- **TextEncoder UTF-8** made explicit in the hash-algorithm decision row.
+- **MCP tool count** specifics added: PR 3 must update `server.ts:6`'s description literal to the post-merge count and add a registration test.
+- **`__row_id__`-exclusion parity test** added as a required fixture case.
+- **Determinism clamp** for `gen_memory_fixtures.py --rebuild-db` made explicit (fixed `created_at`, fixed UUIDs, no `datetime.now()`).
+- **TS 5.2 `using`** confirmed feasible (`package.json` already at 5.4); `lib` must add `"ESNext.Disposable"`.
+- **Async-everywhere** rationale spelled out (interface convergence between in-memory and SQLite stores; zero-cost wrappers).
+- **API churn** flagged as breaking-change CHANGELOG line in PR 1.
+- **Learner rewrite** scope made explicit (current `learner.ts` references the old shape).
 
 ## Open questions resolved
 
