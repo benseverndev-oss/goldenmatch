@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 
 import yaml
@@ -10,29 +11,27 @@ from goldenmatch.web.rules import load_rules_from_yaml
 
 router = APIRouter(prefix="/api/v1/rules")
 
+# Single-tenant by design: no concurrency guard on `state.rules` or the YAML
+# file. Localhost dev tool — concurrent PUT/save is a non-goal for v1.
 
-def _seed_rules(state) -> dict:
-    """Seed in-memory rules from yaml, normalizing the default threshold."""
-    seeded = load_rules_from_yaml(state.config_path)
-    return {
-        "threshold": 0.85 if seeded["threshold"] is None else float(seeded["threshold"]),
-        "matchkeys": seeded["matchkeys"],
-    }
+
+def _seeded_rules(state) -> RulesPayload:
+    return RulesPayload(**load_rules_from_yaml(state.config_path))
 
 
 @router.get("")
 def get_rules(request: Request) -> dict:
     state = request.app.state.app_state
     if state.rules is None:
-        state.rules = _seed_rules(state)
-    return state.rules
+        state.rules = _seeded_rules(state)
+    return state.rules.model_dump()
 
 
 @router.put("")
 def put_rules(payload: RulesPayload, request: Request) -> dict:
     state = request.app.state.app_state
-    state.rules = payload.model_dump()
-    return state.rules
+    state.rules = payload
+    return state.rules.model_dump()
 
 
 @router.post("/save")
@@ -43,13 +42,22 @@ def save_rules(request: Request) -> dict:
     if state.config_path is None:
         state.config_path = state.project_root / "goldenmatch.yml"
 
+    existing: dict = {}
     if state.config_path.exists():
+        # Snapshot prior on-disk state into .yml.bak before clobbering.
         shutil.copy2(state.config_path, state.config_path.with_suffix(".yml.bak"))
-
-    existing = {}
-    if state.config_path.exists():
         existing = yaml.safe_load(state.config_path.read_text(encoding="utf-8")) or {}
-    existing["threshold"] = state.rules["threshold"]
-    existing["matchkey"] = state.rules["matchkeys"]
-    state.config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+
+    # Drop both spellings before writing the canonical singular key, so a file
+    # that previously held `matchkeys:` (plural) doesn't end up with both keys.
+    existing.pop("matchkey", None)
+    existing.pop("matchkeys", None)
+    existing["threshold"] = state.rules.threshold
+    existing["matchkey"] = [m.model_dump(exclude_none=True) for m in state.rules.matchkeys]
+
+    # Atomic write: tmp file + os.replace so a mid-write failure leaves the
+    # original file intact (the .bak still mirrors prior state).
+    tmp = state.config_path.with_suffix(".yml.tmp")
+    tmp.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, state.config_path)
     return {"saved": True, "path": str(state.config_path)}

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from goldenmatch.config.schemas import RulesPayload
 
 
 @dataclass
@@ -10,9 +13,12 @@ class AppState:
     project_root: Path
     config_path: Path | None
     labels_path: Path
-    rules: dict[str, Any] | None = None  # in-memory edited rules; seeded lazily from goldenmatch.yml on first /api/v1/rules read
-    runs_dir: Path | None = None  # defaults to project_root if None
-    registry: Any = field(default=None)  # filled in Task 5
+    # In-memory edited rules; seeded lazily from goldenmatch.yml on first
+    # /api/v1/rules read. Stored as a validated RulesPayload so Task 5's
+    # preview can feed the matching engine without re-validating per request.
+    rules: "RulesPayload | None" = None
+    runs_dir: Path | None = None
+    registry: Any = None
 
     @classmethod
     def from_project_dir(cls, project_dir: Path, runs_dir: Path | None = None) -> "AppState":

@@ -41,3 +41,37 @@ def test_save_rules_writes_yaml_and_backup(client, sample_project):
     bak = (sample_project / "goldenmatch.yml.bak").read_text(encoding="utf-8")
     assert "0.5" in yml
     assert "0.85" in bak  # backup keeps old threshold
+
+
+def test_save_rules_drops_stale_plural_matchkeys_key(sample_project, client):
+    """If the on-disk YAML used the plural `matchkeys:` spelling, the save
+    path must not leave both keys side by side after rewriting the canonical
+    singular `matchkey:`.
+    """
+    import yaml
+
+    cfg = sample_project / "goldenmatch.yml"
+    cfg.write_text(yaml.safe_dump({
+        "threshold": 0.6,
+        "matchkeys": [{"column": "name", "scorer": "jaro_winkler",
+                       "weight": 1.0, "transforms": []}],
+        "extra_top_level": "preserve_me",
+    }), encoding="utf-8")
+
+    # Re-build the app so it picks up the rewritten config (lazy seed reads it).
+    from fastapi.testclient import TestClient
+    from goldenmatch.web.app import create_app
+    from goldenmatch.web.state import AppState
+    fresh = TestClient(create_app(AppState.from_project_dir(sample_project)))
+
+    fresh.put("/api/v1/rules", json={
+        "threshold": 0.7,
+        "matchkeys": [{"column": "name", "scorer": "exact",
+                       "weight": 1.0, "transforms": []}],
+    })
+    assert fresh.post("/api/v1/rules/save").status_code == 200
+
+    written = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert "matchkeys" not in written  # stale plural key dropped
+    assert written["matchkey"][0]["scorer"] == "exact"
+    assert written["extra_top_level"] == "preserve_me"
