@@ -225,6 +225,8 @@ export type { BudgetSnapshot } from "./llm/budget.js";
 export { llmScorePairs, scoreStringsWithLlm } from "./llm/scorer.js";
 export type { LLMScoreResult } from "./llm/scorer.js";
 export { llmClusterPairs } from "./llm/cluster.js";
+export { whyForCorrection, llmExplainPair } from "./llm/explain.js";
+export type { WhyOptions, WhyInput } from "./llm/explain.js";
 
 // ---------------------------------------------------------------------------
 // Explain
