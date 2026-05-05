@@ -6,7 +6,16 @@
  * <0.75 auto-reject, everything in between needs review.
  */
 
-import type { ScoredPair } from "./types.js";
+import type { Row, ScoredPair } from "./types.js";
+import type {
+  Decision,
+  MemoryStore,
+} from "./memory/types.js";
+import { trustForSource } from "./memory/types.js";
+import {
+  computeFieldHash,
+  computeRecordHash,
+} from "./memory/hash.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,17 +134,23 @@ export class ReviewQueue {
   }
 
   /** Mark a pair approved. No-op if unknown. */
-  approve(pairId: string): void {
+  approve(pairId: string, opts?: ReviewMemoryOpts): Promise<void> | void {
     const item = this.items.get(pairId);
     if (item === undefined) return;
     this.items.set(pairId, { ...item, status: "approved" });
+    if (opts?.memoryStore) {
+      return _writeReviewCorrection(item, "approve", opts);
+    }
   }
 
   /** Mark a pair rejected. No-op if unknown. */
-  reject(pairId: string): void {
+  reject(pairId: string, opts?: ReviewMemoryOpts): Promise<void> | void {
     const item = this.items.get(pairId);
     if (item === undefined) return;
     this.items.set(pairId, { ...item, status: "rejected" });
+    if (opts?.memoryStore) {
+      return _writeReviewCorrection(item, "reject", opts);
+    }
   }
 
   /** All pending items. */
@@ -174,4 +189,65 @@ export class ReviewQueue {
   static pairIdFor(a: number, b: number): string {
     return pairIdFor(a, b);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Memory collection (Phase 2.4.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Options accepted by `ReviewQueue.approve` / `reject` to collect a
+ * `Correction` from a steward decision. When `df` + `matchkeyFields` are
+ * supplied, dual hashes are computed; otherwise empty hashes (still applied
+ * via short-circuit on row-id match).
+ */
+export interface ReviewMemoryOpts {
+  readonly memoryStore: MemoryStore;
+  readonly df?: ReadonlyArray<Row>;
+  readonly matchkeyFields?: ReadonlyArray<string>;
+  readonly dataset?: string | null;
+  readonly matchkeyName?: string | null;
+}
+
+async function _writeReviewCorrection(
+  item: ReviewItem,
+  decision: Decision,
+  opts: ReviewMemoryOpts,
+): Promise<void> {
+  let fieldHash = "";
+  let recordHash = "";
+  if (opts.df && opts.df.length > 0) {
+    const cols = Object.keys(opts.df[0]!);
+    const rowById = new Map<number, Row>();
+    for (const r of opts.df) {
+      const rid = r["__row_id__"];
+      if (typeof rid === "number") rowById.set(rid, r);
+    }
+    const rowA = rowById.get(item.idA);
+    const rowB = rowById.get(item.idB);
+    if (rowA && rowB) {
+      const fields = (opts.matchkeyFields ?? []).filter((f) => cols.includes(f));
+      const valsA = fields.map((f) => rowA[f]);
+      const valsB = fields.map((f) => rowB[f]);
+      fieldHash = await computeFieldHash(valsA, valsB);
+      const rhA = await computeRecordHash(rowA, cols);
+      const rhB = await computeRecordHash(rowB, cols);
+      recordHash = `${rhA}:${rhB}`;
+    }
+  }
+  await opts.memoryStore.addCorrection({
+    id: crypto.randomUUID(),
+    idA: item.idA,
+    idB: item.idB,
+    decision,
+    source: "steward",
+    trust: trustForSource("steward"),
+    fieldHash,
+    recordHash,
+    originalScore: item.score,
+    matchkeyName: opts.matchkeyName ?? null,
+    reason: null,
+    dataset: opts.dataset ?? null,
+    createdAt: new Date(),
+  });
 }

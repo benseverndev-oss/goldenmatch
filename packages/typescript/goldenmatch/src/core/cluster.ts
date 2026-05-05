@@ -571,11 +571,12 @@ export function addToCluster(
  * Remove a record from its cluster and re-cluster remaining members.
  * The removed record becomes a singleton.
  */
-export function unmergeRecord(
+export async function unmergeRecord(
   recordId: number,
   clusters: Map<number, ClusterInfo>,
   threshold = 0.0,
-): Map<number, ClusterInfo> {
+  opts?: { memoryStore?: import("./memory/types.js").MemoryStore | null },
+): Promise<Map<number, ClusterInfo>> {
   // Find which cluster contains this record
   let sourceCid: number | null = null;
   for (const [cid, cinfo] of clusters) {
@@ -588,6 +589,31 @@ export function unmergeRecord(
   if (sourceCid === null) return clusters; // Not found
   const cinfo = clusters.get(sourceCid)!;
   if (cinfo.size <= 1) return clusters; // Already singleton
+
+  // Memory: write reject corrections from `recordId` to every other member
+  // BEFORE we mutate `clusters`. Empty hashes (no df in scope at unmerge
+  // time) -- short-circuit dual-hash so the correction always re-applies.
+  if (opts?.memoryStore) {
+    const store = opts.memoryStore;
+    for (const m of cinfo.members) {
+      if (m === recordId) continue;
+      await store.addCorrection({
+        id: crypto.randomUUID(),
+        idA: Math.min(recordId, m),
+        idB: Math.max(recordId, m),
+        decision: "reject",
+        source: "unmerge",
+        trust: 1.0,
+        fieldHash: "",
+        recordHash: "",
+        originalScore: 0,
+        matchkeyName: null,
+        reason: null,
+        dataset: null,
+        createdAt: new Date(),
+      });
+    }
+  }
 
   // Extract pairs excluding the removed record, applying threshold
   const remainingMembers = cinfo.members.filter((m) => m !== recordId);
@@ -637,14 +663,42 @@ export function unmergeRecord(
  * Shatter a cluster into individual singletons.
  * All members become their own cluster. Pair scores are discarded.
  */
-export function unmergeCluster(
+export async function unmergeCluster(
   clusterId: number,
   clusters: Map<number, ClusterInfo>,
-): Map<number, ClusterInfo> {
+  opts?: { memoryStore?: import("./memory/types.js").MemoryStore | null },
+): Promise<Map<number, ClusterInfo>> {
   const cinfo = clusters.get(clusterId);
   if (!cinfo) return clusters;
 
   const members = cinfo.members;
+
+  // Memory: write reject correction for every former pair. Empty hashes.
+  if (opts?.memoryStore) {
+    const store = opts.memoryStore;
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        const a = members[i]!;
+        const b = members[j]!;
+        await store.addCorrection({
+          id: crypto.randomUUID(),
+          idA: Math.min(a, b),
+          idB: Math.max(a, b),
+          decision: "reject",
+          source: "unmerge",
+          trust: 1.0,
+          fieldHash: "",
+          recordHash: "",
+          originalScore: 0,
+          matchkeyName: null,
+          reason: null,
+          dataset: null,
+          createdAt: new Date(),
+        });
+      }
+    }
+  }
+
   clusters.delete(clusterId);
 
   let nextCid = _nextCid(clusters);
