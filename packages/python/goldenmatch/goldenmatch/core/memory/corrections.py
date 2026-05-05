@@ -28,6 +28,29 @@ class CorrectionStats:
     failed: bool = False
     error: str | None = None
 
+    def validate(self) -> bool:
+        """Sanity check the count invariant after apply_corrections finishes.
+
+        Returns True when applied + stale + stale_ambiguous +
+        stale_unanchorable <= total_pairs. On violation logs a warning and
+        returns False — callers should NOT crash on a counting bug, but a
+        violation does indicate something accidentally double-counted a pair.
+        """
+        total_classified = (
+            self.applied + self.stale + self.stale_ambiguous
+            + self.stale_unanchorable
+        )
+        if self.total_pairs > 0 and total_classified > self.total_pairs:
+            log.warning(
+                "CorrectionStats invariant violated: applied=%d stale=%d "
+                "stale_ambiguous=%d stale_unanchorable=%d (sum=%d) > "
+                "total_pairs=%d",
+                self.applied, self.stale, self.stale_ambiguous,
+                self.stale_unanchorable, total_classified, self.total_pairs,
+            )
+            return False
+        return True
+
 
 def build_row_lookup(df: pl.DataFrame, fields: list[str]) -> dict[int, tuple]:
     """Build row ID to field values lookup once for all pairs."""
@@ -51,8 +74,8 @@ def compute_field_hash(row_a_vals: tuple, row_b_vals: tuple) -> str:
 def compute_record_hash(df: pl.DataFrame, row_id: int) -> str:
     """Hash content fields (sorted by name) for entity identity check.
 
-    Excludes __row_id__ so the hash is durable across input refreshes that
-    reorder rows.
+    Excludes ``__row_id__`` so two runs over the same content produce the
+    same hash even if row order changes.
     """
     filtered = df.filter(pl.col("__row_id__") == row_id)
     if filtered.is_empty():
@@ -64,8 +87,7 @@ def compute_record_hash(df: pl.DataFrame, row_id: int) -> str:
 
 
 def _build_hash_to_rids(df: pl.DataFrame) -> dict[str, list[int]]:
-    """Vectorized record_hash → [row_ids] map. Excludes __row_id__ so hash is
-    content-keyed and durable across row reordering."""
+    """Vectorized record_hash to [row_ids] map."""
     sorted_cols = sorted(c for c in df.columns if c != "__row_id__")
     hashed = df.select(
         pl.col("__row_id__"),
@@ -115,8 +137,6 @@ def apply_corrections(
     hash_to_rids = _build_hash_to_rids(df)
     current_rids = {rid for rids in hash_to_rids.values() for rid in rids}
 
-    # active maps canonical (id_a, id_b) — keyed by NEW row IDs after re-anchor —
-    # to the originating Correction.
     active: dict[tuple[int, int], Correction] = {}
     for c in all_corrections:
         if c.id_a in current_rids and c.id_b in current_rids:
@@ -148,7 +168,6 @@ def apply_corrections(
             stats.stale_ambiguous += 1
             stats.stale_pairs.append((c.id_a, c.id_b))
         else:
-            # One or both hash sides have NO match — entity gone.
             stats.stale_unanchorable += 1
             stats.stale_pairs.append((c.id_a, c.id_b))
             log.debug(
@@ -211,4 +230,5 @@ def apply_corrections(
         stats.applied, stats.stale, stats.stale_ambiguous,
         stats.stale_unanchorable, stats.total_pairs,
     )
+    stats.validate()
     return adjusted, stats

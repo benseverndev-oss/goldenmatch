@@ -76,6 +76,11 @@ class DedupeResult:
     scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     config: Any = None
     postflight_report: PostflightReport | None = None
+    # Note: memory_stats is also attached to postflight_report.memory_stats by
+    # _attach_memory_to_postflight. The duplication is intentional — converting
+    # this field to a property delegating to postflight_report would break the
+    # pipeline's direct field assignment pattern. Single source of truth would
+    # require refactoring _attach_memory_to_postflight; tracked as follow-up.
     memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
@@ -169,6 +174,7 @@ class MatchResult:
     unmatched: pl.DataFrame | None = None
     stats: dict = field(default_factory=dict)
     postflight_report: PostflightReport | None = None
+    # See DedupeResult.memory_stats note — same intentional duplication.
     memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str) -> Path:
@@ -910,8 +916,8 @@ def add_correction(
     from datetime import datetime
     from goldenmatch.core.memory.store import Correction
 
-    from goldenmatch.core.memory.store import HIGH_TRUST_SOURCES
-    trust = 1.0 if source in HIGH_TRUST_SOURCES else 0.5
+    from goldenmatch.core.memory.store import trust_for_source
+    trust = trust_for_source(source)
     store = get_memory(path)
     try:
         store.add_correction(Correction(

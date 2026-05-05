@@ -40,6 +40,15 @@ HIGH_TRUST_SOURCES: frozenset[CorrectionSource] = frozenset({
 })
 
 
+def trust_for_source(source: str | CorrectionSource) -> float:
+    """Return 1.0 for human-trust sources (steward/boost/unmerge), 0.5 else.
+
+    Accepts a raw string OR a CorrectionSource member. Centralizes the trust
+    mapping so call sites cannot drift.
+    """
+    return 1.0 if source in HIGH_TRUST_SOURCES else 0.5
+
+
 @dataclass
 class Correction:
     """A single pair decision stored in memory."""

@@ -1,7 +1,15 @@
 """Tests for MemoryStore CRUD operations."""
 import pytest
 from datetime import datetime
-from goldenmatch.core.memory.store import MemoryStore, Correction, LearnedAdjustment
+from goldenmatch.core.memory.store import (
+    CorrectionSource,
+    Decision,
+    HIGH_TRUST_SOURCES,
+    MemoryStore,
+    Correction,
+    LearnedAdjustment,
+    trust_for_source,
+)
 
 
 @pytest.fixture
@@ -179,3 +187,82 @@ class TestLastLearnTime:
         ))
         result = store.last_learn_time()
         assert result is not None
+
+
+class TestCorrectionSourceEnum:
+    """StrEnum-based source/decision constants and trust mapping."""
+
+    def test_strenum_equals_raw_string(self):
+        assert CorrectionSource.STEWARD == "steward"
+        assert CorrectionSource.BOOST == "boost"
+        assert CorrectionSource.UNMERGE == "unmerge"
+        assert CorrectionSource.AGENT == "agent"
+        assert CorrectionSource.LLM == "llm"
+        assert CorrectionSource.API == "api"
+        assert Decision.APPROVE == "approve"
+        assert Decision.REJECT == "reject"
+
+    def test_high_trust_set_membership(self):
+        assert CorrectionSource.STEWARD in HIGH_TRUST_SOURCES
+        assert CorrectionSource.BOOST in HIGH_TRUST_SOURCES
+        assert CorrectionSource.UNMERGE in HIGH_TRUST_SOURCES
+        assert CorrectionSource.AGENT not in HIGH_TRUST_SOURCES
+        assert CorrectionSource.LLM not in HIGH_TRUST_SOURCES
+        assert CorrectionSource.API not in HIGH_TRUST_SOURCES
+        # Raw-string membership also works (StrEnum is a str subclass)
+        assert "steward" in HIGH_TRUST_SOURCES
+        assert "agent" not in HIGH_TRUST_SOURCES
+
+    def test_trust_for_source_human_tier(self):
+        assert trust_for_source("steward") == 1.0
+        assert trust_for_source("boost") == 1.0
+        assert trust_for_source("unmerge") == 1.0
+        assert trust_for_source(CorrectionSource.STEWARD) == 1.0
+
+    def test_trust_for_source_agent_tier(self):
+        assert trust_for_source("api") == 0.5
+        assert trust_for_source("agent") == 0.5
+        assert trust_for_source("llm") == 0.5
+        assert trust_for_source(CorrectionSource.AGENT) == 0.5
+
+    def test_all_sources_round_trip_through_store(self, store):
+        """Every defined CorrectionSource value persists and reads back."""
+        for i, src in enumerate(CorrectionSource):
+            store.add_correction(_make_correction(
+                id=f"src-{src.value}",
+                id_a=i * 10,
+                id_b=i * 10 + 1,
+                source=src.value,
+                trust=trust_for_source(src),
+            ))
+        items = store.get_corrections(dataset="test")
+        sources_seen = {c.source for c in items}
+        assert sources_seen == {s.value for s in CorrectionSource}
+
+
+@pytest.mark.skip(
+    reason="WAL mode required for reliable concurrent writes from two "
+    "MemoryStore instances on the same SQLite file. Default journaling "
+    "intermittently raises 'database is locked'. Tracked as a follow-up; "
+    "test exists to surface the limitation rather than enforce it."
+)
+def test_concurrent_memory_store_writes_dont_lock(tmp_path):
+    """Two MemoryStore instances pointing at the same DB; each writes one
+    correction; both are visible to a third reader. Skipped by default --
+    flips green only when WAL mode is enabled (TODO)."""
+    db = str(tmp_path / "concurrent.db")
+    s1 = MemoryStore(backend="sqlite", path=db)
+    s2 = MemoryStore(backend="sqlite", path=db)
+    try:
+        s1.add_correction(_make_correction(id="c1", id_a=10, id_b=11))
+        s2.add_correction(_make_correction(id="c2", id_a=20, id_b=21))
+    finally:
+        s1.close()
+        s2.close()
+    reader = MemoryStore(backend="sqlite", path=db)
+    try:
+        items = reader.get_corrections(dataset="test")
+        ids = {c.id for c in items}
+        assert ids == {"c1", "c2"}
+    finally:
+        reader.close()
