@@ -68,6 +68,14 @@ def run_preview(
     if df.height > sample_n:
         df = df.sample(n=sample_n, seed=seed)
 
+    # The engine accepts unknown columns silently and returns empty results —
+    # for a workbench, that's the wrong UX (a typo looks like "no matches").
+    # Validate up front and raise so the router maps to 400.
+    referenced_columns = {m.column or m.field for m in rules.matchkeys if (m.column or m.field)}
+    missing = sorted(referenced_columns - set(df.columns))
+    if missing:
+        raise ValueError(f"matchkey references unknown column(s): {missing}")
+
     config = _build_config(rules)
     result = run_dedupe_df(df, config, output_clusters=True)
 
