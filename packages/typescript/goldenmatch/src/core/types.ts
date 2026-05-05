@@ -233,9 +233,11 @@ export interface LearningConfig {
 
 export interface MemoryConfig {
   readonly enabled: boolean;
-  readonly backend: "sqlite" | "postgres";
+  readonly backend: "memory" | "sqlite";
   readonly path?: string;
-  readonly trust: number;
+  readonly dataset?: string | null;
+  readonly reanchor?: boolean;
+  readonly trust?: { human: number; agent: number };
   readonly learning: LearningConfig;
 }
 

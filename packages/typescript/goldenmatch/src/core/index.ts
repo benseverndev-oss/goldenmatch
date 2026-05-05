@@ -33,8 +33,6 @@ export type {
   BudgetConfig,
   LLMScorerConfig,
   DomainConfig,
-  LearningConfig,
-  MemoryConfig,
   InputFileConfig,
   InputConfig,
   OutputConfig,
@@ -300,11 +298,7 @@ export type { TableSchema, Relationship, GraphERResult } from "./graph-er.js";
 // Memory (learning corrections)
 // ---------------------------------------------------------------------------
 
-export { MemoryStore } from "./memory/store.js";
-export type { Correction, MemoryStoreConfig } from "./memory/store.js";
-export { applyCorrections, hashRow } from "./memory/corrections.js";
-export { MemoryLearner } from "./memory/learner.js";
-export type { LearnedParams } from "./memory/learner.js";
+export * from "./memory/index.js";
 
 // ---------------------------------------------------------------------------
 // PPRL (Privacy-Preserving Record Linkage)
