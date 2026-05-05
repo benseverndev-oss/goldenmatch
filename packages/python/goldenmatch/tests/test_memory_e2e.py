@@ -602,3 +602,101 @@ def test_pipeline_memory_failure_renders_in_postflight(tmp_path):
     line = _render_memory_line(stats)
     assert "failed" in line
     assert "boom" in line
+
+
+def test_pipeline_respects_reanchor_false_flag(tmp_path):
+    """With reanchor=False, a correction whose row IDs no longer match must
+    NOT attempt re-anchor (every such correction lands in stale_unanchorable
+    immediately). With reanchor=True the same correction would route through
+    the record-hash re-anchor path.
+    """
+    df = pl.DataFrame(
+        {
+            "name": ["Acme Corp", "Acme LLC", "Beta Inc"],
+            "zip": ["10001", "10001", "20002"],
+        }
+    )
+
+    db_path = str(tmp_path / "mem.db")
+    captured_hashes: dict[str, list[int]] = {}
+    from goldenmatch.core.memory import corrections as corr_mod
+
+    real_build = corr_mod._build_hash_to_rids
+
+    def capturing_build(df_arg):
+        out = real_build(df_arg)
+        captured_hashes.update(out)
+        return out
+
+    # Seed an unrelated correction so apply_corrections actually runs (it
+    # short-circuits when the store is empty).
+    store = MemoryStore(backend="sqlite", path=db_path)
+    try:
+        store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=42, id_b=43,
+            decision="reject",
+            source="steward",
+            trust=1.0,
+            field_hash="placeholder",
+            record_hash="aaaa:bbbb",
+            original_score=0.5,
+            matchkey_name=None,
+            reason=None,
+            dataset=None,
+            created_at=datetime.now(),
+        ))
+    finally:
+        store.close()
+
+    corr_mod._build_hash_to_rids = capturing_build
+    try:
+        config = _build_config(db_path)
+        dedupe_df(df, config=config)
+    finally:
+        corr_mod._build_hash_to_rids = real_build
+
+    distinct = [(h, rids[0]) for h, rids in captured_hashes.items() if len(rids) == 1]
+    assert len(distinct) >= 2, f"need 2 distinct rows, got {captured_hashes}"
+    rh0 = distinct[0][0]
+    rh1 = distinct[1][0]
+
+    def seed_and_get_stats(reanchor_value: bool):
+        Path(db_path).unlink(missing_ok=True)
+        store = MemoryStore(backend="sqlite", path=db_path)
+        try:
+            store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=999, id_b=1000,  # absent from df
+                decision="reject",
+                source="steward",
+                trust=1.0,
+                field_hash="",
+                record_hash=f"{rh0}:{rh1}",
+                original_score=0.95,
+                matchkey_name=None,
+                reason=None,
+                dataset=None,
+                created_at=datetime.now(),
+            ))
+        finally:
+            store.close()
+        config = _build_config(db_path)
+        config.memory.reanchor = reanchor_value
+        result = dedupe_df(df, config=config)
+        return result.memory_stats
+
+    stats_reanchor = seed_and_get_stats(True)
+    stats_no_reanchor = seed_and_get_stats(False)
+
+    # reanchor=False should immediately route the correction to
+    # stale_unanchorable (it never tries the record_hash path).
+    assert stats_no_reanchor.stale_unanchorable == 1, (
+        f"reanchor=False should yield 1 unanchorable; got {stats_no_reanchor}"
+    )
+    # reanchor=True should NOT route to stale_unanchorable (it found the
+    # record hashes — even if downstream hash mismatch makes it stale, it
+    # exited the unanchorable bucket).
+    assert stats_reanchor.stale_unanchorable == 0, (
+        f"reanchor=True should attempt re-anchor; got {stats_reanchor}"
+    )

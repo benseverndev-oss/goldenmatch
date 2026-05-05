@@ -111,6 +111,31 @@ def test_postflight_renders_stale_ambiguous():
     assert "stale-ambiguous" in text
 
 
+def test_postflight_renders_stale_unanchorable():
+    """A fake CorrectionStats with stale_unanchorable>0 surfaces the
+    'unanchorable' label so stewards can spot row-IDs-gone-no-record-hash
+    cases distinctly from generic stale counts."""
+    report = PostflightReport()
+    report.memory_stats = CorrectionStats(
+        applied=0, stale=0, stale_ambiguous=0, stale_unanchorable=3,
+    )
+    text = str(report)
+    assert "Memory:" in text
+    assert "unanchorable" in text
+
+
+def test_postflight_renders_failure_sentinel():
+    """When CorrectionStats.failed=True the renderer surfaces a 'failed'
+    line carrying the error string (added in tier-2 review feedback)."""
+    report = PostflightReport()
+    report.memory_stats = CorrectionStats(
+        total_pairs=10, failed=True, error="garbage memory.db",
+    )
+    text = str(report)
+    assert "Memory: failed" in text
+    assert "garbage memory.db" in text
+
+
 def test_postflight_omits_memory_when_zero_counts(tmp_path):
     """Memory enabled, no corrections in store -> no 'Memory:' line."""
     df = pl.DataFrame(
