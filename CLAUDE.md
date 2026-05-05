@@ -53,3 +53,10 @@ Only `.github/workflows/` at the repo root runs. Workflow files left under `pack
 ## `gh` field-name gotchas
 - `gh repo view --json topics` errors; the field is `repositoryTopics` (object array, `.repositoryTopics | map(.name)`).
 - `gh release create --notes` body rejects em-dashes via the API (422). Keep release notes ASCII like everything else.
+
+## Workflow trigger ordering
+A push of a tag that points at a commit predating a workflow file's introduction will NOT fire that workflow — GitHub Actions reads the workflow definition from the tag's commit, not from main HEAD. After landing a new `publish-*.yml` at the root, either re-tag at HEAD-of-main once the workflow is committed, or use `gh workflow run <file> --ref main` (which reads the workflow from main and checks out via the `ref` input). Bit us on `goldenmatch-js-v0.4.0` (v0.4.0 merge predated the publish workflow) and on `v1.6.0` (Python orphan).
+
+## pnpm vs npm flag drift
+- `pnpm pack` has no `--dry-run` flag (npm-only). pnpm always writes a `.tgz`; running plain `pnpm pack` on a CI dry-run path validates packing without publishing.
+- `pnpm publish` from CI needs `--no-git-checks` because the runner checkout state confuses pnpm's "is this the latest commit on the branch?" guard.

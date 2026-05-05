@@ -313,6 +313,17 @@ Hosted on Railway, registered on Smithery:
 - `apply_corrections` reanchor builds `record_hash → list[row_id]` via `pl.concat_str` + `map_elements` (vectorized O(N)). Ambiguous re-anchors counted as `stale_ambiguous`, never silently misapplied.
 - PyPI publish: `publish-goldenmatch.yml` lives at the **monorepo root**, not under this package. Trusted publishing NOT configured — uses `PYPI_TOKEN` secret. To enable trusted publishing later, claim PyPI publisher: owner `benzsevern`, repo `goldenmatch`, workflow `publish-goldenmatch.yml`, environment `pypi`.
 
+## TS port v0.4.0 — Learning Memory parity
+- npm `goldenmatch` v0.4.0 ships full cross-language parity with Python `goldenmatch` v1.6.0. A correction written by either runtime applies identically in the other.
+- **Hash bytes are the contract.** SHA-256 truncated to 16 hex chars via Web Crypto (`crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))`). UTF-8 encoding mandatory on both sides. Hash input = values only joined by `|` (NOT `<col>=<val>`). `__row_id__` excluded from `record_hash` so it survives row reordering.
+- **Edge-safety boundary.** `src/core/memory/` is edge-safe (no `node:*`); `src/node/memory/` has `SqliteMemoryStore` + the Python-API mirror (`getMemory`, `addCorrection`, `learn`, `memoryStats`) — they construct a Node-only SQLite store.
+- **`ScoredPair` shape divergence.** Memory module's `applyCorrections` takes a tuple `[a, b, score]` (matches Python). Pipeline passes the object shape. Translation isolated to `_applyMemoryPost` in `pipeline.ts` — touching it means handling both shapes.
+- **Pipeline is async post-v0.4.0.** `runDedupePipeline`, `runMatchPipeline`, `dedupe`, `match`, `dedupeFile`, `matchFile`, `runSensitivity`, `unmergeRecord`, `unmergeCluster` all return Promises. Every external caller awaits.
+- **MCP tool count is 24** (19 existing + 5 memory tools). Description literal at `src/node/mcp/server.ts:6` reads `Exposes 24 tools`. Update + assert via the existing regex test when adding more.
+- **`better-sqlite3` is an OPTIONAL peer dep.** `await import("better-sqlite3" as string)` with the `as string` cast (prevents tsup resolving at build time). Throws clear "install better-sqlite3" if missing.
+- **Cross-language parity fixtures** committed at `tests/parity/fixtures/{memory_corrections.json, memory.db, memory_apply_inputs.json}` on both Python and TS sides. Regen via `packages/python/goldenmatch/tests/parity/memory/gen_memory_fixtures.py --rebuild-db`. Determinism clamp: pinned UUIDs, pinned `created_at` (no `datetime.now()`).
+- **npm publish workflow:** `.github/workflows/publish-goldenmatch-js.yml` at MONOREPO ROOT. Trusted publishing NOT configured — uses `NPM_TOKEN` secret. Trigger pattern: `goldenmatch-js-v*` tag push OR `workflow_dispatch` with optional `ref` input. Tag MUST point at a commit that has the workflow file, otherwise the trigger doesn't fire.
+
 ## API Quick Reference
 
 ### dedupe_df() — DataFrame deduplication
