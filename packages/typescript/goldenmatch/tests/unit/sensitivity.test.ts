@@ -55,10 +55,10 @@ function baselineConfig() {
 }
 
 describe("runSensitivity", () => {
-  it("produces one SweepPoint per value with stats and TWI vs baseline", () => {
+  it("produces one SweepPoint per value with stats and TWI vs baseline", async () => {
     const rows = makeRows();
     const cfg = baselineConfig();
-    const result = runSensitivity(rows, cfg, [
+    const result = await runSensitivity(rows, cfg, [
       { path: "threshold", values: [0.75, 0.85, 0.95] },
     ]);
     expect(result.points.length).toBe(3);
@@ -78,22 +78,22 @@ describe("runSensitivity", () => {
     expect(result.baseline.twi).toBe(1.0);
   });
 
-  it("writes the sweep-param value into each point's params object (dot-path at root)", () => {
+  it("writes the sweep-param value into each point's params object (dot-path at root)", async () => {
     const rows = makeRows();
     const cfg = baselineConfig();
-    const result = runSensitivity(rows, cfg, [
+    const result = await runSensitivity(rows, cfg, [
       { path: "threshold", values: [0.7, 0.9] },
     ]);
     const values = result.points.map((p) => p.params["threshold"]);
     expect(values).toEqual([0.7, 0.9]);
   });
 
-  it("preserves partial results when one point errors", () => {
+  it("preserves partial results when one point errors", async () => {
     const rows = makeRows();
     const cfg = baselineConfig();
     // Inject a non-existent path that will parse fine but using an invalid
     // matchkey object forces the pipeline to throw.
-    const result = runSensitivity(rows, cfg, [
+    const result = await runSensitivity(rows, cfg, [
       {
         path: "matchkeys",
         values: [
@@ -128,10 +128,10 @@ describe("runSensitivity", () => {
     expect(errs.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("empty sweep params yields zero points but still a baseline", () => {
+  it("empty sweep params yields zero points but still a baseline", async () => {
     const rows = makeRows();
     const cfg = baselineConfig();
-    const result = runSensitivity(rows, cfg, []);
+    const result = await runSensitivity(rows, cfg, []);
     expect(result.points.length).toBe(0);
     expect(result.baseline.twi).toBe(1.0);
     expect(result.stable).toBe(true);
@@ -139,10 +139,10 @@ describe("runSensitivity", () => {
 });
 
 describe("stabilityReport", () => {
-  it("returns a string summarizing the sweep", () => {
+  it("returns a string summarizing the sweep", async () => {
     const rows = makeRows();
     const cfg = baselineConfig();
-    const result = runSensitivity(rows, cfg, [
+    const result = await runSensitivity(rows, cfg, [
       { path: "threshold", values: [0.85, 0.95] },
     ]);
     const report = stabilityReport(result);

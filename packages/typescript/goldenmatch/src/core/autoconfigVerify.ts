@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 import type { ColumnProfile } from "./profiler.js";
 import { DOMAIN_EXTRACTED_COLS } from "./domain.js";
+import type { CorrectionStats } from "./memory/types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,6 +188,72 @@ export interface PostflightReport {
   readonly signals: PostflightSignals;
   readonly adjustments: readonly PostflightAdjustment[];
   readonly advisories: readonly string[];
+}
+
+// ---------------------------------------------------------------------------
+// Memory line + postflight rendering (Phase 2.3).
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the one-line Memory section, or `null` when nothing to show.
+ *
+ * Mirrors Python `_render_memory_line` (autoconfig_verify.py:256-278). Returns
+ * null when stats is null/undefined, or when every counter is zero. Returns
+ * "Memory: FAILED -- see logs" when `stats.failed` is true. ASCII only.
+ */
+export function renderMemoryLine(
+  stats: CorrectionStats | null | undefined,
+): string | null {
+  if (stats == null) return null;
+  if (stats.failed === true) {
+    const err = stats.error && stats.error.length > 0 ? stats.error : "unknown error";
+    return `Memory: FAILED -- ${err}`;
+  }
+  const applied = stats.applied | 0;
+  const stale = stats.stale | 0;
+  const ambig = stats.staleAmbiguous | 0;
+  const unanch = stats.staleUnanchorable | 0;
+  if (applied === 0 && stale === 0 && ambig === 0 && unanch === 0) return null;
+  const noun = applied === 1 ? "correction applied" : "corrections applied";
+  return (
+    `Memory: ${applied} ${noun}, ${stale} stale, ` +
+    `${ambig} stale-ambiguous, ${unanch} unanchorable ` +
+    "(run `goldenmatch review` to re-decide stale pairs)"
+  );
+}
+
+/**
+ * Render a {@link PostflightReport} as multi-line ASCII text. Mirrors
+ * Python's `PostflightReport.__str__`. When `memoryStats` is provided and
+ * non-empty, appends one Memory line.
+ */
+export function renderPostflight(
+  report: PostflightReport,
+  memoryStats?: CorrectionStats | null,
+): string {
+  const parts: string[] = ["PostflightReport:"];
+  if (Object.keys(report.signals as unknown as Record<string, unknown>).length > 0) {
+    parts.push(`  signals: ${JSON.stringify(report.signals)}`);
+  }
+  if (report.adjustments.length > 0) {
+    parts.push("  adjustments:");
+    for (const adj of report.adjustments) {
+      parts.push(
+        `    - ${adj.field}: ${String(adj.fromValue)} -> ${String(adj.toValue)}`,
+      );
+    }
+  }
+  if (report.advisories.length > 0) {
+    parts.push("  advisories:");
+    for (const adv of report.advisories) {
+      parts.push(`    - ${adv}`);
+    }
+  }
+  const mem = renderMemoryLine(memoryStats);
+  if (mem !== null) {
+    parts.push(`  ${mem}`);
+  }
+  return parts.join("\n");
 }
 
 // ---------------------------------------------------------------------------

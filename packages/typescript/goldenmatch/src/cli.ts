@@ -136,7 +136,7 @@ program
   .action(async (files: string[], opts: SharedMatchOpts) => {
     const rows = loadFilesWithSource(files);
     const options = buildOptionsFromFlags(opts);
-    const result = dedupe(rows, options);
+    const result = await dedupe(rows, options);
     const pct = (result.stats.matchRate * 100).toFixed(1);
     process.stdout.write(
       `Dedupe complete: ${result.stats.totalRecords} records -> ${result.stats.totalClusters} clusters (${pct}% match rate)\n`,
@@ -180,7 +180,7 @@ program
         __source__: "reference",
       }));
       const options = buildOptionsFromFlags(opts);
-      const result = match(targetRows, referenceRows, options);
+      const result = await match(targetRows, referenceRows, options);
       process.stdout.write(
         `Match complete: ${result.matched.length} matched, ${result.unmatched.length} unmatched\n`,
       );
@@ -283,7 +283,7 @@ program
 program
   .command("demo")
   .description("Run a quick demo on synthetic data")
-  .action(() => {
+  .action(async () => {
     const rows: Row[] = [
       { id: 1, name: "John Smith", email: "john@example.com", zip: "01234" },
       { id: 2, name: "Jon Smith", email: "john@example.com", zip: "01234" },
@@ -292,7 +292,7 @@ program
       { id: 5, name: "Bob Jones", email: "bob@example.com", zip: "10001" },
     ];
     process.stdout.write(`Input: ${rows.length} synthetic records\n`);
-    const result = dedupe(rows, {
+    const result = await dedupe(rows, {
       exact: ["email"],
       fuzzy: { name: 0.8 },
       blocking: ["zip"],

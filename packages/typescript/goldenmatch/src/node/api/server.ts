@@ -84,6 +84,22 @@ class ReviewQueue {
 
 const reviewQueue = new ReviewQueue();
 
+// Memory store (Phase 2.4.4): bound by `setServerMemoryStore` from server
+// startup or tests. When null, /reviews/decide skips correction writes.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let serverMemoryStore: any = null;
+
+/**
+ * Bind a `MemoryStore` to the REST server. When set, `POST /reviews/decide`
+ * writes a steward correction (empty hashes) on every decision. Pass `null`
+ * to clear.
+ */
+export function setServerMemoryStore(
+  store: import("../../core/memory/types.js").MemoryStore | null,
+): void {
+  serverMemoryStore = store;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -182,7 +198,7 @@ async function handleRequest(
       const body = await readJsonBody(req);
       const rows = asRowArray(body["rows"], "rows");
       const options = extractShorthand(body);
-      const result = dedupe(rows, options);
+      const result = await dedupe(rows, options);
       sendJson(res, 200, {
         stats: {
           total_records: result.stats.totalRecords,
@@ -203,7 +219,7 @@ async function handleRequest(
       const target = asRowArray(body["target"], "target");
       const reference = asRowArray(body["reference"], "reference");
       const options = extractShorthand(body);
-      const result = match(
+      const result = await match(
         target.map((r) => ({ ...r, __source__: "target" })),
         reference.map((r) => ({ ...r, __source__: "reference" })),
         options,
@@ -293,7 +309,7 @@ async function handleRequest(
       const body = await readJsonBody(req);
       const rows = asRowArray(body["rows"], "rows");
       const options = extractShorthand(body);
-      const result = dedupe(rows, options);
+      const result = await dedupe(rows, options);
       const clusters: Array<{
         cluster_id: number;
         size: number;
@@ -331,6 +347,36 @@ async function handleRequest(
       if (!decided) {
         sendJson(res, 404, { error: `review item ${id} not found` });
         return;
+      }
+      // Memory collection (Phase 2.4.4): if a serverMemoryStore is bound,
+      // write a steward correction with EMPTY hashes (REST has no df).
+      if (serverMemoryStore !== null) {
+        try {
+          const { trustForSource } = await import("../../core/memory/types.js");
+          await serverMemoryStore.addCorrection({
+            id: crypto.randomUUID(),
+            idA: Math.min(decided.idA, decided.idB),
+            idB: Math.max(decided.idA, decided.idB),
+            decision: accept ? "approve" : "reject",
+            source: "steward",
+            trust: trustForSource("steward"),
+            fieldHash: "",
+            recordHash: "",
+            originalScore: decided.score,
+            matchkeyName: null,
+            reason: null,
+            dataset: null,
+            createdAt: new Date(),
+          });
+        } catch (err) {
+          // Never fail the REST decision because memory write failed.
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Memory write failed for /reviews/decide ${id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
       }
       sendJson(res, 200, { decided });
       return;

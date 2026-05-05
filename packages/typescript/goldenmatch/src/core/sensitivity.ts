@@ -65,7 +65,7 @@ function setPath(
 // Stats extraction
 // ---------------------------------------------------------------------------
 
-function statsFrom(result: ReturnType<typeof runDedupePipeline>): Record<string, number> {
+function statsFrom(result: Awaited<ReturnType<typeof runDedupePipeline>>): Record<string, number> {
   return {
     totalRecords: result.stats.totalRecords,
     totalClusters: result.stats.totalClusters,
@@ -112,13 +112,13 @@ function cartesianPoints(
  * Per-point errors are caught and stored on the point so that partial
  * results are preserved.
  */
-export function runSensitivity(
+export async function runSensitivity(
   rows: readonly Row[],
   baselineConfig: GoldenMatchConfig,
   params: readonly SweepParam[],
-): SensitivityResult {
+): Promise<SensitivityResult> {
   // Baseline run
-  const baselineRun = runDedupePipeline(rows, baselineConfig);
+  const baselineRun = await runDedupePipeline(rows, baselineConfig);
   const baseline: SweepPoint = {
     params: {},
     stats: statsFrom(baselineRun),
@@ -140,7 +140,7 @@ export function runSensitivity(
     }
 
     try {
-      const runResult = runDedupePipeline(rows, cfg);
+      const runResult = await runDedupePipeline(rows, cfg);
       let twi: number | undefined;
       try {
         twi = compareClusters(baselineRun.clusters, runResult.clusters).twi;

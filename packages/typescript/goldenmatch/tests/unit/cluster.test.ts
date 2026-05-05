@@ -11,13 +11,13 @@ import {
 import type { ClusterInfo } from "../../src/core/index.js";
 
 describe("UnionFind", () => {
-  it("add + find returns self", () => {
+  it("add + find returns self", async () => {
     const uf = new UnionFind();
     uf.add(1);
     expect(uf.find(1)).toBe(1);
   });
 
-  it("union joins two elements", () => {
+  it("union joins two elements", async () => {
     const uf = new UnionFind();
     uf.add(1);
     uf.add(2);
@@ -25,7 +25,7 @@ describe("UnionFind", () => {
     expect(uf.find(1)).toBe(uf.find(2));
   });
 
-  it("getClusters returns grouping", () => {
+  it("getClusters returns grouping", async () => {
     const uf = new UnionFind();
     uf.addMany([1, 2, 3, 4]);
     uf.union(1, 2);
@@ -36,7 +36,7 @@ describe("UnionFind", () => {
     expect(sizes).toEqual([2, 2]);
   });
 
-  it("transitive closure", () => {
+  it("transitive closure", async () => {
     const uf = new UnionFind();
     uf.addMany([1, 2, 3]);
     uf.union(1, 2);
@@ -46,7 +46,7 @@ describe("UnionFind", () => {
 });
 
 describe("buildClusters", () => {
-  it("simple pairs produce expected clusters", () => {
+  it("simple pairs produce expected clusters", async () => {
     const pairs: [number, number, number][] = [
       [1, 2, 0.95],
       [3, 4, 0.9],
@@ -58,7 +58,7 @@ describe("buildClusters", () => {
     expect(sizes).toEqual([1, 2, 2]);
   });
 
-  it("cluster with only singletons", () => {
+  it("cluster with only singletons", async () => {
     const clusters = buildClusters([], [1, 2, 3]);
     expect(clusters.size).toBe(3);
     for (const c of clusters.values()) {
@@ -66,7 +66,7 @@ describe("buildClusters", () => {
     }
   });
 
-  it("weak cluster detection downgrades confidence", () => {
+  it("weak cluster detection downgrades confidence", async () => {
     // Chain with weak link: edges (1,2)=0.95, (2,3)=0.95, (1,3)=0.3
     // avg - min = (0.95+0.95+0.3)/3 - 0.3 ~= 0.433, > 0.3 threshold
     const pairs: [number, number, number][] = [
@@ -79,7 +79,7 @@ describe("buildClusters", () => {
     expect(single.clusterQuality).toBe("weak");
   });
 
-  it("oversized cluster auto-splits", () => {
+  it("oversized cluster auto-splits", async () => {
     // With maxClusterSize=2, 3 fully-connected nodes should split
     const pairs: [number, number, number][] = [
       [1, 2, 0.9],
@@ -91,7 +91,7 @@ describe("buildClusters", () => {
     expect(clusters.size).toBeGreaterThan(1);
   });
 
-  it("auto-split disabled leaves oversized", () => {
+  it("auto-split disabled leaves oversized", async () => {
     const pairs: [number, number, number][] = [
       [1, 2, 0.9],
       [2, 3, 0.9],
@@ -108,13 +108,13 @@ describe("buildClusters", () => {
 });
 
 describe("computeClusterConfidence", () => {
-  it("singleton confidence 1.0", () => {
+  it("singleton confidence 1.0", async () => {
     const conf = computeClusterConfidence(new Map(), 1);
     expect(conf.confidence).toBe(1.0);
     expect(conf.minEdge).toBe(null);
   });
 
-  it("confidence formula: 0.4*min + 0.3*avg + 0.3*connectivity", () => {
+  it("confidence formula: 0.4*min + 0.3*avg + 0.3*connectivity", async () => {
     // One pair, size=2 — fully connected so connectivity=1.0
     const pairs = new Map([[pairKey(1, 2), 0.8]]);
     const conf = computeClusterConfidence(pairs, 2);
@@ -125,7 +125,7 @@ describe("computeClusterConfidence", () => {
     expect(conf.confidence).toBeCloseTo(0.86, 5);
   });
 
-  it("bottleneck pair is weakest edge", () => {
+  it("bottleneck pair is weakest edge", async () => {
     const pairs = new Map([
       [pairKey(1, 2), 0.9],
       [pairKey(2, 3), 0.5],
@@ -136,7 +136,7 @@ describe("computeClusterConfidence", () => {
 });
 
 describe("unmergeRecord", () => {
-  it("removes a record and makes it singleton", () => {
+  it("removes a record and makes it singleton", async () => {
     const pairs: [number, number, number][] = [
       [1, 2, 0.95],
       [2, 3, 0.95],
@@ -146,7 +146,7 @@ describe("unmergeRecord", () => {
     // Cluster has {1,2,3}
     expect(clusters.size).toBe(1);
 
-    const updated = unmergeRecord(1, clusters);
+    const updated = await unmergeRecord(1, clusters);
     // Now record 1 is a singleton; 2,3 may still be together
     const allMembers: number[] = [];
     for (const c of updated.values()) {
@@ -166,11 +166,11 @@ describe("unmergeRecord", () => {
 });
 
 describe("unmergeCluster", () => {
-  it("shatters cluster into singletons", () => {
+  it("shatters cluster into singletons", async () => {
     const pairs: [number, number, number][] = [[1, 2, 0.95], [2, 3, 0.95]];
     const clusters = buildClusters(pairs, [1, 2, 3]);
     const cid = [...clusters.keys()][0]!;
-    const updated = unmergeCluster(cid, clusters);
+    const updated = await unmergeCluster(cid, clusters);
     expect(updated.size).toBe(3);
     for (const c of updated.values()) {
       expect(c.size).toBe(1);
@@ -179,7 +179,7 @@ describe("unmergeCluster", () => {
 });
 
 describe("addToCluster", () => {
-  it("no match -> singleton", () => {
+  it("no match -> singleton", async () => {
     const clusters = new Map<number, ClusterInfo>();
     addToCluster(5, [], clusters);
     expect(clusters.size).toBe(1);
@@ -188,7 +188,7 @@ describe("addToCluster", () => {
     expect(c.size).toBe(1);
   });
 
-  it("1 cluster match -> joins that cluster", () => {
+  it("1 cluster match -> joins that cluster", async () => {
     // Start with cluster {1,2}
     const pairs: [number, number, number][] = [[1, 2, 0.9]];
     const clusters = buildClusters(pairs, [1, 2]);
@@ -198,7 +198,7 @@ describe("addToCluster", () => {
     expect(sizes).toContain(3);
   });
 
-  it("2+ cluster matches -> merges clusters", () => {
+  it("2+ cluster matches -> merges clusters", async () => {
     const pairs: [number, number, number][] = [
       [1, 2, 0.9],
       [3, 4, 0.9],
