@@ -310,6 +310,316 @@ program
     }
   });
 
+// ---------- memory ----------
+const memoryCmd = program
+  .command("memory")
+  .description("Inspect and manage Learning Memory");
+
+memoryCmd
+  .command("stats")
+  .description("Show counts, last learn time, and current adjustments")
+  .option("--path <path>", "Memory DB path", ".goldenmatch/memory.db")
+  .action(async (opts: { path: string }) => {
+    const { memoryStats } = await import("./node/memory/api.js");
+    const s = await memoryStats({ path: opts.path });
+    process.stdout.write(`Corrections: ${s.count}\n`);
+    process.stdout.write(
+      `Last learn:  ${s.lastLearnTime ? s.lastLearnTime.toISOString() : "(never)"}\n`,
+    );
+    process.stdout.write(`Adjustments: ${s.adjustments.length}\n`);
+    for (const a of s.adjustments) {
+      const thr = a.threshold !== null ? a.threshold.toFixed(3) : "-";
+      const learned = a.learnedAt.toISOString();
+      process.stdout.write(
+        `  ${a.matchkeyName}: threshold=${thr} samples=${a.sampleSize} learned=${learned}\n`,
+      );
+    }
+  });
+
+memoryCmd
+  .command("learn")
+  .description("Force a learning pass over stored corrections")
+  .option("--matchkey-name <name>", "Limit learning to this matchkey")
+  .option("--path <path>", "Memory DB path", ".goldenmatch/memory.db")
+  .action(async (opts: { matchkeyName?: string; path: string }) => {
+    const { learn } = await import("./node/memory/api.js");
+    const learnOpts: { matchkeyName?: string; path?: string } = {
+      path: opts.path,
+    };
+    if (opts.matchkeyName) learnOpts.matchkeyName = opts.matchkeyName;
+    const adjustments = await learn(learnOpts);
+    if (adjustments.length === 0) {
+      process.stdout.write(
+        "No adjustments produced (need >=10 corrections with both approve and reject decisions).\n",
+      );
+      return;
+    }
+    process.stdout.write(`Learned ${adjustments.length} adjustment(s):\n`);
+    for (const a of adjustments) {
+      const thr = a.threshold !== null ? a.threshold.toFixed(3) : "-";
+      process.stdout.write(
+        `  ${a.matchkeyName}: threshold=${thr} samples=${a.sampleSize}\n`,
+      );
+    }
+  });
+
+const _CSV_FIELDS = [
+  "id",
+  "id_a",
+  "id_b",
+  "decision",
+  "source",
+  "trust",
+  "field_hash",
+  "record_hash",
+  "original_score",
+  "matchkey_name",
+  "reason",
+  "dataset",
+  "created_at",
+] as const;
+
+function csvEscape(v: string | number | null | undefined): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+memoryCmd
+  .command("export")
+  .description("Dump all corrections as CSV")
+  .argument("<out>", "Output CSV path")
+  .option("--path <path>", "Memory DB path", ".goldenmatch/memory.db")
+  .action(async (out: string, opts: { path: string }) => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+    const { getMemory } = await import("./node/memory/api.js");
+    const store = await getMemory({ path: opts.path });
+    let corrections;
+    try {
+      corrections = await store.getCorrections();
+    } finally {
+      await store.close?.();
+    }
+    const dir = dirname(out);
+    if (dir && dir !== ".") mkdirSync(dir, { recursive: true });
+    const lines: string[] = [];
+    lines.push(_CSV_FIELDS.join(","));
+    for (const c of corrections) {
+      lines.push(
+        [
+          csvEscape(c.id),
+          csvEscape(c.idA),
+          csvEscape(c.idB),
+          csvEscape(c.decision),
+          csvEscape(c.source),
+          csvEscape(c.trust),
+          csvEscape(c.fieldHash || ""),
+          csvEscape(c.recordHash || ""),
+          csvEscape(c.originalScore),
+          csvEscape(c.matchkeyName || ""),
+          csvEscape(c.reason || ""),
+          csvEscape(c.dataset || ""),
+          csvEscape(c.createdAt.toISOString()),
+        ].join(","),
+      );
+    }
+    writeFileSync(out, lines.join("\n") + "\n", "utf-8");
+    process.stdout.write(`Exported ${corrections.length} corrections to ${out}\n`);
+  });
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let i = 0;
+  let inQuotes = false;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      cur += ch;
+      i++;
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+        i++;
+      } else if (ch === ",") {
+        out.push(cur);
+        cur = "";
+        i++;
+      } else {
+        cur += ch;
+        i++;
+      }
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+memoryCmd
+  .command("import")
+  .description("Load corrections from CSV. Skips malformed rows with a warning")
+  .argument("<src>", "Source CSV path")
+  .option("--path <path>", "Memory DB path", ".goldenmatch/memory.db")
+  .action(async (src: string, opts: { path: string }) => {
+    const { readFileSync, existsSync } = await import("node:fs");
+    if (!existsSync(src)) {
+      process.stderr.write(`File not found: ${src}\n`);
+      process.exit(1);
+    }
+    const { getMemory } = await import("./node/memory/api.js");
+    const { trustForSource } = await import("./core/memory/types.js");
+    const text = readFileSync(src, "utf-8");
+    const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+    if (lines.length === 0) {
+      process.stderr.write("Empty CSV file\n");
+      process.exit(1);
+    }
+    const header = parseCsvLine(lines[0]!);
+    const required = ["id_a", "id_b", "decision", "source"];
+    const missing = required.filter((r) => !header.includes(r));
+    if (missing.length > 0) {
+      process.stderr.write(
+        `Malformed CSV: missing required columns: ${JSON.stringify(missing)}\n`,
+      );
+      process.exit(1);
+    }
+    const colIdx: Record<string, number> = {};
+    header.forEach((h, idx) => {
+      colIdx[h] = idx;
+    });
+    const get = (cells: string[], col: string): string =>
+      colIdx[col] !== undefined ? (cells[colIdx[col]!] ?? "") : "";
+
+    const store = await getMemory({ path: opts.path });
+    let imported = 0;
+    let skipped = 0;
+    try {
+      for (let li = 1; li < lines.length; li++) {
+        const cells = parseCsvLine(lines[li]!);
+        const idA = parseInt(get(cells, "id_a"), 10);
+        const idB = parseInt(get(cells, "id_b"), 10);
+        if (!Number.isFinite(idA) || !Number.isFinite(idB)) {
+          process.stderr.write(
+            `Skipping malformed row ${li + 1}: cannot parse id_a/id_b\n`,
+          );
+          skipped++;
+          continue;
+        }
+        const decision = get(cells, "decision");
+        if (decision !== "approve" && decision !== "reject") {
+          process.stderr.write(
+            `Skipping malformed row ${li + 1}: invalid decision ${decision}\n`,
+          );
+          skipped++;
+          continue;
+        }
+        const source = get(cells, "source") || "api";
+        const trustRaw = get(cells, "trust");
+        const trust = trustRaw ? parseFloat(trustRaw) : trustForSource(source);
+        const origScoreRaw = get(cells, "original_score");
+        const originalScore = origScoreRaw ? parseFloat(origScoreRaw) : 0.0;
+        const createdRaw = get(cells, "created_at");
+        let createdAt: Date;
+        if (createdRaw) {
+          const d = new Date(createdRaw);
+          createdAt = isNaN(d.getTime()) ? new Date() : d;
+        } else {
+          createdAt = new Date();
+        }
+        const id = get(cells, "id") || crypto.randomUUID();
+        await store.addCorrection({
+          id,
+          idA,
+          idB,
+          decision: decision as "approve" | "reject",
+          source: source as
+            | "steward"
+            | "boost"
+            | "unmerge"
+            | "agent"
+            | "llm"
+            | "api",
+          trust: Number.isFinite(trust) ? trust : 0.5,
+          fieldHash: get(cells, "field_hash"),
+          recordHash: get(cells, "record_hash"),
+          originalScore: Number.isFinite(originalScore) ? originalScore : 0.0,
+          matchkeyName: get(cells, "matchkey_name") || null,
+          reason: get(cells, "reason") || null,
+          dataset: get(cells, "dataset") || null,
+          createdAt,
+        });
+        imported++;
+      }
+    } finally {
+      await store.close?.();
+    }
+    let msg = `Imported ${imported} corrections from ${src}`;
+    if (skipped > 0) msg += ` (skipped ${skipped} malformed row(s))`;
+    process.stdout.write(msg + "\n");
+  });
+
+memoryCmd
+  .command("show")
+  .description("Pretty-print a single stored correction")
+  .argument("<idA>", "First record ID")
+  .argument("<idB>", "Second record ID")
+  .option("--path <path>", "Memory DB path", ".goldenmatch/memory.db")
+  .action(async (idAStr: string, idBStr: string, opts: { path: string }) => {
+    const { getMemory } = await import("./node/memory/api.js");
+    const idA = parseInt(idAStr, 10);
+    const idB = parseInt(idBStr, 10);
+    if (!Number.isFinite(idA) || !Number.isFinite(idB)) {
+      process.stderr.write("idA and idB must be integers\n");
+      process.exit(1);
+    }
+    const store = await getMemory({ path: opts.path });
+    let c;
+    try {
+      // Try with no dataset first; if not found try without filter via getCorrections.
+      c = await store.getCorrection(idA, idB, null);
+      if (c === null) {
+        const all = await store.getCorrections();
+        const lo = Math.min(idA, idB);
+        const hi = Math.max(idA, idB);
+        c = all.find((x) => x.idA === lo && x.idB === hi) ?? null;
+      }
+    } finally {
+      await store.close?.();
+    }
+    if (c === null) {
+      process.stderr.write(`No correction found for pair (${idA}, ${idB}).\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`Correction (${c.idA}, ${c.idB}):\n`);
+    process.stdout.write(`  id:             ${c.id}\n`);
+    process.stdout.write(`  decision:       ${c.decision}\n`);
+    process.stdout.write(`  source:         ${c.source}\n`);
+    process.stdout.write(`  trust:          ${c.trust.toFixed(2)}\n`);
+    process.stdout.write(`  matchkey_name:  ${c.matchkeyName ?? ""}\n`);
+    process.stdout.write(`  reason:         ${c.reason ?? ""}\n`);
+    process.stdout.write(`  dataset:        ${c.dataset ?? ""}\n`);
+    process.stdout.write(
+      `  original_score: ${c.originalScore.toFixed(3)}\n`,
+    );
+    process.stdout.write(`  field_hash:     ${c.fieldHash}\n`);
+    process.stdout.write(`  record_hash:    ${c.recordHash}\n`);
+    process.stdout.write(`  created_at:     ${c.createdAt.toISOString()}\n`);
+  });
+
 // ---------- mcp-serve ----------
 program
   .command("mcp-serve")
