@@ -208,5 +208,8 @@ export function correctionFromJSON(j: CorrectionJSON): Correction {
 // ---------------------------------------------------------------------------
 // Re-exports of caller-facing config types (defined in core/types.ts)
 // ---------------------------------------------------------------------------
+// These flow through `core/memory/index.ts` (the barrel) to `core/index.ts`,
+// which is why `core/index.ts` does NOT also list them in its named export
+// from `./types.js` -- doing so would duplicate the export.
 
 export type { MemoryConfig, LearningConfig } from "../types.js";
