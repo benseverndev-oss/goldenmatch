@@ -1,13 +1,4 @@
-"""MCP tool surface for Learning Memory.
-
-Five tools wrap MemoryStore + MemoryLearner operations:
-  list_corrections, add_correction, learn_thresholds, memory_stats, memory_export.
-
-Each handler instantiates its own MemoryStore (matches AgentSession pattern in
-agent_tools.py -- no shared global state). All handlers trap
-sqlite3.OperationalError and return a structured JSON error in TextContent
-rather than raising, so a failed memory call cannot crash an MCP session.
-"""
+"""MCP tool surface for Learning Memory."""
 from __future__ import annotations
 
 import json
@@ -166,8 +157,7 @@ def _adjustment_to_dict(a: Any) -> dict:
     }
 
 
-# Re-export point for tests/monkeypatching: the dispatcher reads MemoryStore
-# from this module so tests can swap it out.
+# Re-export so tests can monkeypatch the dispatcher's MemoryStore.
 from goldenmatch.core.memory.store import MemoryStore as MemoryStore  # noqa: E402,F401
 
 
@@ -206,7 +196,6 @@ def _dispatch(name: str, args: dict) -> dict:
         }
 
     if name == "add_correction":
-        # Validate required, non-empty dataset.
         dataset = args.get("dataset")
         if not dataset:
             return {"error": "Missing or empty required parameter: dataset"}

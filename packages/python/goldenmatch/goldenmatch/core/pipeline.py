@@ -497,9 +497,6 @@ def _run_dedupe_pipeline(
             combined_lf = combined_df_tmp.lazy()
 
     # ── Learning Memory: pre-scoring learner overlay ──
-    # Threshold adjustments are mutated onto the matchkeys parameter in place;
-    # rebinding to a fresh list would shadow the parameter that the scoring
-    # loop below reads.
     _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 2: TRANSFORM ──
