@@ -161,15 +161,18 @@ def import_cmd(
                 f"{sorted(missing)}[/red]"
             )
             raise typer.Exit(code=1)
+        skipped = 0
         for i, row in enumerate(reader, start=2):  # line 1 is header
             try:
                 row["id_a"] = int(row["id_a"])
                 row["id_b"] = int(row["id_b"])
             except (KeyError, ValueError, TypeError) as e:
                 err_console.print(
-                    f"[red]Malformed CSV at row {i}: cannot parse id_a/id_b ({e})[/red]"
+                    f"[yellow]Skipping malformed row {i}: cannot parse "
+                    f"id_a/id_b ({e})[/yellow]"
                 )
-                raise typer.Exit(code=1)
+                skipped += 1
+                continue
             rows.append(row)
 
     store = goldenmatch.get_memory(path)
@@ -205,7 +208,10 @@ def import_cmd(
     finally:
         store.close()
 
-    console.print(f"[green]Imported {len(rows)} corrections from {src_path}[/green]")
+    msg = f"[green]Imported {len(rows)} corrections from {src_path}[/green]"
+    if skipped:
+        msg += f" [yellow](skipped {skipped} malformed row(s))[/yellow]"
+    console.print(msg)
 
 
 @memory_app.command("show")

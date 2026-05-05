@@ -154,3 +154,33 @@ def test_cli_memory_import_rejects_malformed_csv(tmp_path):
     bad.write_text("foo,bar\n1,2\n", encoding="utf-8")
     res = runner.invoke(app, ["memory", "import", str(bad), "--path", p])
     assert res.exit_code == 1
+
+
+def test_cli_memory_import_skips_malformed_rows(tmp_path):
+    """Mixed valid/invalid rows: header is fine so import proceeds, but each
+    invalid row is skipped with a warning printed. The valid rows land in the
+    store; the malformed ones do not."""
+    runner = CliRunner()
+    p = str(tmp_path / "mem.db")
+    src = tmp_path / "mixed.csv"
+    src.write_text(
+        "id_a,id_b,decision,source\n"
+        "1,2,approve,steward\n"
+        "not_an_int,3,approve,steward\n"  # malformed id_a
+        "4,not_an_int,reject,steward\n"   # malformed id_b
+        "5,6,reject,steward\n",
+        encoding="utf-8",
+    )
+    res = runner.invoke(app, ["memory", "import", str(src), "--path", p])
+    assert res.exit_code == 0, res.output
+    # Two malformed rows were skipped; two good rows imported.
+    from goldenmatch.core.memory.store import MemoryStore
+
+    store = MemoryStore(backend="sqlite", path=p)
+    try:
+        items = store.get_corrections()
+    finally:
+        store.close()
+    assert len(items) == 2
+    pairs = sorted({(c.id_a, c.id_b) for c in items})
+    assert pairs == [(1, 2), (5, 6)]
