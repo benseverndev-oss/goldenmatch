@@ -15,6 +15,12 @@ import type { Row, ScoredPair, LLMScorerConfig } from "../types.js";
 import { makeScoredPair } from "../types.js";
 import { BudgetTracker, countTokensApprox } from "./budget.js";
 import type { BudgetSnapshot } from "./budget.js";
+import type { MemoryStore } from "../memory/types.js";
+import { trustForSource } from "../memory/types.js";
+import {
+  computeFieldHash,
+  computeRecordHash,
+} from "../memory/hash.js";
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -240,8 +246,8 @@ async function scoreBatch(
   }
 }
 
-/** A stable numeric key for a pair, used as a Map index. */
-function pairIndex(pair: ScoredPair): number {
+/** A stable numeric key for a pair, used as a Map index. Exported for tests. */
+export function pairIndex(pair: ScoredPair): number {
   // Cantor pairing on the canonical (min,max) ids.
   const a = Math.min(pair.idA, pair.idB);
   const b = Math.max(pair.idA, pair.idB);
@@ -258,11 +264,19 @@ function pairIndex(pair: ScoredPair): number {
  *
  * When no `apiKey` is available, degrades gracefully and returns the input.
  */
+export interface LlmMemoryOpts {
+  readonly memoryStore?: MemoryStore | null;
+  readonly matchkeyFields?: ReadonlyArray<string>;
+  readonly dataset?: string | null;
+  readonly matchkeyName?: string | null;
+}
+
 export async function llmScorePairs(
   pairs: readonly ScoredPair[],
   rows: readonly Row[],
   config: LLMScorerConfig,
   apiKey?: string,
+  memoryOpts?: LlmMemoryOpts,
 ): Promise<LLMScoreResult> {
   const budget = new BudgetTracker(
     config.budget ?? {},
@@ -343,7 +357,64 @@ export async function llmScorePairs(
     }
   }
 
+  // Memory: persist each LLM decision as a Correction (source='llm', trust=0.5).
+  if (memoryOpts?.memoryStore) {
+    await _writeLlmCorrections(
+      candidates,
+      llmDecisions,
+      rowById,
+      memoryOpts,
+    );
+  }
+
   return { pairs: resultPairs, budget: budget.snapshot() };
+}
+
+/**
+ * Exported for testing only. Writes Corrections for a set of LLM decisions.
+ * Production callers go through `llmScorePairs`.
+ */
+export async function _writeLlmCorrections(
+  candidates: ReadonlyArray<ScoredPair>,
+  llmDecisions: ReadonlyMap<number, boolean>,
+  rowById: ReadonlyMap<number, Row>,
+  opts: LlmMemoryOpts,
+): Promise<void> {
+  const store = opts.memoryStore;
+  if (!store) return;
+  const fields = opts.matchkeyFields ?? [];
+  for (const p of candidates) {
+    const dec = llmDecisions.get(pairIndex(p));
+    if (dec === undefined) continue;
+    const rowA = rowById.get(p.idA);
+    const rowB = rowById.get(p.idB);
+    let fieldHash = "";
+    let recordHash = "";
+    if (rowA && rowB) {
+      const cols = Object.keys(rowA);
+      const valsA = fields.map((f) => rowA[f]);
+      const valsB = fields.map((f) => rowB[f]);
+      fieldHash = await computeFieldHash(valsA, valsB);
+      const rhA = await computeRecordHash(rowA, cols);
+      const rhB = await computeRecordHash(rowB, cols);
+      recordHash = `${rhA}:${rhB}`;
+    }
+    await store.addCorrection({
+      id: crypto.randomUUID(),
+      idA: Math.min(p.idA, p.idB),
+      idB: Math.max(p.idA, p.idB),
+      decision: dec ? "approve" : "reject",
+      source: "llm",
+      trust: trustForSource("llm"),
+      fieldHash,
+      recordHash,
+      originalScore: p.score,
+      matchkeyName: opts.matchkeyName ?? null,
+      reason: null,
+      dataset: opts.dataset ?? null,
+      createdAt: new Date(),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

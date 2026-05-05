@@ -88,6 +88,52 @@ function buildPairCluster(
   return m;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2.4.3: LLM scorer collection
+// ---------------------------------------------------------------------------
+
+import { _writeLlmCorrections, pairIndex } from "../../src/core/llm/scorer.js";
+import type { Row } from "../../src/core/types.js";
+
+describe("Phase 2.4.3: llmScorePairs collection", () => {
+  it(
+    "_writeLlmCorrections writes one llm correction per decided pair",
+    { timeout: 15000 },
+    async () => {
+      const store = new InMemoryStore();
+      const rowById = new Map<number, Row>([
+        [0, { __row_id__: 0, name: "Acme Corp", zip: "10001" }],
+        [1, { __row_id__: 1, name: "Acme LLC", zip: "10001" }],
+        [2, { __row_id__: 2, name: "Beta", zip: "20002" }],
+        [3, { __row_id__: 3, name: "Beta Inc", zip: "20002" }],
+      ]);
+      const candidates = [
+        { idA: 0, idB: 1, score: 0.8 },
+        { idA: 2, idB: 3, score: 0.78 },
+      ];
+      const decisions = new Map<number, boolean>([
+        [pairIndex({ idA: 0, idB: 1, score: 0 }), true],
+        [pairIndex({ idA: 2, idB: 3, score: 0 }), false],
+      ]);
+      await _writeLlmCorrections(candidates, decisions, rowById, {
+        memoryStore: store,
+        matchkeyFields: ["name"],
+        matchkeyName: "identity",
+      });
+      const all = await store.getCorrections();
+      expect(all.length).toBe(2);
+      for (const c of all) {
+        expect(c.source).toBe("llm");
+        expect(c.trust).toBe(0.5);
+        expect(c.fieldHash.length).toBeGreaterThan(0);
+        expect(c.recordHash.length).toBeGreaterThan(0);
+      }
+      expect(all.find((c) => c.idA === 0)!.decision).toBe("approve");
+      expect(all.find((c) => c.idA === 2)!.decision).toBe("reject");
+    },
+  );
+});
+
 describe("Phase 2.4.2: unmerge collection", () => {
   it(
     "unmergeRecord with memoryStore writes empty-hash unmerge correction",
