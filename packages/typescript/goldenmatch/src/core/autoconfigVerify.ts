@@ -232,7 +232,7 @@ export function renderPostflight(
   memoryStats?: CorrectionStats | null,
 ): string {
   const parts: string[] = ["PostflightReport:"];
-  if (Object.keys(report.signals as Record<string, unknown>).length > 0) {
+  if (Object.keys(report.signals as unknown as Record<string, unknown>).length > 0) {
     parts.push(`  signals: ${JSON.stringify(report.signals)}`);
   }
   if (report.adjustments.length > 0) {

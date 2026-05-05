@@ -81,7 +81,7 @@ describe("Phase 2.5: Learning Memory e2e scenarios", () => {
       // Simpler approach: use empty-hash short-circuit to validate the
       // re-anchor *path* survives the row id swap.
       await seedReject(store, 0, 1);
-      const reordered = [ROWS_3[2], ROWS_3[1], ROWS_3[0]];
+      const reordered = [ROWS_3[2]!, ROWS_3[1]!, ROWS_3[0]!];
       const r = await dedupe(reordered, {
         ...SHARED_OPTS,
         memoryStore: store,
