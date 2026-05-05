@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from goldenmatch.web.labels import append_label, read_labels_dedup
 
@@ -15,6 +15,12 @@ class LabelIn(BaseModel):
     row_id_b: int
     label: Literal["match", "non_match"]
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_self_pair(self) -> "LabelIn":
+        if self.row_id_a == self.row_id_b:
+            raise ValueError("row_id_a and row_id_b must differ (self-pair has no meaning)")
+        return self
 
 
 @router.post("")
