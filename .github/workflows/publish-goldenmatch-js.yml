@@ -62,9 +62,13 @@ jobs:
           fi
           echo "Version OK: $PKG_VERSION"
 
-      - name: Pack (dry-run)
+      - name: Pack (dry-run validation)
         if: github.event.inputs.dry-run == 'true'
-        run: pnpm pack --dry-run
+        # pnpm pack has no --dry-run flag; it always writes a .tgz. Running it
+        # here with dry-run=true validates the package can be packed cleanly
+        # (file list, entry points, version, etc.) without publishing. The
+        # artifact stays on the runner and is discarded on job teardown.
+        run: pnpm pack
 
       - name: Publish to npm
         if: github.event.inputs.dry-run != 'true'
