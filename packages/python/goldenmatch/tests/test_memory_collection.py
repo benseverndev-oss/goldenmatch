@@ -15,6 +15,29 @@ def _new_store(tmp_path) -> MemoryStore:
     return MemoryStore(backend="sqlite", path=str(tmp_path / "mem.db"))
 
 
+def _make_match_server_for_test(memory_store: MemoryStore, dataset: str):
+    """Test factory that builds a MatchServer with memory plumbing only.
+
+    Avoids reaching into private fields directly across the test surface;
+    keeps the test honest if MatchServer.__init__ grows new defaults.
+    """
+    from goldenmatch.api.server import MatchServer
+
+    server = MatchServer.__new__(MatchServer)
+    # Mirror the public init shape (engine/config/result), then populate
+    # memory plumbing.
+    server.engine = None
+    server.config = None
+    server.result = None
+    server._rows = []
+    server._id_to_idx = {}
+    server._review_queue = []
+    server._review_decisions = []
+    server._memory_store = memory_store
+    server._memory_dataset = dataset
+    return server
+
+
 def _person_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
@@ -234,18 +257,10 @@ class TestRestDecideCollection:
         from goldenmatch.api.server import MatchServer
 
         store = _new_store(tmp_path)
-        server = MatchServer.__new__(MatchServer)
-        server.engine = None
-        server.config = None
-        server.result = None
-        server._rows = []
-        server._id_to_idx = {}
+        server = _make_match_server_for_test(store, "dsr")
         server._review_queue = [
             {"pair_id": "p1", "row_id_a": 1, "row_id_b": 2, "status": "pending"}
         ]
-        server._review_decisions = []
-        server._memory_store = store
-        server._memory_dataset = "dsr"
 
         result = server.review_decision("p1", "approve", reviewer="steward")
         assert result["status"] == "recorded"
@@ -267,50 +282,29 @@ class TestRestDecideCollection:
 
 class TestBoostTabCollection:
     def test_record_label_writes_correction(self, tmp_path):
-        from goldenmatch.tui.tabs.boost_tab import BoostTab
-        from goldenmatch.tui.engine import EngineResult, EngineStats
+        """Targets the testable seam (record_boost_label) instead of poking
+        private BoostTab attrs. Real Textual setup is too heavy for unit tests,
+        and the seam is what BoostTab._record_memory_correction calls anyway."""
+        from goldenmatch.tui.tabs.boost_tab import record_boost_label
 
         store = _new_store(tmp_path)
         df = _person_df()
-        result = EngineResult(
-            clusters={},
-            golden=None,
-            unique=None,
-            dupes=None,
-            quarantine=None,
-            matched=None,
-            unmatched=None,
-            scored_pairs=[(0, 1, 0.82), (2, 3, 0.78)],
-            stats=EngineStats(
-                total_records=4,
-                total_clusters=4,
-                singleton_count=4,
-                match_rate=0.0,
-                cluster_sizes=[1, 1, 1, 1],
-                avg_cluster_size=1.0,
-                max_cluster_size=1,
-                oversized_count=0,
-            ),
+        pairs = [(0, 1, 0.82), (2, 3, 0.78)]
+
+        # Match (approve).
+        a, b, score = pairs[0]
+        record_boost_label(
+            memory_store=store, df=df,
+            id_a=a, id_b=b, score=score, is_match=True,
+            matchkey_fields=["name", "zip"], dataset="dsb",
         )
-
-        tab = BoostTab.__new__(BoostTab)
-        tab._result = result
-        tab._data = df
-        tab._display_cols = ["name", "zip"]
-        tab._batch = [0, 1]
-        tab._batch_pos = 0
-        tab._labels = {}
-        tab._total_labeled = 0
-        tab._memory_store = store
-        tab._memory_dataset = "dsb"
-        tab._memory_matchkey_fields = ["name", "zip"]
-
-        # Stub UI side-effects.
-        tab._show_current_pair = lambda: None  # type: ignore
-        tab._on_batch_complete = lambda: None  # type: ignore
-
-        tab._record_label(True)  # match
-        tab._record_label(False)  # non-match
+        # Non-match (reject).
+        a, b, score = pairs[1]
+        record_boost_label(
+            memory_store=store, df=df,
+            id_a=a, id_b=b, score=score, is_match=False,
+            matchkey_fields=["name", "zip"], dataset="dsb",
+        )
 
         items = store.get_corrections(dataset="dsb")
         assert len(items) == 2

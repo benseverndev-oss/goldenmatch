@@ -910,7 +910,8 @@ def add_correction(
     from datetime import datetime
     from goldenmatch.core.memory.store import Correction
 
-    trust = 1.0 if source in {"steward", "boost", "unmerge"} else 0.5
+    from goldenmatch.core.memory.store import HIGH_TRUST_SOURCES
+    trust = 1.0 if source in HIGH_TRUST_SOURCES else 0.5
     store = get_memory(path)
     try:
         store.add_correction(Correction(

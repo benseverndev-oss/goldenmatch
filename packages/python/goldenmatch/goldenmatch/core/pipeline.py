@@ -131,7 +131,10 @@ def _apply_memory_post(
         )
     except Exception as e:
         logger.warning("Memory apply_corrections failed: %s", e)
-        return all_pairs, None
+        from goldenmatch.core.memory.corrections import CorrectionStats
+        return all_pairs, CorrectionStats(
+            total_pairs=len(all_pairs), failed=True, error=str(e),
+        )
 
 
 def _derive_review_queue_path(config: GoldenMatchConfig) -> str | None:

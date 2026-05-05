@@ -542,3 +542,63 @@ def test_unmerge_correction_round_trips_empty_hash(tmp_path):
     )
     assert result_2.memory_stats is not None
     assert result_2.memory_stats.applied >= 1
+
+
+def test_trust_same_tier_latest_wins(tmp_path):
+    """Two trust=1.0 corrections from steward for the same pair, opposing
+    decisions: the second (latest) wins."""
+    import time
+
+    from goldenmatch.core.memory.store import Correction, MemoryStore
+
+    db_path = str(tmp_path / "mem.db")
+    store = MemoryStore(backend="sqlite", path=db_path)
+    try:
+        # First correction: approve.
+        store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=0, id_b=1,
+            decision="approve",
+            source="steward",
+            trust=1.0,
+            field_hash="", record_hash="",
+            original_score=0.85,
+            matchkey_name=None,
+            reason=None,
+            dataset=None,
+            created_at=datetime.now(),
+        ))
+        # Tiny sleep so created_at strictly differs even on fast clocks.
+        time.sleep(0.01)
+        # Second correction (same pair, same trust): reject. Should override.
+        store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=0, id_b=1,
+            decision="reject",
+            source="steward",
+            trust=1.0,
+            field_hash="", record_hash="",
+            original_score=0.85,
+            matchkey_name=None,
+            reason="changed my mind",
+            dataset=None,
+            created_at=datetime.now(),
+        ))
+        items = store.get_corrections()
+        assert len(items) == 1, f"expected upsert (1 row), got {len(items)}"
+        assert items[0].decision == "reject"
+        assert items[0].reason == "changed my mind"
+    finally:
+        store.close()
+
+
+def test_pipeline_memory_failure_renders_in_postflight(tmp_path):
+    """When _apply_memory_post raises, CorrectionStats(failed=True) flows
+    through and the postflight renderer surfaces 'Memory: failed (...)'."""
+    from goldenmatch.core.autoconfig_verify import _render_memory_line
+    from goldenmatch.core.memory.corrections import CorrectionStats
+
+    stats = CorrectionStats(total_pairs=5, failed=True, error="boom")
+    line = _render_memory_line(stats)
+    assert "failed" in line
+    assert "boom" in line

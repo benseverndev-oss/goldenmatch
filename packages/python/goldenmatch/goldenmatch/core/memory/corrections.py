@@ -25,6 +25,8 @@ class CorrectionStats:
     stale_pairs: list[tuple[int, int]] = field(default_factory=list)
     stale_ambiguous: int = 0
     stale_unanchorable: int = 0
+    failed: bool = False
+    error: str | None = None
 
 
 def build_row_lookup(df: pl.DataFrame, fields: list[str]) -> dict[int, tuple]:

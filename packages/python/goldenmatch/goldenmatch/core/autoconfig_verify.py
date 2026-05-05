@@ -261,6 +261,9 @@ def _render_memory_line(stats: Any) -> str:
     """
     if stats is None:
         return ""
+    if getattr(stats, "failed", False):
+        err = getattr(stats, "error", None) or "unknown error"
+        return f"Memory: failed ({err})"
     applied = int(getattr(stats, "applied", 0) or 0)
     stale = int(getattr(stats, "stale", 0) or 0)
     stale_ambig = int(getattr(stats, "stale_ambiguous", 0) or 0)
