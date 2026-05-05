@@ -6,8 +6,10 @@ from pathlib import Path
 
 import typer
 
-from goldenmatch.web.app import create_app
-from goldenmatch.web.state import AppState
+# NOTE: do not import goldenmatch.web at module load — it pulls in fastapi,
+# which is part of the optional [web] extra. Module-load imports here would
+# break every other CLI command for users who installed plain `goldenmatch`.
+# Web imports happen lazily inside serve_ui_cmd, after the dep check.
 
 
 def serve_ui_cmd(
@@ -20,6 +22,9 @@ def serve_ui_cmd(
     """Launch the local web UI."""
     try:
         import uvicorn
+
+        from goldenmatch.web.app import create_app
+        from goldenmatch.web.state import AppState
     except ImportError as exc:
         raise typer.BadParameter(
             "goldenmatch[web] extra not installed. Run: pip install 'goldenmatch[web]'"
