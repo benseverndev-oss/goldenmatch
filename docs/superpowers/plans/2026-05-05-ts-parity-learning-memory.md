@@ -21,7 +21,7 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 ### PR 1 (Foundation + parity harness)
 
 **Create:**
-- `src/core/memory/types.ts` — `Correction`, `LearnedAdjustment`, `CorrectionStats`, `MemoryConfig`, `MemoryStore` interface, `CorrectionSource`/`Decision` literal unions, `HIGH_TRUST_SOURCES`, `trustForSource()`. JSON `<-> Correction` translators.
+- `src/core/memory/types.ts` — `Correction`, `LearnedAdjustment`, `CorrectionStats`, `MemoryStore` interface, `CorrectionSource`/`Decision` literal unions, `HIGH_TRUST_SOURCES`, `trustForSource()`. JSON `<-> Correction` translators. **`MemoryConfig` and `LearningConfig` are NOT redefined here — they already exist at `src/core/types.ts:229-240`. PR 1 extends those in place (see Phase 1.1.0 below).**
 - `src/core/memory/hash.ts` — SHA-256 helpers via Web Crypto (UTF-8 via `TextEncoder`); `sha256_16`, `computeFieldHash`, `computeRecordHash`, `computeRecordHashes` batch.
 - `src/node/memory/sqlite-store.ts` — `SqliteMemoryStore implements MemoryStore`. Optional-peer dynamic import of `better-sqlite3`.
 - `src/node/memory/index.ts` — re-export `SqliteMemoryStore`.
@@ -45,9 +45,11 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 - `tests/unit/memory.test.ts` — rewrite all 7 existing tests to the new shapes.
 
 **Modify:**
-- `src/core/index.ts:303-304` — re-exports updated for new types.
-- `src/node/index.ts` — add `export * from "./memory/index.js"`.
-- `package.json` — add `better-sqlite3` to `peerDependencies` and `peerDependenciesMeta` as optional.
+- `src/core/types.ts:229-240` — extend existing `MemoryConfig` (add `dataset`, `reanchor`; change `backend: "sqlite" | "postgres"` to `"memory" | "sqlite"`; change `trust: number` to `trust?: { human: number; agent: number }` matching Python). Existing `LearningConfig` keeps its shape.
+- `src/core/config/loader.ts:675-691` — update `parseMemoryConfig` to read the new `dataset`/`reanchor` keys and the `trust` object form.
+- `src/core/index.ts:36-37` — re-exports already include `MemoryConfig` / `LearningConfig`; add `Correction`, `Decision`, `CorrectionSource`, `CorrectionStats`, `LearnedAdjustment`, `MemoryStore`, `InMemoryStore`, `HIGH_TRUST_SOURCES`, `trustForSource`, `applyCorrections`, `MemoryLearner`, `correctionToJSON`, `correctionFromJSON`.
+- `src/node/index.ts:9+` (already barrel-exports core) — add `export * from "./memory/index.js"`.
+- `package.json` — add `better-sqlite3` to `peerDependencies` (`^11.0.0`) and `peerDependenciesMeta` as optional. Also `devDependencies` for local tests.
 - `tsconfig.json` — add `"ESNext.Disposable"` to `compilerOptions.lib` to enable `using`.
 
 ### PR 2 (Pipeline + postflight + collection points)
@@ -55,18 +57,24 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 **Create:**
 - `src/node/memory/sibling-review-queue.ts` — opens SQLite review queue at `dirname(memoryPath)/review_queue.db`.
 - `tests/unit/memory-pipeline.test.ts` — pipeline integration, ~5 tests.
-- `tests/integration/memory-e2e.test.ts` — port the 7 applicable scenarios from Python `test_memory_e2e.py` (skip BoostTab).
+- `tests/unit/memory-e2e.test.ts` — port the 7 applicable scenarios from Python `test_memory_e2e.py` (skip BoostTab). **Lives under `tests/unit/`** to match the existing TS layout (only `tests/unit/` and `tests/parity/` exist today; no `tests/integration/`). Vitest globs `tests/**/*.test.ts` per `vitest.config.ts`, so the directory choice is purely organizational.
 
-**Modify:**
-- `src/core/pipeline.ts` — add `_applyMemoryPre` / `_applyMemoryPost` helpers; **`runDedupePipeline` and `runMatchPipeline` become async**; insert hooks at scoring/postflight boundary (~line 290).
-- `src/core/api.ts:154,172` — both result-builders attach `memoryStats`; `dedupe`/`match` become async.
+**Modify (pipeline-async migration; complete caller list — every site below must `await`):**
+- `src/core/pipeline.ts` — add `_applyMemoryPre` / `_applyMemoryPost` helpers; `runDedupePipeline` and `runMatchPipeline` become `async`; insert hooks at scoring/postflight boundary (~line 290).
+- `src/core/api.ts:151,168` — `dedupe` and `match` become `async`; both result-builders (`_emptyDedupeResult` etc.) attach `memoryStats`.
+- `src/core/sensitivity.ts:121,143` — direct `runDedupePipeline` callers; sensitivity helpers become async. The `ReturnType<typeof runDedupePipeline>` alias at line 68 changes to `Awaited<ReturnType<...>>`.
 - `src/core/types.ts` (DedupeResult, MatchResult interfaces) — add `memoryStats: CorrectionStats | null`.
 - `src/core/autoconfigVerify.ts` — `PostflightReport` toString appends one-line memory section per spec.
 - `src/core/review-queue.ts` — `approve`/`reject` accept optional `memoryStore`, write `Correction`.
 - `src/core/cluster.ts::unmergeRecord, unmergeCluster` — accept optional `memoryStore`, write empty-hash corrections.
-- `src/core/llm/scorer.ts` (or wherever pair-level LLM scoring lives) — accept optional `memoryStore`, write per-decision corrections.
-- `src/node/api/server.ts::POST /reviews/decide` — accept `memoryStore` from server config, write empty-hash correction.
-- `src/cli.ts` — `dedupeCommand` / `matchCommand` (both wrap `runDedupePipeline`) become async.
+- `src/core/llm/scorer.ts` — accept optional `memoryStore`, write per-decision corrections.
+- `src/node/api/server.ts:185,206,296` — REST handlers `await dedupe(...)` / `await match(...)`; `POST /reviews/decide` accepts `memoryStore` from server config and writes empty-hash correction.
+- `src/node/a2a/server.ts:175,211` — A2A skill handlers `await`.
+- `src/node/mcp/server.ts:462,497,571,681,739` — MCP tool handlers that wrap `dedupe`/`match` `await`.
+- `src/node/tui/app.ts:651` — TUI dedupe action `await`s.
+- `src/node/db/sync.ts:39` — DB-sync `dedupe` call `await`s.
+- `src/node/dedupe-file.ts` — file-based dedupe entry point `await`s.
+- `src/cli.ts` — commander handlers `await` the pipeline (commander supports async handlers natively).
 
 ### PR 3 (Surfaces + v0.4.0 release)
 
@@ -84,7 +92,7 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 - `src/core/review-queue.ts` — `ReviewItem` gains `why?: string` field; populate via new `whyForCorrection`.
 - `src/core/llm/explain.ts` (new or modify existing) — add `llmExplainPair` for the LLM upgrade path.
 - `package.json` — bump `version` from `0.3.1` to `0.4.0`.
-- `CHANGELOG.md` — add `[0.4.0]` section with breaking-change call-out.
+- `CHANGELOG.md` — **create new file** at `packages/typescript/goldenmatch/CHANGELOG.md` (does not exist today). Use Keep-a-Changelog format. First entry is `[0.4.0]` per spec.
 
 ---
 
@@ -98,7 +106,15 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 - Full TS suite: `cd packages/typescript/goldenmatch && npx tsc --noEmit && npx vitest run`
 - Python parity tests: `cd packages/python/goldenmatch && pytest tests/parity/memory/ -v`
 
-**Hashing.** Web Crypto in `core/`, also works in Node 20+. **No sync hashing.** This is the architectural pivot from the v0.3.1 FNV-1a sync path.
+**Hashing.** Web Crypto in `core/`, also works in Node 20+. **No sync hashing.** This is the architectural pivot from the v0.3.1 FNV-1a sync path. The global `crypto.subtle` reference is correct in `src/core/`; do NOT import `node:crypto` (violates the edge-safety rule per package CLAUDE.md).
+
+**UUIDs.** `crypto.randomUUID()` (the global Web Crypto form) is available in Node 20+ and edge runtimes. Use it in `src/core/`. Do NOT add `import { randomUUID } from "node:crypto"` — same edge-safety rule as hashing.
+
+**Vitest test timeouts.** Default 5s timeout has bitten this codebase before (cost a release per package CLAUDE.md). Hash-batch tests (parity harness with 12+ corrections, e2e tests with multi-row hashing) need explicit `{ timeout: 15000 }`:
+```typescript
+it("expensive parity case", { timeout: 15000 }, async () => { /* ... */ });
+```
+Apply this to: `memory_apply.parity.test.ts` cases that hash >5 rows; e2e tests that run a full pipeline; SqliteMemoryStore tests that write >10 corrections.
 
 **Pipeline async migration.** PR 2 turns the pipeline async. This is an additional breaking change beyond the field renames. CHANGELOG must call it out. Public API callers do `result = await dedupe(rows, config)` instead of `result = dedupe(rows, config)`.
 
@@ -120,6 +136,33 @@ All paths relative to `packages/typescript/goldenmatch/` unless noted. PR-by-PR 
 
 **Files:**
 - Create: `src/core/memory/types.ts`
+- Modify: `src/core/types.ts:229-240` (extend existing `MemoryConfig`)
+- Modify: `src/core/config/loader.ts:675-691` (parse new memory keys)
+
+#### Phase 1.1.0: Extend the existing `MemoryConfig` first
+
+The existing `MemoryConfig` at `src/core/types.ts:229-240` is the single source of truth for the package's memory config. Don't recreate it; extend it:
+
+```typescript
+export interface LearningConfig {
+  readonly thresholdMinCorrections: number;
+  readonly weightsMinCorrections: number;
+}
+
+export interface MemoryConfig {
+  readonly enabled: boolean;
+  readonly backend: "memory" | "sqlite";          // CHANGED: drop "postgres" (no impl); add "memory"
+  readonly path?: string;
+  readonly dataset?: string | null;                // NEW
+  readonly reanchor?: boolean;                     // NEW (default true at apply-time)
+  readonly trust?: { human: number; agent: number }; // CHANGED: was `trust: number`; matches Python
+  readonly learning: LearningConfig;
+}
+```
+
+Then update the corresponding YAML loader at `src/core/config/loader.ts:675-691` (`parseMemoryConfig`) to read the new keys and the new `trust` shape. Existing tests for `parseMemoryConfig` will need their fixtures updated to match.
+
+This is a breaking change to the config shape; CHANGELOG must note it under PR 1's `[0.4.0] BREAKING` section.
 
 - [ ] **Step 1.1.1: Write the failing types module test**
 
@@ -155,7 +198,9 @@ describe("Correction source/decision types", () => {
 
 - [ ] **Step 1.1.3: Implement `src/core/memory/types.ts`**
 
-Full type definitions: `CorrectionSource`/`Decision` literal unions, `HIGH_TRUST_SOURCES` `ReadonlySet`, `trustForSource()`, `Correction` interface (camelCase fields per spec), `LearnedAdjustment`, `CorrectionStats` (with `applied`, `stale`, `staleAmbiguous`, `staleUnanchorable`, `stalePairs`, `totalPairs`, optional `failed`/`error`), `MemoryConfig`, `MemoryStore` async interface (10 methods per spec), `CorrectionJSON` snake_case wire format, `correctionToJSON` / `correctionFromJSON` translators with ISO-8601 UTC timestamps.
+Full type definitions: `CorrectionSource`/`Decision` literal unions, `HIGH_TRUST_SOURCES` `ReadonlySet`, `trustForSource()`, `Correction` interface (camelCase fields per spec), `LearnedAdjustment`, `CorrectionStats` (with `applied`, `stale`, `staleAmbiguous`, `staleUnanchorable`, `stalePairs`, `totalPairs`, optional `failed`/`error`), `MemoryStore` async interface (10 methods per spec), `CorrectionJSON` snake_case wire format, `correctionToJSON` / `correctionFromJSON` translators with ISO-8601 UTC timestamps.
+
+**Do NOT define `MemoryConfig` or `LearningConfig` here** — they already exist at `src/core/types.ts:229-240` and were extended in step 1.1.0. Re-export them from `memory/types.ts` for caller convenience: `export type { MemoryConfig, LearningConfig } from "../types.js";`.
 
 Verbatim shape per spec section "Data model"; do NOT improvise field names.
 
@@ -397,6 +442,19 @@ Cover: `hasNewCorrections()` reflects last learn time; `learn()` returns empty w
 
 Translate Python `learner.py` line-by-line. Same `_compute_threshold` grid-search semantics; same trust-weighted misclassification cost. Async methods.
 
+**Constructor signature:** TS-idiomatic, takes the existing `LearningConfig` object rather than positional numeric args. This diverges intentionally from Python's `(store, threshold_min=10, weights_min=50)`:
+
+```typescript
+export class MemoryLearner {
+  constructor(
+    private readonly store: MemoryStore,
+    private readonly config: LearningConfig = { thresholdMinCorrections: 10, weightsMinCorrections: 50 },
+  ) {}
+}
+```
+
+Pipeline calls become `new MemoryLearner(store, config.memory.learning)` cleanly.
+
 - [ ] **Step 1.5.4: Run; confirm passes**
 
 - [ ] **Step 1.5.5: Commit**
@@ -472,8 +530,10 @@ export class SqliteMemoryStore implements MemoryStore {
     }
     const BetterSqlite3 = mod.default ?? mod;
     this.db = new BetterSqlite3(this.config.path);
-    // run multi-statement DDL once
-    this.db.prepare(SCHEMA).run; // see implementer note below
+    // Apply multi-statement DDL via better-sqlite3's database method that
+    // accepts raw SQL strings (mirrors Python's _conn.executescript(_SCHEMA)
+    // at packages/python/goldenmatch/goldenmatch/core/memory/store.py:123).
+    this.db.exec(SCHEMA);
   }
 
   // ... addCorrection, getCorrection, getCorrections, etc.
@@ -481,9 +541,9 @@ export class SqliteMemoryStore implements MemoryStore {
 }
 ```
 
-**Implementer note:** `better-sqlite3`'s database object has methods for running raw multi-statement SQL (consult the library's docs for the canonical multi-statement runner). Use that to apply `SCHEMA`. Do not split into individual `prepare(...).run()` calls unless required.
-
 For the trust-upsert transaction, use `better-sqlite3`'s `db.transaction(fn)` API to wrap a `DELETE` + `INSERT` into one atomic block. Mirror Python `store.py:113-132` exactly.
+
+**`init()` is `SqliteMemoryStore`-specific** — not part of the `MemoryStore` interface. Callers must always construct via `getMemory()` (added in PR 3) or call `await store.init()` explicitly before any other method. The plan keeps the `MemoryStore` interface 10 methods exactly per spec; init is a constructor-shaped concern. Tests construct via `const store = new SqliteMemoryStore({...}); await store.init();`.
 
 Port each method from Python `store.py:100-225`. Field-name mapping: TS `idA` -> SQL `id_a`, TS `matchkeyName` -> SQL `matchkey_name`, TS `createdAt` (Date) -> SQL `created_at` (ISO string). Read on output, hydrate the `Date`. Use parameterized SQL throughout.
 
@@ -542,8 +602,25 @@ def make_corrections() -> list[Correction]:
         # ... pinned UUIDs and field values
     ]
 
+def correction_to_dict(c: Correction) -> dict:
+    """Snake_case JSON wire format for cross-language parity.
+
+    Add this helper to `goldenmatch/core/memory/store.py` if it doesn't exist
+    yet — it's the source of truth for the JSON contract documented in the
+    spec's "Data model" section. ISO-8601 UTC for created_at.
+    """
+    return {
+        "id": c.id, "id_a": c.id_a, "id_b": c.id_b,
+        "decision": c.decision, "source": c.source, "trust": c.trust,
+        "field_hash": c.field_hash, "record_hash": c.record_hash,
+        "original_score": c.original_score,
+        "matchkey_name": c.matchkey_name, "reason": c.reason,
+        "dataset": c.dataset,
+        "created_at": c.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
 def write_json(corrections):
-    out = [c.to_dict() for c in corrections]
+    out = [correction_to_dict(c) for c in corrections]
     (FIXTURE_DIR / "memory_corrections.json").write_text(json.dumps(out, indent=2))
 
 def write_db(corrections):
@@ -570,7 +647,7 @@ if __name__ == "__main__":
     print(f"Fixtures written to {FIXTURE_DIR}")
 ```
 
-If `Correction.to_dict()` doesn't exist, add it to the Python dataclass for parity output (snake_case keys, ISO-8601 UTC timestamp).
+The Python `Correction` dataclass at `packages/python/goldenmatch/goldenmatch/core/memory/store.py:52-67` does NOT have a `to_dict()` method today. The `correction_to_dict()` helper above is the canonical serializer; add it as a function in the generator script (or, if you prefer, as a method on the dataclass in a follow-up PR — but Python parity tests should import the same serializer to avoid drift).
 
 - [ ] **Step 1.7.2: Run generator; copy fixtures to TS side**
 
@@ -692,12 +769,16 @@ async function _applyMemoryPre(
 }
 
 async function _applyMemoryPost(
-  config: GoldenMatchConfig, scoredPairs: ScoredPair[], df: Row[], matchkeyFields: string[], store: MemoryStore | null,
+  config: GoldenMatchConfig, scoredPairs: ScoredPair[], df: Row[], matchkeyFields: string[],
+  store: MemoryStore | null, derivedDataset: string,
 ): Promise<readonly [ScoredPair[], CorrectionStats | null]> {
   if (!store || !config.memory?.enabled) return [scoredPairs, null];
+  // Dataset derivation: explicit config wins; else use derivedDataset (input
+  // file path or "<DataFrame>"). Mirrors Python's pipeline behavior.
+  const dataset = config.memory.dataset ?? derivedDataset;
   try {
     return await applyCorrections(scoredPairs, store, df, matchkeyFields, {
-      dataset: config.memory.dataset ?? null,
+      dataset,
       reanchor: config.memory.reanchor ?? true,
     });
   } catch (e) {
@@ -708,6 +789,8 @@ async function _applyMemoryPost(
   }
 }
 ```
+
+The caller (`runDedupePipeline`) computes `derivedDataset` from its inputs: when called via `dedupeFile(path, ...)` the dataset is `path`; via `dedupe(rows, ...)` the dataset is `"<DataFrame>"`. Pass it into `_applyMemoryPost` explicitly so the dataset-derivation rule is testable and predictable.
 
 - [ ] **Step 2.2.2: Make `runDedupePipeline` async; insert hooks**
 
@@ -804,11 +887,16 @@ Surfaces in order:
 - [ ] **2.4.3** llmScorePairs (`src/core/llm/scorer.ts`) — source `llm`, trust 0.5; full hashes.
 - [ ] **2.4.4** REST `POST /reviews/decide` (`src/node/api/server.ts`) — source `steward`, trust 1.0; **empty hashes**.
 
-Note: TS port has no `agent_approve_reject` MCP tool today, so the agent collection point is deferred.
+**Why 4 surfaces and not 7 like Python:**
+- Python's BoostTab — TS TUI has no active-learning tab (no boost screen exists in `src/node/tui/`).
+- Python's `agent_approve_reject` MCP tool — not present in TS MCP server.
+- Python's Python-API `add_correction` — covered by PR 3 step 3.1.2 (separate phase because the Python API mirror lives in `src/core/api.ts`, not the pipeline path).
+
+Spec section "Collection points" explicitly excludes BoostTab; the MCP agent-tool gap is acknowledged as out-of-plan in the spec's "Out of plan" list. PR 2 ships the 4 surfaces that have TS analogues today; if anyone adds a BoostTab or agent MCP tool later, they wire them additively.
 
 ### Phase 2.5: E2E tests (port 7 of Python's 8 scenarios)
 
-- [ ] **Step 2.5.1: `tests/integration/memory-e2e.test.ts`**
+- [ ] **Step 2.5.1: `tests/unit/memory-e2e.test.ts`** (file lives under `tests/unit/` — see PR 2 file-structure notes)
 
 Port from Python `test_memory_e2e.py`, skipping the BoostTab scenario:
 
@@ -1049,6 +1137,23 @@ If `publish-npm.yml` is wired (likely from pre-fold), it auto-publishes on tag. 
 - Agent MCP `agent_approve_reject` parity (not present in TS)
 
 ---
+
+## Plan-review notes (2026-05-05)
+
+The plan went through one review pass before execution. Findings folded in:
+
+- **`MemoryConfig` collision avoided** — the existing interface at `src/core/types.ts:229-240` is extended in place (Phase 1.1.0); a separate `memory/types.ts` `MemoryConfig` would have collided at the `core/index.ts` barrel.
+- **Async pipeline migration footprint expanded** — caller list now covers `sensitivity.ts`, `node/api/server.ts`, `a2a/server.ts`, `node/mcp/server.ts`, `tui/app.ts`, `db/sync.ts`. Engineer following the plan literally would no longer ship PR 2 with broken servers/TUI/sync.
+- **Python `Correction.to_dict()` pinned** — the function does not exist on the dataclass today; `correction_to_dict()` helper specified in `gen_memory_fixtures.py` with explicit snake_case field map and ISO-8601 UTC handling.
+- **`db.exec(SCHEMA)` named** — replaces the `.run` typo and the vague "consult docs" pointer.
+- **`init()` scoped to `SqliteMemoryStore`** — not added to `MemoryStore` interface; callers always go through `getMemory()` (PR 3) or call init explicitly.
+- **`MemoryLearner` constructor** takes the existing `LearningConfig` object (TS-idiomatic); positional numeric args path closed off.
+- **`tests/integration/` directory dropped** — e2e tests live in `tests/unit/memory-e2e.test.ts` matching existing TS layout.
+- **`CHANGELOG.md` is created**, not modified — file does not exist today.
+- **`config.memory.dataset` derivation wired** — `_applyMemoryPost` takes a `derivedDataset` parameter the pipeline computes (file path or `"<DataFrame>"`); explicit config still wins.
+- **Vitest 15s timeouts** specified for parity-harness and e2e tests.
+- **`crypto.randomUUID` global vs `node:crypto`** edge-safety note added so a future "fix" PR doesn't break edge runtimes.
+- **4-vs-7 collection-point gap explained** — BoostTab and `agent_approve_reject` deferred per spec; Python-API mirror is PR 3 phase 3.1.
 
 ## Risk register
 
