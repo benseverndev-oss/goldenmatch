@@ -1,0 +1,116 @@
+{
+  "df": [
+    {
+      "__row_id__": 0,
+      "name": "Acme Corp",
+      "zip": "10001"
+    },
+    {
+      "__row_id__": 1,
+      "name": "Acme LLC",
+      "zip": "10001"
+    },
+    {
+      "__row_id__": 2,
+      "name": "Beta Inc",
+      "zip": "20002"
+    },
+    {
+      "__row_id__": 3,
+      "name": "Beta Inc",
+      "zip": "20002"
+    },
+    {
+      "__row_id__": 4,
+      "name": "Gamma Co",
+      "zip": "30003"
+    }
+  ],
+  "matchkey_fields": [
+    "name",
+    "zip"
+  ],
+  "dataset": "parity_test",
+  "reanchor": true,
+  "scored_pairs": [
+    [
+      0,
+      1,
+      0.92
+    ],
+    [
+      0,
+      4,
+      0.4
+    ],
+    [
+      2,
+      4,
+      0.78
+    ],
+    [
+      1,
+      2,
+      0.3
+    ],
+    [
+      3,
+      4,
+      0.2
+    ]
+  ],
+  "expected": {
+    "adjusted": [
+      [
+        0,
+        1,
+        0.0
+      ],
+      [
+        0,
+        4,
+        1.0
+      ],
+      [
+        2,
+        4,
+        0.78
+      ],
+      [
+        1,
+        2,
+        0.3
+      ],
+      [
+        3,
+        4,
+        0.2
+      ]
+    ],
+    "stats": {
+      "applied": 2,
+      "stale": 1,
+      "stale_ambiguous": 1,
+      "stale_unanchorable": 2,
+      "stale_pairs": [
+        [
+          2,
+          4
+        ],
+        [
+          99,
+          100
+        ],
+        [
+          500,
+          501
+        ],
+        [
+          700,
+          701
+        ]
+      ],
+      "total_pairs": 5
+    }
+  }
+}
