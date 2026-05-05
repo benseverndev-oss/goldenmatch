@@ -3,11 +3,11 @@
 > Entity resolution toolkit — deduplicate records and match across datasets using fuzzy, probabilistic, and LLM-powered scoring.
 
 ## Interfaces
-- MCP Server: `goldenmatch mcp-serve` (13 agent tools + 17 data tools = 30 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (30 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- MCP Server: `goldenmatch mcp-serve` (13 agent tools + 17 data tools + 5 memory tools = 35 total)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (35 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (10 skills)
-- CLI: `goldenmatch dedupe`, `goldenmatch match`, + 18 more commands
-- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~101 exports
+- CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch memory ...`, + more
+- Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
 - REST API: `goldenmatch serve` on port 8000
 
 ## Install
@@ -104,8 +104,19 @@ exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_m
 ## Transforms
 lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normalize_whitespace, token_sort, first_token, last_token, substring:start:end
 
+## Learning Memory (v1.6.0)
+Persistent corrections + threshold learning. Off by default; enable with `memory.enabled = true`.
+- Store: SQLite (default) or Postgres. Path: `.goldenmatch/memory.db`.
+- Collection points: review queue, boost tab, unmerge_record/cluster, LLM scorer, MCP `agent_approve_reject`, REST `/reviews/decide`, Python `add_correction()`.
+- Re-anchors via `record_hash`; ambiguous rehydrations report `stale_ambiguous`. Postflight reports `Memory: N applied, M stale, K stale-ambiguous, J unanchorable`.
+- CLI: `goldenmatch memory stats|learn|export|import|show`.
+- Python: `goldenmatch.add_correction(...)`, `learn()`, `memory_stats()`, `get_memory()`. Result objects expose `result.memory_stats`.
+- MCP tools: `list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`.
+- Learner runs at `learning.threshold_min_corrections` (default 10) per matchkey via trust-weighted grid search.
+
 ## Docs
-- [Full docs](https://benzsevern.github.io/goldenmatch/): 22 guides
+- [Learning Memory](https://benzsevern.github.io/goldenmatch/learning-memory)
+- [Full docs](https://benzsevern.github.io/goldenmatch/): 23 guides
 - [Full API reference](https://benzsevern.github.io/goldenmatch/python-api): 101 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
 - [GitHub](https://github.com/benzsevern/goldenmatch)

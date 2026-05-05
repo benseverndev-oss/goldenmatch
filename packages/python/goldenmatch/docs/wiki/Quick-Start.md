@@ -93,6 +93,29 @@ goldenmatch dedupe products.csv --llm-boost
 goldenmatch dedupe products.csv --llm-boost
 ```
 
+## 6. Remember Steward Decisions (Learning Memory, v1.6.0)
+
+If you have humans reviewing borderline pairs, persist their decisions so the same correction never has to be made twice.
+
+```yaml
+# add to your config
+memory:
+  enabled: true
+  backend: sqlite
+  path: .goldenmatch/memory.db
+  reanchor: true
+  dataset: customers
+```
+
+```bash
+goldenmatch dedupe customers.csv --config goldenmatch.yml   # 1. produce review queue
+goldenmatch review              --config goldenmatch.yml   # 2. steward decides
+goldenmatch dedupe customers.csv --config goldenmatch.yml   # 3. corrections apply
+# > Memory: 12 corrections applied, 0 stale, 0 stale-ambiguous, 0 unanchorable
+```
+
+Corrections re-anchor across row reorders via `record_hash`. After 10+ corrections accumulate against a matchkey, `goldenmatch memory learn` adjusts that matchkey's threshold automatically. See [[Learning-Memory]] for the full feature.
+
 ## Output Files
 
 With `--output-all`, GoldenMatch produces:

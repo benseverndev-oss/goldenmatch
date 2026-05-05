@@ -45,7 +45,9 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
-> **🆕 v1.5.0 (Python) · v0.3.1 (npm)** — Auto-config now runs a **preflight + postflight verification layer**. Biblio / domain-extracted schemas no longer crash under zero-config, remote-asset scorers are demoted by default (offline-safe CI), strict mode for deterministic parity runs, and every `DedupeResult` carries an inspectable `postflight_report`. See [Auto-Config Verification](#auto-config-verification-v150). Built by [Ben Severn](https://bensevern.dev).
+> **🆕 v1.6.0 (Python)** — **Learning Memory** is wired end-to-end. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local SQLite (or Postgres) store, re-anchor across row reorders, and apply automatically on the next run. The pipeline reports `Memory: N applied, M stale, K stale-ambiguous, J unanchorable` in postflight. New CLI subgroup `goldenmatch memory`, five new MCP tools, and Python `goldenmatch.add_correction()` / `learn()` / `memory_stats()`. Off by default. See [Learning Memory](#learning-memory-v160).
+>
+> v1.5.0 — Auto-config preflight + postflight verification layer (still on by default). See [Auto-Config Verification](#auto-config-verification-v150). Built by [Ben Severn](https://bensevern.dev).
 
 ---
 
@@ -53,8 +55,9 @@ npm install goldenmatch
 
 - **Zero-config** — auto-detects columns, picks scorers, and runs. No training data needed
 - **97.2% F1** on DBLP-ACM out of the box. [DQBench ER score: 95.30](https://github.com/benzsevern/dqbench)
+- **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **30 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **35 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### Choose your path
@@ -68,6 +71,7 @@ npm install goldenmatch
 | Write TypeScript / Node.js | [TypeScript API](https://benzsevern.github.io/goldenmatch/typescript) |
 | Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://benzsevern.github.io/goldenmatch/typescript) |
 | Use the interactive TUI | [TUI Guide](https://benzsevern.github.io/goldenmatch/tui) |
+| Train the system on my corrections | [Learning Memory](https://benzsevern.github.io/goldenmatch/learning-memory) |
 
 ---
 
@@ -105,6 +109,14 @@ npm install goldenmatch
 - **DuckDB backend** — out-of-core processing for 10M+ records without Spark
 - **Ray distributed backend** — scale to 50M+ records with `pip install goldenmatch[ray]`
 - **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
+
+### Learning Memory (v1.6.0)
+- **Persistent corrections** — every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store
+- **Re-anchor via record_hash** — corrections survive row reordering and refresh; ambiguous re-anchors report as `stale_ambiguous` rather than misapplying
+- **Automatic application** — `dedupe_df` and `match_df` overlay learned thresholds before scoring and apply hard 1.0/0.0 overrides after; postflight reports impact
+- **Threshold learner** — trust-weighted grid search auto-tunes matchkey thresholds once 10+ corrections accumulate
+- **CLI / Python / MCP triad** — `goldenmatch memory stats|learn|export|import|show`, `goldenmatch.add_correction()` / `learn()` / `memory_stats()`, and 5 new MCP tools (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`)
+- **Off by default** — zero-config posture preserved; opt in via `config.memory.enabled = True`
 
 ### Developer Experience
 - **Gold-themed TUI** — interactive interface with keyboard shortcuts, live threshold tuning
@@ -208,6 +220,82 @@ result = gm.dedupe("products.csv", fuzzy={"title": 0.80}, llm_scorer=True)
 # With Ray backend for large datasets
 result = gm.dedupe("huge.parquet", exact=["email"], backend="ray")
 ```
+
+### Learning Memory (v1.6.0)
+
+GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://benzsevern.github.io/goldenmatch/learning-memory).
+
+**`goldenmatch.yml`:**
+
+```yaml
+matchkeys:
+  - name: identity
+    type: weighted
+    threshold: 0.85
+    fields:
+      - field: name
+        scorer: jaro_winkler
+        transforms: [lowercase, strip]
+        weight: 1.0
+      - field: email
+        scorer: exact
+        weight: 1.0
+
+blocking:
+  strategy: static
+  keys:
+    - fields: [zip]
+      transforms: [lowercase]
+
+memory:
+  enabled: true
+  backend: sqlite
+  path: .goldenmatch/memory.db
+  reanchor: true
+  dataset: customers
+  learning:
+    threshold_min_corrections: 10
+    weights_min_corrections: 50
+```
+
+**Three commands users actually run:**
+
+```bash
+# 1. First run -- produces the review queue
+goldenmatch dedupe customers.csv --config goldenmatch.yml
+
+# 2. Steward decides borderline pairs (writes to .goldenmatch/memory.db)
+goldenmatch review --config goldenmatch.yml      # interactive TUI
+
+# 3. Re-run -- corrections apply automatically; postflight reports impact
+goldenmatch dedupe customers.csv --config goldenmatch.yml
+# > Memory: 12 corrections applied, 0 stale, 0 stale-ambiguous, 0 unanchorable
+```
+
+**Python API equivalent:**
+
+```python
+import goldenmatch
+
+# Programmatically register a correction
+goldenmatch.add_correction(
+    id_a=42, id_b=87, decision="reject", source="steward",
+    reason="Different EIN despite name match", dataset="customers",
+)
+
+# Force a learning pass (otherwise auto-runs at next pipeline call)
+adjustments = goldenmatch.learn()
+print(f"Adjusted {len(adjustments)} matchkey thresholds")
+
+# Inspect what's stored
+print(goldenmatch.memory_stats())
+```
+
+**MCP equivalent (from Claude Desktop / Code):**
+
+> "Show me uncertain pairs from the last goldenmatch run on customers.csv, then mark rows 17 and 23 as not-a-match because they have different EINs."
+
+The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
 ### Auto-Config Verification (v1.5.0)
 
@@ -392,7 +480,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (30 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (35 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -800,6 +888,7 @@ Settings tuned in the TUI can be saved to the project file. Next run picks them 
 | `goldenmatch analyze-blocking FILE` | Analyze data and suggest blocking strategies |
 | `goldenmatch label FILE --config --gt` | Interactively label pairs to build ground truth CSV |
 | `goldenmatch config save/load/list/show` | Manage config presets |
+| `goldenmatch memory stats/learn/export/import/show` | Manage Learning Memory store (v1.6.0) |
 
 **Key dedupe flags:**
 
@@ -836,7 +925,7 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-30 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, and synthesize golden records.
+35 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ## Architecture
 

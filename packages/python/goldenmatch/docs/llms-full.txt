@@ -256,18 +256,41 @@ from goldenmatch import (
 )
 ```
 
-## Learning Memory
+## Learning Memory (v1.6.0 — wired end-to-end)
+
+Persistent corrections + threshold learning. Off by default; enable via `config.memory.enabled = True` or YAML `memory:` block.
 
 ```python
+import goldenmatch
+
+# High-level API (the way most users interact with it)
+goldenmatch.add_correction(
+    id_a=42, id_b=87, decision="reject", source="steward",
+    reason="Different EIN despite name match", dataset="customers",
+)
+adjustments = goldenmatch.learn()         # trust-weighted threshold learner
+print(goldenmatch.memory_stats())         # counts, last-learned timestamps
+store = goldenmatch.get_memory()          # underlying MemoryStore
+
+# Low-level building blocks (for custom integrations)
 from goldenmatch import (
     MemoryStore,         # MemoryStore(backend="sqlite", path="memory.db")
-    Correction,          # Correction(pair, decision, reason)
+    Correction,          # Correction(id_a, id_b, decision, source, trust, ...)
     LearnedAdjustment,   # Learned threshold/weight adjustment
-    CorrectionStats,     # Stats on stored corrections
-    MemoryLearner,       # MemoryLearner(store) -- .learn() -> list[LearnedAdjustment]
-    apply_corrections,   # apply_corrections(pairs, store) -> pairs
+    CorrectionStats,     # {applied, stale, stale_ambiguous, unanchorable}
+    MemoryLearner,       # MemoryLearner(store).learn() -> list[LearnedAdjustment]
+    apply_corrections,   # apply_corrections(pairs, store, df, fields, dataset)
 )
+
+# Pipeline integration: result objects carry memory impact
+result = goldenmatch.dedupe_df(df, config=config)
+print(result.memory_stats)
+# {'applied': 12, 'stale': 0, 'stale_ambiguous': 0, 'unanchorable': 0}
 ```
+
+Seven collection points write to the store: review queue (`steward`/1.0), boost tab (`boost`/1.0), `unmerge_record` and `unmerge_cluster` (`unmerge`/1.0), LLM scorer decisions (`llm`/0.5), MCP `agent_approve_reject` (`agent`/0.5), REST `POST /reviews/decide` (`steward`/1.0), and the Python `add_correction()` API.
+
+Five MCP tools: `list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`. CLI subgroup: `goldenmatch memory stats|learn|export|import|show`.
 
 ## Common Usage Patterns
 
@@ -355,6 +378,16 @@ llm_scorer:
     max_cost_usd: 0.05
     max_calls: 100
 
+memory:
+  enabled: true
+  backend: sqlite
+  path: .goldenmatch/memory.db
+  reanchor: true
+  dataset: customers
+  learning:
+    threshold_min_corrections: 10
+    weights_min_corrections: 50
+
 output:
   format: csv
   path: output/
@@ -374,12 +407,16 @@ goldenmatch incremental new.csv --base existing.csv  # Incremental matching
 goldenmatch explain cluster-42                       # Explain a cluster
 goldenmatch unmerge record-123                       # Unmerge a record
 goldenmatch label pairs.csv                          # Label training pairs
+goldenmatch memory stats   --config config.yaml      # Inspect Learning Memory
+goldenmatch memory learn   --config config.yaml      # Force a learner pass
+goldenmatch memory export  --config config.yaml --output corrections.jsonl
+goldenmatch memory import  --config config.yaml --input  corrections.jsonl
 ```
 
 ## Interfaces
 
-- **MCP Server**: `goldenmatch mcp-serve` — 13 tools for Claude Desktop integration
-- **Remote MCP**: https://goldenmatch-mcp-production.up.railway.app/mcp/ (30 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- **MCP Server**: `goldenmatch mcp-serve` — 35 tools (13 agent + 17 data + 5 memory) for Claude Desktop integration
+- **Remote MCP**: https://goldenmatch-mcp-production.up.railway.app/mcp/ (35 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - **A2A Server**: `goldenmatch agent-serve --port 8200` — 10 skills via Agent-to-Agent protocol
 - **REST API**: `goldenmatch serve` on port 8000 — match, clusters, explain, reviews endpoints
 - **CLI**: 20+ Typer commands

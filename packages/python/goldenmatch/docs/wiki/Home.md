@@ -31,6 +31,7 @@ goldenmatch setup
 | [GPU Routing & Vertex AI](GPU-Routing.md) | Managed embeddings via Google Cloud |
 | [Database Integration](Database-Integration.md) | Incremental Postgres sync with golden record versioning |
 | [LLM Boost](LLM-Boost.md) | Claude/GPT-4 labeling + fine-tuning |
+| [Learning Memory](Learning-Memory) | Persistent corrections + threshold learning (v1.6.0) |
 | [dbt Integration](dbt-Integration.md) | Post-hooks, Postgres sync, Snowflake/BigQuery recipes |
 
 ## Reference
@@ -65,6 +66,7 @@ goldenmatch setup
 | `goldenmatch analyze-blocking FILE` | Analyze and suggest blocking strategies |
 | `goldenmatch label FILE --config --gt` | Interactively label pairs to build ground truth CSV |
 | `goldenmatch config save/load/list/show` | Manage config presets |
+| `goldenmatch memory stats/learn/export/import/show` | Manage Learning Memory store (v1.6.0) |
 | `goldenmatch compare-clusters A.json B.json` | Compare two clustering outcomes (CCMS) |
 | `goldenmatch sensitivity FILE --sweep ...` | Parameter sensitivity analysis |
 

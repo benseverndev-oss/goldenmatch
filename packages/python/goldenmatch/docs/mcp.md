@@ -6,7 +6,7 @@ nav_order: 18
 
 # MCP Server
 
-GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 30 tools total: 13 agent-level tools for autonomous ER + 17 data tools for inspection and management.
+GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 35 tools total: 13 agent-level tools for autonomous ER, 17 data tools for inspection and management, and 5 Learning Memory tools (v1.6.0) for persisting steward decisions.
 
 > **Looking for AI-to-AI autonomy?** See the [ER Agent (A2A)](agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
 
@@ -207,6 +207,24 @@ Normalize phone numbers (E.164), dates (ISO), categorical spelling, and Unicode.
 ```
 
 In addition, 13 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms). See [ER Agent](agent) for details.
+
+### Learning Memory tools (v1.6.0)
+
+Five tools surface the persistent corrections store. See [Learning Memory]({% link learning-memory.md %}) for the full feature.
+
+| Tool | Behavior |
+|---|---|
+| `list_corrections` | Page through stored corrections, optionally filtered by dataset and source. |
+| `add_correction` | Writes a correction with caller-supplied trust (`steward`/`unmerge` 1.0, `agent`/`llm` 0.5). |
+| `learn_thresholds` | Runs `MemoryLearner.learn()`; returns the adjustment dict per matchkey. |
+| `memory_stats` | Counts plus last-learned timestamps. |
+| `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
+
+Natural-language workflow:
+
+> "Show me uncertain pairs from the last goldenmatch run on customers.csv, then mark rows 17 and 23 as not-a-match because they have different EINs."
+
+The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
 ---
 
