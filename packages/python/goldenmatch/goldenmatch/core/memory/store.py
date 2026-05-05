@@ -6,9 +6,47 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 log = logging.getLogger("goldenmatch.memory")
+
+
+class CorrectionSource(StrEnum):
+    """Canonical correction source identifiers.
+
+    StrEnum members ARE strings, so existing call sites that pass raw
+    "steward"/"boost"/etc. continue to work. These enums are reference
+    values for callers/tests/lookups, not field type changes.
+    """
+    STEWARD = "steward"
+    BOOST = "boost"
+    UNMERGE = "unmerge"
+    AGENT = "agent"
+    LLM = "llm"
+    API = "api"
+
+
+class Decision(StrEnum):
+    """Canonical correction decisions."""
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
+HIGH_TRUST_SOURCES: frozenset[CorrectionSource] = frozenset({
+    CorrectionSource.STEWARD,
+    CorrectionSource.BOOST,
+    CorrectionSource.UNMERGE,
+})
+
+
+def trust_for_source(source: str | CorrectionSource) -> float:
+    """Return 1.0 for human-trust sources (steward/boost/unmerge), 0.5 else.
+
+    Accepts a raw string OR a CorrectionSource member. Centralizes the trust
+    mapping so call sites cannot drift.
+    """
+    return 1.0 if source in HIGH_TRUST_SOURCES else 0.5
 
 
 @dataclass
@@ -17,9 +55,9 @@ class Correction:
     id: str
     id_a: int
     id_b: int
-    decision: str                # "approve" | "reject"
-    source: str                  # "steward" | "boost" | "unmerge" | "agent" | "llm"
-    trust: float                 # 1.0 (human) or 0.5 (agent)
+    decision: str                # Decision value (StrEnum members serialize as str)
+    source: str                  # CorrectionSource value
+    trust: float                 # 1.0 (HIGH_TRUST_SOURCES) or 0.5 (else)
     field_hash: str
     record_hash: str
     original_score: float

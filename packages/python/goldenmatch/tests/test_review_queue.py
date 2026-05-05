@@ -37,6 +37,22 @@ class TestReviewItem:
         item.reject("bob")
         assert item.reason == ""
 
+    def test_empty_why_normalizes_to_none(self):
+        """Tier 3.3: an empty `why` string is normalized to None so callers
+        don't have to distinguish "no explainer ran" from "explainer ran and
+        produced an empty string"."""
+        item = ReviewItem(
+            job_name="j1", id_a=1, id_b=2, score=0.85, explanation="x", why="",
+        )
+        assert item.why is None
+
+    def test_nonempty_why_preserved(self):
+        item = ReviewItem(
+            job_name="j1", id_a=1, id_b=2, score=0.85, explanation="x",
+            why="name match strong",
+        )
+        assert item.why == "name match strong"
+
 
 # ── gate_pairs ──────────────────────────────────────────────────────────
 

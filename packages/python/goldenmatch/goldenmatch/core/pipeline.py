@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -58,6 +59,133 @@ def _propagate_autoconfig_markers(
         dst._preflight_report = src._preflight_report
     if getattr(src, "_strict_autoconfig", False):
         dst._strict_autoconfig = True
+
+
+def _open_memory_store(config: GoldenMatchConfig):
+    """Open the MemoryStore configured on `config`. Returns None on failure or
+    when memory is disabled — pipeline must continue regardless."""
+    if not config.memory or not config.memory.enabled:
+        return None
+    try:
+        from goldenmatch.core.memory.store import MemoryStore
+        return MemoryStore(
+            backend=config.memory.backend,
+            path=config.memory.path,
+            connection=config.memory.connection,
+        )
+    except Exception as e:
+        logger.warning("Memory store init failed, continuing without memory: %s", e)
+        return None
+
+
+def _apply_memory_pre(memory_store, config: GoldenMatchConfig, matchkeys: list) -> None:
+    """Overlay learned threshold adjustments onto the matchkeys parameter.
+
+    Mutates `matchkeys` in place — rebinding to a fresh list would shadow the
+    parameter and the scoring loop would never see the overlay.
+    """
+    if memory_store is None:
+        return
+    try:
+        from goldenmatch.core.memory.learner import MemoryLearner
+        learner = MemoryLearner(
+            memory_store,
+            threshold_min=config.memory.learning.threshold_min_corrections,
+            weights_min=config.memory.learning.weights_min_corrections,
+        )
+        if not learner.has_new_corrections():
+            return
+        adjustments = learner.learn()
+        for adj in adjustments:
+            if adj.threshold is None:
+                continue
+            for mk in matchkeys:
+                if mk.threshold is None:
+                    continue
+                if (not adj.matchkey_name
+                        or adj.matchkey_name == mk.name
+                        or adj.matchkey_name == "_default"):
+                    mk.threshold = adj.threshold
+    except Exception as e:
+        logger.warning("Memory learner overlay failed: %s", e)
+
+
+def _apply_memory_post(
+    memory_store,
+    config: GoldenMatchConfig,
+    df: pl.DataFrame,
+    all_pairs: list[tuple[int, int, float]],
+):
+    """Apply stored corrections to scored pairs. Returns (pairs, stats|None)."""
+    if memory_store is None:
+        return all_pairs, None
+    try:
+        from goldenmatch.core.memory.corrections import apply_corrections
+        matchkey_field_names = sorted({
+            f.field for mk in config.get_matchkeys() for f in mk.fields
+        })
+        return apply_corrections(
+            all_pairs, memory_store, df, matchkey_field_names,
+            dataset=config.memory.dataset,
+            reanchor=config.memory.reanchor,
+        )
+    except Exception as e:
+        logger.warning("Memory apply_corrections failed: %s", e)
+        from goldenmatch.core.memory.corrections import CorrectionStats
+        return all_pairs, CorrectionStats(
+            total_pairs=len(all_pairs), failed=True, error=str(e),
+        )
+
+
+def _derive_review_queue_path(config: GoldenMatchConfig) -> str | None:
+    """Derive review-queue SQLite path as sibling of the memory store path.
+
+    Returns None if memory is disabled or no path is configured.
+    """
+    if not config.memory or not config.memory.enabled:
+        return None
+    mem_path = getattr(config.memory, "path", None)
+    if not mem_path:
+        return None
+    p = Path(mem_path)
+    return str(p.with_name("review_queue.db"))
+
+
+def _enqueue_stale_pairs(
+    memory_stats,
+    all_pairs: list[tuple[int, int, float]],
+    config: GoldenMatchConfig,
+) -> None:
+    """Push stale pairs onto a SQLite-backed ReviewQueue for steward triage.
+
+    The queue is colocated with the memory store (sibling SQLite file) so the
+    next `goldenmatch review` invocation surfaces these pairs across processes.
+    """
+    if memory_stats is None or not memory_stats.stale_pairs:
+        return
+    rq = None
+    try:
+        from goldenmatch.core.review_queue import ReviewQueue
+        queue_path = _derive_review_queue_path(config)
+        if queue_path is not None:
+            rq = ReviewQueue(backend="sqlite", path=queue_path)
+        else:
+            rq = ReviewQueue()
+        score_lookup = {(a, b): s for a, b, s in all_pairs}
+        for (a, b) in memory_stats.stale_pairs:
+            score = score_lookup.get((a, b), score_lookup.get((b, a), 0.0))
+            rq.add(
+                job_name="memory_stale", id_a=a, id_b=b, score=score,
+                explanation="correction stale: re-decide",
+            )
+    except Exception as e:
+        logger.warning("Failed to enqueue stale pairs: %s", e)
+    finally:
+        if rq is not None:
+            try:
+                rq.close()
+            except Exception:
+                pass
 
 
 def _apply_postflight(
@@ -256,6 +384,7 @@ def _run_dedupe_pipeline(
     This function contains all pipeline steps from auto-fix/validation through
     output. Both run_dedupe() and run_dedupe_df() delegate to this function.
     """
+    memory_store = _open_memory_store(config)
     # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
     if config.quality is None or config.quality.mode != "disabled":
         from goldenmatch.core.quality import run_quality_check
@@ -366,6 +495,9 @@ def _run_dedupe_pipeline(
                 logger.info("LLM validated %d/%d low-confidence extractions", len(extractions), len(low_conf_ids))
 
             combined_lf = combined_df_tmp.lazy()
+
+    # ── Learning Memory: pre-scoring learner overlay ──
+    _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 2: TRANSFORM ──
     combined_lf = compute_matchkeys(combined_lf, matchkeys)
@@ -487,6 +619,11 @@ def _run_dedupe_pipeline(
             )
         except ImportError as e:
             logger.warning("LLM boost unavailable: %s", e)
+
+    # ── Learning Memory: post-scoring corrections overlay ──
+    all_pairs, memory_stats = _apply_memory_post(
+        memory_store, config, collected_df, all_pairs
+    )
 
     # ── Step 3.6: POSTFLIGHT (auto-config only) ──
     # Postflight verification. Signals are computed from the unadjusted pair
@@ -626,8 +763,14 @@ def _run_dedupe_pipeline(
         "report": report,
         "quarantine": quarantine_df,
         "postflight_report": postflight_report,
+        "memory_stats": memory_stats,
     }
 
+    try:
+        _enqueue_stale_pairs(memory_stats, all_pairs, config)
+    finally:
+        if memory_store is not None:
+            memory_store.close()
     return results
 
 
@@ -754,6 +897,7 @@ def _run_match_pipeline(
     This function contains all pipeline steps from auto-fix/validation through
     output. Both run_match() and run_match_df() delegate to this function.
     """
+    memory_store = _open_memory_store(config)
     # ── Step 2.5a: AUTO-FIX + VALIDATION ──
     if config.validation and config.validation.auto_fix:
         combined_df_tmp = combined_lf.collect()
@@ -803,6 +947,9 @@ def _run_match_pipeline(
     # ── Step 2.5b: STANDARDIZE ──
     if config.standardization and config.standardization.rules:
         combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+
+    # ── Learning Memory: pre-scoring learner overlay ──
+    _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 3: Compute matchkeys ──
     combined_lf = compute_matchkeys(combined_lf, matchkeys)
@@ -892,6 +1039,11 @@ def _run_match_pipeline(
             all_pairs = llm_score_pairs(all_pairs, combined_df, config=config.llm_scorer)
         all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
 
+    # ── Learning Memory: post-scoring corrections overlay ──
+    all_pairs, memory_stats = _apply_memory_post(
+        memory_store, config, combined_df, all_pairs
+    )
+
     # ── Step 4.7: POSTFLIGHT (auto-config only) ──
     # Postflight verification. Signals are computed from the unadjusted pair
     # list; threshold adjustments (if any, non-strict only) are then applied
@@ -971,12 +1123,19 @@ def _run_match_pipeline(
     if output_scores and matched_df is not None:
         write_output(matched_df, directory, run_name, "scores", fmt)
 
+    try:
+        _enqueue_stale_pairs(memory_stats, all_pairs, config)
+    finally:
+        if memory_store is not None:
+            memory_store.close()
+
     return {
         "matched": matched_df,
         "unmatched": unmatched_df,
         "report": report,
         "quarantine": quarantine_df_match,
         "postflight_report": postflight_report,
+        "memory_stats": memory_stats,
     }
 
 

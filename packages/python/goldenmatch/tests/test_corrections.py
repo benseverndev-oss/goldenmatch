@@ -133,3 +133,31 @@ class TestApplyCorrections:
         assert result[1][2] == 0.60
         assert stats.applied == 1
         assert stats.total_pairs == 2
+
+
+# ── Tier 3.2: CorrectionStats validate() helper ──────────────────────────
+
+
+class TestCorrectionStatsInvariant:
+    def test_validate_returns_true_when_consistent(self):
+        stats = CorrectionStats(
+            applied=2, stale=1, stale_ambiguous=1, stale_unanchorable=0,
+            total_pairs=10,
+        )
+        assert stats.validate() is True
+
+    def test_validate_returns_false_when_overshoot(self, caplog):
+        stats = CorrectionStats(
+            applied=5, stale=5, stale_ambiguous=5, stale_unanchorable=5,
+            total_pairs=10,
+        )
+        with caplog.at_level("WARNING", logger="goldenmatch.memory"):
+            ok = stats.validate()
+        assert ok is False
+        # A warning should have been logged surfacing the bad counts.
+        assert any("invariant violated" in r.message.lower() for r in caplog.records)
+
+    def test_validate_skipped_when_total_pairs_zero(self):
+        """Synthetic / unset construction should not trip the invariant."""
+        stats = CorrectionStats(applied=10, total_pairs=0)
+        assert stats.validate() is True

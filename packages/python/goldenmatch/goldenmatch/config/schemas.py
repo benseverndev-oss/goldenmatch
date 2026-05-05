@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_verify import PreflightReport
@@ -407,6 +407,18 @@ class MemoryConfig(BaseModel):
     connection: str | None = None
     trust: dict[str, float] = Field(default_factory=lambda: {"human": 1.0, "agent": 0.5})
     learning: LearningConfig = Field(default_factory=LearningConfig)
+    reanchor: bool = True
+    dataset: str | None = None
+
+    @field_validator("dataset")
+    @classmethod
+    def _reject_empty_dataset(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("MemoryConfig.dataset must be non-empty (or None)")
+        return stripped
 
 
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────

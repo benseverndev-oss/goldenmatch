@@ -15,13 +15,35 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.corrections import CorrectionStats
+
 logger = logging.getLogger(__name__)
+
+
+def _attach_memory_to_postflight(
+    postflight_report: PostflightReport | None,
+    memory_stats: "CorrectionStats | None",
+) -> PostflightReport | None:
+    """Attach memory_stats onto the postflight report so str(report) renders
+    a 'Memory:' line. Creates an empty report when memory ran but no
+    postflight ran (explicit-config path), so the rendering is always
+    reachable via ``result.postflight_report``.
+
+    Returns None only when both the report and memory_stats are absent.
+    """
+    if memory_stats is None:
+        return postflight_report
+    if postflight_report is None:
+        postflight_report = PostflightReport()
+    postflight_report.memory_stats = memory_stats
+    return postflight_report
 
 
 def _detect_llm_provider() -> str | None:
@@ -54,6 +76,12 @@ class DedupeResult:
     scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     config: Any = None
     postflight_report: PostflightReport | None = None
+    # Note: memory_stats is also attached to postflight_report.memory_stats by
+    # _attach_memory_to_postflight. The duplication is intentional — converting
+    # this field to a property delegating to postflight_report would break the
+    # pipeline's direct field assignment pattern. Single source of truth would
+    # require refactoring _attach_memory_to_postflight; tracked as follow-up.
+    memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -146,6 +174,8 @@ class MatchResult:
     unmatched: pl.DataFrame | None = None
     stats: dict = field(default_factory=dict)
     postflight_report: PostflightReport | None = None
+    # See DedupeResult.memory_stats note — same intentional duplication.
+    memory_stats: "CorrectionStats | None" = None
 
     def to_csv(self, path: str) -> Path:
         """Write matched results to CSV."""
@@ -256,6 +286,7 @@ def dedupe(
     # Run pipeline
     result = run_dedupe(file_specs, cfg)
 
+    _mem = result.get("memory_stats")
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -264,7 +295,10 @@ def dedupe(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=cfg,
-        postflight_report=result.get("postflight_report"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -341,6 +375,7 @@ def dedupe_df(
         auto_config_llm_provider=_auto_config_provider,
     )
 
+    _mem = result.get("memory_stats")
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -349,7 +384,10 @@ def dedupe_df(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=config,
-        postflight_report=result.get("postflight_report"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -412,11 +450,15 @@ def match_df(
 
     result = run_match_df(target, reference, config, auto_config=_auto_config)
 
+    _mem = result.get("memory_stats")
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
-        postflight_report=result.get("postflight_report"),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -591,10 +633,15 @@ def match(
 
     result = run_match(target_spec, ref_specs, cfg)
 
+    _mem = result.get("memory_stats")
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
+        postflight_report=_attach_memory_to_postflight(
+            result.get("postflight_report"), _mem
+        ),
+        memory_stats=_mem,
     )
 
 
@@ -827,6 +874,103 @@ def _extract_stats(result: dict) -> dict:
         "matched_records": matched_records,
         "match_rate": match_rate,
     }
+
+
+# ── Learning Memory API ──
+
+
+def get_memory(path: str | None = None) -> Any:
+    """Open (or create) a Learning Memory store.
+
+    Args:
+        path: Path to the SQLite DB file. Defaults to ``.goldenmatch/memory.db``.
+
+    Returns:
+        A ``MemoryStore`` instance. Caller is responsible for ``close()``.
+    """
+    from goldenmatch.core.memory.store import MemoryStore
+    return MemoryStore(backend="sqlite", path=path or ".goldenmatch/memory.db")
+
+
+def add_correction(
+    id_a: int,
+    id_b: int,
+    decision: str,
+    *,
+    source: str = "api",
+    reason: str | None = None,
+    dataset: str | None = None,
+    matchkey_name: str | None = None,
+    path: str | None = None,
+) -> None:
+    """Add a correction to the Learning Memory store.
+
+    Trust is derived from ``source``: 1.0 for ``steward``/``boost``/``unmerge``,
+    0.5 otherwise. Default ``source="api"`` is treated as a programmatic
+    (agent-tier) actor; pass ``source="steward"`` explicitly for human trust.
+
+    Hashes are written empty — apply_corrections handles empty-hash entries
+    via the row-ID-presence path.
+    """
+    import uuid
+    from datetime import datetime
+    from goldenmatch.core.memory.store import Correction
+
+    from goldenmatch.core.memory.store import trust_for_source
+    trust = trust_for_source(source)
+    store = get_memory(path)
+    try:
+        store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=id_a, id_b=id_b,
+            decision=decision, source=source, trust=trust,
+            field_hash="", record_hash="",
+            original_score=0.0,
+            matchkey_name=matchkey_name,
+            reason=reason,
+            dataset=dataset,
+            created_at=datetime.now(),
+        ))
+    finally:
+        store.close()
+
+
+def learn(
+    matchkey_name: str | None = None,
+    path: str | None = None,
+) -> list:
+    """Force a learning pass over stored corrections.
+
+    Args:
+        matchkey_name: Optional filter; only learn for this matchkey.
+        path: Path to the memory DB file.
+
+    Returns:
+        List of ``LearnedAdjustment`` objects produced this pass.
+    """
+    from goldenmatch.core.memory.learner import MemoryLearner
+    store = get_memory(path)
+    try:
+        learner = MemoryLearner(store)
+        return learner.learn(matchkey_name=matchkey_name)
+    finally:
+        store.close()
+
+
+def memory_stats(path: str | None = None) -> dict:
+    """Return summary stats about the memory store.
+
+    Returns a dict with ``count``, ``last_learn_time``, and ``adjustments``.
+    """
+    store = get_memory(path)
+    try:
+        return {
+            "count": store.count_corrections(),
+            "last_learn_time": store.last_learn_time(),
+            "adjustments": [a.__dict__ for a in store.get_all_adjustments()],
+        }
+    finally:
+        store.close()
 
 
 def _extract_pairs(result: dict) -> list:

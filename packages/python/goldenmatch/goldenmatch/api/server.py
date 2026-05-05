@@ -42,6 +42,10 @@ class MatchServer:
         self._id_to_idx: dict[int, int] = {}
         self._review_queue: list[dict] = []  # pending reviews
         self._review_decisions: list[dict] = []  # completed reviews
+        # Optional learning memory plumbing — when set, /reviews/decide writes a
+        # Correction with empty hashes (REST receives raw decisions, no df).
+        self._memory_store: Any = None
+        self._memory_dataset: str | None = None
 
     def initialize(self) -> None:
         """Run initial matching and cache results."""
@@ -228,9 +232,39 @@ class MatchServer:
                     self.engine.unmerge_record(item["row_id_a"])
                     self.result = self.engine._last_result
 
+                self._record_memory_correction(item, decision)
+
                 return {"status": "recorded", "pair_id": pair_id, "decision": decision}
 
         return {"error": f"Pair {pair_id} not found in review queue"}
+
+    def _record_memory_correction(self, item: dict, decision: str) -> None:
+        """Persist a Correction with source='steward', trust=1.0, empty hashes."""
+        if self._memory_store is None:
+            return
+        try:
+            import uuid
+            from datetime import datetime as _dt
+
+            from goldenmatch.core.memory.store import Correction
+
+            self._memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=int(item["row_id_a"]),
+                id_b=int(item["row_id_b"]),
+                decision=decision,
+                source="steward",
+                trust=1.0,
+                field_hash="",
+                record_hash="",
+                original_score=float(item.get("score", 0.0)),
+                matchkey_name=None,
+                reason=None,
+                dataset=self._memory_dataset,
+                created_at=_dt.now(),
+            ))
+        except Exception as e:
+            logger.warning("REST /reviews/decide memory write failed: %s", e)
 
 
 # Global server instance

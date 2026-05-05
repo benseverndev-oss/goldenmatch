@@ -25,9 +25,72 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from typing import TYPE_CHECKING
+
 import polars as pl
 
+if TYPE_CHECKING:
+    from goldenmatch.core.memory.store import MemoryStore
+
 logger = logging.getLogger(__name__)
+
+
+def _record_llm_corrections(
+    llm_results: dict[int, bool],
+    pairs: list[tuple[int, int, float]],
+    df: pl.DataFrame,
+    memory_store: "MemoryStore | None",
+    matchkey_fields: list[str] | None,
+    matchkey_name: str | None,
+    dataset: str | None,
+    cols: list[str],
+) -> None:
+    """Write Correction rows for each LLM decision (approve/reject)."""
+    if memory_store is None or not llm_results:
+        return
+    try:
+        import uuid
+        from datetime import datetime
+
+        from goldenmatch.core.memory.store import Correction, _canon_pair
+        from goldenmatch.core.memory.corrections import (
+            build_row_lookup,
+            compute_field_hash,
+            compute_record_hash,
+        )
+
+        fields = matchkey_fields or cols
+        lookup = build_row_lookup(df, fields)
+
+        for idx, is_match in llm_results.items():
+            a, b, score = pairs[idx]
+            ca, cb = _canon_pair(a, b)
+            field_hash = ""
+            record_hash = ""
+            if ca in lookup and cb in lookup:
+                field_hash = compute_field_hash(lookup[ca], lookup[cb])
+            ra = compute_record_hash(df, ca)
+            rb = compute_record_hash(df, cb)
+            if ra and rb:
+                record_hash = f"{ra}:{rb}"
+
+            memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=a,
+                id_b=b,
+                decision="approve" if is_match else "reject",
+                source="llm",
+                trust=0.5,
+                field_hash=field_hash,
+                record_hash=record_hash,
+                original_score=score,
+                matchkey_name=matchkey_name,
+                reason=None,
+                dataset=dataset,
+                created_at=datetime.now(),
+            ))
+    except Exception as e:
+        logger.warning("LLM scorer memory write failed: %s", e)
 
 
 def llm_score_pairs(
@@ -44,6 +107,10 @@ def llm_score_pairs(
     display_columns: list[str] | None = None,
     config: "LLMScorerConfig | None" = None,
     return_budget: bool = False,
+    memory_store: "MemoryStore | None" = None,
+    matchkey_fields: list[str] | None = None,
+    matchkey_name: str | None = None,
+    dataset: str | None = None,
 ) -> "list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]":
     """Score borderline pairs with an LLM.
 
@@ -206,6 +273,10 @@ def llm_score_pairs(
             "LLM calibration applied in %.1fs: %d promoted, %d unchanged",
             elapsed, n_promoted + sum(1 for m in llm_results.values() if m), n_unchanged,
         )
+        _record_llm_corrections(
+            llm_results, pairs, df, memory_store,
+            matchkey_fields, matchkey_name, dataset, cols,
+        )
     else:
         # Direct scoring path: few candidates, score them all
         llm_results = _batch_score(
@@ -232,7 +303,92 @@ def llm_score_pairs(
                 result[i] = (a, b, 1.0)
             # else: keep original fuzzy score (never demote)
 
+        _record_llm_corrections(
+            llm_results, pairs, df, memory_store,
+            matchkey_fields, matchkey_name, dataset, cols,
+        )
+
     return _return(result)
+
+
+def llm_explain_pair(
+    row_a: dict,
+    row_b: dict,
+    score: float,
+    *,
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    budget: "BudgetTracker | None" = None,
+    max_chars: int = 240,
+) -> str:
+    """Generate a one-sentence prose explanation for a record pair.
+
+    Routes through the configured LLM provider when an API key is available.
+    On ANY error (no key, network failure, budget exhausted, parse failure),
+    returns a short deterministic fallback string. Never raises.
+
+    The output is clipped to ``max_chars`` characters; long LLM responses are
+    truncated to the first sentence (or hard-cut) so the result stays
+    suitable for a UI ``why`` field.
+    """
+    def _fallback() -> str:
+        # Deterministic, no network.
+        cols = sorted(set((row_a or {}).keys()) | set((row_b or {}).keys()))
+        cols = [c for c in cols if not c.startswith("__")]
+        head = ", ".join(cols[:3]) if cols else "the available fields"
+        return f"Pair score {score:.2f} based on {head}."
+
+    try:
+        if not provider or not api_key:
+            detected_provider, detected_key = _detect_provider()
+            provider = provider or detected_provider
+            api_key = api_key or detected_key
+        if not provider or not api_key:
+            return _fallback()
+
+        if budget is not None and budget.budget_exhausted:
+            return _fallback()
+
+        if not model:
+            model = "gpt-4o-mini" if provider == "openai" else "claude-haiku-4-5-20251001"
+
+        cols = sorted(set((row_a or {}).keys()) | set((row_b or {}).keys()))
+        cols = [c for c in cols if not c.startswith("__")]
+        text_a = " | ".join(f"{c}: {row_a.get(c, '')}" for c in cols if row_a.get(c) is not None)[:300]
+        text_b = " | ".join(f"{c}: {row_b.get(c, '')}" for c in cols if row_b.get(c) is not None)[:300]
+        prompt = (
+            "In ONE short sentence (max 25 words), explain why these two records "
+            "could refer to the same entity, citing the most informative field(s). "
+            "Do not restate the question.\n"
+            f"A: {text_a}\nB: {text_b}\nFuzzy score: {score:.2f}"
+        )
+
+        if provider == "openai":
+            text, in_tok, out_tok = _call_openai(prompt, api_key, model, max_tokens=80)
+        else:
+            text, in_tok, out_tok = _call_anthropic(prompt, api_key, model, max_tokens=80)
+
+        if budget is not None:
+            try:
+                budget.record_usage(input_tokens=in_tok, output_tokens=out_tok, model=model)
+            except Exception:
+                pass
+
+        text = (text or "").strip().replace("\n", " ").replace("  ", " ")
+        if not text:
+            return _fallback()
+        # First sentence only.
+        for sep in (". ", "! ", "? "):
+            if sep in text:
+                text = text.split(sep, 1)[0] + sep.strip()
+                break
+        if len(text) > max_chars:
+            text = text[: max_chars - 3].rstrip() + "..."
+        return text
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("llm_explain_pair failed: %s", e)
+        return _fallback()
 
 
 def _detect_provider() -> tuple[str | None, str | None]:

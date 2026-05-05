@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
+
+if TYPE_CHECKING:
+    import polars as pl
+
+    from goldenmatch.core.memory.store import MemoryStore
+
+log = logging.getLogger("goldenmatch.memory")
 
 
 @dataclass
@@ -18,10 +27,18 @@ class ReviewItem:
     id_b: int
     score: float
     explanation: str
-    status: str = "pending"
+    status: Literal["pending", "approved", "rejected"] = "pending"
     decided_by: Optional[str] = None
     decided_at: Optional[str] = None
     reason: Optional[str] = None
+    why: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Normalize empty `why` to None so callers don't have to special-case
+        # the difference between "no explanation" and "explainer ran but
+        # produced an empty string".
+        if not self.why:
+            self.why = None
 
     def approve(self, decided_by: str) -> None:
         self.status = "approved"
@@ -33,6 +50,96 @@ class ReviewItem:
         self.decided_by = decided_by
         self.decided_at = datetime.now(timezone.utc).isoformat()
         self.reason = reason
+
+
+_MAX_WHY_CHARS = 240
+
+
+def _row_to_dict(df: "pl.DataFrame", row_id: int, fields: List[str]) -> dict:
+    """Pluck a row's matchkey-field values into a dict; empty if not found."""
+    try:
+        cols = [f for f in fields if f in df.columns]
+        if "__row_id__" not in df.columns or not cols:
+            return {}
+        sub = df.filter(df["__row_id__"] == row_id).select(cols)
+        if sub.is_empty():
+            return {}
+        return sub.row(0, named=True)
+    except Exception as e:
+        log.debug("row lookup for id=%s failed: %s", row_id, e)
+        return {}
+
+
+def _llm_enabled() -> bool:
+    import os
+    return bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def why_for_correction(
+    id_a: int,
+    id_b: int,
+    df: "pl.DataFrame | None",
+    matchkey_fields: Optional[List[str]],
+    *,
+    score: float = 0.0,
+    use_llm: bool = False,
+) -> str:
+    """Compute a short ``why`` string for a (id_a, id_b) correction.
+
+    Default path is deterministic (zero cost). When ``use_llm=True`` AND an
+    LLM API key is present in the environment, routes through
+    :func:`goldenmatch.core.llm_scorer.llm_explain_pair`. Falls back to the
+    deterministic path on any error so callers never have to handle
+    exceptions. Output is always non-empty and clipped to one short sentence.
+    """
+    row_a: dict = {}
+    row_b: dict = {}
+    fields = list(matchkey_fields) if matchkey_fields else []
+    if df is not None and fields:
+        row_a = _row_to_dict(df, id_a, fields)
+        row_b = _row_to_dict(df, id_b, fields)
+
+    if use_llm and _llm_enabled():
+        try:
+            from goldenmatch.core.llm_scorer import llm_explain_pair
+            out = llm_explain_pair(row_a or {}, row_b or {}, score)
+            if out:
+                if len(out) > _MAX_WHY_CHARS:
+                    out = out[: _MAX_WHY_CHARS - 3].rstrip() + "..."
+                return out
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("why_for_correction LLM path failed: %s", e)
+
+    # Deterministic path.
+    try:
+        if row_a and row_b and fields:
+            field_scores = []
+            for f in fields:
+                va = row_a.get(f)
+                vb = row_b.get(f)
+                if va is None and vb is None:
+                    continue
+                # Cheap exact-or-not signal; explain_pair_nl knows how to
+                # phrase it. We don't compute fuzzy scores here -- this stays
+                # zero-cost.
+                s = 1.0 if (va is not None and str(va) == str(vb)) else 0.4
+                field_scores.append({
+                    "field": f, "scorer": "exact",
+                    "value_a": va, "value_b": vb,
+                    "score": s, "weight": 1.0,
+                })
+            if field_scores:
+                from goldenmatch.core.explain import explain_pair_nl
+                out = explain_pair_nl(row_a, row_b, field_scores, score)
+                out = (out or "").strip().replace("\n", " ")
+                if out:
+                    if len(out) > _MAX_WHY_CHARS:
+                        out = out[: _MAX_WHY_CHARS - 3].rstrip() + "..."
+                    return out
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning("why_for_correction deterministic path failed: %s", e)
+
+    return f"Pair ({id_a}, {id_b}) flagged at score {score:.2f}."
 
 
 def gate_pairs(
@@ -107,10 +214,16 @@ class _MemoryBackend:
 class _SQLiteBackend:
     """SQLite-backed persistent storage for review items."""
 
-    def __init__(self) -> None:
-        db_dir = Path(".goldenmatch")
-        db_dir.mkdir(exist_ok=True)
-        self._db_path = db_dir / "reviews.db"
+    def __init__(self, path: Optional[str] = None) -> None:
+        if path is None:
+            db_dir = Path(".goldenmatch")
+            db_dir.mkdir(exist_ok=True)
+            self._db_path = db_dir / "reviews.db"
+        else:
+            self._db_path = Path(path)
+            parent = self._db_path.parent
+            if str(parent) and parent != Path(""):
+                parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -215,14 +328,33 @@ class ReviewQueue:
         "memory" (default) or "sqlite"
     """
 
-    def __init__(self, backend: str = "memory") -> None:
+    def __init__(
+        self,
+        backend: str = "memory",
+        path: Optional[str] = None,
+        *,
+        memory_store: "MemoryStore | None" = None,
+        df: "pl.DataFrame | None" = None,
+        matchkey_fields: Optional[List[str]] = None,
+        dataset: Optional[str] = None,
+        use_llm_explainer: bool = False,
+    ) -> None:
         if backend == "memory":
             self._backend = _MemoryBackend()
         elif backend == "sqlite":
-            self._backend = _SQLiteBackend()
+            self._backend = _SQLiteBackend(path=path)
         else:
             raise ValueError(f"Unknown backend: {backend!r}. Use 'memory' or 'sqlite'.")
         self._backend_name = backend
+        self._memory_store = memory_store
+        self._memory_df = df
+        self._memory_matchkey_fields = list(matchkey_fields) if matchkey_fields else None
+        self._memory_dataset = dataset
+        self._use_llm_explainer = use_llm_explainer
+
+    def close(self) -> None:
+        """Close any backend resources. SQLite uses per-call connections, so this is a no-op."""
+        return None
 
     @property
     def storage_tier(self) -> str:
@@ -230,6 +362,15 @@ class ReviewQueue:
 
     def add(self, job_name: str, id_a: int, id_b: int, score: float, explanation: str) -> None:
         item = ReviewItem(job_name=job_name, id_a=id_a, id_b=id_b, score=score, explanation=explanation)
+        # Populate `why` when we have enough context. Never raises.
+        if self._memory_df is not None and self._memory_matchkey_fields:
+            try:
+                item.why = why_for_correction(
+                    id_a, id_b, self._memory_df, self._memory_matchkey_fields,
+                    score=score, use_llm=self._use_llm_explainer,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                log.warning("ReviewQueue why computation failed: %s", e)
         self._backend.add(item)
 
     def list_pending(self, job_name: str) -> list[ReviewItem]:
@@ -237,9 +378,61 @@ class ReviewQueue:
 
     def approve(self, job_name: str, id_a: int, id_b: int, decided_by: str) -> None:
         self._backend.approve(job_name, id_a, id_b, decided_by)
+        self._record_correction(id_a, id_b, "approve", reason=None)
 
     def reject(self, job_name: str, id_a: int, id_b: int, decided_by: str, reason: str = "") -> None:
         self._backend.reject(job_name, id_a, id_b, decided_by, reason)
+        self._record_correction(id_a, id_b, "reject", reason=reason or None)
 
     def stats(self, job_name: str) -> dict[str, int]:
         return self._backend.stats(job_name)
+
+    def _record_correction(
+        self,
+        id_a: int,
+        id_b: int,
+        decision: str,
+        reason: Optional[str],
+    ) -> None:
+        """Write a Correction to the optional memory store; never raises."""
+        if self._memory_store is None:
+            return
+        try:
+            from goldenmatch.core.memory.store import Correction
+            from goldenmatch.core.memory.corrections import (
+                build_row_lookup,
+                compute_field_hash,
+                compute_record_hash,
+            )
+
+            from goldenmatch.core.memory.store import _canon_pair
+
+            ca, cb = _canon_pair(id_a, id_b)
+            field_hash = ""
+            record_hash = ""
+            if self._memory_df is not None and self._memory_matchkey_fields:
+                lookup = build_row_lookup(self._memory_df, self._memory_matchkey_fields)
+                if ca in lookup and cb in lookup:
+                    field_hash = compute_field_hash(lookup[ca], lookup[cb])
+                ra = compute_record_hash(self._memory_df, ca)
+                rb = compute_record_hash(self._memory_df, cb)
+                if ra and rb:
+                    record_hash = f"{ra}:{rb}"
+
+            self._memory_store.add_correction(Correction(
+                id=str(uuid.uuid4()),
+                id_a=id_a,
+                id_b=id_b,
+                decision=decision,
+                source="steward",
+                trust=1.0,
+                field_hash=field_hash,
+                record_hash=record_hash,
+                original_score=0.0,
+                matchkey_name=None,
+                reason=reason,
+                dataset=self._memory_dataset,
+                created_at=datetime.now(),
+            ))
+        except Exception as e:
+            log.warning("ReviewQueue memory write failed: %s", e)

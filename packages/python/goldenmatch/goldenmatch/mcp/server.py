@@ -28,6 +28,11 @@ from mcp.types import (
 )
 
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.memory_tools import (
+    MEMORY_TOOLS,
+    _MEMORY_TOOL_NAMES,
+    handle_memory_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -405,20 +410,24 @@ _BASE_TOOLS = [
     ),
 ]
 
-# TOOLS is the union of agent tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + _BASE_TOOLS
+# TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
     """Unified dispatcher used by goldensuite-mcp aggregator.
 
-    Routes agent-level tool calls to AgentSession via agent_tools._dispatch, and
-    base tool calls to _handle_tool. Returns a JSON-serializable dict for both.
+    Routes agent-level tool calls to AgentSession via agent_tools._dispatch,
+    memory tools via memory_tools._dispatch, and base tool calls to
+    _handle_tool. Returns a JSON-serializable dict for all.
     """
     if name in _AGENT_TOOL_NAMES:
         from goldenmatch.core.agent import AgentSession
         from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
         return _agent_dispatch(name, args, AgentSession)
+    if name in _MEMORY_TOOL_NAMES:
+        from goldenmatch.mcp.memory_tools import _dispatch as _memory_dispatch
+        return _memory_dispatch(name, args)
     return _handle_tool(name, args)
 
 
@@ -432,7 +441,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -678,6 +687,8 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
         # Delegate agent-level tools to the agent handler
         if name in _AGENT_TOOL_NAMES:
             return handle_agent_tool(name, arguments)
+        if name in _MEMORY_TOOL_NAMES:
+            return handle_memory_tool(name, arguments)
         try:
             result = _handle_tool(name, arguments)
             return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
@@ -1263,7 +1274,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 30 MCP tools for matching, explaining, reviewing, data quality, transforms, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 35 MCP tools for matching, explaining, reviewing, data quality, transforms, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benzsevern/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

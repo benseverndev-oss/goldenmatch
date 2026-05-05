@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -80,6 +81,10 @@ class BoostTab(Static):
         self._batch_pos: int = 0  # current position in batch
         self._labels: dict[int, bool] = {}  # pair_index -> True (match) / False (non-match)
         self._total_labeled: int = 0
+        # Optional learning memory plumbing (additive to LR classifier wiring).
+        self._memory_store = None
+        self._memory_dataset: str | None = None
+        self._memory_matchkey_fields: list[str] | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -268,8 +273,94 @@ class BoostTab(Static):
             pair_idx = self._batch[self._batch_pos]
             self._labels[pair_idx] = is_match
             self._total_labeled += 1
+            self._record_memory_correction(pair_idx, is_match)
         self._batch_pos += 1
         self._show_current_pair()
+
+    def _record_memory_correction(self, pair_idx: int, is_match: bool) -> None:
+        """Mirror the y/n label into the optional learning-memory store."""
+        if self._memory_store is None or self._result is None or self._data is None:
+            return
+        try:
+            a, b, score = self._result.scored_pairs[pair_idx]
+        except Exception as e:
+            logger.warning("BoostTab memory write failed: %s", e)
+            return
+        record_boost_label(
+            memory_store=self._memory_store,
+            df=self._data,
+            id_a=a,
+            id_b=b,
+            score=score,
+            is_match=is_match,
+            matchkey_fields=self._memory_matchkey_fields,
+            dataset=self._memory_dataset,
+        )
+
+
+def record_boost_label(
+    *,
+    memory_store: Any,
+    df: Any,
+    id_a: int,
+    id_b: int,
+    score: float,
+    is_match: bool,
+    matchkey_fields: list[str] | None = None,
+    dataset: str | None = None,
+) -> None:
+    """Write a boost-tab y/n label as a Correction.
+
+    Extracted from BoostTab._record_memory_correction so tests can target the
+    seam without instantiating a Textual widget. Never raises; logs warnings
+    on failure.
+    """
+    if memory_store is None or df is None:
+        return
+    try:
+        import uuid
+        from datetime import datetime
+
+        from goldenmatch.core.memory.store import Correction, _canon_pair
+        from goldenmatch.core.memory.corrections import (
+            build_row_lookup,
+            compute_field_hash,
+            compute_record_hash,
+        )
+
+        ca, cb = _canon_pair(id_a, id_b)
+        fields = matchkey_fields or [
+            c for c in df.columns if not c.startswith("__")
+        ]
+
+        field_hash = ""
+        record_hash = ""
+        if fields:
+            lookup = build_row_lookup(df, fields)
+            if ca in lookup and cb in lookup:
+                field_hash = compute_field_hash(lookup[ca], lookup[cb])
+        ra = compute_record_hash(df, ca)
+        rb = compute_record_hash(df, cb)
+        if ra and rb:
+            record_hash = f"{ra}:{rb}"
+
+        memory_store.add_correction(Correction(
+            id=str(uuid.uuid4()),
+            id_a=id_a,
+            id_b=id_b,
+            decision="approve" if is_match else "reject",
+            source="boost",
+            trust=1.0,
+            field_hash=field_hash,
+            record_hash=record_hash,
+            original_score=score,
+            matchkey_name=None,
+            reason=None,
+            dataset=dataset,
+            created_at=datetime.now(),
+        ))
+    except Exception as e:
+        logger.warning("BoostTab memory write failed: %s", e)
 
     # ── Button handlers ──────────────────────────────────────────
 
