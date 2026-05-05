@@ -306,7 +306,12 @@ Hosted on Railway, registered on Smithery:
 - GitHub Pages: docs workflow uses `actions/jekyll-build-pages` with source `./docs`, Just the Docs theme
 - GitHub Release triggers publish.yml workflow which auto-publishes to PyPI via trusted publishing
 - Scored pairs are canonicalized as `(min(id_a, id_b), max(id_a, id_b))` throughout cluster.py, graph.py, chunked.py, ann_blocker.py -- any new code storing/looking up pairs must canonicalize too
-- v2.0 Learning Memory: PR #9 merged. Core modules shipped (store, corrections, learner). Remaining: pipeline integration (hook after scoring), collection point wiring (review_queue, boost_tab, unmerge, llm_scorer, agent_tools, REST), CLI subcommands (memory stats/learn/export/import), MCP tools. Spec: `docs/superpowers/specs/2026-03-26-learning-memory-design.md`. Plan: `docs/superpowers/plans/2026-03-26-learning-memory-implementation.md`
+- v1.6.0 Learning Memory: end-to-end loop wired. Pipeline applies corrections + learned thresholds; 7 collection points (ReviewQueue, BoostTab, unmerge_record/cluster, LLM scorer, agent_approve_reject, REST `/reviews/decide`, Python API); 5 MCP tools (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`); CLI subgroup `goldenmatch memory ...`. Spec: `docs/superpowers/specs/2026-05-04-learning-memory-completion.md` (foundation: pre-fold 2026-03-26 spec).
+- `record_hash` excludes `__row_id__` so corrections survive row reordering across runs (the durability invariant; including it would defeat re-anchoring).
+- `Correction.source` and `Correction.decision` are `StrEnum`s in `core/memory/store.py`. Trust mapping lives in `HIGH_TRUST_SOURCES` + `trust_for_source(source)` — use these instead of inline `if source in {...}: trust = 1.0`.
+- `MemoryConfig.dataset` field validator strips whitespace and rejects empty strings; pass `None` to omit.
+- `apply_corrections` reanchor builds `record_hash → list[row_id]` via `pl.concat_str` + `map_elements` (vectorized O(N)). Ambiguous re-anchors counted as `stale_ambiguous`, never silently misapplied.
+- PyPI publish: `publish-goldenmatch.yml` lives at the **monorepo root**, not under this package. Trusted publishing NOT configured — uses `PYPI_TOKEN` secret. To enable trusted publishing later, claim PyPI publisher: owner `benzsevern`, repo `goldenmatch`, workflow `publish-goldenmatch.yml`, environment `pypi`.
 
 ## API Quick Reference
 
