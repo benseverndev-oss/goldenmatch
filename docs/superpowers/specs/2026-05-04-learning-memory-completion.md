@@ -70,7 +70,11 @@ def apply_corrections(
 
     # 2. Build vectorized record_hash → [row_ids] map ONCE.
     #    Use polars-native concat_str + hash to avoid O(N) per-row filters.
-    sorted_cols = sorted(df.columns)
+    #    EXCLUDE __row_id__ — it is the positional key that changes across runs;
+    #    including it would make record_hash non-durable, defeating re-anchoring.
+    #    The shipped compute_record_hash() also excludes __row_id__ (corrections
+    #    of v1.6.0+ — earlier persisted hashes that included it appear as stale).
+    sorted_cols = sorted(c for c in df.columns if c != "__row_id__")
     hashed = (
         df.select(
             pl.col("__row_id__"),

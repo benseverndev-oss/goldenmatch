@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 
 import polars as pl
+import pytest
 
 from goldenmatch import dedupe_df
 from goldenmatch.config.schemas import (
@@ -232,3 +233,32 @@ def test_pipeline_continues_when_store_open_fails(tmp_path, caplog):
         for rec in caplog.records
         if rec.levelname == "WARNING"
     )
+
+
+# ── Tier 3.1: MemoryConfig.dataset validator ────────────────────────────
+
+
+def test_memory_config_rejects_empty_dataset():
+    """Empty string dataset is rejected at validation time."""
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="non-empty"):
+        MemoryConfig(dataset="")
+
+
+def test_memory_config_rejects_whitespace_dataset():
+    """Whitespace-only dataset is rejected (would silently fail downstream)."""
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="non-empty"):
+        MemoryConfig(dataset="   ")
+
+
+def test_memory_config_accepts_none_dataset():
+    """None remains valid (means: dataset filtering off)."""
+    cfg = MemoryConfig(dataset=None)
+    assert cfg.dataset is None
+
+
+def test_memory_config_strips_dataset():
+    """Padding whitespace is trimmed but real value preserved."""
+    cfg = MemoryConfig(dataset="  prod  ")
+    assert cfg.dataset == "prod"
