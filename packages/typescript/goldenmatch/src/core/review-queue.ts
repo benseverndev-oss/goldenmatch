@@ -30,6 +30,13 @@ export interface ReviewItem {
   readonly score: number;
   readonly status: ReviewStatus;
   readonly createdAt: number;
+  /**
+   * Optional human-readable one-liner explaining why this pair was flagged.
+   * Populated by `whyForCorrection` (deterministic) or `llmExplainPair`
+   * (when an OPENAI_API_KEY / ANTHROPIC_API_KEY is set). Surfaces in the
+   * review TUI / REST `/reviews` payload.
+   */
+  readonly why?: string;
 }
 
 export interface GatedResult {
