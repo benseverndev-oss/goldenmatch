@@ -10,7 +10,7 @@ class AppState:
     project_root: Path
     config_path: Path | None
     labels_path: Path
-    rules: dict[str, Any] | None = None  # populated lazily by /api/v1/rules
+    rules: dict[str, Any] | None = None  # in-memory edited rules; seeded lazily from goldenmatch.yml on first /api/v1/rules read
     runs_dir: Path | None = None  # defaults to project_root if None
     registry: Any = field(default=None)  # filled in Task 5
 

@@ -100,6 +100,12 @@ class MatchkeyField(BaseModel):
         return self
 
 
+class RulesPayload(BaseModel):
+    """Web-UI-facing wrapper around the matchkey + threshold portions of config."""
+    threshold: float = Field(ge=0.0, le=1.0)
+    matchkeys: list[MatchkeyField]
+
+
 # ── MatchkeyConfig ──────────────────────────────────────────────────────────
 
 

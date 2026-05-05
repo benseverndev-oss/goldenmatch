@@ -19,8 +19,10 @@ def create_app(state: AppState) -> FastAPI:
         return {"status": "ok"}
 
     from goldenmatch.web.routers import project as project_router
+    from goldenmatch.web.routers import rules as rules_router
     from goldenmatch.web.routers import runs as runs_router
     app.include_router(project_router.router)
+    app.include_router(rules_router.router)
     app.include_router(runs_router.router)
 
     if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
