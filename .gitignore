@@ -11,6 +11,9 @@ __pycache__/
 # Generated outputs
 *_lineage.json
 *_clusters.csv
+# Allow committed test fixtures that mimic run outputs
+!packages/python/goldenmatch/tests/web/fixtures/**
+!packages/python/goldenmatch/tests/**/fixtures/**
 
 # IDE
 .vscode/
