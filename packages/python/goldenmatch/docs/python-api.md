@@ -864,6 +864,49 @@ gm.generate_dedupe_report(result) -> str  # HTML report
 
 ---
 
+## Learning Memory (v1.6.0)
+
+```python
+import goldenmatch
+
+# Programmatically register a correction (same effect as the review TUI)
+goldenmatch.add_correction(
+    id_a=42, id_b=87, decision="reject", source="steward",
+    reason="Different EIN despite name match", dataset="customers",
+)
+
+# Force a learning pass (otherwise auto-runs at next pipeline call)
+adjustments = goldenmatch.learn()
+print(f"Adjusted {len(adjustments)} matchkey thresholds")
+
+# Inspect what's stored
+print(goldenmatch.memory_stats())
+
+# Direct store access (for custom queries / migrations)
+store = goldenmatch.get_memory()
+for c in store.get_corrections(dataset="customers"):
+    print(c.id_a, c.id_b, c.decision, c.trust, c.reason)
+```
+
+| Function | Returns |
+|---|---|
+| `goldenmatch.get_memory()` | The active `MemoryStore` (constructed from `config.memory`). |
+| `goldenmatch.add_correction(id_a, id_b, decision, ...)` | Upserts a correction, trust-weighted. Higher trust wins on conflict. |
+| `goldenmatch.learn()` | Runs `MemoryLearner`, returns the dict of threshold adjustments. |
+| `goldenmatch.memory_stats()` | Counts and last-learned timestamps. |
+
+After a pipeline run, every `DedupeResult` / `MatchResult` carries a `memory_stats` field:
+
+```python
+result = goldenmatch.dedupe_df(df, config=config)
+print(result.memory_stats)
+# {'applied': 12, 'stale': 0, 'stale_ambiguous': 0, 'unanchorable': 0}
+```
+
+Full guide: [Learning Memory]({% link learning-memory.md %}).
+
+---
+
 ## REST API client
 
 ```python

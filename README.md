@@ -45,7 +45,9 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
-> **🆕 v1.5.0 (Python) · v0.3.1 (npm)** — Auto-config now runs a **preflight + postflight verification layer**. Biblio / domain-extracted schemas no longer crash under zero-config, remote-asset scorers are demoted by default (offline-safe CI), strict mode for deterministic parity runs, and every `DedupeResult` carries an inspectable `postflight_report`. Built by [Ben Severn](https://bensevern.dev).
+> **🆕 v1.6.0 (Python)** — **Learning Memory** is now wired end-to-end in GoldenMatch. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local store and apply automatically on the next run; corrections re-anchor across row reorders via record-hash. New CLI subgroup, 5 new MCP tools (35 total), and Python `add_correction()` / `learn()` / `memory_stats()`. Off by default. See [Learning Memory docs](https://benzsevern.github.io/goldenmatch/learning-memory).
+>
+> v1.5.0 — auto-config preflight + postflight verification layer. Built by [Ben Severn](https://bensevern.dev).
 
 ---
 
@@ -63,8 +65,9 @@ Each tool stands alone, but they compose into a single pipeline:
 
 - **Zero-config defaults that admit when they're unsure** — every step has a self-verifying preflight + postflight; results carry an inspectable report instead of failing silently.
 - **97.2% F1 on DBLP-ACM out of the box** for entity resolution. [DQBench ER score: 95.30](https://github.com/benzsevern/dqbench).
+- **Learning Memory** — corrections persist across runs and re-anchor across row reorders, so the system stops needing the same correction twice (GoldenMatch v1.6.0; off by default).
 - **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
-- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 30+ MCP tools across the suite.
+- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 35+ MCP tools across the suite.
 - **Polyglot parity** — Python and TypeScript implementations track the same scorer outputs to 4-decimal precision via a parity harness.
 - **Production paths** — Postgres sync, daemon mode, lineage tracking, review queues, dbt integration, GitHub Actions, and a Rust extension layer for Postgres / DuckDB.
 
@@ -201,7 +204,7 @@ GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers
 }
 ```
 
-30+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records.
+35+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, and manage Learning Memory corrections.
 
 ---
 

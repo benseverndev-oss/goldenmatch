@@ -100,6 +100,7 @@ Scale: 7,823 records/sec on a laptop (fuzzy + exact + golden).
 | [Domain Packs](domain-packs) | 7 built-in YAML rulebooks |
 | [PPRL](pprl) | Privacy-preserving record linkage |
 | [LLM Integration](llm) | LLM scorer, LLM clustering, budget tracking |
+| [Learning Memory](learning-memory) | Persistent corrections + threshold learning (v1.6.0) |
 | [Streaming & Incremental](streaming) | Real-time matching, append-only mode |
 | [PostgreSQL Extension](sql-postgres) | 18 SQL functions, pipeline schema |
 | [DuckDB Extension](sql-duckdb) | 12 Python UDFs |

@@ -159,6 +159,16 @@ llm_scorer:
     max_calls: 100
     warn_at_pct: 80
 
+memory:
+  enabled: true                 # default: false. Off => no memory work, zero overhead.
+  backend: sqlite               # sqlite | postgres
+  path: .goldenmatch/memory.db  # sqlite path or postgres DSN
+  reanchor: true                # default: true. Look up corrections by record_hash when row IDs miss.
+  dataset: customers            # tag corrections so one DB can hold memory for many tables
+  learning:
+    threshold_min_corrections: 10   # learner runs once per matchkey at this floor
+    weights_min_corrections: 50     # field-weight learner floor (stub in v1.6, returns null)
+
 output:
   directory: ./output
   format: csv
@@ -397,3 +407,21 @@ for finding in cfg._preflight_report.findings:
 ```
 
 See the [Verification section in the Python API docs](python-api.html#verification-v150) for the full `preflight` / `postflight` signatures and the `PostflightSignals` schema.
+
+---
+
+## Learning Memory (v1.6.0)
+
+The optional `memory:` section enables persistent corrections. Once a steward, agent, or LLM decides a pair, that decision is stored, re-anchored across row reorders by `record_hash`, and applied automatically on every subsequent `dedupe_df` / `match_df` call. After 10+ corrections accumulate against a matchkey, the learner adjusts that matchkey's threshold for the next run. Off by default; enable via the YAML block above or `config.memory.enabled = True`.
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | Zero-config preserved. Enabling does not change pipeline output until corrections exist. |
+| `backend` | `"sqlite"` | `"postgres"` requires `pip install goldenmatch[postgres]`. |
+| `path` | `".goldenmatch/memory.db"` | SQLite file or full DSN for postgres. |
+| `reanchor` | `true` | Re-anchor by `record_hash` when row IDs miss; ambiguous re-anchors report `stale_ambiguous`. |
+| `dataset` | `null` | Tag corrections; isolates per-table memory in shared DBs. |
+| `learning.threshold_min_corrections` | `10` | Trust-weighted grid search runs once a matchkey crosses this floor. |
+| `learning.weights_min_corrections` | `50` | Field-weight learning is stubbed in v1.6.0 and returns `null`. |
+
+Full guide: [Learning Memory]({% link learning-memory.md %}).

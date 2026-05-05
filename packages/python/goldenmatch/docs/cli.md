@@ -282,6 +282,35 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --daemon
 
 ---
 
+## memory (v1.6.0)
+
+Inspect, train, and move the Learning Memory store. Requires `memory.enabled = true` in your config (see [Configuration]({% link configuration.md %})).
+
+```bash
+# Inspect what's stored
+goldenmatch memory stats --config goldenmatch.yml
+goldenmatch memory show  --config goldenmatch.yml --limit 50
+
+# Force a learning pass (otherwise auto-runs at next pipeline call)
+goldenmatch memory learn --config goldenmatch.yml
+
+# Move memory between environments
+goldenmatch memory export --config goldenmatch.yml --output corrections.jsonl
+goldenmatch memory import --config goldenmatch.yml --input  corrections.jsonl
+```
+
+| Subcommand | Purpose |
+|---|---|
+| `memory stats` | Counts by source / decision, learned threshold deltas, last-learned timestamp. |
+| `memory show` | List recent corrections with reason and trust. |
+| `memory learn` | Run the threshold learner over the current store. |
+| `memory export` | JSONL dump of all corrections (one record per line). |
+| `memory import` | Bulk-load corrections from JSONL with trust-based upsert. |
+
+Full guide: [Learning Memory]({% link learning-memory.md %}).
+
+---
+
 ## Other commands
 
 | Command | Description |
