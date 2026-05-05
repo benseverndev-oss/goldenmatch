@@ -300,11 +300,10 @@ export type { TableSchema, Relationship, GraphERResult } from "./graph-er.js";
 // Memory (learning corrections)
 // ---------------------------------------------------------------------------
 
-export { MemoryStore } from "./memory/store.js";
-export type { Correction, MemoryStoreConfig } from "./memory/store.js";
-export { applyCorrections, hashRow } from "./memory/corrections.js";
-export { MemoryLearner } from "./memory/learner.js";
-export type { LearnedParams } from "./memory/learner.js";
+export { InMemoryStore } from "./memory/store.js";
+export type { Correction, MemoryStore } from "./memory/types.js";
+// NOTE: applyCorrections / MemoryLearner re-exports are deferred until
+// phases 1.4 (corrections) and 1.5 (learner) port them to the v0.4.0 shape.
 
 // ---------------------------------------------------------------------------
 // PPRL (Privacy-Preserving Record Linkage)
