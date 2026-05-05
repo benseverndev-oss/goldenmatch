@@ -57,7 +57,7 @@ const VALID_BLOCKING_STRATEGIES = new Set([
   "learned",
 ] as const);
 
-const VALID_MEMORY_BACKENDS = new Set(["sqlite", "postgres"] as const);
+const VALID_MEMORY_BACKENDS = new Set(["memory", "sqlite"] as const);
 
 const VALID_QUALITY_MODES = new Set([
   "silent",
@@ -674,6 +674,24 @@ function parseLearningConfig(raw: unknown, ctx: string): LearningConfig {
 
 function parseMemoryConfig(raw: unknown, ctx: string): MemoryConfig {
   const obj = asObj(raw, ctx);
+  let trust: { human: number; agent: number } | undefined;
+  if (typeof obj.trust === "object" && obj.trust !== null) {
+    const t = obj.trust as Record<string, unknown>;
+    trust = {
+      human: typeof t.human === "number" ? t.human : 1.0,
+      agent: typeof t.agent === "number" ? t.agent : 0.5,
+    };
+  }
+  let dataset: string | null | undefined;
+  if (obj.dataset === null) {
+    dataset = null;
+  } else if (typeof obj.dataset === "string") {
+    const trimmed = obj.dataset.trim();
+    if (trimmed.length === 0) {
+      throw new Error(`${ctx}.dataset must be non-empty or null`);
+    }
+    dataset = trimmed;
+  }
   return stripUndefined({
     enabled: typeof obj.enabled === "boolean" ? obj.enabled : false,
     backend: requireIn(
@@ -683,7 +701,9 @@ function parseMemoryConfig(raw: unknown, ctx: string): MemoryConfig {
       "sqlite",
     ),
     path: optStr(obj.path),
-    trust: typeof obj.trust === "number" ? obj.trust : 0.9,
+    dataset,
+    reanchor: typeof obj.reanchor === "boolean" ? obj.reanchor : undefined,
+    trust,
     learning:
       typeof obj.learning === "object" && obj.learning !== null
         ? parseLearningConfig(obj.learning, `${ctx}.learning`)

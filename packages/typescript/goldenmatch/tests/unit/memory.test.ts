@@ -1,119 +1,77 @@
 import { describe, it, expect } from "vitest";
-import { MemoryStore, MemoryLearner } from "../../src/core/index.js";
-import type { Correction, MatchkeyConfig } from "../../src/core/index.js";
+import {
+  HIGH_TRUST_SOURCES,
+  trustForSource,
+  correctionToJSON,
+  correctionFromJSON,
+  type Correction,
+} from "../../src/core/memory/types.js";
 
-function makeCorrection(
-  rowIdA: number,
-  rowIdB: number,
-  verdict: "match" | "no_match",
-  score: number,
-): Correction {
-  return {
-    rowIdA,
-    rowIdB,
-    verdict,
-    feature: "overall",
-    score,
-    timestamp: Date.now(),
-    trust: 0.9,
-    source: "test",
-  };
-}
-
-describe("MemoryStore", () => {
-  it("add + list + count", () => {
-    const store = new MemoryStore();
-    expect(store.count()).toBe(0);
-    store.add(makeCorrection(1, 2, "match", 0.9));
-    store.add(makeCorrection(3, 4, "no_match", 0.3));
-    expect(store.count()).toBe(2);
-    expect(store.list().length).toBe(2);
+describe("Correction source/decision types", () => {
+  it("HIGH_TRUST_SOURCES contains exactly steward/boost/unmerge", () => {
+    expect(HIGH_TRUST_SOURCES.size).toBe(3);
+    expect(HIGH_TRUST_SOURCES.has("steward")).toBe(true);
+    expect(HIGH_TRUST_SOURCES.has("boost")).toBe(true);
+    expect(HIGH_TRUST_SOURCES.has("unmerge")).toBe(true);
   });
 
-  it("listMatches and listNonMatches", () => {
-    const store = new MemoryStore();
-    store.add(makeCorrection(1, 2, "match", 0.9));
-    store.add(makeCorrection(3, 4, "no_match", 0.3));
-    expect(store.listMatches().length).toBe(1);
-    expect(store.listNonMatches().length).toBe(1);
+  it("trustForSource maps high-trust to 1.0 and others to 0.5", () => {
+    expect(trustForSource("steward")).toBe(1.0);
+    expect(trustForSource("boost")).toBe(1.0);
+    expect(trustForSource("unmerge")).toBe(1.0);
+    expect(trustForSource("agent")).toBe(0.5);
+    expect(trustForSource("llm")).toBe(0.5);
+    expect(trustForSource("api")).toBe(0.5);
   });
 
-  it("clear resets the store", () => {
-    const store = new MemoryStore();
-    store.add(makeCorrection(1, 2, "match", 0.9));
-    store.clear();
-    expect(store.count()).toBe(0);
+  it("Correction JSON round-trip is identity", () => {
+    const c: Correction = {
+      id: "abc-123",
+      idA: 5,
+      idB: 7,
+      decision: "reject",
+      source: "steward",
+      trust: 1.0,
+      fieldHash: "abc123",
+      recordHash: "abc123:def456",
+      originalScore: 0.92,
+      matchkeyName: "identity",
+      reason: null,
+      dataset: "customers",
+      createdAt: new Date("2026-05-04T12:00:00.000Z"),
+    };
+    const r = correctionFromJSON(correctionToJSON(c));
+    expect(r).toEqual(c);
   });
 
-  it("upsert with higher trust replaces existing", () => {
-    const store = new MemoryStore();
-    const c1: Correction = {
-      rowIdA: 1,
-      rowIdB: 2,
-      verdict: "match",
-      feature: "name",
-      score: 0.9,
-      timestamp: 1000,
+  it("correctionToJSON emits snake_case keys and ISO-8601 UTC", () => {
+    const c: Correction = {
+      id: "u1",
+      idA: 1,
+      idB: 2,
+      decision: "approve",
+      source: "agent",
       trust: 0.5,
-      source: "a",
+      fieldHash: "ff",
+      recordHash: "aa:bb",
+      originalScore: 0.5,
+      matchkeyName: null,
+      reason: null,
+      dataset: null,
+      createdAt: new Date("2026-05-04T12:00:00.000Z"),
     };
-    const c2: Correction = { ...c1, trust: 0.9, source: "b", timestamp: 2000 };
-    store.upsert(c1);
-    store.upsert(c2);
-    expect(store.count()).toBe(1);
-    expect(store.list()[0]!.source).toBe("b");
+    const j = correctionToJSON(c);
+    expect(j.id_a).toBe(1);
+    expect(j.id_b).toBe(2);
+    expect(j.field_hash).toBe("ff");
+    expect(j.record_hash).toBe("aa:bb");
+    expect(j.original_score).toBe(0.5);
+    expect(j.matchkey_name).toBeNull();
+    expect(j.created_at).toBe("2026-05-04T12:00:00Z");
   });
 });
 
-describe("MemoryLearner", () => {
-  it("tunes threshold when given >= 10 corrections with mixed verdicts", () => {
-    const baseline: MatchkeyConfig = {
-      name: "m",
-      type: "weighted",
-      threshold: 0.85,
-      fields: [{ field: "name", transforms: [], scorer: "jaro_winkler", weight: 1.0 }],
-    };
-    const corrections: Correction[] = [];
-    // 10 positives with score > 0.8, 10 negatives with score < 0.7
-    for (let i = 0; i < 10; i++) {
-      corrections.push(makeCorrection(i, i + 100, "match", 0.85));
-      corrections.push(makeCorrection(i + 200, i + 300, "no_match", 0.4));
-    }
-    const learner = new MemoryLearner();
-    const params = learner.learn(corrections, baseline);
-    expect(params.correctionCount).toBe(20);
-    expect(params.threshold).not.toBeUndefined();
-    // Optimal threshold should be somewhere between 0.4 and 0.85
-    expect(params.threshold!).toBeGreaterThanOrEqual(0.5);
-    expect(params.threshold!).toBeLessThanOrEqual(0.95);
-  });
-
-  it("returns no threshold when fewer than 10 corrections", () => {
-    const baseline: MatchkeyConfig = {
-      name: "m",
-      type: "weighted",
-      threshold: 0.85,
-      fields: [{ field: "name", transforms: [], scorer: "jaro_winkler", weight: 1.0 }],
-    };
-    const corrections = [makeCorrection(1, 2, "match", 0.9)];
-    const learner = new MemoryLearner();
-    const params = learner.learn(corrections, baseline);
-    expect(params.threshold).toBeUndefined();
-  });
-
-  it("returns no threshold when all verdicts are the same", () => {
-    const baseline: MatchkeyConfig = {
-      name: "m",
-      type: "weighted",
-      threshold: 0.85,
-      fields: [{ field: "name", transforms: [], scorer: "jaro_winkler", weight: 1.0 }],
-    };
-    const corrections: Correction[] = [];
-    for (let i = 0; i < 15; i++) {
-      corrections.push(makeCorrection(i, i + 100, "match", 0.9));
-    }
-    const learner = new MemoryLearner();
-    const params = learner.learn(corrections, baseline);
-    expect(params.threshold).toBeUndefined();
-  });
-});
+// TODO(phase 1.3): The pre-v0.4.0 tests for InMemoryStore + MemoryLearner
+// (verdict/feature shape, sync API) are deleted here. They will be rewritten
+// against the new async MemoryStore interface in phase 1.3 of the TS parity
+// learning-memory plan.
