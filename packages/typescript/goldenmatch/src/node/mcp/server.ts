@@ -3,8 +3,9 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes ~20 tools covering dedupe, match, scoring, explanation,
- * profiling, auto-config (shorthand), evaluation, and listings.
+ * Exposes 24 tools covering dedupe, match, scoring, explanation,
+ * profiling, auto-config (shorthand), evaluation, listings, and Learning
+ * Memory (5 memory tools wired in via MEMORY_TOOLS).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -38,6 +39,11 @@ import { buildClusters } from "../../core/cluster.js";
 import { explainPair, explainCluster } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import { evaluatePairs, loadGroundTruthPairs } from "../../core/evaluate.js";
+import {
+  MEMORY_TOOLS,
+  MEMORY_TOOL_NAMES,
+  handleMemoryTool,
+} from "./memory-tools.js";
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -66,7 +72,7 @@ const rowArg = {
   description: "Record object (column -> value)",
 };
 
-export const TOOLS: readonly Tool[] = [
+const EXISTING_TOOLS: readonly Tool[] = [
   {
     name: "dedupe",
     description:
@@ -347,6 +353,8 @@ export const TOOLS: readonly Tool[] = [
   },
 ];
 
+export const TOOLS: readonly Tool[] = [...EXISTING_TOOLS, ...MEMORY_TOOLS];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -454,6 +462,18 @@ export async function handleTool(
 ): Promise<unknown> {
   const args = rawArgs ?? {};
   try {
+    if (MEMORY_TOOL_NAMES.has(name)) {
+      const content = await handleMemoryTool(name, args);
+      // The MCP server wraps non-memory results in JSON.stringify themselves;
+      // memory tools already return TextContent. Parse the JSON back so the
+      // outer dispatch shape stays consistent with the other tools.
+      const text = content[0]?.text ?? "{}";
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { error: "memory tool returned non-JSON" };
+      }
+    }
     switch (name) {
       case "dedupe": {
         const path = sanitizePath(String(args["path"]));
