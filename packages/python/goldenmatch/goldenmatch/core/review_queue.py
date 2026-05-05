@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
 
 if TYPE_CHECKING:
     import polars as pl
@@ -27,11 +27,18 @@ class ReviewItem:
     id_b: int
     score: float
     explanation: str
-    status: str = "pending"
+    status: Literal["pending", "approved", "rejected"] = "pending"
     decided_by: Optional[str] = None
     decided_at: Optional[str] = None
     reason: Optional[str] = None
     why: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Normalize empty `why` to None so callers don't have to special-case
+        # the difference between "no explanation" and "explainer ran but
+        # produced an empty string".
+        if not self.why:
+            self.why = None
 
     def approve(self, decided_by: str) -> None:
         self.status = "approved"
