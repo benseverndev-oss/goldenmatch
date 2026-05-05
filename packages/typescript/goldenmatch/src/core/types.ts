@@ -7,6 +7,7 @@ import type {
   PreflightReport,
   PostflightReport,
 } from "./autoconfigVerify.js";
+import type { CorrectionStats } from "./memory/types.js";
 
 // ---------------------------------------------------------------------------
 // Primitive types
@@ -345,6 +346,9 @@ export interface DedupeResult {
   readonly scoredPairs: readonly ScoredPair[];
   readonly config: GoldenMatchConfig;
   readonly postflightReport?: PostflightReport;
+  /** Learning Memory outcome for this run. Null when memory was disabled
+   *  or no corrections existed. Set by `_applyMemoryPost` in pipeline.ts. */
+  readonly memoryStats?: CorrectionStats | null;
 }
 
 export interface MatchResult {
@@ -352,6 +356,8 @@ export interface MatchResult {
   readonly unmatched: readonly Row[];
   readonly stats: Readonly<Record<string, unknown>>;
   readonly postflightReport?: PostflightReport;
+  /** Learning Memory outcome for this run. See `DedupeResult.memoryStats`. */
+  readonly memoryStats?: CorrectionStats | null;
 }
 
 export interface FieldProvenance {
