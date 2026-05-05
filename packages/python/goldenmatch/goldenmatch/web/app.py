@@ -18,6 +18,9 @@ def create_app(state: AppState) -> FastAPI:
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    from goldenmatch.web.routers import project as project_router
+    app.include_router(project_router.router)
+
     if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
