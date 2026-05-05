@@ -13,10 +13,10 @@ def _find_run(state, run_name: str):
     for ref in runs_mod.discover_runs(state.runs_dir or state.project_root):
         if ref.run_name == run_name:
             return ref
-    # also check the in-memory registry (added in Task 5; falls back to None now)
-    reg = getattr(state, "registry", None)
-    if reg is not None:
-        ref = reg.get(run_name)
+    # In-memory preview registry (Task 5) sits alongside on-disk runs and
+    # uses the same /api/v1/runs/{name} surface.
+    if state.registry is not None:
+        ref = state.registry.get(run_name)
         if ref is not None:
             return ref
     raise HTTPException(status_code=404, detail=f"run not found: {run_name}")
@@ -29,8 +29,17 @@ def manifest(run_name: str, request: Request):
 
 
 @router.get("/{run_name}/clusters")
-def clusters(run_name: str, request: Request,
-             cursor: int | None = Query(None), limit: int = Query(50, le=500)):
+def clusters(
+    run_name: str,
+    request: Request,
+    cursor: int | None = Query(None, ge=0, description="Offset into the cluster list (0-based)."),
+    limit: int = Query(50, ge=1, le=500, description="Page size."),
+):
+    """Paginated cluster summaries.
+
+    Returns ``{items, cursor, total}``. Pass ``cursor`` from the previous response
+    to fetch the next page; ``cursor=null`` indicates the end of the list.
+    """
     ref = _find_run(request.app.state.app_state, run_name)
     summaries = runs_mod.cluster_summaries(ref)
     start = cursor or 0
