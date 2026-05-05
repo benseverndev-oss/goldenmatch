@@ -53,3 +53,61 @@ def load_run_manifest(ref: RunRef) -> RunManifest:
         cluster_count=int(df.select(pl.col("cluster_id").n_unique()).item()),
         row_count=int(df.height),
     )
+
+
+def _load_source_df(ref: RunRef, lineage: dict | None = None) -> pl.DataFrame:
+    """Locate and load the source CSV. v1 expects `data.csv` next to the run.
+
+    Lineage may carry source info in future versions — currently it does not.
+    """
+    src = ref.lineage_path.parent / "data.csv"
+    if not src.exists():
+        raise FileNotFoundError(f"source CSV not found at {src}")
+    return pl.read_csv(src)
+
+
+def cluster_summaries(ref: RunRef) -> list[dict]:
+    """Per-cluster size + score range, computed from clusters CSV + lineage."""
+    df = load_clusters_df(ref)
+    lineage = load_lineage(ref)
+    pairs_by_cluster: dict[int, list[float]] = {}
+    for p in lineage.get("pairs", []):
+        pairs_by_cluster.setdefault(int(p["cluster_id"]), []).append(float(p["score"]))
+
+    summaries = []
+    for cid, group in df.group_by("cluster_id"):
+        cid_int = int(cid[0]) if isinstance(cid, tuple) else int(cid)
+        scores = pairs_by_cluster.get(cid_int, [])
+        rep_row_id = int(group["row_id"][0])
+        summaries.append({
+            "cluster_id": cid_int,
+            "size": int(group.height),
+            "max_score": max(scores) if scores else None,
+            "min_score": min(scores) if scores else None,
+            "representative_row_id": rep_row_id,
+        })
+    summaries.sort(key=lambda c: c["cluster_id"])
+    return summaries
+
+
+def cluster_detail(ref: RunRef, cluster_id: int) -> dict:
+    df = load_clusters_df(ref)
+    lineage = load_lineage(ref)
+    members = df.filter(pl.col("cluster_id") == cluster_id)
+    if members.height == 0:
+        raise KeyError(cluster_id)
+    row_ids = [int(r) for r in members["row_id"]]
+    src = _load_source_df(ref)
+    rows = [
+        {"row_id": rid, "columns": dict(zip(src.columns, src.row(rid)))}
+        for rid in row_ids
+    ]
+    pairs = [p for p in lineage.get("pairs", []) if int(p["cluster_id"]) == cluster_id]
+    return {"cluster_id": cluster_id, "row_ids": row_ids, "rows": rows, "pairs": pairs}
+
+
+def source_row(ref: RunRef, row_id: int) -> dict:
+    src = _load_source_df(ref)
+    if row_id < 0 or row_id >= src.height:
+        raise IndexError(row_id)
+    return {"row_id": row_id, "columns": dict(zip(src.columns, src.row(row_id)))}
