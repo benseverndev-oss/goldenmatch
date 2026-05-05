@@ -415,9 +415,10 @@ class MemoryConfig(BaseModel):
     def _reject_empty_dataset(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if not v.strip():
+        stripped = v.strip()
+        if not stripped:
             raise ValueError("MemoryConfig.dataset must be non-empty (or None)")
-        return v
+        return stripped
 
 
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
