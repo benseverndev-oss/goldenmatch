@@ -1,0 +1,1 @@
+"""GoldenMatch local web UI."""
