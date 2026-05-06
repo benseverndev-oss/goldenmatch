@@ -41,6 +41,37 @@ export type EvaluationSummary = {
   unlabeled_fp: number;
 };
 
+export type CompareSummary = {
+  unchanged: number;
+  merged: number;
+  partitioned: number;
+  overlapping: number;
+  rc: number;
+  cc1: number;
+  cc2: number;
+  sc1: number;
+  sc2: number;
+  twi: number;
+  unchanged_pct: number;
+  merged_pct: number;
+  partitioned_pct: number;
+  overlapping_pct: number;
+};
+
+export type ClusterCase = {
+  cluster_id: number;
+  case: "unchanged" | "merged" | "partitioned" | "overlapping";
+  members: number[];
+  er2_clusters: Record<string, number[]>;
+};
+
+export type CompareResponse = {
+  run_a: string;
+  run_b: string;
+  summary: CompareSummary;
+  cases: ClusterCase[];
+};
+
 export type EvaluationResponse = {
   summary: EvaluationSummary;
   tp: import("./types").Pair[];
@@ -160,6 +191,8 @@ export const api = {
   }): Promise<RunResponse> => post<RunResponse>("/api/v1/run", body ?? {}),
   settings: (): Promise<SettingsResponse> =>
     fetch("/api/v1/settings").then((r) => json<SettingsResponse>(r)),
+  compare: (run_a: string, run_b: string): Promise<CompareResponse> =>
+    post<CompareResponse>("/api/v1/compare", { run_a, run_b }),
   putSettings: (body: WebSettings): Promise<SettingsResponse> =>
     fetch("/api/v1/settings", {
       method: "PUT",
