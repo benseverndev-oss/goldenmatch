@@ -10,10 +10,10 @@ export function Home() {
   });
 
   if (isLoading)
-    return <div className="p-12 text-sm text-ink-400">Loading project…</div>;
+    return <div className="p-12 text-sm text-ink-500">Loading project…</div>;
   if (error)
     return (
-      <div className="p-12 text-sm text-red-400">
+      <div className="p-12 text-sm text-red-700">
         Failed to load: {String(error)}
       </div>
     );
@@ -27,19 +27,19 @@ export function Home() {
     <div className="px-8 py-10 max-w-5xl mx-auto">
       <section className="mb-10">
         <p className="eyebrow mb-2">project</p>
-        <h1 className="display text-4xl text-ink-50 break-all">
+        <h1 className="display text-4xl text-ink-900 break-all">
           {data.project_root}
         </h1>
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-          <span className="text-ink-400">
+          <span className="text-ink-500">
             <span className="eyebrow mr-2">config</span>
-            <span className="font-mono text-ink-200">
+            <span className="font-mono text-ink-700">
               {data.config_path ? trimPath(data.config_path) : "—"}
             </span>
           </span>
-          <span className="text-ink-400">
+          <span className="text-ink-500">
             <span className="eyebrow mr-2">rules</span>
-            <span className="text-ink-200">{ruleSummary}</span>
+            <span className="text-ink-700">{ruleSummary}</span>
           </span>
         </div>
       </section>
@@ -49,7 +49,7 @@ export function Home() {
           <h2 className="eyebrow">runs · {data.runs.length}</h2>
           <Link
             to="/workbench"
-            className="text-[12px] uppercase tracking-eyebrow text-ink-400 hover:text-gold-200 transition-colors"
+            className="text-[12px] uppercase tracking-eyebrow text-ink-500 hover:text-gold-600 transition-colors"
           >
             open workbench →
           </Link>
@@ -68,10 +68,10 @@ export function Home() {
                 >
                   <div className="flex items-baseline justify-between gap-6">
                     <div className="flex items-baseline gap-4">
-                      <span className="num text-[13px] text-ink-500 tabular-nums">
+                      <span className="num text-[13px] text-ink-400 tabular-nums">
                         {String(idx + 1).padStart(2, "0")}
                       </span>
-                      <h3 className="display text-xl text-ink-50 group-hover:text-gold-200 transition-colors">
+                      <h3 className="display text-xl text-ink-900 group-hover:text-gold-600 transition-colors">
                         {r.run_name}
                       </h3>
                     </div>
@@ -96,7 +96,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div>
       <p className="eyebrow mb-1">{label}</p>
-      <p className="num text-2xl text-ink-100 tabular-nums">{value}</p>
+      <p className="num text-2xl text-ink-800 tabular-nums">{value}</p>
     </div>
   );
 }
@@ -105,7 +105,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="text-right">
       <p className="eyebrow">{label}</p>
-      <p className="num text-[13px] text-ink-300 mt-0.5">{value}</p>
+      <p className="num text-[13px] text-ink-600 mt-0.5">{value}</p>
     </div>
   );
 }
@@ -113,11 +113,11 @@ function Stat({ label, value }: { label: string; value: string }) {
 function EmptyRuns() {
   return (
     <div className="card px-6 py-10 text-center">
-      <p className="display text-2xl text-ink-200">No runs in this project.</p>
-      <p className="mt-2 text-sm text-ink-400">
-        Drop a <code className="font-mono text-gold-200">*_lineage.json</code> +{" "}
-        <code className="font-mono text-gold-200">*_clusters.csv</code> pair
-        next to <code className="font-mono text-gold-200">data.csv</code>, or
+      <p className="display text-2xl text-ink-700">No runs in this project.</p>
+      <p className="mt-2 text-sm text-ink-500">
+        Drop a <code className="font-mono text-gold-600">*_lineage.json</code> +{" "}
+        <code className="font-mono text-gold-600">*_clusters.csv</code> pair
+        next to <code className="font-mono text-gold-600">data.csv</code>, or
         head to the workbench and run a preview.
       </p>
     </div>

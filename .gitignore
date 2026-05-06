@@ -21,9 +21,10 @@ packages/python/goldenmatch/web/frontend/playwright-report/
 # Generated outputs
 *_lineage.json
 *_clusters.csv
-# Allow committed test fixtures that mimic run outputs
+# Allow committed test fixtures and demo project that mimic run outputs
 !packages/python/goldenmatch/tests/web/fixtures/**
 !packages/python/goldenmatch/tests/**/fixtures/**
+!packages/python/goldenmatch/web/demo/**
 
 # IDE
 .vscode/

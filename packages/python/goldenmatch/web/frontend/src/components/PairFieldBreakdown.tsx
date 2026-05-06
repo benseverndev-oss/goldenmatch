@@ -14,10 +14,10 @@ const renderValue = (v: unknown): string => {
 /** Color scoring: gold for high agreement, fading to ink as score drops.
  *  Mirrors how the human eye reads "this matches" without screaming. */
 function scoreClass(score: number): string {
-  if (score >= 0.95) return "text-gold-200";
-  if (score >= 0.85) return "text-gold-300";
-  if (score >= 0.7) return "text-ink-100";
-  return "text-ink-400";
+  if (score >= 0.95) return "text-gold-600";
+  if (score >= 0.85) return "text-gold-500";
+  if (score >= 0.7) return "text-ink-800";
+  return "text-ink-500";
 }
 
 function diffMark(diff_type: string): string {
@@ -49,10 +49,10 @@ export function PairFieldBreakdown({ pair }: Props) {
   return (
     <article className="card mb-3">
       {/* header bar */}
-      <header className="px-4 py-2.5 border-b border-ink-800 flex items-center gap-4">
-        <span className="num text-[13px] text-ink-200 tabular-nums tracking-tightish">
+      <header className="px-4 py-2.5 border-b border-ink-200 flex items-center gap-4">
+        <span className="num text-[13px] text-ink-700 tabular-nums tracking-tightish">
           #{pair.row_id_a}
-          <span className="mx-1.5 text-gold-300">→</span>
+          <span className="mx-1.5 text-gold-500">→</span>
           #{pair.row_id_b}
         </span>
         <span className="ml-auto flex items-baseline gap-2">
@@ -67,7 +67,7 @@ export function PairFieldBreakdown({ pair }: Props) {
 
       {/* field-by-field diff */}
       {open && (
-        <ul className="divide-y divide-ink-800/60">
+        <ul className="divide-y divide-ink-200/60">
           {pair.fields.map((f, i) => (
             <FieldRow key={i} field={f} />
           ))}
@@ -75,7 +75,7 @@ export function PairFieldBreakdown({ pair }: Props) {
       )}
 
       {/* footer: collapse + label actions */}
-      <footer className="px-4 py-2.5 border-t border-ink-800 flex items-center gap-3">
+      <footer className="px-4 py-2.5 border-t border-ink-200 flex items-center gap-3">
         <button
           type="button"
           onClick={() => setOpen(!open)}
@@ -86,7 +86,7 @@ export function PairFieldBreakdown({ pair }: Props) {
 
         <div className="ml-auto flex items-center gap-2">
           {mutation.error && (
-            <span className="text-xs text-red-400 font-mono">
+            <span className="text-xs text-red-700 font-mono">
               {String(mutation.error)}
             </span>
           )}
@@ -96,7 +96,7 @@ export function PairFieldBreakdown({ pair }: Props) {
             disabled={mutation.isPending}
             className={
               "btn !py-1 !text-[11px] !uppercase tracking-eyebrow " +
-              (savedLabel === "match" ? "border-gold-400 text-gold-200" : "")
+              (savedLabel === "match" ? "border-gold-400 text-gold-600" : "")
             }
           >
             {savedLabel === "match" ? "✓ saved" : "label match"}
@@ -108,7 +108,7 @@ export function PairFieldBreakdown({ pair }: Props) {
             className={
               "btn !py-1 !text-[11px] !uppercase tracking-eyebrow " +
               (savedLabel === "non_match"
-                ? "border-gold-400 text-gold-200"
+                ? "border-gold-400 text-gold-600"
                 : "")
             }
           >
@@ -124,37 +124,37 @@ function FieldRow({ field: f }: { field: FieldBreakdown }) {
   return (
     <li className="grid grid-cols-[10rem_1fr_auto_1fr] items-stretch gap-0">
       {/* Left: field name + scorer + diff mark */}
-      <div className="px-4 py-3 border-r border-ink-800/60 flex flex-col justify-center">
-        <span className="font-mono text-[13px] text-ink-100">{f.field}</span>
-        <span className="num text-[11px] text-ink-500 mt-0.5">
+      <div className="px-4 py-3 border-r border-ink-200/60 flex flex-col justify-center">
+        <span className="font-mono text-[13px] text-ink-800">{f.field}</span>
+        <span className="num text-[11px] text-ink-400 mt-0.5">
           {f.scorer}
           {" · "}w&nbsp;{f.weight}
         </span>
       </div>
 
       {/* value_a */}
-      <div className="px-4 py-3 border-r border-ink-800/60 flex items-center">
-        <span className="font-mono text-sm text-ink-100 break-all">
+      <div className="px-4 py-3 border-r border-ink-200/60 flex items-center">
+        <span className="font-mono text-sm text-ink-800 break-all">
           {renderValue(f.value_a)}
         </span>
       </div>
 
       {/* score column — narrow, mono, gold */}
-      <div className="px-3 py-3 border-r border-ink-800/60 flex flex-col items-center justify-center min-w-[5.5rem]">
+      <div className="px-3 py-3 border-r border-ink-200/60 flex flex-col items-center justify-center min-w-[5.5rem]">
         <span
           className={`num text-base tabular-nums ${scoreClass(f.score)}`}
           title={f.diff_type}
         >
           {f.score.toFixed(3)}
         </span>
-        <span className="num text-[11px] text-ink-500 mt-0.5">
+        <span className="num text-[11px] text-ink-400 mt-0.5">
           {diffMark(f.diff_type)} {f.diff_type}
         </span>
       </div>
 
       {/* value_b */}
       <div className="px-4 py-3 flex items-center">
-        <span className="font-mono text-sm text-ink-100 break-all">
+        <span className="font-mono text-sm text-ink-800 break-all">
           {renderValue(f.value_b)}
         </span>
       </div>

@@ -19,7 +19,7 @@ function fieldErrorsFor(
 function ErrorList({ messages }: { messages: string[] }) {
   if (messages.length === 0) return null;
   return (
-    <div className="text-[11px] text-red-400 font-mono mt-1 space-y-0.5">
+    <div className="text-[11px] text-red-700 font-mono mt-1 space-y-0.5">
       {messages.map((m, i) => (
         <div key={i}>↳ {m}</div>
       ))}
@@ -129,8 +129,8 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
 
         <div className="space-y-3">
           {rules.matchkeys.length === 0 && (
-            <div className="card px-4 py-6 text-center text-sm text-ink-500">
-              No matchkeys yet. Click <span className="text-ink-300">+ add matchkey</span> to start.
+            <div className="card px-4 py-6 text-center text-sm text-ink-400">
+              No matchkeys yet. Click <span className="text-ink-600">+ add matchkey</span> to start.
             </div>
           )}
 
@@ -143,13 +143,13 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
             return (
               <article key={idx} className="card px-4 py-4 space-y-4">
                 <div className="flex items-baseline gap-3">
-                  <span className="num text-[11px] text-ink-500 tabular-nums">
+                  <span className="num text-[11px] text-ink-400 tabular-nums">
                     {String(idx + 1).padStart(2, "0")}
                   </span>
                   <span className="eyebrow">matchkey</span>
                   <button
                     type="button"
-                    className="ml-auto btn btn-ghost !text-[11px] !uppercase tracking-eyebrow hover:!text-red-400 hover:!border-red-900/50"
+                    className="ml-auto btn btn-ghost !text-[11px] !uppercase tracking-eyebrow hover:!text-red-700 hover:!border-red-300"
                     onClick={() => removeMatchkey(idx)}
                   >
                     remove
@@ -231,8 +231,8 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                           className={
                             "font-mono text-[11px] px-2 py-1 border rounded transition-colors " +
                             (active
-                              ? "border-gold-400 text-gold-200 bg-gold-700/20"
-                              : "border-ink-700 text-ink-400 hover:border-ink-500 hover:text-ink-200")
+                              ? "border-gold-400 text-gold-600 bg-gold-100"
+                              : "border-ink-200 text-ink-500 hover:border-ink-500 hover:text-ink-700")
                           }
                         >
                           {t}

@@ -4,22 +4,34 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Warm near-black canvas — pure black reads cold and clinical.
-        ink: {
-          950: "#0c0c0c",
-          900: "#111110",
-          800: "#1a1a18",
-          700: "#26241f",
-          600: "#3a362d",
-          500: "#5a5247",
-          400: "#827767",
-          300: "#a89a83",
-          200: "#cabba0",
-          100: "#e8dcc4",
-          50: "#f5ecd6",
+        // Warm cream paper canvas — pure white reads cold and clinical for
+        // a tool you stare at during multi-hour rule-tuning sessions.
+        paper: {
+          50: "#fefcf6",
+          100: "#fbf6e8",
+          200: "#f5edd6",
+          300: "#ece1c0",
+          400: "#dcceaa",
+          500: "#bda77f",
         },
-        // The wordmark gold from packages/python/goldenmatch/assets/social-preview.png.
-        // Reserved for: selection edge, score values, focus rings, primary affordances.
+        // Warm grays — used as TYPE colors, light-mode-tuned. The 100/200
+        // shades are background fills, 600+ are text.
+        ink: {
+          50: "#fbf8f1",
+          100: "#f3ecdb",
+          200: "#e3d8be",
+          300: "#cbbb95",
+          400: "#a89a72",
+          500: "#7a6f55",
+          600: "#534b39",
+          700: "#3a3429",
+          800: "#26221a",
+          900: "#161310",
+          950: "#0c0b09",
+        },
+        // Wordmark gold (#d4a017). gold-500 (#a87e0c) is the WCAG-readable
+        // gold for type on cream. Use gold-500 for typography, gold-DEFAULT
+        // for fills / borders / score values.
         gold: {
           DEFAULT: "#d4a017",
           50: "#fdf7e3",
@@ -42,13 +54,11 @@ export default {
         eyebrow: "0.16em",
       },
       boxShadow: {
-        // Soft golden glow used on focus/active states only.
-        gold: "0 0 0 1px rgba(212,160,23,0.45), 0 0 18px -2px rgba(212,160,23,0.25)",
-      },
-      backgroundImage: {
-        // Faint top/bottom gold strips echoing the social preview frame.
-        "frame-strips":
-          "linear-gradient(to bottom, #d4a017 0, #d4a017 2px, transparent 2px, transparent calc(100% - 2px), #d4a017 calc(100% - 2px), #d4a017 100%)",
+        gold: "0 0 0 1px rgba(212,160,23,0.55), 0 1px 8px -1px rgba(212,160,23,0.18)",
+        // Real paper shadows — soft, warm-toned, not the typical neutral gray.
+        card: "0 1px 0 0 rgba(82,60,6,0.04), 0 1px 2px 0 rgba(82,60,6,0.06)",
+        "card-hover":
+          "0 2px 0 0 rgba(82,60,6,0.06), 0 4px 12px -2px rgba(82,60,6,0.10)",
       },
     },
   },

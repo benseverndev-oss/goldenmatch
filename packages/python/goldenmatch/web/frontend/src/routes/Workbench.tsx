@@ -57,24 +57,24 @@ export function Workbench() {
   });
 
   if (initial.isLoading || rules == null) {
-    return <div className="p-12 text-sm text-ink-400">Loading rules…</div>;
+    return <div className="p-12 text-sm text-ink-500">Loading rules…</div>;
   }
   if (initial.error) {
     return (
-      <div className="p-12 text-sm text-red-400">{String(initial.error)}</div>
+      <div className="p-12 text-sm text-red-700">{String(initial.error)}</div>
     );
   }
 
   return (
     <div className="grid grid-cols-[minmax(0,28rem)_1fr] gap-0 h-[calc(100vh-7rem)]">
       {/* LEFT: editor */}
-      <aside className="overflow-auto border-r border-ink-800 px-6 py-6 space-y-6">
+      <aside className="overflow-auto border-r border-ink-200 px-6 py-6 space-y-6">
         <header>
           <p className="eyebrow mb-1">workbench</p>
-          <h1 className="display text-2xl text-ink-50">Rules</h1>
-          <p className="mt-1 text-sm text-ink-400">
+          <h1 className="display text-2xl text-ink-900">Rules</h1>
+          <p className="mt-1 text-sm text-ink-500">
             Edit, validate, preview against a sampled slice, then save back to
-            <code className="ml-1 font-mono text-gold-200">goldenmatch.yml</code>.
+            <code className="ml-1 font-mono text-gold-600">goldenmatch.yml</code>.
           </p>
         </header>
 
@@ -97,7 +97,7 @@ export function Workbench() {
         <RuleEditor rules={rules} onChange={setRules} errors={errors} />
 
         {/* Preview controls */}
-        <section className="border-t border-ink-800 pt-5">
+        <section className="border-t border-ink-200 pt-5">
           <p className="eyebrow mb-3">preview</p>
           <div className="flex flex-wrap items-end gap-4">
             <label className="block">
@@ -127,7 +127,7 @@ export function Workbench() {
             >
               {previewMutation.isPending ? (
                 <span className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 rounded-full bg-ink-900 animate-pulse" />
+                  <span className="inline-block h-2 w-2 rounded-full bg-paper-50 animate-pulse" />
                   Running preview…
                 </span>
               ) : (
@@ -139,11 +139,11 @@ export function Workbench() {
 
         {toast && (
           <div className="card px-3 py-2 flex items-start gap-2 text-xs">
-            <span className="font-mono text-gold-200 flex-1 break-all">
+            <span className="font-mono text-gold-600 flex-1 break-all">
               {toast}
             </span>
             <button
-              className="text-ink-500 hover:text-ink-200 transition-colors"
+              className="text-ink-400 hover:text-ink-700 transition-colors"
               onClick={() => setToast(null)}
             >
               dismiss
@@ -156,10 +156,10 @@ export function Workbench() {
       <section className="overflow-auto">
         {previewName ? (
           <div className="h-full flex flex-col">
-            <div className="px-5 py-3 border-b border-ink-800 flex items-center gap-3 text-xs">
+            <div className="px-5 py-3 border-b border-ink-200 flex items-center gap-3 text-xs">
               <span className="eyebrow">preview run</span>
-              <span className="font-mono text-gold-200">{previewName}</span>
-              <span className="ml-auto text-ink-500">
+              <span className="font-mono text-gold-600">{previewName}</span>
+              <span className="ml-auto text-ink-400">
                 in-memory · evicted from registry after 8 previews
               </span>
             </div>
@@ -170,10 +170,10 @@ export function Workbench() {
         ) : (
           <div className="h-full grid place-items-center px-8">
             <div className="max-w-md text-center space-y-3">
-              <p className="display text-3xl text-ink-200">No preview yet.</p>
-              <p className="text-sm text-ink-400">
+              <p className="display text-3xl text-ink-700">No preview yet.</p>
+              <p className="text-sm text-ink-500">
                 Adjust rules on the left, then{" "}
-                <span className="text-gold-200">Run preview</span>. The result
+                <span className="text-gold-600">Run preview</span>. The result
                 lands here as if it were a saved run — same cluster table, same
                 pair drilldown, same labeling.
               </p>

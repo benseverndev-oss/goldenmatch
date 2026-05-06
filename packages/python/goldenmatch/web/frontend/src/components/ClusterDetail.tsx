@@ -19,9 +19,9 @@ export function ClusterDetail({ data }: Props) {
       {/* cluster eyebrow + title */}
       <header className="mb-5">
         <p className="eyebrow mb-1">cluster</p>
-        <h2 className="display text-2xl text-gold-200">
+        <h2 className="display text-2xl text-gold-600">
           #{data.cluster_id}
-          <span className="ml-3 text-ink-400 text-sm font-sans">
+          <span className="ml-3 text-ink-500 text-sm font-sans">
             {data.rows.length} member{data.rows.length === 1 ? "" : "s"}
             {" · "}
             {data.pairs.length} pair{data.pairs.length === 1 ? "" : "s"}
@@ -38,7 +38,7 @@ export function ClusterDetail({ data }: Props) {
               key={r.row_id}
               className="card px-4 py-3 grid gap-x-6 gap-y-1.5 grid-cols-[auto_1fr]"
             >
-              <span className="num text-[13px] text-ink-400 row-span-full self-start tabular-nums pt-0.5">
+              <span className="num text-[13px] text-ink-500 row-span-full self-start tabular-nums pt-0.5">
                 #{r.row_id}
               </span>
               <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
@@ -55,7 +55,7 @@ export function ClusterDetail({ data }: Props) {
       <section>
         <p className="eyebrow mb-2">pairs</p>
         {data.pairs.length === 0 ? (
-          <div className="card px-4 py-6 text-center text-sm text-ink-500">
+          <div className="card px-4 py-6 text-center text-sm text-ink-400">
             No pairs scored above threshold for this cluster.
           </div>
         ) : (
@@ -75,7 +75,7 @@ function FieldKV({ k, v }: { k: string; v: unknown }) {
   return (
     <>
       <dt className="eyebrow self-baseline pt-1">{k}</dt>
-      <dd className="font-mono text-[13px] text-ink-100 break-all">
+      <dd className="font-mono text-[13px] text-ink-800 break-all">
         {renderValue(v)}
       </dd>
     </>

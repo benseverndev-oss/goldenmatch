@@ -15,12 +15,12 @@ const rootRoute = createRootRoute({
       {/* top frame strip — echoes the social-preview wordmark frame */}
       <div aria-hidden className="h-[2px] frame-strip" />
 
-      <header className="px-8 py-5 flex items-end gap-8 border-b border-ink-800">
+      <header className="px-8 py-5 flex items-end gap-8 border-b border-ink-200">
         <Link to="/" className="group flex items-baseline gap-3 select-none">
-          <span className="display text-3xl text-gold-300 leading-none group-hover:text-gold-200 transition-colors">
+          <span className="display text-3xl text-gold-500 leading-none group-hover:text-gold-600 transition-colors">
             GoldenMatch
           </span>
-          <span className="eyebrow text-ink-500 group-hover:text-ink-400 transition-colors">
+          <span className="eyebrow text-ink-400 group-hover:text-ink-500 transition-colors">
             entity resolution&nbsp;·&nbsp;workbench
           </span>
         </Link>
@@ -44,8 +44,8 @@ function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <Link
       to={to}
-      className="px-3 py-2 uppercase tracking-eyebrow text-ink-400 hover:text-gold-200 transition-colors"
-      activeProps={{ className: "text-gold-300" }}
+      className="px-3 py-2 uppercase tracking-eyebrow text-ink-500 hover:text-gold-600 transition-colors"
+      activeProps={{ className: "text-gold-500" }}
     >
       {children}
     </Link>

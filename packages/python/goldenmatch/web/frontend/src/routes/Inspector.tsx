@@ -12,17 +12,17 @@ export function Inspector() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
-      <header className="px-8 py-4 border-b border-ink-800 flex items-baseline justify-between gap-6">
+      <header className="px-8 py-4 border-b border-ink-200 flex items-baseline justify-between gap-6">
         <div className="flex items-baseline gap-4 min-w-0">
           <Link
             to="/"
-            className="eyebrow text-ink-500 hover:text-gold-200 transition-colors"
+            className="eyebrow text-ink-400 hover:text-gold-600 transition-colors"
           >
             ← project
           </Link>
           <div className="min-w-0">
             <p className="eyebrow mb-0.5">run</p>
-            <h1 className="display text-2xl text-gold-200 truncate">{name}</h1>
+            <h1 className="display text-2xl text-gold-600 truncate">{name}</h1>
           </div>
         </div>
         {manifest.data && (
@@ -44,7 +44,7 @@ function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="text-right">
       <p className="eyebrow">{label}</p>
-      <p className="num text-lg text-ink-100 tabular-nums">{value}</p>
+      <p className="num text-lg text-ink-800 tabular-nums">{value}</p>
     </div>
   );
 }

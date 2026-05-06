@@ -32,15 +32,15 @@ function SizeGlyph({ size }: { size: number }) {
         />
       ))}
       {overflow > 0 && (
-        <span className="num text-[11px] text-ink-400 ml-1">+{overflow}</span>
+        <span className="num text-[11px] text-ink-500 ml-1">+{overflow}</span>
       )}
     </span>
   );
 }
 
 function ScoreCell({ value }: { value: number | null }) {
-  if (value == null) return <span className="text-ink-500">—</span>;
-  return <span className="num text-ink-100 tabular-nums">{fmt(value)}</span>;
+  if (value == null) return <span className="text-ink-400">—</span>;
+  return <span className="num text-ink-800 tabular-nums">{fmt(value)}</span>;
 }
 
 const columns: ColumnDef<ClusterSummary>[] = [
@@ -48,7 +48,7 @@ const columns: ColumnDef<ClusterSummary>[] = [
     accessorKey: "cluster_id",
     header: "Cluster",
     cell: (ctx) => (
-      <span className="num text-ink-100 tabular-nums">
+      <span className="num text-ink-800 tabular-nums">
         {ctx.getValue<number>()}
       </span>
     ),
@@ -58,7 +58,7 @@ const columns: ColumnDef<ClusterSummary>[] = [
     header: "Size",
     cell: (ctx) => (
       <span className="flex items-center gap-2">
-        <span className="num text-ink-200 tabular-nums w-4 text-right">
+        <span className="num text-ink-700 tabular-nums w-4 text-right">
           {ctx.getValue<number>()}
         </span>
         <SizeGlyph size={ctx.getValue<number>()} />
@@ -79,7 +79,7 @@ const columns: ColumnDef<ClusterSummary>[] = [
     accessorKey: "representative_row_id",
     header: "Rep",
     cell: (ctx) => (
-      <span className="num text-ink-400 tabular-nums">
+      <span className="num text-ink-500 tabular-nums">
         #{ctx.getValue<number>()}
       </span>
     ),
@@ -105,7 +105,7 @@ export function ClusterTable({ clusters, onSelect, selectedId }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-3 py-2 border-b border-ink-800 flex items-center gap-3">
+      <div className="px-3 py-2 border-b border-ink-200 flex items-center gap-3">
         <span className="eyebrow">filter</span>
         <input
           type="text"
@@ -114,13 +114,13 @@ export function ClusterTable({ clusters, onSelect, selectedId }: Props) {
           placeholder="cluster id…"
           className="flex-1 !py-0.5"
         />
-        <span className="num text-[11px] text-ink-500 tabular-nums">
+        <span className="num text-[11px] text-ink-400 tabular-nums">
           {data.length}/{clusters.length}
         </span>
       </div>
       <div className="overflow-auto flex-1">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-ink-900/95 backdrop-blur z-[1]">
+          <thead className="sticky top-0 bg-paper-50/95 backdrop-blur z-[1]">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
                 {hg.headers.map((h) => {
@@ -129,11 +129,11 @@ export function ClusterTable({ clusters, onSelect, selectedId }: Props) {
                     <th
                       key={h.id}
                       onClick={h.column.getToggleSortingHandler()}
-                      className="px-3 py-2 text-left eyebrow cursor-pointer select-none border-b border-ink-800 hover:text-gold-200 transition-colors"
+                      className="px-3 py-2 text-left eyebrow cursor-pointer select-none border-b border-ink-200 hover:text-gold-600 transition-colors"
                     >
                       <span className="inline-flex items-center gap-1">
                         {flexRender(h.column.columnDef.header, h.getContext())}
-                        <span className="text-gold-300 w-2 inline-block">
+                        <span className="text-gold-500 w-2 inline-block">
                           {sorted === "asc"
                             ? "▲"
                             : sorted === "desc"
@@ -155,10 +155,10 @@ export function ClusterTable({ clusters, onSelect, selectedId }: Props) {
                   key={row.id}
                   onClick={() => onSelect(row.original.cluster_id)}
                   className={
-                    "cursor-pointer border-b border-ink-800/60 transition-colors " +
+                    "cursor-pointer border-b border-ink-200/60 transition-colors " +
                     (isSelected
-                      ? "bg-ink-800/80 gold-edge"
-                      : "hover:bg-ink-800/40")
+                      ? "bg-paper-200 gold-edge"
+                      : "hover:bg-paper-100/70")
                   }
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -176,7 +176,7 @@ export function ClusterTable({ clusters, onSelect, selectedId }: Props) {
               <tr>
                 <td
                   colSpan={columns.length}
-                  className="px-3 py-8 text-center text-sm text-ink-500"
+                  className="px-3 py-8 text-center text-sm text-ink-400"
                 >
                   No clusters match{filter ? ` "${filter}"` : ""}.
                 </td>
