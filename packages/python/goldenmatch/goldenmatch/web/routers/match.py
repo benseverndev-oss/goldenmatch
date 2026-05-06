@@ -162,5 +162,10 @@ async def match_run(payload: MatchRequest, request: Request) -> dict:
         )
     except HTTPException:
         raise
-    except (pl.exceptions.ColumnNotFoundError, KeyError, ValueError) as exc:
+    except (pl.exceptions.ColumnNotFoundError, ValueError) as exc:
+        # KeyError is intentionally NOT caught here — it usually signals a
+        # bug inside goldenmatch (renamed dict key, missing internal field)
+        # rather than a user config error. Letting it 500 surfaces a stack
+        # trace to server logs instead of a misleading "match failed: 'X'"
+        # 400 with no clue it's an upstream defect.
         raise HTTPException(status_code=400, detail=f"match failed: {exc}")

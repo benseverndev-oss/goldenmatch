@@ -46,6 +46,42 @@ def test_pair_canonicalization_dedups_swapped_orderings(client):
     assert (listed[0]["row_id_a"], listed[0]["row_id_b"]) == (0, 1)
 
 
+def test_post_label_returns_mirrored_flag(client, monkeypatch, tmp_path):
+    """Successful mirror to MemoryStore → response carries `mirrored: true`
+    (and no mirror_error). UI uses this to trust that the next pipeline run
+    will pick up the decision."""
+    monkeypatch.chdir(tmp_path)
+    body = {"row_id_a": 4, "row_id_b": 5, "label": "match"}
+    posted = client.post("/api/v1/labels", json=body).json()
+    assert posted["mirrored"] is True
+    assert "mirror_error" not in posted
+
+
+def test_post_label_surfaces_mirror_failure(client, monkeypatch):
+    """When `add_correction` raises (e.g. unwritable backend), the response
+    flips `mirrored: false` and includes the exception type+message in
+    `mirror_error` so the UI can show a yellow warning."""
+    import goldenmatch.web.routers.labels as labels_router
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated memory backend failure")
+
+    # The router does `from goldenmatch._api import add_correction` inside
+    # the function body — patch the source module so the import picks up
+    # the boom version.
+    import goldenmatch._api as gm_api
+    monkeypatch.setattr(gm_api, "add_correction", _boom)
+
+    body = {"row_id_a": 6, "row_id_b": 7, "label": "match"}
+    posted = client.post("/api/v1/labels", json=body).json()
+    assert posted["mirrored"] is False
+    assert "RuntimeError" in posted["mirror_error"]
+    assert "simulated memory backend failure" in posted["mirror_error"]
+    # labels.jsonl write still succeeded — that's the source of truth.
+    listed = client.get("/api/v1/labels").json()
+    assert any((r["row_id_a"], r["row_id_b"]) == (6, 7) for r in listed)
+
+
 def test_note_and_timestamp_round_trip(client):
     body = {"row_id_a": 2, "row_id_b": 3, "label": "match", "note": "obvious dup"}
     posted = client.post("/api/v1/labels", json=body).json()

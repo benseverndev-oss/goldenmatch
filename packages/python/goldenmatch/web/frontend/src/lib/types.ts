@@ -33,27 +33,75 @@ export type BlockingKey = {
   transforms: string[];
 };
 
+export type BlockingStrategy =
+  | "static"
+  | "adaptive"
+  | "sorted_neighborhood"
+  | "multi_pass"
+  | "ann"
+  | "canopy"
+  | "ann_pairs"
+  | "learned";
+
 /** Slim view of the engine's BlockingConfig that the workbench surfaces.
- *  Extra fields (ann_*, learned_*, canopy, …) round-trip via index signature
- *  so we don't drop on save. */
+ *
+ *  No index signature — typos like `auto_sugest` are caught by excess-
+ *  property checks. Advanced strategies (ann_*, learned_*, canopy, …) the
+ *  workbench doesn't surface round-trip through the typed `extras` field;
+ *  ``mergeBlockingForWire`` merges them back at request time. */
 export type BlockingPayload = {
-  strategy?:
-    | "static"
-    | "adaptive"
-    | "sorted_neighborhood"
-    | "multi_pass"
-    | "ann"
-    | "canopy"
-    | "ann_pairs"
-    | "learned";
+  strategy?: BlockingStrategy;
   keys?: BlockingKey[];
   passes?: BlockingKey[] | null;
   max_block_size?: number;
   skip_oversized?: boolean;
   auto_suggest?: boolean;
   auto_select?: boolean;
-  [extra: string]: unknown;
+  /** Fields the workbench doesn't surface but came from the server (or the
+   *  user's hand-edited YAML). Spread back onto the wire payload on save. */
+  extras?: Record<string, unknown>;
 };
+
+/** Known field names — anything else lands in `extras`. */
+const BLOCKING_KNOWN_KEYS = new Set([
+  "strategy",
+  "keys",
+  "passes",
+  "max_block_size",
+  "skip_oversized",
+  "auto_suggest",
+  "auto_select",
+  "extras",
+]);
+
+/** Split a raw blocking dict from the server into known fields + extras. */
+export function parseBlockingFromServer(
+  raw: Record<string, unknown> | null | undefined,
+): BlockingPayload | null {
+  if (!raw) return null;
+  const out: BlockingPayload = {};
+  const extras: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (BLOCKING_KNOWN_KEYS.has(k)) {
+      // Trusted: server validated against BlockingConfig. Cast at the
+      // single boundary so callers get a typed object.
+      (out as Record<string, unknown>)[k] = v;
+    } else {
+      extras[k] = v;
+    }
+  }
+  if (Object.keys(extras).length > 0) out.extras = extras;
+  return out;
+}
+
+/** Flatten BlockingPayload back to the wire shape for save / preview. */
+export function serializeBlockingForWire(
+  blocking: BlockingPayload | null | undefined,
+): Record<string, unknown> | null {
+  if (!blocking) return null;
+  const { extras, ...known } = blocking;
+  return { ...known, ...(extras ?? {}) };
+}
 
 export type RulesPayload = {
   threshold: number;

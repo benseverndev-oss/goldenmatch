@@ -31,6 +31,7 @@ function diffMark(diff_type: string): string {
 
 export function PairFieldBreakdown({ pair }: Props) {
   const [savedLabel, setSavedLabel] = useState<string | null>(null);
+  const [mirrorWarning, setMirrorWarning] = useState<string | null>(null);
   const [open, setOpen] = useState(true); // expanded by default — this IS the content
 
   const mutation = useMutation({
@@ -40,9 +41,18 @@ export function PairFieldBreakdown({ pair }: Props) {
         row_id_b: pair.row_id_b,
         label,
       }),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       setSavedLabel(variables);
       setTimeout(() => setSavedLabel(null), 1200);
+      // Surface mirror-fall-through: label landed in labels.jsonl but the
+      // MemoryStore mirror failed → pipeline won't pick up the decision.
+      if (data && data.mirrored === false) {
+        setMirrorWarning(
+          data.mirror_error ?? "memory mirror failed — label won't apply on next run",
+        );
+      } else {
+        setMirrorWarning(null);
+      }
     },
   });
 
@@ -92,6 +102,14 @@ export function PairFieldBreakdown({ pair }: Props) {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          {mirrorWarning && (
+            <span
+              className="text-[11px] text-amber-700 font-mono"
+              title={mirrorWarning}
+            >
+              ⚠ memory mirror failed
+            </span>
+          )}
           {mutation.error && (
             <span className="text-xs text-red-700 font-mono">
               {String(mutation.error)}

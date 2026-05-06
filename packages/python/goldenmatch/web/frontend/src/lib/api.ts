@@ -5,6 +5,32 @@ import type {
   RulesPayload,
   RunManifest,
 } from "./types";
+import { parseBlockingFromServer, serializeBlockingForWire } from "./types";
+
+/** Server → client: split server's flat BlockingConfig dict into known
+ *  fields + extras so editor code gets type narrowing without losing
+ *  round-trip fidelity for advanced strategies the workbench doesn't
+ *  surface (ann_*, learned_*, canopy, …). */
+function deserializeRules(raw: RulesPayload): RulesPayload {
+  if (!raw.blocking) return raw;
+  return {
+    ...raw,
+    blocking: parseBlockingFromServer(
+      raw.blocking as unknown as Record<string, unknown>,
+    ),
+  };
+}
+
+/** Client → server: re-flatten extras into the BlockingConfig wire shape. */
+function serializeRules(rules: RulesPayload): RulesPayload {
+  if (!rules.blocking) return rules;
+  const flat = serializeBlockingForWire(rules.blocking);
+  return { ...rules, blocking: flat as RulesPayload["blocking"] };
+}
+
+function deserializeProject(raw: Project): Project {
+  return { ...raw, rules: deserializeRules(raw.rules) };
+}
 
 export type ClustersPage = {
   items: ClusterSummary[];
@@ -18,6 +44,11 @@ export type LabelRecord = {
   label: "match" | "non_match";
   note?: string | null;
   ts: string;
+  /** True when the label was mirrored into MemoryStore. False means the
+   *  pipeline won't pick it up on the next run; UI should warn. */
+  mirrored?: boolean;
+  /** Set when mirroring fell through; carries the exception type/message. */
+  mirror_error?: string;
 };
 
 /** Per-run label record — the global label record plus the cluster_id of
@@ -237,7 +268,9 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
 
 export const api = {
   project: (): Promise<Project> =>
-    fetch("/api/v1/project").then((r) => json<Project>(r)),
+    fetch("/api/v1/project")
+      .then((r) => json<Project>(r))
+      .then(deserializeProject),
   run: (name: string): Promise<RunManifest> =>
     fetch(`/api/v1/runs/${name}`).then((r) => json<RunManifest>(r)),
   clusters: (name: string, cursor?: number): Promise<ClustersPage> =>
@@ -249,13 +282,17 @@ export const api = {
       json<ClusterDetail>(r),
     ),
   rules: (): Promise<RulesPayload> =>
-    fetch("/api/v1/rules").then((r) => json<RulesPayload>(r)),
+    fetch("/api/v1/rules")
+      .then((r) => json<RulesPayload>(r))
+      .then(deserializeRules),
   putRules: (body: RulesPayload): Promise<RulesPayload> =>
     fetch("/api/v1/rules", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => json<RulesPayload>(r)),
+      body: JSON.stringify(serializeRules(body)),
+    })
+      .then((r) => json<RulesPayload>(r))
+      .then(deserializeRules),
   saveRules: (): Promise<SaveRulesResponse> =>
     fetch("/api/v1/rules/save", { method: "POST" }).then((r) =>
       json<SaveRulesResponse>(r),
@@ -263,7 +300,11 @@ export const api = {
   preview: (body: {
     rules: RulesPayload;
     sample: { n: number; seed: number };
-  }): Promise<PreviewResponse> => post<PreviewResponse>("/api/v1/preview", body),
+  }): Promise<PreviewResponse> =>
+    post<PreviewResponse>("/api/v1/preview", {
+      ...body,
+      rules: serializeRules(body.rules),
+    }),
   postLabel: (body: {
     row_id_a: number;
     row_id_b: number;
@@ -299,9 +340,9 @@ export const api = {
   },
   autoconfig: (domain?: string): Promise<RulesPayload> => {
     const qs = domain ? `?domain=${encodeURIComponent(domain)}` : "";
-    return fetch(`/api/v1/autoconfig${qs}`, { method: "POST" }).then((r) =>
-      json<RulesPayload>(r),
-    );
+    return fetch(`/api/v1/autoconfig${qs}`, { method: "POST" })
+      .then((r) => json<RulesPayload>(r))
+      .then(deserializeRules);
   },
   domains: (): Promise<DomainPack[]> =>
     fetch("/api/v1/domains").then((r) => json<DomainPack[]>(r)),
@@ -327,7 +368,12 @@ export const api = {
     auto_config?: boolean;
     llm_boost?: boolean;
     rules?: RulesPayload;
-  }): Promise<RunResponse> => post<RunResponse>("/api/v1/run", body ?? {}),
+  }): Promise<RunResponse> => {
+    const payload = body
+      ? { ...body, ...(body.rules ? { rules: serializeRules(body.rules) } : {}) }
+      : {};
+    return post<RunResponse>("/api/v1/run", payload);
+  },
   settings: (): Promise<SettingsResponse> =>
     fetch("/api/v1/settings").then((r) => json<SettingsResponse>(r)),
   compare: (run_a: string, run_b: string): Promise<CompareResponse> =>

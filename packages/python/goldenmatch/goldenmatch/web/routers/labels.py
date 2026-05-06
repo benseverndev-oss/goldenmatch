@@ -25,7 +25,7 @@ class LabelIn(BaseModel):
         return self
 
 
-def _mirror_to_memory_store(payload: LabelIn, project_root) -> None:
+def _mirror_to_memory_store(payload: LabelIn, project_root) -> tuple[bool, str | None]:
     """Mirror a steward label into goldenmatch's Learning Memory store.
 
     The labels.jsonl is the workbench's steward-facing record of decisions;
@@ -44,6 +44,11 @@ def _mirror_to_memory_store(payload: LabelIn, project_root) -> None:
 
     Failures here log but don't block the HTTP write to labels.jsonl —
     the steward record is the source of truth for the UI.
+
+    Returns ``(mirrored, error)`` so the route can surface mirror-fall-
+    through to the UI (yellow toast / banner) rather than silently
+    succeeding while the next pipeline run rediscovers the same wrong
+    decision.
     """
     try:
         from goldenmatch._api import add_correction
@@ -56,15 +61,21 @@ def _mirror_to_memory_store(payload: LabelIn, project_root) -> None:
             reason=payload.note,
             dataset=str(project_root),
         )
+        return True, None
     except Exception as exc:  # MemoryStore can fail if backend unwritable etc.
-        log.warning("label mirror to MemoryStore failed: %s", exc)
+        msg = f"{type(exc).__name__}: {exc}"
+        log.warning("label mirror to MemoryStore failed: %s", msg)
+        return False, msg
 
 
 @router.post("")
 def post_label(payload: LabelIn, request: Request) -> dict:
     state = request.app.state.app_state
     record = append_label(state.labels_path, payload.model_dump())
-    _mirror_to_memory_store(payload, state.project_root)
+    mirrored, mirror_error = _mirror_to_memory_store(payload, state.project_root)
+    record["mirrored"] = mirrored
+    if mirror_error is not None:
+        record["mirror_error"] = mirror_error
     return record
 
 
