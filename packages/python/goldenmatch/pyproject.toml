@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "1.7.0"
+version = "1.7.1"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -109,8 +109,14 @@ all = [
 [tool.hatch.build.targets.wheel]
 packages = ["goldenmatch"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"goldenmatch/web/static" = "goldenmatch/web/static"
+# `packages = ["goldenmatch"]` already collects everything inside
+# goldenmatch/, including web/static/. A force-include here would re-add
+# the same files and PyPI rejects the wheel with "Duplicate filename in
+# local headers" (this caused the v1.7.0 publish to fail).
+#
+# The publish workflow runs scripts/build_web.py before `python -m build`
+# so the static dir contains the staged frontend at wheel-build time —
+# packages picks them up automatically.
 
 [project.scripts]
 goldenmatch = "goldenmatch.cli.main:app"
