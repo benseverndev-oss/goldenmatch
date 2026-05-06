@@ -1,0 +1,40 @@
+name: Publish goldencheck to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    # Only run for goldencheck-v* tags. Skip goldencheck-types-v*
+    # (handled by publish-goldencheck-types.yml) and other package tags.
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'goldencheck-v') && !startsWith(github.event.release.tag_name, 'goldencheck-types-v'))
+    runs-on: ubuntu-latest
+    environment: pypi
+    defaults:
+      run:
+        working-directory: packages/python/goldencheck
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/python/goldencheck/dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true
