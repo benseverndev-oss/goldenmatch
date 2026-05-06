@@ -9,6 +9,7 @@ import { Compare } from "./routes/Compare";
 import { Home } from "./routes/Home";
 import { Inspector } from "./routes/Inspector";
 import { Match } from "./routes/Match";
+import { Memory } from "./routes/Memory";
 import { Sensitivity } from "./routes/Sensitivity";
 import { Settings } from "./routes/Settings";
 import { Workbench } from "./routes/Workbench";
@@ -35,6 +36,7 @@ const rootRoute = createRootRoute({
           <NavLink to="/match">Match</NavLink>
           <NavLink to="/compare">Compare</NavLink>
           <NavLink to="/sensitivity">Sensitivity</NavLink>
+          <NavLink to="/memory">Memory</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
       </header>
@@ -102,6 +104,12 @@ const matchRoute = createRoute({
   component: Match,
 });
 
+const memoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/memory",
+  component: Memory,
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   inspectorRoute,
@@ -109,6 +117,7 @@ const routeTree = rootRoute.addChildren([
   compareRoute,
   sensitivityRoute,
   matchRoute,
+  memoryRoute,
   settingsRoute,
 ]);
 

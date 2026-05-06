@@ -125,6 +125,46 @@ export type MatchResponse = {
   unmatched_truncated: boolean;
 };
 
+export type MemoryCorrection = {
+  id: string;
+  id_a: number;
+  id_b: number;
+  decision: string;
+  source: string;
+  trust: number;
+  original_score: number;
+  matchkey_name: string | null;
+  reason: string | null;
+  dataset: string | null;
+  created_at: string | null;
+};
+
+export type CorrectionsResponse = {
+  items: MemoryCorrection[];
+  total: number;
+  truncated: boolean;
+  limit: number;
+};
+
+export type LearnedAdjustment = {
+  matchkey_name: string;
+  threshold?: number;
+  weights?: Record<string, number>;
+  evidence_count: number;
+  computed_at: string;
+};
+
+export type MemoryStatsResponse = {
+  count: number;
+  last_learn_time: string | null;
+  adjustments: LearnedAdjustment[];
+};
+
+export type LearnResponse = {
+  adjustments: LearnedAdjustment[];
+  matchkey_filter: string | null;
+};
+
 export type DomainPack = {
   name: string;
   signals: string[];
@@ -249,6 +289,16 @@ export const api = {
   },
   domains: (): Promise<DomainPack[]> =>
     fetch("/api/v1/domains").then((r) => json<DomainPack[]>(r)),
+  memoryCorrections: (limit = 200): Promise<CorrectionsResponse> =>
+    fetch(`/api/v1/memory/corrections?limit=${limit}`).then((r) =>
+      json<CorrectionsResponse>(r),
+    ),
+  memoryStatsApi: (): Promise<MemoryStatsResponse> =>
+    fetch("/api/v1/memory/stats").then((r) => json<MemoryStatsResponse>(r)),
+  memoryLearn: (): Promise<LearnResponse> =>
+    fetch("/api/v1/memory/learn", { method: "POST" }).then((r) =>
+      json<LearnResponse>(r),
+    ),
   match: (body: {
     reference_path: string;
     target_path?: string;
