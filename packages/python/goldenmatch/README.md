@@ -168,6 +168,20 @@ console.log(result.stats);  // { totalRecords: 3, totalClusters: 2, ... }
 Full docs: [benzsevern.github.io/goldenmatch/typescript](https://benzsevern.github.io/goldenmatch/typescript)
 See [packages/goldenmatch-js/examples/](packages/goldenmatch-js/examples/) for 10+ usage examples.
 
+## Web UI
+
+```bash
+pip install 'goldenmatch[web]'
+goldenmatch serve-ui              # current directory as project
+goldenmatch serve-ui ./my-runs    # specific runs/project dir
+```
+
+Localhost browser UI for browsing runs, editing matchkey rules with live
+pydantic validation, running sampled previews, and labeling pairs. Single
+process, no auth — for the dev-on-their-laptop case. Use `--dev` and run
+`pnpm -C packages/python/goldenmatch/web/frontend dev` alongside if you're
+hacking on the frontend.
+
 ## Installation
 
 ```bash
