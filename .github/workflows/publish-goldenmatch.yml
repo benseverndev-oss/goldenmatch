@@ -29,9 +29,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Build the web frontend BEFORE the wheel build so the staged dist
+      # files (gitignored under goldenmatch/web/static/) are present and
+      # `packages = ["goldenmatch"]` picks them up. Without this step the
+      # wheel ships only `.gitkeep` and `goldenmatch[web]` users can't
+      # serve the UI without running build_web.py themselves.
+      - name: Install pnpm workspace deps
+        working-directory: ${{ github.workspace }}
+        run: pnpm install --frozen-lockfile
+      - name: Build + stage web frontend
+        working-directory: ${{ github.workspace }}
+        run: python packages/python/goldenmatch/scripts/build_web.py
       - run: pip install build
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
