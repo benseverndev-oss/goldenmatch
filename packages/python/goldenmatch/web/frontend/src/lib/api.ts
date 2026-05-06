@@ -20,6 +20,10 @@ export type LabelRecord = {
   ts: string;
 };
 
+/** Per-run label record — the global label record plus the cluster_id of
+ *  the pair within this run. */
+export type RunLabelRecord = LabelRecord & { cluster_id: number };
+
 export type PreviewResponse = { run_name: string };
 export type SaveRulesResponse = { saved: boolean; path: string };
 
@@ -70,4 +74,12 @@ export const api = {
     label: "match" | "non_match";
     note?: string;
   }): Promise<LabelRecord> => post<LabelRecord>("/api/v1/labels", body),
+  runLabels: (name: string): Promise<RunLabelRecord[]> =>
+    fetch(`/api/v1/runs/${name}/labels`).then((r) =>
+      json<RunLabelRecord[]>(r),
+    ),
+  autoconfig: (): Promise<RulesPayload> =>
+    fetch("/api/v1/autoconfig", { method: "POST" }).then((r) =>
+      json<RulesPayload>(r),
+    ),
 };

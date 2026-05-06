@@ -5,6 +5,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from goldenmatch.web import runs as runs_mod
+from goldenmatch.web.labels import read_labels_dedup
 
 router = APIRouter(prefix="/api/v1/runs")
 
@@ -64,3 +65,32 @@ def row(run_name: str, row_id: int, request: Request):
         return runs_mod.source_row(ref, row_id)
     except IndexError:
         raise HTTPException(status_code=404, detail=f"row {row_id} out of range")
+
+
+@router.get("/{run_name}/labels")
+def run_labels(run_name: str, request: Request) -> list[dict]:
+    """Labels scoped to pairs that appear in this run's lineage.
+
+    Labels themselves are dataset-level (keyed by canonical pair, not run).
+    This endpoint just intersects the global labels store with this run's
+    pair set so the inspector can show "what have I labeled in THIS run".
+    Each record carries the pair's cluster_id so the UI can navigate.
+    """
+    state = request.app.state.app_state
+    ref = _find_run(state, run_name)
+    pair_to_cluster: dict[tuple[int, int], int] = {}
+    lineage = runs_mod.load_lineage(ref)
+    for p in lineage.get("pairs", []):
+        a, b = int(p["row_id_a"]), int(p["row_id_b"])
+        key = (a, b) if a <= b else (b, a)
+        pair_to_cluster[key] = int(p["cluster_id"])
+
+    out: list[dict] = []
+    for label in read_labels_dedup(state.labels_path):
+        a, b = int(label["row_id_a"]), int(label["row_id_b"])
+        key = (a, b) if a <= b else (b, a)
+        cid = pair_to_cluster.get(key)
+        if cid is None:
+            continue
+        out.append({**label, "cluster_id": cid})
+    return out
