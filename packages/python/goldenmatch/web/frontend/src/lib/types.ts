@@ -54,3 +54,24 @@ export type ClusterDetail = {
   rows: { row_id: number; columns: Record<string, unknown> }[];
   pairs: Pair[];
 };
+
+export const SCORERS = [
+  "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
+  "embedding", "record_embedding", "ensemble", "dice", "jaccard",
+] as const;
+
+export const TRANSFORMS = [
+  "lowercase", "uppercase", "strip", "strip_all", "soundex", "metaphone",
+  "digits_only", "alpha_only", "normalize_whitespace",
+  "token_sort", "first_token", "last_token",
+] as const;
+
+export type Scorer = (typeof SCORERS)[number];
+export type Transform = (typeof TRANSFORMS)[number];
+
+// FastAPI 422 detail entry shape.
+export type PydanticError = {
+  loc: (string | number)[];
+  msg: string;
+  type?: string;
+};
