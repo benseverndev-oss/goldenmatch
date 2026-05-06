@@ -30,12 +30,19 @@
 <!-- Ecosystem -->
 [![Docs](https://img.shields.io/badge/docs-bensevern.dev-d4a017)](https://bensevern.dev/)
 [![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benzsevern/goldenmatch/wiki)
+[![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/scripts/gpu_colab_notebook.ipynb)
 
+<!-- Activity -->
+[![GitHub Discussions](https://img.shields.io/github/discussions/benzsevern/goldenmatch?color=d4a017&logo=github&label=discussions)](https://github.com/benzsevern/goldenmatch/discussions)
+[![Last commit](https://img.shields.io/github/last-commit/benzsevern/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benzsevern/goldenmatch/commits/main)
+
 </div>
 
-![GoldenMatch Demo](packages/python/goldenmatch/docs/screenshots/demo.svg)
+[![GoldenMatch web workbench — pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
+
+<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benzsevern/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 ```bash
 # Headline package: dedupe a CSV in 30 seconds

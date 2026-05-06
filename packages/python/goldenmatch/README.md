@@ -35,7 +35,9 @@
 
 </div>
 
-![GoldenMatch Demo](docs/screenshots/demo.svg)
+[![GoldenMatch web workbench — pair drilldown with NL prose](docs/screenshots/web/web-inspector.png)](#web-ui)
+
+<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="#web-ui">More screenshots →</a></em></sub></p>
 
 ```bash
 # Python
