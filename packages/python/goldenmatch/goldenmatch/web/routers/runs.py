@@ -67,6 +67,53 @@ def row(run_name: str, row_id: int, request: Request):
         raise HTTPException(status_code=404, detail=f"row {row_id} out of range")
 
 
+@router.get("/{run_name}/review")
+def run_review(
+    run_name: str,
+    request: Request,
+    lo: float = Query(0.5, ge=0.0, le=1.0, description="Lower score bound (inclusive)."),
+    hi: float = Query(1.0, ge=0.0, le=1.0, description="Upper score bound (inclusive)."),
+    include_labeled: bool = Query(False, description="Include pairs you've already labeled."),
+    limit: int = Query(50, ge=1, le=500),
+) -> list[dict]:
+    """Quick-labelling worklist: candidate pairs from this run's lineage.
+
+    Surfaces pairs in the score band ``[lo, hi]`` so the user can triage
+    potential matches one at a time. By default excludes pairs already in
+    ``labels.jsonl`` so reload picks up where you left off; pass
+    ``include_labeled=true`` to revisit decisions.
+
+    Each row carries the full lineage pair record (with field-level
+    breakdown) so the UI can render the same diff view used in the cluster
+    drilldown — just streamed as a worklist rather than nested under clusters.
+    """
+    state = request.app.state.app_state
+    ref = _find_run(state, run_name)
+    lineage = runs_mod.load_lineage(ref)
+
+    labeled_keys: set[tuple[int, int]] = set()
+    if not include_labeled:
+        for label in read_labels_dedup(state.labels_path):
+            a, b = int(label["row_id_a"]), int(label["row_id_b"])
+            labeled_keys.add((a, b) if a <= b else (b, a))
+
+    out: list[dict] = []
+    for p in lineage.get("pairs", []):
+        score = float(p.get("score", 0.0))
+        if not (lo <= score <= hi):
+            continue
+        a, b = int(p["row_id_a"]), int(p["row_id_b"])
+        key = (a, b) if a <= b else (b, a)
+        if key in labeled_keys:
+            continue
+        out.append(p)
+        if len(out) >= limit:
+            break
+
+    out.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
+    return out
+
+
 @router.get("/{run_name}/labels")
 def run_labels(run_name: str, request: Request) -> list[dict]:
     """Labels scoped to pairs that appear in this run's lineage.

@@ -35,26 +35,75 @@ def _pick_matchkeys(
 ) -> tuple[list[MatchkeyField], float]:
     """Collapse a multi-matchkey config into a flat field list + threshold.
 
-    Preference order:
-      1. First ``weighted`` matchkey (carries per-field weights + threshold).
-      2. First ``probabilistic`` matchkey (use auto-derived link_threshold).
-      3. First matchkey of any type, flattened.
+    The workbench's RulesPayload is a single weighted matchkey, but
+    ``auto_configure_df`` typically returns multiple (e.g. ``exact_email`` +
+    ``fuzzy_name``). Picking just one drops fields the user obviously wanted
+    suggested, so this merges fields across ALL matchkeys, deduplicating by
+    column name and preferring the highest-weighted occurrence.
 
-    Returns ``([], 0.85)`` if no matchkeys made it through preflight.
+    Type translation:
+      - exact matchkeys contribute ``scorer="exact", weight=1.0`` for each field.
+      - weighted matchkeys contribute their fields' (scorer, weight) verbatim.
+      - probabilistic matchkeys are demoted to ``jaro_winkler`` since the
+        workbench preview path doesn't support probabilistic scoring.
+
+    Threshold preference: the first weighted matchkey's threshold (carrying
+    auto-tuned values), then probabilistic ``link_threshold``, then 0.85.
+
+    Returns ``([], 0.85)`` if no matchkeys survived preflight.
     """
-    weighted = [m for m in matchkeys if m.type == "weighted"]
-    probabilistic = [m for m in matchkeys if m.type == "probabilistic"]
-    chosen: MatchkeyConfig | None = None
-    if weighted:
-        chosen = weighted[0]
-    elif probabilistic:
-        chosen = probabilistic[0]
-    elif matchkeys:
-        chosen = matchkeys[0]
-    if chosen is None:
+    if not matchkeys:
         return [], 0.85
-    threshold = chosen.threshold or chosen.link_threshold or 0.85
-    return list(chosen.fields), float(threshold)
+
+    threshold = 0.85
+    for m in matchkeys:
+        if m.type == "weighted" and m.threshold is not None:
+            threshold = float(m.threshold)
+            break
+    else:
+        for m in matchkeys:
+            if m.type == "probabilistic" and m.link_threshold is not None:
+                threshold = float(m.link_threshold)
+                break
+
+    by_column: dict[str, MatchkeyField] = {}
+    for m in matchkeys:
+        for f in m.fields:
+            col = f.column or f.field
+            if not col:
+                continue
+            if m.type == "exact":
+                # Exact matchkeys describe identity claims; surface as
+                # scorer=exact so the workbench shows them as exact-match rules.
+                merged = MatchkeyField(
+                    field=f.field,
+                    column=f.column,
+                    scorer="exact",
+                    weight=1.0,
+                    transforms=list(f.transforms or ["lowercase", "strip"]),
+                )
+            elif m.type == "weighted":
+                merged = MatchkeyField(
+                    field=f.field,
+                    column=f.column,
+                    scorer=f.scorer or "jaro_winkler",
+                    weight=float(f.weight) if f.weight is not None else 1.0,
+                    transforms=list(f.transforms or []),
+                )
+            else:  # probabilistic — demote scorer
+                merged = MatchkeyField(
+                    field=f.field,
+                    column=f.column,
+                    scorer=f.scorer or "jaro_winkler",
+                    weight=1.0,
+                    transforms=list(f.transforms or []),
+                )
+
+            existing = by_column.get(col)
+            if existing is None or (merged.weight or 0) > (existing.weight or 0):
+                by_column[col] = merged
+
+    return list(by_column.values()), threshold
 
 
 def _ui_safe_field(f: MatchkeyField) -> dict[str, Any]:

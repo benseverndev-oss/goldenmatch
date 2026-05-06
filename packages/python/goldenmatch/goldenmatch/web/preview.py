@@ -20,14 +20,73 @@ from goldenmatch.web.runs import RunRef
 
 
 def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
-    """Wrap RulesPayload's matchkey list into a single weighted MatchkeyConfig."""
-    matchkey = MatchkeyConfig(
-        name="preview",
-        type="weighted",
-        threshold=rules.threshold,
-        fields=[MatchkeyField(**m.model_dump(exclude_none=True)) for m in rules.matchkeys],
+    """Translate the workbench's flat matchkey list into a GoldenMatchConfig.
+
+    The workbench presents each row as an independent matchkey — semantically
+    these are OR'd: a pair matches if ANY matchkey qualifies. The engine
+    evaluates separate MatchkeyConfigs with that OR semantic, so build one
+    MatchkeyConfig per workbench row:
+
+      - ``scorer == "exact"`` → MatchkeyConfig(type=exact, fields=[field])
+        Pairs match when the (transformed) values are identical.
+      - any fuzzy scorer → MatchkeyConfig(type=weighted, threshold=rules.threshold,
+        fields=[field]). Single-field weighted is fine; the threshold gates
+        whether the pair survives.
+
+    Wrapping everything into one weighted matchkey would AND-average the
+    field scores, which produces almost no matches when one column hits 1.0
+    while another hits 0.4 (e.g. same email but different name).
+
+    Two earlier bugs to keep in mind here:
+      1. The schema field is ``matchkeys`` (plural). ``matchkey=`` is silently
+         dropped because pydantic discards unknown kwargs.
+      2. Weighted matchkeys require a blocking config; without one the
+         engine generates zero comparisons. ``BlockingConfig(keys=[],
+         auto_suggest=True)`` mirrors what ``goldenmatch.dedupe_df`` does for
+         callers who haven't hand-tuned blocking.
+    """
+    from goldenmatch.config.schemas import BlockingConfig
+
+    matchkeys: list[MatchkeyConfig] = []
+    for i, m in enumerate(rules.matchkeys):
+        col = m.column or m.field or ""
+        scorer = m.scorer or "exact"
+        if scorer == "exact":
+            matchkeys.append(
+                MatchkeyConfig(
+                    name=f"exact_{col or i}",
+                    type="exact",
+                    fields=[
+                        MatchkeyField(
+                            field=m.field,
+                            column=m.column,
+                            transforms=list(m.transforms or []),
+                        )
+                    ],
+                )
+            )
+        else:
+            matchkeys.append(
+                MatchkeyConfig(
+                    name=f"fuzzy_{col or i}",
+                    type="weighted",
+                    threshold=rules.threshold,
+                    fields=[
+                        MatchkeyField(
+                            field=m.field,
+                            column=m.column,
+                            scorer=scorer,
+                            weight=float(m.weight) if m.weight is not None else 1.0,
+                            transforms=list(m.transforms or []),
+                        )
+                    ],
+                )
+            )
+
+    return GoldenMatchConfig(
+        matchkeys=matchkeys,
+        blocking=BlockingConfig(keys=[], auto_suggest=True),
     )
-    return GoldenMatchConfig(matchkey=[matchkey])
 
 
 def _clusters_csv(clusters: dict[int, dict]) -> str:

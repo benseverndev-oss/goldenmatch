@@ -78,6 +78,20 @@ export const api = {
     fetch(`/api/v1/runs/${name}/labels`).then((r) =>
       json<RunLabelRecord[]>(r),
     ),
+  runReview: (
+    name: string,
+    opts?: { lo?: number; hi?: number; includeLabeled?: boolean; limit?: number },
+  ): Promise<import("./types").Pair[]> => {
+    const params = new URLSearchParams();
+    if (opts?.lo != null) params.set("lo", String(opts.lo));
+    if (opts?.hi != null) params.set("hi", String(opts.hi));
+    if (opts?.includeLabeled) params.set("include_labeled", "true");
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return fetch(
+      `/api/v1/runs/${name}/review${qs ? `?${qs}` : ""}`,
+    ).then((r) => json<import("./types").Pair[]>(r));
+  },
   autoconfig: (): Promise<RulesPayload> =>
     fetch("/api/v1/autoconfig", { method: "POST" }).then((r) =>
       json<RulesPayload>(r),

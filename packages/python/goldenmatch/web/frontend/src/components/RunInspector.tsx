@@ -4,9 +4,10 @@ import { api } from "../lib/api";
 import { ClusterTable } from "./ClusterTable";
 import { ClusterDetail } from "./ClusterDetail";
 import { RunLabels } from "./RunLabels";
+import { RunReview } from "./RunReview";
 import { SplitPane } from "./SplitPane";
 
-type LeftTab = "clusters" | "labels";
+type LeftTab = "clusters" | "review" | "labels";
 
 export function RunInspector({ name }: { name: string }) {
   const [selected, setSelected] = useState<number | undefined>(undefined);
@@ -28,8 +29,11 @@ export function RunInspector({ name }: { name: string }) {
         <TabButton active={tab === "clusters"} onClick={() => setTab("clusters")}>
           clusters
         </TabButton>
+        <TabButton active={tab === "review"} onClick={() => setTab("review")}>
+          review
+        </TabButton>
         <TabButton active={tab === "labels"} onClick={() => setTab("labels")}>
-          labels
+          labeled
         </TabButton>
       </nav>
       <div className="flex-1 min-h-0">
@@ -52,6 +56,7 @@ export function RunInspector({ name }: { name: string }) {
             )}
           </>
         )}
+        {tab === "review" && <RunReview runName={name} />}
         {tab === "labels" && (
           <RunLabels
             runName={name}
