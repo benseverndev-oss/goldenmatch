@@ -13,6 +13,11 @@ Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package 
 - Pytest is `continue-on-error: true` per matrix package. Per-package `--ignore` lists in the case statement mirror each package's pre-fold tuning (see each `packages/python/<pkg>/CLAUDE.md` for the canonical list).
 - Single TS job (not matrix) — relies on `pnpm-lock.yaml` being committed. PPRL tests in `packages/typescript/goldenmatch/tests/unit/pprl-protocol.test.ts` need 30s/45s timeouts under the post-fold shared-runner CI (was 5s/15s on dedicated runners).
 
+## CI path filters (post-2026-05-06, PR #89)
+- `.github/workflows/ci.yml` uses `dorny/paths-filter@v3` to gate jobs by changed paths. The `changes` job emits per-area outputs; each downstream job has `if: needs.changes.outputs.<area> == 'true'`. Python is a dynamic matrix — only changed packages enter the matrix.
+- Workflow-file changes to `ci.yml` itself force every job to re-run (so the filter logic stays under test). Adding a new job means adding a new filter entry in the `changes` job AND wiring the `if:` gate.
+- Doc-only PRs (README, screenshots, wiki refs) run only the `changes` job (~8s). Verified on PR #90.
+
 ## Railway: goldenmatch-mcp service
 - Project `golden-suite-mcp`, service `goldenmatch-mcp`, env `production`. IDs in `packages/python/goldenmatch/.railway/` after `railway link`.
 - Build/deploy config pinned in `packages/python/goldenmatch/railway.json`. Service `rootDirectory='packages/python/goldenmatch'` set via Railway GraphQL — DO NOT revert unless also moving `Dockerfile.mcp` back to repo root.
@@ -53,6 +58,11 @@ Only `.github/workflows/` at the repo root runs. Workflow files left under `pack
 ## `gh` field-name gotchas
 - `gh repo view --json topics` errors; the field is `repositoryTopics` (object array, `.repositoryTopics | map(.name)`).
 - `gh release create --notes` body rejects em-dashes via the API (422). Keep release notes ASCII like everything else.
+- `gh repo edit --description` rejects strings >350 chars (HTTP 422). Trim before retrying.
+
+## Mermaid diagrams in README
+- GitHub renders Mermaid natively in fenced ` ```mermaid ` blocks. Prefer it over ASCII for any diagram with more than two arrows.
+- Mermaid auto-sizes nodes by label width. The `<sub>` HTML tag inside labels doesn't render visually but its bytes still count, so multi-line `Title<br/><sub>subtitle</sub>` labels overflow with the subtitle cropped. Use single-line node labels and put per-step detail in a Markdown table below the diagram. (Bit us in PR #89 → fixed in PR #90.)
 
 ## Workflow trigger ordering
 A push of a tag that points at a commit predating a workflow file's introduction will NOT fire that workflow — GitHub Actions reads the workflow definition from the tag's commit, not from main HEAD. After landing a new `publish-*.yml` at the root, either re-tag at HEAD-of-main once the workflow is committed, or use `gh workflow run <file> --ref main` (which reads the workflow from main and checks out via the `ref` input). Bit us on `goldenmatch-js-v0.4.0` (v0.4.0 merge predated the publish workflow) and on `v1.6.0` (Python orphan).
