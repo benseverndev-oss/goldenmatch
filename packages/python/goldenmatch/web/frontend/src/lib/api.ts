@@ -95,6 +95,36 @@ export type SensitivityResponse = {
   points: SensitivityPoint[];
 };
 
+export type MatchStats = {
+  target_total: number;
+  reference_total: number;
+  matched_pairs: number;
+  matched_targets: number;
+  unmatched_targets: number;
+  match_rate: number;
+};
+
+export type MatchedRow = {
+  __target_row_id__: number;
+  __ref_row_id__: number;
+  __match_score__: number;
+  [k: string]: unknown;
+};
+
+export type UnmatchedRow = {
+  __row_id__: number;
+  [k: string]: unknown;
+};
+
+export type MatchResponse = {
+  stats: MatchStats;
+  matched: MatchedRow[];
+  unmatched: UnmatchedRow[];
+  row_cap: number;
+  matched_truncated: boolean;
+  unmatched_truncated: boolean;
+};
+
 export type DomainPack = {
   name: string;
   signals: string[];
@@ -219,6 +249,12 @@ export const api = {
   },
   domains: (): Promise<DomainPack[]> =>
     fetch("/api/v1/domains").then((r) => json<DomainPack[]>(r)),
+  match: (body: {
+    reference_path: string;
+    target_path?: string;
+    auto_config?: boolean;
+    rules?: RulesPayload;
+  }): Promise<MatchResponse> => post<MatchResponse>("/api/v1/match", body),
   executeRun: (body?: {
     auto_config?: boolean;
     llm_boost?: boolean;

@@ -8,6 +8,7 @@ import {
 import { Compare } from "./routes/Compare";
 import { Home } from "./routes/Home";
 import { Inspector } from "./routes/Inspector";
+import { Match } from "./routes/Match";
 import { Sensitivity } from "./routes/Sensitivity";
 import { Settings } from "./routes/Settings";
 import { Workbench } from "./routes/Workbench";
@@ -31,6 +32,7 @@ const rootRoute = createRootRoute({
         <nav className="ml-auto flex items-center gap-1 text-[12px]">
           <NavLink to="/">Project</NavLink>
           <NavLink to="/workbench">Workbench</NavLink>
+          <NavLink to="/match">Match</NavLink>
           <NavLink to="/compare">Compare</NavLink>
           <NavLink to="/sensitivity">Sensitivity</NavLink>
           <NavLink to="/settings">Settings</NavLink>
@@ -94,12 +96,19 @@ const sensitivityRoute = createRoute({
   component: Sensitivity,
 });
 
+const matchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/match",
+  component: Match,
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   inspectorRoute,
   workbenchRoute,
   compareRoute,
   sensitivityRoute,
+  matchRoute,
   settingsRoute,
 ]);
 

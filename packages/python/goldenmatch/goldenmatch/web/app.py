@@ -23,6 +23,7 @@ def create_app(state: AppState) -> FastAPI:
     from goldenmatch.web.routers import domains as domains_router
     from goldenmatch.web.routers import evaluation as evaluation_router
     from goldenmatch.web.routers import labels as labels_router
+    from goldenmatch.web.routers import match as match_router
     from goldenmatch.web.routers import preview as preview_router
     from goldenmatch.web.routers import project as project_router
     from goldenmatch.web.routers import rules as rules_router
@@ -44,6 +45,7 @@ def create_app(state: AppState) -> FastAPI:
     app.include_router(compare_router.router)
     app.include_router(sensitivity_router.router)
     app.include_router(domains_router.router)
+    app.include_router(match_router.router)
 
     if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
