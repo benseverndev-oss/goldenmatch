@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import type { PydanticError, RulesPayload } from "../lib/types";
 import { RuleEditor } from "../components/RuleEditor";
@@ -67,6 +68,26 @@ export function Workbench() {
       qc.setQueryData(["rules"], resp);
       setToast(
         `Auto-configured from data.csv — ${resp.matchkeys.length} matchkey${resp.matchkeys.length === 1 ? "" : "s"} suggested. Run preview to see results, or tweak.`,
+      );
+    },
+    onError: (err: unknown) => setToast(String(err)),
+  });
+
+  const [llmBoost, setLlmBoost] = useState(false);
+  const [savedRunName, setSavedRunName] = useState<string | null>(null);
+  const runForRealMutation = useMutation({
+    mutationFn: (vars: { autoConfig: boolean }) =>
+      api.executeRun({
+        auto_config: vars.autoConfig,
+        llm_boost: llmBoost,
+        rules: vars.autoConfig ? undefined : rules ?? undefined,
+      }),
+    onSuccess: (resp) => {
+      setErrors([]);
+      setSavedRunName(resp.run_name);
+      qc.invalidateQueries({ queryKey: ["project"] });
+      setToast(
+        `Saved run ${resp.run_name} — ${resp.cluster_count} clusters · ${resp.total_pairs} pairs${resp.llm_boost ? " · LLM boost on" : ""}.`,
       );
     },
     onError: (err: unknown) => setToast(String(err)),
@@ -166,6 +187,70 @@ export function Workbench() {
             )}
           </button>
         </div>
+      </section>
+
+      <section className="border-t border-ink-200 pt-5">
+        <p className="eyebrow mb-2">save run to project</p>
+        <p className="text-xs text-ink-500 mb-3">
+          Runs the engine on the full data.csv (not sampled) and writes
+          lineage + clusters to the project root. Steward labels (from the
+          inspector's review tab) are mirrored to{" "}
+          <code className="font-mono text-gold-600">MemoryStore</code> and
+          applied automatically on every run.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-ink-700 mb-3">
+          <input
+            type="checkbox"
+            checked={llmBoost}
+            onChange={(e) => setLlmBoost(e.target.checked)}
+          />
+          <span>
+            <span className="text-ink-800">LLM boost</span>{" "}
+            <span className="text-ink-500">
+              · second-opinion on borderline pairs (0.75-0.95). Needs
+              OPENAI_API_KEY or ANTHROPIC_API_KEY in env.
+            </span>
+          </span>
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="btn btn-primary"
+            onClick={() => runForRealMutation.mutate({ autoConfig: false })}
+            disabled={runForRealMutation.isPending}
+            title="Run the current rules on the full data.csv. Writes a saved run to the project."
+          >
+            {runForRealMutation.isPending ? (
+              <span className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-paper-50 animate-pulse" />
+                Running…
+              </span>
+            ) : (
+              "Save run with current rules"
+            )}
+          </button>
+          <button
+            className="btn"
+            onClick={() => runForRealMutation.mutate({ autoConfig: true })}
+            disabled={runForRealMutation.isPending}
+            title="Skip the workbench rules — use auto_configure_df to pick a config and run."
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden className="text-gold-500">✦</span>
+              Zero-config run
+            </span>
+          </button>
+        </div>
+        {savedRunName && (
+          <div className="mt-3 text-xs">
+            <Link
+              to="/runs/$name"
+              params={{ name: savedRunName }}
+              className="font-mono text-gold-600 hover:text-gold-500"
+            >
+              → open {savedRunName}
+            </Link>
+          </div>
+        )}
       </section>
 
       {toast && (

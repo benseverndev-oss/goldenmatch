@@ -27,6 +27,17 @@ export type RunLabelRecord = LabelRecord & { cluster_id: number };
 export type PreviewResponse = { run_name: string };
 export type SaveRulesResponse = { saved: boolean; path: string };
 
+export type RunResponse = {
+  run_name: string;
+  row_count: number;
+  cluster_count: number;
+  total_pairs: number;
+  lineage_path: string;
+  clusters_path: string;
+  auto_config: boolean;
+  llm_boost: boolean;
+};
+
 const json = async <T>(resp: Response): Promise<T> => {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -96,4 +107,9 @@ export const api = {
     fetch("/api/v1/autoconfig", { method: "POST" }).then((r) =>
       json<RulesPayload>(r),
     ),
+  executeRun: (body?: {
+    auto_config?: boolean;
+    llm_boost?: boolean;
+    rules?: RulesPayload;
+  }): Promise<RunResponse> => post<RunResponse>("/api/v1/run", body ?? {}),
 };

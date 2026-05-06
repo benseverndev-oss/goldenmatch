@@ -1,12 +1,26 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import type { Project } from "../lib/types";
 
 export function Home() {
+  const qc = useQueryClient();
+  const [llmBoost, setLlmBoost] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+
   const { data, isLoading, error } = useQuery<Project>({
     queryKey: ["project"],
     queryFn: api.project,
+  });
+
+  const autoRunMutation = useMutation({
+    mutationFn: () => api.executeRun({ auto_config: true, llm_boost: llmBoost }),
+    onSuccess: () => {
+      setRunError(null);
+      qc.invalidateQueries({ queryKey: ["project"] });
+    },
+    onError: (err: unknown) => setRunError(String(err)),
   });
 
   if (isLoading)
@@ -42,6 +56,60 @@ export function Home() {
             <span className="text-ink-700">{ruleSummary}</span>
           </span>
         </div>
+      </section>
+
+      <section className="mb-10 card px-5 py-4">
+        <div className="flex items-baseline gap-3 mb-2">
+          <p className="eyebrow">auto-run</p>
+          <p className="text-xs text-ink-500">
+            Skip the workbench — let goldenmatch profile data.csv, pick a
+            config, and write a saved run. Add LLM boost for borderline pairs.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            className="btn btn-primary"
+            onClick={() => autoRunMutation.mutate()}
+            disabled={autoRunMutation.isPending}
+          >
+            {autoRunMutation.isPending ? (
+              <span className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-paper-50 animate-pulse" />
+                Running…
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <span aria-hidden>✦</span>
+                {llmBoost ? "Auto-run with LLM boost" : "Auto-run"}
+              </span>
+            )}
+          </button>
+          <label className="flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={llmBoost}
+              onChange={(e) => setLlmBoost(e.target.checked)}
+            />
+            <span>
+              <span className="text-ink-800">LLM boost</span>{" "}
+              <span className="text-ink-500">
+                · review-band pairs get a second-opinion call
+              </span>
+            </span>
+          </label>
+          {autoRunMutation.data && (
+            <Link
+              to="/runs/$name"
+              params={{ name: autoRunMutation.data.run_name }}
+              className="ml-auto text-xs font-mono text-gold-600 hover:text-gold-500"
+            >
+              → open {autoRunMutation.data.run_name}
+            </Link>
+          )}
+        </div>
+        {runError && (
+          <p className="mt-2 text-xs text-red-700 font-mono">↳ {runError}</p>
+        )}
       </section>
 
       <section>
