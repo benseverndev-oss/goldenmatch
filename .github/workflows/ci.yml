@@ -86,6 +86,47 @@ jobs:
       # the scripts diverge.
       - run: pnpm turbo run build test typecheck
 
+  web_ui_e2e:
+    # End-to-end smoke for the goldenmatch[web] UI: builds the frontend,
+    # boots the FastAPI backend against the pytest fixture project, runs
+    # one Playwright scenario covering home → run → cluster.
+    # The TS job above already exercises `pnpm build` and the vitest unit
+    # tests via turbo — this job adds the Python+browser integration that
+    # turbo can't cover.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pnpm install --frozen-lockfile
+      - name: Install goldenmatch[web]
+        run: pip install -e "packages/python/goldenmatch[web]"
+      - name: Build + stage frontend into wheel-include path
+        run: python packages/python/goldenmatch/scripts/build_web.py
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright browsers
+        run: pnpm -C packages/python/goldenmatch/web/frontend exec playwright install --with-deps chromium
+      - name: Playwright smoke
+        run: pnpm -C packages/python/goldenmatch/web/frontend exec playwright test
+      - name: Upload Playwright trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace
+          path: packages/python/goldenmatch/web/frontend/test-results
+          if-no-files-found: ignore
+
   rust:
     runs-on: ubuntu-latest
     defaults:

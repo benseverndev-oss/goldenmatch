@@ -1,0 +1,14 @@
+threshold: 0.85
+matchkey:
+  - column: name
+    transforms: [lowercase, strip]
+    scorer: jaro_winkler
+    weight: 0.6
+  - column: email
+    transforms: [lowercase, strip]
+    scorer: levenshtein
+    weight: 0.3
+  - column: city
+    transforms: [lowercase, strip]
+    scorer: jaro_winkler
+    weight: 0.1

@@ -30,6 +30,7 @@ service-account*.json
 .goldenmatch_finetuned_model/
 .goldenmatch_cross_encoder/
 .goldenmatch_faiss/
+.goldenmatch/
 .superpowers/
 tests/benchmarks/datasets/NCVR/
 

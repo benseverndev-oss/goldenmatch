@@ -1,0 +1,20 @@
+threshold: 0.85
+matchkey:
+- field: email
+  column: email
+  transforms:
+  - lowercase
+  - strip
+  scorer: exact
+  weight: 1.0
+  levels: 2
+  partial_threshold: 0.8
+- field: name
+  column: name
+  transforms:
+  - lowercase
+  - strip
+  scorer: ensemble
+  weight: 1.0
+  levels: 2
+  partial_threshold: 0.8

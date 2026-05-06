@@ -70,6 +70,19 @@ class MatchkeyField(BaseModel):
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
     levels: int = 2  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
+    # Workbench-only hint: which kind of MatchkeyConfig to wrap this field
+    # in when /preview / /run translate the flat row list into engine
+    # MatchkeyConfigs. Optional + None-default so engine-internal callers
+    # that build MatchkeyField directly remain unaffected; preview's
+    # _build_config falls back to its scorer-based heuristic when absent.
+    type: Literal["exact", "weighted", "probabilistic"] | None = None
+    # Probabilistic-only: EM iterations cap. Mirrors MatchkeyConfig.em_iterations
+    # so the workbench can tune training stability without surfacing the full
+    # MatchkeyConfig shape. Read by _build_config when type == "probabilistic".
+    # `None` (not 20) is the default so `model_dump(exclude_none=True)` doesn't
+    # leak the value into saved YAML for non-probabilistic matchkeys; the
+    # workbench → engine translation in web/preview.py coerces None → 20.
+    em_iterations: int | None = None
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> "MatchkeyField":
@@ -97,6 +110,38 @@ class MatchkeyField(BaseModel):
                     f"Invalid scorer '{self.scorer}'. Must be one of {sorted(VALID_SCORERS)} "
                     f"or a registered plugin scorer."
                 )
+        return self
+
+
+class RulesPayload(BaseModel):
+    """Web-UI-facing wrapper around the matchkey + threshold portions of config.
+
+    ``standardization`` mirrors ``StandardizationConfig.rules`` (column →
+    list of standardizer names). Optional so existing payloads from the
+    workbench keep validating without modification. Validation against
+    ``VALID_STANDARDIZERS`` happens here so the UI gets a 422 with the
+    exact column rather than a deeper engine error at preview time.
+
+    ``blocking`` accepts a ``BlockingConfig`` literal so the workbench can
+    pin a strategy + keys without having to invent a parallel wire shape.
+    Absent (``None``) means "let the engine pick" — the workbench's
+    historical default of ``auto_suggest=True`` with no static keys.
+    """
+    threshold: float = Field(ge=0.0, le=1.0)
+    matchkeys: list[MatchkeyField]
+    standardization: dict[str, list[str]] | None = None
+    blocking: "BlockingConfig | None" = None
+
+    @model_validator(mode="after")
+    def _validate_standardizers(self) -> "RulesPayload":
+        if self.standardization:
+            for column, std_names in self.standardization.items():
+                for name in std_names:
+                    if name not in VALID_STANDARDIZERS:
+                        raise ValueError(
+                            f"Invalid standardizer '{name}' for column '{column}'. "
+                            f"Valid: {sorted(VALID_STANDARDIZERS)}"
+                        )
         return self
 
 
@@ -474,3 +519,8 @@ class GoldenMatchConfig(BaseModel):
         if self.match_settings:
             return self.match_settings.matchkeys
         return []
+
+
+# RulesPayload's `blocking` field forward-references BlockingConfig (defined
+# later in this module). Resolve the reference now that all models exist.
+RulesPayload.model_rebuild()

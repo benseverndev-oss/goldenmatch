@@ -10,6 +10,7 @@ Cross-suite, runnable scripts. Each is standalone — pick the one closest to yo
 | `04_pprl_two_party.py` | Privacy-preserving record linkage between two parties. Bloom-filter encoding, no raw PII shared. | `goldenmatch[pprl]` |
 | `05_review_workflow.py` | Borderline-pair review queue + Learning Memory feedback loop in-process. | `goldenmatch[memory]` |
 | `06_mcp_client.py` | Connect to a `goldensuite-mcp` container from a Python MCP client. | `mcp` |
+| `07_web_ui_walkthrough.py` | Drive every web workbench endpoint from Python: rules, preview, compare runs (CCMS), sensitivity sweep, match, memory store, label round-trip, learn pass. Useful for scripting bulk ops or smoke-testing a deployment. | `goldenmatch[web]`, `requests` |
 
 ## Sample data
 
@@ -37,6 +38,7 @@ pl.DataFrame({
 - **Linking across organizations without sharing raw data** → 04.
 - **Closing a feedback loop with humans in the loop** → 05.
 - **Calling Suite tools from outside Python (Claude Desktop, an agent, a notebook)** → 06 + the deployed `goldensuite-mcp` container.
+- **Editing rules, comparing runs, labeling pairs in a browser** → run `goldenmatch serve-ui <project>` and use the workbench directly. To script the same surface, see 07.
 
 ## Going to production
 

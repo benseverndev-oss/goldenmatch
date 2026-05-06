@@ -45,7 +45,9 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
-> **🆕 v1.6.0 (Python) + v0.4.0 (npm) — cross-language Learning Memory parity** — **Learning Memory** now ships in both runtimes. A correction written by Python applies identically in TypeScript and vice versa: byte-identical SHA-256 hashes, the same SQLite schema, the same collision-safe re-anchor algorithm, verified every CI run by JSON + SQLite + apply-outcome parity tests on both sides. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local store, re-anchor across row reorders via record-hash, and apply automatically on the next run. Each runtime ships its own CLI subgroup (`goldenmatch memory` / `goldenmatch-js memory`), MCP tools (35 Python / 24 TS), and programmatic API (`add_correction()` / `learn()` / `memory_stats()`). Off by default. See [Learning Memory docs](https://benzsevern.github.io/goldenmatch/learning-memory).
+> **🆕 v1.7.0 (Python) — web workbench** — `pip install goldenmatch[web]` then `goldenmatch serve-ui <project>` opens a localhost browser workbench (FastAPI + React, editorial gold-on-cream theme). Edit matchkey / standardization / blocking rules with live Pydantic validation, run sampled previews, save back to `goldenmatch.yml`. Inspect saved runs (cluster table + pair drilldown + one-line NL prose explanations + F1/precision/recall vs steward labels). One-to-many `match` workflow, run-vs-run comparison (CCMS), parameter sensitivity sweeps, Learning Memory browser. Single-process, no auth — for dev-on-a-laptop. See [packages/python/goldenmatch/README.md#web-ui](packages/python/goldenmatch/README.md#web-ui).
+>
+> v1.6.0 (Python) + v0.4.0 (npm) — **cross-language Learning Memory parity**. A correction written by Python applies identically in TypeScript and vice versa: byte-identical SHA-256 hashes, the same SQLite schema, the same collision-safe re-anchor algorithm, verified every CI run by JSON + SQLite + apply-outcome parity tests on both sides. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local store, re-anchor across row reorders via record-hash, and apply automatically on the next run. Each runtime ships its own CLI subgroup (`goldenmatch memory` / `goldenmatch-js memory`), MCP tools (35 Python / 24 TS), and programmatic API (`add_correction()` / `learn()` / `memory_stats()`). Off by default. See [Learning Memory docs](https://benzsevern.github.io/goldenmatch/learning-memory).
 >
 > v1.5.0 — auto-config preflight + postflight verification layer. Built by [Ben Severn](https://bensevern.dev).
 
@@ -96,6 +98,7 @@ Each tool stands alone, but they compose into a single pipeline:
 |---|---|
 | Deduplicate a CSV right now | [`packages/python/goldenmatch`](packages/python/goldenmatch/README.md#quick-start) |
 | Use from Claude Desktop / Code | [`packages/python/goldenmatch` — MCP](packages/python/goldenmatch/README.md#remote-mcp-server) |
+| Edit rules in a browser, label pairs, compare runs | [`packages/python/goldenmatch` — Web UI](packages/python/goldenmatch/README.md#web-ui) |
 | Build AI agents that deduplicate | [ER Agent / A2A wiki page](https://github.com/benzsevern/goldenmatch/wiki/ER-Agent) |
 | Profile data quality before matching | [`packages/python/goldencheck`](packages/python/goldencheck/README.md) |
 | Standardize messy fields (phone, date, address) | [`packages/python/goldenflow`](packages/python/goldenflow/README.md) |
@@ -146,6 +149,20 @@ console.log(result.stats);  // { totalRecords, totalClusters, matchRate, ... }
 
 Runs in browsers, Vercel Edge, Cloudflare Workers, Deno. 478 tests, strict TypeScript (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`).
 
+### Web workbench — browser UI for matching
+
+```bash
+pip install 'goldenmatch[web]'
+goldenmatch serve-ui my-project   # opens http://localhost:5050
+```
+
+![GoldenMatch web UI](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)
+
+Edit rules with live validation, preview against a sampled slice, label pairs
+(mirrored into Learning Memory automatically), compare runs (CCMS), sweep
+parameters, browse the corrections store. Single-process localhost workbench
+shipped as the optional `[web]` extra.
+
 ### Composed pipeline
 
 ```python
@@ -182,6 +199,7 @@ pip install goldenmatch[quality]           # + GoldenCheck integration
 pip install goldenmatch[transform]         # + GoldenFlow integration
 pip install goldenmatch[mcp]               # + MCP server for Claude Desktop
 pip install goldenmatch[agent]             # + A2A agent (aiohttp)
+pip install goldenmatch[web]               # + localhost browser workbench (FastAPI + React)
 
 goldenmatch setup    # interactive wizard: GPU, API keys, database
 ```

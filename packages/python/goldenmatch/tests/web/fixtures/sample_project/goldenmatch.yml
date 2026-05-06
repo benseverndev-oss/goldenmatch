@@ -1,0 +1,6 @@
+threshold: 0.85
+matchkey:
+  - column: name
+    transforms: [lowercase, strip]
+    scorer: jaro_winkler
+    weight: 1.0

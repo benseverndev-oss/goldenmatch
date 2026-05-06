@@ -97,9 +97,20 @@ quality = [
 transform = [
     "goldenflow>=1.0.0",
 ]
-all = [
-    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform]",
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",  # used by TestClient and tests
 ]
+all = [
+    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web]",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["goldenmatch"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"goldenmatch/web/static" = "goldenmatch/web/static"
 
 [project.scripts]
 goldenmatch = "goldenmatch.cli.main:app"

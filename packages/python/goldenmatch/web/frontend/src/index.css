@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-paper-50 text-ink-700 font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    background-image:
+      radial-gradient(
+        ellipse at top left,
+        rgba(212, 160, 23, 0.06) 0%,
+        transparent 50%
+      ),
+      radial-gradient(
+        ellipse at bottom right,
+        rgba(212, 160, 23, 0.04) 0%,
+        transparent 55%
+      );
+    background-attachment: fixed;
+    position: relative;
+  }
+
+  /* Faint paper grain — same SVG noise but tuned for the cream canvas. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.04;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.32  0 0 0 0 0.23  0 0 0 0 0.04  0 0 0 0.65 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  ::selection {
+    background-color: rgba(212, 160, 23, 0.3);
+    color: #161310;
+  }
+
+  /* Inputs — paper-colored fill, dark warm-gray text, gold focus ring. */
+  input[type="text"],
+  input[type="number"],
+  select {
+    @apply font-mono text-sm bg-paper-100 border border-ink-200 text-ink-800 rounded px-2 py-1
+           focus:outline-none focus:border-gold-400 focus:shadow-gold transition;
+  }
+
+  /* Range inputs — gold fill, dark-track contrast. */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 9999px;
+    background: linear-gradient(
+      to right,
+      #d4a017 var(--val, 0%),
+      #e3d8be var(--val, 0%)
+    );
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: -6px;
+    height: 14px;
+    width: 14px;
+    border-radius: 9999px;
+    background: #d4a017;
+    box-shadow: 0 0 0 3px rgba(212, 160, 23, 0.18),
+      0 1px 2px rgba(82, 60, 6, 0.25);
+    transition: transform 80ms ease;
+  }
+  input[type="range"]:active::-webkit-slider-thumb {
+    transform: scale(1.15);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 3px;
+    background: #e3d8be;
+    border-radius: 9999px;
+  }
+  input[type="range"]::-moz-range-progress {
+    height: 3px;
+    background: #d4a017;
+    border-radius: 9999px;
+  }
+  input[type="range"]::-moz-range-thumb {
+    height: 14px;
+    width: 14px;
+    border: 0;
+    border-radius: 9999px;
+    background: #d4a017;
+    box-shadow: 0 0 0 3px rgba(212, 160, 23, 0.18),
+      0 1px 2px rgba(82, 60, 6, 0.25);
+  }
+
+  input[type="checkbox"] {
+    accent-color: #d4a017;
+  }
+
+  /* Scrollbars — warm and unobtrusive on cream. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #e3d8be;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #cbbb95;
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  .frame-strip {
+    background-color: #d4a017;
+  }
+
+  /* Eyebrow — small caps, tracked, ink-500 (warm mid-gray) for hierarchy. */
+  .eyebrow {
+    @apply text-[10px] uppercase tracking-eyebrow text-ink-500 font-medium;
+  }
+
+  .display {
+    @apply font-display tracking-tightish text-ink-900;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 text-sm font-sans
+           border border-ink-200 text-ink-800 bg-paper-100
+           hover:border-gold-400 hover:bg-paper-50 hover:text-gold-600
+           focus:outline-none focus:border-gold-400 focus:shadow-gold
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors duration-150 rounded-sm;
+  }
+  .btn-primary {
+    @apply border-gold-500 text-paper-50 bg-gold-500
+           hover:bg-gold-600 hover:border-gold-600 hover:text-paper-50;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-500
+           hover:text-gold-600 hover:border-ink-200;
+  }
+
+  /* Card — paper-colored fill, soft warm shadow, subtle border. */
+  .card {
+    @apply border border-ink-200 bg-paper-50 shadow-card rounded-sm;
+  }
+
+  /* Gold left-edge stripe used to mark "selected" rows / cards. */
+  .gold-edge {
+    box-shadow: inset 3px 0 0 0 #d4a017,
+      0 1px 0 0 rgba(82, 60, 6, 0.04);
+  }
+}
+
+@layer utilities {
+  .num {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+}

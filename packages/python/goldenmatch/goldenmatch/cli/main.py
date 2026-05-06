@@ -17,6 +17,7 @@ from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.sync import sync_cmd
 from goldenmatch.cli.serve import serve_cmd
+from goldenmatch.cli.serve_ui import serve_ui_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
 from goldenmatch.cli.watch import watch_cmd
 from goldenmatch.cli.setup import setup_cmd
@@ -98,6 +99,7 @@ app.command("dedupe", help="Run deduplication on one or more files.")(dedupe_cmd
 app.command("match", help="Match a target file against reference files.")(match_cmd)
 app.command("sync", help="Sync database table, match new records against existing.")(sync_cmd)
 app.command("serve", help="Start REST API server for real-time matching.")(serve_cmd)
+app.command("serve-ui", help="Launch the local web UI.")(serve_ui_cmd)
 app.command("mcp-serve", help="Start MCP server for Claude Desktop integration.")(mcp_serve_cmd)
 app.command("watch", help="Watch database table and match new records continuously.")(watch_cmd)
 app.command("setup", help="Interactive setup wizard for GPU, API keys, and database.")(setup_cmd)
