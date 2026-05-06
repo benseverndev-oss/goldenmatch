@@ -263,13 +263,19 @@ def scan_file(
 
     # If a schema was provided, use canonical types from the schema for known
     # columns; only fall back to header-heuristic classify_columns for columns
-    # marked "unknown". Emit one unmapped_column finding per unknown column.
+    # the schema flagged as unmapped. Emit one unmapped_column finding per
+    # unknown column.
     if schema is not None:
+        from goldencheck_types import InferredSchema
+        if not isinstance(schema, InferredSchema):
+            raise TypeError(
+                f"scan_file(schema=) expected InferredSchema, got {type(schema).__name__}",
+            )
         from goldencheck.semantic.classifier import ColumnClassification
         schema_types: dict[str, ColumnClassification] = {}
         unmapped_cols: list[str] = []
         for col, mapping in schema.fields.items():
-            if mapping.type == "unknown":
+            if mapping.is_unknown:
                 unmapped_cols.append(col)
             else:
                 schema_types[col] = ColumnClassification(

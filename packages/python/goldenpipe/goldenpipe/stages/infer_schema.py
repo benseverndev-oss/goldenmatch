@@ -10,14 +10,27 @@ Configuration via ``ctx.stage_config``:
     no_infer: bool        Skip InferMap entirely.
 
 Flag precedence: schema > no_infer > domain > auto-detect.
+
+The ``UNMAPPED_TYPE`` sentinel is the canonical "no canonical type" marker.
+Use ``FieldMapping.is_unknown`` to test for it; never compare ``type`` to
+the literal string.
 """
 from __future__ import annotations
 
-from goldencheck_types import InferredSchema, FieldMapping, load_domain
+import logging
+
+from goldencheck_types import (
+    UNMAPPED_TYPE,
+    FieldMapping,
+    InferredSchema,
+    load_domain,
+)
 import infermap
 
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import stage
+
+log = logging.getLogger(__name__)
 
 
 def _result_to_inferred_schema(result, domain: str) -> InferredSchema:
@@ -27,7 +40,7 @@ def _result_to_inferred_schema(result, domain: str) -> InferredSchema:
         fields[fm.source] = FieldMapping(
             source_col=fm.source,
             canonical=fm.target,
-            type=fm.target if fm.target else "unknown",
+            type=fm.target if fm.target else UNMAPPED_TYPE,
             confidence=fm.confidence,
             evidence={"reasoning": fm.reasoning},
         )
@@ -37,7 +50,7 @@ def _result_to_inferred_schema(result, domain: str) -> InferredSchema:
             fields[col] = FieldMapping(
                 source_col=col,
                 canonical=None,
-                type="unknown",
+                type=UNMAPPED_TYPE,
                 confidence=0.0,
                 evidence={},
             )
@@ -84,9 +97,26 @@ def infer_schema_stage(ctx: PipeContext) -> StageResult:
         ctx.artifacts["inferred_schema"] = None
         return StageResult(status=StageStatus.SUCCESS)
 
-    domain = cfg.get("domain") or infermap.detect_domain(ctx.df) or "generic"
+    explicit_domain = cfg.get("domain")
+    detected = explicit_domain or infermap.detect_domain(ctx.df)
+    fallback = detected is None
+    domain = detected or "generic"
+    if fallback:
+        log.info(
+            "infer_schema: detect_domain returned no confident match (or tied); "
+            "falling back to 'generic'. Pin a domain via stage_config['domain'] "
+            "to suppress this fallback.",
+        )
+
     pack = load_domain(domain)
     target = infermap.DomainPackTarget(pack)
     result = infermap.map(ctx.df, target, soft=True)
-    ctx.artifacts["inferred_schema"] = _result_to_inferred_schema(result, domain)
+    inferred = _result_to_inferred_schema(result, domain)
+    if fallback:
+        # Mark the fallback path so downstream consumers can distinguish
+        # "auto-detected with confidence" from "auto-detected by giving up".
+        # InferredSchema is frozen — replace() keeps the wire-format invariant.
+        from dataclasses import replace
+        inferred = replace(inferred, confidence=0.0)
+    ctx.artifacts["inferred_schema"] = inferred
     return StageResult(status=StageStatus.SUCCESS)

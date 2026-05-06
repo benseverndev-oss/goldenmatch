@@ -2,9 +2,11 @@
 
 ## Layout
 
-- `tests/fixtures/` — CSVs and other shared fixtures used by integration + parity tests.
+- `tests/fixtures/` — CSVs and other shared fixtures used by integration tests.
 - `tests/integration/` — multi-package end-to-end tests (e.g., `infermap` → `goldencheck` handoff).
-- `tests/parity/` (planned) — Python ↔ TS parity harness; not yet implemented.
+
+Python ↔ TS parity tests live inside their respective packages (e.g.
+`packages/typescript/goldenmatch/tests/parity/`) rather than at the top level.
 
 ## How they're discovered
 

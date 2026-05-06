@@ -14,21 +14,24 @@ def test_scan_with_no_tui():
     assert result.exit_code == 0
 
 
-@pytest.mark.skip(
-    reason=(
-        "validate without a config falls into goldencheck's Textual TUI path "
-        "(`tui_app.run()`), which tries to grab a TTY. Without one (CliRunner, "
-        "CI runners, this test process), textual deadlocks on the asyncio "
-        "selector — pytest-timeout fires and the xdist worker crashes. The "
-        "test passed historically by lottery: when xdist happened to assign "
-        "this test to a worker that exited before others finished. The right "
-        "fix is to make `validate` produce a clean error when no config is "
-        "found before invoking the TUI; until then, skip rather than rely on "
-        "scheduling luck."
-    ),
-)
-def test_validate_without_config():
-    result = runner.invoke(app, ["validate", str(FIXTURES / "simple.csv")])
+def test_validate_without_config(tmp_path):
+    """`validate` without a config should exit non-zero before the TUI fires.
+
+    Previously this test was a flake (textual TUI deadlocked on the asyncio
+    selector when no TTY was available, killing the xdist worker). The
+    `validate` command now TTY-detects via ``sys.stdout.isatty()`` before
+    invoking the TUI — typer's CliRunner / CI / cron / docker users all hit
+    the rich-output path and the missing-config error surfaces cleanly.
+
+    Pass an explicit non-existent ``--config`` so we exercise the "no
+    config" branch even if the test happens to run inside a directory
+    that contains a ``goldencheck.yml`` (e.g. the monorepo root).
+    """
+    missing = tmp_path / "does-not-exist.yml"
+    result = runner.invoke(
+        app,
+        ["validate", str(FIXTURES / "simple.csv"), "--config", str(missing)],
+    )
     assert result.exit_code != 0
 
 

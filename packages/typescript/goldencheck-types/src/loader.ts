@@ -5,6 +5,20 @@ import * as url from "url";
 import * as yaml from "js-yaml";
 import type { DomainPack, FieldSpec } from "./types.js";
 
+/** A domain-pack YAML file is malformed (wrong shape, type, or value).
+ *  Distinct from "file not found" so callers can react differently — a
+ *  malformed pack is a fix-the-yaml situation, not a fix-the-call situation. */
+export class DomainPackError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DomainPackError";
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function domainsDir(): string {
   if (process.env.GOLDENCHECK_TYPES_TEST_DIR) {
     return process.env.GOLDENCHECK_TYPES_TEST_DIR;
@@ -23,6 +37,13 @@ export function listDomains(): string[] {
     .sort();
 }
 
+/** Load and shape-validate a domain pack YAML.
+ *
+ * Mismatched types raise `DomainPackError` with the file path + key path
+ * so the user can fix the YAML directly. Previously a misindented
+ * `name_hints:` or a string-where-list-expected produced a pack that
+ * "loaded fine" but matched nothing at runtime.
+ */
 export function loadDomain(name: string): DomainPack {
   const filePath = path.join(domainsDir(), `${name}.yaml`);
   if (!fs.existsSync(filePath)) {
@@ -30,29 +51,82 @@ export function loadDomain(name: string): DomainPack {
       `domain pack '${name}' not found in ${domainsDir()}`,
     );
   }
-  const raw = (yaml.load(fs.readFileSync(filePath, "utf-8")) as
-    | Record<string, any>
-    | null) ?? {};
+  const parsed = yaml.load(fs.readFileSync(filePath, "utf-8")) as unknown;
+  if (parsed === null || parsed === undefined) {
+    throw new DomainPackError(
+      `${filePath}: empty or null YAML; expected a mapping`,
+    );
+  }
+  if (!isPlainObject(parsed)) {
+    throw new DomainPackError(
+      `${filePath}: top level must be a mapping, got ${typeof parsed}`,
+    );
+  }
+  const raw = parsed;
+  const rawTypesAny = raw.types;
+  let rawTypes: Record<string, unknown>;
+  if (rawTypesAny === undefined || rawTypesAny === null) {
+    rawTypes = {};
+  } else if (!isPlainObject(rawTypesAny)) {
+    throw new DomainPackError(
+      `${filePath}: 'types' must be a mapping, got ${typeof rawTypesAny}`,
+    );
+  } else {
+    rawTypes = rawTypesAny;
+  }
+
   const types: Record<string, FieldSpec> = {};
-  const rawTypes = (raw.types ?? {}) as Record<string, any>;
-  for (const [typeName, spec] of Object.entries(rawTypes)) {
-    const threshold = spec.confidence_threshold;
-    if (threshold !== undefined && (threshold < 0 || threshold > 1)) {
-      throw new Error(
-        `confidence_threshold for ${name}.${typeName} must be in [0,1], got ${threshold}`,
+  for (const [typeName, specAny] of Object.entries(rawTypes)) {
+    if (!isPlainObject(specAny)) {
+      throw new DomainPackError(
+        `${filePath}: types.${typeName} must be a mapping, got ${typeof specAny}`,
       );
     }
+    const spec = specAny;
+
+    const nameHints = spec.name_hints ?? [];
+    if (!Array.isArray(nameHints)) {
+      throw new DomainPackError(
+        `${filePath}: types.${typeName}.name_hints must be a list, got ${typeof nameHints}`,
+      );
+    }
+    const valueSignals = spec.value_signals ?? {};
+    if (!isPlainObject(valueSignals)) {
+      throw new DomainPackError(
+        `${filePath}: types.${typeName}.value_signals must be a mapping, got ${typeof valueSignals}`,
+      );
+    }
+    const suppress = spec.suppress ?? [];
+    if (!Array.isArray(suppress)) {
+      throw new DomainPackError(
+        `${filePath}: types.${typeName}.suppress must be a list, got ${typeof suppress}`,
+      );
+    }
+    const threshold = spec.confidence_threshold as number | undefined;
+    if (threshold !== undefined) {
+      if (typeof threshold !== "number" || Number.isNaN(threshold)) {
+        throw new DomainPackError(
+          `${filePath}: types.${typeName}.confidence_threshold must be numeric, got ${threshold}`,
+        );
+      }
+      if (threshold < 0 || threshold > 1) {
+        throw new DomainPackError(
+          `${filePath}: types.${typeName}.confidence_threshold must be in [0,1], got ${threshold}`,
+        );
+      }
+    }
+
     types[typeName] = {
-      name_hints: spec.name_hints ?? [],
-      value_signals: spec.value_signals ?? {},
-      suppress: spec.suppress ?? [],
-      confidence_threshold: threshold,
-      description: spec.description,
+      name_hints: nameHints.map(String),
+      value_signals: valueSignals,
+      suppress: suppress.map(String),
+      ...(threshold !== undefined ? { confidence_threshold: threshold } : {}),
+      ...(typeof spec.description === "string" ? { description: spec.description } : {}),
     };
   }
   return {
     name,
-    description: raw.description ?? "",
+    description: typeof raw.description === "string" ? raw.description : "",
     types,
   };
 }

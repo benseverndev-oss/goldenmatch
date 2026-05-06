@@ -3,7 +3,7 @@
 ## Environment
 - Windows 11, bash shell (Git Bash) — use Unix paths in scripts
 - Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`
-- Project: `D:\show_case\infermap`
+- Project lives in the goldenmatch monorepo at `packages/python/infermap/`. Pre-fold standalone path was `D:\show_case\infermap` — `_archive/goldenmatch-pre-fold/` retains that history.
 - Two GitHub accounts: `benzsevern` (owner) and `benzsevern-mjh` (work)
 - Always `gh auth switch --user benzsevern` before push, switch back after
 - PyPI: `infermap` v0.1.0 published (trusted publishing configured)

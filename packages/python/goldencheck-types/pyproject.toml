@@ -13,10 +13,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["goldencheck_types/**", "domains/**"]
+# Vendored YAMLs at goldencheck_types/_domains/ are the source of truth for
+# the Python package — included by default since they live under the package
+# dir. Run scripts/sync_domain_packs.py from the monorepo root whenever the
+# TS sibling at ../../typescript/goldencheck-types/domains/ changes.
+include = ["goldencheck_types/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["goldencheck_types"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"../../typescript/goldencheck-types/domains" = "goldencheck_types/_domains"

@@ -28,6 +28,8 @@ class DomainPackTarget:
                     metadata={
                         "value_signals": dict(spec.value_signals),
                         "confidence_threshold": spec.confidence_threshold,
+                        "suppress": list(spec.suppress),
+                        "description": spec.description,
                         "domain": self.pack.name,
                     },
                 )

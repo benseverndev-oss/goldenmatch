@@ -22,6 +22,13 @@ import { applyCorroborationBoost } from "./confidence.js";
 import { maybeSample } from "./sampler.js";
 import { generalize } from "../profilers/pattern-consistency.js";
 
+// Local mirror of goldencheck-types' UNMAPPED_TYPE. Keeping a string literal
+// here (instead of taking goldencheck-types as a dep) preserves goldencheck-js'
+// edge-safety profile — the scanner runs in browsers / Workers and can't pull
+// js-yaml or fs-using deps. Drift risk: if `goldencheck-types/types.ts`'s
+// UNMAPPED_TYPE ever changes, update both sides.
+const UNMAPPED_TYPE_LOCAL = "unknown";
+
 export interface ScanOptions {
   /** Max rows to sample. Default 100,000. */
   sampleSize?: number | undefined;
@@ -108,7 +115,7 @@ export function scanData(
     const schemaTypes: Record<string, ColumnClassification> = {};
     const unmappedCols: string[] = [];
     for (const [col, mapping] of Object.entries(schema.fields)) {
-      if (mapping.type === "unknown") {
+      if (mapping.type === UNMAPPED_TYPE_LOCAL) {
         unmappedCols.push(col);
       } else {
         schemaTypes[col] = { typeName: mapping.type, source: "name" };

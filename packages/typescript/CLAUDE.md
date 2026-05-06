@@ -19,6 +19,7 @@ Tarballs in `.vendor/` are committed to git (small, deterministic, build-output 
 ## Style / convention
 
 - camelCase for fields (`sampleValues`, `sourceName`, `typeName`) — even though Python siblings use `snake_case`.
+- **Exception:** `goldencheck-types/src/types.ts` keeps snake_case (`name_hints`, `value_signals`, `confidence_threshold`, `source_col`, `schema_version`) because those types pass through YAML on the producer side and JSON wire on the consumer side without remapping. Cross-language parity with the Python sibling at `packages/python/goldencheck-types/goldencheck_types/types.py` is more valuable here than language-idiomatic case style. The same exception applies to any TS code that constructs / consumes those interfaces directly.
 - Type-only imports: `import type { … }` to stay edge-safe.
 - `.js` suffix on relative imports (NodeNext / Bundler module resolution).
 

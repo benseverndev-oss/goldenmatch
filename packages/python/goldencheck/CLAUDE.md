@@ -35,7 +35,7 @@ goldencheck/
 ├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation)
 ├── semantic/      # Type classifier + suppression engine + domain packs (healthcare, finance, ecommerce)
 ├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
-├── mcp/           # MCP server (9 tools incl. domain discovery)
+├── mcp/           # MCP server (count varies; see goldencheck mcp-serve --help for current)
 ├── config/        # Pydantic YAML config (goldencheck.yml)
 ├── models/        # Finding (with metadata dict), Profile dataclasses
 ├── notebook.py    # ScanResult wrapper + HTML renderers for Jupyter/Colab
@@ -170,7 +170,7 @@ goldencheck profile data.csv           # column-level stats
 goldencheck health-score data.csv      # health grade
 goldencheck validate data.csv          # validate against pinned rules
 goldencheck fix data.csv               # auto-fix safe issues
-goldencheck mcp-serve                  # start MCP server (19 tools)
+goldencheck mcp-serve                  # start MCP server
 goldencheck demo --no-tui              # generate and scan demo data
 ```
 
