@@ -1,7 +1,11 @@
 """Tests for DomainPackTarget + soft mode + detect_domain."""
 from __future__ import annotations
 
-import pandas as pd
+import pytest
+
+# pandas is an optional/test-only dep across this workspace — skip cleanly
+# when it's not installed (per packages/python/CLAUDE.md guidance).
+pd = pytest.importorskip("pandas")
 from goldencheck_types import load_domain
 
 from infermap import DomainPackTarget, detect_domain, map as infermap_map

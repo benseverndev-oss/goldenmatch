@@ -769,6 +769,7 @@ name = "goldencheck"
 version = "1.1.2"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
+    { name = "goldencheck-types" },
     { name = "openpyxl" },
     { name = "polars" },
     { name = "pydantic" },
@@ -810,6 +811,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'agent'", specifier = ">=3.9" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.30" },
     { name = "connectorx", marker = "extra == 'db'", specifier = ">=0.3" },
+    { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "numpy", marker = "extra == 'baseline'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
@@ -1096,6 +1098,8 @@ name = "goldenpipe"
 version = "1.0.6"
 source = { editable = "packages/python/goldenpipe" }
 dependencies = [
+    { name = "goldencheck-types" },
+    { name = "infermap" },
     { name = "polars" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1156,12 +1160,14 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110" },
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
     { name = "goldencheck", marker = "extra == 'golden-suite'", editable = "packages/python/goldencheck" },
+    { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
     { name = "goldenflow", marker = "extra == 'flow'", editable = "packages/python/goldenflow" },
     { name = "goldenflow", marker = "extra == 'golden-suite'", editable = "packages/python/goldenflow" },
     { name = "goldenmatch", marker = "extra == 'golden-suite'", editable = "packages/python/goldenmatch" },
     { name = "goldenmatch", marker = "extra == 'match'", editable = "packages/python/goldenmatch" },
     { name = "goldenpipe", extras = ["golden-suite", "tui", "api", "mcp", "agent"], marker = "extra == 'all'", editable = "packages/python/goldenpipe" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "infermap", editable = "packages/python/infermap" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.7" },

@@ -1,9 +1,12 @@
 """Tests for the infer_schema stage."""
 from __future__ import annotations
 
-import pandas as pd
 import polars as pl
 import pytest
+
+# pandas is an optional/test-only dep across this workspace — skip cleanly
+# when it's not installed (per packages/python/CLAUDE.md guidance).
+pd = pytest.importorskip("pandas")
 from goldencheck_types import InferredSchema, FieldMapping
 
 from goldenpipe.models.context import PipeContext, StageStatus
