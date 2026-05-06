@@ -1,5 +1,6 @@
 """CLI entry points for GoldenCheck."""
 from __future__ import annotations
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -229,9 +230,20 @@ def validate(
         findings = validate_file(file, cfg)
         _, profile = scan_file(file, sample_size=cfg.settings.sample_size)
 
+        # TUI-vs-rich routing. Default is TUI when stdout is a real TTY;
+        # in CI / cron / docker logs / typer CliRunner the TUI's terminal
+        # grab deadlocks the asyncio event loop and never returns. Falling
+        # through to rich there is the safe default. Pass --no-tui to force
+        # rich, or set the env var GOLDENCHECK_FORCE_TUI=1 to override the
+        # TTY detection (rare; mostly for screenshot recording inside a
+        # PTY-emulated environment).
+        force_tui = os.environ.get("GOLDENCHECK_FORCE_TUI") == "1"
+        is_tty = sys.stdout.isatty() if hasattr(sys.stdout, "isatty") else False
+        use_tui = not no_tui and not json_output and (is_tty or force_tui)
+
         if json_output:
             report_json(findings, profile, sys.stdout)
-        elif not no_tui:
+        elif use_tui:
             from goldencheck.tui.app import GoldenCheckApp
             tui_app = GoldenCheckApp(findings=findings, profile=profile, config=cfg)
             tui_app.run()

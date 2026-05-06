@@ -217,6 +217,7 @@ def scan_file(
     return_sample: bool = False,
     domain: str | None = None,
     baseline: "BaselineProfile | Path | None" = None,
+    schema: "object | None" = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     row_count = len(df)
@@ -259,7 +260,51 @@ def scan_file(
 
     # Classify columns (load type defs once, pass to both classify and suppress)
     type_defs = load_type_defs(domain=domain)
-    column_types = classify_columns(sample, type_defs=type_defs)
+
+    # If a schema was provided, use canonical types from the schema for known
+    # columns; only fall back to header-heuristic classify_columns for columns
+    # the schema flagged as unmapped. Emit one unmapped_column finding per
+    # unknown column.
+    if schema is not None:
+        from goldencheck_types import InferredSchema
+        if not isinstance(schema, InferredSchema):
+            raise TypeError(
+                f"scan_file(schema=) expected InferredSchema, got {type(schema).__name__}",
+            )
+        from goldencheck.semantic.classifier import ColumnClassification
+        schema_types: dict[str, ColumnClassification] = {}
+        unmapped_cols: list[str] = []
+        for col, mapping in schema.fields.items():
+            if mapping.is_unknown:
+                unmapped_cols.append(col)
+            else:
+                schema_types[col] = ColumnClassification(
+                    type_name=mapping.type, source="schema"
+                )
+        if unmapped_cols:
+            cols_in_sample = [c for c in unmapped_cols if c in sample.columns]
+            if cols_in_sample:
+                heuristic = classify_columns(sample.select(cols_in_sample), type_defs=type_defs)
+            else:
+                heuristic = {}
+        else:
+            heuristic = {}
+        column_types = {**schema_types, **heuristic}
+        for col in unmapped_cols:
+            all_findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    column=col,
+                    check="unmapped_column",
+                    message=(
+                        f"Column {col!r} could not be typed against domain pack "
+                        f"{schema.domain!r}. Consider adding name_hints to the pack."
+                    ),
+                    confidence=1.0,
+                )
+            )
+    else:
+        column_types = classify_columns(sample, type_defs=type_defs)
 
     # Apply type suppression BEFORE corroboration boost
     all_findings = apply_type_suppression(all_findings, column_types, type_defs)

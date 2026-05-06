@@ -7,6 +7,7 @@ import { TabularData, isNullish } from "../data.js";
 import {
   type Finding,
   type ColumnProfile,
+  type ColumnClassification,
   type DatasetProfile,
   type ScanResult,
   Severity,
@@ -21,6 +22,13 @@ import { applyCorroborationBoost } from "./confidence.js";
 import { maybeSample } from "./sampler.js";
 import { generalize } from "../profilers/pattern-consistency.js";
 
+// Local mirror of goldencheck-types' UNMAPPED_TYPE. Keeping a string literal
+// here (instead of taking goldencheck-types as a dep) preserves goldencheck-js'
+// edge-safety profile — the scanner runs in browsers / Workers and can't pull
+// js-yaml or fs-using deps. Drift risk: if `goldencheck-types/types.ts`'s
+// UNMAPPED_TYPE ever changes, update both sides.
+const UNMAPPED_TYPE_LOCAL = "unknown";
+
 export interface ScanOptions {
   /** Max rows to sample. Default 100,000. */
   sampleSize?: number | undefined;
@@ -28,6 +36,12 @@ export interface ScanOptions {
   domain?: string | null | undefined;
   /** Return the sampled data along with results. */
   returnSample?: boolean | undefined;
+  /**
+   * Optional InferredSchema (from goldencheck-types). When provided, use the
+   * canonical types directly for known columns and emit `unmapped_column`
+   * findings for unknown ones.
+   */
+  schema?: { domain: string; fields: Record<string, { type: string }> } | null | undefined;
 }
 
 export interface ScanResultWithSample extends ScanResult {
@@ -94,7 +108,44 @@ export function scanData(
 
   // Classify columns
   const typeDefs = loadTypeDefs(domain);
-  const columnTypes = classifyColumns(sample, typeDefs);
+  const schema = options?.schema ?? null;
+
+  let columnTypes: Record<string, ColumnClassification>;
+  if (schema) {
+    const schemaTypes: Record<string, ColumnClassification> = {};
+    const unmappedCols: string[] = [];
+    for (const [col, mapping] of Object.entries(schema.fields)) {
+      if (mapping.type === UNMAPPED_TYPE_LOCAL) {
+        unmappedCols.push(col);
+      } else {
+        schemaTypes[col] = { typeName: mapping.type, source: "name" };
+      }
+    }
+    let heuristic: Record<string, ColumnClassification> = {};
+    if (unmappedCols.length > 0) {
+      const all = classifyColumns(sample, typeDefs);
+      heuristic = Object.fromEntries(
+        Object.entries(all).filter(([c]) => unmappedCols.includes(c)),
+      );
+    }
+    columnTypes = { ...schemaTypes, ...heuristic };
+
+    for (const col of unmappedCols) {
+      allFindings.push(
+        makeFinding({
+          severity: Severity.INFO,
+          column: col,
+          check: "unmapped_column",
+          message:
+            `Column '${col}' could not be typed against domain pack '${schema.domain}'. ` +
+            `Consider adding name_hints to the pack.`,
+          confidence: 1.0,
+        }),
+      );
+    }
+  } else {
+    columnTypes = classifyColumns(sample, typeDefs);
+  }
 
   // Apply suppression BEFORE corroboration boost
   allFindings = applySuppression(allFindings, columnTypes, typeDefs);

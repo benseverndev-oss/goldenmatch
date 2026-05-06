@@ -1,0 +1,4 @@
+patient_id,diagnosis,icd10,visit_date
+P001,Hypertension,I10,2026-01-05
+P002,Asthma,J45,2026-02-12
+P003,Diabetes,E11,2026-03-08

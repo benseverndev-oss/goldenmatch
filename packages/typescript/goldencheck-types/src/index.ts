@@ -1,3 +1,13 @@
-// Stub entry — real types will land as goldencheck starts consuming this package.
-// Domain schemas live in ./domains/*.yaml and are loaded at runtime by consumers.
-export const PACKAGE_NAME = "goldencheck-types";
+export { loadDomain, listDomains, DomainPackError } from "./loader.js";
+export type {
+  FieldSpec,
+  DomainPack,
+  FieldMapping,
+  InferredSchema,
+} from "./types.js";
+export {
+  isUnknown,
+  unmappedCols,
+  UNMAPPED_TYPE,
+  SCHEMA_VERSION,
+} from "./types.js";

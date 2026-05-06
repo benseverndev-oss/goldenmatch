@@ -1,5 +1,8 @@
 from pathlib import Path
+
+import pytest
 from typer.testing import CliRunner
+
 from goldencheck.cli.main import app
 
 runner = CliRunner()
@@ -11,8 +14,24 @@ def test_scan_with_no_tui():
     assert result.exit_code == 0
 
 
-def test_validate_without_config():
-    result = runner.invoke(app, ["validate", str(FIXTURES / "simple.csv")])
+def test_validate_without_config(tmp_path):
+    """`validate` without a config should exit non-zero before the TUI fires.
+
+    Previously this test was a flake (textual TUI deadlocked on the asyncio
+    selector when no TTY was available, killing the xdist worker). The
+    `validate` command now TTY-detects via ``sys.stdout.isatty()`` before
+    invoking the TUI — typer's CliRunner / CI / cron / docker users all hit
+    the rich-output path and the missing-config error surfaces cleanly.
+
+    Pass an explicit non-existent ``--config`` so we exercise the "no
+    config" branch even if the test happens to run inside a directory
+    that contains a ``goldencheck.yml`` (e.g. the monorepo root).
+    """
+    missing = tmp_path / "does-not-exist.yml"
+    result = runner.invoke(
+        app,
+        ["validate", str(FIXTURES / "simple.csv"), "--config", str(missing)],
+    )
     assert result.exit_code != 0
 
 

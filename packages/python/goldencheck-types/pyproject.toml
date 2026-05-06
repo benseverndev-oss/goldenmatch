@@ -1,0 +1,23 @@
+[project]
+name = "goldencheck-types"
+version = "0.1.0"
+description = "Shared canonical field types for the Golden Suite"
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Vendored YAMLs at goldencheck_types/_domains/ are the source of truth for
+# the Python package — included by default since they live under the package
+# dir. Run scripts/sync_domain_packs.py from the monorepo root whenever the
+# TS sibling at ../../typescript/goldencheck-types/domains/ changes.
+include = ["goldencheck_types/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["goldencheck_types"]

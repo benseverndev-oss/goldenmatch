@@ -3,10 +3,8 @@
 Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 
 ## Related Projects
-- **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
-- **GoldenFlow:** `D:\show_case\goldenflow` -- Data transformation. Has its own CLAUDE.md.
-- **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenpipe`, `benzsevern/goldencheck`, `benzsevern/goldenflow`, `benzsevern/goldenmatch`
+Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenflow,goldenmatch,infermap}/`. Pre-fold standalone repos lived at `D:\show_case\<name>`; their history is in `_archive/goldenmatch-pre-fold/`.
+- **GitHub:** `benzsevern/goldenmatch` (single monorepo since 2026-05-02)
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main

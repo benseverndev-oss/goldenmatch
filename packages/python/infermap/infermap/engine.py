@@ -200,6 +200,7 @@ class MapEngine:
         target: Any,
         required: list[str] | None = None,
         schema_file: str | None = None,
+        soft: bool = False,
         **kwargs,
     ) -> MapResult:
         """Map fields from *source* to *target*.
@@ -209,17 +210,30 @@ class MapEngine:
         source:
             Source data (CSV path, DataFrame, DB URI, schema YAML, …).
         target:
-            Target data — same variety of inputs.
+            Target data — same variety of inputs. Also accepts a
+            ``DomainPackTarget`` wrapping a goldencheck-types DomainPack.
         required:
             Extra required target field names beyond those declared in schema.
         schema_file:
             Path to a schema YAML file whose aliases are merged into target fields.
+        soft:
+            When True, post-process the result so any mapping with confidence
+            below the resolved threshold has ``target=None`` (treated as
+            ``unknown`` by downstream consumers).
         **kwargs:
             Forwarded to ``extract_schema``.
         """
+        # Local import to avoid cycle: domain_pack imports goldencheck_types.
+        from infermap.domain_pack import DomainPackTarget
+
         # 1. Extract schemas
         src_schema: SchemaInfo = extract_schema(source, sample_size=self.sample_size, **kwargs)
-        tgt_schema: SchemaInfo = extract_schema(target, sample_size=self.sample_size, **kwargs)
+        domain_target = None
+        if isinstance(target, DomainPackTarget):
+            tgt_schema: SchemaInfo = target.to_schema_info()
+            domain_target = target
+        else:
+            tgt_schema = extract_schema(target, sample_size=self.sample_size, **kwargs)
 
         # 2. Optional schema_file aliases (only applicable when paths are provided;
         # callers who already have SchemaInfo use map_schemas directly).
@@ -227,12 +241,35 @@ class MapEngine:
         if schema_file is not None:
             sf_schema = extract_schema(schema_file, **kwargs)
 
-        return self.map_schemas(
+        result = self.map_schemas(
             src_schema,
             tgt_schema,
             required=required,
             schema_file_schema=sf_schema,
         )
+
+        if soft:
+            result = self._apply_soft(result, domain_target)
+        return result
+
+    def _apply_soft(self, result: MapResult, domain_target) -> MapResult:
+        """Mark below-threshold mappings as unknown (target=None)."""
+        import dataclasses
+
+        global_default = getattr(self, "default_threshold", 0.7)
+        thresholds: dict[str, float] = {}
+        if domain_target is not None:
+            for type_name, spec in domain_target.pack.types.items():
+                t = spec.confidence_threshold
+                thresholds[type_name] = t if t is not None else global_default
+
+        new_mappings = []
+        for fm in result.mappings:
+            threshold = thresholds.get(fm.target, global_default)
+            if fm.confidence < threshold:
+                fm = dataclasses.replace(fm, target=None)
+            new_mappings.append(fm)
+        return dataclasses.replace(result, mappings=new_mappings)
 
     def map_schemas(
         self,

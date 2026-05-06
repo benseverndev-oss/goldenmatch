@@ -8,6 +8,8 @@ from infermap.engine import MapEngine
 from infermap.config import from_config
 from infermap.scorers import default_scorers, scorer
 from infermap.providers import extract_schema
+from infermap.domain_pack import DomainPackTarget
+from infermap.detect import detect_domain
 
 
 def map(source, target, **kwargs) -> MapResult:

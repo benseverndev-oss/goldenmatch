@@ -4,6 +4,7 @@
 import type { MapEngineOptions, MapSchemasOptions } from "./engine.js";
 import { MapEngine } from "./engine.js";
 import type { SchemaInfo } from "./types.js";
+import { DomainPackTarget, isDomainPackTarget } from "./domainPack.js";
 import {
   inferSchemaFromCsvText,
   inferSchemaFromJsonText,
@@ -26,6 +27,7 @@ import { defaultScorers } from "./scorers/registry.js";
  */
 export type MapInput =
   | SchemaInfo
+  | DomainPackTarget
   | { records: ReadonlyArray<Record<string, unknown>>; sourceName?: string }
   | { csvText: string; sourceName?: string }
   | { jsonText: string; sourceName?: string }
@@ -40,6 +42,15 @@ export interface MapOptions extends MapSchemasOptions {
    */
   config?: string | EngineConfig;
   sampleSize?: number;
+  /**
+   * When true, post-process so any mapping with confidence below the resolved
+   * threshold has ``target=null`` (treated as ``unknown`` downstream).
+   */
+  soft?: boolean;
+  /**
+   * Default threshold used when no per-type override is provided.
+   */
+  defaultThreshold?: number;
 }
 
 function isSchemaInfo(input: MapInput): input is SchemaInfo {
@@ -53,6 +64,7 @@ function isSchemaInfo(input: MapInput): input is SchemaInfo {
 
 /** Normalize any MapInput to a SchemaInfo. */
 export function toSchemaInfo(input: MapInput, sampleSize?: number): SchemaInfo {
+  if (isDomainPackTarget(input)) return input.toSchemaInfo();
   if (isSchemaInfo(input)) return input;
 
   if ("records" in input) {
@@ -111,5 +123,37 @@ export function map(
   const subOpts: MapSchemasOptions = {};
   if (options.required !== undefined) subOpts.required = options.required;
   if (options.schemaFile !== undefined) subOpts.schemaFile = options.schemaFile;
-  return engine.mapSchemas(srcSchema, tgtSchema, subOpts);
+  let result = engine.mapSchemas(srcSchema, tgtSchema, subOpts);
+
+  if (options.soft) {
+    result = applySoft(
+      result,
+      isDomainPackTarget(target) ? target : null,
+      options.defaultThreshold ?? 0.7,
+    );
+  }
+  return result;
+}
+
+function applySoft(
+  result: MapResult,
+  domainTarget: DomainPackTarget | null,
+  defaultThreshold: number,
+): MapResult {
+  const thresholds: Record<string, number> = {};
+  if (domainTarget) {
+    for (const [type_name, spec] of Object.entries(domainTarget.pack.types)) {
+      thresholds[type_name] =
+        spec.confidence_threshold !== undefined
+          ? spec.confidence_threshold
+          : defaultThreshold;
+    }
+  }
+  return {
+    ...result,
+    mappings: result.mappings.map((fm) => {
+      const threshold = thresholds[fm.target] ?? defaultThreshold;
+      return fm.confidence < threshold ? { ...fm, target: null as any } : fm;
+    }),
+  };
 }
