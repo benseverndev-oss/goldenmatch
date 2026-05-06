@@ -45,7 +45,7 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
-> **🆕 v1.6.0 (Python)** — **Learning Memory** is wired end-to-end. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local SQLite (or Postgres) store, re-anchor across row reorders, and apply automatically on the next run. The pipeline reports `Memory: N applied, M stale, K stale-ambiguous, J unanchorable` in postflight. New CLI subgroup `goldenmatch memory`, five new MCP tools, and Python `goldenmatch.add_correction()` / `learn()` / `memory_stats()`. Off by default. See [Learning Memory](#learning-memory-v160).
+> **🆕 v1.6.0 (Python) + v0.4.0 (npm) — cross-language Learning Memory parity** — A correction written by Python applies identically in TypeScript and vice versa: byte-identical SHA-256 hashes, the same SQLite schema, the same collision-safe re-anchor algorithm, verified every CI run by JSON + SQLite + apply-outcome parity tests on both sides. Steward decisions, unmerges, LLM votes, and agent approvals persist to a local SQLite store, re-anchor across row reorders via record-hash, and apply automatically on the next run. The pipeline reports `Memory: N applied, M stale, K stale-ambiguous, J unanchorable` in postflight. New CLI subgroup `goldenmatch memory` (and `goldenmatch-js memory` in TS), five new MCP tools per runtime, and `goldenmatch.add_correction()` / `learn()` / `memory_stats()`. Off by default. See [Learning Memory](#learning-memory-v160).
 >
 > v1.5.0 — Auto-config preflight + postflight verification layer (still on by default). See [Auto-Config Verification](#auto-config-verification-v150). Built by [Ben Severn](https://bensevern.dev).
 
