@@ -78,6 +78,17 @@ def _open_memory_store(config: GoldenMatchConfig):
         return None
 
 
+def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast all non-internal columns to Utf8.
+
+    Used by both file and DataFrame match entry points so that (a) per-file
+    CSV inference cannot produce schema-incompatible columns across the
+    target/reference vstack and (b) string transforms like lowercase/strip
+    always have a string to consume in zero-config paths.
+    """
+    return df.cast({c: pl.Utf8 for c in df.columns if not c.startswith("__")})
+
+
 def _apply_domain_extraction(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -884,6 +895,11 @@ def run_match(
     target_lf = target_lf.with_columns(pl.lit(target_source).alias("__source__"))
     target_lf = _add_row_ids(target_lf, offset=0)
     target_df = target_lf.collect()
+    # Cast user columns to string before concat: target and reference files
+    # may have schema-incompatible types for the same column (e.g. DBLP
+    # ``id`` is string while ACM ``id`` is Int64), and CSV inference produces
+    # numeric columns that string transforms cannot consume downstream.
+    target_df = _cast_user_cols_to_str(target_df)
     target_ids = set(target_df["__row_id__"].to_list())
     offset = len(target_df)
 
@@ -901,20 +917,14 @@ def run_match(
             ref_lf = apply_column_map(ref_lf, ref_col_map)
         ref_lf = ref_lf.with_columns(pl.lit(ref_source).alias("__source__"))
         ref_lf = _add_row_ids(ref_lf, offset=offset)
-        ref_df = ref_lf.collect()
+        ref_df = _cast_user_cols_to_str(ref_lf.collect())
         offset += len(ref_df)
         ref_frames.append(ref_df)
         ref_sources.add(ref_source)
 
-    # Concat all
-    all_frames = [target_df] + ref_frames
-    combined_df = pl.concat(all_frames)
-    # Cast user columns to string for consistency with run_match_df's
-    # zero-config path: CSV inference can produce Int64 columns (e.g. year)
-    # that string transforms like lowercase/strip cannot consume.
-    combined_df = combined_df.cast(
-        {col: pl.Utf8 for col in combined_df.columns if not col.startswith("__")}
-    )
+    # Concat all (frames are already Utf8-cast on user columns above so the
+    # vstack can never fail on cross-file schema mismatches).
+    combined_df = pl.concat([target_df] + ref_frames)
     combined_lf = combined_df.lazy()
 
     return _run_match_pipeline(
