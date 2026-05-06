@@ -23,8 +23,8 @@
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-97.2%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
-[![PyPI downloads](https://img.shields.io/pypi/dm/goldenmatch?color=d4a017&label=pypi%20dl%2Fmo&logo=pypi&logoColor=white)](https://pepy.tech/project/goldenmatch)
-[![npm downloads](https://img.shields.io/npm/dm/goldenmatch?color=cb3837&label=npm%20dl%2Fmo&logo=npm&logoColor=white)](https://www.npmjs.com/package/goldenmatch)
+[![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenzsevern%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+infermap+goldencheck-types)
+[![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenzsevern%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
 [![GitHub stars](https://img.shields.io/github/stars/benzsevern/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benzsevern/goldenmatch/stargazers)
 
 <!-- Ecosystem -->

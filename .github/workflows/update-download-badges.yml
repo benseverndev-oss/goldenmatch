@@ -1,0 +1,66 @@
+name: Update suite download badges
+
+on:
+  schedule:
+    # Daily at 06:17 UTC (off the top-of-hour CI rush).
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "scripts/suite_download_badges.py"
+      - ".github/workflows/update-download-badges.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-download-badges
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute suite-wide download totals
+        run: python scripts/suite_download_badges.py --out badges-out
+
+      - name: Publish to badges branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fresh tree so we can replace the badges branch contents wholesale.
+          tmp=$(mktemp -d)
+          cp badges-out/*.json "$tmp/"
+
+          # Clone (or init) the orphan branch.
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin badges; then
+            git fetch origin badges:badges
+            git worktree add wt badges
+          else
+            git worktree add --orphan -b badges wt
+            (cd wt && git rm -rf . 2>/dev/null || true)
+          fi
+
+          cp "$tmp"/*.json wt/
+          cd wt
+
+          # Only commit if anything changed.
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No badge changes."
+            exit 0
+          fi
+
+          git add -A
+          git commit -m "chore(badges): refresh suite download totals"
+          git push origin HEAD:badges
