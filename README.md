@@ -66,21 +66,29 @@ Each tool stands alone, but they compose into a single pipeline:
 
 ```mermaid
 flowchart LR
-    raw["raw rows<br/><sub>(any schema)</sub>"]
-    golden["golden records"]
+    raw([raw rows])
+    golden([golden records])
 
     subgraph orchestration ["GoldenPipe orchestrates"]
         direction LR
-        infermap["InferMap<br/><sub>schema mapping</sub>"]
-        goldencheck["GoldenCheck<br/><sub>profile + validate</sub>"]
-        goldenflow["GoldenFlow<br/><sub>standardize + transform</sub>"]
-        goldenmatch["GoldenMatch<br/><sub>dedupe + cluster + survivorship</sub>"]
+        infermap[InferMap]
+        goldencheck[GoldenCheck]
+        goldenflow[GoldenFlow]
+        goldenmatch[GoldenMatch]
         infermap --> goldencheck --> goldenflow --> goldenmatch
     end
 
     raw --> infermap
     goldenmatch --> golden
 ```
+
+| Step | Role |
+|---|---|
+| **InferMap** | schema mapping — auto-aligns columns across heterogeneous sources |
+| **GoldenCheck** | profile + validate — encoding, format, anomaly detection |
+| **GoldenFlow** | standardize + transform — phone, date, address, categorical normalization |
+| **GoldenMatch** | dedupe + cluster + survivorship — fuzzy / exact / probabilistic / LLM |
+| **GoldenPipe** | orchestrator — declarative YAML pipeline wiring the four steps |
 
 - **Zero-config defaults that admit when they're unsure** — every step has a self-verifying preflight + postflight; results carry an inspectable report instead of failing silently.
 - **97.2% F1 on DBLP-ACM out of the box** for entity resolution. [DQBench ER score: 95.30](https://github.com/benzsevern/dqbench).
