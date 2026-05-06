@@ -130,6 +130,11 @@ export const api = {
     fetch(`/api/v1/runs/${name}/evaluation`).then((r) =>
       json<EvaluationResponse>(r),
     ),
+  unmerge: (
+    name: string,
+    body: { mode: "record" | "cluster"; cluster_id: number; row_id?: number },
+  ): Promise<{ run_name: string; mode: string; broken_pairs: number; cluster_count: number }> =>
+    post(`/api/v1/runs/${name}/unmerge`, body),
   runReview: (
     name: string,
     opts?: { lo?: number; hi?: number; includeLabeled?: boolean; limit?: number },

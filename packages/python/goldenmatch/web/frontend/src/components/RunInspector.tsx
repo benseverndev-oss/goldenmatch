@@ -92,7 +92,13 @@ export function RunInspector({ name }: { name: string }) {
           {String(detail.error)}
         </div>
       )}
-      {detail.data && <ClusterDetail data={detail.data} />}
+      {detail.data && (
+        <ClusterDetail
+          data={detail.data}
+          runName={name}
+          onUnmerge={() => setSelected(undefined)}
+        />
+      )}
     </div>
   );
 
