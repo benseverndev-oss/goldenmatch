@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from goldencheck_types import list_domains, load_domain
+from goldencheck_types import DetectionResult, list_domains, load_domain
 
 DEFAULT_MIN_SCORE = 0.3
 
@@ -43,37 +43,76 @@ def detect_domain(
     """Pick the domain pack whose name_hints best match this df's columns.
 
     Returns ``None`` if no candidate scores at or above ``min_score``, or if
-    multiple candidates tie for top score (refuses to silently pick one).
+    multiple candidates tie for top score. Use ``detect_domain_detailed``
+    when you want to distinguish those two cases or see the runner-up.
     The ``generic`` pack is always excluded from auto-detection.
     """
-    columns = [str(c) for c in df.columns]
-    domains = candidates or [d for d in list_domains() if d != "generic"]
+    return detect_domain_detailed(df, candidates, min_score).domain
 
+
+def detect_domain_detailed(
+    df,
+    candidates: list[str] | None = None,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> DetectionResult:
+    """Auto-detect with full diagnostic info.
+
+    Returns a :class:`DetectionResult` carrying:
+      - ``domain`` — the picked name, or None when no decision was made
+      - ``score`` — top score (regardless of whether it was picked)
+      - ``runner_up`` / ``runner_up_score`` — second-best candidate
+      - ``reason`` — one of "confident", "tie", "below_min_score", "no_data"
+
+    Callers like ``goldenpipe.stages.infer_schema`` use this to surface
+    "auto-detected with confidence" vs "auto-fallback because tied" in
+    the InferredSchema's confidence field and evidence map.
+    """
+    columns = [str(c) for c in df.columns]
+    if not columns:
+        return DetectionResult(
+            domain=None, score=0.0, runner_up=None, runner_up_score=0.0,
+            reason="no_data",
+        )
+
+    domains = candidates or [d for d in list_domains() if d != "generic"]
     scored: list[tuple[str, float]] = []
     for d in domains:
         pack = load_domain(d)
-        all_hints = {
-            h
-            for spec in pack.types.values()
-            for h in spec.name_hints
-        }
+        all_hints = {h for spec in pack.types.values() for h in spec.name_hints}
         if not all_hints:
             continue
-
         hits = sum(
             1 for c in columns if any(_hint_matches(h, c) for h in all_hints)
         )
-        score = hits / max(len(columns), 1)
-        scored.append((d, score))
+        scored.append((d, hits / max(len(columns), 1)))
 
     if not scored:
-        return None
+        return DetectionResult(
+            domain=None, score=0.0, runner_up=None, runner_up_score=0.0,
+            reason="no_data",
+        )
 
-    best_score = max(s for _, s in scored)
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best_name, best_score = scored[0]
+    runner_name, runner_score = (scored[1] if len(scored) > 1 else (None, 0.0))
+
     if best_score < min_score:
-        return None
-    top = [d for d, s in scored if s == best_score]
-    # Tie-break: refuse to pick. Caller can fall through to "generic" with
-    # explicit knowledge that detection was ambiguous, vs us silently
-    # picking whichever sorted first.
-    return top[0] if len(top) == 1 else None
+        return DetectionResult(
+            domain=None, score=best_score,
+            runner_up=runner_name, runner_up_score=runner_score,
+            reason="below_min_score",
+        )
+
+    top_count = sum(1 for _, s in scored if s == best_score)
+    if top_count > 1:
+        return DetectionResult(
+            domain=None, score=best_score,
+            runner_up=runner_name, runner_up_score=runner_score,
+            reason="tie",
+        )
+
+    return DetectionResult(
+        domain=best_name, score=best_score,
+        runner_up=runner_name, runner_up_score=runner_score,
+        reason="confident",
+    )

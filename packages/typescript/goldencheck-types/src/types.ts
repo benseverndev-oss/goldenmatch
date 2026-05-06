@@ -18,10 +18,17 @@
 export const UNMAPPED_TYPE = "unknown" as const;
 
 /** Wire-format version embedded in `InferredSchema`. Bump on any
- *  backwards-incompatible change to the shape. */
-export const SCHEMA_VERSION = 1 as const;
+ *  backwards-incompatible change to the shape.
+ *
+ *  v2 (2026-05-06): `FieldSpec` gained `name` so the canonical identifier
+ *  travels with the spec instead of only as a dict key. */
+export const SCHEMA_VERSION = 2 as const;
 
 export interface FieldSpec {
+  /** Canonical identifier — matches the key under `DomainPack.types`.
+   *  The loader populates from the dict key and raises if a YAML
+   *  explicitly sets a different name. */
+  readonly name: string;
   readonly name_hints: string[];
   readonly value_signals: Record<string, unknown>;
   readonly suppress: string[];
@@ -58,3 +65,24 @@ export const unmappedCols = (s: InferredSchema): string[] =>
   Object.entries(s.fields)
     .filter(([, m]) => isUnknown(m))
     .map(([k]) => k);
+
+/** Reason field on `DetectionResult`. */
+export type DetectionReason =
+  | "confident"
+  | "tie"
+  | "below_min_score"
+  | "no_data";
+
+/** Rich auto-detection result.
+ *
+ *  Use `detectDomainDetailed` (returns this) when you want the runner-up,
+ *  score, or to distinguish "tied" from "no match". The thin
+ *  `detectDomain` wrapper returns just `.domain` for callers that only
+ *  care about the picked name. */
+export interface DetectionResult {
+  readonly domain: string | null;
+  readonly score: number;
+  readonly runner_up: string | null;
+  readonly runner_up_score: number;
+  readonly reason: DetectionReason;
+}

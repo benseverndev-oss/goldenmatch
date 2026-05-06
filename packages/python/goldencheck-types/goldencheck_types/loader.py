@@ -1,6 +1,7 @@
 """Load domain packs from yaml files."""
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 
@@ -62,8 +63,25 @@ def list_domains() -> list[str]:
     return sorted(p.stem for p in _domains_dir().glob("*.yaml"))
 
 
+def clear_cache() -> None:
+    """Drop memoized domain packs.
+
+    Tests that mutate YAML files on disk after the first ``load_domain``
+    call must invoke this — otherwise subsequent loads return the cached
+    pre-mutation pack. Production code never needs this; ``load_domain``
+    keys its cache on the resolved domains directory, so flipping
+    ``GOLDENCHECK_TYPES_TEST_DIR`` between calls invalidates naturally.
+    """
+    _load_domain_cached.cache_clear()
+
+
+@functools.lru_cache(maxsize=32)
+def _load_domain_cached(name: str, domains_dir: str) -> DomainPack:
+    return _load_domain_uncached(name, Path(domains_dir))
+
+
 def load_domain(name: str) -> DomainPack:
-    """Load and validate a domain pack YAML.
+    """Load and validate a domain pack YAML (memoized; see ``clear_cache``).
 
     Shape-checks every field rather than silently coercing. A misindented
     ``name_hints:`` or a string-where-list-expected used to produce a pack
@@ -72,9 +90,13 @@ def load_domain(name: str) -> DomainPack:
     ``DomainPackError`` with the file path and key path so the user can
     fix the YAML directly.
     """
-    path = _domains_dir() / f"{name}.yaml"
+    return _load_domain_cached(name, str(_domains_dir()))
+
+
+def _load_domain_uncached(name: str, domains_dir: Path) -> DomainPack:
+    path = domains_dir / f"{name}.yaml"
     if not path.exists():
-        raise KeyError(f"domain pack {name!r} not found in {_domains_dir()}")
+        raise KeyError(f"domain pack {name!r} not found in {domains_dir}")
 
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if raw is None:
@@ -137,7 +159,18 @@ def load_domain(name: str) -> DomainPack:
         else:
             threshold_f = None
 
+        # If the YAML explicitly carries a `name:` it must match the dict
+        # key. Disagreement signals user error (typo, copy-paste). The
+        # YAMLs ship without a `name:` today; loader populates from the
+        # key.
+        explicit_name = spec.get("name")
+        if explicit_name is not None and explicit_name != type_name:
+            raise DomainPackError(
+                f"{path}: types.{type_name}.name is {explicit_name!r}, "
+                f"but it lives under key {type_name!r}. The two must agree.",
+            )
         types[type_name] = FieldSpec(
+            name=type_name,
             name_hints=[str(h) for h in name_hints],
             value_signals=dict(value_signals),
             suppress=[str(s) for s in suppress],
