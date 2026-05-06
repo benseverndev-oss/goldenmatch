@@ -618,12 +618,21 @@ def match(
     from goldenmatch.core.pipeline import run_match
     from goldenmatch.config.schemas import GoldenMatchConfig
 
+    _auto_config = False
+
     if isinstance(config, str):
         cfg = load_config(config)
     elif config is not None:
         cfg = config
-    else:
+    elif exact or fuzzy:
         cfg = _build_config(exact, fuzzy, blocking, threshold, backend=backend)
+    else:
+        # Zero-config: defer to in-pipeline auto-config (mirrors match_df).
+        # Without this, the file API previously fell through to _build_config
+        # which emitted a stub matchkey on a non-existent ``__placeholder__``
+        # column and crashed precompute_matchkey_transforms.
+        cfg = GoldenMatchConfig()
+        _auto_config = True
 
     if backend and hasattr(cfg, "backend"):
         cfg.backend = backend
@@ -631,7 +640,7 @@ def match(
     target_spec = (str(target), Path(target).stem)
     ref_specs = [(str(reference), Path(reference).stem)]
 
-    result = run_match(target_spec, ref_specs, cfg)
+    result = run_match(target_spec, ref_specs, cfg, auto_config=_auto_config)
 
     _mem = result.get("memory_stats")
     return MatchResult(

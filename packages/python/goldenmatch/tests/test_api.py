@@ -474,6 +474,75 @@ class TestMatchDfEdgeCases:
         assert isinstance(result, gm.MatchResult)
 
 
+class TestMatchZeroConfig:
+    """Zero-config (no exact / fuzzy / config) entry points must run end-to-end.
+
+    Both crashes were silent regressions: the match pipeline skipped the
+    domain-extraction step that the dedupe pipeline runs (CRASH 1), and the
+    file-based ``match()`` API never threaded auto-config into the pipeline at
+    all (CRASH 2 - emitted a placeholder matchkey using a non-existent column).
+    """
+
+    def _bibliographic_pair(self):
+        # DBLP-ACM-shaped data: title triggers domain auto-config to emit a
+        # matchkey on the derived ``__title_key__`` column.
+        target = pl.DataFrame({
+            "id": ["1", "2", "3"],
+            "title": [
+                "concurrency in the data warehouse",
+                "energy efficient indexing on air",
+                "neurorule a connectionist approach to data mining",
+            ],
+            "authors": ["richard taylor", "tomasz imielinski", "hongjun lu"],
+            "venue": ["vldb", "sigmod conference", "vldb"],
+            "year": ["2000", "1994", "1995"],
+        })
+        reference = pl.DataFrame({
+            "id": ["10", "20", "30"],
+            "title": [
+                "concurrency in the data warehouse",
+                "energy efficient indexing on air",
+                "an unrelated paper title",
+            ],
+            "authors": ["richard taylor", "tomasz imielinski", "someone else"],
+            "venue": [
+                "very large data bases",
+                "international conference on management of data",
+                "icde",
+            ],
+            "year": ["2000", "1994", "2001"],
+        })
+        return target, reference
+
+    def test_match_df_zero_config_runs(self):
+        """match_df(target, reference) with no config or kwargs must not crash.
+
+        Was: ColumnNotFoundError: __title_key__ - auto-config emitted a
+        domain-extracted matchkey but the match pipeline skipped the domain
+        extraction step that the dedupe pipeline runs.
+        """
+        import goldenmatch as gm
+        target, reference = self._bibliographic_pair()
+        result = gm.match_df(target, reference)
+        assert isinstance(result, gm.MatchResult)
+
+    def test_match_files_zero_config_runs(self, tmp_path):
+        """gm.match(file, file) with no config or kwargs must not crash.
+
+        Was: ColumnNotFoundError: __placeholder__ - the file API fell through
+        to _build_config which emitted a stub matchkey on a non-existent column
+        instead of deferring to in-pipeline auto-config like match_df does.
+        """
+        import goldenmatch as gm
+        target, reference = self._bibliographic_pair()
+        tgt_path = tmp_path / "target.csv"
+        ref_path = tmp_path / "reference.csv"
+        target.write_csv(tgt_path)
+        reference.write_csv(ref_path)
+        result = gm.match(str(tgt_path), str(ref_path))
+        assert isinstance(result, gm.MatchResult)
+
+
 class TestDedupeResultHtml:
     def test_repr_html_basic(self):
         from goldenmatch import DedupeResult
