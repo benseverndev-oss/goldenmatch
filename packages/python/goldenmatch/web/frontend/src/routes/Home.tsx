@@ -6,8 +6,16 @@ import type { Project } from "../lib/types";
 
 export function Home() {
   const qc = useQueryClient();
-  const [llmBoost, setLlmBoost] = useState(false);
+  const [llmBoost, setLlmBoost] = useState<boolean | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  // Seed the local llmBoost toggle from persisted settings.llm_boost_default
+  // on first load. After that the user's per-session toggle wins.
+  if (llmBoost === null && settings.data) {
+    setLlmBoost(settings.data.llm_boost_default);
+  }
+  const effectiveLlmBoost = llmBoost ?? false;
 
   const { data, isLoading, error } = useQuery<Project>({
     queryKey: ["project"],
@@ -15,7 +23,8 @@ export function Home() {
   });
 
   const autoRunMutation = useMutation({
-    mutationFn: () => api.executeRun({ auto_config: true, llm_boost: llmBoost }),
+    mutationFn: () =>
+      api.executeRun({ auto_config: true, llm_boost: effectiveLlmBoost }),
     onSuccess: () => {
       setRunError(null);
       qc.invalidateQueries({ queryKey: ["project"] });
@@ -87,13 +96,16 @@ export function Home() {
           <label className="flex items-center gap-2 text-sm text-ink-700">
             <input
               type="checkbox"
-              checked={llmBoost}
+              checked={effectiveLlmBoost}
               onChange={(e) => setLlmBoost(e.target.checked)}
             />
             <span>
               <span className="text-ink-800">LLM boost</span>{" "}
               <span className="text-ink-500">
                 · review-band pairs get a second-opinion call
+                {settings.data && !settings.data.llm_keys_present.openai &&
+                 !settings.data.llm_keys_present.anthropic &&
+                  " · no API key in env"}
               </span>
             </span>
           </label>

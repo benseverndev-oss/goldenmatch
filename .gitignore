@@ -18,6 +18,16 @@ packages/python/goldenmatch/goldenmatch/web/static/*
 packages/python/goldenmatch/web/frontend/test-results/
 packages/python/goldenmatch/web/frontend/playwright-report/
 
+# YAML-edit backups (web UI's POST /api/v1/rules/save writes goldenmatch.yml.bak
+# next to the file before clobbering — local-only safety net, not source).
+*.yml.bak
+
+# Steward labels — runtime-written by the inspector's review tab. Keep them
+# out of git so a contributor's labels don't ride along on PRs. If you want
+# seed labels for a demo project, commit a curated labels.seed.jsonl and
+# rename at use time.
+labels.jsonl
+
 # Generated outputs
 *_lineage.json
 *_clusters.csv

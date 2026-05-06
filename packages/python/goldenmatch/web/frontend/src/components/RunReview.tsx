@@ -5,23 +5,28 @@ import type { FieldBreakdown, Pair } from "../lib/types";
 
 type Props = { runName: string };
 
-/** Score-band controls. Defaults mirror goldenmatch's review-queue convention
- *  (>0.95 auto-merge, 0.75-0.95 review, <0.75 reject) but loosened a bit at
- *  the bottom so the workbench user can see what fell just under the cutoff. */
-const DEFAULT_LO = 0.5;
-const DEFAULT_HI = 1.0;
+/** Score-band fallback if settings haven't loaded yet. Settings.review_band_*
+ *  is the source of truth for "what does the steward want to triage by default". */
+const FALLBACK_LO = 0.5;
+const FALLBACK_HI = 1.0;
 
 /** Quick-labelling worklist: pairs in the candidate band that you haven't
  *  triaged yet. Skip / Match / Non-match advance to the next pair. */
 export function RunReview({ runName }: Props) {
   const qc = useQueryClient();
-  const [lo, setLo] = useState(DEFAULT_LO);
-  const [hi, setHi] = useState(DEFAULT_HI);
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const [lo, setLo] = useState<number | null>(null);
+  const [hi, setHi] = useState<number | null>(null);
+  if (lo === null && settings.data) setLo(settings.data.review_band_lo);
+  if (hi === null && settings.data) setHi(settings.data.review_band_hi);
+  const effectiveLo = lo ?? FALLBACK_LO;
+  const effectiveHi = hi ?? FALLBACK_HI;
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
   const queue = useQuery({
-    queryKey: ["review", runName, lo, hi],
-    queryFn: () => api.runReview(runName, { lo, hi, limit: 200 }),
+    queryKey: ["review", runName, effectiveLo, effectiveHi],
+    queryFn: () =>
+      api.runReview(runName, { lo: effectiveLo, hi: effectiveHi, limit: 200 }),
   });
 
   const label = useMutation({
@@ -100,9 +105,9 @@ export function RunReview({ runName }: Props) {
       {/* Score band controls */}
       <header className="px-3 py-2 border-b border-ink-200 flex items-center gap-3">
         <span className="eyebrow">band</span>
-        <BandInput value={lo} onChange={setLo} ariaLabel="lower bound" />
+        <BandInput value={effectiveLo} onChange={setLo} ariaLabel="lower bound" />
         <span className="text-ink-400">—</span>
-        <BandInput value={hi} onChange={setHi} ariaLabel="upper bound" />
+        <BandInput value={effectiveHi} onChange={setHi} ariaLabel="upper bound" />
         <span className="ml-auto num text-[11px] text-ink-500 tabular-nums">
           {visible.length} pending · {reviewedSoFar} done · {totalForBand} in band
         </span>
@@ -112,10 +117,13 @@ export function RunReview({ runName }: Props) {
       <div className="flex-1 overflow-auto px-4 py-5">
         {!current ? (
           <EmptyQueue
-            isFiltered={lo !== DEFAULT_LO || hi !== DEFAULT_HI}
+            isFiltered={
+              effectiveLo !== (settings.data?.review_band_lo ?? FALLBACK_LO) ||
+              effectiveHi !== (settings.data?.review_band_hi ?? FALLBACK_HI)
+            }
             onReset={() => {
-              setLo(DEFAULT_LO);
-              setHi(DEFAULT_HI);
+              setLo(settings.data?.review_band_lo ?? FALLBACK_LO);
+              setHi(settings.data?.review_band_hi ?? FALLBACK_HI);
               setSkipped(new Set());
             }}
           />
@@ -189,11 +197,12 @@ function EmptyQueue({
         <p className="display text-2xl text-ink-700">All caught up.</p>
         <p className="text-sm text-ink-500">
           No unlabeled pairs in this band. Decisions live in{" "}
-          <code className="font-mono text-gold-600">labels.jsonl</code>.
+          <code className="font-mono text-gold-600">labels.jsonl</code> +{" "}
+          <code className="font-mono text-gold-600">MemoryStore</code>.
         </p>
         {isFiltered && (
           <button className="btn" onClick={onReset}>
-            Reset band to {DEFAULT_LO}–{DEFAULT_HI}
+            Reset band to your default
           </button>
         )}
       </div>

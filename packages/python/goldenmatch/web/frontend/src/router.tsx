@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { Home } from "./routes/Home";
 import { Inspector } from "./routes/Inspector";
+import { Settings } from "./routes/Settings";
 import { Workbench } from "./routes/Workbench";
 
 const rootRoute = createRootRoute({
@@ -28,6 +29,7 @@ const rootRoute = createRootRoute({
         <nav className="ml-auto flex items-center gap-1 text-[12px]">
           <NavLink to="/">Project</NavLink>
           <NavLink to="/workbench">Workbench</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
       </header>
 
@@ -70,10 +72,17 @@ const workbenchRoute = createRoute({
   component: Workbench,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: Settings,
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   inspectorRoute,
   workbenchRoute,
+  settingsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

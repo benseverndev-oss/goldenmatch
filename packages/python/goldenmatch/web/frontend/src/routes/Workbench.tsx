@@ -12,9 +12,10 @@ const DEFAULT_SAMPLE_N = 1000;
 export function Workbench() {
   const qc = useQueryClient();
   const initial = useQuery({ queryKey: ["rules"], queryFn: api.rules });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [rules, setRules] = useState<RulesPayload | null>(null);
   const [errors, setErrors] = useState<PydanticError[]>([]);
-  const [sampleN, setSampleN] = useState<number>(DEFAULT_SAMPLE_N);
+  const [sampleN, setSampleN] = useState<number | null>(null);
   const [seed, setSeed] = useState<number>(0);
   const [previewName, setPreviewName] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -23,10 +24,20 @@ export function Workbench() {
     if (initial.data && rules == null) setRules(initial.data);
   }, [initial.data, rules]);
 
+  // Seed sample size from persisted settings on first load. Per-session
+  // edits (the user typing a different number) win after that.
+  if (sampleN === null && settings.data) {
+    setSampleN(settings.data.preview_sample_n);
+  }
+  const effectiveSampleN = sampleN ?? DEFAULT_SAMPLE_N;
+
   const previewMutation = useMutation({
     mutationFn: async (current: RulesPayload) => {
       await api.putRules(current);
-      return api.preview({ rules: current, sample: { n: sampleN, seed } });
+      return api.preview({
+        rules: current,
+        sample: { n: effectiveSampleN, seed },
+      });
     },
     onSuccess: (resp) => {
       setErrors([]);
@@ -73,13 +84,17 @@ export function Workbench() {
     onError: (err: unknown) => setToast(String(err)),
   });
 
-  const [llmBoost, setLlmBoost] = useState(false);
+  const [llmBoost, setLlmBoost] = useState<boolean | null>(null);
+  if (llmBoost === null && settings.data) {
+    setLlmBoost(settings.data.llm_boost_default);
+  }
+  const effectiveLlmBoost = llmBoost ?? false;
   const [savedRunName, setSavedRunName] = useState<string | null>(null);
   const runForRealMutation = useMutation({
     mutationFn: (vars: { autoConfig: boolean }) =>
       api.executeRun({
         auto_config: vars.autoConfig,
-        llm_boost: llmBoost,
+        llm_boost: effectiveLlmBoost,
         rules: vars.autoConfig ? undefined : rules ?? undefined,
       }),
     onSuccess: (resp) => {
@@ -158,7 +173,7 @@ export function Workbench() {
               type="number"
               min={1}
               max={10000}
-              value={sampleN}
+              value={effectiveSampleN}
               onChange={(e) => setSampleN(Number(e.target.value))}
               className="w-24 text-center"
             />
@@ -201,7 +216,7 @@ export function Workbench() {
         <label className="flex items-center gap-2 text-sm text-ink-700 mb-3">
           <input
             type="checkbox"
-            checked={llmBoost}
+            checked={effectiveLlmBoost}
             onChange={(e) => setLlmBoost(e.target.checked)}
           />
           <span>
@@ -209,6 +224,15 @@ export function Workbench() {
             <span className="text-ink-500">
               · second-opinion on borderline pairs (0.75-0.95). Needs
               OPENAI_API_KEY or ANTHROPIC_API_KEY in env.
+              {settings.data && (
+                <span className="ml-1">
+                  Cost cap ${settings.data.llm_max_cost_usd.toFixed(2)} ·{" "}
+                  {settings.data.llm_max_calls} calls
+                  <span className="ml-1 text-ink-400">
+                    (configurable in <a href="/settings" className="underline hover:text-gold-600">Settings</a>)
+                  </span>
+                </span>
+              )}
             </span>
           </span>
         </label>

@@ -38,6 +38,21 @@ export type RunResponse = {
   llm_boost: boolean;
 };
 
+export type WebSettings = {
+  llm_boost_default: boolean;
+  llm_provider: "openai" | "anthropic";
+  llm_max_cost_usd: number;
+  llm_max_calls: number;
+  review_band_lo: number;
+  review_band_hi: number;
+  preview_sample_n: number;
+};
+
+export type SettingsResponse = WebSettings & {
+  llm_keys_present: { openai: boolean; anthropic: boolean };
+  _path: string;
+};
+
 const json = async <T>(resp: Response): Promise<T> => {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -112,4 +127,12 @@ export const api = {
     llm_boost?: boolean;
     rules?: RulesPayload;
   }): Promise<RunResponse> => post<RunResponse>("/api/v1/run", body ?? {}),
+  settings: (): Promise<SettingsResponse> =>
+    fetch("/api/v1/settings").then((r) => json<SettingsResponse>(r)),
+  putSettings: (body: WebSettings): Promise<SettingsResponse> =>
+    fetch("/api/v1/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => json<SettingsResponse>(r)),
 };

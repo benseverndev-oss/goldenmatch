@@ -89,7 +89,20 @@ def _execute_run(
             )
         if config is None:
             config = GoldenMatchConfig()  # zero-config path will populate inside pipeline
-        config.llm_scorer = LLMScorerConfig(enabled=True)
+        # Apply the user's persisted cost / call caps. The BudgetTracker enforces
+        # both during the run; without these the pipeline defaults would still
+        # cap, but at $1 / 5000 calls — usually higher than what a workbench
+        # iteration wants.
+        from goldenmatch.config.schemas import BudgetConfig
+        from goldenmatch.web.settings import load_settings
+        s = load_settings()
+        config.llm_scorer = LLMScorerConfig(
+            enabled=True,
+            budget=BudgetConfig(
+                max_cost_usd=s.llm_max_cost_usd,
+                max_calls=s.llm_max_calls,
+            ),
+        )
 
     if auto_config:
         # Zero-config: run_dedupe_df calls auto_configure_df internally when
