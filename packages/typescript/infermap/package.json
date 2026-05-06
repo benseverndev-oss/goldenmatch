@@ -16,12 +16,12 @@
   "author": "Ben Severn (https://bensevern.dev)",
   "repository": {
     "type": "git",
-    "url": "https://github.com/benzsevern/infermap.git",
-    "directory": "packages/infermap-js"
+    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "directory": "packages/typescript/infermap"
   },
-  "homepage": "https://benzsevern.github.io/infermap/",
+  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/infermap",
   "bugs": {
-    "url": "https://github.com/benzsevern/infermap/issues"
+    "url": "https://github.com/benzsevern/goldenmatch/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",
