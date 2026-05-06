@@ -70,10 +70,13 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
       ...rules,
       matchkeys: [
         ...rules.matchkeys,
-        { column: "", scorer: "exact", weight: 1.0, transforms: [] },
+        { column: "", scorer: "exact", weight: 1.0, transforms: [], type: "exact" },
       ],
     });
   };
+
+  const effectiveType = (mk: Matchkey): "exact" | "weighted" | "probabilistic" =>
+    mk.type ?? (mk.scorer === "exact" ? "exact" : "weighted");
 
   const toggleTransform = (idx: number, t: string) => {
     const mk = rules.matchkeys[idx];
@@ -163,7 +166,7 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                 </div>
 
                 <div className="grid grid-cols-12 gap-x-4 gap-y-3">
-                  <div className="col-span-4">
+                  <div className="col-span-3">
                     <p className="eyebrow mb-1">column</p>
                     <input
                       type="text"
@@ -177,6 +180,38 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                     <ErrorList messages={colErrors} />
                   </div>
                   <div className="col-span-3">
+                    <p className="eyebrow mb-1">type</p>
+                    <select
+                      value={effectiveType(mk)}
+                      onChange={(e) => {
+                        const next = e.target.value as
+                          | "exact"
+                          | "weighted"
+                          | "probabilistic";
+                        const patch: Partial<Matchkey> = { type: next };
+                        // Snap scorer to exact when picking exact type to keep
+                        // the engine round-trip consistent. Weighted/prob keep
+                        // whatever the user already selected.
+                        if (next === "exact") patch.scorer = "exact";
+                        else if (mk.scorer === "exact") patch.scorer = "jaro_winkler";
+                        // Seed probabilistic defaults the first time this row
+                        // becomes probabilistic so the inputs aren't undefined.
+                        if (next === "probabilistic") {
+                          if (mk.levels === undefined) patch.levels = 2;
+                          if (mk.partial_threshold === undefined) patch.partial_threshold = 0.8;
+                          if (mk.em_iterations === undefined) patch.em_iterations = 20;
+                        }
+                        updateMatchkey(idx, patch);
+                      }}
+                      className="w-full"
+                      title="exact: identity claim. weighted: threshold-gated similarity. probabilistic: Fellegi-Sunter EM-trained."
+                    >
+                      <option value="exact">exact</option>
+                      <option value="weighted">weighted</option>
+                      <option value="probabilistic">probabilistic</option>
+                    </select>
+                  </div>
+                  <div className="col-span-3">
                     <p className="eyebrow mb-1">scorer</p>
                     <select
                       value={mk.scorer}
@@ -184,6 +219,7 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                         updateMatchkey(idx, { scorer: e.target.value })
                       }
                       className="w-full"
+                      disabled={effectiveType(mk) === "exact"}
                     >
                       {SCORERS.map((s) => (
                         <option key={s} value={s}>
@@ -193,7 +229,7 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                     </select>
                     <ErrorList messages={scorerErrors} />
                   </div>
-                  <div className="col-span-5">
+                  <div className="col-span-3">
                     <p className="eyebrow mb-1">weight</p>
                     <div className="flex items-center gap-3">
                       <GoldRange
@@ -223,6 +259,81 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                     <ErrorList messages={weightErrors} />
                   </div>
                 </div>
+
+                {effectiveType(mk) === "probabilistic" && (
+                  <div className="grid grid-cols-12 gap-x-4 gap-y-3 p-3 border border-ink-200/60 rounded bg-paper-100/50">
+                    <div className="col-span-12">
+                      <p className="eyebrow text-ink-500">probabilistic · Fellegi-Sunter</p>
+                      <p className="text-[11px] text-ink-500 mt-1">
+                        Levels = comparison granularity (2 = agree/disagree,
+                        3 = adds a partial-agree band gated by partial threshold).
+                        EM iterations cap training; defaults are usually fine.
+                      </p>
+                    </div>
+                    <div className="col-span-3">
+                      <p className="eyebrow mb-1">levels</p>
+                      <select
+                        value={mk.levels ?? 2}
+                        onChange={(e) =>
+                          updateMatchkey(idx, { levels: Number(e.target.value) })
+                        }
+                        className="w-full"
+                      >
+                        <option value={2}>2 · agree / disagree</option>
+                        <option value={3}>3 · agree / partial / disagree</option>
+                      </select>
+                    </div>
+                    {(mk.levels ?? 2) === 3 && (
+                      <div className="col-span-5">
+                        <p className="eyebrow mb-1">partial threshold</p>
+                        <div className="flex items-center gap-3">
+                          <GoldRange
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={mk.partial_threshold ?? 0.8}
+                            onChange={(e) =>
+                              updateMatchkey(idx, {
+                                partial_threshold: Number(e.target.value),
+                              })
+                            }
+                            className="flex-1"
+                            aria-label={`partial threshold ${idx}`}
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={mk.partial_threshold ?? 0.8}
+                            onChange={(e) =>
+                              updateMatchkey(idx, {
+                                partial_threshold: Number(e.target.value),
+                              })
+                            }
+                            className="w-16 text-center"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className={(mk.levels ?? 2) === 3 ? "col-span-4" : "col-span-9"}>
+                      <p className="eyebrow mb-1">EM iterations</p>
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        step={1}
+                        value={mk.em_iterations ?? 20}
+                        onChange={(e) =>
+                          updateMatchkey(idx, {
+                            em_iterations: Math.max(1, Number(e.target.value) || 20),
+                          })
+                        }
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <p className="eyebrow mb-2">transforms</p>

@@ -51,7 +51,12 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
     for i, m in enumerate(rules.matchkeys):
         col = m.column or m.field or ""
         scorer = m.scorer or "exact"
-        if scorer == "exact":
+        # Type resolution: explicit `type` from the workbench wins; otherwise
+        # fall back to the scorer-based heuristic so existing payloads keep
+        # working (exact scorer → exact matchkey; anything else → weighted).
+        mk_type = m.type or ("exact" if scorer == "exact" else "weighted")
+
+        if mk_type == "exact":
             matchkeys.append(
                 MatchkeyConfig(
                     name=f"exact_{col or i}",
@@ -65,7 +70,32 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
                     ],
                 )
             )
-        else:
+        elif mk_type == "probabilistic":
+            # Fellegi-Sunter: EM-trained match weights from comparison vectors.
+            # The engine handles training inside the pipeline given the field's
+            # levels + partial_threshold. Threshold sourcing: rules.threshold is
+            # the workbench-wide knob; the engine surfaces auto-tuned link/review
+            # thresholds at runtime.
+            matchkeys.append(
+                MatchkeyConfig(
+                    name=f"prob_{col or i}",
+                    type="probabilistic",
+                    threshold=rules.threshold,
+                    em_iterations=int(m.em_iterations) if m.em_iterations else 20,
+                    fields=[
+                        MatchkeyField(
+                            field=m.field,
+                            column=m.column,
+                            scorer=scorer,
+                            weight=float(m.weight) if m.weight is not None else 1.0,
+                            transforms=list(m.transforms or []),
+                            levels=int(m.levels),
+                            partial_threshold=float(m.partial_threshold),
+                        )
+                    ],
+                )
+            )
+        else:  # weighted (default)
             matchkeys.append(
                 MatchkeyConfig(
                     name=f"fuzzy_{col or i}",

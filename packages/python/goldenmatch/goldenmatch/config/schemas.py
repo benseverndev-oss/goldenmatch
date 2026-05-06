@@ -70,6 +70,16 @@ class MatchkeyField(BaseModel):
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
     levels: int = 2  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
+    # Workbench-only hint: which kind of MatchkeyConfig to wrap this field
+    # in when /preview / /run translate the flat row list into engine
+    # MatchkeyConfigs. Optional + None-default so engine-internal callers
+    # that build MatchkeyField directly remain unaffected; preview's
+    # _build_config falls back to its scorer-based heuristic when absent.
+    type: Literal["exact", "weighted", "probabilistic"] | None = None
+    # Probabilistic-only: EM iterations cap. Mirrors MatchkeyConfig.em_iterations
+    # so the workbench can tune training stability without surfacing the full
+    # MatchkeyConfig shape. Read by _build_config when type == "probabilistic".
+    em_iterations: int = 20
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> "MatchkeyField":

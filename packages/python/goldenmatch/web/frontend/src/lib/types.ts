@@ -6,11 +6,22 @@ export type RunManifest = {
   row_count: number;
 };
 
+export type MatchkeyType = "exact" | "weighted" | "probabilistic";
+
 export type Matchkey = {
   column: string;
   scorer: string;
   weight: number;
   transforms: string[];
+  /** Workbench-only override of the engine matchkey type. When omitted,
+   *  preview/run pick exact for `scorer === "exact"` and weighted otherwise. */
+  type?: MatchkeyType;
+  /** Probabilistic-only: 2 = agree/disagree, 3 = agree/partial/disagree. */
+  levels?: number;
+  /** Probabilistic + levels=3: score >= this counts as a partial agree. */
+  partial_threshold?: number;
+  /** Probabilistic-only: EM iteration cap. */
+  em_iterations?: number;
 };
 
 /** Mirrors goldenmatch.config.schemas.StandardizationConfig.rules — column
