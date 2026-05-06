@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { api } from "../lib/api";
+import type { QualityFinding, QualityResponse } from "../lib/api";
 import type { Project } from "../lib/types";
 
 export function Home() {
@@ -20,6 +21,14 @@ export function Home() {
   const { data, isLoading, error } = useQuery<Project>({
     queryKey: ["project"],
     queryFn: api.project,
+  });
+
+  const qualityQ = useQuery<QualityResponse>({
+    queryKey: ["quality"],
+    queryFn: api.quality,
+    // Don't auto-refetch on focus — quality scans can be expensive on real
+    // datasets, and the banner is only mildly time-sensitive.
+    refetchOnWindowFocus: false,
   });
 
   const autoRunMutation = useMutation({
@@ -66,6 +75,8 @@ export function Home() {
           </span>
         </div>
       </section>
+
+      {qualityQ.data && <QualityBanner data={qualityQ.data} />}
 
       <section className="mb-10 card px-5 py-4">
         <div className="flex items-baseline gap-3 mb-2">
@@ -169,6 +180,103 @@ export function Home() {
         )}
       </section>
     </div>
+  );
+}
+
+function QualityBanner({ data }: { data: QualityResponse }) {
+  if (!data.available) return null; // GoldenCheck not installed — silent
+  const { errors, warnings, total } = data.summary;
+  const [open, setOpen] = useState(false);
+
+  if (data.error) {
+    return (
+      <section className="mb-6 card px-5 py-3 border-amber-300 bg-amber-50/40">
+        <p className="text-sm text-amber-800">
+          <span className="eyebrow text-amber-700 mr-2">quality</span>
+          Couldn't run scan ·{" "}
+          <code className="font-mono text-[12px] text-amber-700 break-all">
+            {data.error}
+          </code>
+        </p>
+      </section>
+    );
+  }
+  if (total === 0) {
+    return (
+      <section className="mb-6 card px-5 py-3 border-emerald-300/60 bg-emerald-50/40">
+        <p className="text-sm text-emerald-800">
+          <span className="eyebrow text-emerald-700 mr-2">quality</span>
+          GoldenCheck found no issues in <code className="font-mono">data.csv</code>.
+        </p>
+      </section>
+    );
+  }
+
+  const tone =
+    errors > 0
+      ? "border-red-300 bg-red-50/40"
+      : "border-amber-300 bg-amber-50/40";
+  const headlineColor = errors > 0 ? "text-red-800" : "text-amber-800";
+
+  return (
+    <section className={`mb-6 card px-5 py-3 ${tone}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`w-full text-left text-sm flex items-baseline gap-3 ${headlineColor}`}
+      >
+        <span className="eyebrow">quality</span>
+        <span>
+          {total} {total === 1 ? "finding" : "findings"} ·{" "}
+          {errors} error{errors === 1 ? "" : "s"} ·{" "}
+          {warnings} warning{warnings === 1 ? "" : "s"}
+        </span>
+        <span className="ml-auto text-[11px] uppercase tracking-eyebrow opacity-70">
+          {open ? "hide" : "show"}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3 max-h-72 overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left eyebrow text-ink-500 border-b border-ink-200/60">
+                <th className="py-1.5 pr-3">severity</th>
+                <th className="py-1.5 pr-3">rule</th>
+                <th className="py-1.5 pr-3">column</th>
+                <th className="py-1.5 pr-3">rows</th>
+                <th className="py-1.5 pr-3">message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.issues.map((f, i) => (
+                <FindingRow key={i} finding={f} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FindingRow({ finding: f }: { finding: QualityFinding }) {
+  const sev = (f.severity ?? "").toLowerCase();
+  const tone =
+    sev === "error"
+      ? "text-red-700"
+      : sev === "warning"
+        ? "text-amber-700"
+        : "text-ink-600";
+  return (
+    <tr className="border-b border-ink-100/60 last:border-b-0 font-mono tabular-nums">
+      <td className={`py-1.5 pr-3 uppercase text-[11px] ${tone}`}>
+        {f.severity ?? "—"}
+      </td>
+      <td className="py-1.5 pr-3 text-ink-700">{f.rule ?? "—"}</td>
+      <td className="py-1.5 pr-3 text-ink-700">{f.column ?? "—"}</td>
+      <td className="py-1.5 pr-3 text-ink-700">{f.rows_affected ?? "—"}</td>
+      <td className="py-1.5 pr-3 text-ink-800 font-sans">{f.message ?? ""}</td>
+    </tr>
   );
 }
 

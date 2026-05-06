@@ -165,6 +165,22 @@ export type LearnResponse = {
   matchkey_filter: string | null;
 };
 
+export type QualityFinding = {
+  rule?: string;
+  severity?: string;
+  column?: string | null;
+  message?: string;
+  rows_affected?: number | null;
+  confidence?: number | null;
+};
+
+export type QualityResponse = {
+  available: boolean;
+  issues: QualityFinding[];
+  summary: { errors: number; warnings: number; total: number };
+  error?: string;
+};
+
 export type DomainPack = {
   name: string;
   signals: string[];
@@ -289,6 +305,8 @@ export const api = {
   },
   domains: (): Promise<DomainPack[]> =>
     fetch("/api/v1/domains").then((r) => json<DomainPack[]>(r)),
+  quality: (): Promise<QualityResponse> =>
+    fetch("/api/v1/quality").then((r) => json<QualityResponse>(r)),
   memoryCorrections: (limit = 200): Promise<CorrectionsResponse> =>
     fetch(`/api/v1/memory/corrections?limit=${limit}`).then((r) =>
       json<CorrectionsResponse>(r),
