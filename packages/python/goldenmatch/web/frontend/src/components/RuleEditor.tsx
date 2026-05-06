@@ -1,4 +1,10 @@
-import type { PydanticError, RulesPayload, Matchkey } from "../lib/types";
+import type {
+  BlockingKey,
+  BlockingPayload,
+  Matchkey,
+  PydanticError,
+  RulesPayload,
+} from "../lib/types";
 import { SCORERS, STANDARDIZERS, TRANSFORMS } from "../lib/types";
 
 type RuleEditorProps = {
@@ -251,6 +257,252 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
       </section>
 
       <StandardizationEditor rules={rules} onChange={onChange} errors={errors} />
+      <BlockingEditor rules={rules} onChange={onChange} errors={errors} />
+    </div>
+  );
+}
+
+function BlockingEditor({
+  rules,
+  onChange,
+  errors,
+}: {
+  rules: RulesPayload;
+  onChange: (rules: RulesPayload) => void;
+  errors: PydanticError[];
+}) {
+  const blocking = rules.blocking;
+  const blockingErrors = fieldErrorsFor(errors, ["body", "blocking"]);
+
+  // Three modes the workbench actually surfaces. Anything else (ann, canopy,
+  // learned, sorted_neighborhood) round-trips read-only so we don't clobber
+  // a hand-tuned YAML the user has already invested in.
+  const mode: "auto" | "static" | "multi_pass" | "other" = (() => {
+    if (!blocking) return "auto";
+    if (blocking.strategy === "multi_pass") return "multi_pass";
+    if (blocking.strategy === "static" || blocking.strategy === undefined) {
+      return blocking.auto_suggest ? "auto" : "static";
+    }
+    return "other";
+  })();
+
+  const setMode = (m: "auto" | "static" | "multi_pass") => {
+    if (m === "auto") {
+      onChange({ ...rules, blocking: null });
+      return;
+    }
+    if (m === "static") {
+      onChange({
+        ...rules,
+        blocking: {
+          strategy: "static",
+          keys: blocking?.keys?.length ? blocking.keys : [{ fields: [""], transforms: [] }],
+          ...(blocking?.max_block_size !== undefined ? { max_block_size: blocking.max_block_size } : {}),
+        },
+      });
+      return;
+    }
+    // multi_pass
+    onChange({
+      ...rules,
+      blocking: {
+        strategy: "multi_pass",
+        // multi_pass requires keys OR passes; reuse existing keys as the
+        // first pass when transitioning so the editor isn't empty.
+        keys: blocking?.keys?.length ? blocking.keys : [{ fields: [""], transforms: [] }],
+        passes:
+          blocking?.passes?.length
+            ? blocking.passes
+            : blocking?.keys?.length
+              ? blocking.keys
+              : [{ fields: [""], transforms: [] }],
+      },
+    });
+  };
+
+  const updateBlocking = (patch: Partial<BlockingPayload>) => {
+    onChange({ ...rules, blocking: { ...(blocking ?? {}), ...patch } });
+  };
+
+  return (
+    <section>
+      <header className="flex items-baseline justify-between mb-3">
+        <p className="eyebrow">blocking</p>
+        <div className="flex gap-1.5">
+          {(["auto", "static", "multi_pass"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              disabled={mode === "other"}
+              className={
+                "font-mono text-[11px] px-2 py-1 border rounded transition-colors " +
+                (mode === m
+                  ? "border-gold-400 text-gold-600 bg-gold-100"
+                  : "border-ink-200 text-ink-500 hover:border-ink-500 hover:text-ink-700")
+              }
+              title={mode === "other" ? "advanced strategy in YAML — edit by hand" : undefined}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <p className="text-[11px] text-ink-500 mb-3 max-w-prose">
+        Blocking decides which pairs are even compared. <code className="font-mono">auto</code> lets
+        the engine pick keys per-column. <code className="font-mono">static</code> pins exact keys.
+        <code className="font-mono"> multi_pass</code> runs several blocking passes (good for catching
+        phonetic + email + substring duplicates in one config).
+      </p>
+
+      {mode === "other" && (
+        <div className="card px-4 py-3 text-sm text-ink-700">
+          Strategy <code className="font-mono text-gold-600">{blocking?.strategy}</code> isn't
+          surfaced in the workbench. Edit <code className="font-mono">goldenmatch.yml</code> directly
+          to tune it; saving here will preserve the existing block.
+        </div>
+      )}
+
+      {mode === "auto" && (
+        <div className="card px-4 py-3 text-sm text-ink-500">
+          Engine will discover blocking keys at runtime via <code className="font-mono">auto_suggest</code>.
+          Switch to <code className="font-mono">static</code> or <code className="font-mono">multi_pass</code> to pin them.
+        </div>
+      )}
+
+      {(mode === "static" || mode === "multi_pass") && (
+        <div className="space-y-3">
+          <KeyList
+            label={mode === "multi_pass" ? "keys (fallback)" : "keys"}
+            keys={blocking?.keys ?? []}
+            onChange={(keys) => updateBlocking({ keys })}
+          />
+          {mode === "multi_pass" && (
+            <KeyList
+              label="passes"
+              keys={blocking?.passes ?? []}
+              onChange={(passes) => updateBlocking({ passes })}
+            />
+          )}
+          <div className="card px-4 py-3 grid grid-cols-2 gap-4">
+            <label>
+              <p className="eyebrow mb-1">max block size</p>
+              <input
+                type="number"
+                min={1}
+                value={blocking?.max_block_size ?? 5000}
+                onChange={(e) =>
+                  updateBlocking({ max_block_size: Math.max(1, Number(e.target.value) || 5000) })
+                }
+                className="w-full"
+              />
+            </label>
+            <label className="flex items-center gap-2 self-end pb-2">
+              <input
+                type="checkbox"
+                checked={!!blocking?.skip_oversized}
+                onChange={(e) => updateBlocking({ skip_oversized: e.target.checked })}
+              />
+              <span className="text-sm text-ink-700">skip oversized blocks</span>
+            </label>
+          </div>
+        </div>
+      )}
+      <ErrorList messages={blockingErrors} />
+    </section>
+  );
+}
+
+function KeyList({
+  label,
+  keys,
+  onChange,
+}: {
+  label: string;
+  keys: BlockingKey[];
+  onChange: (keys: BlockingKey[]) => void;
+}) {
+  const updateKey = (idx: number, patch: Partial<BlockingKey>) => {
+    onChange(keys.map((k, i) => (i === idx ? { ...k, ...patch } : k)));
+  };
+  const removeKey = (idx: number) => onChange(keys.filter((_, i) => i !== idx));
+  const addKey = () => onChange([...keys, { fields: [""], transforms: [] }]);
+
+  return (
+    <div>
+      <header className="flex items-baseline justify-between mb-2">
+        <p className="eyebrow">{label} · {keys.length}</p>
+        <button
+          type="button"
+          className="btn btn-ghost !text-[11px] !uppercase tracking-eyebrow"
+          onClick={addKey}
+        >
+          + add key
+        </button>
+      </header>
+      <div className="space-y-2">
+        {keys.map((k, idx) => (
+          <article key={idx} className="card px-4 py-3">
+            <div className="flex items-baseline gap-3 mb-3">
+              <span className="num text-[11px] text-ink-400 tabular-nums">
+                {String(idx + 1).padStart(2, "0")}
+              </span>
+              <span className="eyebrow">fields</span>
+              <input
+                type="text"
+                value={k.fields.join(", ")}
+                onChange={(e) =>
+                  updateKey(idx, {
+                    fields: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="e.g. last_name, zip"
+                className="flex-1"
+              />
+              <button
+                type="button"
+                className="btn btn-ghost !text-[11px] !uppercase tracking-eyebrow hover:!text-red-700 hover:!border-red-300"
+                onClick={() => removeKey(idx)}
+              >
+                remove
+              </button>
+            </div>
+            <div>
+              <p className="eyebrow mb-2">transforms</p>
+              <div className="flex flex-wrap gap-1.5">
+                {TRANSFORMS.map((t) => {
+                  const active = k.transforms.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        updateKey(idx, {
+                          transforms: active
+                            ? k.transforms.filter((x) => x !== t)
+                            : [...k.transforms, t],
+                        })
+                      }
+                      className={
+                        "font-mono text-[11px] px-2 py-1 border rounded transition-colors " +
+                        (active
+                          ? "border-gold-400 text-gold-600 bg-gold-100"
+                          : "border-ink-200 text-ink-500 hover:border-ink-500 hover:text-ink-700")
+                      }
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }

@@ -88,9 +88,12 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
         if rules.standardization
         else None
     )
+    # Workbench default if the user hasn't pinned blocking: auto_suggest with
+    # no static keys, mirroring goldenmatch.dedupe_df's zero-config path.
+    blocking = rules.blocking or BlockingConfig(keys=[], auto_suggest=True)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
-        blocking=BlockingConfig(keys=[], auto_suggest=True),
+        blocking=blocking,
         standardization=standardization,
     )
 

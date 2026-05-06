@@ -64,6 +64,15 @@ def save_rules(request: Request) -> dict:
     if state.rules.standardization:
         existing["standardization"] = {"rules": dict(state.rules.standardization)}
 
+    # Blocking: serialize the user's BlockingConfig with defaults stripped so
+    # the YAML stays compact. Absent / cleared blocking removes the key
+    # entirely, returning to "engine picks" behavior.
+    existing.pop("blocking", None)
+    if state.rules.blocking is not None:
+        existing["blocking"] = state.rules.blocking.model_dump(
+            exclude_defaults=True, exclude_none=True,
+        )
+
     # Atomic write: tmp file + os.replace so a mid-write failure leaves the
     # original file intact (the .bak still mirrors prior state).
     tmp = state.config_path.with_suffix(".yml.tmp")

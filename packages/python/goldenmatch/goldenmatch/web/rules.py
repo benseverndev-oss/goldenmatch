@@ -25,6 +25,7 @@ def load_rules_from_yaml(config_path: Path | None) -> dict:
         "threshold": float(threshold) if threshold is not None else DEFAULT_THRESHOLD,
         "matchkeys": raw.get("matchkey") or raw.get("matchkeys") or [],
         "standardization": _extract_standardization(raw),
+        "blocking": raw.get("blocking") if isinstance(raw.get("blocking"), dict) else None,
     }
 
 

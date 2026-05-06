@@ -17,10 +17,38 @@ export type Matchkey = {
  *  → ordered list of standardizer names from STANDARDIZERS. */
 export type StandardizationRules = Record<string, string[]>;
 
+export type BlockingKey = {
+  fields: string[];
+  transforms: string[];
+};
+
+/** Slim view of the engine's BlockingConfig that the workbench surfaces.
+ *  Extra fields (ann_*, learned_*, canopy, …) round-trip via index signature
+ *  so we don't drop on save. */
+export type BlockingPayload = {
+  strategy?:
+    | "static"
+    | "adaptive"
+    | "sorted_neighborhood"
+    | "multi_pass"
+    | "ann"
+    | "canopy"
+    | "ann_pairs"
+    | "learned";
+  keys?: BlockingKey[];
+  passes?: BlockingKey[] | null;
+  max_block_size?: number;
+  skip_oversized?: boolean;
+  auto_suggest?: boolean;
+  auto_select?: boolean;
+  [extra: string]: unknown;
+};
+
 export type RulesPayload = {
   threshold: number;
   matchkeys: Matchkey[];
   standardization?: StandardizationRules | null;
+  blocking?: BlockingPayload | null;
 };
 
 export const STANDARDIZERS = [

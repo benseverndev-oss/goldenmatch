@@ -108,10 +108,16 @@ class RulesPayload(BaseModel):
     workbench keep validating without modification. Validation against
     ``VALID_STANDARDIZERS`` happens here so the UI gets a 422 with the
     exact column rather than a deeper engine error at preview time.
+
+    ``blocking`` accepts a ``BlockingConfig`` literal so the workbench can
+    pin a strategy + keys without having to invent a parallel wire shape.
+    Absent (``None``) means "let the engine pick" — the workbench's
+    historical default of ``auto_suggest=True`` with no static keys.
     """
     threshold: float = Field(ge=0.0, le=1.0)
     matchkeys: list[MatchkeyField]
     standardization: dict[str, list[str]] | None = None
+    blocking: "BlockingConfig | None" = None
 
     @model_validator(mode="after")
     def _validate_standardizers(self) -> "RulesPayload":
@@ -500,3 +506,8 @@ class GoldenMatchConfig(BaseModel):
         if self.match_settings:
             return self.match_settings.matchkeys
         return []
+
+
+# RulesPayload's `blocking` field forward-references BlockingConfig (defined
+# later in this module). Resolve the reference now that all models exist.
+RulesPayload.model_rebuild()
