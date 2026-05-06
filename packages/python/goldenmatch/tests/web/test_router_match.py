@@ -65,6 +65,39 @@ def test_match_400_on_path_traversal(client, sample_project: Path):
     assert "escapes" in resp.json()["detail"].lower()
 
 
+def test_match_400_on_target_path_traversal(client, sample_project: Path):
+    """Path traversal on the target side is guarded the same way as reference."""
+    _add_reference(sample_project)
+    _set_rules(client)
+    resp = client.post("/api/v1/match", json={
+        "reference_path": "reference.csv",
+        "target_path": "../../../etc/passwd",
+    })
+    assert resp.status_code == 400
+    assert "escapes" in resp.json()["detail"].lower()
+
+
+def test_match_auto_config_skips_rules_requirement(client, sample_project: Path):
+    """auto_config=true bypasses the "no rules to match with" 400 — the
+    engine builds its own config from the data. We don't assert success
+    on the engine path itself (the toy 3-row fixture isn't rich enough for
+    domain extraction to succeed), only that the auto_config branch is
+    reachable: the request is NOT rejected for missing rules.
+    """
+    _add_reference(sample_project)
+    client.put("/api/v1/rules", json={"threshold": 0.85, "matchkeys": []})
+    resp = client.post("/api/v1/match", json={
+        "reference_path": "reference.csv",
+        "auto_config": True,
+    })
+    # Either a 200 (engine succeeded on the auto-config) or a 400 from
+    # downstream engine processing — but NOT the rules-required 400.
+    if resp.status_code == 400:
+        assert "rules" not in resp.json()["detail"].lower(), resp.text
+    else:
+        assert resp.status_code == 200, resp.text
+
+
 def test_match_caps_returned_rows(client, sample_project: Path):
     """Result rows are capped at ROW_CAP and the response flags truncation.
 

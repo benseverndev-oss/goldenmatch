@@ -27,10 +27,12 @@ def prose_for_pair(pair: dict) -> str:
 def with_prose(pair: dict) -> dict:
     """Return a shallow copy of ``pair`` with a ``prose`` key added.
 
-    Skips re-computation when ``prose`` is already present (idempotent if
-    the same pair flows through multiple enrichment sites).
+    Skips re-computation when ``prose`` is already present AND non-empty
+    (idempotent if the same pair flows through multiple enrichment sites).
+    Empty / falsy prose is recomputed — likely a stale stub that should be
+    refreshed once the field-level breakdown is available.
     """
-    if "prose" in pair:
+    if pair.get("prose"):
         return pair
     return {**pair, "prose": prose_for_pair(pair)}
 

@@ -10,12 +10,15 @@ findings" badge instead of breaking.
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -46,8 +49,11 @@ def _execute_scan(project_root: Path, domain: str | None) -> dict[str, Any]:
         # version drift between goldencheck and goldenmatch can break this
         # without warning. Surface as a soft "scan failed" so the workbench
         # banner still renders (saying "couldn't scan") rather than 500ing.
+        # Always log so server-side audit trails capture the type even when
+        # the UI suppresses the trace.
         issues = []
         scan_error = f"{type(exc).__name__}: {exc}"
+        log.warning("quality scan failed: %s", scan_error)
 
     errors = sum(1 for i in issues if (i.get("severity") or "").lower() == "error")
     warnings = sum(1 for i in issues if (i.get("severity") or "").lower() == "warning")

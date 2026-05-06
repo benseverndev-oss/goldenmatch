@@ -12,6 +12,7 @@ label → mirror → browse → learn → next run picks up adjustments.
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -62,8 +63,10 @@ def list_corrections(
         store.close()
 
     # Newest first — corrections accumulate over time and steward review wants
-    # "what did I just decide" before historical decisions.
-    items.sort(key=lambda c: c.created_at or 0, reverse=True)
+    # "what did I just decide" before historical decisions. A None created_at
+    # sorts to the bottom; mixing datetime with int 0 would TypeError.
+    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+    items.sort(key=lambda c: c.created_at or _epoch, reverse=True)
     truncated = len(items) > limit
     return {
         "items": [_serialize_correction(c) for c in items[:limit]],

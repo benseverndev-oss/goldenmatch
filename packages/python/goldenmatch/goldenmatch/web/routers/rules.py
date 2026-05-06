@@ -46,7 +46,11 @@ def save_rules(request: Request) -> dict:
     if state.config_path.exists():
         # Snapshot prior on-disk state into .yml.bak before clobbering.
         shutil.copy2(state.config_path, state.config_path.with_suffix(".yml.bak"))
-        existing = yaml.safe_load(state.config_path.read_text(encoding="utf-8")) or {}
+        loaded = yaml.safe_load(state.config_path.read_text(encoding="utf-8"))
+        # If the file is malformed (top-level YAML list/scalar/None) treat as
+        # empty rather than erroring on `existing.pop(...)`. The .bak still
+        # holds the original content, so this isn't lossy.
+        existing = loaded if isinstance(loaded, dict) else {}
 
     # Drop both spellings before writing the canonical singular key, so a file
     # that previously held `matchkeys:` (plural) doesn't end up with both keys.

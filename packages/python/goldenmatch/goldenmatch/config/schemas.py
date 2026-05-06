@@ -79,7 +79,10 @@ class MatchkeyField(BaseModel):
     # Probabilistic-only: EM iterations cap. Mirrors MatchkeyConfig.em_iterations
     # so the workbench can tune training stability without surfacing the full
     # MatchkeyConfig shape. Read by _build_config when type == "probabilistic".
-    em_iterations: int = 20
+    # `None` (not 20) is the default so `model_dump(exclude_none=True)` doesn't
+    # leak the value into saved YAML for non-probabilistic matchkeys; the
+    # workbench → engine translation in web/preview.py coerces None → 20.
+    em_iterations: int | None = None
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> "MatchkeyField":

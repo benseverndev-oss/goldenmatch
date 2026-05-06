@@ -193,6 +193,55 @@ def test_save_rules_drops_blocking_when_cleared(client, sample_project):
     assert "blocking" not in written
 
 
+def test_save_rules_does_not_leak_em_iterations_for_non_probabilistic(
+    client, sample_project,
+):
+    """Regression guard: MatchkeyField.em_iterations defaults to None so
+    `model_dump(exclude_none=True)` doesn't write `em_iterations: 20` into
+    every saved YAML for users who never touched probabilistic matchkeys.
+    """
+    import yaml
+
+    client.put("/api/v1/rules", json={
+        "threshold": 0.85,
+        "matchkeys": [
+            {"column": "name", "scorer": "jaro_winkler",
+             "weight": 1.0, "transforms": ["lowercase"]}
+        ],
+    })
+    assert client.post("/api/v1/rules/save").status_code == 200
+    written = yaml.safe_load(
+        (sample_project / "goldenmatch.yml").read_text(encoding="utf-8"),
+    )
+    saved_mk = written["matchkey"][0]
+    assert "em_iterations" not in saved_mk, saved_mk
+    # `type` is also optional + None default, also shouldn't leak when not set.
+    assert "type" not in saved_mk, saved_mk
+
+
+def test_save_rules_recovers_from_non_dict_yaml(client, sample_project):
+    """If goldenmatch.yml is malformed (top-level list / scalar), save_rules
+    treats existing as empty rather than 500ing on `existing.pop(...)`."""
+    cfg = sample_project / "goldenmatch.yml"
+    cfg.write_text("- this is a list, not a dict\n", encoding="utf-8")
+
+    from fastapi.testclient import TestClient
+    from goldenmatch.web.app import create_app
+    from goldenmatch.web.state import AppState
+    fresh = TestClient(create_app(AppState.from_project_dir(sample_project)))
+    fresh.put("/api/v1/rules", json={
+        "threshold": 0.85,
+        "matchkeys": [
+            {"column": "name", "scorer": "exact",
+             "weight": 1.0, "transforms": []}
+        ],
+    })
+    assert fresh.post("/api/v1/rules/save").status_code == 200
+    import yaml
+    written = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert written["matchkey"][0]["scorer"] == "exact"
+
+
 def test_save_rules_drops_stale_plural_matchkeys_key(sample_project, client):
     """If the on-disk YAML used the plural `matchkeys:` spelling, the save
     path must not leave both keys side by side after rewriting the canonical

@@ -38,8 +38,10 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
     while another hits 0.4 (e.g. same email but different name).
 
     Two earlier bugs to keep in mind here:
-      1. The schema field is ``matchkeys`` (plural). ``matchkey=`` is silently
-         dropped because pydantic discards unknown kwargs.
+      1. The canonical schema field is ``matchkeys`` (plural). Passing
+         ``matchkey=...`` (singular) to ``GoldenMatchConfig`` is silently
+         ignored — pydantic v2's default ``extra="ignore"`` accepts unknown
+         kwargs and drops them, so ``get_matchkeys()`` returns ``[]``.
       2. Weighted matchkeys require a blocking config; without one the
          engine generates zero comparisons. ``BlockingConfig(keys=[],
          auto_suggest=True)`` mirrors what ``goldenmatch.dedupe_df`` does for
@@ -81,7 +83,7 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
                     name=f"prob_{col or i}",
                     type="probabilistic",
                     threshold=rules.threshold,
-                    em_iterations=int(m.em_iterations) if m.em_iterations else 20,
+                    em_iterations=int(m.em_iterations) if m.em_iterations is not None else 20,
                     fields=[
                         MatchkeyField(
                             field=m.field,

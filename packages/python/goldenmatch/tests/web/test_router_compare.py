@@ -101,6 +101,35 @@ def test_compare_400_on_different_row_coverage(client, sample_project: Path):
     assert "different row IDs" in resp.json()["detail"]
 
 
+def test_compare_overlapping_when_b_splits_clusters_across_each_other(
+    client, sample_project: Path,
+):
+    """Overlapping = a B cluster contains some but not all members of an
+    A cluster, AND those B clusters aren't strict subsets of A. Build it:
+    A = {0,1}, {2}; B = {0,2}, {1}. B's cluster {0,2} intersects A's {0,1}
+    AND A's {2} — neither subset, so cluster {0,1} → overlapping."""
+    # Re-shape the fixture so A has two members in one cluster + one alone.
+    # The default fixture already does that ({0,1} in cluster 1, {2} in 2).
+    _write_second_run(
+        sample_project,
+        "20260102_000000",
+        "row_id,cluster_id\n0,7\n1,8\n2,7\n",
+        [],
+    )
+    body = client.post(
+        "/api/v1/compare",
+        json={"run_a": "20260101_000000", "run_b": "20260102_000000"},
+    ).json()
+    s = body["summary"]
+    # Cluster {0,1} (A) → B's {0,2} and {1}: members 0 and 1 split across B
+    # clusters that include row 2 (not in A's original {0,1}). Not subsets,
+    # so overlapping. Cluster {2} (A) → B's {0,2}: subset (just {2})? No,
+    # B's {0,2} contains an element not in A's {2}, so this is "merged"
+    # from the perspective of A's {2} (single B cluster, but {0,2} ≠ {2}).
+    assert s["overlapping"] == 1
+    assert s["merged"] == 1
+
+
 def test_compare_404_on_unknown_run(client):
     resp = client.post(
         "/api/v1/compare",

@@ -35,9 +35,15 @@ def _mirror_to_memory_store(payload: LabelIn, project_root) -> None:
     cosmetic — they'd appear in the inspector tab but the next "Run for
     real" would re-discover the same false positives the user just rejected.
 
+    Caveat: ``add_correction`` writes empty ``record_hash``, so the
+    re-anchoring path falls back to row-ID presence (CLAUDE.md: "empty-hash
+    entries via the row-ID-presence path"). This works reliably for full-
+    data runs (deterministic ``__row_id__``) but NOT for sampled previews,
+    where row IDs depend on sample order. The mirror is durable for runs
+    started via "Run for real"; preview-only labels may not re-apply.
+
     Failures here log but don't block the HTTP write to labels.jsonl —
-    the steward record is the source of truth for the UI; memory is a
-    durability optimization.
+    the steward record is the source of truth for the UI.
     """
     try:
         from goldenmatch._api import add_correction
