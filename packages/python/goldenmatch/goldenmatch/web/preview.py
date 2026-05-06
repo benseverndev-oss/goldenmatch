@@ -45,7 +45,7 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
          auto_suggest=True)`` mirrors what ``goldenmatch.dedupe_df`` does for
          callers who haven't hand-tuned blocking.
     """
-    from goldenmatch.config.schemas import BlockingConfig
+    from goldenmatch.config.schemas import BlockingConfig, StandardizationConfig
 
     matchkeys: list[MatchkeyConfig] = []
     for i, m in enumerate(rules.matchkeys):
@@ -83,9 +83,15 @@ def _build_config(rules: RulesPayload) -> GoldenMatchConfig:
                 )
             )
 
+    standardization = (
+        StandardizationConfig(rules=dict(rules.standardization))
+        if rules.standardization
+        else None
+    )
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=BlockingConfig(keys=[], auto_suggest=True),
+        standardization=standardization,
     )
 
 

@@ -55,6 +55,15 @@ def save_rules(request: Request) -> dict:
     existing["threshold"] = state.rules.threshold
     existing["matchkey"] = [m.model_dump(exclude_none=True) for m in state.rules.matchkeys]
 
+    # Standardization: write the explicit `{rules: {col: [...]}}` shape so
+    # the engine's loader accepts it without relying on the shorthand
+    # normalizer. None / empty drops the block entirely rather than writing
+    # `standardization: null`, which the loader treats as a no-op anyway but
+    # leaves a confusing key in the file.
+    existing.pop("standardization", None)
+    if state.rules.standardization:
+        existing["standardization"] = {"rules": dict(state.rules.standardization)}
+
     # Atomic write: tmp file + os.replace so a mid-write failure leaves the
     # original file intact (the .bak still mirrors prior state).
     tmp = state.config_path.with_suffix(".yml.tmp")

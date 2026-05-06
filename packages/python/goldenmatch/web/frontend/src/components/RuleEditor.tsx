@@ -1,5 +1,5 @@
 import type { PydanticError, RulesPayload, Matchkey } from "../lib/types";
-import { SCORERS, TRANSFORMS } from "../lib/types";
+import { SCORERS, STANDARDIZERS, TRANSFORMS } from "../lib/types";
 
 type RuleEditorProps = {
   rules: RulesPayload;
@@ -249,6 +249,137 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
           })}
         </div>
       </section>
+
+      <StandardizationEditor rules={rules} onChange={onChange} errors={errors} />
     </div>
+  );
+}
+
+function StandardizationEditor({
+  rules,
+  onChange,
+  errors,
+}: {
+  rules: RulesPayload;
+  onChange: (rules: RulesPayload) => void;
+  errors: PydanticError[];
+}) {
+  const std = rules.standardization ?? {};
+  const entries = Object.entries(std);
+  const stdErrors = fieldErrorsFor(errors, ["body", "standardization"]);
+
+  const setEntries = (next: [string, string[]][]) => {
+    const obj: Record<string, string[]> = {};
+    for (const [col, names] of next) {
+      // Drop empty rows on serialize so the payload stays clean.
+      if (col.trim()) obj[col] = names;
+    }
+    onChange({
+      ...rules,
+      standardization: Object.keys(obj).length ? obj : null,
+    });
+  };
+
+  const updateColumn = (idx: number, column: string) => {
+    const next = entries.map(([c, n], i): [string, string[]] =>
+      i === idx ? [column, n] : [c, n],
+    );
+    setEntries(next);
+  };
+
+  const toggleStandardizer = (idx: number, name: string) => {
+    const next = entries.map(([c, n], i): [string, string[]] => {
+      if (i !== idx) return [c, n];
+      return [c, n.includes(name) ? n.filter((x) => x !== name) : [...n, name]];
+    });
+    setEntries(next);
+  };
+
+  const removeRow = (idx: number) => {
+    setEntries(entries.filter((_, i) => i !== idx));
+  };
+
+  const addRow = () => {
+    setEntries([...entries, ["", []]]);
+  };
+
+  return (
+    <section>
+      <header className="flex items-baseline justify-between mb-3">
+        <p className="eyebrow">standardization · {entries.length}</p>
+        <button
+          type="button"
+          className="btn btn-ghost !text-[11px] !uppercase tracking-eyebrow"
+          onClick={addRow}
+        >
+          + add column
+        </button>
+      </header>
+
+      <p className="text-[11px] text-ink-500 mb-3 max-w-prose">
+        Run before matchkey scoring. Useful for normalizing variants that the
+        scorer would otherwise see as different — e.g. <code className="font-mono">name_proper</code> on a name column collapses
+        ALL CAPS / mixed case before string similarity runs.
+      </p>
+
+      <div className="space-y-3">
+        {entries.length === 0 && (
+          <div className="card px-4 py-6 text-center text-sm text-ink-400">
+            No standardizers configured. Click <span className="text-ink-600">+ add column</span> to start.
+          </div>
+        )}
+
+        {entries.map(([column, names], idx) => (
+          <article key={idx} className="card px-4 py-4 space-y-3">
+            <div className="flex items-baseline gap-3">
+              <span className="num text-[11px] text-ink-400 tabular-nums">
+                {String(idx + 1).padStart(2, "0")}
+              </span>
+              <span className="eyebrow">column</span>
+              <input
+                type="text"
+                value={column}
+                onChange={(e) => updateColumn(idx, e.target.value)}
+                placeholder="e.g. name"
+                className="flex-1 max-w-xs"
+              />
+              <button
+                type="button"
+                className="ml-auto btn btn-ghost !text-[11px] !uppercase tracking-eyebrow hover:!text-red-700 hover:!border-red-300"
+                onClick={() => removeRow(idx)}
+              >
+                remove
+              </button>
+            </div>
+
+            <div>
+              <p className="eyebrow mb-2">standardizers · applied in order</p>
+              <div className="flex flex-wrap gap-1.5">
+                {STANDARDIZERS.map((s) => {
+                  const active = names.includes(s);
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => toggleStandardizer(idx, s)}
+                      className={
+                        "font-mono text-[11px] px-2 py-1 border rounded transition-colors " +
+                        (active
+                          ? "border-gold-400 text-gold-600 bg-gold-100"
+                          : "border-ink-200 text-ink-500 hover:border-ink-500 hover:text-ink-700")
+                      }
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <ErrorList messages={stdErrors} />
+    </section>
   );
 }

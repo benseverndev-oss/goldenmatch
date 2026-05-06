@@ -13,7 +13,22 @@ export type Matchkey = {
   transforms: string[];
 };
 
-export type RulesPayload = { threshold: number; matchkeys: Matchkey[] };
+/** Mirrors goldenmatch.config.schemas.StandardizationConfig.rules — column
+ *  → ordered list of standardizer names from STANDARDIZERS. */
+export type StandardizationRules = Record<string, string[]>;
+
+export type RulesPayload = {
+  threshold: number;
+  matchkeys: Matchkey[];
+  standardization?: StandardizationRules | null;
+};
+
+export const STANDARDIZERS = [
+  "email", "name_proper", "name_upper", "name_lower",
+  "phone", "zip5", "address", "state", "strip", "trim_whitespace",
+] as const;
+
+export type Standardizer = (typeof STANDARDIZERS)[number];
 
 export type Project = {
   project_root: string;

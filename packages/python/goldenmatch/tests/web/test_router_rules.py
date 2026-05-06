@@ -43,6 +43,77 @@ def test_save_rules_writes_yaml_and_backup(client, sample_project):
     assert "0.85" in bak  # backup keeps old threshold
 
 
+def test_get_rules_seeds_standardization_from_yaml(client, sample_project):
+    """Standardization in the on-disk YAML round-trips through GET /rules.
+
+    Loader accepts the shorthand shape; we expose it back in the canonical
+    column-keyed dict.
+    """
+    import yaml
+
+    cfg = sample_project / "goldenmatch.yml"
+    raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    raw["standardization"] = {"name": ["name_proper", "strip"]}
+    cfg.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    from fastapi.testclient import TestClient
+    from goldenmatch.web.app import create_app
+    from goldenmatch.web.state import AppState
+    fresh = TestClient(create_app(AppState.from_project_dir(sample_project)))
+    body = fresh.get("/api/v1/rules").json()
+    assert body["standardization"] == {"name": ["name_proper", "strip"]}
+
+
+def test_put_rules_rejects_invalid_standardizer(client):
+    resp = client.put("/api/v1/rules", json={
+        "threshold": 0.85,
+        "matchkeys": [
+            {"column": "name", "scorer": "exact", "weight": 1.0, "transforms": []}
+        ],
+        "standardization": {"name": ["not_a_real_standardizer"]},
+    })
+    assert resp.status_code == 422
+    body = resp.json()
+    assert any("not_a_real_standardizer" in e.get("msg", "") for e in body["detail"])
+
+
+def test_save_rules_writes_standardization_block(client, sample_project):
+    import yaml
+    client.put("/api/v1/rules", json={
+        "threshold": 0.85,
+        "matchkeys": [
+            {"column": "name", "scorer": "exact", "weight": 1.0, "transforms": []}
+        ],
+        "standardization": {"name": ["name_proper"]},
+    })
+    assert client.post("/api/v1/rules/save").status_code == 200
+    written = yaml.safe_load((sample_project / "goldenmatch.yml").read_text(encoding="utf-8"))
+    assert written["standardization"] == {"rules": {"name": ["name_proper"]}}
+
+
+def test_save_rules_drops_standardization_when_cleared(client, sample_project):
+    import yaml
+    cfg = sample_project / "goldenmatch.yml"
+    raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    raw["standardization"] = {"name": ["name_proper"]}
+    cfg.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    from fastapi.testclient import TestClient
+    from goldenmatch.web.app import create_app
+    from goldenmatch.web.state import AppState
+    fresh = TestClient(create_app(AppState.from_project_dir(sample_project)))
+    fresh.put("/api/v1/rules", json={
+        "threshold": 0.85,
+        "matchkeys": [
+            {"column": "name", "scorer": "exact", "weight": 1.0, "transforms": []}
+        ],
+        # standardization absent → server reads it as None → save drops the block.
+    })
+    assert fresh.post("/api/v1/rules/save").status_code == 200
+    written = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert "standardization" not in written
+
+
 def test_save_rules_drops_stale_plural_matchkeys_key(sample_project, client):
     """If the on-disk YAML used the plural `matchkeys:` spelling, the save
     path must not leave both keys side by side after rewriting the canonical

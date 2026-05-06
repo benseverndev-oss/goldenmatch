@@ -101,9 +101,29 @@ class MatchkeyField(BaseModel):
 
 
 class RulesPayload(BaseModel):
-    """Web-UI-facing wrapper around the matchkey + threshold portions of config."""
+    """Web-UI-facing wrapper around the matchkey + threshold portions of config.
+
+    ``standardization`` mirrors ``StandardizationConfig.rules`` (column →
+    list of standardizer names). Optional so existing payloads from the
+    workbench keep validating without modification. Validation against
+    ``VALID_STANDARDIZERS`` happens here so the UI gets a 422 with the
+    exact column rather than a deeper engine error at preview time.
+    """
     threshold: float = Field(ge=0.0, le=1.0)
     matchkeys: list[MatchkeyField]
+    standardization: dict[str, list[str]] | None = None
+
+    @model_validator(mode="after")
+    def _validate_standardizers(self) -> "RulesPayload":
+        if self.standardization:
+            for column, std_names in self.standardization.items():
+                for name in std_names:
+                    if name not in VALID_STANDARDIZERS:
+                        raise ValueError(
+                            f"Invalid standardizer '{name}' for column '{column}'. "
+                            f"Valid: {sorted(VALID_STANDARDIZERS)}"
+                        )
+        return self
 
 
 # ── MatchkeyConfig ──────────────────────────────────────────────────────────
