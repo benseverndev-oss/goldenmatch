@@ -3,24 +3,46 @@ import type {
   ClusterSummary,
   Project,
   RulesPayload,
+  RunManifest,
 } from "./types";
+
+export type ClustersPage = {
+  items: ClusterSummary[];
+  cursor: number | null;
+  total: number;
+};
+
+export type LabelRecord = {
+  row_id_a: number;
+  row_id_b: number;
+  label: "match" | "non_match";
+  note?: string | null;
+  ts: string;
+};
+
+export type PreviewResponse = { run_name: string };
+export type SaveRulesResponse = { saved: boolean; path: string };
 
 const json = async <T>(resp: Response): Promise<T> => {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
 };
 
+const post = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => json<T>(r));
+
 export const api = {
   project: (): Promise<Project> =>
     fetch("/api/v1/project").then((r) => json<Project>(r)),
-  run: (name: string) =>
-    fetch(`/api/v1/runs/${name}`).then((r) => json(r)),
-  clusters: (
-    name: string,
-    cursor?: number,
-  ): Promise<{ clusters: ClusterSummary[]; next_cursor: number | null }> =>
+  run: (name: string): Promise<RunManifest> =>
+    fetch(`/api/v1/runs/${name}`).then((r) => json<RunManifest>(r)),
+  clusters: (name: string, cursor?: number): Promise<ClustersPage> =>
     fetch(`/api/v1/runs/${name}/clusters?cursor=${cursor ?? 0}`).then((r) =>
-      json(r),
+      json<ClustersPage>(r),
     ),
   cluster: (name: string, id: number): Promise<ClusterDetail> =>
     fetch(`/api/v1/runs/${name}/clusters/${id}`).then((r) =>
@@ -28,24 +50,24 @@ export const api = {
     ),
   rules: (): Promise<RulesPayload> =>
     fetch("/api/v1/rules").then((r) => json<RulesPayload>(r)),
-  putRules: (body: unknown) =>
+  putRules: (body: RulesPayload): Promise<RulesPayload> =>
     fetch("/api/v1/rules", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-    }).then((r) => json(r)),
-  saveRules: () =>
-    fetch("/api/v1/rules/save", { method: "POST" }).then((r) => json(r)),
-  preview: (body: unknown) =>
-    fetch("/api/v1/preview", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => json(r)),
-  postLabel: (body: unknown) =>
-    fetch("/api/v1/labels", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => json(r)),
+    }).then((r) => json<RulesPayload>(r)),
+  saveRules: (): Promise<SaveRulesResponse> =>
+    fetch("/api/v1/rules/save", { method: "POST" }).then((r) =>
+      json<SaveRulesResponse>(r),
+    ),
+  preview: (body: {
+    rules: RulesPayload;
+    sample: { n: number; seed: number };
+  }): Promise<PreviewResponse> => post<PreviewResponse>("/api/v1/preview", body),
+  postLabel: (body: {
+    row_id_a: number;
+    row_id_b: number;
+    label: "match" | "non_match";
+    note?: string;
+  }): Promise<LabelRecord> => post<LabelRecord>("/api/v1/labels", body),
 };

@@ -4,28 +4,18 @@ import { useParams } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import { ClusterTable } from "../components/ClusterTable";
 import { ClusterDetail } from "../components/ClusterDetail";
-import type {
-  ClusterDetail as ClusterDetailT,
-  ClusterSummary,
-} from "../lib/types";
-
-type ClustersPage = {
-  items: ClusterSummary[];
-  cursor: number | null;
-  total: number;
-};
 
 export function Inspector() {
   const { name } = useParams({ strict: false }) as { name: string };
   const [selected, setSelected] = useState<number | undefined>(undefined);
 
-  const summaries = useQuery<ClustersPage>({
+  const summaries = useQuery({
     queryKey: ["clusters", name],
-    queryFn: () => api.clusters(name) as unknown as Promise<ClustersPage>,
+    queryFn: () => api.clusters(name),
   });
-  const detail = useQuery<ClusterDetailT>({
+  const detail = useQuery({
     queryKey: ["cluster", name, selected],
-    queryFn: () => api.cluster(name, selected!) as Promise<ClusterDetailT>,
+    queryFn: () => api.cluster(name, selected!),
     enabled: selected != null,
   });
 
