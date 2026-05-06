@@ -47,6 +47,8 @@ jobs:
               - 'packages/python/infermap/**'
             python_goldensuite_mcp:
               - 'packages/python/goldensuite-mcp/**'
+            python_goldencheck_types:
+              - 'packages/python/goldencheck-types/**'
             typescript:
               - 'packages/typescript/**'
               - 'package.json'
@@ -76,14 +78,15 @@ jobs:
           set -euo pipefail
           PKGS=()
           if [ "$ALL" = "true" ]; then
-            PKGS=(goldenmatch goldencheck goldenflow goldenpipe infermap goldensuite-mcp)
+            PKGS=(goldenmatch goldencheck goldencheck-types goldenflow goldenpipe infermap goldensuite-mcp)
           else
-            [ "${{ steps.filter.outputs.python_goldenmatch }}" = "true" ]      && PKGS+=(goldenmatch)
-            [ "${{ steps.filter.outputs.python_goldencheck }}" = "true" ]      && PKGS+=(goldencheck)
-            [ "${{ steps.filter.outputs.python_goldenflow }}" = "true" ]       && PKGS+=(goldenflow)
-            [ "${{ steps.filter.outputs.python_goldenpipe }}" = "true" ]       && PKGS+=(goldenpipe)
-            [ "${{ steps.filter.outputs.python_infermap }}" = "true" ]         && PKGS+=(infermap)
-            [ "${{ steps.filter.outputs.python_goldensuite_mcp }}" = "true" ]  && PKGS+=(goldensuite-mcp)
+            [ "${{ steps.filter.outputs.python_goldenmatch }}" = "true" ]       && PKGS+=(goldenmatch)
+            [ "${{ steps.filter.outputs.python_goldencheck }}" = "true" ]       && PKGS+=(goldencheck)
+            [ "${{ steps.filter.outputs.python_goldencheck_types }}" = "true" ] && PKGS+=(goldencheck-types)
+            [ "${{ steps.filter.outputs.python_goldenflow }}" = "true" ]        && PKGS+=(goldenflow)
+            [ "${{ steps.filter.outputs.python_goldenpipe }}" = "true" ]        && PKGS+=(goldenpipe)
+            [ "${{ steps.filter.outputs.python_infermap }}" = "true" ]          && PKGS+=(infermap)
+            [ "${{ steps.filter.outputs.python_goldensuite_mcp }}" = "true" ]   && PKGS+=(goldensuite-mcp)
           fi
           if [ ${#PKGS[@]} -eq 0 ]; then
             echo "pkgs=[]" >> "$GITHUB_OUTPUT"
