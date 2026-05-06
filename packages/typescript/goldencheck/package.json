@@ -16,12 +16,12 @@
   "author": "Ben Severn (https://bensevern.dev)",
   "repository": {
     "type": "git",
-    "url": "https://github.com/benzsevern/goldencheck.git",
-    "directory": "packages/goldencheck-js"
+    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "directory": "packages/typescript/goldencheck"
   },
-  "homepage": "https://benzsevern.github.io/goldencheck/",
+  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/goldencheck",
   "bugs": {
-    "url": "https://github.com/benzsevern/goldencheck/issues"
+    "url": "https://github.com/benzsevern/goldenmatch/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",
