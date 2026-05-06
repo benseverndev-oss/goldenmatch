@@ -46,6 +46,9 @@ export type Pair = {
   score: number;
   cluster_id: number;
   fields: FieldBreakdown[];
+  /** One-line template explanation (server-side, zero LLM cost). Absent for
+   *  ground-truth-only stub pairs in the evaluation FN list. */
+  prose?: string;
 };
 
 export type ClusterDetail = {

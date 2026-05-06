@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from goldenmatch.core.evaluate import evaluate_pairs
 from goldenmatch.web import runs as runs_mod
 from goldenmatch.web.labels import read_labels_dedup
+from goldenmatch.web.pair_prose import with_prose
 
 router = APIRouter(prefix="/api/v1/runs")
 
@@ -89,7 +90,7 @@ def run_evaluation(run_name: str, request: Request) -> dict:
             p = pair_lookup.get(k)
             if p is None:
                 # Ground-truth-only pair — no lineage record. Render a stub
-                # so the UI can still surface it.
+                # so the UI can still surface it. No prose: nothing to explain.
                 out.append({
                     "row_id_a": k[0],
                     "row_id_b": k[1],
@@ -98,7 +99,7 @@ def run_evaluation(run_name: str, request: Request) -> dict:
                     "cluster_id": None,
                 })
             else:
-                out.append(p)
+                out.append(with_prose(p))
         out.sort(key=lambda r: (r.get("score") or 0.0), reverse=True)
         return out
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from goldenmatch.web import runs as runs_mod
 from goldenmatch.web.labels import read_labels_dedup
+from goldenmatch.web.pair_prose import enrich_pairs, with_prose
 
 router = APIRouter(prefix="/api/v1/runs")
 
@@ -53,9 +54,11 @@ def clusters(
 def detail(run_name: str, cluster_id: int, request: Request):
     ref = _find_run(request.app.state.app_state, run_name)
     try:
-        return runs_mod.cluster_detail(ref, cluster_id)
+        detail = runs_mod.cluster_detail(ref, cluster_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"cluster {cluster_id} not in run")
+    detail["pairs"] = enrich_pairs(detail.get("pairs", []))
+    return detail
 
 
 @router.get("/{run_name}/rows/{row_id}")
@@ -106,7 +109,7 @@ def run_review(
         key = (a, b) if a <= b else (b, a)
         if key in labeled_keys:
             continue
-        out.append(p)
+        out.append(with_prose(p))
         if len(out) >= limit:
             break
 

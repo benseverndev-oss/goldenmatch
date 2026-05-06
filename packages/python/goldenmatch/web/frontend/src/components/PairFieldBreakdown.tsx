@@ -65,6 +65,13 @@ export function PairFieldBreakdown({ pair }: Props) {
         </span>
       </header>
 
+      {/* prose summary — one-line explanation of why this pair matched */}
+      {pair.prose && (
+        <p className="px-4 py-2 text-[13px] text-ink-700 italic border-b border-ink-200/60">
+          {pair.prose}
+        </p>
+      )}
+
       {/* field-by-field diff */}
       {open && (
         <ul className="divide-y divide-ink-200/60">
