@@ -172,15 +172,101 @@ See [packages/goldenmatch-js/examples/](packages/goldenmatch-js/examples/) for 1
 
 ```bash
 pip install 'goldenmatch[web]'
-goldenmatch serve-ui              # current directory as project
-goldenmatch serve-ui ./my-runs    # specific runs/project dir
+goldenmatch serve-ui                                         # current dir as project
+goldenmatch serve-ui packages/python/goldenmatch/web/demo    # bundled demo project
 ```
 
-Localhost browser UI for browsing runs, editing matchkey rules with live
-pydantic validation, running sampled previews, and labeling pairs. Single
-process, no auth — for the dev-on-their-laptop case. Use `--dev` and run
-`pnpm -C packages/python/goldenmatch/web/frontend dev` alongside if you're
-hacking on the frontend.
+Localhost browser workbench. Editorial gold-on-cream design, single process,
+no auth — for the dev-on-a-laptop case.
+
+![Project page](docs/screenshots/web/web-home.png)
+
+It surfaces the engine's full capability stack as 7 pages:
+
+| Page | What you can do |
+|---|---|
+| **Project** (`/`) | Browse saved runs, auto-run from `data.csv`, see GoldenCheck quality findings as a banner |
+| **Workbench** (`/workbench`) | Edit matchkey rules + threshold + standardization + blocking + per-row matchkey type (exact / weighted / probabilistic). Run sampled previews. Save back to `goldenmatch.yml` (atomic write + `.bak`). Auto-configure with optional domain-pack pinning (electronics, people, healthcare, …). |
+| **Inspector** (`/runs/{name}`) | Cluster table + member view + pair drilldown with field-level diff + one-line NL prose explanation per pair. Label pairs (mirrors to Learning Memory). Unmerge a record or shatter a cluster. F1/precision/recall vs your labels. |
+| **Match** (`/match`) | One-to-many target × reference workflow. Different output shape from dedupe — flat `target → reference` mapping + unmatched targets. |
+| **Compare** (`/compare`) | Run A vs B classification (CCMS): unchanged / merged / partitioned / overlapping per cluster, plus the Talburt-Wang Index over the whole transformation. No labels needed. |
+| **Sensitivity** (`/sensitivity`) | Sweep one parameter (threshold / blocking max-block-size / per-matchkey threshold), CCMS-compare each point against the baseline. Cluster-count sparkline + most-stable-value report. |
+| **Memory** (`/memory`) | Browse the Learning Memory store (corrections + sources + trust + matchkey). Trigger a learn pass. Stored adjustments table. |
+
+### Workbench
+
+![Workbench](docs/screenshots/web/web-workbench.png)
+
+Every change validates through the same Pydantic schema the engine uses; 422
+errors render inline next to the offending field. Save writes the canonical
+shape (`matchkey:` singular, the shape `goldenmatch dedupe` reads) and snapshots
+the prior file to `goldenmatch.yml.bak` before clobbering.
+
+### Inspector
+
+![Inspector](docs/screenshots/web/web-inspector.png)
+
+Each pair card shows a one-line template explanation above the field
+breakdown — derived from the field scores via
+`goldenmatch.core.explain.explain_pair_nl`, no LLM cost. Labels mirror to
+the same `MemoryStore` the pipeline reads on every run via
+`apply_corrections`, so the loop closes end-to-end.
+
+### Compare runs (CCMS)
+
+![Compare](docs/screenshots/web/web-compare.png)
+
+CCMS classification (Talburt et al., arXiv:2601.02824v1, 2026): every
+cluster from run A is mapped to one of unchanged / merged / partitioned /
+overlapping with respect to run B. Mismatched row-ID coverage between the
+two runs surfaces as a clean 400 with the engine's diagnostic intact.
+
+### Sensitivity sweep
+
+![Sensitivity](docs/screenshots/web/web-sensitivity.png)
+
+Re-runs the pipeline at each sweep value on a sampled slice (default 500
+rows, configurable per-request up to 10K), CCMS-compares each point against
+the baseline, and surfaces the most-stable value alongside the per-point
+TWI / cluster-count / case breakdown.
+
+### Match (target × reference)
+
+![Match](docs/screenshots/web/web-match.png)
+
+Different output shape from dedupe — match has no clusters. Both target
+and reference paths are resolved under the project root with a path-traversal
+guard. Auto-configure mode skips the workbench rules and profiles both
+files together.
+
+### Memory store browser
+
+![Memory](docs/screenshots/web/web-memory.png)
+
+Every label you save in the inspector mirrors into the engine's Learning
+Memory store. The pipeline reads it on every run, so the next dedupe picks
+up the decision automatically. Threshold tuning fires at ≥10 corrections;
+weight learning at ≥50.
+
+### Build / dev
+
+```bash
+# Backend tests
+pytest packages/python/goldenmatch/tests/web -q     # 100+ tests
+
+# Frontend build (TypeScript + Vite)
+pnpm -C packages/python/goldenmatch/web/frontend install
+pnpm -C packages/python/goldenmatch/web/frontend test
+pnpm -C packages/python/goldenmatch/web/frontend build
+
+# Stage build output into the wheel-included static dir
+python packages/python/goldenmatch/scripts/build_web.py
+```
+
+Frontend source lives **outside** the package at `web/frontend/`; build
+output lands **inside** the package at `goldenmatch/web/static/` (gitignored
+except for a `.gitkeep`, included in the wheel via `force-include`). The
+dev server (`pnpm dev`) proxies `/api/v1/*` to `http://localhost:5050`.
 
 ## Installation
 
@@ -195,6 +281,7 @@ pip install goldenmatch[databricks]       # + Databricks connector
 pip install goldenmatch[salesforce]       # + Salesforce connector
 pip install goldenmatch[duckdb]           # + DuckDB backend
 pip install goldenmatch[quality]          # + GoldenCheck data quality scanning
+pip install goldenmatch[web]              # + localhost browser workbench (FastAPI + React)
 
 # Run the setup wizard to configure GPU, API keys, and database:
 goldenmatch setup
