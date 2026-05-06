@@ -19,11 +19,28 @@ function fieldErrorsFor(
 function ErrorList({ messages }: { messages: string[] }) {
   if (messages.length === 0) return null;
   return (
-    <div className="text-xs text-red-600 mt-1">
+    <div className="text-[11px] text-red-400 font-mono mt-1 space-y-0.5">
       {messages.map((m, i) => (
-        <div key={i}>{m}</div>
+        <div key={i}>↳ {m}</div>
       ))}
     </div>
+  );
+}
+
+/** A range input that paints its filled portion gold using --val (0-100). */
+function GoldRange(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const v = Number(props.value ?? 0);
+  const min = Number(props.min ?? 0);
+  const max = Number(props.max ?? 1);
+  const pct = Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+  return (
+    <input
+      type="range"
+      {...props}
+      style={
+        { ...(props.style ?? {}), ["--val" as string]: `${pct}%` } as React.CSSProperties
+      }
+    />
   );
 }
 
@@ -65,12 +82,12 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
   const thresholdErrors = fieldErrorsFor(errors, ["body", "threshold"]);
 
   return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-semibold mb-1">Threshold</label>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
+    <div className="space-y-6">
+      {/* Threshold */}
+      <section>
+        <p className="eyebrow mb-2">threshold</p>
+        <div className="flex items-center gap-4">
+          <GoldRange
             min={0}
             max={1}
             step={0.01}
@@ -90,89 +107,77 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
             onChange={(e) =>
               onChange({ ...rules, threshold: Number(e.target.value) })
             }
-            className="w-20 border rounded px-2 py-1 text-sm"
+            className="w-20 text-center"
             aria-label="threshold number"
           />
-          <span className="text-xs text-gray-500 w-12">
-            {rules.threshold.toFixed(2)}
-          </span>
         </div>
         <ErrorList messages={thresholdErrors} />
-      </div>
+      </section>
 
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold">Matchkeys</h3>
+      {/* Matchkeys */}
+      <section>
+        <header className="flex items-baseline justify-between mb-3">
+          <p className="eyebrow">matchkeys · {rules.matchkeys.length}</p>
           <button
             type="button"
-            className="px-2 py-1 text-xs border rounded hover:bg-gray-50"
+            className="btn btn-ghost !text-[11px] !uppercase tracking-eyebrow"
             onClick={addMatchkey}
           >
-            + Add matchkey
+            + add matchkey
           </button>
-        </div>
+        </header>
 
         <div className="space-y-3">
+          {rules.matchkeys.length === 0 && (
+            <div className="card px-4 py-6 text-center text-sm text-ink-500">
+              No matchkeys yet. Click <span className="text-ink-300">+ add matchkey</span> to start.
+            </div>
+          )}
+
           {rules.matchkeys.map((mk, idx) => {
-            const rowErrors = fieldErrorsFor(errors, [
-              "body",
-              "matchkeys",
-              idx,
-            ]);
-            const colErrors = fieldErrorsFor(errors, [
-              "body",
-              "matchkeys",
-              idx,
-              "column",
-            ]);
-            const scorerErrors = fieldErrorsFor(errors, [
-              "body",
-              "matchkeys",
-              idx,
-              "scorer",
-            ]);
-            const weightErrors = fieldErrorsFor(errors, [
-              "body",
-              "matchkeys",
-              idx,
-              "weight",
-            ]);
-            const transformErrors = fieldErrorsFor(errors, [
-              "body",
-              "matchkeys",
-              idx,
-              "transforms",
-            ]);
+            const rowErrors = fieldErrorsFor(errors, ["body", "matchkeys", idx]);
+            const colErrors = fieldErrorsFor(errors, ["body", "matchkeys", idx, "column"]);
+            const scorerErrors = fieldErrorsFor(errors, ["body", "matchkeys", idx, "scorer"]);
+            const weightErrors = fieldErrorsFor(errors, ["body", "matchkeys", idx, "weight"]);
+            const transformErrors = fieldErrorsFor(errors, ["body", "matchkeys", idx, "transforms"]);
             return (
-              <div
-                key={idx}
-                className="border rounded p-3 space-y-2 bg-white"
-              >
-                <div className="grid grid-cols-12 gap-2 items-start">
-                  <div className="col-span-3">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      Column
-                    </label>
+              <article key={idx} className="card px-4 py-4 space-y-4">
+                <div className="flex items-baseline gap-3">
+                  <span className="num text-[11px] text-ink-500 tabular-nums">
+                    {String(idx + 1).padStart(2, "0")}
+                  </span>
+                  <span className="eyebrow">matchkey</span>
+                  <button
+                    type="button"
+                    className="ml-auto btn btn-ghost !text-[11px] !uppercase tracking-eyebrow hover:!text-red-400 hover:!border-red-900/50"
+                    onClick={() => removeMatchkey(idx)}
+                  >
+                    remove
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-12 gap-x-4 gap-y-3">
+                  <div className="col-span-4">
+                    <p className="eyebrow mb-1">column</p>
                     <input
                       type="text"
                       value={mk.column}
                       onChange={(e) =>
                         updateMatchkey(idx, { column: e.target.value })
                       }
-                      className="w-full border rounded px-2 py-1 text-sm"
+                      placeholder="e.g. name"
+                      className="w-full"
                     />
                     <ErrorList messages={colErrors} />
                   </div>
                   <div className="col-span-3">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      Scorer
-                    </label>
+                    <p className="eyebrow mb-1">scorer</p>
                     <select
                       value={mk.scorer}
                       onChange={(e) =>
                         updateMatchkey(idx, { scorer: e.target.value })
                       }
-                      className="w-full border rounded px-2 py-1 text-sm"
+                      className="w-full"
                     >
                       {SCORERS.map((s) => (
                         <option key={s} value={s}>
@@ -183,20 +188,15 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                     <ErrorList messages={scorerErrors} />
                   </div>
                   <div className="col-span-5">
-                    <label className="block text-xs text-gray-500 mb-1">
-                      Weight
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
+                    <p className="eyebrow mb-1">weight</p>
+                    <div className="flex items-center gap-3">
+                      <GoldRange
                         min={0}
                         max={1}
                         step={0.01}
                         value={mk.weight}
                         onChange={(e) =>
-                          updateMatchkey(idx, {
-                            weight: Number(e.target.value),
-                          })
+                          updateMatchkey(idx, { weight: Number(e.target.value) })
                         }
                         className="flex-1"
                         aria-label={`weight range ${idx}`}
@@ -208,67 +208,47 @@ export function RuleEditor({ rules, onChange, errors }: RuleEditorProps) {
                         step={0.01}
                         value={mk.weight}
                         onChange={(e) =>
-                          updateMatchkey(idx, {
-                            weight: Number(e.target.value),
-                          })
+                          updateMatchkey(idx, { weight: Number(e.target.value) })
                         }
-                        className="w-16 border rounded px-2 py-1 text-sm"
+                        className="w-16 text-center"
                         aria-label={`weight number ${idx}`}
                       />
                     </div>
                     <ErrorList messages={weightErrors} />
                   </div>
-                  <div className="col-span-1 flex justify-end pt-5">
-                    <button
-                      type="button"
-                      className="px-2 py-1 text-xs border rounded text-red-600 hover:bg-red-50"
-                      onClick={() => removeMatchkey(idx)}
-                    >
-                      Remove
-                    </button>
-                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">
-                    Transforms
-                  </label>
-                  {mk.transforms.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-2">
-                      {mk.transforms.map((t) => (
-                        <span
+                  <p className="eyebrow mb-2">transforms</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TRANSFORMS.map((t) => {
+                      const active = mk.transforms.includes(t);
+                      return (
+                        <button
                           key={t}
-                          className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded"
+                          type="button"
+                          onClick={() => toggleTransform(idx, t)}
+                          className={
+                            "font-mono text-[11px] px-2 py-1 border rounded transition-colors " +
+                            (active
+                              ? "border-gold-400 text-gold-200 bg-gold-700/20"
+                              : "border-ink-700 text-ink-400 hover:border-ink-500 hover:text-ink-200")
+                          }
                         >
                           {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="grid grid-cols-3 gap-1">
-                    {TRANSFORMS.map((t) => (
-                      <label
-                        key={t}
-                        className="flex items-center gap-1 text-xs"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={mk.transforms.includes(t)}
-                          onChange={() => toggleTransform(idx, t)}
-                        />
-                        {t}
-                      </label>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                   <ErrorList messages={transformErrors} />
                 </div>
 
                 <ErrorList messages={rowErrors} />
-              </div>
+              </article>
             );
           })}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

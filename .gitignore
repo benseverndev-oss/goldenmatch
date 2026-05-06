@@ -14,6 +14,10 @@ __pycache__/
 packages/python/goldenmatch/goldenmatch/web/static/*
 !packages/python/goldenmatch/goldenmatch/web/static/.gitkeep
 
+# Playwright runtime artifacts
+packages/python/goldenmatch/web/frontend/test-results/
+packages/python/goldenmatch/web/frontend/playwright-report/
+
 # Generated outputs
 *_lineage.json
 *_clusters.csv

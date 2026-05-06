@@ -29,8 +29,12 @@ const wrap = (ui: ReactNode) => (
 
 describe("PairFieldBreakdown", () => {
   it("renders score and pair ids", () => {
-    render(wrap(<PairFieldBreakdown pair={fixturePair} />));
-    expect(screen.getByText(/0 → 1/)).toBeInTheDocument();
+    const { container } = render(wrap(<PairFieldBreakdown pair={fixturePair} />));
+    // Header renders #0 → #1 across separate spans so search the
+    // collapsed text content rather than insisting on a single text node.
+    const header = container.querySelector("header");
+    expect(header?.textContent).toMatch(/#0/);
+    expect(header?.textContent).toMatch(/#1/);
     expect(screen.getAllByText(/0\.900/).length).toBeGreaterThan(0);
     expect(screen.getByText(/jaro_winkler/)).toBeInTheDocument();
     expect(screen.getByText(/Sony DSC-T77 Silver/)).toBeInTheDocument();

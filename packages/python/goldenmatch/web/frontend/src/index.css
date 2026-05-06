@@ -1,3 +1,175 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-ink-100 font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    background-image:
+      radial-gradient(
+        ellipse at top left,
+        rgba(212, 160, 23, 0.06) 0%,
+        transparent 45%
+      ),
+      radial-gradient(
+        ellipse at bottom right,
+        rgba(212, 160, 23, 0.04) 0%,
+        transparent 50%
+      );
+    background-attachment: fixed;
+    position: relative;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.83  0 0 0 0 0.63  0 0 0 0 0.09  0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  ::selection {
+    background-color: rgba(212, 160, 23, 0.35);
+    color: #fff;
+  }
+
+  input[type="text"],
+  input[type="number"],
+  select {
+    @apply font-mono text-sm bg-ink-800 border border-ink-700 text-ink-100 rounded px-2 py-1
+           focus:outline-none focus:border-gold-300 focus:shadow-gold transition;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 2px;
+    background: linear-gradient(
+      to right,
+      #d4a017 var(--val, 0%),
+      #3a362d var(--val, 0%)
+    );
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: -6px;
+    height: 14px;
+    width: 14px;
+    border-radius: 9999px;
+    background: #d4a017;
+    box-shadow: 0 0 0 3px rgba(212, 160, 23, 0.18);
+    transition: transform 80ms ease;
+  }
+  input[type="range"]:active::-webkit-slider-thumb {
+    transform: scale(1.15);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 2px;
+    background: #3a362d;
+  }
+  input[type="range"]::-moz-range-progress {
+    height: 2px;
+    background: #d4a017;
+  }
+  input[type="range"]::-moz-range-thumb {
+    height: 14px;
+    width: 14px;
+    border: 0;
+    border-radius: 9999px;
+    background: #d4a017;
+    box-shadow: 0 0 0 3px rgba(212, 160, 23, 0.18);
+  }
+
+  input[type="checkbox"] {
+    accent-color: #d4a017;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #26241f;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #3a362d;
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  .frame-strip {
+    background-color: #d4a017;
+  }
+
+  .eyebrow {
+    @apply text-[10px] uppercase tracking-eyebrow text-ink-400 font-medium;
+  }
+
+  .display {
+    @apply font-display tracking-tightish;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 text-sm font-sans
+           border border-ink-700 text-ink-100 bg-ink-800/60
+           hover:border-gold-400 hover:text-gold-200
+           focus:outline-none focus:border-gold-400 focus:shadow-gold
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors duration-150;
+  }
+  .btn-primary {
+    @apply border-gold-400 text-ink-900 bg-gold
+           hover:bg-gold-300 hover:text-ink-950 hover:border-gold-300;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-300
+           hover:text-gold-200 hover:border-ink-700;
+  }
+
+  .card {
+    @apply border border-ink-700 bg-ink-800/40 backdrop-blur-sm;
+  }
+
+  .gold-edge {
+    box-shadow: inset 3px 0 0 0 #d4a017;
+  }
+}
+
+@layer utilities {
+  .num {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+}
