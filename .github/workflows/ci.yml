@@ -6,12 +6,102 @@ on:
   pull_request:
 
 jobs:
+  # Path-filter: compute which areas of the monorepo changed so downstream
+  # jobs only run when relevant. Doc-only PRs (README, wiki references,
+  # screenshots) skip every code job. Workflow-file changes force every job
+  # to re-run so the workflow itself stays under test.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      # JSON array of changed Python package names (empty if none).
+      python_pkgs: ${{ steps.set_python.outputs.pkgs }}
+      typescript: ${{ steps.filter.outputs.typescript }}
+      web_ui_e2e: ${{ steps.filter.outputs.web }}
+      rust: ${{ steps.filter.outputs.rust }}
+      dbt: ${{ steps.filter.outputs.dbt }}
+      action: ${{ steps.filter.outputs.action }}
+      ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `filters` runs against the diff between the PR head and base
+          # (or push head and the previous push for branch builds). Per-path
+          # globs are unanchored — `'foo/**'` matches at any depth.
+          filters: |
+            ci_workflow:
+              - '.github/workflows/ci.yml'
+            python_root:
+              - 'pyproject.toml'
+              - 'uv.lock'
+            python_goldenmatch:
+              - 'packages/python/goldenmatch/**'
+            python_goldencheck:
+              - 'packages/python/goldencheck/**'
+            python_goldenflow:
+              - 'packages/python/goldenflow/**'
+            python_goldenpipe:
+              - 'packages/python/goldenpipe/**'
+            python_infermap:
+              - 'packages/python/infermap/**'
+            python_goldensuite_mcp:
+              - 'packages/python/goldensuite-mcp/**'
+            typescript:
+              - 'packages/typescript/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+            web:
+              - 'packages/python/goldenmatch/web/**'
+              - 'packages/python/goldenmatch/goldenmatch/web/**'
+              - 'packages/python/goldenmatch/scripts/build_web.py'
+              - 'packages/python/goldenmatch/pyproject.toml'
+              - 'pnpm-lock.yaml'
+            rust:
+              - 'packages/rust/**'
+            dbt:
+              - 'packages/dbt/**'
+            action:
+              - 'packages/actions/**'
+      # Build the python matrix dynamically: only include packages whose code
+      # actually changed. A workflow-file or root-pyproject change expands to
+      # all packages so dependency-resolution changes can't slip through.
+      - id: set_python
+        shell: bash
+        env:
+          ALL: ${{ steps.filter.outputs.ci_workflow == 'true' || steps.filter.outputs.python_root == 'true' }}
+        run: |
+          set -euo pipefail
+          PKGS=()
+          if [ "$ALL" = "true" ]; then
+            PKGS=(goldenmatch goldencheck goldenflow goldenpipe infermap goldensuite-mcp)
+          else
+            [ "${{ steps.filter.outputs.python_goldenmatch }}" = "true" ]      && PKGS+=(goldenmatch)
+            [ "${{ steps.filter.outputs.python_goldencheck }}" = "true" ]      && PKGS+=(goldencheck)
+            [ "${{ steps.filter.outputs.python_goldenflow }}" = "true" ]       && PKGS+=(goldenflow)
+            [ "${{ steps.filter.outputs.python_goldenpipe }}" = "true" ]       && PKGS+=(goldenpipe)
+            [ "${{ steps.filter.outputs.python_infermap }}" = "true" ]         && PKGS+=(infermap)
+            [ "${{ steps.filter.outputs.python_goldensuite_mcp }}" = "true" ]  && PKGS+=(goldensuite-mcp)
+          fi
+          if [ ${#PKGS[@]} -eq 0 ]; then
+            echo "pkgs=[]" >> "$GITHUB_OUTPUT"
+          else
+            json="["
+            for p in "${PKGS[@]}"; do json+="\"$p\","; done
+            json="${json%,}]"
+            echo "pkgs=$json" >> "$GITHUB_OUTPUT"
+          fi
+
   python:
+    needs: changes
+    if: needs.changes.outputs.python_pkgs != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pkg: [goldenmatch, goldencheck, goldenflow, goldenpipe, infermap, goldensuite-mcp]
+        pkg: ${{ fromJSON(needs.changes.outputs.python_pkgs) }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -62,6 +152,8 @@ jobs:
           uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread $IGNORE
 
   typescript:
+    needs: changes
+    if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +179,8 @@ jobs:
       - run: pnpm turbo run build test typecheck
 
   web_ui_e2e:
+    needs: changes
+    if: needs.changes.outputs.web_ui_e2e == 'true' || needs.changes.outputs.ci_workflow == 'true'
     # End-to-end smoke for the goldenmatch[web] UI: builds the frontend,
     # boots the FastAPI backend against the pytest fixture project, runs
     # one Playwright scenario covering home → run → cluster.
@@ -128,6 +222,8 @@ jobs:
           if-no-files-found: ignore
 
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -142,6 +238,8 @@ jobs:
       - run: cargo clippy --workspace -- -D warnings
 
   dbt:
+    needs: changes
+    if: needs.changes.outputs.dbt == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +251,8 @@ jobs:
       - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
 
   action:
+    needs: changes
+    if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

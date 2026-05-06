@@ -64,12 +64,22 @@ npm install goldenmatch
 
 Each tool stands alone, but they compose into a single pipeline:
 
-```
-   raw rows  ──► InferMap ──► GoldenCheck ──► GoldenFlow ──► GoldenMatch ──► golden records
-   (any        (schema      (profile +      (standardize    (dedupe +
-    schema)     mapping)     validate)       transform)      cluster +
-                                                              survivorship)
-                                            └──── GoldenPipe orchestrates ────┘
+```mermaid
+flowchart LR
+    raw["raw rows<br/><sub>(any schema)</sub>"]
+    golden["golden records"]
+
+    subgraph orchestration ["GoldenPipe orchestrates"]
+        direction LR
+        infermap["InferMap<br/><sub>schema mapping</sub>"]
+        goldencheck["GoldenCheck<br/><sub>profile + validate</sub>"]
+        goldenflow["GoldenFlow<br/><sub>standardize + transform</sub>"]
+        goldenmatch["GoldenMatch<br/><sub>dedupe + cluster + survivorship</sub>"]
+        infermap --> goldencheck --> goldenflow --> goldenmatch
+    end
+
+    raw --> infermap
+    goldenmatch --> golden
 ```
 
 - **Zero-config defaults that admit when they're unsure** — every step has a self-verifying preflight + postflight; results carry an inspectable report instead of failing silently.
