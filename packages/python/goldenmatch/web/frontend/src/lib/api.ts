@@ -72,6 +72,29 @@ export type CompareResponse = {
   cases: ClusterCase[];
 };
 
+export type SensitivityPoint = {
+  value: number;
+  cluster_count_a: number;
+  cluster_count_b: number;
+  unchanged: number;
+  merged: number;
+  partitioned: number;
+  overlapping: number;
+  twi: number;
+};
+
+export type SensitivityResponse = {
+  field: string;
+  baseline_value: number | null;
+  sample_n: number;
+  stability: {
+    best_value: number;
+    best_unchanged_pct: number;
+    points: { value: number; unchanged: number; merged: number; partitioned: number; overlapping: number; twi: number }[];
+  };
+  points: SensitivityPoint[];
+};
+
 export type EvaluationResponse = {
   summary: EvaluationSummary;
   tp: import("./types").Pair[];
@@ -193,6 +216,14 @@ export const api = {
     fetch("/api/v1/settings").then((r) => json<SettingsResponse>(r)),
   compare: (run_a: string, run_b: string): Promise<CompareResponse> =>
     post<CompareResponse>("/api/v1/compare", { run_a, run_b }),
+  sensitivity: (body: {
+    field: string;
+    start: number;
+    stop: number;
+    step: number;
+    sample_n: number;
+    rules?: RulesPayload;
+  }): Promise<SensitivityResponse> => post<SensitivityResponse>("/api/v1/sensitivity", body),
   putSettings: (body: WebSettings): Promise<SettingsResponse> =>
     fetch("/api/v1/settings", {
       method: "PUT",
