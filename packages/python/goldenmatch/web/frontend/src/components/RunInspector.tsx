@@ -3,11 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { ClusterTable } from "./ClusterTable";
 import { ClusterDetail } from "./ClusterDetail";
+import { RunEvaluation } from "./RunEvaluation";
 import { RunLabels } from "./RunLabels";
 import { RunReview } from "./RunReview";
 import { SplitPane } from "./SplitPane";
 
-type LeftTab = "clusters" | "review" | "labels";
+type LeftTab = "clusters" | "review" | "labels" | "evaluation";
 
 export function RunInspector({ name }: { name: string }) {
   const [selected, setSelected] = useState<number | undefined>(undefined);
@@ -34,6 +35,9 @@ export function RunInspector({ name }: { name: string }) {
         </TabButton>
         <TabButton active={tab === "labels"} onClick={() => setTab("labels")}>
           labeled
+        </TabButton>
+        <TabButton active={tab === "evaluation"} onClick={() => setTab("evaluation")}>
+          eval
         </TabButton>
       </nav>
       <div className="flex-1 min-h-0">
@@ -66,6 +70,7 @@ export function RunInspector({ name }: { name: string }) {
             }}
           />
         )}
+        {tab === "evaluation" && <RunEvaluation runName={name} />}
       </div>
     </div>
   );

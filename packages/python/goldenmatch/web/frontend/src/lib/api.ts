@@ -27,6 +27,28 @@ export type RunLabelRecord = LabelRecord & { cluster_id: number };
 export type PreviewResponse = { run_name: string };
 export type SaveRulesResponse = { saved: boolean; path: string };
 
+export type EvaluationSummary = {
+  tp: number;
+  fp: number;
+  fn: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  predicted_pairs: number;
+  ground_truth_pairs: number;
+  label_counts: { positives: number; negatives: number; total: number };
+  confirmed_fp: number;
+  unlabeled_fp: number;
+};
+
+export type EvaluationResponse = {
+  summary: EvaluationSummary;
+  tp: import("./types").Pair[];
+  fp_confirmed: import("./types").Pair[];
+  fp_unlabeled: import("./types").Pair[];
+  fn: import("./types").Pair[];
+};
+
 export type RunResponse = {
   run_name: string;
   row_count: number;
@@ -103,6 +125,10 @@ export const api = {
   runLabels: (name: string): Promise<RunLabelRecord[]> =>
     fetch(`/api/v1/runs/${name}/labels`).then((r) =>
       json<RunLabelRecord[]>(r),
+    ),
+  runEvaluation: (name: string): Promise<EvaluationResponse> =>
+    fetch(`/api/v1/runs/${name}/evaluation`).then((r) =>
+      json<EvaluationResponse>(r),
     ),
   runReview: (
     name: string,
