@@ -122,7 +122,7 @@ def _ui_safe_field(f: MatchkeyField) -> dict[str, Any]:
     }
 
 
-def _autoconfigure(project_root: Path) -> RulesPayload:
+def _autoconfigure(project_root: Path, domain: str | None = None) -> RulesPayload:
     src = project_root / "data.csv"
     if not src.exists():
         raise FileNotFoundError("source CSV (data.csv) not found in project root")
@@ -131,7 +131,15 @@ def _autoconfigure(project_root: Path) -> RulesPayload:
     # `allow_remote_assets=False` keeps the autoconfig offline-safe — preflight
     # demotes embedding scorers to fuzzy alternatives. The workbench's UI also
     # rejects embedding scorers in /preview, so this matches.
-    cfg = auto_configure_df(df, allow_remote_assets=False)
+    domain_config = None
+    if domain:
+        from goldenmatch.config.schemas import DomainConfig
+        # Manual domain override skips auto-detection and pins the domain name
+        # for downstream extract_features / preflight wiring. Rulebook lookup
+        # happens lazily inside the engine — passing an unknown name yields a
+        # synthesized profile with no extractions, but doesn't error.
+        domain_config = DomainConfig(enabled=True, mode=domain)
+    cfg = auto_configure_df(df, allow_remote_assets=False, domain_config=domain_config)
     fields, threshold = _pick_matchkeys(cfg.get_matchkeys())
 
     # The workbench rejects matchkeys whose scorer is in {embedding, record_embedding}
@@ -159,12 +167,12 @@ def _autoconfigure(project_root: Path) -> RulesPayload:
 
 
 @router.post("/autoconfig")
-async def autoconfigure(request: Request) -> dict:
+async def autoconfigure(request: Request, domain: str | None = None) -> dict:
     state = request.app.state.app_state
     loop = asyncio.get_running_loop()
     try:
         payload = await asyncio.wait_for(
-            loop.run_in_executor(_executor, lambda: _autoconfigure(state.project_root)),
+            loop.run_in_executor(_executor, lambda: _autoconfigure(state.project_root, domain=domain)),
             timeout=AUTOCONFIG_TIMEOUT_S,
         )
     except asyncio.TimeoutError:

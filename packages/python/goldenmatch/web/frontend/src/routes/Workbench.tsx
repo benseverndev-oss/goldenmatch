@@ -69,8 +69,11 @@ export function Workbench() {
     },
   });
 
+  const domainsQ = useQuery({ queryKey: ["domains"], queryFn: api.domains });
+  const [domain, setDomain] = useState<string>("");
+
   const autoConfigMutation = useMutation({
-    mutationFn: () => api.autoconfig(),
+    mutationFn: () => api.autoconfig(domain || undefined),
     onSuccess: (resp) => {
       setErrors([]);
       setRules(resp);
@@ -156,10 +159,28 @@ export function Workbench() {
           ) : (
             <span className="flex items-center gap-2">
               <span aria-hidden className="text-gold-500">✦</span>
-              Auto-configure from data
+              {domain ? `Auto-configure (${domain})` : "Auto-configure from data"}
             </span>
           )}
         </button>
+        {domainsQ.data && domainsQ.data.length > 0 && (
+          <label className="flex items-center gap-2 text-[12px] text-ink-600">
+            <span className="eyebrow">domain</span>
+            <select
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              className="bg-paper-50 border border-ink-200 rounded px-2 py-1 font-mono text-[12px]"
+              title="Pin a domain rulebook before auto-configuring."
+            >
+              <option value="">— auto-detect —</option>
+              {domainsQ.data.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name} ({d.signal_count}s · {d.brand_count}b)
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       <RuleEditor rules={rules} onChange={setRules} errors={errors} />

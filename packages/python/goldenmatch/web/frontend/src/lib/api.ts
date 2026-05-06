@@ -95,6 +95,14 @@ export type SensitivityResponse = {
   points: SensitivityPoint[];
 };
 
+export type DomainPack = {
+  name: string;
+  signals: string[];
+  signal_count: number;
+  brand_count: number;
+  identifier_count: number;
+};
+
 export type EvaluationResponse = {
   summary: EvaluationSummary;
   tp: import("./types").Pair[];
@@ -203,10 +211,14 @@ export const api = {
       `/api/v1/runs/${name}/review${qs ? `?${qs}` : ""}`,
     ).then((r) => json<import("./types").Pair[]>(r));
   },
-  autoconfig: (): Promise<RulesPayload> =>
-    fetch("/api/v1/autoconfig", { method: "POST" }).then((r) =>
+  autoconfig: (domain?: string): Promise<RulesPayload> => {
+    const qs = domain ? `?domain=${encodeURIComponent(domain)}` : "";
+    return fetch(`/api/v1/autoconfig${qs}`, { method: "POST" }).then((r) =>
       json<RulesPayload>(r),
-    ),
+    );
+  },
+  domains: (): Promise<DomainPack[]> =>
+    fetch("/api/v1/domains").then((r) => json<DomainPack[]>(r)),
   executeRun: (body?: {
     auto_config?: boolean;
     llm_boost?: boolean;
