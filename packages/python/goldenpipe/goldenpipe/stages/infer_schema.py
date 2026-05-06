@@ -98,25 +98,46 @@ def infer_schema_stage(ctx: PipeContext) -> StageResult:
         return StageResult(status=StageStatus.SUCCESS)
 
     explicit_domain = cfg.get("domain")
-    detected = explicit_domain or infermap.detect_domain(ctx.df)
-    fallback = detected is None
-    domain = detected or "generic"
-    if fallback:
-        log.info(
-            "infer_schema: detect_domain returned no confident match (or tied); "
-            "falling back to 'generic'. Pin a domain via stage_config['domain'] "
-            "to suppress this fallback.",
-        )
+    if explicit_domain:
+        domain = explicit_domain
+        detect_score = 1.0  # caller pinned it explicitly
+        detect_evidence: dict = {"detect_reason": "explicit"}
+    else:
+        result = infermap.detect_domain_detailed(ctx.df)
+        if result.domain is not None:
+            domain = result.domain
+            detect_score = result.score
+            detect_evidence = {
+                "detect_reason": result.reason,
+                "detect_score": result.score,
+                "runner_up": result.runner_up,
+                "runner_up_score": result.runner_up_score,
+            }
+        else:
+            domain = "generic"
+            detect_score = 0.0
+            detect_evidence = {
+                "detect_reason": result.reason,
+                "detect_score": result.score,
+                "runner_up": result.runner_up,
+                "runner_up_score": result.runner_up_score,
+                "fallback": True,
+            }
+            log.info(
+                "infer_schema: detect_domain reason=%s (score=%.2f, runner_up=%s@%.2f); "
+                "falling back to 'generic'. Pin via stage_config['domain'] to suppress.",
+                result.reason, result.score, result.runner_up, result.runner_up_score,
+            )
 
     pack = load_domain(domain)
     target = infermap.DomainPackTarget(pack)
-    result = infermap.map(ctx.df, target, soft=True)
-    inferred = _result_to_inferred_schema(result, domain)
-    if fallback:
-        # Mark the fallback path so downstream consumers can distinguish
-        # "auto-detected with confidence" from "auto-detected by giving up".
-        # InferredSchema is frozen — replace() keeps the wire-format invariant.
-        from dataclasses import replace
-        inferred = replace(inferred, confidence=0.0)
+    map_result = infermap.map(ctx.df, target, soft=True)
+    inferred = _result_to_inferred_schema(map_result, domain)
+    # Confidence reflects detection quality (was always min() of mapping
+    # confidences before, regardless of whether detection was confident).
+    # Replace because InferredSchema is frozen.
+    from dataclasses import replace
+    inferred = replace(inferred, confidence=detect_score)
     ctx.artifacts["inferred_schema"] = inferred
+    ctx.artifacts.setdefault("infer_schema_evidence", detect_evidence)
     return StageResult(status=StageStatus.SUCCESS)

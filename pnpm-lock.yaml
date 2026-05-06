@@ -1542,8 +1542,9 @@ packages:
     engines: {node: '>=18'}
 
   goldencheck-types@file:.vendor/goldencheck-types-0.1.0.tgz:
-    resolution: {integrity: sha512-0q06U3IBnvcCeIlClxrVe0lWqAs3UTzJvNv3XS4uq6EvSnOPe8aR4rrBi40n2TpTsnN7wPMzluG4xczOmcJqgw==, tarball: file:.vendor/goldencheck-types-0.1.0.tgz}
+    resolution: {integrity: sha512-JscP1PxTyXtHDhay1RnpIp1Lg6mRPLLHi33CNUOr3BFV5Bd9pbzjQc3zOm/ifV00BkxNS2DicgNwXbvdTO9Zlg==, tarball: file:.vendor/goldencheck-types-0.1.0.tgz}
     version: 0.1.0
+    engines: {node: '>=20'}
 
   hasown@2.0.3:
     resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}

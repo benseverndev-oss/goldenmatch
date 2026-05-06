@@ -29,6 +29,20 @@ function domainsDir(): string {
   return path.resolve(here, "..", "domains");
 }
 
+// Module-scoped pack cache. Keyed on (resolved-domains-dir, pack-name) so
+// flipping GOLDENCHECK_TYPES_TEST_DIR between calls invalidates naturally
+// without callers remembering to clearCache().
+const _packCache = new Map<string, DomainPack>();
+
+/** Drop memoized domain packs.
+ *
+ *  Tests that mutate YAML files on disk after the first `loadDomain` call
+ *  must invoke this — otherwise subsequent loads return the cached
+ *  pre-mutation pack. Production code never needs this. */
+export function clearCache(): void {
+  _packCache.clear();
+}
+
 export function listDomains(): string[] {
   return fs
     .readdirSync(domainsDir())
@@ -37,7 +51,7 @@ export function listDomains(): string[] {
     .sort();
 }
 
-/** Load and shape-validate a domain pack YAML.
+/** Load and shape-validate a domain pack YAML (memoized; see `clearCache`).
  *
  * Mismatched types raise `DomainPackError` with the file path + key path
  * so the user can fix the YAML directly. Previously a misindented
@@ -45,10 +59,15 @@ export function listDomains(): string[] {
  * "loaded fine" but matched nothing at runtime.
  */
 export function loadDomain(name: string): DomainPack {
-  const filePath = path.join(domainsDir(), `${name}.yaml`);
+  const dir = domainsDir();
+  const cacheKey = `${dir}::${name}`;
+  const cached = _packCache.get(cacheKey);
+  if (cached) return cached;
+
+  const filePath = path.join(dir, `${name}.yaml`);
   if (!fs.existsSync(filePath)) {
     throw new Error(
-      `domain pack '${name}' not found in ${domainsDir()}`,
+      `domain pack '${name}' not found in ${dir}`,
     );
   }
   const parsed = yaml.load(fs.readFileSync(filePath, "utf-8")) as unknown;
@@ -116,7 +135,20 @@ export function loadDomain(name: string): DomainPack {
       }
     }
 
+    // If the YAML explicitly carries a `name:` it must match the dict
+    // key. Disagreement signals user error (typo, copy-paste).
+    if (
+      spec.name !== undefined &&
+      spec.name !== null &&
+      spec.name !== typeName
+    ) {
+      throw new DomainPackError(
+        `${filePath}: types.${typeName}.name is ${JSON.stringify(spec.name)}, ` +
+          `but it lives under key ${JSON.stringify(typeName)}. The two must agree.`,
+      );
+    }
     types[typeName] = {
+      name: typeName,
       name_hints: nameHints.map(String),
       value_signals: valueSignals,
       suppress: suppress.map(String),
@@ -124,9 +156,11 @@ export function loadDomain(name: string): DomainPack {
       ...(typeof spec.description === "string" ? { description: spec.description } : {}),
     };
   }
-  return {
+  const pack: DomainPack = {
     name,
     description: typeof raw.description === "string" ? raw.description : "",
     types,
   };
+  _packCache.set(cacheKey, pack);
+  return pack;
 }
