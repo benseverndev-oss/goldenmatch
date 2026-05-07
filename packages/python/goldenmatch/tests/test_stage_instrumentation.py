@@ -103,3 +103,30 @@ def test_scorer_emits_scoring_profile_via_dedupe_df():
     assert 0.0 <= e.scoring.dip_statistic <= 0.25
     assert 0.0 <= e.scoring.mass_above_threshold <= 1.0
     assert 0.0 <= e.scoring.mass_in_borderline <= 1.0
+
+
+def test_build_clusters_emits_cluster_profile():
+    """ClusterProfile populated after build_clusters with cluster sizes + transitivity."""
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.core.profile_emitter import profile_capture
+    from goldenmatch.core.complexity_profile import ClusterProfile
+    # Three pairs forming a triangle (transitive cluster) + one isolated pair
+    pairs = [
+        (1, 2, 0.95), (2, 3, 0.92), (1, 3, 0.90),  # cluster {1,2,3}
+        (10, 11, 0.85),                              # cluster {10,11}
+    ]
+    with profile_capture() as e:
+        clusters = build_clusters(pairs)
+    assert e.cluster is not None
+    assert isinstance(e.cluster, ClusterProfile)
+    assert e.cluster.n_clusters == 2
+    assert e.cluster.cluster_size_max == 3
+    # Transitivity over {1,2,3}: all three edges meet any reasonable threshold -> 1.0
+    assert e.cluster.transitivity_rate == pytest.approx(1.0)
+
+
+def test_build_clusters_no_emit_when_no_capture():
+    from goldenmatch.core.cluster import build_clusters
+    pairs = [(1, 2, 0.9), (2, 3, 0.85)]
+    clusters = build_clusters(pairs)  # must not raise
+    assert len(clusters) >= 1
