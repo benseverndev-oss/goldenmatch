@@ -289,6 +289,25 @@ def _render_memory_line(stats: Any) -> str:
     )
 
 
+def _signals_view(pf: "PostflightReport") -> dict:
+    """Read postflight signals as the legacy ``PostflightSignals`` dict shape.
+
+    Prefers ``controller_profile`` (typed ``ComplexityProfile``) when
+    available — calls ``to_legacy_dict()`` which maps typed sub-profiles back
+    to the legacy key set.  Falls back to ``pf.signals`` (the raw
+    ``PostflightSignals`` TypedDict) for callers that went through the
+    plain ``postflight()`` path without a controller.  Returns ``{}`` when
+    both are ``None``.
+
+    Use this helper instead of reading ``pf.signals`` directly so that
+    consumers automatically benefit from the richer typed data once the
+    controller ran.
+    """
+    if pf.controller_profile is not None:
+        return pf.controller_profile.to_legacy_dict()
+    return dict(pf.signals) if pf.signals else {}
+
+
 class ConfigValidationError(Exception):
     """Raised when preflight finds unrepairable configuration errors.
 
