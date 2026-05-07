@@ -1,0 +1,31 @@
+id,title,authors,venue,year
+ACM_001,distributed databases survey,smith jones,vldb proceedings,1995
+ACM_002,energy efficient indexing on air,tomasz imielinski,sigmod conference,1994
+ACM_003,concurrency in data warehouse systems,r taylor,vldb,2000
+ACM_004,query optimization heterogeneous databases,h garcia-molina,icde proceedings,1997
+ACM_005,semantic query processing with deductive databases,won kim,aaai proceedings,1988
+ACM_006,object oriented data models for complex objects,p atzeni,er conference,1993
+ACM_007,rule based rewriting in deductive databases,j w lloyd,jlp journal,1991
+ACM_008,transaction management multidatabase systems,r elmasri,vldb,1992
+ACM_009,extended relational data model,e f codd,acm transactions,1979
+ACM_010,integrity constraints in deductive databases,h kohler,vldb,1988
+ACM_011,schema integration federated databases,a sheth,computer science,1990
+ACM_012,data exchange theory and application,r fagin,pods symposium,2005
+ACM_013,approximate query answering using wavelets,y matias,vldb,2000
+ACM_014,cost based optimization heterogeneous sources,a levy,sigmod,1996
+ACM_015,temporal database model and language,r snodgrass,information systems,1992
+ACM_999,an unrelated reference paper about compilers,backus,acm,1960
+ACM_998,operating system design principles,dijkstra,acm,1968
+ACM_997,structured programming and program correctness,hoare,acm,1969
+ACM_996,functional programming language design,church,acm,1941
+ACM_995,formal verification methods survey,floyd,acm,1967
+ACM_994,compiler optimization techniques review,allen,acm,1970
+ACM_993,algorithm analysis and complexity theory,knuth,acm,1974
+ACM_992,data structures and algorithm design,tarjan,acm,1972
+ACM_991,network flow algorithms and applications,ford,acm,1956
+ACM_990,linear programming and operations research,dantzig,acm,1951
+ACM_989,cryptography and information security,diffie,acm,1976
+ACM_988,machine learning foundations,vapnik,acm,1995
+ACM_987,statistical learning theory overview,shalev,acm,2010
+ACM_986,information retrieval models,robertson,acm,1976
+ACM_985,natural language processing foundations,chomsky,acm,1956

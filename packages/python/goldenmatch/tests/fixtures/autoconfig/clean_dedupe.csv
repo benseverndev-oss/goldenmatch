@@ -1,0 +1,51 @@
+name,email,city
+alice smith,alice@example.com,boston
+alice smith,alice@example.com,boston
+alyce smith,alice@example.com,boston
+bob jones,bob@example.com,seattle
+bob jones,bob@example.com,seattle
+bobby jones,bob@example.com,seattle
+carol white,carol@example.com,austin
+carol white,carol@example.com,austin
+carole white,carol@example.com,austin
+david brown,david@example.com,chicago
+david brown,david@example.com,chicago
+dave brown,david@example.com,chicago
+eve davis,eve@example.com,miami
+eve davis,eve@example.com,miami
+eva davis,eve@example.com,miami
+frank miller,frank@example.com,denver
+frank miller,frank@example.com,denver
+frank miller,frank@example.com,denver
+grace wilson,grace@example.com,portland
+grace wilson,grace@example.com,portland
+henry moore,henry@example.com,phoenix
+henry moore,henry@example.com,phoenix
+henry moore,henry@example.com,phoenix
+irene taylor,irene@example.com,dallas
+irene taylor,irene@example.com,dallas
+irene taylor,irene@example.com,dallas
+james anderson,james@example.com,san francisco
+james anderson,james@example.com,san francisco
+kate thomas,kate@example.com,los angeles
+kate thomas,kate@example.com,los angeles
+liam jackson,liam@example.com,new york
+liam jackson,liam@example.com,new york
+liam jakson,liam@example.com,new york
+mary harris,mary@example.com,houston
+mary harris,mary@example.com,houston
+mary hariss,mary@example.com,houston
+noah martin,noah@example.com,san diego
+noah martin,noah@example.com,san diego
+olivia garcia,olivia@example.com,atlanta
+olivia garcia,olivia@example.com,atlanta
+peter martinez,peter@example.com,minneapolis
+peter martinez,peter@example.com,minneapolis
+quinn robinson,quinn@example.com,detroit
+quinn robinson,quinn@example.com,detroit
+rachel clark,rachel@example.com,nashville
+rachel clark,rachel@example.com,nashville
+sam rodriguez,sam@example.com,las vegas
+sam rodriguez,sam@example.com,las vegas
+tina lewis,tina@example.com,charlotte
+tina lewis,tina@example.com,charlotte
