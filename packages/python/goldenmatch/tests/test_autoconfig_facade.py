@@ -111,3 +111,27 @@ def test_legacy_auto_configure_v0_still_callable():
     })
     cfg = _legacy_auto_configure_v0(df)
     assert isinstance(cfg, GoldenMatchConfig)
+
+
+# ============================================================
+# Fix 3 — kwargs threaded through to _legacy_auto_configure_v0
+# ============================================================
+
+def test_kwargs_threaded_to_v0():
+    """auto_configure_df forwards strict/llm_auto kwargs into _legacy_auto_configure_v0."""
+    from unittest.mock import patch as _patch
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import ComplexityProfile
+
+    df = pl.DataFrame({"name": ["a", "b"] * 5, "city": ["x", "y"] * 5})
+    with _patch("goldenmatch.core.autoconfig._legacy_auto_configure_v0") as mock_v0:
+        mock_v0.return_value = GoldenMatchConfig(matchkeys=[])
+        goldenmatch.auto_configure_df(df, strict=True, llm_auto=True)
+    mock_v0.assert_called()
+    call_kwargs = mock_v0.call_args.kwargs
+    assert call_kwargs.get("strict") is True, (
+        f"expected strict=True to be forwarded; got kwargs={call_kwargs}"
+    )
+    assert call_kwargs.get("llm_auto") is True, (
+        f"expected llm_auto=True to be forwarded; got kwargs={call_kwargs}"
+    )

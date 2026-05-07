@@ -354,6 +354,7 @@ def dedupe_df(
     from goldenmatch.core.pipeline import run_dedupe_df
     import goldenmatch._api as _self_api
 
+    _used_controller = False
     if isinstance(config, str):
         config = load_config(config)
     elif config is None:
@@ -371,7 +372,9 @@ def dedupe_df(
                 df,
                 llm_provider=_auto_config_provider,
                 llm_auto=llm_auto,
+                _skip_finalize=True,
             )
+            _used_controller = True
 
     # Apply overrides uniformly regardless of config source
     if backend and hasattr(config, "backend"):
@@ -388,6 +391,25 @@ def dedupe_df(
     )
 
     _mem = result.get("memory_stats")
+    pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
+
+    # Fix 1: Wire controller profile + history onto PostflightReport.
+    # When the zero-config path ran the controller, stash sample_profile and
+    # history so callers can inspect health verdicts, errors, and drift.
+    # NOTE: full_vs_sample_drift is not set here because _skip_finalize=True
+    # skips the controller's _finalize call. Task 6.1 will compute drift here
+    # once pf.signals is a typed ComplexityProfile (currently PostflightSignals
+    # TypedDict). For now, drift is left unset on this path.
+    if _used_controller:
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        _ctrl_state = _LAST_CONTROLLER_RUN.get()
+        if _ctrl_state is not None:
+            _sample_profile, _history = _ctrl_state
+            if pf is None:
+                pf = PostflightReport()
+            pf.controller_profile = _sample_profile
+            pf.controller_history = _history
+
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -396,9 +418,7 @@ def dedupe_df(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=config,
-        postflight_report=_attach_memory_to_postflight(
-            result.get("postflight_report"), _mem
-        ),
+        postflight_report=pf,
         memory_stats=_mem,
     )
 
@@ -443,6 +463,7 @@ def match_df(
     from goldenmatch.core.pipeline import run_match_df
     import goldenmatch._api as _self_api
 
+    _used_controller = False
     if isinstance(config, str):
         config = load_config(config)
     elif config is None:
@@ -455,7 +476,10 @@ def match_df(
             # Pass reference= so auto-config sees both column sets and emits
             # matchkeys/blocking that apply uniformly across the join.
             # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
-            config = _self_api.auto_configure_df(target, reference=reference)
+            config = _self_api.auto_configure_df(
+                target, reference=reference, _skip_finalize=True,
+            )
+            _used_controller = True
 
     if backend and hasattr(config, "backend"):
         config.backend = backend
@@ -463,13 +487,26 @@ def match_df(
     result = run_match_df(target, reference, config, auto_config=False)
 
     _mem = result.get("memory_stats")
+    pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
+
+    # Fix 1: Wire controller profile + history onto PostflightReport (match path).
+    # See dedupe_df for full commentary. Drift unset when _skip_finalize=True
+    # (Task 6.1 deferred).
+    if _used_controller:
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        _ctrl_state = _LAST_CONTROLLER_RUN.get()
+        if _ctrl_state is not None:
+            _sample_profile, _history = _ctrl_state
+            if pf is None:
+                pf = PostflightReport()
+            pf.controller_profile = _sample_profile
+            pf.controller_history = _history
+
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
-        postflight_report=_attach_memory_to_postflight(
-            result.get("postflight_report"), _mem
-        ),
+        postflight_report=pf,
         memory_stats=_mem,
     )
 

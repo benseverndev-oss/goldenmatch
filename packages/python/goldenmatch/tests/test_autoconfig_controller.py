@@ -360,3 +360,76 @@ def test_finalize_records_zero_drift_when_full_matches_sample(small_df):
     # Drift recorded via history.full_vs_sample_drift
     assert history.full_vs_sample_drift is not None
     assert history.full_vs_sample_drift == pytest.approx(0.0, abs=0.001)
+
+
+# ============================================================
+# Fix 2 — KeyboardInterrupt propagates
+# ============================================================
+
+def test_keyboard_interrupt_propagates(small_df):
+    """Ctrl-C inside a pipeline iteration must bubble out, not be swallowed."""
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=1),
+    )
+
+    def interrupting(sample, ref, config):
+        raise KeyboardInterrupt
+
+    controller._run_pipeline_sample = interrupting  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        controller.run(small_df)
+
+
+# ============================================================
+# Fix 4 — skip_finalize skips _finalize call
+# ============================================================
+
+def test_skip_finalize_does_not_call_finalize(small_df):
+    """When skip_finalize=True and a healthy iteration exists, _finalize is NOT called."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    # _finalize is already a MagicMock from _make_controller_with_mocked_runner
+    config, profile, history = controller.run(small_df, skip_finalize=True)
+    controller._finalize.assert_not_called()
+    assert isinstance(config, GoldenMatchConfig)
+    # Profile returned is the sample profile (not full-data); drift not computed.
+    assert history.full_vs_sample_drift is None
+
+
+def test_skip_finalize_false_still_calls_finalize(small_df):
+    """Default (skip_finalize=False) still calls _finalize as before."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    controller.run(small_df, skip_finalize=False)
+    controller._finalize.assert_called_once()
+
+
+# ============================================================
+# Fix 6 — Warning logged on all-RED fallback
+# ============================================================
+
+import logging as _logging
+
+
+def test_run_returns_v0_red_when_all_iterations_crash_logs_warning(small_df, caplog):
+    """Every iteration crashes → returns v0 with RED AND logs a warning."""
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(max_iterations=2, sample_skip_below=1),
+    )
+
+    def always_crashes(sample, ref, config):
+        raise RuntimeError("never works")
+
+    controller._run_pipeline_sample = always_crashes  # type: ignore[method-assign]
+    controller._finalize = MagicMock()
+
+    with caplog.at_level(_logging.WARNING, logger="goldenmatch.core.autoconfig_controller"):
+        config, profile, history = controller.run(small_df)
+
+    assert profile.health() == HealthVerdict.RED
+    assert any(
+        "could not produce a healthy config" in rec.message
+        for rec in caplog.records
+    ), f"Expected warning not found; records: {[r.message for r in caplog.records]}"

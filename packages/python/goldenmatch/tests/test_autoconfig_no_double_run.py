@@ -132,3 +132,81 @@ def test_match_df_zero_config_invokes_auto_configure_df_with_reference():
     # Either positional or keyword
     if "reference" in call.kwargs:
         assert call.kwargs["reference"] is not None
+
+
+# ============================================================
+# Fix 1 — PostflightReport wired with controller_profile/history
+# ============================================================
+
+def test_dedupe_df_zero_config_postflight_has_controller_fields():
+    """Zero-config dedupe_df should populate controller_profile and
+    controller_history on the returned postflight_report."""
+    import goldenmatch as gm
+    from goldenmatch.core.complexity_profile import ComplexityProfile
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    df = pl.DataFrame({
+        "name": ["alice", "alyce", "bob", "bobby"] * 4,
+        "city": ["nyc", "la", "sf", "nyc"] * 4,
+    })
+    with patch("goldenmatch._api.auto_configure_df") as mock_auto:
+        mock_auto.return_value = GoldenMatchConfig(matchkeys=[])
+        # Seed the ContextVar with a fake (profile, history) so the _api wiring
+        # can pick it up without running the real controller.
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        fake_profile = ComplexityProfile()
+        fake_history = RunHistory()
+        _LAST_CONTROLLER_RUN.set((fake_profile, fake_history))
+
+        with patch("goldenmatch.core.pipeline.run_dedupe_df") as mock_pipeline:
+            mock_pipeline.return_value = _trivial_dedupe_pipeline_return(df)
+            result = gm.dedupe_df(df)
+
+    pf = result.postflight_report
+    assert pf is not None, "postflight_report should not be None in zero-config path"
+    assert pf.controller_profile is fake_profile, (
+        "controller_profile should be the profile from _LAST_CONTROLLER_RUN"
+    )
+    assert pf.controller_history is fake_history, (
+        "controller_history should be the history from _LAST_CONTROLLER_RUN"
+    )
+
+
+# ============================================================
+# Fix 4 — zero-config path passes _skip_finalize=True
+# ============================================================
+
+def test_dedupe_df_zero_config_passes_skip_finalize_true():
+    """The zero-config path in dedupe_df must pass _skip_finalize=True to
+    auto_configure_df so the controller does not run a full-data _finalize
+    before the caller's own full pipeline run."""
+    import goldenmatch as gm
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    df = pl.DataFrame({"name": ["alice", "bob"] * 4, "city": ["x", "y"] * 4})
+    with patch("goldenmatch._api.auto_configure_df") as mock_auto:
+        mock_auto.return_value = GoldenMatchConfig(matchkeys=[])
+        with patch("goldenmatch.core.pipeline.run_dedupe_df") as mock_pipeline:
+            mock_pipeline.return_value = _trivial_dedupe_pipeline_return(df)
+            gm.dedupe_df(df)
+    call_kwargs = mock_auto.call_args.kwargs
+    assert call_kwargs.get("_skip_finalize") is True, (
+        f"Expected _skip_finalize=True to be forwarded; got kwargs={call_kwargs}"
+    )
+
+
+def test_zero_config_pipeline_called_auto_config_false():
+    """After skip_finalize fix, run_dedupe_df must always be called with
+    auto_config=False (never True) in the zero-config path."""
+    import goldenmatch as gm
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    df = pl.DataFrame({"name": ["alice", "bob"] * 4, "city": ["x", "y"] * 4})
+    with patch("goldenmatch._api.auto_configure_df") as mock_auto:
+        mock_auto.return_value = GoldenMatchConfig(matchkeys=[])
+        with patch("goldenmatch.core.pipeline.run_dedupe_df") as mock_pipeline:
+            mock_pipeline.return_value = _trivial_dedupe_pipeline_return(df)
+            gm.dedupe_df(df)
+    for call in mock_pipeline.call_args_list:
+        assert call.kwargs.get("auto_config", False) is False

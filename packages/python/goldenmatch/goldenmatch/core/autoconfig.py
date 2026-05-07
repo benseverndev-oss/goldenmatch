@@ -1236,6 +1236,7 @@ def auto_configure_df(
     allow_remote_assets: bool = False,
     *,
     reference: "pl.DataFrame | pl.LazyFrame | None" = None,
+    _skip_finalize: bool = False,
 ) -> "GoldenMatchConfig":
     """Public auto-configuration entry point (controller-backed).
 
@@ -1289,7 +1290,19 @@ def auto_configure_df(
         policy=HeuristicRefitPolicy(),
         budget=ControllerBudget(),
     )
-    config, profile, history = controller.run(df, reference=reference)
+    v0_kw = {
+        "llm_provider": llm_provider,
+        "domain_config": domain_config,
+        "llm_auto": llm_auto,
+        "strict": strict,
+        "allow_remote_assets": allow_remote_assets,
+    }
+    config, profile, history = controller.run(
+        df,
+        reference=reference,
+        v0_kwargs=v0_kw,
+        skip_finalize=_skip_finalize,
+    )
     _LAST_CONTROLLER_RUN.set((profile, history))
     return config
 

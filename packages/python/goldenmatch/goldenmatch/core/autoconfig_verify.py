@@ -217,6 +217,11 @@ class PostflightReport:
     --llm-auto"). ``memory_stats`` is set by the result-build layer when the
     Learning Memory hook produced a ``CorrectionStats`` for this run; the
     string render surfaces it as a single ``Memory: ...`` line.
+
+    ``controller_profile`` and ``controller_history`` are populated by the
+    zero-config path in ``_api.dedupe_df`` / ``_api.match_df`` when the
+    AutoConfigController ran. They are ``None`` for hand-written configs.
+    Kept loosely typed to avoid import cycles with autoconfig modules.
     """
 
     signals: "PostflightSignals" = field(default_factory=_empty_signals)
@@ -226,6 +231,12 @@ class PostflightReport:
     # to avoid an import cycle (corrections.py imports nothing from this
     # module today, but we don't want to invert that).
     memory_stats: Any = None
+    # Set by zero-config API callers after the controller runs.
+    # ComplexityProfile | None — profile from the full-data finalize run (or
+    # the sample profile when _skip_finalize=True is used from _api).
+    controller_profile: Any = None
+    # RunHistory | None — full iteration history including errors and drift.
+    controller_history: Any = None
 
     def __str__(self) -> str:
         """Human-readable rendering used by CLI/postflight summaries.

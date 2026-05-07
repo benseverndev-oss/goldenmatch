@@ -15,6 +15,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any
 import hashlib
+import logging
 import time
 import traceback
 import polars as pl
@@ -26,6 +27,8 @@ from goldenmatch.core.complexity_profile import (
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
 
+
+logger = logging.getLogger(__name__)
 
 # Sentinel: forces RED via DataProfile.health() when n_rows == 0.
 _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
@@ -72,6 +75,8 @@ class AutoConfigController:
         df: pl.DataFrame,
         *,
         reference: pl.DataFrame | None = None,
+        v0_kwargs: dict | None = None,
+        skip_finalize: bool = False,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -101,12 +106,12 @@ class AutoConfigController:
 
         # Single non-empty column or single row → return v0 yellow, skip loop
         if df.height == 1 or len(user_cols) == 1:
-            v0 = self._initial_config(df, reference=reference)
+            v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)
             yellow_profile = self._yellow_sentinel_profile(df.height, user_cols)
             return v0, yellow_profile, RunHistory()
 
         # Iteration loop (Task 4.2)
-        config_v0 = self._initial_config(df, reference=reference)
+        config_v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)
         sample, sample_ref = self._take_sample(df, reference=reference)
         history = RunHistory()
         config_n = config_v0
@@ -133,7 +138,7 @@ class AutoConfigController:
                     ))
                 except KeyboardInterrupt:
                     history.elapsed = timedelta(seconds=time.time() - start)
-                    break
+                    raise
                 except Exception as exc:
                     from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
                     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
@@ -170,8 +175,30 @@ class AutoConfigController:
         # Pick committed config
         best_entry = history.cheapest_healthy()
         if best_entry is None:
-            # No healthy iterations → return v0 + RED sentinel
+            # No healthy iterations → return v0 + RED sentinel.
+            # Fix 6: emit a warning so operators can diagnose.
+            n_crashed = len(history.errors)
+            n_red = sum(
+                1 for e in history.entries
+                if e.profile.health() == HealthVerdict.RED and e.error is None
+            )
+            logger.warning(
+                "auto-config controller could not produce a healthy config; "
+                "committing v0. Iterations: %d total, %d crashed, %d RED. "
+                "Inspect _LAST_CONTROLLER_RUN.get() for diagnostics.",
+                history.iteration, n_crashed, n_red,
+            )
             return config_v0, _RED_PROFILE, history
+
+        # Fix 4: When skip_finalize=True (called from _api zero-config path),
+        # skip the full-data _finalize run. The caller will execute the real
+        # full pipeline immediately after, so running it here would be a double
+        # full run. Drift detection is deferred to Task 6.1 when the caller can
+        # compare pf.signals (a typed ComplexityProfile) against best_entry.profile.
+        if skip_finalize:
+            # Return the best sample profile in lieu of a full-data profile.
+            # history.full_vs_sample_drift is left None (drift not computed).
+            return best_entry.config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
         profile_full = self._finalize(best_entry.config, df, reference)
@@ -185,9 +212,17 @@ class AutoConfigController:
 
     # ---- Internals --------------------------------------------------------
     def _initial_config(
-        self, df: pl.DataFrame, *, reference: pl.DataFrame | None
+        self,
+        df: pl.DataFrame,
+        *,
+        reference: pl.DataFrame | None,
+        v0_kwargs: dict | None = None,
     ) -> GoldenMatchConfig:
         """Run the legacy heuristic to produce config v0.
+
+        ``v0_kwargs`` are threaded through to ``_legacy_auto_configure_v0`` so
+        that callers of ``auto_configure_df(strict=True, llm_auto=True, ...)``
+        have their kwargs honoured in the initial heuristic pass.
 
         Today's heuristic lives in core/autoconfig.py::auto_configure_df.
         Task 5.1 will refactor that function to call the controller; until
@@ -196,6 +231,8 @@ class AutoConfigController:
         """
         # Late import to avoid circulars
         from goldenmatch.core.autoconfig import _legacy_auto_configure_v0 as _legacy
+
+        kw = v0_kwargs or {}
 
         # The legacy function does not (yet) accept a `reference` kwarg; for
         # match-mode we call it on the concatenated frame as a v0 stand-in.
@@ -206,16 +243,24 @@ class AutoConfigController:
                 merged = pl.concat([df, reference], how="vertical_relaxed")
             except Exception:
                 merged = df
-            return _legacy(merged)
-        return _legacy(df)
+            return _legacy(merged, **kw)
+        return _legacy(df, **kw)
 
     def _take_sample(
         self, df: pl.DataFrame, *, reference: pl.DataFrame | None
     ) -> tuple[pl.DataFrame, pl.DataFrame | None]:
-        """Stratified sample. Below sample_skip_below → full data; above → sample_size_default rows.
+        """Uniform random sample with a deterministic seed derived from data shape.
 
-        Deterministic seed = hash of (n_rows, columns) for reproducibility.
+        Below ``sample_skip_below`` rows → returns full data unchanged.
+        Above that threshold → samples exactly ``sample_size_default`` rows.
+        Seed = hash of (n_rows, column names) for reproducibility across runs
+        with the same schema.
+
         Match mode samples target and reference independently with the same rules.
+
+        # TODO(autoconfig-v2): replace with stratified sampling (e.g. by blocking-key
+        # group) to ensure rare subgroups are represented in the sample and the
+        # profile more faithfully reflects full-data behaviour.
         """
         target_sample = self._sample_one(df)
         ref_sample = self._sample_one(reference) if reference is not None else None
