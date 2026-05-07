@@ -117,6 +117,9 @@ class ScoringProfile:
     mass_above_threshold: float = 0.0
     mass_in_borderline: float = 0.0
     per_field_score_variance: dict[str, float] = field(default_factory=dict)
+    # Tier 1a: fraction of random non-blocked pairs whose weighted score >= threshold.
+    # None = probe not run (older paths that don't invoke the probe stay valid).
+    random_pair_above_threshold_rate: float | None = None
 
     def health(self) -> HealthVerdict:
         # No candidates compared and no pairs scored → RED (nothing happened)
@@ -258,4 +261,5 @@ class ComplexityProfile:
             "current_threshold": 0.0,
             "preliminary_cluster_sizes": cluster_pct,
             "oversized_clusters": oversized,
+            "random_pair_above_threshold_rate": self.scoring.random_pair_above_threshold_rate,
         }

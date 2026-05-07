@@ -129,7 +129,7 @@ class AutoConfigController:
                         self._run_pipeline_sample(sample, sample_ref, config_n)
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,
-                        reference=sample_ref,
+                        reference=sample_ref, config=config_n,
                     )
                     wall_ms = int((time.time() - iter_start) * 1000)
                     from goldenmatch.core.autoconfig_history import HistoryEntry
@@ -157,7 +157,26 @@ class AutoConfigController:
 
                 # Stop check
                 if profile_n.health() == HealthVerdict.GREEN:
-                    break
+                    # Tier 1a override: even when GREEN, don't exit early on iter 0
+                    # if the profile shows a "too tight" blocking signal: perfect precision
+                    # (mass_above_threshold == 1.0) with very few candidates relative to
+                    # the sample size suggests blocking is over-restricting recall.
+                    # Allow the policy to check recall-aware rules before committing.
+                    sp = profile_n.scoring
+                    bp = profile_n.blocking
+                    n_rows = profile_n.data.n_rows
+                    _suspicious_tight_blocking = (
+                        iteration == 0
+                        and sp.mass_above_threshold >= 1.0
+                        and sp.candidates_compared > 0
+                        and n_rows > 0
+                        and sp.candidates_compared < n_rows * 0.5
+                        and bp.reduction_ratio > 0.995
+                    )
+                    if not _suspicious_tight_blocking:
+                        break
+                    # Fall through to policy check — if no rule fires, the policy
+                    # returns None and we break naturally below.
                 # Convergence guard: only break when the profile is unchanged AND
                 # the previous iteration fired no rule (decision=None).  When a rule
                 # DID fire but the profile is still the same (e.g. rule_no_matches
@@ -351,6 +370,80 @@ class AutoConfigController:
         else:
             match_df(sample, reference, config=config)
 
+    def _compute_recall_probe(
+        self,
+        sample: pl.DataFrame,
+        config: "GoldenMatchConfig",
+        *,
+        n_samples: int = 100,
+    ) -> "float | None":
+        """Score N random pairs (i, j with i != j, uniform from the sample) using
+        the first weighted matchkey's scoring logic. Returns the fraction whose
+        weighted score is >= the matchkey's threshold.
+
+        A high rate (e.g. > 0.05) suggests the blocking is excluding real matches:
+        if random non-blocked pairs match, the blocking key is over-restricting.
+
+        Returns None when no weighted matchkey is configured or the sample is
+        too small to probe meaningfully.
+        """
+        import dataclasses
+        import random
+        from goldenmatch.core.scorer import score_field
+        from goldenmatch.utils.transforms import apply_transforms
+
+        weighted_mk = next(
+            (mk for mk in (config.matchkeys or []) if mk.type == "weighted"), None,
+        )
+        if weighted_mk is None:
+            return None
+        if sample.height < 4:
+            return None
+
+        threshold = weighted_mk.threshold or 0.7
+        rng = random.Random(self._seed_for(sample))
+        n_rows = sample.height
+        rows = sample.to_dicts()
+
+        above = 0
+        total = 0
+        attempts = 0
+        target = min(n_samples, n_rows * (n_rows - 1) // 2)
+        while total < target and attempts < target * 4:
+            attempts += 1
+            i = rng.randrange(n_rows)
+            j = rng.randrange(n_rows)
+            if i == j:
+                continue
+            weighted_sum = 0.0
+            weight_sum = 0.0
+            for f in (weighted_mk.fields or []):
+                if f.scorer is None:
+                    continue
+                # Map composite/compound scorers to a single-pair-friendly fallback.
+                # 'ensemble' is a block-level scorer (not supported by score_field);
+                # use jaro_winkler as a close single-field proxy for the probe.
+                _probe_scorer = f.scorer
+                if _probe_scorer == "ensemble":
+                    _probe_scorer = "jaro_winkler"
+                val_i = apply_transforms(rows[i].get(f.field), f.transforms or [])
+                val_j = apply_transforms(rows[j].get(f.field), f.transforms or [])
+                try:
+                    s = score_field(val_i, val_j, _probe_scorer)
+                except (ValueError, Exception):
+                    continue
+                if s is None:
+                    continue
+                w = f.weight or 1.0
+                weighted_sum += s * w
+                weight_sum += w
+            if weight_sum > 0:
+                score = weighted_sum / weight_sum
+                total += 1
+                if score >= threshold:
+                    above += 1
+        return above / total if total else None
+
     def _assemble_profile(
         self,
         emitter: Any,
@@ -359,6 +452,7 @@ class AutoConfigController:
         iteration: int,
         is_sample: bool = True,
         reference: pl.DataFrame | None = None,
+        config: "GoldenMatchConfig | None" = None,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
         fall back to defaults computed from ``df`` (plus ``reference`` in match
@@ -370,19 +464,27 @@ class AutoConfigController:
         the true count, making ``rule_blocking_too_coarse``'s average block
         size calculation use the wrong denominator (Bug A).
         """
+        import dataclasses
         from goldenmatch.core.complexity_profile import (
             DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
             MatchkeyProfile, DomainProfile, ProfileMeta,
         )
 
         data = emitter.data or self._compute_data_profile(df, reference=reference)
+        scoring = emitter.scoring or ScoringProfile()
+
+        # Tier 1a: compute random-pair recall probe (only on real iterations, not the
+        # finalize sentinel iteration=-1) and when a config is available.
+        if iteration >= 0 and config is not None:
+            probe_rate = self._compute_recall_probe(df, config)
+            scoring = dataclasses.replace(scoring, random_pair_above_threshold_rate=probe_rate)
 
         return ComplexityProfile(
             data=data,
             domain=emitter.domain or DomainProfile(),
             matchkey=emitter.matchkey or MatchkeyProfile(),
             blocking=emitter.blocking or BlockingProfile(),
-            scoring=emitter.scoring or ScoringProfile(),
+            scoring=scoring,
             cluster=emitter.cluster or ClusterProfile(),
             meta=ProfileMeta(
                 iteration=iteration, is_sample=is_sample,
@@ -473,5 +575,5 @@ class AutoConfigController:
             self._run_pipeline_sample(df, reference, config)
         return self._assemble_profile(
             emitter, df=df, iteration=-1, is_sample=False,
-            reference=reference,
+            reference=reference, config=None,
         )

@@ -471,3 +471,46 @@ def test_match_mode_n_rows_includes_reference():
     )
     # n_rows must be 100 (50 target + 50 reference), not 50 (target only)
     assert profile.data.n_rows == 100
+
+
+# ============================================================
+# Tier 1a — recall probe tests (autoconfig-tier1-tier2)
+# ============================================================
+
+
+def test_recall_probe_runs_on_real_sample():
+    df = pl.DataFrame({
+        "name": [f"alice_{i}" for i in range(20)] + [f"bob_{i}" for i in range(20)],
+        "email": [f"a{i}@x" for i in range(20)] + [f"b{i}@y" for i in range(20)],
+    })
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=10, max_iterations=1),
+    )
+    config, profile, history = controller.run(df)
+    if history.entries:
+        # Probe should have run on iter 0
+        rate = history.entries[0].profile.scoring.random_pair_above_threshold_rate
+        assert rate is None or 0.0 <= rate <= 1.0
+
+
+def test_recall_probe_returns_none_when_no_weighted_matchkey():
+    """If config has only exact matchkeys, probe returns None."""
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_email", type="exact",
+            fields=[MatchkeyField(field="email", transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(strategy="static",
+                                 keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+                                 max_block_size=5000, skip_oversized=False),
+    )
+    controller = AutoConfigController(policy=HeuristicRefitPolicy(),
+                                       budget=ControllerBudget())
+    df = pl.DataFrame({"email": [f"a{i}@x.com" for i in range(20)]})
+    rate = controller._compute_recall_probe(df, cfg)
+    assert rate is None

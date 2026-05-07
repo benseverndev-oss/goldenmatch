@@ -1048,10 +1048,16 @@ def build_blocking(
     def _null_rate(col_name: str) -> float:
         return df[col_name].null_count() / df.height if df.height > 0 else 0.0
 
+    # Tier 2 (autoconfig-tier1-tier2): null-aware v0 blocking selection.
+    # Columns with null_rate > NULL_RATE_CEILING are skipped as blocking keys:
+    # records with null values in the blocking field can't appear in any block,
+    # structurally capping recall regardless of how good the scoring is.
+    # NOTE: max_null_rate serves as NULL_RATE_CEILING here (value = 0.20).
+    NULL_RATE_CEILING = max_null_rate  # 0.20 — explicit alias for Tier 2 intent
     exact_cols = [
         p for p in profiles
         if p.col_type in ("email", "phone", "zip", "identifier", "year")
-        and _null_rate(p.name) <= max_null_rate
+        and _null_rate(p.name) <= NULL_RATE_CEILING  # Tier 2: skip high-null candidates
         and p.cardinality_ratio < 0.95
         and _check_source_overlap(df, p.name) > 0.0
     ]
