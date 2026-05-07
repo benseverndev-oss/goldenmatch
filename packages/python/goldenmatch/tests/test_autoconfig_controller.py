@@ -157,3 +157,206 @@ def test_take_sample_is_deterministic():
     s1, _ = controller._take_sample(df, reference=None)
     s2, _ = controller._take_sample(df, reference=None)
     assert s1.equals(s2)
+
+
+# ============================================================
+# Task 4.2 — iteration loop
+# ============================================================
+
+from unittest.mock import patch, MagicMock
+from goldenmatch.core.complexity_profile import (
+    BlockingProfile, ScoringProfile, ClusterProfile, MatchkeyProfile, FieldStats,
+)
+from goldenmatch.core.autoconfig_history import HistoryEntry, PolicyDecision, ErrorRecord
+from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+
+
+def _green_subprofiles():
+    """Return sub-profiles that yield ComplexityProfile.health() == GREEN."""
+    return dict(
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
+            block_sizes_p99=20, block_sizes_max=25,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+            dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.05,
+        ),
+        cluster=ClusterProfile(
+            n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
+            cluster_size_max=8, transitivity_rate=0.95,
+        ),
+        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+    )
+
+
+def _red_blocking_subprofile():
+    return BlockingProfile(
+        keys_used=[["a"]], n_blocks=2, total_comparisons=4900,
+        reduction_ratio=0.01,  # RED: < 0.5
+        block_sizes_p50=49, block_sizes_p95=49, block_sizes_p99=49,
+        block_sizes_max=49,
+    )
+
+
+@pytest.fixture
+def small_df():
+    """Df above pathological threshold but below sample_skip_below."""
+    return pl.DataFrame({
+        "a": ["x", "y", "z"] * 4,
+        "b": ["1", "2", "3"] * 4,
+    })
+
+
+def _make_controller_with_mocked_runner(profiles_per_iter, **budget_kwargs):
+    """Build a controller whose `_run_pipeline_sample` returns the given
+    sequence of (sub-profile dict) per iteration."""
+    bk = {"max_iterations": 5, "sample_skip_below": 1}
+    bk.update(budget_kwargs)
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(**bk),
+    )
+    # The mock writes to the active emitter so _assemble_profile picks it up.
+    iter_idx = {"i": 0}
+
+    def fake_runner(sample, ref, config):
+        from goldenmatch.core.profile_emitter import current_emitter
+        idx = iter_idx["i"]
+        iter_idx["i"] = min(idx + 1, len(profiles_per_iter) - 1)
+        sub = profiles_per_iter[idx]
+        e = current_emitter()
+        if "blocking" in sub: e.set_blocking(sub["blocking"])
+        if "scoring" in sub: e.set_scoring(sub["scoring"])
+        if "cluster" in sub: e.set_cluster(sub["cluster"])
+        if "matchkey" in sub: e.set_matchkey(sub["matchkey"])
+        if "data" in sub: e.set_data(sub["data"])
+        if "domain" in sub: e.set_domain(sub["domain"])
+
+    controller._run_pipeline_sample = fake_runner  # type: ignore[method-assign]
+    # Build the finalize return value with a DataProfile that has enough rows
+    # for the blocking/cluster health checks to yield GREEN (n_rows needs to
+    # be >= n_blocks * block_sizes_p99 / 10 = 10*20/10 = 20) and diverse
+    # column types so DataProfile.health() returns GREEN (not YELLOW).
+    _green_subs = _green_subprofiles()
+    _green_full = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2, column_types={"a": "name", "b": "numeric"}),
+        **_green_subs,
+    )
+    controller._finalize = MagicMock(return_value=_green_full)
+    return controller
+
+
+def test_run_exits_green_after_one_iteration(small_df):
+    """All-green sample profile → GREEN exit, finalize runs."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    config, profile, history = controller.run(small_df)
+    assert isinstance(config, GoldenMatchConfig)
+    assert profile.health() == HealthVerdict.GREEN
+    assert history.iteration == 1
+
+
+def test_run_handles_iteration_crash_gracefully(small_df):
+    """Sample iteration raises → recorded in history.errors, controller continues."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green, green])
+    crash_count = {"n": 0}
+    original = controller._run_pipeline_sample
+
+    def crashing(sample, ref, config):
+        if crash_count["n"] == 0:
+            crash_count["n"] += 1
+            raise RuntimeError("synthetic")
+        original(sample, ref, config)
+
+    controller._run_pipeline_sample = crashing  # type: ignore[method-assign]
+    config, profile, history = controller.run(small_df)
+    assert len(history.errors) == 1
+    assert history.errors[0].exception_type == "RuntimeError"
+    # At least one healthy entry should follow → committed
+    assert profile.health() != HealthVerdict.RED
+
+
+def test_run_returns_v0_red_when_all_iterations_crash(small_df):
+    """Every iteration crashes → returns v0 with RED, no finalize call."""
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(max_iterations=2, sample_skip_below=1),
+    )
+
+    def always_crashes(sample, ref, config):
+        raise RuntimeError("never works")
+
+    controller._run_pipeline_sample = always_crashes  # type: ignore[method-assign]
+    controller._finalize = MagicMock()  # finalize must NOT be called
+    config, profile, history = controller.run(small_df)
+    assert isinstance(config, GoldenMatchConfig)
+    assert profile.health() == HealthVerdict.RED
+    assert len(history.errors) >= 2
+    controller._finalize.assert_not_called()
+
+
+def test_run_exits_budget_iterations_when_no_progress(small_df):
+    """Profile stays red across iterations and policy keeps proposing → BUDGET_ITERATIONS."""
+    red = {**_green_subprofiles(), "blocking": _red_blocking_subprofile()}
+    # All iters return same red profile; the rule will fire and propose a config,
+    # but next iter still returns red (the mock doesn't actually use the config).
+    controller = _make_controller_with_mocked_runner([red, red, red, red, red],
+                                                      max_iterations=2)
+    config, profile, history = controller.run(small_df)
+    # No healthy iterations at all → returns v0 with RED
+    assert profile.health() == HealthVerdict.RED
+
+
+def test_run_budget_time_exit(small_df):
+    """When wall-clock budget exceeds, exits with budget_time."""
+    green = _green_subprofiles()
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(max_iterations=10, max_seconds=0.0001,
+                                sample_skip_below=1),
+    )
+    import time
+    def slow(sample, ref, config):
+        time.sleep(0.01)
+        from goldenmatch.core.profile_emitter import current_emitter
+        # Emit RED sample profile so we don't exit GREEN immediately
+        current_emitter().set_blocking(_red_blocking_subprofile())
+        for k, v in green.items():
+            if k != "blocking":
+                getattr(current_emitter(), f"set_{k}")(v)
+
+    controller._run_pipeline_sample = slow  # type: ignore[method-assign]
+    controller._finalize = MagicMock(return_value=ComplexityProfile(**green))
+    config, profile, history = controller.run(small_df)
+    # Should bail out quickly via BUDGET_TIME or BUDGET_ITERATIONS — either is acceptable
+    assert history.iteration >= 1
+
+
+# ============================================================
+# Task 4.3 — _finalize + drift detection
+# ============================================================
+
+
+def test_finalize_records_zero_drift_when_full_matches_sample(small_df):
+    """Full-data profile equal to final sample profile → drift == 0."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    # Replace finalize with one that returns the same green profile.
+    # n_rows=100 matches the inferred n_rows from blocking stats
+    # (n_blocks=10, p50=10 → max(12, 100) = 100) so the signal vectors
+    # are identical and drift == 0.  Diverse column_types avoids the
+    # DataProfile single-type YELLOW verdict.
+    full_profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                         column_types={"a": "name", "b": "numeric"}),
+        **green,
+    )
+    controller._finalize = MagicMock(return_value=full_profile)
+    config, profile, history = controller.run(small_df)
+    # Drift recorded via history.full_vs_sample_drift
+    assert history.full_vs_sample_drift is not None
+    assert history.full_vs_sample_drift == pytest.approx(0.0, abs=0.001)

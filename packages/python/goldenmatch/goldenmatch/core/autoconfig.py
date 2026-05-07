@@ -1225,29 +1225,29 @@ def auto_configure_df(
     domain_config=None, llm_auto: bool = False,
     strict: bool = False, allow_remote_assets: bool = False,
 ) -> GoldenMatchConfig:
-    """Auto-generate a GoldenMatchConfig from a DataFrame.
+    """Public entry point. Currently a thin wrapper over the legacy heuristic;
+    Task 5.1 will rewire this to use AutoConfigController.
+    """
+    return _legacy_auto_configure_v0(
+        df, llm_provider=llm_provider, domain_config=domain_config,
+        llm_auto=llm_auto, strict=strict, allow_remote_assets=allow_remote_assets,
+    )
 
-    Profiles columns by name heuristics and data sampling, then builds
-    matchkeys, blocking, and golden rules automatically. Runs preflight
-    verification on the resulting config before returning, attaching the
-    `PreflightReport` to the config as ``config._preflight_report``.
 
-    Args:
-        df: Polars DataFrame to auto-configure for.
-        llm_provider: Optional LLM provider for profiling (openai/anthropic).
-        domain_config: Manual domain override; skips auto-detection.
-        llm_auto: Auto-enable the LLM scorer when an API key is present.
-        strict: When True, postflight computes signals and emits advisories
-            but does not apply any adjustments (keeps output deterministic for
-            parity runs). Preflight always raises ``ConfigValidationError`` on
-            unrepairable errors regardless. Stashed on the config as
-            ``_strict_autoconfig`` for downstream consumers.
-        allow_remote_assets: When True, keep embedding/record_embedding/
-            rerank scorers. When False (default), preflight demotes them to
-            offline-safe alternatives.
-
-    Returns:
-        A fully populated GoldenMatchConfig ready for pipeline execution.
+def _legacy_auto_configure_v0(
+    df: pl.DataFrame,
+    *,
+    reference: pl.DataFrame | None = None,  # ignored for v1; Task 5.1 plumbs it
+    llm_provider: str | None = None,
+    domain_config=None,
+    llm_auto: bool = False,
+    strict: bool = False,
+    allow_remote_assets: bool = False,
+) -> GoldenMatchConfig:
+    """Legacy column-profiling + rule-based auto-config heuristic (the v0
+    starting point for the controller). Implementation unchanged from the
+    pre-Task-4.x ``auto_configure_df`` — just renamed and given a private
+    underscore prefix so the controller can call it without recursing.
     """
     # Initialized up front so the preflight-wiring block at the bottom can
     # safely test `if domain_profile is not None` even when the domain

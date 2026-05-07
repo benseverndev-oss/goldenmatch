@@ -15,6 +15,8 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any
 import hashlib
+import time
+import traceback
 import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
@@ -103,17 +105,83 @@ class AutoConfigController:
             yellow_profile = self._yellow_sentinel_profile(df.height, user_cols)
             return v0, yellow_profile, RunHistory()
 
-        # Loop body lands in Task 4.2. For now, bail out with v0 + sentinel.
-        v0 = self._initial_config(df, reference=reference)
-        # Returning a placeholder profile so the public contract is correct;
-        # Task 4.2 replaces this with the real iteration loop + finalize.
-        placeholder = ComplexityProfile(
-            data=DataProfile(
-                n_rows=df.height, n_cols=len(user_cols),
-                column_types={c: "unknown" for c in user_cols},
-            ),
-        )
-        return v0, placeholder, RunHistory()
+        # Iteration loop (Task 4.2)
+        config_v0 = self._initial_config(df, reference=reference)
+        sample, sample_ref = self._take_sample(df, reference=reference)
+        history = RunHistory()
+        config_n = config_v0
+        start = time.time()
+
+        try:
+            for iteration in range(self.budget.max_iterations + 1):
+                elapsed = time.time() - start
+                if elapsed > self.budget.max_seconds and iteration > 0:
+                    break
+                iter_start = time.time()
+                try:
+                    from goldenmatch.core.profile_emitter import profile_capture
+                    with profile_capture() as emitter:
+                        self._run_pipeline_sample(sample, sample_ref, config_n)
+                    profile_n = self._assemble_profile(
+                        emitter, iteration=iteration, n_rows=sample.height,
+                    )
+                    wall_ms = int((time.time() - iter_start) * 1000)
+                    from goldenmatch.core.autoconfig_history import HistoryEntry
+                    history.entries.append(HistoryEntry(
+                        iteration=iteration, config=config_n, profile=profile_n,
+                        decision=None, error=None, wall_clock_ms=wall_ms,
+                    ))
+                except KeyboardInterrupt:
+                    history.elapsed = timedelta(seconds=time.time() - start)
+                    break
+                except Exception as exc:
+                    from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
+                    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+                    tb_summary = "".join(tb_lines[:5] + tb_lines[-3:])[:2000]
+                    history.entries.append(HistoryEntry(
+                        iteration=iteration, config=config_n, profile=_RED_PROFILE,
+                        decision=None,
+                        error=ErrorRecord(
+                            exception_type=type(exc).__name__,
+                            traceback_summary=tb_summary,
+                        ),
+                        wall_clock_ms=int((time.time() - iter_start) * 1000),
+                    ))
+                    continue
+
+                # Stop check
+                if profile_n.health() == HealthVerdict.GREEN:
+                    break
+                if history.profile_distance_to_prev() < self.budget.converge_epsilon:
+                    break
+                if history.is_oscillating():
+                    break
+
+                # Ask policy for next config
+                config_next = self.policy.propose(profile_n, config_n, history)
+                if config_next is None:
+                    break
+                if config_next == config_n:
+                    break
+                config_n = config_next
+        finally:
+            history.elapsed = timedelta(seconds=time.time() - start)
+
+        # Pick committed config
+        best_entry = history.cheapest_healthy()
+        if best_entry is None:
+            # No healthy iterations → return v0 + RED sentinel
+            return config_v0, _RED_PROFILE, history
+
+        # Finalize on full data (Task 4.3)
+        profile_full = self._finalize(best_entry.config, df, reference)
+        # Drift detection
+        sample_vec = best_entry.profile.normalized_signal_vector()
+        full_vec = profile_full.normalized_signal_vector()
+        drift = sum(abs(a - b) for a, b in zip(sample_vec, full_vec))
+        history.full_vs_sample_drift = drift
+
+        return best_entry.config, profile_full, history
 
     # ---- Internals --------------------------------------------------------
     def _initial_config(
@@ -127,7 +195,7 @@ class AutoConfigController:
         controller).
         """
         # Late import to avoid circulars
-        from goldenmatch.core.autoconfig import auto_configure_df as _legacy
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0 as _legacy
 
         # The legacy function does not (yet) accept a `reference` kwarg; for
         # match-mode we call it on the concatenated frame as a v0 stand-in.
@@ -198,11 +266,86 @@ class AutoConfigController:
         if df.height < self.budget.sample_skip_below:
             return df
         seed = self._seed_for(df)
+        n = min(self.budget.sample_size_default, df.height)
         # Polars sample with shuffle=False keeps row order; we want diverse coverage so shuffle=True.
-        return df.sample(n=self.budget.sample_size_default, seed=seed, shuffle=True)
+        return df.sample(n=n, seed=seed, shuffle=True)
 
     def _seed_for(self, df: pl.DataFrame) -> int:
         """Hash of data shape for reproducible sampling."""
         key = f"{df.height}|{','.join(df.columns)}".encode("utf-8")
         digest = hashlib.sha256(key).hexdigest()
         return int(digest[:8], 16)
+
+    def _run_pipeline_sample(
+        self,
+        sample: pl.DataFrame,
+        reference: pl.DataFrame | None,
+        config: GoldenMatchConfig,
+    ) -> None:
+        """Run the lightweight pipeline (blocking → score → cluster) on the sample.
+
+        Uses the public ``dedupe_df`` / ``match_df`` API so the same instrumented
+        stages run; the active ``profile_capture()`` collects sub-profiles.
+        """
+        from goldenmatch._api import dedupe_df, match_df
+        if reference is None:
+            dedupe_df(sample, config=config)
+        else:
+            match_df(sample, reference, config=config)
+
+    def _assemble_profile(
+        self,
+        emitter: Any,
+        *,
+        iteration: int,
+        n_rows: int,
+        is_sample: bool = True,
+    ) -> ComplexityProfile:
+        """Build ComplexityProfile from emitter writes. Missing sub-profiles
+        fall back to defaults (which produce RED via DataProfile.n_rows=0).
+
+        When the emitter did not write a DataProfile, we infer n_rows from the
+        blocking sub-profile (n_blocks * block_sizes_p50) if available, so
+        that the health verdict is calibrated against the blocking stats rather
+        than the potentially-tiny sample size.
+        """
+        from goldenmatch.core.complexity_profile import (
+            DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
+            MatchkeyProfile, DomainProfile, ProfileMeta,
+        )
+        if emitter.data is None and emitter.blocking is not None and emitter.blocking.n_blocks > 0:
+            # Use block count × median block size as a lower-bound n_rows estimate
+            # so health verdicts are calibrated against the blocking-profile scale.
+            inferred = max(n_rows, emitter.blocking.n_blocks * max(emitter.blocking.block_sizes_p50, 1))
+            fallback_data = DataProfile(n_rows=inferred)
+        else:
+            fallback_data = DataProfile(n_rows=n_rows)
+        return ComplexityProfile(
+            data=emitter.data or fallback_data,
+            domain=emitter.domain or DomainProfile(),
+            matchkey=emitter.matchkey or MatchkeyProfile(),
+            blocking=emitter.blocking or BlockingProfile(),
+            scoring=emitter.scoring or ScoringProfile(),
+            cluster=emitter.cluster or ClusterProfile(),
+            meta=ProfileMeta(
+                iteration=iteration, is_sample=is_sample,
+                sample_size=n_rows, n_rows_full=n_rows,
+            ),
+        )
+
+    def _finalize(
+        self,
+        config: GoldenMatchConfig,
+        df: pl.DataFrame,
+        reference: pl.DataFrame | None,
+    ) -> ComplexityProfile:
+        """Run the full pipeline on the full data with profile capture. Returns
+        a ComplexityProfile reflecting actual full-data behavior. Drift vs the
+        final sample profile is computed in run() and recorded on history.
+        """
+        from goldenmatch.core.profile_emitter import profile_capture
+        with profile_capture() as emitter:
+            self._run_pipeline_sample(df, reference, config)
+        return self._assemble_profile(
+            emitter, iteration=-1, n_rows=df.height, is_sample=False,
+        )
