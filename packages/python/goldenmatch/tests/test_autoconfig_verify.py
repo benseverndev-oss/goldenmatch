@@ -475,13 +475,17 @@ def test_postflight_attached_after_match_via_autoconfig():
 
 def test_preflight_check1_domain_repair_works_with_manual_domain_config():
     """Bug fix: when user passes explicit domain_config, preflight should still
-    be able to auto-repair domain-extracted column references."""
+    be able to auto-repair domain-extracted column references.
+    Uses _legacy_auto_configure_v0 directly because domain_config and the
+    resulting _domain_profile/_preflight_report attributes are set by the legacy
+    heuristic; the controller-backed auto_configure_df does not thread these kwargs.
+    """
     import polars as pl
-    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
     from goldenmatch.config.schemas import DomainConfig
     df = pl.DataFrame({"title": [f"paper {i}" for i in range(50)]})
     # Force manual domain selection
-    cfg = auto_configure_df(df, domain_config=DomainConfig(enabled=True, mode="bibliographic"))
+    cfg = _legacy_auto_configure_v0(df, domain_config=DomainConfig(enabled=True, mode="bibliographic"))
     assert hasattr(cfg, "_domain_profile")
     assert cfg._domain_profile is not None
     assert cfg._preflight_report is not None
@@ -527,10 +531,14 @@ def test_postflight_threshold_adjustment_applied_before_clustering():
 def test_postflight_strict_mode_pipeline_does_not_filter_all_pairs():
     """When _strict_autoconfig is True, the pipeline must NOT apply threshold
     adjustments even if postflight emits them. Verified by running with
-    strict=True and a bimodal input."""
+    strict=True and a bimodal input.
+    Uses _legacy_auto_configure_v0 directly because strict= and the resulting
+    _strict_autoconfig attribute are legacy-heuristic-specific; the
+    controller-backed auto_configure_df does not thread this kwarg.
+    """
     import polars as pl
     from goldenmatch._api import dedupe_df
-    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
 
     # Same bimodal input as above
     names = []
@@ -540,7 +548,7 @@ def test_postflight_strict_mode_pipeline_does_not_filter_all_pairs():
     df = pl.DataFrame({"name": names})
 
     # Build strict config externally then reuse
-    cfg_strict = auto_configure_df(df, strict=True)
+    cfg_strict = _legacy_auto_configure_v0(df, strict=True)
     assert cfg_strict._strict_autoconfig is True
 
     result = dedupe_df(df, config=cfg_strict)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1220,18 +1221,77 @@ def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 5
 
 # ── Main entry point ──────────────────────────────────────────────────────
 
+# ContextVar populated by auto_configure_df after each successful controller
+# run. Holds (ComplexityProfile, RunHistory) so PostflightReport can pick up
+# the profile + history without threading them through every call site.
+_LAST_CONTROLLER_RUN: ContextVar = ContextVar("_LAST_CONTROLLER_RUN", default=None)
+
+
 def auto_configure_df(
-    df: pl.DataFrame, llm_provider: str | None = None,
-    domain_config=None, llm_auto: bool = False,
-    strict: bool = False, allow_remote_assets: bool = False,
-) -> GoldenMatchConfig:
-    """Public entry point. Currently a thin wrapper over the legacy heuristic;
-    Task 5.1 will rewire this to use AutoConfigController.
+    df: "pl.DataFrame | pl.LazyFrame",
+    llm_provider: str | None = None,
+    domain_config=None,
+    llm_auto: bool = False,
+    strict: bool = False,
+    allow_remote_assets: bool = False,
+    *,
+    reference: "pl.DataFrame | pl.LazyFrame | None" = None,
+) -> "GoldenMatchConfig":
+    """Public auto-configuration entry point (controller-backed).
+
+    Runs an iterative refit loop:
+      1. Compute v0 config via the legacy heuristic
+      2. Run blocking → score → cluster on a stratified sample under profile_capture
+      3. Read the ComplexityProfile, ask the policy for a refit
+      4. Loop until green/converged/budget
+      5. Run the full pipeline once and return the committed config
+
+    The committed config is what's returned. Profile + history are stashed
+    on the ``_LAST_CONTROLLER_RUN`` ContextVar so the calling pipeline can
+    surface them via PostflightReport.
+
+    Args:
+        df: target DataFrame (or LazyFrame, which will be collected).
+        reference: optional reference DataFrame for cross-source ``match_df``
+            mode. When None, dedupe mode (single-source).
+        llm_provider, domain_config, llm_auto, strict, allow_remote_assets:
+            unchanged from the legacy signature; threaded into v0 only.
+
+    Raises:
+        TypeError: when ``df`` or ``reference`` is not a polars DataFrame/LazyFrame.
+        ConfigValidationError: from the controller, when input is unworkable
+            (empty, all-null, etc.).
     """
-    return _legacy_auto_configure_v0(
-        df, llm_provider=llm_provider, domain_config=domain_config,
-        llm_auto=llm_auto, strict=strict, allow_remote_assets=allow_remote_assets,
+    # Coerce + validate input types
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+    elif not isinstance(df, pl.DataFrame):
+        raise TypeError(
+            f"auto_configure_df requires pl.DataFrame or pl.LazyFrame, "
+            f"got {type(df).__name__}"
+        )
+    if reference is not None:
+        if isinstance(reference, pl.LazyFrame):
+            reference = reference.collect()
+        elif not isinstance(reference, pl.DataFrame):
+            raise TypeError(
+                f"reference requires pl.DataFrame or pl.LazyFrame, "
+                f"got {type(reference).__name__}"
+            )
+
+    # Lazy import to avoid circular imports (controller imports back here)
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController, ControllerBudget,
     )
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(),
+    )
+    config, profile, history = controller.run(df, reference=reference)
+    _LAST_CONTROLLER_RUN.set((profile, history))
+    return config
 
 
 def _legacy_auto_configure_v0(
