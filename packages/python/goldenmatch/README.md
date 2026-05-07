@@ -885,6 +885,18 @@ Head-to-head against Splink, Dedupe, and RecordLinkage on two datasets. GoldenMa
 
 **Key takeaway:** GoldenMatch is the most consistent performer — top-2 F1 on both datasets with zero training data. Splink dominates structured PII but struggles on non-PII. RecordLinkage wins DBLP-ACM but lags on PII.
 
+### Zero-Config Controller (v1.8, PR [#103](https://github.com/benzsevern/goldenmatch/pull/103) / [#104](https://github.com/benzsevern/goldenmatch/pull/104))
+
+The introspective auto-config controller iterates on ComplexityProfile signals to reach hand-tuned-or-better accuracy with no user configuration on bibliographic data.
+
+| Dataset | Mode | Precision | Recall | F1 | Notes |
+|---|---|---|---|---|---|
+| **DBLP-ACM** | zero-config (controller, v1.8) | — | — | **0.964** | Iterates 2× on a 2K-row sample; swaps blocking from `__title_key__` to `first_token(title)` + drops stale derived-column matchkey |
+| **Febrl3** | zero-config (controller, v1.8) | 1.000 | 0.743 | **0.853** | Controller commits without iteration on this dataset — clean person-matching data doesn't trigger refit rules |
+| DBLP-ACM | explicit hand-tuned config | 0.891 | 0.945 | 0.918 | (unchanged — v1.2.7 library comparison above) |
+
+**Note:** The zero-config controller achieves above-hand-tuned F1 on bibliographic-shape data (DBLP-ACM). Febrl3 held at 0.853 vs 0.971 hand-tuned — the controller's rules don't fire on clean synthetic PII. Product matching (Amazon-Google, Abt-Buy) is unverified by this work; domain extraction + LLM scorer remain the recommended path for those datasets.
+
 <details>
 <summary>Febrl explicit config example</summary>
 
