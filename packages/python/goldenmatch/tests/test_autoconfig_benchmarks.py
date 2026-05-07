@@ -2,6 +2,7 @@
 Skipped by default -- run with `pytest -m benchmark`.
 """
 from __future__ import annotations
+import random
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,10 @@ pytestmark = pytest.mark.benchmark
 
 
 DATASETS = Path(__file__).parent / "benchmarks" / "datasets"
+
+NCVR_DIR = DATASETS / "NCVR"
+NCVR_SAMPLE = NCVR_DIR / "ncvoter_sample_10k.txt"
+NCVR_AVAILABLE = NCVR_SAMPLE.exists()
 
 
 def test_dblp_acm_autoconfig_runs():
@@ -96,3 +101,110 @@ def test_preflight_domain_repair_frame_shape_stable():
 
     assert "__title_key__" in enhanced.columns
     assert enhanced.height == df.height
+
+
+@pytest.mark.skipif(not NCVR_AVAILABLE, reason="NCVR sample dataset missing")
+def test_autoconfig_ncvr_meets_target():
+    """Controller-driven zero-config NCVR (with corruption-based GT) must hit
+    F1 >= 0.90.
+
+    NCVR records are unique by ``ncid``, so we generate ground truth by sampling
+    K records, creating corrupted versions of N of them, and concatenating
+    into one DataFrame. The (orig_ncid, orig_ncid + "_DUP") pairs are GT.
+
+    Measured 2026-05-07: F1=0.9719 (P=0.9820, R=0.9620). Target 0.90 is
+    deliberately below to leave headroom for rule changes that may affect
+    NCVR. Bump if multiple measurements consistently exceed 0.95.
+    """
+    import goldenmatch
+    from goldenmatch.core.complexity_profile import HealthVerdict
+
+    # Load + filter
+    df = pl.read_csv(NCVR_SAMPLE, separator="\t",
+                      encoding="utf8-lossy", ignore_errors=True)
+    df = df.filter(
+        (pl.col("last_name").str.len_chars() > 1) &
+        (pl.col("first_name").str.len_chars() > 1)
+    )
+    SEED = 42
+    N_BASE = min(5000, df.height)
+    N_DUPES = N_BASE // 2
+
+    df = df.sample(n=N_BASE, seed=SEED)
+    keep_cols = ["ncid", "first_name", "last_name", "middle_name",
+                 "res_street_address", "res_city_desc", "state_cd",
+                 "zip_code", "birth_year", "gender_code"]
+    keep_cols = [c for c in keep_cols if c in df.columns]
+    df = df.select(keep_cols)
+
+    # Generate corrupted duplicates
+    rng = random.Random(SEED)
+    rows = df.to_dicts()
+    dup_indices = rng.sample(range(len(rows)), min(N_DUPES, len(rows)))
+
+    corrupt_fields = ["first_name", "last_name", "middle_name",
+                      "res_street_address", "zip_code"]
+
+    def _corrupt(val: str | None) -> str | None:
+        if val is None or len(val) < 2:
+            return val
+        op = rng.choice(["typo", "swap", "drop", "abbreviate", "case"])
+        if op == "typo":
+            pos = rng.randint(0, len(val) - 1)
+            repl = rng.choice("abcdefghijklmnopqrstuvwxyz")
+            return val[:pos] + repl + val[pos + 1:]
+        if op == "swap" and len(val) >= 3:
+            pos = rng.randint(0, len(val) - 2)
+            return val[:pos] + val[pos + 1] + val[pos] + val[pos + 2:]
+        if op == "drop" and len(val) >= 3:
+            pos = rng.randint(0, len(val) - 1)
+            return val[:pos] + val[pos + 1:]
+        if op == "abbreviate" and len(val) >= 3:
+            return val[0] + "."
+        if op == "case":
+            return val.lower() if rng.random() < 0.5 else val.upper()
+        return val
+
+    corrupted = []
+    gt: set[tuple] = set()
+    for orig_idx in dup_indices:
+        original = rows[orig_idx]
+        corrupt = dict(original)
+        corrupt["ncid"] = original["ncid"] + "_DUP"
+        for field in corrupt_fields:
+            if rng.random() < 0.30:
+                corrupt[field] = _corrupt(corrupt.get(field))
+        corrupted.append(corrupt)
+        a, b = original["ncid"], corrupt["ncid"]
+        gt.add((min(a, b), max(a, b)))
+
+    combined = pl.DataFrame(rows + corrupted)
+    result = goldenmatch.dedupe_df(combined)
+
+    # Convert clusters -> pair set (ncid)
+    ncid_lookup = combined["ncid"].to_list()
+    found: set[tuple] = set()
+    for c in result.clusters.values():
+        members = sorted(c["members"])
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                a, b = ncid_lookup[members[i]], ncid_lookup[members[j]]
+                found.add((min(a, b), max(a, b)))
+
+    tp = len(found & gt)
+    fp = len(found - gt)
+    fn = len(gt - found)
+    p = tp / (tp + fp) if (tp + fp) else 0.0
+    r = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * p * r / (p + r) if (p + r) else 0.0
+
+    assert f1 >= 0.90, (
+        f"NCVR F1={f1:.4f} < 0.90 target "
+        f"(precision={p:.4f}, recall={r:.4f}, found={len(found)}, gt={len(gt)})"
+    )
+
+    # Sanity: postflight should NOT be RED
+    if result.postflight_report is not None:
+        signals = result.postflight_report
+        if hasattr(signals, "controller_profile") and signals.controller_profile is not None:
+            assert signals.controller_profile.health() != HealthVerdict.RED
