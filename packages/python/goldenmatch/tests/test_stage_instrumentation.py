@@ -65,3 +65,41 @@ def test_build_blocks_emits_singleton_count():
     assert e.blocking is not None
     assert e.blocking.n_blocks == 0
     assert e.blocking.singleton_block_count == 0
+
+
+def test_scorer_emits_scoring_profile_via_dedupe_df():
+    """After fuzzy scoring runs, the emitter holds a ScoringProfile."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.profile_emitter import profile_capture
+    from goldenmatch.core.complexity_profile import ScoringProfile
+    import goldenmatch as gm
+
+    df = pl.DataFrame({
+        "name": ["alice", "alyce", "bob", "bobby", "carol", "carrol"] * 3,
+        "city": ["nyc"] * 18,
+    })
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                  weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    with profile_capture() as e:
+        gm.dedupe_df(df, config=cfg)
+    assert e.scoring is not None, "scorer did not emit a ScoringProfile"
+    assert isinstance(e.scoring, ScoringProfile)
+    assert e.scoring.n_pairs_scored > 0
+    assert sum(e.scoring.score_histogram) == e.scoring.n_pairs_scored
+    assert 0.0 <= e.scoring.dip_statistic <= 0.25
+    assert 0.0 <= e.scoring.mass_above_threshold <= 1.0
+    assert 0.0 <= e.scoring.mass_in_borderline <= 1.0

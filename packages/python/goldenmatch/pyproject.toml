@@ -36,6 +36,7 @@ dependencies = [
     "numpy>=1.26",
     "openpyxl>=3.1",
     "textual>=1.0",
+    "diptest>=0.5.2",
 ]
 
 [project.urls]

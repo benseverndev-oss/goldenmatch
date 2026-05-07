@@ -15,8 +15,29 @@ from rapidfuzz.process import cdist
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core.complexity_profile import ScoringProfile
+from goldenmatch.core._profile_helpers import histogram_20, hartigan_dip, mass_above, mass_borderline
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_scoring_profile(
+    pairs: "list[tuple[int, int, float]]",
+    threshold: float,
+    per_field_variance: "dict[str, float] | None" = None,
+) -> None:
+    """Emit ScoringProfile to current emitter. No-op when emitter is null."""
+    scores = [s for _, _, s in pairs]
+    profile = ScoringProfile(
+        n_pairs_scored=len(scores),
+        score_histogram=histogram_20(scores),
+        dip_statistic=hartigan_dip(scores),
+        mass_above_threshold=mass_above(scores, threshold),
+        mass_in_borderline=mass_borderline(scores, threshold),
+        per_field_score_variance=per_field_variance or {},
+    )
+    current_emitter().set_scoring(profile)
 
 
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
@@ -601,6 +622,7 @@ def score_blocks_parallel(
             all_pairs.extend(pairs)
             for a, b, s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
+        _emit_scoring_profile(all_pairs, mk.threshold)
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -643,6 +665,7 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
+    _emit_scoring_profile(all_pairs, mk.threshold)
     return all_pairs
 
 
