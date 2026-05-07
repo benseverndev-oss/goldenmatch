@@ -1589,6 +1589,50 @@ def _legacy_auto_configure_v0(
 
     memory_config = MemoryConfig(enabled=True) if llm_auto else None
 
+    # Auto-detect standardization rules (Change 1, 2026-05-07)
+    # When the column-profile classifier identifies a typed column (phone,
+    # email, name, address, zip, geo), emit a corresponding StandardizationConfig
+    # rule. The hand-tuned dqbench adapter does this manually; auto-config
+    # now matches it without explicit user intervention.
+    #
+    # StandardizationConfig.rules schema: {column_name: [standardizer_names]}
+    # VALID_STANDARDIZERS: email, phone, zip5, address, state, name_proper,
+    # name_upper, name_lower, strip, trim_whitespace.
+    _std_rules: dict[str, list[str]] = {}  # {col_name: [std_name, ...]}
+    _email_typed_cols: set[str] = set()  # guard: skip address detection on these
+    for _p in profiles:
+        if _p.col_type == "email":
+            _email_typed_cols.add(_p.name)
+            _std_rules[_p.name] = ["email"]
+        elif _p.col_type == "phone":
+            _std_rules[_p.name] = ["phone"]
+        elif _p.col_type == "zip":
+            _std_rules[_p.name] = ["zip5"]
+        elif _p.col_type == "geo":
+            # state-shaped columns (state_cd, province, country) → state rule
+            _cl = _p.name.lower()
+            if any(pat in _cl for pat in ("state", "province", "country")):
+                _std_rules[_p.name] = ["state"]
+        elif _p.col_type == "name":
+            # Route all name columns to name_proper (title-case + strip).
+            _std_rules[_p.name] = ["name_proper"]
+        elif _p.col_type == "address":
+            # Guard: skip if column was already typed as email (e.g. email_address)
+            if _p.name not in _email_typed_cols:
+                _std_rules[_p.name] = ["address"]
+
+    # Build the StandardizationConfig only if we detected something.
+    # Return None rather than StandardizationConfig(rules={}) to avoid passing
+    # an empty config into the pipeline.
+    _standardization = None
+    if _std_rules:
+        from goldenmatch.config.schemas import StandardizationConfig
+        _standardization = StandardizationConfig(rules=_std_rules)
+        logger.info(
+            "auto-config: StandardizationConfig auto-detected %d column rules: %s",
+            len(_std_rules), sorted(_std_rules.keys()),
+        )
+
     # Capture choices in a decisions object so a future iterative-tuning loop
     # can nudge them without re-profiling. Matchkeys and blocking strategy/
     # keys/passes all flow through decisions; non-decision runtime attributes
@@ -1615,6 +1659,7 @@ def _legacy_auto_configure_v0(
         transient_blocking=blocking,
         llm_scorer_config=llm_scorer_config,
         memory_config=memory_config,
+        standardization_config=_standardization,
     )
 
     # ── Preflight verification ──
@@ -1647,6 +1692,7 @@ def _rebuild_from_decisions(
     transient_blocking: BlockingConfig | None,
     llm_scorer_config: LLMScorerConfig | None,
     memory_config: MemoryConfig | None,
+    standardization_config: "StandardizationConfig | None" = None,
 ) -> GoldenMatchConfig:
     """Assemble a GoldenMatchConfig from decisions (+ runtime hand-offs).
 
@@ -1654,6 +1700,7 @@ def _rebuild_from_decisions(
       - `transient_blocking` carries non-decision attributes (learned_sample_size,
         learned_min_recall, skip_oversized, ...) that survive the rebuild.
       - `llm_scorer_config` / `memory_config` are runtime plumbing, not decisions.
+      - `standardization_config` is auto-detected from column types (Change 1).
 
     Splitting this out lets a future iterative-tuning loop mutate `decisions`
     and re-call `_rebuild_from_decisions` without re-running profile_columns /
@@ -1663,6 +1710,7 @@ def _rebuild_from_decisions(
     iterative-tuning hooks that may re-examine column stats without rethreading
     them through the call chain.
     """
+    from goldenmatch.config.schemas import StandardizationConfig as _StdCfg  # noqa: F401
     # Rebuild final blocking from decisions, preserving runtime-only attrs
     # (learned_sample_size, learned_min_recall, skip_oversized, etc.) from
     # the transient blocking object produced above.
@@ -1683,6 +1731,7 @@ def _rebuild_from_decisions(
         output=OutputConfig(),
         llm_scorer=llm_scorer_config,
         memory=memory_config,
+        standardization=standardization_config,
     )
 
 

@@ -712,3 +712,69 @@ def test_decorate_with_llm_scorer_silent_no_key(monkeypatch):
     )
     out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
     assert out is cfg or out.llm_scorer is None
+
+
+# ============================================================
+# Change 2 (2026-05-07): adaptive auto_threshold
+# ============================================================
+
+def test_decorate_uses_wide_mode_when_borderline_dominant(monkeypatch):
+    """When mass_in_borderline > 0.5, LLM scorer's auto_threshold drops
+    near 1.0 so the LLM inspects high-scoring pairs (the DQbench T2/T3
+    pathology where mass_above=1.0 AND mass_borderline=0.95)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile, ScoringProfile, ClusterProfile,
+    )
+    cfg = _cfg_with_threshold(0.7)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=25,
+                                  block_sizes_p99=98),
+        scoring=ScoringProfile(
+            n_pairs_scored=600, candidates_compared=80000,
+            mass_above_threshold=1.0,
+            mass_in_borderline=0.95,    # WIDE MODE TRIGGER
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.02),
+    )
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(), budget=ControllerBudget(),
+    )
+    out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
+    assert out.llm_scorer is not None
+    # Wide mode: auto_threshold close to 1.0
+    assert out.llm_scorer.auto_threshold >= 0.95
+    # candidate_lo ≈ threshold - 0.05 (tighter than standard mode's -0.10)
+    assert out.llm_scorer.candidate_lo == pytest.approx(0.65, abs=0.01)
+
+
+def test_decorate_uses_standard_mode_when_borderline_modest(monkeypatch):
+    """When mass_in_borderline is between 0.10 and 0.50, dynamic bounds
+    centered on threshold remain (existing behavior)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile, ScoringProfile, ClusterProfile,
+    )
+    cfg = _cfg_with_threshold(0.7)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=200, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10,
+                                  block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=300,
+            mass_above_threshold=0.4,
+            mass_in_borderline=0.25,    # STANDARD MODE
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(), budget=ControllerBudget(),
+    )
+    out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
+    # Standard bounds: lo=0.6, hi=0.9, auto=0.9
+    assert out.llm_scorer.candidate_lo == pytest.approx(0.60)
+    assert out.llm_scorer.candidate_hi == pytest.approx(0.90)
+    assert out.llm_scorer.auto_threshold == pytest.approx(0.90)
