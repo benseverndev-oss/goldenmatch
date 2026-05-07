@@ -418,7 +418,8 @@ def test_default_rules_list_has_five_entries():
     # Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)
     # Reverted to 9: rule_enable_llm_scorer moved out of DEFAULT_RULES into
     # AutoConfigController._maybe_decorate_with_llm_scorer (post-iteration decoration)
-    assert len(DEFAULT_RULES) == 9
+    # Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -597,9 +598,10 @@ def test_default_rules_now_has_six_entries():
     """Singleton-trap rule is added to DEFAULT_RULES.
     Updated to 7 after rule_blocking_key_swap was added (2026-05-07).
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
-    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration."""
+    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration.
+    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -809,20 +811,24 @@ def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
 def test_default_rules_now_has_seven_entries():
     """Adding rule_blocking_key_swap brings the count to 7.
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
-    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration."""
+    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration.
+    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
-def test_rule_key_swap_is_after_rule_no_matches():
-    """rule_no_matches gets first crack on iter 0 (it lowers threshold first);
-    rule_blocking_key_swap is the iter-1+ fallback when that didn't help."""
+def test_rule_key_swap_is_before_rule_no_matches():
+    """Fix 1: rule_blocking_key_swap fires BEFORE rule_no_matches (and
+    rule_low_transitivity). When blocking is fundamentally wrong (mass_above==0),
+    the structural fix (swap key) must take priority over tuning rules (lower threshold).
+    The old behavior was iter-1+ fallback AFTER no_matches; now it fires earlier as a
+    structural check, with history.decisions guard ensuring iter-0 safety."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_no_matches, rule_blocking_key_swap,
     )
     idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
     idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
-    assert idx_no_matches < idx_swap
+    assert idx_swap < idx_no_matches, "key_swap must run before no_matches (structural before tuning)"
 
 
 def test_rule_key_swap_drops_derived_column_exact_matchkey():
@@ -1123,11 +1129,12 @@ def test_rule_null_heavy_does_not_fire_on_low_null_field():
 
 
 def test_default_rules_now_has_nine_entries():
-    """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brings the count to 9.
+    """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brought the count to 9.
+    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     (rule_enable_llm_scorer was moved out of DEFAULT_RULES into
     AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)"""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
@@ -1256,12 +1263,12 @@ def test_rule_enable_llm_scorer_does_not_fire_when_already_enabled(monkeypatch):
     assert out is None
 
 
-def test_default_rules_now_has_nine_entries():
-    """rule_enable_llm_scorer was moved out of DEFAULT_RULES into
-    AutoConfigController._maybe_decorate_with_llm_scorer (post-iteration
-    decoration), bringing count back to 9."""
+def test_default_rules_now_has_ten_entries():
+    """rule_uniform_heavy_blocking was added (Fix 2) and rule_blocking_key_swap
+    was reordered (Fix 1), bringing the count to 10.
+    (rule_enable_llm_scorer remains outside DEFAULT_RULES as post-iteration decoration.)"""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_rule_enable_llm_scorer_not_in_default_rules():
@@ -1284,3 +1291,223 @@ def test_llm_api_key_helper_reads_openai_or_anthropic(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-test")
     assert _llm_api_key_available()
+
+
+# ============================================================
+# rule_uniform_heavy_blocking (added 2026-05-07)
+# ============================================================
+
+from goldenmatch.core.autoconfig_rules import rule_uniform_heavy_blocking
+
+
+def test_rule_uniform_heavy_blocking_fires_on_t2_signature():
+    """T2-like: 25 blocks × avg 80 records, mass_above=1.0, mass_borderline=0.95.
+    Should propose switch to a high-cardinality identity column."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="customer_name", scorer="ensemble",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["city", "product_category"],
+                                     transforms=["lowercase"])],
+            passes=[
+                BlockingKeyConfig(fields=["city", "product_category"], transforms=["lowercase"]),
+                BlockingKeyConfig(fields=["product_category"], transforms=["lowercase"]),
+            ],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=2000, n_cols=8,
+            column_types={
+                "city": "geo", "product_category": "text",
+                "customer_email": "email", "customer_name": "name",
+                "phone_number": "phone", "billing_zip": "zip",
+                "customer_id": "id-like", "order_total": "numeric",
+            },
+            cardinality_ratio={
+                "city": 0.05, "product_category": 0.02,
+                "customer_email": 0.95, "customer_name": 0.85,
+                "phone_number": 0.85, "billing_zip": 0.20,
+                "customer_id": 0.99, "order_total": 0.50,
+            },
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["city", "product_category"]], n_blocks=25,
+            total_comparisons=79767, reduction_ratio=0.96,
+            block_sizes_p50=80, block_sizes_p95=98, block_sizes_p99=98,
+            block_sizes_max=98,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=598, candidates_compared=79767,
+            mass_above_threshold=1.0, mass_in_borderline=0.9465,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.021),
+        matchkey=MatchkeyProfile(per_field={
+            "customer_name": FieldStats(0.85, 0.0, 12),
+        }),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "uniform_heavy_blocking"
+    # Should pick customer_email or customer_name (high-cardinality identity)
+    # customer_email (0.95) is excluded by cardinality ceiling; customer_name (0.85) should win
+    new_field = new_cfg.blocking.keys[0].fields[0]
+    assert new_field in {"customer_email", "customer_name"}
+    # Multi-pass dropped
+    assert len(new_cfg.blocking.passes or []) == 0
+
+
+def test_rule_uniform_heavy_blocking_does_not_fire_when_blocks_small():
+    """When avg block size < 30, this rule doesn't fire (different pathology)."""
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=4),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=500, total_comparisons=1000,
+            reduction_ratio=0.99, block_sizes_p99=5,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, candidates_compared=1000,
+            mass_above_threshold=1.0, mass_in_borderline=0.6,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.5),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_uniform_heavy_blocking_does_not_fire_when_few_candidates():
+    """When candidates_compared < n_rows, blocking is too tight, not too loose."""
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=4),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=20, total_comparisons=500,
+            reduction_ratio=0.95, block_sizes_p99=100,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, candidates_compared=500,  # < n_rows
+            mass_above_threshold=1.0, mass_in_borderline=0.6,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.5),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_uniform_heavy_blocking_does_not_fire_when_mass_above_low():
+    """When most pairs DON'T match, this isn't the over-coarse pathology."""
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=4,
+                          cardinality_ratio={"a": 0.01, "name": 0.85}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=20, total_comparisons=80000,
+            reduction_ratio=0.96, block_sizes_p99=100,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=80000,
+            mass_above_threshold=0.1,  # below 0.5
+            mass_in_borderline=0.6,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.5),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_uniform_heavy_blocking_does_not_fire_when_mass_borderline_low():
+    """When mass_in_borderline < 0.5, matches are confident — may be real matches."""
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=4,
+                          cardinality_ratio={"a": 0.01, "name": 0.85},
+                          column_types={"a": "text", "name": "name"}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=20, total_comparisons=80000,
+            reduction_ratio=0.96, block_sizes_p99=100,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=80000,
+            mass_above_threshold=0.9,
+            mass_in_borderline=0.2,  # below 0.5 — confident matches
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.5),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_uniform_heavy_blocking_returns_none_when_no_alternate_field():
+    """No high-cardinality identity-bearing field available → don't fire."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="city", scorer="exact",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=2000, n_cols=2,
+            column_types={"city": "geo", "state": "geo"},
+            cardinality_ratio={"city": 0.05, "state": 0.01},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["city"]], n_blocks=25,
+            total_comparisons=79767, reduction_ratio=0.96,
+            block_sizes_p99=98,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=598, candidates_compared=79767,
+            mass_above_threshold=1.0, mass_in_borderline=0.95,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.021),
+    )
+    out = rule_uniform_heavy_blocking(profile, cfg, RunHistory())
+    assert out is None
+
+
+# ── Ordering tests for Fix 1 + Fix 2 ────────────────────────────────────────
+
+
+def test_default_rules_order_blocking_key_swap_before_low_transitivity():
+    """Fix 1 — when blocking is fundamentally wrong (mass_above=0), swap
+    the key BEFORE tuning the threshold. Otherwise low_transitivity fires
+    iteration after iteration, lowering threshold uselessly."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_blocking_key_swap, rule_low_transitivity,
+    )
+    idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
+    idx_lt = DEFAULT_RULES.index(rule_low_transitivity)
+    assert idx_swap < idx_lt
+
+
+def test_default_rules_uniform_heavy_after_blocking_too_coarse():
+    """rule_blocking_too_coarse handles skewed (p99 outlier);
+    rule_uniform_heavy_blocking handles uniform-large. Both target
+    structural blocking issues; uniform-heavy comes after the more
+    specific p99-outlier check."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_blocking_too_coarse, rule_uniform_heavy_blocking,
+    )
+    idx_too_coarse = DEFAULT_RULES.index(rule_blocking_too_coarse)
+    idx_uniform = DEFAULT_RULES.index(rule_uniform_heavy_blocking)
+    assert idx_too_coarse < idx_uniform
+
+
+def test_default_rules_now_has_ten_entries_final():
+    """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total."""
+    from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+    assert len(DEFAULT_RULES) == 10

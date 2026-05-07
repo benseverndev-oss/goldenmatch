@@ -384,6 +384,97 @@ def rule_blocking_key_swap(
     return new_cfg, decision
 
 
+def rule_uniform_heavy_blocking(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when blocking creates many candidates but scoring can't separate
+    matches from non-matches — signature of over-coarse blocking on a
+    low-discriminating key.
+
+    Distinct from rule_blocking_too_coarse (which fires on p99 outlier — a
+    SKEWED distribution): this fires on UNIFORM-large blocks where every
+    pair scores high but most are false positives. T2 & T3 of DQbench fit:
+    blocking on `(city, product_category)` or `service_day` groups records
+    that share a category/date but aren't the same entity.
+
+    Signature:
+      - candidates_compared > n_rows (more than 1 comparison per row on average)
+      - mass_above_threshold > 0.5 (>50% of pairs "match")
+      - mass_in_borderline > 0.5 (>50% are borderline-confidence)
+      - avg block size > 30 (uniform-heavy, not just two big tail blocks)
+
+    Action: switch to a higher-cardinality identity-bearing column
+    (text or id-like, cardinality_ratio in [0.3, 0.95]) not currently
+    in blocking — typically a name/email field.
+    """
+    bp = profile.blocking
+    sp = profile.scoring
+    dp = profile.data
+    n_rows = dp.n_rows
+
+    if bp.n_blocks == 0 or n_rows == 0:
+        return None
+    avg_block = n_rows / bp.n_blocks
+    if avg_block < 30:
+        return None  # blocks already small enough — different pathology
+    if sp.candidates_compared < n_rows:
+        return None  # not enough candidates to characterize as over-coarse
+    if sp.mass_above_threshold < 0.5:
+        return None  # not the "everything matches" signature
+    if sp.mass_in_borderline < 0.5:
+        return None  # if matches are confident, they may be real
+
+    if current.blocking is None:
+        return None
+    used = _existing_blocking_fields(current)
+
+    # Find a high-cardinality identity-bearing column not already in blocking.
+    # Prefer email > name > text > id-like; cardinality 0.3-0.95 (selective but not unique)
+    priority_map = {"email": 0, "name": 1, "text": 2, "id-like": 3}
+    candidates: list[tuple[int, float, str, str]] = []  # (priority, -ratio, col, col_type)
+    for col, ratio in dp.cardinality_ratio.items():
+        if col in used:
+            continue
+        if not (0.3 <= ratio <= 0.95):
+            continue
+        col_type = dp.column_types.get(col, "unknown")
+        if col_type in priority_map:
+            prio = priority_map[col_type]
+            candidates.append((prio, -ratio, col, col_type))
+    if not candidates:
+        return None
+    candidates.sort()
+    new_field = candidates[0][2]
+    new_type = candidates[0][3]
+
+    # Replace blocking with single key on the selected high-cardinality field
+    new_blocking = current.blocking.model_copy(update={
+        "strategy": "static",
+        "keys": [BlockingKeyConfig(
+            fields=[new_field],
+            transforms=["lowercase", "strip"],
+        )],
+        "passes": [],  # drop multi-pass; the new key is selective enough
+    })
+    new_cfg = current.model_copy(update={"blocking": new_blocking})
+    decision = PolicyDecision(
+        rule_name="uniform_heavy_blocking",
+        rationale=(
+            f"avg_block_size={avg_block:.1f} (uniform-heavy: p99/avg ratio "
+            f"low) with mass_above={sp.mass_above_threshold:.2f} and "
+            f"mass_borderline={sp.mass_in_borderline:.2f} — blocking "
+            f"creates ambiguous candidates. Switching to "
+            f"{new_field!r} ({new_type}, cardinality "
+            f"{dp.cardinality_ratio[new_field]:.2f})"
+        ),
+        config_diff={
+            "blocking.strategy": "static",
+            "blocking.keys[0].fields": [new_field],
+        },
+    )
+    return new_cfg, decision
+
+
 def rule_blocking_field_null_heavy(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
@@ -629,15 +720,16 @@ def rule_enable_llm_scorer(
 
 
 DEFAULT_RULES = [
-    rule_blocking_field_null_heavy,   # structural null-rate guard (runs first)
-    rule_blocking_singleton_trap,     # catches __title_key__-style traps before blocking_too_coarse
-    rule_blocking_too_coarse,
-    rule_unimodal_scoring,
-    rule_low_reduction_ratio,
-    rule_low_transitivity,
-    rule_no_matches,
-    rule_blocking_key_swap,           # iter-1+ fallback when threshold/block loosening didn't help
-    rule_recall_gap_suspected,        # probe-based recall signal
+    rule_blocking_field_null_heavy,   # structural: high-null blocking field (runs first)
+    rule_blocking_singleton_trap,     # structural: candidates_compared == 0
+    rule_blocking_key_swap,           # structural: mass_above==0 with prior decision (Fix 1: was pos 8)
+    rule_blocking_too_coarse,         # structural: p99 outlier (skewed distribution)
+    rule_uniform_heavy_blocking,      # structural: uniform-large blocks (Fix 2: new rule)
+    rule_unimodal_scoring,            # tuning: dip statistic low
+    rule_low_reduction_ratio,         # structural: too-tight blocking
+    rule_low_transitivity,            # tuning: transitivity low (Fix 1: demoted from pos 6)
+    rule_no_matches,                  # tuning: nothing matches
+    rule_recall_gap_suspected,        # tuning: random pair probe high OR over-tight signature
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
