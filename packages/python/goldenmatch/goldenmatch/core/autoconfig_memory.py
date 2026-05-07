@@ -37,10 +37,13 @@ CREATE INDEX IF NOT EXISTS idx_autoconfig_sig ON autoconfig_runs (profile_signat
 
 
 def profile_signature(df: "pl.DataFrame", *, mode: str = "dedupe") -> str:
-    """Compute a coarse shape signature for a DataFrame.
+    """Compute a per-column-name signature for a DataFrame.
 
-    Same n_cols + same dtype distribution → same signature.
-    DBLP-ACM (5 Utf8 cols) ≠ Febrl3 (11 Utf8 cols) ≠ NCVR (10 Utf8 cols).
+    Two frames hash to the same signature only when they have the same
+    user-facing **column names** AND the same per-column dtypes. Just
+    ``(n_cols, dtype_distribution)`` is too coarse — cached configs
+    reference specific column names, and replaying a config that names
+    columns the new frame doesn't have would crash the pipeline.
 
     Args:
         df: Input DataFrame (target frame in match mode).
@@ -50,9 +53,14 @@ def profile_signature(df: "pl.DataFrame", *, mode: str = "dedupe") -> str:
     Returns:
         16-character hex string (truncated SHA-256).
     """
-    user_cols = [c for c in df.columns if not c.startswith("__")]
-    types = tuple(sorted(str(df.schema[c]) for c in user_cols))
-    key = (mode, len(user_cols), types)
+    # Sort by name so column ORDER doesn't change the signature; it's the
+    # set of (name, dtype) pairs that matters.
+    pairs = sorted(
+        (c, str(df.schema[c]))
+        for c in df.columns
+        if not c.startswith("__")
+    )
+    key = (mode, tuple(pairs))
     return hashlib.sha256(repr(key).encode()).hexdigest()[:16]
 
 

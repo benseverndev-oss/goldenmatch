@@ -3,6 +3,32 @@ import pytest
 from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def _disable_autoconfig_memory(monkeypatch):
+    """Default-off the cross-run autoconfig memory in every test.
+
+    Cross-test poisoning is otherwise possible: test A runs ``auto_configure_df``
+    on a frame with shape S, test B runs it on a different frame with the same
+    shape S, and test B silently picks up test A's cached config. Tests that
+    specifically want to exercise memory should pass an explicit
+    ``AutoConfigMemory`` instance into the controller they construct.
+
+    The env var is read at module import time, so we also patch the cached
+    module state directly to make the fixture effective for tests that import
+    goldenmatch transitively before this fixture runs.
+    """
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    try:
+        import goldenmatch.core.autoconfig as _ac
+        monkeypatch.setattr(_ac, "_AUTOCONFIG_MEMORY_DISABLED", True, raising=False)
+        monkeypatch.setattr(_ac, "_DEFAULT_MEMORY", None, raising=False)
+    except ImportError:
+        # goldenmatch not importable — skip fixture (e.g. import-failure
+        # collection-time tests); env var still set, so any later import
+        # picks up the disabled state.
+        pass
+
+
 @pytest.fixture
 def tmp_dir(tmp_path):
     return tmp_path
