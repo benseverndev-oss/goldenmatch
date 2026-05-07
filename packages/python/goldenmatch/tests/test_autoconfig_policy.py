@@ -177,3 +177,230 @@ def test_decision_not_attached_when_no_history_entries():
     # Empty history — propose still works, just no attach
     result = policy.propose(_red_profile(), cfg_a, RunHistory())
     assert result is cfg_b
+
+
+# ============================================================
+# Task 3.2 — five rules
+# ============================================================
+
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.core.autoconfig_rules import (
+    rule_blocking_too_coarse, rule_unimodal_scoring, rule_low_reduction_ratio,
+    rule_low_transitivity, rule_no_matches, DEFAULT_RULES,
+)
+
+
+def _config_with_blocking(field: str = "a", threshold: float = 0.7,
+                          scorer: str = "jaro_winkler") -> GoldenMatchConfig:
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=threshold,
+            fields=[
+                MatchkeyField(field="name", scorer=scorer, weight=1.0,
+                              transforms=["lowercase"]),
+                MatchkeyField(field="city", scorer=scorer, weight=1.0,
+                              transforms=["lowercase"]),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=[field], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+
+
+def _profile_blocking_too_coarse() -> ComplexityProfile:
+    return ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=3,
+            column_types={"a": "text", "name": "name", "city": "geo"},
+            cardinality_ratio={"a": 0.02, "name": 0.4, "city": 0.3},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=2, total_comparisons=99000,
+            reduction_ratio=0.8, block_sizes_p50=100, block_sizes_p95=400,
+            block_sizes_p99=950,  # 950 > 10 * (1000/2 = 500) → 5000? no, 10*500 = 5000 NOT >
+            block_sizes_max=950,
+        ),
+        scoring=ScoringProfile(n_pairs_scored=99000, mass_above_threshold=0.1, dip_statistic=0.05),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+
+
+def _profile_blocking_RED() -> ComplexityProfile:
+    """p99 (5500) > 10 * 1000/2 (5000) → fires."""
+    return ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=3,
+            column_types={"a": "text", "name": "name", "city": "geo"},
+            cardinality_ratio={"a": 0.02, "name": 0.4, "city": 0.3},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=2, total_comparisons=99000,
+            reduction_ratio=0.8, block_sizes_p50=100, block_sizes_p95=400,
+            block_sizes_p99=5500, block_sizes_max=5500,
+        ),
+        scoring=ScoringProfile(n_pairs_scored=99000, mass_above_threshold=0.1, dip_statistic=0.05),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+
+
+# Rule 1
+def test_rule_blocking_too_coarse_fires_when_p99_dominates():
+    cfg = _config_with_blocking(field="a")
+    out = rule_blocking_too_coarse(_profile_blocking_RED(), cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "blocking_too_coarse"
+    new_field = new_cfg.blocking.keys[0].fields[0]
+    assert new_field != "a"
+    assert new_field in {"name", "city"}
+
+
+def test_rule_blocking_too_coarse_does_not_fire_when_p99_modest():
+    cfg = _config_with_blocking(field="a")
+    out = rule_blocking_too_coarse(_profile_blocking_too_coarse(), cfg, RunHistory())
+    # 950 < 5000 threshold → no fire
+    assert out is None
+
+
+def test_rule_blocking_too_coarse_returns_none_when_no_alternate_col():
+    cfg = _config_with_blocking(field="name")
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=2,
+            column_types={"name": "name", "rare": "id-like"},
+            cardinality_ratio={"name": 0.4, "rare": 0.99},  # nothing in [0.05, 0.5] except 'name' itself
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["name"]], n_blocks=2, total_comparisons=99000, reduction_ratio=0.8,
+            block_sizes_p99=5500,
+        ),
+        scoring=ScoringProfile(n_pairs_scored=10, mass_above_threshold=0.1, dip_statistic=0.05),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_blocking_too_coarse(profile, cfg, RunHistory())
+    assert out is None
+
+
+# Rule 2
+def test_rule_unimodal_scoring_fires_and_swaps_scorer():
+    cfg = _config_with_blocking(scorer="jaro_winkler")
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, dip_statistic=0.001,
+            mass_above_threshold=0.4, mass_in_borderline=0.3,
+        ),
+        matchkey=MatchkeyProfile(per_field={
+            "name": FieldStats(0.4, 0.0, 10),
+            "city": FieldStats(0.1, 0.0, 5),
+        }),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_unimodal_scoring(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    # Highest cardinality field is "name"
+    name_field = next(f for f in new_cfg.matchkeys[0].fields if f.field == "name")
+    assert name_field.scorer == "ensemble"
+
+
+def test_rule_unimodal_scoring_does_not_fire_when_already_ensemble():
+    cfg = _config_with_blocking(scorer="ensemble")
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, dip_statistic=0.001, mass_above_threshold=0.4,
+        ),
+        matchkey=MatchkeyProfile(per_field={"name": FieldStats(0.4, 0.0, 10)}),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_unimodal_scoring(profile, cfg, RunHistory())
+    assert out is None
+
+
+# Rule 3
+def test_rule_low_reduction_fires_and_adds_multi_pass():
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                         column_types={"name": "text", "city": "geo"}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=10, total_comparisons=4000,
+            reduction_ratio=0.1, block_sizes_p99=15,
+        ),
+        scoring=ScoringProfile(n_pairs_scored=4000, mass_above_threshold=0.4, dip_statistic=0.05),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_low_reduction_ratio(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, _ = out
+    assert new_cfg.blocking.strategy == "multi_pass"
+    assert len(new_cfg.blocking.passes) >= 2
+    soundex_pass = [p for p in new_cfg.blocking.passes if "soundex" in p.transforms]
+    assert soundex_pass
+
+
+# Rule 4
+def test_rule_low_transitivity_lowers_threshold():
+    cfg = _config_with_blocking(threshold=0.8)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        scoring=ScoringProfile(n_pairs_scored=500, mass_above_threshold=0.4, dip_statistic=0.05),
+        cluster=ClusterProfile(n_clusters=10, transitivity_rate=0.5),  # below 0.85
+    )
+    out = rule_low_transitivity(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, _ = out
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.75)
+
+
+def test_rule_low_transitivity_floors_at_0_5():
+    cfg = _config_with_blocking(threshold=0.5)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        scoring=ScoringProfile(n_pairs_scored=500, mass_above_threshold=0.4, dip_statistic=0.05),
+        cluster=ClusterProfile(n_clusters=10, transitivity_rate=0.5),
+    )
+    out = rule_low_transitivity(profile, cfg, RunHistory())
+    assert out is None  # already at floor
+
+
+# Rule 5
+def test_rule_no_matches_resets_threshold_and_broadens_blocking():
+    cfg = _config_with_blocking(threshold=0.85)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, mass_above_threshold=0.0,  # nothing matched
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_no_matches(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, _ = out
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.5)
+    assert new_cfg.blocking.max_block_size >= 50000
+
+
+def test_default_rules_list_has_five_entries():
+    assert len(DEFAULT_RULES) == 5
+
+
+def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
+    """End-to-end: HeuristicRefitPolicy with DEFAULT_RULES proposes a config
+    when blocking is too coarse."""
+    cfg = _config_with_blocking(field="a")
+    policy = HeuristicRefitPolicy()  # uses DEFAULT_RULES
+    profile = _profile_blocking_RED()
+    out = policy.propose(profile, cfg, RunHistory())
+    assert out is not None
+    assert out is not cfg
