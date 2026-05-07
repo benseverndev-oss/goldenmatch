@@ -1240,6 +1240,15 @@ _AUTOCONFIG_MEMORY_DISABLED: bool = (
     in ("0", "false", "disabled")
 )
 
+# Tier 3: LLM fallback policy.  Set GOLDENMATCH_AUTOCONFIG_LLM=1 (or "true"
+# or "enabled") to enable LLM-assisted config proposals when the heuristic
+# rule table is exhausted but the profile is still RED/YELLOW.  Requires
+# OPENAI_API_KEY.  Default OFF to avoid unexpected API spend.
+_AUTOCONFIG_LLM_ENABLED: bool = (
+    os.environ.get("GOLDENMATCH_AUTOCONFIG_LLM", "0").lower()
+    in ("1", "true", "enabled")
+)
+
 # Module-level default memory singleton (uses ~/.goldenmatch/autoconfig_memory.db).
 # Lazily initialised on first use to avoid creating the directory at import time.
 _DEFAULT_MEMORY: "AutoConfigMemory | None" = None
@@ -1323,11 +1332,15 @@ def auto_configure_df(
     from goldenmatch.core.autoconfig_controller import (
         AutoConfigController, ControllerBudget,
     )
-    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
 
     memory = _get_default_memory()
+    if _AUTOCONFIG_LLM_ENABLED:
+        policy: "HeuristicRefitPolicy | LLMRefitPolicy" = LLMRefitPolicy(HeuristicRefitPolicy())
+    else:
+        policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
-        policy=HeuristicRefitPolicy(),
+        policy=policy,
         budget=ControllerBudget(),
         memory=memory,
     )
