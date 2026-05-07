@@ -201,3 +201,61 @@ class ComplexityProfile:
             min(self.cluster.cluster_size_max / max(self.data.n_rows, 1), 1.0),
             float(self.cluster.n_clusters > 0),
         ]
+
+    def to_legacy_dict(self) -> dict:
+        """Return the typed sub-profiles as the legacy ``PostflightSignals`` dict shape.
+
+        This is the canonical back-compat shim used by ``_signals_view`` in
+        ``autoconfig_verify``. Keys match ``PostflightSignals`` exactly so
+        consumers that read by key work without change.
+
+        Notes on shape differences vs the legacy postflight() path:
+        - ``score_histogram``: returns the typed ``list[int]`` (20 buckets) rather
+          than the ``{"bins": [...], "counts": [...]}`` dict produced by the legacy
+          postflight path. Consumers that previously expected the dict shape must
+          accept the list — they should read from ``controller_profile`` paths only
+          when the controller ran, so this is a controlled cut-over.
+        - ``blocking_recall``: mapped from ``reduction_ratio`` (same concept; the
+          legacy key was mislabelled).
+        - ``block_size_percentiles``: reconstructed from the four BlockingProfile
+          percentile fields. ``p95`` is not stored in BlockingProfile; 0 is used
+          as a sentinel.
+        - ``preliminary_cluster_sizes``: reconstructed from ClusterProfile. ``p95``
+          and ``count`` are not in ClusterProfile; 0 is used as sentinels.
+        - ``current_threshold``: not stored in ComplexityProfile (it is a config
+          value, not a data signal); returns 0.0 as sentinel.
+        - ``oversized_clusters``: ColusterProfile stores only the count; returns a
+          list of ``count`` empty dicts as a structural placeholder.
+        """
+        hist: list[int] = list(self.scoring.score_histogram)
+
+        block_pct: dict = {
+            "p50": self.blocking.block_sizes_p50,
+            "p95": self.blocking.block_sizes_p95,
+            "p99": self.blocking.block_sizes_p99,
+            "max": self.blocking.block_sizes_max,
+        }
+
+        cluster_pct: dict = {
+            "p50": self.cluster.cluster_size_p50,
+            "p95": 0,
+            "p99": self.cluster.cluster_size_p99,
+            "max": self.cluster.cluster_size_max,
+            "count": self.cluster.n_clusters,
+        }
+
+        # Structural placeholder: callers that read oversized_clusters items by
+        # key (cluster_id / size / bottleneck_pair) won't find them here, but
+        # the count is preserved so length-based guards keep working.
+        oversized: list[dict] = [{} for _ in range(self.cluster.oversized_cluster_count)]
+
+        return {
+            "score_histogram": hist,
+            "blocking_recall": self.blocking.reduction_ratio,
+            "block_size_percentiles": block_pct,
+            "threshold_overlap_pct": self.scoring.mass_in_borderline,
+            "total_pairs_scored": self.scoring.n_pairs_scored,
+            "current_threshold": 0.0,
+            "preliminary_cluster_sizes": cluster_pct,
+            "oversized_clusters": oversized,
+        }
