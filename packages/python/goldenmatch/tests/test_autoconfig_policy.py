@@ -415,7 +415,7 @@ def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
 def test_default_rules_list_has_five_entries():
     # Updated to 6 after rule_blocking_singleton_trap was added (2026-05-07)
     # Updated to 7 after rule_blocking_key_swap was added (2026-05-07)
-    assert len(DEFAULT_RULES) == 7
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -594,7 +594,7 @@ def test_default_rules_now_has_six_entries():
     """Singleton-trap rule is added to DEFAULT_RULES.
     Updated to 7 after rule_blocking_key_swap was added (2026-05-07)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 7
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -804,7 +804,7 @@ def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
 def test_default_rules_now_has_seven_entries():
     """Adding rule_blocking_key_swap brings the count to 7."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 7
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_rule_key_swap_is_after_rule_no_matches():
@@ -924,3 +924,213 @@ def test_rule_key_swap_keeps_exact_matchkey_with_mixed_derived_and_regular_field
     # Both survive — the mixed matchkey has a non-derived field, user might
     # have a real reason for it
     assert len(new_cfg.matchkeys) == 2
+
+
+# ============================================================
+# Tier 1b — rule_recall_gap_suspected (added autoconfig-tier1-tier2)
+# ============================================================
+
+from goldenmatch.core.autoconfig_rules import (
+    rule_recall_gap_suspected, rule_blocking_field_null_heavy,
+)
+
+
+def test_rule_recall_gap_fires_on_high_random_pair_rate():
+    """random_pair_above_threshold_rate > 0.05 with single-pass blocking
+    triggers a multi-pass proposal."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["soc_sec_id"], transforms=["strip"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=2000, n_cols=4,
+            column_types={"soc_sec_id": "id-like", "name": "name",
+                          "address": "text", "city": "geo"},
+            cardinality_ratio={"soc_sec_id": 0.7, "name": 0.5,
+                                "address": 0.6, "city": 0.4},
+            null_rate={"soc_sec_id": 0.0, "name": 0.05,
+                        "address": 0.05, "city": 0.05},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["soc_sec_id"]], n_blocks=400, total_comparisons=900,
+            reduction_ratio=0.999, block_sizes_p99=5,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=700, candidates_compared=900,
+            mass_above_threshold=1.0, dip_statistic=0.04,
+            random_pair_above_threshold_rate=0.08,    # signal: 8% of random pairs match
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+        matchkey=MatchkeyProfile(per_field={"name": FieldStats(0.5, 0.0, 8)}),
+    )
+    out = rule_recall_gap_suspected(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "recall_gap_suspected"
+    assert new_cfg.blocking.strategy == "multi_pass"
+    assert len(new_cfg.blocking.passes) >= 2
+    # Second pass should be on a non-blocking column
+    second_pass_field = new_cfg.blocking.passes[1].fields[0]
+    assert second_pass_field != "soc_sec_id"
+
+
+def test_rule_recall_gap_does_not_fire_when_probe_rate_low():
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["soc_sec_id"], transforms=["strip"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=50),
+        scoring=ScoringProfile(
+            n_pairs_scored=50, candidates_compared=100,
+            mass_above_threshold=0.5, dip_statistic=0.05,
+            random_pair_above_threshold_rate=0.02,    # below threshold
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+    )
+    out = rule_recall_gap_suspected(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_recall_gap_does_not_fire_when_probe_none():
+    """When random_pair_above_threshold_rate is None (probe not run), don't fire."""
+    cfg = _config_with_blocking()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        scoring=ScoringProfile(random_pair_above_threshold_rate=None),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+    )
+    out = rule_recall_gap_suspected(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_recall_gap_does_not_fire_on_already_multipass():
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["soc_sec_id"], transforms=["strip"])],
+            passes=[
+                BlockingKeyConfig(fields=["soc_sec_id"], transforms=["strip"]),
+                BlockingKeyConfig(fields=["surname"], transforms=["soundex"]),
+            ],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=2000, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=400),
+        scoring=ScoringProfile(
+            n_pairs_scored=700, mass_above_threshold=0.6,
+            random_pair_above_threshold_rate=0.10,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+    )
+    out = rule_recall_gap_suspected(profile, cfg, RunHistory())
+    assert out is None
+
+
+# ============================================================
+# Tier 1c — rule_blocking_field_null_heavy (added autoconfig-tier1-tier2)
+# ============================================================
+
+
+def test_rule_null_heavy_fires_on_high_null_blocking_field():
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["sparse_id"], transforms=["strip"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=3,
+            column_types={"sparse_id": "id-like", "name": "name", "city": "geo"},
+            cardinality_ratio={"sparse_id": 0.7, "name": 0.5, "city": 0.4},
+            null_rate={"sparse_id": 0.30, "name": 0.0, "city": 0.0},  # 30% null
+        ),
+        blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=100),
+        scoring=ScoringProfile(),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+    )
+    out = rule_blocking_field_null_heavy(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "blocking_field_null_heavy"
+    assert new_cfg.blocking.strategy == "multi_pass"
+    second_pass = new_cfg.blocking.passes[1]
+    assert second_pass.fields[0] in {"name", "city"}
+
+
+def test_rule_null_heavy_does_not_fire_on_low_null_field():
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["dense_id"], transforms=["strip"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=2,
+            null_rate={"dense_id": 0.02, "name": 0.0},
+        ),
+        scoring=ScoringProfile(),
+        cluster=ClusterProfile(transitivity_rate=0.9),
+    )
+    out = rule_blocking_field_null_heavy(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_default_rules_now_has_nine_entries():
+    """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brings the count to 9."""
+    from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+    assert len(DEFAULT_RULES) == 9
+
+
+def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
+    """Order: rule_blocking_field_null_heavy first (structural check),
+    rule_recall_gap_suspected last (probe signal)."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_blocking_field_null_heavy,
+        rule_recall_gap_suspected, rule_no_matches,
+    )
+    idx_null_heavy = DEFAULT_RULES.index(rule_blocking_field_null_heavy)
+    idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
+    idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
+    assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
+    assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
+    assert idx_recall_gap == len(DEFAULT_RULES) - 1, "recall_gap must be the last rule"

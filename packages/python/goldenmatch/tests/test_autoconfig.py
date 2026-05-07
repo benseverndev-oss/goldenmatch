@@ -1377,3 +1377,33 @@ def test_classify_by_data_year_rejects_pathological_floats():
     col_type, _ = _classify_by_data(values)
     # Just verify no crash — classification outcome doesn't matter
     assert col_type is not None
+
+
+# ============================================================
+# Tier 2 — v0 null-rate guard (autoconfig-tier1-tier2)
+# ============================================================
+
+
+def test_legacy_v0_skips_high_null_blocking_candidate():
+    """v0 heuristic should skip blocking on a column with >20% nulls
+    even if its cardinality is otherwise ideal."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+
+    # sparse_id has high cardinality (0.5) but ~33% nulls;
+    # email has moderate cardinality (0.2) and 0% nulls.
+    df = pl.DataFrame({
+        "sparse_id": [str(i) if i % 3 != 0 else None for i in range(100)],  # ~33% null
+        "email": [f"u{i % 20}@x.com" for i in range(100)],
+        "name": [f"name_{i % 50}" for i in range(100)],
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    blocking_fields = []
+    for k in (cfg.blocking.keys or []):
+        blocking_fields.extend(k.fields)
+    for k in (cfg.blocking.passes or []):
+        blocking_fields.extend(k.fields)
+    assert "sparse_id" not in blocking_fields, (
+        f"v0 picked sparse_id (30% null) as a blocking field; should have skipped. "
+        f"Got blocking fields: {blocking_fields}"
+    )
