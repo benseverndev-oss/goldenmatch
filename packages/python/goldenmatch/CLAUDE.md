@@ -194,7 +194,7 @@
 - Pipeline backend selection: `_get_block_scorer(config)` in pipeline.py returns `score_blocks_parallel` or `score_blocks_ray` based on `config.backend`
 - PPRL vectorized similarity: use numpy matrix multiply (`mat_a @ mat_b.T`) for bloom filter dice, NOT per-pair Python loops. 13x speedup.
 - PPRL auto-config: penalize near-unique fields (IDs), long fields (>15 chars), high-null fields. Min threshold 0.85. max_fields=4 beats 6.
-- NCVR voter data: tab-delimited, 488MB zip at `tests/benchmarks/datasets/NCVR/`. Gitignored. `birth_year` only (no full DOB). `ssn` is Y/N flag not actual SSN.
+- NCVR voter data: tab-delimited, 488MB zip at `tests/benchmarks/datasets/NCVR/`. Gitignored. `birth_year` only (no full DOB). `ssn` is Y/N flag not actual SSN. The 10K-row sample at `ncvoter_sample_10k.txt` is the file the controller benchmark consumes; created by streaming the first 10K rows out of `ncvoter_Statewide.zip` (avoids the full 4.3GB extract). Both files are gitignored.
 - AgentSession creates own state (data, config, result, review_queue) -- not shared with MCP global state
 - `select_strategy(profile)` returns StrategyDecision with auto_execute=False for PPRL (requires caller confirmation)
 - A2A agent card must include `inputModes`/`outputModes` on every skill and `provider` field at top level

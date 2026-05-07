@@ -8,6 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Added
 - Auto-config introspective controller (PR #103, #104). Zero-config DBLP-ACM F1 0.51→0.96. New ComplexityProfile types, RefitPolicy protocol, 7 heuristic rules, controller history surfaced via PostflightReport.
+- Auto-config NCVR benchmark: F1=0.972 zero-config on synth-corruption ground truth
+  (P=0.982, R=0.962); v0 heuristic alone produces healthy config. Test gated
+  on dataset presence in tests/test_autoconfig_benchmarks.py.
 
 ## [Unreleased] / TypeScript port
 
