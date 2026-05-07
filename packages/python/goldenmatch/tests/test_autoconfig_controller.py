@@ -433,3 +433,41 @@ def test_run_returns_v0_red_when_all_iterations_crash_logs_warning(small_df, cap
         "could not produce a healthy config" in rec.message
         for rec in caplog.records
     ), f"Expected warning not found; records: {[r.message for r in caplog.records]}"
+
+
+# ============================================================
+# Fix A — match-mode n_rows includes reference
+# ============================================================
+
+def test_match_mode_n_rows_includes_reference():
+    """In match mode, DataProfile.n_rows must reflect target+reference combined.
+
+    Bug A: _assemble_profile previously called _compute_data_profile(df) with
+    only the target sample. BlockingProfile is built over the combined frame, so
+    rule_blocking_too_coarse's average block size was computed on half the actual
+    record count, causing phantom fires.
+    """
+    from goldenmatch.core.profile_emitter import ProfileEmitter
+
+    target = pl.DataFrame({
+        "title": [f"paper {i}" for i in range(50)],
+        "year": ["2020"] * 50,
+    })
+    reference = pl.DataFrame({
+        "title": [f"paper {i}" for i in range(50, 100)],
+        "year": ["2020"] * 50,
+    })
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=10, max_iterations=1),
+    )
+    # Use an empty emitter to force the _compute_data_profile fallback
+    emitter = ProfileEmitter()
+    profile = controller._assemble_profile(
+        emitter,
+        df=target,
+        reference=reference,
+        iteration=0,
+    )
+    # n_rows must be 100 (50 target + 50 reference), not 50 (target only)
+    assert profile.data.n_rows == 100

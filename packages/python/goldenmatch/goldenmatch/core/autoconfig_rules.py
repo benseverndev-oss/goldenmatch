@@ -24,6 +24,11 @@ def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
     return None
 
 
+def _is_derived(field_name: str) -> bool:
+    """Return True if field_name is an auto-generated derived column (prefixed with __)."""
+    return field_name.startswith("__")
+
+
 def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
     if cfg.blocking is None:
         return set()
@@ -35,6 +40,75 @@ def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
         for f in (k.fields or []):
             fields.add(f)
     return fields
+
+
+def rule_blocking_singleton_trap(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when blocking produced blocks but the scorer saw zero candidate
+    pairs to compare.  This covers two related pathologies:
+
+    1. Classic singleton trap: every block has exactly one record, so there
+       are no within-block pairs to compare.
+    2. Cross-source isolation (match mode): blocks were formed but no block
+       contains records from both target and reference, so the scorer again
+       sees zero candidates.
+
+    The primary signal is ``candidates_compared == 0`` with ``n_blocks > 0``.
+    The old ``singleton_block_count / n_blocks > 0.5`` guard is intentionally
+    dropped — DBLP-ACM has very few singletons yet still falls into the trap.
+
+    Action: switch to ``first_token`` on the dominant text field of the
+    first weighted matchkey, producing coarser blocks that are more likely
+    to contain matching cross-source pairs.
+    """
+    bp = profile.blocking
+    sp = profile.scoring
+    # If candidates were actually compared, this is not the singleton trap.
+    if sp.candidates_compared > 0:
+        return None
+    if bp.n_blocks == 0:
+        return None
+
+    if current.blocking is None:
+        return None
+
+    # Target field: first text field in the first weighted matchkey
+    mk = _first_weighted_mk(current)
+    if mk is None:
+        return None
+    target_field = None
+    for f in mk.fields or []:
+        col_type = profile.data.column_types.get(f.field, "unknown")
+        if col_type in ("text", "name"):
+            target_field = f.field
+            break
+    if target_field is None:
+        return None
+
+    # Build a new blocking key on raw text with first_token + lowercase.
+    new_blocking = current.blocking.model_copy(update={
+        "strategy": "static",
+        "keys": [BlockingKeyConfig(
+            fields=[target_field],
+            transforms=["lowercase", "first_token"],
+        )],
+    })
+    new_cfg = current.model_copy(update={"blocking": new_blocking})
+    decision = PolicyDecision(
+        rule_name="blocking_singleton_trap",
+        rationale=(
+            f"candidates_compared=0 with n_blocks={bp.n_blocks}; "
+            f"singletons={bp.singleton_block_count}/{bp.n_blocks} "
+            f"({bp.singleton_block_count / bp.n_blocks:.0%}); "
+            f"switching blocking to first_token({target_field!r})"
+        ),
+        config_diff={
+            "blocking.keys[0].fields": [target_field],
+            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+        },
+    )
+    return new_cfg, decision
 
 
 def rule_blocking_too_coarse(
@@ -173,8 +247,11 @@ def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
     sp = profile.scoring
-    # Fires on either (a) scored pairs but none above threshold,
-    # or (b) blocking produced no scorable pairs at all (singleton trap).
+    # Only fires when the fuzzy scorer actually compared candidates but none
+    # reached the threshold.  When candidates_compared == 0, the singleton-trap
+    # rule should fire instead (blocking never produced comparable pairs).
+    if sp.candidates_compared == 0:
+        return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
     if sp.mass_above_threshold > 0.0:
         return None  # something matched; not our case
     mk = _first_weighted_mk(current)
@@ -201,19 +278,118 @@ def rule_no_matches(
     decision = PolicyDecision(
         rule_name="no_matches",
         rationale=(
-            f"mass_above_threshold={sp.mass_above_threshold} on "
-            f"{sp.n_pairs_scored} pairs scored; resetting to permissive baseline "
-            f"(lower threshold, broader blocking)"
+            f"candidates_compared={sp.candidates_compared}, "
+            f"mass_above_threshold={sp.mass_above_threshold}; "
+            f"resetting to permissive baseline (lower threshold, broader blocking)"
         ),
         config_diff=updates,
     )
     return new_cfg, decision
 
 
+def rule_blocking_key_swap(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when a prior iteration already loosened the threshold/block cap
+    but candidates still aren't matching. The blocking *key* is wrong —
+    swap to ``first_token`` on the dominant text field of the first weighted
+    matchkey.
+
+    Diagnosed from DBLP-ACM: ``__title_key__`` blocking groups records whose
+    full titles share too little for token_sort to score above 0.5 even at
+    threshold 0.5. ``first_token`` on raw ``title`` puts records sharing
+    the first word in the same block, giving the fuzzy scorer pairs whose
+    titles are textually similar enough to actually match.
+    """
+    sp = profile.scoring
+    # Only fire when fuzzy actually compared candidates AND nothing matched
+    if sp.candidates_compared == 0:
+        return None
+    if sp.mass_above_threshold > 0.0:
+        return None
+    # Only fire after a prior iteration already tried something else (avoid
+    # double-firing with rule_no_matches on iter 0; this is the iter-1+ fallback)
+    if not history.decisions:
+        return None
+    if current.blocking is None:
+        return None
+
+    # Target field: first text field in the first weighted matchkey
+    mk = _first_weighted_mk(current)
+    if mk is None:
+        return None
+    target_field = None
+    for f in mk.fields or []:
+        col_type = profile.data.column_types.get(f.field, "unknown")
+        if col_type in ("text", "name"):
+            target_field = f.field
+            break
+    if target_field is None:
+        return None
+
+    # Avoid proposing a config we already have (anti-oscillation belt-and-suspenders)
+    existing_first_key = (current.blocking.keys or [None])[0]
+    if (existing_first_key is not None
+            and existing_first_key.fields == [target_field]
+            and "first_token" in (existing_first_key.transforms or [])):
+        return None
+
+    new_blocking = current.blocking.model_copy(update={
+        "strategy": "static",
+        "keys": [BlockingKeyConfig(
+            fields=[target_field],
+            transforms=["lowercase", "first_token"],
+        )],
+    })
+
+    # Drop exact matchkeys whose fields are ENTIRELY derived (__*).
+    # These were emitted by domain-extraction paired with the original
+    # blocking; once we override the blocking, they're stale.
+    surviving_matchkeys = []
+    dropped_names = []
+    for mk in (current.matchkeys or []):
+        if mk.type == "exact" and mk.fields:
+            field_names = [f.field for f in mk.fields]
+            if all(_is_derived(n) for n in field_names):
+                dropped_names.append(mk.name)
+                continue
+        surviving_matchkeys.append(mk)
+
+    updates: dict[str, Any] = {"blocking": new_blocking}
+    if dropped_names:
+        updates["matchkeys"] = surviving_matchkeys
+
+    new_cfg = current.model_copy(update=updates)
+
+    rationale_parts = [
+        f"after {len(history.decisions)} prior decision(s), "
+        f"candidates_compared={sp.candidates_compared} "
+        f"but mass_above_threshold={sp.mass_above_threshold}; "
+        f"swapping blocking to first_token({target_field!r})"
+    ]
+    if dropped_names:
+        rationale_parts.append(
+            f"; dropped {len(dropped_names)} stale derived-column exact "
+            f"matchkey(s): {dropped_names}"
+        )
+    decision = PolicyDecision(
+        rule_name="blocking_key_swap",
+        rationale="".join(rationale_parts),
+        config_diff={
+            "blocking.keys[0].fields": [target_field],
+            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+            **({"matchkeys.dropped": dropped_names} if dropped_names else {}),
+        },
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
+    rule_blocking_singleton_trap,   # catches __title_key__-style traps before blocking_too_coarse
     rule_blocking_too_coarse,
     rule_unimodal_scoring,
     rule_low_reduction_ratio,
     rule_low_transitivity,
     rule_no_matches,
+    rule_blocking_key_swap,         # iter-1+ fallback when threshold/block loosening didn't help
 ]

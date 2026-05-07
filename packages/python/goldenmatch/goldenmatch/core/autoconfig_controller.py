@@ -129,6 +129,7 @@ class AutoConfigController:
                         self._run_pipeline_sample(sample, sample_ref, config_n)
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,
+                        reference=sample_ref,
                     )
                     wall_ms = int((time.time() - iter_start) * 1000)
                     from goldenmatch.core.autoconfig_history import HistoryEntry
@@ -157,8 +158,16 @@ class AutoConfigController:
                 # Stop check
                 if profile_n.health() == HealthVerdict.GREEN:
                     break
+                # Convergence guard: only break when the profile is unchanged AND
+                # the previous iteration fired no rule (decision=None).  When a rule
+                # DID fire but the profile is still the same (e.g. rule_no_matches
+                # lowered the threshold but the blocking key still produces the same
+                # candidates), we must still call the policy so a follow-up rule
+                # (rule_blocking_key_swap) can try a different axis of change.
                 if history.profile_distance_to_prev() < self.budget.converge_epsilon:
-                    break
+                    prev_entry = history.entries[-2] if len(history.entries) >= 2 else None
+                    if prev_entry is None or prev_entry.decision is None:
+                        break
                 if history.is_oscillating():
                     break
 
@@ -291,9 +300,13 @@ class AutoConfigController:
             singleton_block_count=0,
             oversized_block_count=0,
         )
-        # ScoringProfile: avoid RED by providing non-zero mass/dip
+        # ScoringProfile: avoid RED by providing non-zero mass/dip.
+        # Set candidates_compared=1 as a nominal sentinel so ScoringProfile.health()
+        # doesn't return RED on the "candidates_compared==0" guard.  The actual
+        # scoring didn't run for these pathological-input short-circuit paths.
         scoring = ScoringProfile(
             n_pairs_scored=0,
+            candidates_compared=1,
             dip_statistic=0.01,
             mass_above_threshold=0.01,
             mass_in_borderline=0.0,
@@ -345,17 +358,24 @@ class AutoConfigController:
         df: pl.DataFrame,
         iteration: int,
         is_sample: bool = True,
+        reference: pl.DataFrame | None = None,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
-        fall back to defaults computed from ``df`` so the rollup gets a
-        real DataProfile (without it, n_rows=0 forces RED and the controller
-        can never converge on a healthy config)."""
+        fall back to defaults computed from ``df`` (plus ``reference`` in match
+        mode) so the rollup gets a real DataProfile.
+
+        In match mode the DataProfile must reflect the *combined* target +
+        reference frame because BlockingProfile is built over the combined
+        frame.  Passing only the target sample causes ``n_rows`` to be ~half
+        the true count, making ``rule_blocking_too_coarse``'s average block
+        size calculation use the wrong denominator (Bug A).
+        """
         from goldenmatch.core.complexity_profile import (
             DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
             MatchkeyProfile, DomainProfile, ProfileMeta,
         )
 
-        data = emitter.data or self._compute_data_profile(df)
+        data = emitter.data or self._compute_data_profile(df, reference=reference)
 
         return ComplexityProfile(
             data=data,
@@ -370,11 +390,30 @@ class AutoConfigController:
             ),
         )
 
-    def _compute_data_profile(self, df: pl.DataFrame) -> "DataProfile":
+    def _compute_data_profile(
+        self, df: pl.DataFrame, reference: pl.DataFrame | None = None
+    ) -> "DataProfile":
         """Compute a real DataProfile from a DataFrame. Used as fallback when
         no pipeline stage emitted one (sample iterations don't go through
-        the autoconfig column-profiling step)."""
+        the autoconfig column-profiling step).
+
+        In match mode (``reference`` provided) the combined target+reference
+        frame is used for statistics so that ``n_rows`` reflects the total
+        record count seen by the blocking stage, not just the target half.
+        If concatenation fails due to schema mismatch, falls back to target-only
+        with a warning.
+        """
         from goldenmatch.core.complexity_profile import DataProfile
+
+        if reference is not None:
+            try:
+                df = pl.concat([df, reference], how="vertical_relaxed")
+            except Exception as exc:
+                logger.warning(
+                    "match-mode n_rows fallback: concat target+reference failed (%s); "
+                    "DataProfile will reflect target only",
+                    exc,
+                )
 
         user_cols = [c for c in df.columns if not c.startswith("__")]
         n_rows = df.height
@@ -434,4 +473,5 @@ class AutoConfigController:
             self._run_pipeline_sample(df, reference, config)
         return self._assemble_profile(
             emitter, df=df, iteration=-1, is_sample=False,
+            reference=reference,
         )
