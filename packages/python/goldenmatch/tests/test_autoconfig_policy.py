@@ -416,7 +416,8 @@ def test_rule_no_matches_fires_on_zero_pairs_scored():
 
 
 def test_default_rules_list_has_five_entries():
-    assert len(DEFAULT_RULES) == 5
+    # Updated to 6 after rule_blocking_singleton_trap was added (2026-05-07)
+    assert len(DEFAULT_RULES) == 6
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -428,3 +429,178 @@ def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
     out = policy.propose(profile, cfg, RunHistory())
     assert out is not None
     assert out is not cfg
+
+
+# ============================================================
+# Singleton-trap rule (added 2026-05-07)
+# ============================================================
+
+from goldenmatch.core.autoconfig_rules import rule_blocking_singleton_trap
+
+
+def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
+    """When blocking produces mostly singleton blocks AND fuzzy scorer
+    sees no pairs, the blocking is too discriminating. Rule should propose
+    switching the blocking transform to ``first_token`` on the first
+    weighted matchkey's first text field (e.g. ``title``)."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[
+                MatchkeyField(field="title", scorer="token_sort", weight=1.5,
+                              transforms=["lowercase"]),
+                MatchkeyField(field="authors", scorer="token_sort", weight=1.0,
+                              transforms=["lowercase"]),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(
+            n_rows=2616, n_cols=4,
+            column_types={"title": "text", "authors": "text",
+                          "venue": "text", "year": "numeric"},
+            cardinality_ratio={"title": 0.99, "authors": 0.95,
+                                "venue": 0.005, "year": 0.005},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["__title_key__"]], n_blocks=1201,
+            total_comparisons=24, reduction_ratio=0.997,
+            block_sizes_p50=2, block_sizes_p99=31, block_sizes_max=31,
+            singleton_block_count=900,    # > 0.5 * n_blocks
+            oversized_block_count=0,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=0,             # no pairs to score
+            mass_above_threshold=0.0,
+            dip_statistic=0.0,
+        ),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+        matchkey=MatchkeyProfile(per_field={
+            "title": FieldStats(0.99, 0.0, 50),
+            "authors": FieldStats(0.95, 0.0, 30),
+        }),
+    )
+    out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "blocking_singleton_trap"
+    # New blocking key uses the first matchkey field with first_token transform
+    assert new_cfg.blocking.keys[0].fields == ["title"]
+    assert "first_token" in new_cfg.blocking.keys[0].transforms
+
+
+def test_rule_singleton_trap_does_not_fire_when_pairs_were_scored():
+    """If n_pairs_scored > 0, blocking is producing usable pairs — not the trap."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="title", scorer="token_sort",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                          column_types={"title": "text", "authors": "text"}),
+        blocking=BlockingProfile(
+            keys_used=[["__title_key__"]], n_blocks=10, total_comparisons=50,
+            reduction_ratio=0.99,
+            block_sizes_p50=2, block_sizes_p99=5, block_sizes_max=5,
+            singleton_block_count=8,  # > 0.5 * n_blocks BUT pairs were scored
+        ),
+        scoring=ScoringProfile(n_pairs_scored=144, mass_above_threshold=0.4,
+                                dip_statistic=0.05),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_singleton_trap_does_not_fire_when_blocks_are_dense():
+    """If singleton_block_count / n_blocks < 0.5, blocks aren't pathologically small."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="title", scorer="token_sort",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                          column_types={"title": "text", "authors": "text"}),
+        blocking=BlockingProfile(
+            keys_used=[["__title_key__"]], n_blocks=10, total_comparisons=0,
+            reduction_ratio=1.0,
+            block_sizes_p50=10, block_sizes_p99=15, block_sizes_max=15,
+            singleton_block_count=2,  # only 20% singletons — NOT a trap
+        ),
+        scoring=ScoringProfile(n_pairs_scored=0, mass_above_threshold=0.0,
+                                dip_statistic=0.0),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+    )
+    out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
+    """Rule needs a text field in the first weighted matchkey to target."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="numeric_id", scorer="exact",
+                                   weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__some_key__"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                          column_types={"numeric_id": "id-like",
+                                         "other": "id-like"}),
+        blocking=BlockingProfile(
+            keys_used=[["__some_key__"]], n_blocks=20, total_comparisons=0,
+            reduction_ratio=1.0,
+            block_sizes_p50=2, block_sizes_p99=3, block_sizes_max=3,
+            singleton_block_count=18,  # >0.5 → trap
+        ),
+        scoring=ScoringProfile(n_pairs_scored=0, mass_above_threshold=0.0,
+                                dip_statistic=0.0),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+    )
+    out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
+    assert out is None  # no text field → can't target first_token
+
+
+def test_default_rules_now_has_six_entries():
+    """Singleton-trap rule is added to DEFAULT_RULES."""
+    from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+    assert len(DEFAULT_RULES) == 6
+
+
+def test_singleton_trap_runs_before_blocking_too_coarse():
+    """Order matters: singleton-trap is more specific than blocking-too-coarse
+    on the singleton pathology, so it must run first."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_blocking_singleton_trap, rule_blocking_too_coarse,
+    )
+    idx_trap = DEFAULT_RULES.index(rule_blocking_singleton_trap)
+    idx_coarse = DEFAULT_RULES.index(rule_blocking_too_coarse)
+    assert idx_trap < idx_coarse

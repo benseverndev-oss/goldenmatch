@@ -37,6 +37,70 @@ def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
     return fields
 
 
+def rule_blocking_singleton_trap(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when blocking produces mostly singleton blocks AND the fuzzy
+    scorer found no pairs to score. The current blocking key is too
+    discriminating — switches to ``first_token`` on the dominant text
+    field of the first weighted matchkey.
+
+    Diagnosed from DBLP-ACM: ``__title_key__`` blocking collapses every
+    distinct-prefix title to its own block, leaving the fuzzy scorer with
+    nothing to compare. ``first_token`` on raw ``title`` puts records
+    sharing the first word in the same block, giving the fuzzy scorer
+    real pairs to discriminate.
+    """
+    bp = profile.blocking
+    sp = profile.scoring
+    if sp.n_pairs_scored != 0 or sp.mass_above_threshold != 0.0:
+        return None
+    if bp.n_blocks == 0:
+        return None
+    if (bp.singleton_block_count / bp.n_blocks) <= 0.5:
+        return None
+
+    if current.blocking is None:
+        return None
+
+    # Target field: first text field in the first weighted matchkey
+    mk = _first_weighted_mk(current)
+    if mk is None:
+        return None
+    target_field = None
+    for f in mk.fields or []:
+        col_type = profile.data.column_types.get(f.field, "unknown")
+        if col_type in ("text", "name"):
+            target_field = f.field
+            break
+    if target_field is None:
+        return None
+
+    # Build a new blocking key on raw text with first_token + lowercase.
+    new_blocking = current.blocking.model_copy(update={
+        "strategy": "static",
+        "keys": [BlockingKeyConfig(
+            fields=[target_field],
+            transforms=["lowercase", "first_token"],
+        )],
+    })
+    new_cfg = current.model_copy(update={"blocking": new_blocking})
+    decision = PolicyDecision(
+        rule_name="blocking_singleton_trap",
+        rationale=(
+            f"singletons={bp.singleton_block_count}/{bp.n_blocks} "
+            f"({bp.singleton_block_count / bp.n_blocks:.0%}); "
+            f"n_pairs_scored=0 → switching blocking to "
+            f"first_token({target_field!r})"
+        ),
+        config_diff={
+            "blocking.keys[0].fields": [target_field],
+            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+        },
+    )
+    return new_cfg, decision
+
+
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
@@ -211,6 +275,7 @@ def rule_no_matches(
 
 
 DEFAULT_RULES = [
+    rule_blocking_singleton_trap,   # NEW: catches __title_key__-style traps before blocking_too_coarse
     rule_blocking_too_coarse,
     rule_unimodal_scoring,
     rule_low_reduction_ratio,
