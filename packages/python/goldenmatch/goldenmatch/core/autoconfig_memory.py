@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,8 +62,12 @@ class AutoConfigMemory:
     Default path: ``~/.goldenmatch/autoconfig_memory.db``
     Tests: pass ``db_path=":memory:"`` for isolated in-memory databases.
 
-    Thread safety: each ``AutoConfigMemory`` instance holds its own
-    ``sqlite3.Connection``; do not share instances across threads.
+    Thread safety: the underlying ``sqlite3.Connection`` is opened with
+    ``check_same_thread=False`` and all access is serialized via an internal
+    lock. Safe to share an instance across threads (e.g. when the default
+    module-level memory is used by FastAPI worker threads). Heavy
+    contention isn't expected — ``remember`` / ``lookup_best`` are
+    millisecond-scale operations.
     """
 
     def __init__(self, db_path: "str | Path | None" = None) -> None:
@@ -72,9 +77,11 @@ class AutoConfigMemory:
             db_path = default_dir / "autoconfig_memory.db"
 
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path)
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
 
     # ------------------------------------------------------------------ write
 
@@ -99,16 +106,17 @@ class AutoConfigMemory:
         config_json = config.model_dump_json()
         created_at = datetime.now(timezone.utc).isoformat()
         try:
-            self._conn.execute(
-                """
-                INSERT INTO autoconfig_runs
-                    (profile_signature, committed_config_json, succeeded,
-                     n_iterations, f1_proxy, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (signature, config_json, int(succeeded), n_iterations, f1_proxy, created_at),
-            )
-            self._conn.commit()
+            with self._lock:
+                self._conn.execute(
+                    """
+                    INSERT INTO autoconfig_runs
+                        (profile_signature, committed_config_json, succeeded,
+                         n_iterations, f1_proxy, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (signature, config_json, int(succeeded), n_iterations, f1_proxy, created_at),
+                )
+                self._conn.commit()
         except sqlite3.Error as exc:
             logger.warning("autoconfig_memory: failed to persist run: %s", exc)
 
@@ -121,16 +129,17 @@ class AutoConfigMemory:
         """
         from goldenmatch.config.schemas import GoldenMatchConfig
 
-        row = self._conn.execute(
-            """
-            SELECT committed_config_json
-            FROM autoconfig_runs
-            WHERE profile_signature = ? AND succeeded = 1
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (signature,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT committed_config_json
+                FROM autoconfig_runs
+                WHERE profile_signature = ? AND succeeded = 1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (signature,),
+            ).fetchone()
         if row is None:
             return None
         try:
@@ -144,15 +153,16 @@ class AutoConfigMemory:
 
     def all_for(self, signature: str) -> list[dict]:
         """All runs for a signature, sorted by created_at desc. For diagnostics."""
-        rows = self._conn.execute(
-            """
-            SELECT profile_signature, succeeded, n_iterations, f1_proxy, created_at
-            FROM autoconfig_runs
-            WHERE profile_signature = ?
-            ORDER BY created_at DESC
-            """,
-            (signature,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT profile_signature, succeeded, n_iterations, f1_proxy, created_at
+                FROM autoconfig_runs
+                WHERE profile_signature = ?
+                ORDER BY created_at DESC
+                """,
+                (signature,),
+            ).fetchall()
         return [
             {
                 "profile_signature": r[0],
@@ -168,12 +178,14 @@ class AutoConfigMemory:
 
     def clear(self) -> None:
         """Remove all rows. Primarily for tests."""
-        self._conn.execute("DELETE FROM autoconfig_runs")
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM autoconfig_runs")
+            self._conn.commit()
 
     def close(self) -> None:
         """Close the underlying database connection."""
         try:
-            self._conn.close()
+            with self._lock:
+                self._conn.close()
         except sqlite3.Error:
             pass

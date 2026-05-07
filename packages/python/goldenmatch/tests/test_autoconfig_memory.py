@@ -168,3 +168,29 @@ def test_close_is_idempotent():
     mem = AutoConfigMemory(db_path=":memory:")
     mem.close()
     mem.close()  # should not raise
+
+
+def test_safe_across_threads():
+    """The module-level memory in core/autoconfig.py is shared by FastAPI
+    worker threads. Verify a single AutoConfigMemory instance can be used
+    from a thread other than the one that created it (regression for the
+    sqlite3 ProgrammingError surfaced by web router tests in CI)."""
+    import threading
+    mem = AutoConfigMemory(db_path=":memory:")
+    cfg = _config()
+    mem.remember("sig-main", cfg, succeeded=True, n_iterations=1)
+
+    errors: list[BaseException] = []
+
+    def worker():
+        try:
+            mem.remember("sig-worker", cfg, succeeded=True, n_iterations=1)
+            assert mem.lookup_best("sig-main") == cfg
+            assert mem.lookup_best("sig-worker") == cfg
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout=5)
+    assert not errors, f"cross-thread access raised: {errors}"
