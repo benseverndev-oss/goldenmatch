@@ -1407,3 +1407,130 @@ def test_legacy_v0_skips_high_null_blocking_candidate():
         f"v0 picked sparse_id (30% null) as a blocking field; should have skipped. "
         f"Got blocking fields: {blocking_fields}"
     )
+
+
+# ============================================================
+# Change 1 (2026-05-07): auto-detect StandardizationConfig
+# ============================================================
+
+def test_v0_auto_detects_email_standardization():
+    """Email column → column gets ['email'] standardizer in rules."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "customer_email": ["a@x.com", "B@X.COM", "c@y.com"] * 10,
+        "customer_name": ["alice", "bob", "carol"] * 10,
+        "city": ["nyc", "la", "sf"] * 10,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    assert cfg.standardization is not None
+    rules = cfg.standardization.rules
+    # rules = {col_name: [standardizer_names]}
+    assert "customer_email" in rules
+    assert "email" in rules["customer_email"]
+
+
+def test_v0_auto_detects_phone_standardization():
+    """Phone column → column gets ['phone'] standardizer in rules."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "name": ["alice", "bob"] * 10,
+        "phone_number": ["555-1234", "(555) 5678"] * 10,
+        "city": ["nyc", "la"] * 10,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    assert cfg.standardization is not None
+    rules = cfg.standardization.rules
+    assert "phone_number" in rules
+    assert "phone" in rules["phone_number"]
+
+
+def test_v0_auto_detects_name_standardization():
+    """Name columns → each name column gets ['name_proper'] standardizer."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "first_name": ["alice", "bob", "carol"] * 10,
+        "last_name": ["smith", "jones", "doe"] * 10,
+        "email": ["a@x.com", "b@y.com", "c@z.com"] * 10,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    rules = cfg.standardization.rules
+    assert "first_name" in rules
+    assert "name_proper" in rules["first_name"]
+    assert "last_name" in rules
+    assert "name_proper" in rules["last_name"]
+
+
+def test_v0_auto_detects_address_standardization():
+    """Address column → column gets ['address'] standardizer in rules."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "street_address": ["123 main st", "456 oak ave"] * 10,
+        "city": ["nyc", "la"] * 10,
+        "name": ["alice", "bob"] * 10,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    rules = cfg.standardization.rules
+    assert "street_address" in rules
+    assert "address" in rules["street_address"]
+
+
+def test_v0_auto_detects_zip_standardization():
+    """Zip column → column gets ['zip5'] standardizer (VALID_STANDARDIZERS has zip5, not zip)."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "name": ["alice"] * 10,
+        "billing_zip": ["10001", "10002"] * 5,
+        "city": ["nyc", "la"] * 5,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    rules = cfg.standardization.rules
+    assert "billing_zip" in rules
+    assert "zip5" in rules["billing_zip"]
+
+
+def test_v0_auto_detects_state_standardization():
+    """State-shaped geo column → column gets ['state'] standardizer."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "name": ["alice"] * 10,
+        "state_cd": ["NY", "CA"] * 5,
+        "city": ["nyc", "la"] * 5,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    rules = cfg.standardization.rules
+    assert "state_cd" in rules
+    assert "state" in rules["state_cd"]
+
+
+def test_v0_no_standardization_when_no_typed_columns():
+    """Generic non-PII columns → no standardization rules."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "col_0": ["x", "y"] * 10,
+        "col_1": ["a", "b"] * 10,
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    # Either standardization is None, or rules dict is empty
+    assert cfg.standardization is None or not cfg.standardization.rules
+
+
+def test_v0_existing_callers_unaffected():
+    """Existing callers (DBLP-ACM-shape) still get a valid config."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    df = pl.DataFrame({
+        "id": [str(i) for i in range(20)],
+        "title": [f"paper {i}" for i in range(20)],
+        "authors": [f"author_{i}" for i in range(20)],
+        "venue": ["vldb"] * 20,
+        "year": [str(2000 + i) for i in range(20)],
+    })
+    cfg = _legacy_auto_configure_v0(df)
+    assert cfg.matchkeys

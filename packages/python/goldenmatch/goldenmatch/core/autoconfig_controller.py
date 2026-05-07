@@ -651,11 +651,24 @@ class AutoConfigController:
             return config
         threshold = float(weighted_mk.threshold)
 
-        # Dynamic bounds: straddle the threshold with more headroom above
-        # (where pairs are more likely to be true matches worth verifying).
-        candidate_lo = max(0.0, threshold - 0.10)
-        candidate_hi = min(1.0, threshold + 0.20)
-        auto_threshold = candidate_hi
+        # Adaptive bounds (Change 2, 2026-05-07):
+        # When most of the above-threshold mass is borderline-confident (>0.5),
+        # the LLM needs to inspect those high-scoring pairs to filter false
+        # positives. Drop auto_threshold near 1.0 so the LLM sees them all.
+        # Otherwise keep the standard band centered on the matchkey threshold.
+        if sp.mass_in_borderline > 0.5:
+            # Wide-open mode: LLM inspects almost everything above threshold.
+            candidate_lo = max(0.0, threshold - 0.05)
+            candidate_hi = 0.99    # very narrow auto-accept zone
+            auto_threshold = 0.99
+            mode = "wide"
+        else:
+            # Standard mode: straddle the threshold with more headroom above
+            # (where pairs are more likely to be true matches worth verifying).
+            candidate_lo = max(0.0, threshold - 0.10)
+            candidate_hi = min(1.0, threshold + 0.20)
+            auto_threshold = candidate_hi
+            mode = "standard"
 
         from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
         new_cfg = config.model_copy(update={
@@ -668,10 +681,11 @@ class AutoConfigController:
             ),
         })
         logger.info(
-            "auto-config: enabling LLMScorerConfig on committed config "
+            "auto-config: enabling LLMScorerConfig (mode=%s) "
             "(mass_in_borderline=%.3f, threshold=%.2f, "
-            "candidate_lo=%.2f, candidate_hi=%.2f)",
-            sp.mass_in_borderline, threshold, candidate_lo, candidate_hi,
+            "candidate_lo=%.2f, candidate_hi=%.2f, auto_threshold=%.2f)",
+            mode, sp.mass_in_borderline, threshold,
+            candidate_lo, candidate_hi, auto_threshold,
         )
         return new_cfg
 
