@@ -25,12 +25,24 @@ logger = logging.getLogger(__name__)
 def _emit_scoring_profile(
     pairs: "list[tuple[int, int, float]]",
     threshold: float,
+    *,
+    candidates_compared: int = 0,
     per_field_variance: "dict[str, float] | None" = None,
 ) -> None:
-    """Emit ScoringProfile to current emitter. No-op when emitter is null."""
+    """Emit ScoringProfile to current emitter. No-op when emitter is null.
+
+    Args:
+        pairs: Pairs *above* the threshold (returned by find_fuzzy_matches).
+        threshold: Score threshold used to filter pairs.
+        candidates_compared: Total candidate pairs evaluated before threshold
+            filtering.  Distinct from ``len(pairs)`` which only counts matches.
+            Approximation: sum of n*(n-1)//2 for each block processed.
+        per_field_variance: Optional per-field score variance dict.
+    """
     scores = [s for _, _, s in pairs]
     profile = ScoringProfile(
         n_pairs_scored=len(scores),
+        candidates_compared=candidates_compared,
         score_histogram=histogram_20(scores),
         dip_statistic=hartigan_dip(scores),
         mass_above_threshold=mass_above(scores, threshold),
@@ -608,7 +620,11 @@ def score_blocks_parallel(
     # For small block counts, skip thread overhead
     if len(blocks) <= 2:
         all_pairs = []
+        total_candidates = 0
         for block in blocks:
+            block_df = block.df.collect()
+            n = block_df.height
+            total_candidates += n * (n - 1) // 2
             pairs = _score_one_block(
                 block, mk, matched_pairs,
                 across_files_only=across_files_only,
@@ -622,11 +638,25 @@ def score_blocks_parallel(
             all_pairs.extend(pairs)
             for a, b, s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
-        _emit_scoring_profile(all_pairs, mk.threshold)
+        _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
     frozen_exclude = frozenset(matched_pairs)
+
+    # Total candidate pairs across all blocks — computed cheaply by collecting
+    # the LazyFrame.  Note: each block is collected here for counting, then
+    # collected again inside _score_one_block.  Polars LazyFrames backed by
+    # in-memory data re-collect in O(1), so this is acceptable overhead.
+    # Overcounts when matched_pairs already covers some intra-block pairs;
+    # acceptable approximation documented in ScoringProfile.candidates_compared.
+    total_candidates = 0
+    for block in blocks:
+        try:
+            n = block.df.collect().height
+        except Exception:
+            n = 0
+        total_candidates += n * (n - 1) // 2
 
     all_pairs = []
     total_blocks = len(blocks)
@@ -665,7 +695,7 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
-    _emit_scoring_profile(all_pairs, mk.threshold)
+    _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)
     return all_pairs
 
 

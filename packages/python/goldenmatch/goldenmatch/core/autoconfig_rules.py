@@ -40,24 +40,29 @@ def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
-    """Fires when blocking produces mostly singleton blocks AND the fuzzy
-    scorer found no pairs to score. The current blocking key is too
-    discriminating — switches to ``first_token`` on the dominant text
-    field of the first weighted matchkey.
+    """Fires when blocking produced blocks but the scorer saw zero candidate
+    pairs to compare.  This covers two related pathologies:
 
-    Diagnosed from DBLP-ACM: ``__title_key__`` blocking collapses every
-    distinct-prefix title to its own block, leaving the fuzzy scorer with
-    nothing to compare. ``first_token`` on raw ``title`` puts records
-    sharing the first word in the same block, giving the fuzzy scorer
-    real pairs to discriminate.
+    1. Classic singleton trap: every block has exactly one record, so there
+       are no within-block pairs to compare.
+    2. Cross-source isolation (match mode): blocks were formed but no block
+       contains records from both target and reference, so the scorer again
+       sees zero candidates.
+
+    The primary signal is ``candidates_compared == 0`` with ``n_blocks > 0``.
+    The old ``singleton_block_count / n_blocks > 0.5`` guard is intentionally
+    dropped — DBLP-ACM has very few singletons yet still falls into the trap.
+
+    Action: switch to ``first_token`` on the dominant text field of the
+    first weighted matchkey, producing coarser blocks that are more likely
+    to contain matching cross-source pairs.
     """
     bp = profile.blocking
     sp = profile.scoring
-    if sp.n_pairs_scored != 0 or sp.mass_above_threshold != 0.0:
+    # If candidates were actually compared, this is not the singleton trap.
+    if sp.candidates_compared > 0:
         return None
     if bp.n_blocks == 0:
-        return None
-    if (bp.singleton_block_count / bp.n_blocks) <= 0.5:
         return None
 
     if current.blocking is None:
@@ -88,10 +93,10 @@ def rule_blocking_singleton_trap(
     decision = PolicyDecision(
         rule_name="blocking_singleton_trap",
         rationale=(
+            f"candidates_compared=0 with n_blocks={bp.n_blocks}; "
             f"singletons={bp.singleton_block_count}/{bp.n_blocks} "
             f"({bp.singleton_block_count / bp.n_blocks:.0%}); "
-            f"n_pairs_scored=0 → switching blocking to "
-            f"first_token({target_field!r})"
+            f"switching blocking to first_token({target_field!r})"
         ),
         config_diff={
             "blocking.keys[0].fields": [target_field],
@@ -237,8 +242,11 @@ def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
     sp = profile.scoring
-    # Fires on either (a) scored pairs but none above threshold,
-    # or (b) blocking produced no scorable pairs at all (singleton trap).
+    # Only fires when the fuzzy scorer actually compared candidates but none
+    # reached the threshold.  When candidates_compared == 0, the singleton-trap
+    # rule should fire instead (blocking never produced comparable pairs).
+    if sp.candidates_compared == 0:
+        return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
     if sp.mass_above_threshold > 0.0:
         return None  # something matched; not our case
     mk = _first_weighted_mk(current)
@@ -265,9 +273,9 @@ def rule_no_matches(
     decision = PolicyDecision(
         rule_name="no_matches",
         rationale=(
-            f"mass_above_threshold={sp.mass_above_threshold} on "
-            f"{sp.n_pairs_scored} pairs scored; resetting to permissive baseline "
-            f"(lower threshold, broader blocking)"
+            f"candidates_compared={sp.candidates_compared}, "
+            f"mass_above_threshold={sp.mass_above_threshold}; "
+            f"resetting to permissive baseline (lower threshold, broader blocking)"
         ),
         config_diff=updates,
     )

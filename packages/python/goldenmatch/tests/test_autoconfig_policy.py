@@ -379,7 +379,8 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10, block_sizes_p99=20),
         scoring=ScoringProfile(
-            n_pairs_scored=500, mass_above_threshold=0.0,  # nothing matched
+            n_pairs_scored=500, candidates_compared=500,
+            mass_above_threshold=0.0,  # nothing matched
             dip_statistic=0.05,
         ),
         cluster=ClusterProfile(transitivity_rate=0.95),
@@ -391,28 +392,24 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
     assert new_cfg.blocking.max_block_size >= 50000
 
 
-def test_rule_no_matches_fires_on_zero_pairs_scored():
-    """When blocking collapses everything into singletons, n_pairs_scored=0
-    AND mass_above_threshold=0.0. Rule should fire on this case too —
-    proposing a broader blocking strategy."""
+def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
+    """When candidates_compared==0 (singleton trap), rule_no_matches should NOT
+    fire — that's rule_blocking_singleton_trap's territory."""
     cfg = _config_with_blocking(threshold=0.85)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
         blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=100,
                                  block_sizes_p99=1, singleton_block_count=100),
         scoring=ScoringProfile(
-            n_pairs_scored=0,           # blocking trapped everything
+            n_pairs_scored=0, candidates_compared=0,  # blocking trapped everything
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
     out = rule_no_matches(profile, cfg, RunHistory())
-    assert out is not None
-    new_cfg, decision = out
-    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.5)
-    assert new_cfg.blocking.max_block_size >= 50000
-    assert decision.rule_name == "no_matches"
+    # candidates_compared=0 → singleton trap → rule_no_matches defers
+    assert out is None
 
 
 def test_default_rules_list_has_five_entries():
@@ -439,10 +436,8 @@ from goldenmatch.core.autoconfig_rules import rule_blocking_singleton_trap
 
 
 def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
-    """When blocking produces mostly singleton blocks AND fuzzy scorer
-    sees no pairs, the blocking is too discriminating. Rule should propose
-    switching the blocking transform to ``first_token`` on the first
-    weighted matchkey's first text field (e.g. ``title``)."""
+    """When blocking produces blocks but candidates_compared==0, the blocking
+    is too discriminating. Rule should propose switching to ``first_token``."""
     cfg = GoldenMatchConfig(
         matchkeys=[MatchkeyConfig(
             name="m", type="weighted", threshold=0.7,
@@ -472,11 +467,11 @@ def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
             keys_used=[["__title_key__"]], n_blocks=1201,
             total_comparisons=24, reduction_ratio=0.997,
             block_sizes_p50=2, block_sizes_p99=31, block_sizes_max=31,
-            singleton_block_count=900,    # > 0.5 * n_blocks
+            singleton_block_count=900,    # many singletons
             oversized_block_count=0,
         ),
         scoring=ScoringProfile(
-            n_pairs_scored=0,             # no pairs to score
+            n_pairs_scored=0, candidates_compared=0,  # no candidates compared
             mass_above_threshold=0.0,
             dip_statistic=0.0,
         ),
@@ -495,8 +490,8 @@ def test_rule_singleton_trap_fires_on_mostly_singleton_blocks_with_no_pairs():
     assert "first_token" in new_cfg.blocking.keys[0].transforms
 
 
-def test_rule_singleton_trap_does_not_fire_when_pairs_were_scored():
-    """If n_pairs_scored > 0, blocking is producing usable pairs — not the trap."""
+def test_rule_singleton_trap_does_not_fire_when_candidates_were_compared():
+    """If candidates_compared > 0, blocking produced comparable pairs — not the trap."""
     cfg = GoldenMatchConfig(
         matchkeys=[MatchkeyConfig(
             name="m", type="weighted", threshold=0.7,
@@ -516,18 +511,20 @@ def test_rule_singleton_trap_does_not_fire_when_pairs_were_scored():
             keys_used=[["__title_key__"]], n_blocks=10, total_comparisons=50,
             reduction_ratio=0.99,
             block_sizes_p50=2, block_sizes_p99=5, block_sizes_max=5,
-            singleton_block_count=8,  # > 0.5 * n_blocks BUT pairs were scored
+            singleton_block_count=8,  # many singletons, but candidates_compared > 0
         ),
-        scoring=ScoringProfile(n_pairs_scored=144, mass_above_threshold=0.4,
-                                dip_statistic=0.05),
+        scoring=ScoringProfile(n_pairs_scored=144, candidates_compared=144,
+                                mass_above_threshold=0.4, dip_statistic=0.05),
         cluster=ClusterProfile(transitivity_rate=0.95),
     )
     out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
     assert out is None
 
 
-def test_rule_singleton_trap_does_not_fire_when_blocks_are_dense():
-    """If singleton_block_count / n_blocks < 0.5, blocks aren't pathologically small."""
+def test_rule_singleton_trap_fires_when_no_candidates_even_with_dense_blocks():
+    """Even with few singletons, candidates_compared==0 still triggers the trap
+    (e.g. cross-source non-overlap in match mode). The old singleton-fraction
+    guard has been removed — candidates_compared is the canonical signal."""
     cfg = GoldenMatchConfig(
         matchkeys=[MatchkeyConfig(
             name="m", type="weighted", threshold=0.7,
@@ -547,14 +544,17 @@ def test_rule_singleton_trap_does_not_fire_when_blocks_are_dense():
             keys_used=[["__title_key__"]], n_blocks=10, total_comparisons=0,
             reduction_ratio=1.0,
             block_sizes_p50=10, block_sizes_p99=15, block_sizes_max=15,
-            singleton_block_count=2,  # only 20% singletons — NOT a trap
+            singleton_block_count=2,  # only 20% singletons but candidates_compared=0
         ),
-        scoring=ScoringProfile(n_pairs_scored=0, mass_above_threshold=0.0,
-                                dip_statistic=0.0),
+        scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
     out = rule_blocking_singleton_trap(profile, cfg, RunHistory())
-    assert out is None
+    # candidates_compared=0 with n_blocks>0 → trap fires regardless of singleton fraction
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "blocking_singleton_trap"
 
 
 def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
@@ -579,10 +579,10 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
             keys_used=[["__some_key__"]], n_blocks=20, total_comparisons=0,
             reduction_ratio=1.0,
             block_sizes_p50=2, block_sizes_p99=3, block_sizes_max=3,
-            singleton_block_count=18,  # >0.5 → trap
+            singleton_block_count=18,
         ),
-        scoring=ScoringProfile(n_pairs_scored=0, mass_above_threshold=0.0,
-                                dip_statistic=0.0),
+        scoring=ScoringProfile(n_pairs_scored=0, candidates_compared=0,
+                                mass_above_threshold=0.0, dip_statistic=0.0),
         cluster=ClusterProfile(transitivity_rate=1.0),
     )
     out = rule_blocking_singleton_trap(profile, cfg, RunHistory())

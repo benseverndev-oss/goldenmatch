@@ -111,6 +111,7 @@ class BlockingProfile:
 class ScoringProfile:
     _version: int = 1
     n_pairs_scored: int = 0
+    candidates_compared: int = 0
     score_histogram: list[int] = field(default_factory=lambda: [0] * 20)
     dip_statistic: float = 0.0
     mass_above_threshold: float = 0.0
@@ -118,9 +119,16 @@ class ScoringProfile:
     per_field_score_variance: dict[str, float] = field(default_factory=dict)
 
     def health(self) -> HealthVerdict:
+        # No candidates compared and no pairs scored → RED (nothing happened)
+        if self.candidates_compared == 0 and self.n_pairs_scored == 0:
+            return HealthVerdict.RED
+        # Candidates were compared but nothing reached threshold → still RED
+        # (rule_no_matches handles the "wrong threshold" case)
+        if self.mass_above_threshold == 0.0 and self.candidates_compared > 0:
+            return HealthVerdict.RED
         if self.mass_above_threshold == 0.0:
             return HealthVerdict.RED
-        if self.dip_statistic < 0.005:
+        if self.dip_statistic < 0.005 and self.n_pairs_scored > 0:
             return HealthVerdict.RED
         if self.mass_in_borderline > 0.3:
             return HealthVerdict.YELLOW
