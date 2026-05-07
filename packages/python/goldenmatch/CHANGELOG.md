@@ -6,13 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-### Added
-- Auto-config introspective controller (PR #103, #104). Zero-config DBLP-ACM F1 0.51→0.96. New ComplexityProfile types, RefitPolicy protocol, 7 heuristic rules, controller history surfaced via PostflightReport.
-- Auto-config NCVR benchmark: F1=0.972 zero-config on synth-corruption ground truth
-  (P=0.982, R=0.962); v0 heuristic alone produces healthy config. Test gated
-  on dataset presence in tests/test_autoconfig_benchmarks.py.
-
 ## [Unreleased] / TypeScript port
+
+## [1.8.0] - 2026-05-08
+
+### Added
+- **Introspective auto-config controller** that beats hand-tuned configs on multiple benchmarks without manual tuning. Zero-config now produces a defensible config the first time, even on shapes it hasn't been hand-tuned for. The controller iterates on stage-emitted complexity signals (block size distribution, score histogram, transitivity rate, candidates compared, mass above/in-borderline) and refines its config via a heuristic rule policy until convergence. (#103, #104, #109, #114)
+- **Cross-run memory** at `~/.goldenmatch/autoconfig_memory.db` — past committed configs are reused when the data shape signature matches. Opt out with `GOLDENMATCH_AUTOCONFIG_MEMORY=0`. (#111)
+- **LLM policy fallback** (option B): when heuristic rules exhaust without reaching GREEN, an `LLMRefitPolicy` proposes a config diff. Default off; opt in with `GOLDENMATCH_AUTOCONFIG_LLM=1`. (#112)
+- **Per-pair LLM scoring auto-enable** when the committed profile shows borderline-heavy mass and an LLM API key is available. Adaptive bounds track the matchkey's threshold dynamically. (#113, #115)
+- **Standardization auto-detection** in v0 — phone/email/zip/state/name/address columns now auto-emit `StandardizationConfig` rules. (#115)
+- **Recall-aware probes** — `random_pair_above_threshold_rate` signal in `ScoringProfile`; `rule_recall_gap_suspected` and `rule_blocking_field_null_heavy` rules. (#109)
+- **NCVR benchmark regression test** (gated on dataset presence). (#110)
+- **11 real-data integration tests** + **5 Hypothesis property tests** for controller invariants. (#106, #107)
+
+### Changed
+- `auto_configure_df` is now controller-backed; gains optional `reference` kwarg for cross-source match mode. Public signature otherwise unchanged.
+- Zero-config callers in `_api.dedupe_df` / `_api.match_df` now call `auto_configure_df` *before* the pipeline (eliminates double pipeline run). (#103)
+- `PostflightReport` gains `controller_profile` + `controller_history` fields surfacing the typed `ComplexityProfile` and audit trail. (#103, #108)
+
+### Fixed
+- Zero-config crashes in `match_df` (`ColumnNotFoundError: __title_key__`) and `match()` (`ColumnNotFoundError: __placeholder__`). (#102)
+- Cache poisoning across structurally-identical-but-semantically-different datasets. (#112)
+- SQLite cross-thread access in default memory store (web routers fixed). (#111)
+
+### Benchmarks (zero-config, no manual tuning)
+
+| Dataset | v1.7.1 | v1.8.0 | Hand-tuned ceiling |
+|---|---|---|---|
+| DBLP-ACM (cross-source) | 0.5102 | **0.9641** | 0.918 |
+| Febrl3 (single-source) | 0.8528 | **0.9443** | 0.971 |
+| NCVR (corruption GT) | — | **0.9719** | — |
+| DQbench (no LLM) | 46.24 (hand-tuned) | **62.87** (zero-config) | — |
 
 ## [1.6.0] - 2026-05-04
 
