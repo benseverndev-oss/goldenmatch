@@ -1,0 +1,209 @@
+import pytest
+from datetime import timedelta
+from goldenmatch.core.complexity_profile import (
+    ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
+    ClusterProfile, MatchkeyProfile, DomainProfile, ProfileMeta, HealthVerdict,
+)
+from goldenmatch.core.autoconfig_history import (
+    RunHistory, HistoryEntry, PolicyDecision, ErrorRecord,
+)
+
+
+def _profile(*, scoring: ScoringProfile | None = None,
+             blocking: BlockingProfile | None = None,
+             n_rows: int = 100) -> ComplexityProfile:
+    return ComplexityProfile(
+        data=DataProfile(n_rows=n_rows, n_cols=4,
+                         column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"}),
+        blocking=blocking or BlockingProfile(
+            keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
+            block_sizes_p99=20, block_sizes_max=25,
+            singleton_block_count=0, oversized_block_count=0,
+        ),
+        scoring=scoring or ScoringProfile(
+            n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+            dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.05,
+        ),
+        cluster=ClusterProfile(
+            n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
+            cluster_size_max=8, transitivity_rate=0.95,
+            edge_confidence_p50=0.85, edge_confidence_min=0.7,
+        ),
+    )
+
+
+def _entry(iteration: int, config, profile, decision=None, error=None) -> HistoryEntry:
+    return HistoryEntry(
+        iteration=iteration, config=config, profile=profile,
+        decision=decision, error=error, wall_clock_ms=10,
+    )
+
+
+def test_empty_history_has_no_oscillation():
+    h = RunHistory()
+    assert not h.is_oscillating()
+    assert h.iteration == 0
+    assert h.decisions == []
+    assert h.errors == []
+
+
+def test_iteration_property_counts_entries():
+    h = RunHistory()
+    h.entries.append(_entry(0, "a", _profile()))
+    h.entries.append(_entry(1, "b", _profile()))
+    assert h.iteration == 2
+
+
+def test_decisions_property_filters_none():
+    h = RunHistory()
+    h.entries.append(_entry(0, "a", _profile(),
+                            decision=PolicyDecision(rule_name="r1", rationale="x", config_diff={})))
+    h.entries.append(_entry(1, "b", _profile(), decision=None))
+    h.entries.append(_entry(2, "c", _profile(),
+                            decision=PolicyDecision(rule_name="r2", rationale="y", config_diff={})))
+    assert [d.rule_name for d in h.decisions] == ["r1", "r2"]
+
+
+def test_errors_property_filters_none():
+    h = RunHistory()
+    err = ErrorRecord(exception_type="ValueError", traceback_summary="...")
+    h.entries.append(_entry(0, "a", _profile(), error=err))
+    h.entries.append(_entry(1, "b", _profile(), error=None))
+    assert [e.exception_type for e in h.errors] == ["ValueError"]
+
+
+def test_cheapest_healthy_returns_none_when_all_red():
+    h = RunHistory()
+    red = _profile(scoring=ScoringProfile(
+        n_pairs_scored=0, score_histogram=[0]*20,
+        mass_above_threshold=0.0, dip_statistic=0.001,
+    ))
+    h.entries.append(_entry(0, "x", red))
+    assert h.cheapest_healthy() is None
+
+
+def test_cheapest_healthy_picks_highest_separation():
+    h = RunHistory()
+    weak = _profile(scoring=ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+        dip_statistic=0.05, mass_above_threshold=0.3, mass_in_borderline=0.25,
+    ))
+    strong = _profile(scoring=ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+        dip_statistic=0.05, mass_above_threshold=0.5, mass_in_borderline=0.05,
+    ))
+    h.entries.append(_entry(0, "weak", weak))
+    h.entries.append(_entry(1, "strong", strong))
+    best = h.cheapest_healthy()
+    assert best is not None
+    assert best.config == "strong"
+
+
+def test_cheapest_healthy_prefers_green_over_yellow():
+    h = RunHistory()
+    # Yellow profile (oversized cluster) but high separation
+    yellow_cluster = ClusterProfile(
+        n_clusters=10, cluster_size_p50=2, cluster_size_p99=5,
+        cluster_size_max=8, transitivity_rate=0.95,
+        oversized_cluster_count=1,  # makes cluster YELLOW
+    )
+    yellow_profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=4,
+                         column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
+            block_sizes_p99=20, block_sizes_max=25,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+            dip_statistic=0.05, mass_above_threshold=0.7, mass_in_borderline=0.01,
+        ),
+        cluster=yellow_cluster,
+    )
+    green = _profile(scoring=ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+        dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.05,
+    ))
+    h.entries.append(_entry(0, "yellow", yellow_profile))
+    h.entries.append(_entry(1, "green", green))
+    # Even though yellow has higher mass_above_threshold, GREEN beats YELLOW in lex key.
+    assert h.cheapest_healthy().config == "green"
+
+
+def test_cheapest_healthy_breaks_tie_on_iteration():
+    """With identical health and separation, prefer earlier iteration (cheaper)."""
+    h = RunHistory()
+    same_profile = _profile()
+    h.entries.append(_entry(0, "first", same_profile))
+    h.entries.append(_entry(1, "second", same_profile))
+    assert h.cheapest_healthy().config == "first"
+
+
+def test_oscillation_detected_after_two_repeats_in_window():
+    h = RunHistory()
+    cfg_hashes = ["a", "b", "a", "b"]
+    for i, c in enumerate(cfg_hashes):
+        h.entries.append(_entry(
+            i, c, _profile(),
+            decision=PolicyDecision(rule_name=f"r_{c}", rationale="x", config_diff={}),
+        ))
+    assert h.is_oscillating()
+
+
+def test_oscillation_not_detected_with_distinct_configs():
+    h = RunHistory()
+    for i, c in enumerate(["a", "b", "c", "d"]):
+        h.entries.append(_entry(
+            i, c, _profile(),
+            decision=PolicyDecision(rule_name=f"r_{c}", rationale="x", config_diff={}),
+        ))
+    assert not h.is_oscillating()
+
+
+def test_oscillation_requires_window_of_4():
+    h = RunHistory()
+    h.entries.append(_entry(0, "a", _profile(),
+                            decision=PolicyDecision(rule_name="r", rationale="x", config_diff={})))
+    h.entries.append(_entry(1, "a", _profile(),
+                            decision=PolicyDecision(rule_name="r", rationale="x", config_diff={})))
+    # Only 2 entries; need window of 4
+    assert not h.is_oscillating()
+
+
+def test_profile_distance_to_prev_is_zero_for_identical():
+    h = RunHistory()
+    p = _profile()
+    h.entries.append(_entry(0, "a", p))
+    h.entries.append(_entry(1, "b", p))
+    assert h.profile_distance_to_prev() == pytest.approx(0.0)
+
+
+def test_profile_distance_to_prev_is_inf_for_short_history():
+    h = RunHistory()
+    h.entries.append(_entry(0, "a", _profile()))
+    assert h.profile_distance_to_prev() == float("inf")
+
+
+def test_profile_distance_to_prev_nonzero_for_different():
+    h = RunHistory()
+    a = _profile(blocking=BlockingProfile(
+        keys_used=[["a"]], n_blocks=2, total_comparisons=50,
+        reduction_ratio=0.5, block_sizes_p99=50,
+    ))
+    b = _profile(blocking=BlockingProfile(
+        keys_used=[["a"]], n_blocks=20, total_comparisons=10,
+        reduction_ratio=0.99, block_sizes_p99=5,
+    ))
+    h.entries.append(_entry(0, "a", a))
+    h.entries.append(_entry(1, "b", b))
+    assert h.profile_distance_to_prev() > 0.0
+
+
+def test_prior_runs_default_empty_list():
+    h = RunHistory()
+    assert h.prior_runs == []
+    # Not frozen — caller can mutate, but v1 leaves it empty
+    h.prior_runs.append("v2-hook")
+    assert h.prior_runs == ["v2-hook"]
