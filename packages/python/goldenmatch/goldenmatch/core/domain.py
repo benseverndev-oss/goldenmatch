@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 
 import polars as pl
 
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import DomainProfile as PublicDomainProfile
+
 logger = logging.getLogger(__name__)
 
 
@@ -408,6 +411,19 @@ def extract_biblio_features(text: str) -> dict[str, str | None]:
 # ── DataFrame-Level Extraction ────────────────────────────────────────────
 
 
+def _emit_domain_profile(domain: "DomainProfile", df_after: pl.DataFrame, low_conf_ids) -> None:
+    """Emit PublicDomainProfile. No-op when null emitter."""
+    if not _emitter_stack.get():
+        return
+    derived = [c for c in df_after.columns if c.startswith("__")]
+    current_emitter().set_domain(PublicDomainProfile(
+        detected_domain=getattr(domain, "name", None),
+        confidence=float(getattr(domain, "confidence", 0.0)),
+        derived_columns=derived,
+        low_confidence_row_count=len(low_conf_ids) if low_conf_ids else 0,
+    ))
+
+
 def extract_features(
     df: pl.DataFrame,
     domain: DomainProfile,
@@ -425,6 +441,7 @@ def extract_features(
         and list of row IDs that need LLM validation.
     """
     if not domain.text_columns:
+        _emit_domain_profile(domain, df, [])
         return df, []
 
     if domain.name == "product":
@@ -434,14 +451,17 @@ def extract_features(
             logger.info("Product subdomain auto-detected: %s", domain.subdomain)
 
         if domain.subdomain == "software":
-            return _extract_software_features_df(df, domain, confidence_threshold)
+            result_df, low_conf = _extract_software_features_df(df, domain, confidence_threshold)
         else:
-            return _extract_product_features_df(df, domain, confidence_threshold)
+            result_df, low_conf = _extract_product_features_df(df, domain, confidence_threshold)
     elif domain.name == "bibliographic":
-        return _extract_biblio_features_df(df, domain, confidence_threshold)
+        result_df, low_conf = _extract_biblio_features_df(df, domain, confidence_threshold)
     else:
         # Person and company domains — minimal extraction for now
-        return df, []
+        result_df, low_conf = df, []
+
+    _emit_domain_profile(domain, result_df, low_conf)
+    return result_df, low_conf
 
 
 def _detect_product_subdomain(df: pl.DataFrame, domain: DomainProfile) -> str:

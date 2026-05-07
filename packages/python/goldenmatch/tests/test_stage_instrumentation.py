@@ -130,3 +130,92 @@ def test_build_clusters_no_emit_when_no_capture():
     pairs = [(1, 2, 0.9), (2, 3, 0.85)]
     clusters = build_clusters(pairs)  # must not raise
     assert len(clusters) >= 1
+
+
+def test_compute_matchkeys_emits_matchkey_profile():
+    """After compute_matchkeys runs, MatchkeyProfile.per_field is populated."""
+    import polars as pl
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.matchkey import compute_matchkeys
+    from goldenmatch.core.profile_emitter import profile_capture
+    from goldenmatch.core.complexity_profile import MatchkeyProfile
+
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol", "alice"],
+        "city": ["nyc", "nyc", "la", "la"],
+    }).with_columns(pl.lit(0).alias("__row_id__"))
+
+    mks = [MatchkeyConfig(
+        name="m", type="weighted", threshold=0.7,
+        fields=[
+            MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0,
+                          transforms=["lowercase"]),
+            MatchkeyField(field="city", scorer="exact", weight=1.0,
+                          transforms=["lowercase"]),
+        ],
+    )]
+    with profile_capture() as e:
+        compute_matchkeys(df.lazy(), mks)
+    assert e.matchkey is not None
+    assert isinstance(e.matchkey, MatchkeyProfile)
+    # Both fields should have entries
+    assert "name" in e.matchkey.per_field or "city" in e.matchkey.per_field
+    for stats in e.matchkey.per_field.values():
+        assert 0.0 <= stats.post_transform_cardinality_ratio <= 1.0
+        assert 0.0 <= stats.post_transform_null_rate <= 1.0
+
+
+def test_compute_matchkeys_no_emit_when_no_capture():
+    import polars as pl
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.matchkey import compute_matchkeys
+    df = pl.DataFrame({"name": ["a", "b"]}).with_columns(pl.lit(0).alias("__row_id__"))
+    mks = [MatchkeyConfig(
+        name="m", type="exact",
+        fields=[MatchkeyField(field="name", transforms=["lowercase"])],
+    )]
+    compute_matchkeys(df.lazy(), mks)  # must not raise
+
+
+def test_auto_configure_df_emits_data_profile():
+    """DataProfile populated when auto_configure_df runs under capture."""
+    import polars as pl
+    import goldenmatch
+    from goldenmatch.core.profile_emitter import profile_capture
+    from goldenmatch.core.complexity_profile import DataProfile
+
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol"] * 3,
+        "city": ["nyc", "la", "sf"] * 3,
+    })
+    with profile_capture() as e:
+        goldenmatch.auto_configure_df(df)
+    assert e.data is not None
+    assert isinstance(e.data, DataProfile)
+    assert e.data.n_rows == 9
+    # n_cols counts user (non-internal) cols only
+    assert e.data.n_cols >= 2
+
+
+def test_extract_features_emits_domain_profile():
+    """DomainProfile populated when domain.extract_features runs under capture."""
+    import polars as pl
+    from goldenmatch.core.domain import extract_features, DomainProfile as InternalProfile
+    from goldenmatch.core.profile_emitter import profile_capture
+    from goldenmatch.core.complexity_profile import DomainProfile
+
+    # Use a profile with confidence > 0.3 so extract_features actually does work
+    profile = InternalProfile(
+        name="bibliographic",
+        confidence=0.9,
+        text_columns=["title"],
+    )
+    df = pl.DataFrame({
+        "title": ["Some Paper", "Another Work", "Third One"],
+        "author": ["A", "B", "C"],
+    })
+    with profile_capture() as e:
+        extract_features(df, profile, confidence_threshold=0.5)
+    assert e.domain is not None
+    assert isinstance(e.domain, DomainProfile)
+    assert e.domain.confidence == pytest.approx(0.9)

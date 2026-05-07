@@ -22,8 +22,55 @@ from goldenmatch.config.schemas import (
     OutputConfig,
 )
 from goldenmatch.core.profiler import _guess_type
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import DataProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_data_profile(df: "pl.DataFrame") -> None:
+    """Emit DataProfile from the input DataFrame. No-op when null emitter."""
+    if not _emitter_stack.get():
+        return
+    user_cols = [c for c in df.columns if not c.startswith("__")]
+    column_types: dict[str, str] = {}
+    cardinality_ratio: dict[str, float] = {}
+    null_rate: dict[str, float] = {}
+    value_length_p50: dict[str, int] = {}
+    value_length_p99: dict[str, int] = {}
+    n_rows = df.height
+    for col in user_cols:
+        ser = df[col]
+        non_null = ser.drop_nulls()
+        n_non_null = non_null.len()
+        cardinality_ratio[col] = (non_null.n_unique() / n_non_null) if n_non_null else 0.0
+        null_rate[col] = 1 - (n_non_null / n_rows) if n_rows else 0.0
+        dtype = str(ser.dtype).lower()
+        if "utf" in dtype or "str" in dtype:
+            column_types[col] = "text"
+        elif "int" in dtype or "float" in dtype:
+            column_types[col] = "numeric"
+        elif "date" in dtype or "time" in dtype:
+            column_types[col] = "date"
+        else:
+            column_types[col] = "unknown"
+        if column_types[col] == "text" and n_non_null:
+            try:
+                lens = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
+                if lens:
+                    value_length_p50[col] = int(lens[len(lens) // 2])
+                    value_length_p99[col] = int(lens[max(0, int(0.99 * len(lens)) - 1)])
+            except Exception:
+                pass
+    current_emitter().set_data(DataProfile(
+        n_rows=n_rows,
+        n_cols=len(user_cols),
+        column_types=column_types,
+        cardinality_ratio=cardinality_ratio,
+        null_rate=null_rate,
+        value_length_p50=value_length_p50,
+        value_length_p99=value_length_p99,
+    ))
 
 # ── Column name heuristics ─────────────────────────────────────────────────
 
@@ -1213,6 +1260,8 @@ def auto_configure_df(
     total_rows = df.height
 
     logger.info("Auto-configuring %d rows, %d columns", total_rows, len(df.columns))
+
+    _emit_data_profile(df)
 
     # Profile columns
     profiles = profile_columns(df, llm_provider=llm_provider)
