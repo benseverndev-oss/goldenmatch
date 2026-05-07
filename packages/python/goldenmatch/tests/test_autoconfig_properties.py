@@ -9,8 +9,14 @@ Each property uses small synthetic dataframes (<=30 rows) to keep wall clock <10
 from __future__ import annotations
 import polars as pl
 import pytest
-from hypothesis import given, settings, strategies as st, HealthCheck
-import goldenmatch
+
+# Hypothesis is in [dev] extras; CI only installs [web] so it may be absent.
+# Skip the whole module cleanly when hypothesis isn't available — local runs
+# (and any CI step that installs [dev]) get full property coverage.
+hypothesis = pytest.importorskip("hypothesis")
+from hypothesis import given, settings, strategies as st, HealthCheck  # noqa: E402
+
+import goldenmatch  # noqa: E402
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
 from goldenmatch.core.autoconfig_controller import ConfigValidationError
