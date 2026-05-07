@@ -514,3 +514,109 @@ def test_recall_probe_returns_none_when_no_weighted_matchkey():
     df = pl.DataFrame({"email": [f"a{i}@x.com" for i in range(20)]})
     rate = controller._compute_recall_probe(df, cfg)
     assert rate is None
+
+
+# ============================================================
+# Tier 4 — cross-run memory integration
+# ============================================================
+
+from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
+from goldenmatch.config.schemas import (
+    GoldenMatchConfig as _GoldenMatchConfig,
+    MatchkeyConfig as _MatchkeyConfig,
+    MatchkeyField as _MatchkeyField,
+    BlockingConfig as _BlockingConfig,
+    BlockingKeyConfig as _BlockingKeyConfig,
+)
+
+
+def _cached_cfg():
+    return _GoldenMatchConfig(
+        matchkeys=[_MatchkeyConfig(
+            name="cached",
+            type="weighted",
+            threshold=0.42,
+            fields=[_MatchkeyField(
+                field="name",
+                scorer="ensemble",
+                weight=1.0,
+                transforms=["lowercase"],
+            )],
+        )],
+        blocking=_BlockingConfig(
+            strategy="static",
+            keys=[_BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+            max_block_size=5000,
+            skip_oversized=False,
+        ),
+    )
+
+
+def test_controller_uses_memory_when_signature_matches():
+    """When AutoConfigMemory has a successful entry for this data shape,
+    _initial_config returns the cached config instead of running the legacy heuristic."""
+    mem = AutoConfigMemory(db_path=":memory:")
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol"] * 10,
+        "city": ["x", "y", "z"] * 10,
+    })
+    sig = profile_signature(df)
+    mem.remember(sig, _cached_cfg(), succeeded=True, n_iterations=2)
+
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=10, max_iterations=1),
+        memory=mem,
+    )
+    initial = controller._initial_config(df, reference=None)
+    assert initial.matchkeys[0].threshold == 0.42
+    assert initial.matchkeys[0].name == "cached"
+
+
+def test_controller_records_committed_run_to_memory(small_df):
+    """After a healthy run, the committed config is stored in memory.
+
+    Uses a mocked pipeline runner that returns a GREEN profile, guaranteeing
+    a best_entry so memory.remember is called.
+    """
+    mem = AutoConfigMemory(db_path=":memory:")
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    controller._memory = mem
+    controller._finalize = MagicMock(return_value=ComplexityProfile(**green))
+
+    controller.run(small_df)
+    sig = profile_signature(small_df)
+    cached = mem.lookup_best(sig)
+    # A healthy (GREEN) run must be stored in memory.
+    assert cached is not None
+
+
+def test_controller_memory_not_required():
+    """Default (memory=None) runs without error — no memory recording."""
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol"] * 5,
+        "city": ["x", "y", "z"] * 5,
+    })
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=5, max_iterations=1),
+        memory=None,
+    )
+    config, profile, history = controller.run(df)
+    assert isinstance(config, _GoldenMatchConfig)
+
+
+def test_env_var_disables_default_memory(monkeypatch):
+    """When GOLDENMATCH_AUTOCONFIG_MEMORY=0, auto_configure_df doesn't crash."""
+    import goldenmatch
+    import goldenmatch.core.autoconfig as _ac
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    # Reset cached state so the monkeypatched env var takes effect
+    monkeypatch.setattr(_ac, "_DEFAULT_MEMORY", None)
+    monkeypatch.setattr(_ac, "_AUTOCONFIG_MEMORY_DISABLED", True)
+
+    df = pl.DataFrame({"name": ["a", "b", "c"] * 4, "city": ["x", "y", "z"] * 4})
+    cfg = goldenmatch.auto_configure_df(df)
+    assert isinstance(cfg, _GoldenMatchConfig)

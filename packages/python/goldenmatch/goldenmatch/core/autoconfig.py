@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -1232,6 +1233,34 @@ def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 5
 # the profile + history without threading them through every call site.
 _LAST_CONTROLLER_RUN: ContextVar = ContextVar("_LAST_CONTROLLER_RUN", default=None)
 
+# Tier 4: cross-run memory.  Set GOLDENMATCH_AUTOCONFIG_MEMORY=0 (or "false"
+# or "disabled") to opt out (useful in CI or when disk I/O should be minimal).
+_AUTOCONFIG_MEMORY_DISABLED: bool = (
+    os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY", "1").lower()
+    in ("0", "false", "disabled")
+)
+
+# Module-level default memory singleton (uses ~/.goldenmatch/autoconfig_memory.db).
+# Lazily initialised on first use to avoid creating the directory at import time.
+_DEFAULT_MEMORY: "AutoConfigMemory | None" = None
+
+
+def _get_default_memory() -> "AutoConfigMemory | None":
+    """Return the default AutoConfigMemory, or None when disabled via env var."""
+    global _DEFAULT_MEMORY
+    if _AUTOCONFIG_MEMORY_DISABLED:
+        return None
+    if _DEFAULT_MEMORY is None:
+        try:
+            from goldenmatch.core.autoconfig_memory import AutoConfigMemory
+            _DEFAULT_MEMORY = AutoConfigMemory()
+        except Exception as exc:
+            logger.warning(
+                "auto-config: could not initialise default memory store: %s", exc
+            )
+            return None
+    return _DEFAULT_MEMORY
+
 
 def auto_configure_df(
     df: "pl.DataFrame | pl.LazyFrame",
@@ -1247,7 +1276,7 @@ def auto_configure_df(
     """Public auto-configuration entry point (controller-backed).
 
     Runs an iterative refit loop:
-      1. Compute v0 config via the legacy heuristic
+      1. Compute v0 config via the legacy heuristic (or retrieve from memory)
       2. Run blocking → score → cluster on a stratified sample under profile_capture
       3. Read the ComplexityProfile, ask the policy for a refit
       4. Loop until green/converged/budget
@@ -1256,6 +1285,10 @@ def auto_configure_df(
     The committed config is what's returned. Profile + history are stashed
     on the ``_LAST_CONTROLLER_RUN`` ContextVar so the calling pipeline can
     surface them via PostflightReport.
+
+    Cross-run memory (Tier 4): when a previous successful run used the same
+    data shape, the cached config is returned as the starting point, bypassing
+    the legacy heuristic. Set ``GOLDENMATCH_AUTOCONFIG_MEMORY=0`` to disable.
 
     Args:
         df: target DataFrame (or LazyFrame, which will be collected).
@@ -1292,9 +1325,11 @@ def auto_configure_df(
     )
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
 
+    memory = _get_default_memory()
     controller = AutoConfigController(
         policy=HeuristicRefitPolicy(),
         budget=ControllerBudget(),
+        memory=memory,
     )
     v0_kw = {
         "llm_provider": llm_provider,

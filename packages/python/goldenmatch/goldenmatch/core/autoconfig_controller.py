@@ -26,6 +26,7 @@ from goldenmatch.core.complexity_profile import (
 )
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
+from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
 
 
 logger = logging.getLogger(__name__)
@@ -65,9 +66,15 @@ class AutoConfigController:
     The actual iteration loop is in Task 4.2; finalize is in Task 4.3.
     """
 
-    def __init__(self, policy: RefitPolicy, budget: ControllerBudget) -> None:
+    def __init__(
+        self,
+        policy: RefitPolicy,
+        budget: ControllerBudget,
+        memory: AutoConfigMemory | None = None,
+    ) -> None:
         self.policy = policy
         self.budget = budget
+        self._memory = memory
 
     # ---- Public entry point ------------------------------------------------
     def run(
@@ -226,6 +233,7 @@ class AutoConfigController:
         if skip_finalize:
             # Return the best sample profile in lieu of a full-data profile.
             # history.full_vs_sample_drift is left None (drift not computed).
+            self._record_run(df, reference, best_entry, history)
             return best_entry.config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
@@ -236,6 +244,7 @@ class AutoConfigController:
         drift = sum(abs(a - b) for a, b in zip(sample_vec, full_vec))
         history.full_vs_sample_drift = drift
 
+        self._record_run(df, reference, best_entry, history)
         return best_entry.config, profile_full, history
 
     # ---- Internals --------------------------------------------------------
@@ -246,7 +255,12 @@ class AutoConfigController:
         reference: pl.DataFrame | None,
         v0_kwargs: dict | None = None,
     ) -> GoldenMatchConfig:
-        """Run the legacy heuristic to produce config v0.
+        """Return the starting config for the controller iteration loop.
+
+        Consults cross-run memory first: if a previous successful run with the
+        same data-shape signature exists, return that cached config directly
+        (skipping the legacy heuristic).  Falls back to the legacy heuristic
+        when no memory hit is found.
 
         ``v0_kwargs`` are threaded through to ``_legacy_auto_configure_v0`` so
         that callers of ``auto_configure_df(strict=True, llm_auto=True, ...)``
@@ -257,6 +271,18 @@ class AutoConfigController:
         then, we re-import and call it (it does not yet recurse via the
         controller).
         """
+        # Tier 4: consult cross-run memory before falling back to legacy heuristic
+        if self._memory is not None:
+            mode = "match" if reference is not None else "dedupe"
+            sig = profile_signature(df, mode=mode)
+            cached = self._memory.lookup_best(sig)
+            if cached is not None:
+                logger.info(
+                    "auto-config: using cached config from prior run for signature %s",
+                    sig,
+                )
+                return cached
+
         # Late import to avoid circulars
         from goldenmatch.core.autoconfig import _legacy_auto_configure_v0 as _legacy
 
@@ -577,3 +603,41 @@ class AutoConfigController:
             emitter, df=df, iteration=-1, is_sample=False,
             reference=reference, config=None,
         )
+
+    def _record_run(
+        self,
+        df: pl.DataFrame,
+        reference: "pl.DataFrame | None",
+        best_entry: "Any",
+        history: RunHistory,
+    ) -> None:
+        """Persist the committed config to memory (if memory is configured).
+
+        Only records when ``best_entry`` is not None (i.e. at least one
+        healthy iteration completed). Only ``succeeded=True`` runs are
+        retrievable via ``lookup_best``, so failed runs are stored but
+        invisible to the cache lookup.
+        """
+        if self._memory is None or best_entry is None:
+            return
+        mode = "match" if reference is not None else "dedupe"
+        sig = profile_signature(df, mode=mode)
+        sp = best_entry.profile.scoring
+        f1_proxy: float | None = None
+        if sp.candidates_compared > 0:
+            f1_proxy = sp.mass_above_threshold * (1.0 - sp.mass_in_borderline)
+        succeeded = best_entry.profile.health() != HealthVerdict.RED
+        try:
+            self._memory.remember(
+                sig,
+                best_entry.config,
+                succeeded=succeeded,
+                n_iterations=history.iteration,
+                f1_proxy=f1_proxy,
+            )
+            logger.debug(
+                "auto-config: recorded run to memory (sig=%s, succeeded=%s, f1_proxy=%s)",
+                sig, succeeded, f1_proxy,
+            )
+        except Exception as exc:
+            logger.warning("auto-config: failed to record run to memory: %s", exc)
