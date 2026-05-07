@@ -19,6 +19,14 @@ from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
+# Imported at module level so tests can patch goldenmatch._api.auto_configure_df.
+# The lazy import guard inside each function is kept for cycle safety — this
+# top-level import is a re-export alias that tests can mock.
+try:
+    from goldenmatch.core.autoconfig import auto_configure_df
+except ImportError:  # pragma: no cover
+    auto_configure_df = None  # type: ignore[assignment]
+
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
@@ -344,9 +352,7 @@ def dedupe_df(
         configs.
     """
     from goldenmatch.core.pipeline import run_dedupe_df
-
-    _auto_config = False
-    _auto_config_provider = None
+    import goldenmatch._api as _self_api
 
     if isinstance(config, str):
         config = load_config(config)
@@ -354,11 +360,18 @@ def dedupe_df(
         if exact or fuzzy:
             config = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
         else:
-            # Zero-config: defer auto-config to inside pipeline (after GoldenCheck/GoldenFlow)
-            from goldenmatch.config.schemas import GoldenMatchConfig
-            config = GoldenMatchConfig()
-            _auto_config = True
+            # Zero-config: call auto_configure_df *before* the pipeline so the
+            # pipeline never re-invokes auto-config. This eliminates the
+            # double-pipeline-run introduced by Task 5.1 (the controller loop
+            # itself calls dedupe_df on samples; if the pipeline also ran
+            # auto_configure_df we'd recurse). Task 5.2 fix.
+            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
             _auto_config_provider = _detect_llm_provider() if llm_scorer else None
+            config = _self_api.auto_configure_df(
+                df,
+                llm_provider=_auto_config_provider,
+                llm_auto=llm_auto,
+            )
 
     # Apply overrides uniformly regardless of config source
     if backend and hasattr(config, "backend"):
@@ -371,8 +384,7 @@ def dedupe_df(
 
     result = run_dedupe_df(
         df, config, source_name=source_name,
-        auto_config=_auto_config,
-        auto_config_llm_provider=_auto_config_provider,
+        auto_config=False,
     )
 
     _mem = result.get("memory_stats")
@@ -429,8 +441,7 @@ def match_df(
         configs.
     """
     from goldenmatch.core.pipeline import run_match_df
-
-    _auto_config = False
+    import goldenmatch._api as _self_api
 
     if isinstance(config, str):
         config = load_config(config)
@@ -438,17 +449,18 @@ def match_df(
         if exact or fuzzy:
             config = _build_config(exact, fuzzy, blocking, threshold, backend=backend)
         else:
-            # Zero-config: defer auto-config to inside pipeline (same pattern
-            # as dedupe_df). auto_configure_df runs on the combined target +
-            # reference frame so matchkeys/blocking apply uniformly.
-            from goldenmatch.config.schemas import GoldenMatchConfig
-            config = GoldenMatchConfig()
-            _auto_config = True
+            # Zero-config: call auto_configure_df *before* the pipeline so the
+            # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
+            # (Task 5.2 fix — mirrors dedupe_df zero-config refactor).
+            # Pass reference= so auto-config sees both column sets and emits
+            # matchkeys/blocking that apply uniformly across the join.
+            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
+            config = _self_api.auto_configure_df(target, reference=reference)
 
     if backend and hasattr(config, "backend"):
         config.backend = backend
 
-    result = run_match_df(target, reference, config, auto_config=_auto_config)
+    result = run_match_df(target, reference, config, auto_config=False)
 
     _mem = result.get("memory_stats")
     return MatchResult(

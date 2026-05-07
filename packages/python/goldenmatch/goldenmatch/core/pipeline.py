@@ -372,18 +372,30 @@ def _add_row_ids(lf: pl.LazyFrame, offset: int = 0) -> pl.LazyFrame:
 
 
 def _get_required_columns(config: GoldenMatchConfig) -> list[str]:
-    """Extract all column names referenced in matchkeys and blocking config."""
+    """Extract all *user* column names referenced in matchkeys and blocking config.
+
+    Skips pipeline-generated synthetic columns (those wrapped in double-underscores,
+    e.g. ``__title_key__``, ``__brand__``) because those are created by the domain-
+    extraction step that runs *inside* the pipeline — before the scoring phase that
+    actually needs them. Validating them upfront (on the raw DataFrame) would always
+    fail when a config built by ``auto_configure_df`` references domain columns.
+    """
     cols = set()
     for mk in config.get_matchkeys():
         for f in mk.fields:
             if f.columns:
-                cols.update(f.columns)
+                cols.update(
+                    c for c in f.columns
+                    if not (c.startswith("__") and c.endswith("__"))
+                )
             elif f.field and f.field != "__record__":
-                cols.add(f.field)
+                if not (f.field.startswith("__") and f.field.endswith("__")):
+                    cols.add(f.field)
     if config.blocking:
         for key_config in config.blocking.keys:
             for field_name in key_config.fields:
-                cols.add(field_name)
+                if not (field_name.startswith("__") and field_name.endswith("__")):
+                    cols.add(field_name)
     return sorted(cols)
 
 
