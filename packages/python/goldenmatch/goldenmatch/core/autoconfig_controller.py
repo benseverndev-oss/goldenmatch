@@ -225,6 +225,13 @@ class AutoConfigController:
             )
             return config_v0, _RED_PROFILE, history
 
+        # Post-iteration: decorate committed config with LLM scorer if appropriate.
+        # This runs ONCE, outside the iteration loop, so it never competes with
+        # structural rules for the iteration budget.
+        committed_config = self._maybe_decorate_with_llm_scorer(
+            best_entry.config, best_entry.profile,
+        )
+
         # Fix 4: When skip_finalize=True (called from _api zero-config path),
         # skip the full-data _finalize run. The caller will execute the real
         # full pipeline immediately after, so running it here would be a double
@@ -234,10 +241,10 @@ class AutoConfigController:
             # Return the best sample profile in lieu of a full-data profile.
             # history.full_vs_sample_drift is left None (drift not computed).
             self._record_run(df, reference, best_entry, history)
-            return best_entry.config, best_entry.profile, history
+            return committed_config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
-        profile_full = self._finalize(best_entry.config, df, reference)
+        profile_full = self._finalize(committed_config, df, reference)
         # Drift detection
         sample_vec = best_entry.profile.normalized_signal_vector()
         full_vec = profile_full.normalized_signal_vector()
@@ -245,7 +252,7 @@ class AutoConfigController:
         history.full_vs_sample_drift = drift
 
         self._record_run(df, reference, best_entry, history)
-        return best_entry.config, profile_full, history
+        return committed_config, profile_full, history
 
     # ---- Internals --------------------------------------------------------
     def _initial_config(
@@ -603,6 +610,70 @@ class AutoConfigController:
             emitter, df=df, iteration=-1, is_sample=False,
             reference=reference, config=None,
         )
+
+    def _maybe_decorate_with_llm_scorer(
+        self,
+        config: GoldenMatchConfig,
+        profile: ComplexityProfile,
+    ) -> GoldenMatchConfig:
+        """If the committed profile is borderline-heavy AND an LLM API key is
+        available, enable LLMScorerConfig on the committed config so the
+        user-facing pipeline run uses per-pair LLM scoring on borderline pairs.
+
+        This runs ONCE after the controller iteration loop commits, not inside
+        the loop — so LLM decoration never competes with structural rules for
+        the iteration budget. On DQbench, structural rules dominate every
+        iteration; the old rule_enable_llm_scorer (position 10 in DEFAULT_RULES)
+        never got a turn.
+
+        Bounds (candidate_lo / candidate_hi / auto_threshold) track the weighted
+        matchkey's threshold dynamically (Change B): with controller-lowered
+        thresholds (~0.5 typical), the hardcoded 0.60–0.90 band was entirely
+        above the score distribution and no LLM calls fired.
+        """
+        from goldenmatch.core.autoconfig_rules import _llm_api_key_available
+        sp = profile.scoring
+        if sp.candidates_compared == 0:
+            return config
+        if sp.mass_in_borderline < 0.10:
+            return config
+        if not _llm_api_key_available():
+            return config
+        if config.llm_scorer is not None and config.llm_scorer.enabled:
+            return config
+
+        # Find the weighted matchkey threshold
+        weighted_mk = next(
+            (mk for mk in (config.matchkeys or []) if mk.type == "weighted"),
+            None,
+        )
+        if weighted_mk is None or weighted_mk.threshold is None:
+            return config
+        threshold = float(weighted_mk.threshold)
+
+        # Dynamic bounds: straddle the threshold with more headroom above
+        # (where pairs are more likely to be true matches worth verifying).
+        candidate_lo = max(0.0, threshold - 0.10)
+        candidate_hi = min(1.0, threshold + 0.20)
+        auto_threshold = candidate_hi
+
+        from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+        new_cfg = config.model_copy(update={
+            "llm_scorer": LLMScorerConfig(
+                enabled=True,
+                candidate_lo=candidate_lo,
+                candidate_hi=candidate_hi,
+                auto_threshold=auto_threshold,
+                budget=BudgetConfig(max_calls=500, max_cost_usd=1.0),
+            ),
+        })
+        logger.info(
+            "auto-config: enabling LLMScorerConfig on committed config "
+            "(mass_in_borderline=%.3f, threshold=%.2f, "
+            "candidate_lo=%.2f, candidate_hi=%.2f)",
+            sp.mass_in_borderline, threshold, candidate_lo, candidate_hi,
+        )
+        return new_cfg
 
     def _record_run(
         self,

@@ -620,3 +620,95 @@ def test_env_var_disables_default_memory(monkeypatch):
     df = pl.DataFrame({"name": ["a", "b", "c"] * 4, "city": ["x", "y", "z"] * 4})
     cfg = goldenmatch.auto_configure_df(df)
     assert isinstance(cfg, _GoldenMatchConfig)
+
+
+# ============================================================
+# _maybe_decorate_with_llm_scorer (Change A + B: post-iteration LLM decoration)
+# ============================================================
+
+def _borderline_profile_for_llm():
+    """A ComplexityProfile with meaningful borderline mass (triggers LLM decoration)."""
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile, ScoringProfile, ClusterProfile,
+    )
+    return ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10,
+                                  block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=300,
+            mass_above_threshold=0.4, mass_in_borderline=0.25,
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+
+
+def _cfg_with_threshold(threshold: float) -> _GoldenMatchConfig:
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+    )
+    return _GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=threshold,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+
+
+def test_decorate_with_llm_scorer_fires_with_borderline_and_key(monkeypatch):
+    """When the committed profile is borderline-heavy and an API key is
+    available, _maybe_decorate_with_llm_scorer enables LLMScorerConfig on
+    the returned config."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _cfg_with_threshold(0.7)
+    profile = _borderline_profile_for_llm()
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(),
+    )
+    out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
+    assert out.llm_scorer is not None
+    assert out.llm_scorer.enabled is True
+    # Dynamic bounds: threshold 0.7 → lo=0.6, hi=0.9
+    assert out.llm_scorer.candidate_lo == pytest.approx(0.60)
+    assert out.llm_scorer.candidate_hi == pytest.approx(0.90)
+    assert out.llm_scorer.auto_threshold == pytest.approx(0.90)
+
+
+def test_decorate_with_llm_scorer_uses_lowered_threshold(monkeypatch):
+    """With threshold=0.5 (controller-lowered), bounds should track:
+    lo=0.4, hi=0.7, auto=0.7."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _cfg_with_threshold(0.5)
+    profile = _borderline_profile_for_llm()
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(),
+    )
+    out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
+    assert out.llm_scorer is not None
+    assert out.llm_scorer.candidate_lo == pytest.approx(0.40)
+    assert out.llm_scorer.candidate_hi == pytest.approx(0.70)
+
+
+def test_decorate_with_llm_scorer_silent_no_key(monkeypatch):
+    """Without an API key, _maybe_decorate_with_llm_scorer returns config unchanged."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cfg = _cfg_with_threshold(0.7)
+    from goldenmatch.core.complexity_profile import ScoringProfile
+    profile = ComplexityProfile(
+        scoring=ScoringProfile(candidates_compared=100, mass_in_borderline=0.25),
+    )
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(), budget=ControllerBudget(),
+    )
+    out = controller._maybe_decorate_with_llm_scorer(cfg, profile)
+    assert out is cfg or out.llm_scorer is None
