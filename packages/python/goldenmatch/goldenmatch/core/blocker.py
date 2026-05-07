@@ -3,14 +3,85 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import polars as pl
 
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, CanopyConfig
 from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import BlockingProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _percentile(xs: list[int], q: float) -> int:
+    """Return the q-th percentile of a sorted list of ints."""
+    if not xs:
+        return 0
+    idx = max(0, min(len(xs) - 1, int(math.ceil(q * len(xs))) - 1))
+    return xs[idx]
+
+
+def _emit_blocking_profile(
+    blocks: list["BlockResult"],
+    config: BlockingConfig,
+    lf: pl.LazyFrame,
+) -> None:
+    """Compute and emit a BlockingProfile to the active emitter.
+
+    Short-circuits immediately when no capture is active so non-controller
+    pipeline runs pay zero cost beyond the ``_emitter_stack.get()`` call.
+    """
+    if not _emitter_stack.get():
+        return
+
+    # n_rows is computed here, only when an emitter is active.
+    n_rows: int = lf.select(pl.len()).collect().item()
+
+    # Determine keys_used: prefer passes if truthy, else keys if truthy, else []
+    if config.passes:
+        keys_used = [list(k.fields) for k in config.passes]
+    elif config.keys:
+        keys_used = [list(k.fields) for k in config.keys]
+    else:
+        keys_used = []
+
+    # Collect block sizes by collecting each LazyFrame.
+    # For static/adaptive blocks the underlying DataFrame is already in memory
+    # (group_df.lazy()); collecting again is O(1) copy.
+    sizes: list[int] = []
+    for b in blocks:
+        try:
+            size = b.df.select(pl.len()).collect().item()
+        except Exception:
+            size = 0
+        sizes.append(size)
+
+    sizes_sorted = sorted(sizes)
+    n_blocks = len(sizes_sorted)
+
+    total_comparisons = sum(s * (s - 1) // 2 for s in sizes_sorted)
+    max_pairs = n_rows * (n_rows - 1) // 2
+    reduction_ratio = 1.0 - total_comparisons / max(1, max_pairs)
+
+    singleton_block_count = sum(1 for s in sizes_sorted if s == 1)
+    oversized_block_count = sum(1 for s in sizes_sorted if s > config.max_block_size)
+
+    profile = BlockingProfile(
+        keys_used=keys_used,
+        n_blocks=n_blocks,
+        total_comparisons=total_comparisons,
+        reduction_ratio=reduction_ratio,
+        block_sizes_p50=_percentile(sizes_sorted, 0.50),
+        block_sizes_p95=_percentile(sizes_sorted, 0.95),
+        block_sizes_p99=_percentile(sizes_sorted, 0.99),
+        block_sizes_max=max(sizes_sorted) if sizes_sorted else 0,
+        singleton_block_count=singleton_block_count,
+        oversized_block_count=oversized_block_count,
+    )
+    current_emitter().set_blocking(profile)
 
 
 @dataclass
@@ -745,25 +816,39 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
         config = config.model_copy(update={"keys": [best_key], "auto_select": False})
 
     if config.strategy == "learned":
-        return _build_learned_blocks(lf, config)
+        blocks = _build_learned_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "canopy":
-        return _build_canopy_blocks(lf, config)
+        blocks = _build_canopy_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "ann_pairs":
-        return _build_ann_pair_blocks(lf, config)
+        blocks = _build_ann_pair_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "ann":
-        return _build_ann_blocks(lf, config)
+        blocks = _build_ann_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "sorted_neighborhood":
-        return _build_sorted_neighborhood_blocks(lf, config)
+        blocks = _build_sorted_neighborhood_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "multi_pass":
-        return _build_multi_pass_blocks(lf, config)
+        blocks = _build_multi_pass_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     if config.strategy == "static":
-        return _build_static_blocks(lf, config)
+        blocks = _build_static_blocks(lf, config)
+        _emit_blocking_profile(blocks, config, lf)
+        return blocks
 
     # strategy == "adaptive"
     primary_blocks = _build_static_blocks(lf, config)
@@ -790,4 +875,5 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
         else:
             results.append(block)
 
+    _emit_blocking_profile(results, config, lf)
     return results

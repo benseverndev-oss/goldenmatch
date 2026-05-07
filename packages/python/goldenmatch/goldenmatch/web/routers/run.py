@@ -105,11 +105,12 @@ def _execute_run(
         )
 
     if auto_config:
-        # Zero-config: run_dedupe_df calls auto_configure_df internally when
-        # the config is empty + auto_config=True.
-        if config is None:
-            config = GoldenMatchConfig()
-        result = run_dedupe_df(df, config, output_clusters=True, auto_config=True)
+        # Zero-config: call auto_configure_df *before* the pipeline so the
+        # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
+        # when the Task 5.1 controller loop is in play (Task 5.2 fix).
+        from goldenmatch.core.autoconfig import auto_configure_df
+        config = auto_configure_df(df)
+        result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
     else:
         result = run_dedupe_df(df, config, output_clusters=True)
 

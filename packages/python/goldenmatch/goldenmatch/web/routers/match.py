@@ -84,7 +84,10 @@ def _execute_match(
 
     config: GoldenMatchConfig
     if auto_config:
-        config = GoldenMatchConfig()
+        # Zero-config: call auto_configure_df *before* the pipeline so the
+        # pipeline never re-invokes auto-config (Task 5.2 fix).
+        from goldenmatch.core.autoconfig import auto_configure_df
+        config = auto_configure_df(target_df, reference=ref_df)
     else:
         if rules is None:
             raise HTTPException(
@@ -94,7 +97,7 @@ def _execute_match(
         from goldenmatch.web.preview import _build_config
         config = _build_config(rules)
 
-    result = run_match_df(target_df, ref_df, config, auto_config=auto_config)
+    result = run_match_df(target_df, ref_df, config, auto_config=False)
 
     matched: pl.DataFrame | None = result.get("matched")
     unmatched: pl.DataFrame | None = result.get("unmatched")

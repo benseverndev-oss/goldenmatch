@@ -1035,8 +1035,12 @@ class TestDomainAwareAutoConfig:
         assert len(domain_fields) == 0
 
     def test_manual_domain_config_overrides(self):
-        """When domain_config is provided, auto-config skips domain detection."""
-        from goldenmatch.core.autoconfig import auto_configure_df
+        """When domain_config is provided, the legacy heuristic skips domain detection.
+        Uses _legacy_auto_configure_v0 directly because this tests whitebox behavior
+        of the legacy heuristic's domain_config bypass path, which the controller
+        does not expose via the public auto_configure_df signature.
+        """
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         from goldenmatch.config.schemas import DomainConfig
         from unittest.mock import patch
 
@@ -1046,7 +1050,7 @@ class TestDomainAwareAutoConfig:
         })
 
         with patch("goldenmatch.core.domain.detect_domain") as mock_detect:
-            config = auto_configure_df(df, domain_config=DomainConfig(enabled=False))
+            config = _legacy_auto_configure_v0(df, domain_config=DomainConfig(enabled=False))
 
         # detect_domain should NOT have been called
         mock_detect.assert_not_called()
@@ -1122,8 +1126,12 @@ class TestDataDrivenStrategy:
         assert config.blocking.strategy != "learned"
 
     def test_reranking_enabled_three_plus_fields(self):
-        """Weighted matchkey with 3+ fields should enable reranking."""
-        from goldenmatch.core.autoconfig import auto_configure_df
+        """Weighted matchkey with 3+ fields should enable reranking.
+        Uses _legacy_auto_configure_v0 directly because allow_remote_assets
+        is a legacy-heuristic kwarg that is not threaded through the controller;
+        the public auto_configure_df no longer accepts it as a pass-through.
+        """
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
 
         df = pl.DataFrame({
             "first_name": ["John", "Jane", "Bob", "Alice"],
@@ -1134,7 +1142,7 @@ class TestDataDrivenStrategy:
 
         # rerank downloads a cross-encoder model; preflight's
         # allow_remote_assets=False (default) would demote it. Opt in here.
-        config = auto_configure_df(df, allow_remote_assets=True)
+        config = _legacy_auto_configure_v0(df, allow_remote_assets=True)
         weighted_mks = [mk for mk in config.get_matchkeys() if mk.type == "weighted"]
         assert len(weighted_mks) > 0, "Expected at least one weighted matchkey"
         multi_field = [mk for mk in weighted_mks if len(mk.fields) >= 3]
@@ -1175,11 +1183,15 @@ class TestLLMMemoryAutoEnablement:
     """Tests for LLM + memory auto-enablement."""
 
     def test_llm_auto_with_api_key(self):
-        from goldenmatch.core.autoconfig import auto_configure_df
+        # Uses _legacy_auto_configure_v0 directly because llm_auto is a
+        # legacy-heuristic kwarg not threaded through the controller; the
+        # controller always returns the committed config without LLM scorer
+        # injection from the public auto_configure_df signature.
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         from unittest.mock import patch
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
-            config = auto_configure_df(df, llm_auto=True)
+            config = _legacy_auto_configure_v0(df, llm_auto=True)
         assert config.llm_scorer is not None
         assert config.llm_scorer.enabled is True
         assert config.llm_scorer.budget.max_cost_usd == 0.05
@@ -1204,11 +1216,14 @@ class TestLLMMemoryAutoEnablement:
         assert config.llm_scorer is None
 
     def test_memory_with_llm_auto(self):
-        from goldenmatch.core.autoconfig import auto_configure_df
+        # Uses _legacy_auto_configure_v0 directly because llm_auto memory
+        # enablement is a legacy-heuristic kwarg not threaded through the
+        # controller's public auto_configure_df.
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         from unittest.mock import patch
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
-            config = auto_configure_df(df, llm_auto=True)
+            config = _legacy_auto_configure_v0(df, llm_auto=True)
         assert config.memory is not None
         assert config.memory.enabled is True
 

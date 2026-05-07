@@ -9,6 +9,8 @@ import polars as pl
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import MatchkeyProfile, FieldStats
 
 
 def _try_native_chain(column: str, transforms: list[str]) -> pl.Expr | None:
@@ -116,6 +118,50 @@ def build_matchkey_expr(mk: MatchkeyConfig) -> pl.Expr:
     return pl.concat_str(field_exprs, separator="||").alias(alias)
 
 
+def _emit_matchkey_profile(lf_after: "pl.LazyFrame", matchkeys: list) -> None:
+    """Emit MatchkeyProfile from post-transform columns. No-op when null emitter."""
+    if not _emitter_stack.get():
+        return
+    df = lf_after.collect()
+    n_total = df.height
+    per_field: dict[str, FieldStats] = {}
+    seen_fields: set[str] = set()
+    for mk in matchkeys:
+        for f in getattr(mk, "fields", []) or []:
+            field_name = getattr(f, "field", None)
+            if field_name is None or field_name in seen_fields:
+                continue
+            seen_fields.add(field_name)
+            # Try the exact-matchkey combined column, then fall back to raw column
+            mk_col = f"__mk_{mk.name}__"
+            candidates = [mk_col, field_name]
+            col = next((c for c in candidates if c in df.columns), None)
+            if col is None or n_total == 0:
+                continue
+            ser = df.select(pl.col(col)).to_series()
+            non_null = ser.drop_nulls()
+            n_non_null = non_null.len()
+            if n_non_null == 0:
+                per_field[field_name] = FieldStats(
+                    post_transform_cardinality_ratio=0.0,
+                    post_transform_null_rate=1.0,
+                    post_transform_value_length_p50=0,
+                )
+                continue
+            n_distinct = non_null.n_unique()
+            try:
+                lengths = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
+                p50 = lengths[len(lengths) // 2] if lengths else 0
+            except Exception:
+                p50 = 0
+            per_field[field_name] = FieldStats(
+                post_transform_cardinality_ratio=n_distinct / n_non_null,
+                post_transform_null_rate=1 - (n_non_null / n_total),
+                post_transform_value_length_p50=int(p50),
+            )
+    current_emitter().set_matchkey(MatchkeyProfile(per_field=per_field))
+
+
 def compute_matchkeys(
     lf: pl.LazyFrame, matchkeys: list[MatchkeyConfig]
 ) -> pl.LazyFrame:
@@ -134,6 +180,7 @@ def compute_matchkeys(
             exprs.append(build_matchkey_expr(mk))
     if exprs:
         lf = lf.with_columns(exprs)
+    _emit_matchkey_profile(lf, matchkeys)
     return lf
 
 

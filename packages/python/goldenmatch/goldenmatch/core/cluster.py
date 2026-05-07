@@ -8,6 +8,10 @@ from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import ClusterProfile
+from goldenmatch.core._profile_helpers import transitivity_rate
+
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
 
@@ -152,9 +156,62 @@ def split_oversized_cluster(
     return result
 
 
+def _emit_cluster_profile(clusters: "dict[int, dict]") -> None:
+    """Emit ClusterProfile to current emitter. No-op when no capture is active."""
+    import math
+    if not _emitter_stack.get():
+        return  # fast path: no capture active
+
+    if not clusters:
+        current_emitter().set_cluster(ClusterProfile())
+        return
+
+    sizes = sorted(c["size"] for c in clusters.values())
+
+    def percentile(xs: list, q: float) -> int:
+        if not xs:
+            return 0
+        idx = max(0, min(len(xs) - 1, int(math.ceil(q * len(xs))) - 1))
+        return xs[idx]
+
+    confidences = sorted(
+        c["confidence"] for c in clusters.values()
+        if c.get("confidence") is not None
+    )
+
+    members_by_cluster = {cid: c["members"] for cid, c in clusters.items()}
+
+    # Aggregate pair_scores across clusters
+    aggregated_scores: "dict[tuple[int, int], float]" = {}
+    for c in clusters.values():
+        for k, v in c.get("pair_scores", {}).items():
+            if isinstance(k, tuple) and len(k) == 2:
+                a, b = k
+                aggregated_scores[(min(a, b), max(a, b))] = v
+
+    # Threshold proxy: minimum observed pair score (any pair already passed the
+    # matchkey threshold, so the min is the effective formation floor).
+    if aggregated_scores:
+        threshold = min(aggregated_scores.values())
+    else:
+        threshold = 0.5  # fallback
+
+    profile = ClusterProfile(
+        n_clusters=len(clusters),
+        cluster_size_p50=percentile(sizes, 0.50),
+        cluster_size_p99=percentile(sizes, 0.99),
+        cluster_size_max=sizes[-1] if sizes else 0,
+        transitivity_rate=transitivity_rate(members_by_cluster, aggregated_scores, threshold),
+        edge_confidence_p50=confidences[len(confidences) // 2] if confidences else 0.0,
+        edge_confidence_min=confidences[0] if confidences else 0.0,
+        oversized_cluster_count=sum(1 for c in clusters.values() if c.get("oversized")),
+    )
+    current_emitter().set_cluster(profile)
+
+
 def build_clusters(
     pairs: list[tuple[int, int, float]],
-    all_ids: list[int],
+    all_ids: "list[int] | None" = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
@@ -164,6 +221,14 @@ def build_clusters(
     Auto-splits oversized clusters via MST (when auto_split=True). Assigns cluster_quality
     ("strong", "weak", "split") and downgrades confidence for weak clusters.
     """
+    # Derive all_ids from pairs when not provided explicitly
+    if all_ids is None:
+        seen: set[int] = set()
+        for id_a, id_b, _s in pairs:
+            seen.add(id_a)
+            seen.add(id_b)
+        all_ids = list(seen)
+
     uf = UnionFind()
     uf.add_many(all_ids)
     for id_a, id_b, _score in pairs:
@@ -228,6 +293,7 @@ def build_clusters(
             cinfo["cluster_quality"] = "strong"
         cinfo.pop("_was_split", None)
 
+    _emit_cluster_profile(result)
     return result
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,8 +23,55 @@ from goldenmatch.config.schemas import (
     OutputConfig,
 )
 from goldenmatch.core.profiler import _guess_type
+from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.core.complexity_profile import DataProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_data_profile(df: "pl.DataFrame") -> None:
+    """Emit DataProfile from the input DataFrame. No-op when null emitter."""
+    if not _emitter_stack.get():
+        return
+    user_cols = [c for c in df.columns if not c.startswith("__")]
+    column_types: dict[str, str] = {}
+    cardinality_ratio: dict[str, float] = {}
+    null_rate: dict[str, float] = {}
+    value_length_p50: dict[str, int] = {}
+    value_length_p99: dict[str, int] = {}
+    n_rows = df.height
+    for col in user_cols:
+        ser = df[col]
+        non_null = ser.drop_nulls()
+        n_non_null = non_null.len()
+        cardinality_ratio[col] = (non_null.n_unique() / n_non_null) if n_non_null else 0.0
+        null_rate[col] = 1 - (n_non_null / n_rows) if n_rows else 0.0
+        dtype = str(ser.dtype).lower()
+        if "utf" in dtype or "str" in dtype:
+            column_types[col] = "text"
+        elif "int" in dtype or "float" in dtype:
+            column_types[col] = "numeric"
+        elif "date" in dtype or "time" in dtype:
+            column_types[col] = "date"
+        else:
+            column_types[col] = "unknown"
+        if column_types[col] == "text" and n_non_null:
+            try:
+                lens = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
+                if lens:
+                    value_length_p50[col] = int(lens[len(lens) // 2])
+                    value_length_p99[col] = int(lens[max(0, int(0.99 * len(lens)) - 1)])
+            except Exception:
+                pass
+    current_emitter().set_data(DataProfile(
+        n_rows=n_rows,
+        n_cols=len(user_cols),
+        column_types=column_types,
+        cardinality_ratio=cardinality_ratio,
+        null_rate=null_rate,
+        value_length_p50=value_length_p50,
+        value_length_p99=value_length_p99,
+    ))
 
 # ── Column name heuristics ─────────────────────────────────────────────────
 
@@ -1173,34 +1221,106 @@ def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 5
 
 # ── Main entry point ──────────────────────────────────────────────────────
 
-def auto_configure_df(
-    df: pl.DataFrame, llm_provider: str | None = None,
-    domain_config=None, llm_auto: bool = False,
-    strict: bool = False, allow_remote_assets: bool = False,
-) -> GoldenMatchConfig:
-    """Auto-generate a GoldenMatchConfig from a DataFrame.
+# ContextVar populated by auto_configure_df after each successful controller
+# run. Holds (ComplexityProfile, RunHistory) so PostflightReport can pick up
+# the profile + history without threading them through every call site.
+_LAST_CONTROLLER_RUN: ContextVar = ContextVar("_LAST_CONTROLLER_RUN", default=None)
 
-    Profiles columns by name heuristics and data sampling, then builds
-    matchkeys, blocking, and golden rules automatically. Runs preflight
-    verification on the resulting config before returning, attaching the
-    `PreflightReport` to the config as ``config._preflight_report``.
+
+def auto_configure_df(
+    df: "pl.DataFrame | pl.LazyFrame",
+    llm_provider: str | None = None,
+    domain_config=None,
+    llm_auto: bool = False,
+    strict: bool = False,
+    allow_remote_assets: bool = False,
+    *,
+    reference: "pl.DataFrame | pl.LazyFrame | None" = None,
+    _skip_finalize: bool = False,
+) -> "GoldenMatchConfig":
+    """Public auto-configuration entry point (controller-backed).
+
+    Runs an iterative refit loop:
+      1. Compute v0 config via the legacy heuristic
+      2. Run blocking → score → cluster on a stratified sample under profile_capture
+      3. Read the ComplexityProfile, ask the policy for a refit
+      4. Loop until green/converged/budget
+      5. Run the full pipeline once and return the committed config
+
+    The committed config is what's returned. Profile + history are stashed
+    on the ``_LAST_CONTROLLER_RUN`` ContextVar so the calling pipeline can
+    surface them via PostflightReport.
 
     Args:
-        df: Polars DataFrame to auto-configure for.
-        llm_provider: Optional LLM provider for profiling (openai/anthropic).
-        domain_config: Manual domain override; skips auto-detection.
-        llm_auto: Auto-enable the LLM scorer when an API key is present.
-        strict: When True, postflight computes signals and emits advisories
-            but does not apply any adjustments (keeps output deterministic for
-            parity runs). Preflight always raises ``ConfigValidationError`` on
-            unrepairable errors regardless. Stashed on the config as
-            ``_strict_autoconfig`` for downstream consumers.
-        allow_remote_assets: When True, keep embedding/record_embedding/
-            rerank scorers. When False (default), preflight demotes them to
-            offline-safe alternatives.
+        df: target DataFrame (or LazyFrame, which will be collected).
+        reference: optional reference DataFrame for cross-source ``match_df``
+            mode. When None, dedupe mode (single-source).
+        llm_provider, domain_config, llm_auto, strict, allow_remote_assets:
+            unchanged from the legacy signature; threaded into v0 only.
 
-    Returns:
-        A fully populated GoldenMatchConfig ready for pipeline execution.
+    Raises:
+        TypeError: when ``df`` or ``reference`` is not a polars DataFrame/LazyFrame.
+        ConfigValidationError: from the controller, when input is unworkable
+            (empty, all-null, etc.).
+    """
+    # Coerce + validate input types
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+    elif not isinstance(df, pl.DataFrame):
+        raise TypeError(
+            f"auto_configure_df requires pl.DataFrame or pl.LazyFrame, "
+            f"got {type(df).__name__}"
+        )
+    if reference is not None:
+        if isinstance(reference, pl.LazyFrame):
+            reference = reference.collect()
+        elif not isinstance(reference, pl.DataFrame):
+            raise TypeError(
+                f"reference requires pl.DataFrame or pl.LazyFrame, "
+                f"got {type(reference).__name__}"
+            )
+
+    # Lazy import to avoid circular imports (controller imports back here)
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController, ControllerBudget,
+    )
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(),
+    )
+    v0_kw = {
+        "llm_provider": llm_provider,
+        "domain_config": domain_config,
+        "llm_auto": llm_auto,
+        "strict": strict,
+        "allow_remote_assets": allow_remote_assets,
+    }
+    config, profile, history = controller.run(
+        df,
+        reference=reference,
+        v0_kwargs=v0_kw,
+        skip_finalize=_skip_finalize,
+    )
+    _LAST_CONTROLLER_RUN.set((profile, history))
+    return config
+
+
+def _legacy_auto_configure_v0(
+    df: pl.DataFrame,
+    *,
+    reference: pl.DataFrame | None = None,  # ignored for v1; Task 5.1 plumbs it
+    llm_provider: str | None = None,
+    domain_config=None,
+    llm_auto: bool = False,
+    strict: bool = False,
+    allow_remote_assets: bool = False,
+) -> GoldenMatchConfig:
+    """Legacy column-profiling + rule-based auto-config heuristic (the v0
+    starting point for the controller). Implementation unchanged from the
+    pre-Task-4.x ``auto_configure_df`` — just renamed and given a private
+    underscore prefix so the controller can call it without recursing.
     """
     # Initialized up front so the preflight-wiring block at the bottom can
     # safely test `if domain_profile is not None` even when the domain
@@ -1213,6 +1333,8 @@ def auto_configure_df(
     total_rows = df.height
 
     logger.info("Auto-configuring %d rows, %d columns", total_rows, len(df.columns))
+
+    _emit_data_profile(df)
 
     # Profile columns
     profiles = profile_columns(df, llm_provider=llm_provider)

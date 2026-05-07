@@ -19,6 +19,14 @@ from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
+# Imported at module level so tests can patch goldenmatch._api.auto_configure_df.
+# The lazy import guard inside each function is kept for cycle safety — this
+# top-level import is a re-export alias that tests can mock.
+try:
+    from goldenmatch.core.autoconfig import auto_configure_df
+except ImportError:  # pragma: no cover
+    auto_configure_df = None  # type: ignore[assignment]
+
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
@@ -344,21 +352,29 @@ def dedupe_df(
         configs.
     """
     from goldenmatch.core.pipeline import run_dedupe_df
+    import goldenmatch._api as _self_api
 
-    _auto_config = False
-    _auto_config_provider = None
-
+    _used_controller = False
     if isinstance(config, str):
         config = load_config(config)
     elif config is None:
         if exact or fuzzy:
             config = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
         else:
-            # Zero-config: defer auto-config to inside pipeline (after GoldenCheck/GoldenFlow)
-            from goldenmatch.config.schemas import GoldenMatchConfig
-            config = GoldenMatchConfig()
-            _auto_config = True
+            # Zero-config: call auto_configure_df *before* the pipeline so the
+            # pipeline never re-invokes auto-config. This eliminates the
+            # double-pipeline-run introduced by Task 5.1 (the controller loop
+            # itself calls dedupe_df on samples; if the pipeline also ran
+            # auto_configure_df we'd recurse). Task 5.2 fix.
+            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
             _auto_config_provider = _detect_llm_provider() if llm_scorer else None
+            config = _self_api.auto_configure_df(
+                df,
+                llm_provider=_auto_config_provider,
+                llm_auto=llm_auto,
+                _skip_finalize=True,
+            )
+            _used_controller = True
 
     # Apply overrides uniformly regardless of config source
     if backend and hasattr(config, "backend"):
@@ -371,11 +387,29 @@ def dedupe_df(
 
     result = run_dedupe_df(
         df, config, source_name=source_name,
-        auto_config=_auto_config,
-        auto_config_llm_provider=_auto_config_provider,
+        auto_config=False,
     )
 
     _mem = result.get("memory_stats")
+    pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
+
+    # Fix 1: Wire controller profile + history onto PostflightReport.
+    # When the zero-config path ran the controller, stash sample_profile and
+    # history so callers can inspect health verdicts, errors, and drift.
+    # NOTE: full_vs_sample_drift is not set here because _skip_finalize=True
+    # skips the controller's _finalize call. Task 6.1 will compute drift here
+    # once pf.signals is a typed ComplexityProfile (currently PostflightSignals
+    # TypedDict). For now, drift is left unset on this path.
+    if _used_controller:
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        _ctrl_state = _LAST_CONTROLLER_RUN.get()
+        if _ctrl_state is not None:
+            _sample_profile, _history = _ctrl_state
+            if pf is None:
+                pf = PostflightReport()
+            pf.controller_profile = _sample_profile
+            pf.controller_history = _history
+
     return DedupeResult(
         golden=result.get("golden"),
         clusters=result.get("clusters", {}),
@@ -384,9 +418,7 @@ def dedupe_df(
         stats=_extract_stats(result),
         scored_pairs=_extract_pairs(result),
         config=config,
-        postflight_report=_attach_memory_to_postflight(
-            result.get("postflight_report"), _mem
-        ),
+        postflight_report=pf,
         memory_stats=_mem,
     )
 
@@ -429,35 +461,52 @@ def match_df(
         configs.
     """
     from goldenmatch.core.pipeline import run_match_df
+    import goldenmatch._api as _self_api
 
-    _auto_config = False
-
+    _used_controller = False
     if isinstance(config, str):
         config = load_config(config)
     elif config is None:
         if exact or fuzzy:
             config = _build_config(exact, fuzzy, blocking, threshold, backend=backend)
         else:
-            # Zero-config: defer auto-config to inside pipeline (same pattern
-            # as dedupe_df). auto_configure_df runs on the combined target +
-            # reference frame so matchkeys/blocking apply uniformly.
-            from goldenmatch.config.schemas import GoldenMatchConfig
-            config = GoldenMatchConfig()
-            _auto_config = True
+            # Zero-config: call auto_configure_df *before* the pipeline so the
+            # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
+            # (Task 5.2 fix — mirrors dedupe_df zero-config refactor).
+            # Pass reference= so auto-config sees both column sets and emits
+            # matchkeys/blocking that apply uniformly across the join.
+            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
+            config = _self_api.auto_configure_df(
+                target, reference=reference, _skip_finalize=True,
+            )
+            _used_controller = True
 
     if backend and hasattr(config, "backend"):
         config.backend = backend
 
-    result = run_match_df(target, reference, config, auto_config=_auto_config)
+    result = run_match_df(target, reference, config, auto_config=False)
 
     _mem = result.get("memory_stats")
+    pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
+
+    # Fix 1: Wire controller profile + history onto PostflightReport (match path).
+    # See dedupe_df for full commentary. Drift unset when _skip_finalize=True
+    # (Task 6.1 deferred).
+    if _used_controller:
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        _ctrl_state = _LAST_CONTROLLER_RUN.get()
+        if _ctrl_state is not None:
+            _sample_profile, _history = _ctrl_state
+            if pf is None:
+                pf = PostflightReport()
+            pf.controller_profile = _sample_profile
+            pf.controller_history = _history
+
     return MatchResult(
         matched=result.get("matched"),
         unmatched=result.get("unmatched"),
         stats=_extract_stats(result),
-        postflight_report=_attach_memory_to_postflight(
-            result.get("postflight_report"), _mem
-        ),
+        postflight_report=pf,
         memory_stats=_mem,
     )
 
