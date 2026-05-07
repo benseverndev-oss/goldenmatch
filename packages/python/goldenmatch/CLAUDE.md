@@ -227,6 +227,9 @@ Hosted on Railway, registered on Smithery:
 - `utf8-lossy` encoding on all CSV read paths (ingest.py, agent.py, chunked.py, smart_ingest.py, skills.py)
 - `golden` records != total output. `unique + golden = total distinct people`
 - `llm_scorer` and `backend` kwargs applied uniformly after config resolution (not inside zero-config branch)
+- Controller iterates on ComplexityProfile signals (block-size dist, score histogram dip, transitivity, candidates_compared, mass_above_threshold). HeuristicRefitPolicy is the v1 policy; LearnedRefitPolicy / LLMRefitPolicy are v2 hooks.
+- Stage instrumentation in core/blocker.py, core/scorer.py, core/cluster.py, core/matchkey.py, core/autoconfig.py, core/domain.py emits sub-profiles via a thread-local ProfileEmitter stack (zero cost when no capture is active).
+- Controller history is on PostflightReport.controller_history (RunHistory with .decisions, .errors, .full_vs_sample_drift). RunHistory.decisions is the audit trail of which rules fired and why — useful for explaining auto-config output to users.
 
 ## Gotchas
 - `docs/superpowers/` is gitignored — specs and plans are local-only; do NOT `git add` them
@@ -242,7 +245,7 @@ Hosted on Railway, registered on Smithery:
 - `.profile_tmp/` is gitignored and used for local profiling artifacts (cProfile dumps, sampled parquet fixtures). `.profile_tmp/profile_ncvr.py` is the reference scorer profiling script — loads 200K NCVR voter sample and attributes scorer time across rapidfuzz vs. Python orchestration vs. Polars overhead.
 - Leipzig DBLP-ACM dataset: `DBLP2.csv` uses `latin-1` encoding (not UTF-8). `ACM.csv` also latin-1.
 - `recordlinkage.datasets.load_febrl3()` needs `return_links=True` to get ground truth pairs (default returns only DataFrame)
-- Auto-config fails on all standard benchmarks (Febrl, DBLP-ACM, NC Voter) — always use explicit config for non-trivial dedup. v1.2.7 cardinality guards improve but don't fully solve this.
+- v1.8 (2026-05-07): introspective controller (PR #103, #104) lifts zero-config to hand-tuned-or-better on DBLP-ACM (F1=0.96), holds Febrl3 (F1=0.85). The legacy "always use explicit config for non-trivial dedup" caveat no longer applies for bibliographic-shape data; explicit config still wins on Amazon-Google / Abt-Buy product matching where domain extraction + LLM scorer are required.
 - Comparison benchmark scripts in `D:\show_case\golden-showcase\comparison_bench\` — GoldenMatch, Splink, Dedupe, RecordLinkage on Febrl/DBLP-ACM/NC Voter
 - `dedupe` library class is `dedupe.Dedupe` (not `dedupe.Deduper`). Empty strings cause `ZeroDivisionError` in affinegap — use single space as placeholder. Training pairs must go through `training_file` param, not `mark_pairs` directly.
 - .docx files can't be read by Read tool — use `python-docx` or zipfile+XML

@@ -4,6 +4,11 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added
+- Auto-config introspective controller (PR #103, #104). Zero-config DBLP-ACM F1 0.51→0.96. New ComplexityProfile types, RefitPolicy protocol, 7 heuristic rules, controller history surfaced via PostflightReport.
+
 ## [Unreleased] / TypeScript port
 
 ## [1.6.0] - 2026-05-04
