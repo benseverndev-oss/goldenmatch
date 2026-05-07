@@ -629,7 +629,7 @@ def rule_enable_llm_scorer(
 
 
 DEFAULT_RULES = [
-    rule_blocking_field_null_heavy,   # NEW: structural null-rate guard (runs first)
+    rule_blocking_field_null_heavy,   # structural null-rate guard (runs first)
     rule_blocking_singleton_trap,     # catches __title_key__-style traps before blocking_too_coarse
     rule_blocking_too_coarse,
     rule_unimodal_scoring,
@@ -638,5 +638,9 @@ DEFAULT_RULES = [
     rule_no_matches,
     rule_blocking_key_swap,           # iter-1+ fallback when threshold/block loosening didn't help
     rule_recall_gap_suspected,        # probe-based recall signal
-    rule_enable_llm_scorer,           # NEW: last — enables LLM scorer when borderline-heavy + key available
+    # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
+    # LLM scorer decoration happens post-iteration via
+    # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
+    # after the controller commits a config so it never competes with structural
+    # rules for the iteration budget.
 ]

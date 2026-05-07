@@ -416,7 +416,9 @@ def test_default_rules_list_has_five_entries():
     # Updated to 6 after rule_blocking_singleton_trap was added (2026-05-07)
     # Updated to 7 after rule_blocking_key_swap was added (2026-05-07)
     # Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)
-    assert len(DEFAULT_RULES) == 10
+    # Reverted to 9: rule_enable_llm_scorer moved out of DEFAULT_RULES into
+    # AutoConfigController._maybe_decorate_with_llm_scorer (post-iteration decoration)
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -594,9 +596,10 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
 def test_default_rules_now_has_six_entries():
     """Singleton-trap rule is added to DEFAULT_RULES.
     Updated to 7 after rule_blocking_key_swap was added (2026-05-07).
-    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
+    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
+    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -805,9 +808,10 @@ def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
 
 def test_default_rules_now_has_seven_entries():
     """Adding rule_blocking_key_swap brings the count to 7.
-    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
+    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
+    Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 9
 
 
 def test_rule_key_swap_is_after_rule_no_matches():
@@ -1120,14 +1124,15 @@ def test_rule_null_heavy_does_not_fire_on_low_null_field():
 
 def test_default_rules_now_has_nine_entries():
     """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brings the count to 9.
-    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
+    (rule_enable_llm_scorer was moved out of DEFAULT_RULES into
+    AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)"""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 9
 
 
-def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_before_llm_scorer():
+def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     """Order: rule_blocking_field_null_heavy first (structural check),
-    rule_recall_gap_suspected before rule_enable_llm_scorer (probe signal before LLM)."""
+    rule_recall_gap_suspected last (probe signal, no LLM rule in the table)."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_blocking_field_null_heavy,
         rule_recall_gap_suspected, rule_no_matches,
@@ -1137,8 +1142,8 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_before_llm_scorer
     idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
     assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
     assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
-    # recall_gap is second-to-last (rule_enable_llm_scorer is last)
-    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last"
+    # recall_gap is now LAST (rule_enable_llm_scorer removed from DEFAULT_RULES)
+    assert idx_recall_gap == len(DEFAULT_RULES) - 1, "recall_gap must be last"
 
 
 # ============================================================
@@ -1251,20 +1256,23 @@ def test_rule_enable_llm_scorer_does_not_fire_when_already_enabled(monkeypatch):
     assert out is None
 
 
-def test_default_rules_now_has_ten_entries():
-    """Adding rule_enable_llm_scorer brings count to 10."""
+def test_default_rules_now_has_nine_entries():
+    """rule_enable_llm_scorer was moved out of DEFAULT_RULES into
+    AutoConfigController._maybe_decorate_with_llm_scorer (post-iteration
+    decoration), bringing count back to 9."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 9
 
 
-def test_rule_enable_llm_scorer_runs_last(monkeypatch):
-    """It's the LAST rule — runs only after structural fixes attempt to fix
-    blocking/scoring issues. Adding LLM scoring to a fundamentally broken
-    config is wasted spend."""
+def test_rule_enable_llm_scorer_not_in_default_rules():
+    """rule_enable_llm_scorer must NOT be in DEFAULT_RULES — it runs as a
+    post-iteration decoration via _maybe_decorate_with_llm_scorer, not inside
+    the iteration loop. On DQbench, structural rules dominate the budget and
+    the rule would never get a turn."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_enable_llm_scorer,
     )
-    assert DEFAULT_RULES[-1] is rule_enable_llm_scorer
+    assert rule_enable_llm_scorer not in DEFAULT_RULES
 
 
 def test_llm_api_key_helper_reads_openai_or_anthropic(monkeypatch):
