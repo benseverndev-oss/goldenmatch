@@ -24,6 +24,11 @@ def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
     return None
 
 
+def _is_derived(field_name: str) -> bool:
+    """Return True if field_name is an auto-generated derived column (prefixed with __)."""
+    return field_name.startswith("__")
+
+
 def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
     if cfg.blocking is None:
         return set()
@@ -336,18 +341,44 @@ def rule_blocking_key_swap(
             transforms=["lowercase", "first_token"],
         )],
     })
-    new_cfg = current.model_copy(update={"blocking": new_blocking})
+
+    # Drop exact matchkeys whose fields are ENTIRELY derived (__*).
+    # These were emitted by domain-extraction paired with the original
+    # blocking; once we override the blocking, they're stale.
+    surviving_matchkeys = []
+    dropped_names = []
+    for mk in (current.matchkeys or []):
+        if mk.type == "exact" and mk.fields:
+            field_names = [f.field for f in mk.fields]
+            if all(_is_derived(n) for n in field_names):
+                dropped_names.append(mk.name)
+                continue
+        surviving_matchkeys.append(mk)
+
+    updates: dict[str, Any] = {"blocking": new_blocking}
+    if dropped_names:
+        updates["matchkeys"] = surviving_matchkeys
+
+    new_cfg = current.model_copy(update=updates)
+
+    rationale_parts = [
+        f"after {len(history.decisions)} prior decision(s), "
+        f"candidates_compared={sp.candidates_compared} "
+        f"but mass_above_threshold={sp.mass_above_threshold}; "
+        f"swapping blocking to first_token({target_field!r})"
+    ]
+    if dropped_names:
+        rationale_parts.append(
+            f"; dropped {len(dropped_names)} stale derived-column exact "
+            f"matchkey(s): {dropped_names}"
+        )
     decision = PolicyDecision(
         rule_name="blocking_key_swap",
-        rationale=(
-            f"after {len(history.decisions)} prior decision(s), "
-            f"candidates_compared={sp.candidates_compared} "
-            f"but mass_above_threshold={sp.mass_above_threshold}; "
-            f"swapping blocking to first_token({target_field!r})"
-        ),
+        rationale="".join(rationale_parts),
         config_diff={
             "blocking.keys[0].fields": [target_field],
             "blocking.keys[0].transforms": ["lowercase", "first_token"],
+            **({"matchkeys.dropped": dropped_names} if dropped_names else {}),
         },
     )
     return new_cfg, decision

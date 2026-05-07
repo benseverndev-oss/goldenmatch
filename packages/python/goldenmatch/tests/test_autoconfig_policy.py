@@ -816,3 +816,111 @@ def test_rule_key_swap_is_after_rule_no_matches():
     idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
     idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
     assert idx_no_matches < idx_swap
+
+
+def test_rule_key_swap_drops_derived_column_exact_matchkey():
+    """When swapping blocking off __title_key__, also drop the
+    domain_exact_title_key (an exact matchkey on the same derived column),
+    because its premise (the domain-extraction grouping) is invalidated."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            # The fuzzy matchkey we want to keep
+            MatchkeyConfig(
+                name="m", type="weighted", threshold=0.5,
+                fields=[
+                    MatchkeyField(field="title", scorer="token_sort", weight=1.5,
+                                  transforms=["lowercase"]),
+                ],
+            ),
+            # The domain-extraction-emitted exact matchkey we want dropped
+            MatchkeyConfig(
+                name="domain_exact_title_key", type="exact",
+                fields=[MatchkeyField(field="__title_key__",
+                                       transforms=["lowercase"])],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=50000, skip_oversized=False,
+        ),
+    )
+    profile = _profile_for_swap_test()
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is not None
+    new_cfg, decision = out
+    # Only the fuzzy matchkey survives
+    assert len(new_cfg.matchkeys) == 1
+    assert new_cfg.matchkeys[0].name == "m"
+    assert new_cfg.matchkeys[0].type == "weighted"
+
+
+def test_rule_key_swap_keeps_user_facing_exact_matchkeys():
+    """Don't drop exact matchkeys on regular columns — only the derived ones
+    paired with domain extraction."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="m", type="weighted", threshold=0.5,
+                fields=[MatchkeyField(field="title", scorer="token_sort",
+                                       weight=1.5, transforms=["lowercase"])],
+            ),
+            MatchkeyConfig(
+                name="exact_email", type="exact",
+                fields=[MatchkeyField(field="email",  # NOT derived
+                                       transforms=["lowercase"])],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=50000, skip_oversized=False,
+        ),
+    )
+    profile = _profile_for_swap_test()
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is not None
+    new_cfg, _ = out
+    # Both matchkeys survive (the user-defined exact one is preserved)
+    assert len(new_cfg.matchkeys) == 2
+    names = {mk.name for mk in new_cfg.matchkeys}
+    assert names == {"m", "exact_email"}
+
+
+def test_rule_key_swap_keeps_exact_matchkey_with_mixed_derived_and_regular_fields():
+    """An exact matchkey with at least one non-derived field is user-meaningful;
+    don't drop it."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="m", type="weighted", threshold=0.5,
+                fields=[MatchkeyField(field="title", scorer="token_sort",
+                                       weight=1.5, transforms=["lowercase"])],
+            ),
+            MatchkeyConfig(
+                name="mixed_exact", type="exact",
+                fields=[
+                    MatchkeyField(field="__title_key__", transforms=["lowercase"]),
+                    MatchkeyField(field="year", transforms=[]),  # regular column
+                ],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=50000, skip_oversized=False,
+        ),
+    )
+    profile = _profile_for_swap_test()
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is not None
+    new_cfg, _ = out
+    # Both survive — the mixed matchkey has a non-derived field, user might
+    # have a real reason for it
+    assert len(new_cfg.matchkeys) == 2
