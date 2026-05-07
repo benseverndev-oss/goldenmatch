@@ -1,0 +1,31 @@
+id,title,authors,venue,year
+DBLP_001,a survey of distributed databases,smith jones,vldb,1995
+DBLP_002,energy efficient indexing on air,imielinski,sigmod,1994
+DBLP_003,concurrency control in the data warehouse,taylor,vldb,2000
+DBLP_004,query optimization in heterogeneous databases,garcia,icde,1997
+DBLP_005,semantic query processing using deductive databases,kim,aaai,1988
+DBLP_006,object oriented data model for complex objects,atzeni,er,1993
+DBLP_007,rule based query rewriting in deductive databases,lloyd,jlp,1991
+DBLP_008,transaction management in multidatabase systems,elmasri,vldb,1992
+DBLP_009,extended relational model for semantic data modeling,codd,acm,1979
+DBLP_010,integrity constraint checking in deductive databases,kohler,vldb,1988
+DBLP_011,schema integration in federated database systems,sheth,cs,1990
+DBLP_012,data exchange theory and practice,fagin,pods,2005
+DBLP_013,approximate query processing using wavelets,matias,vldb,2000
+DBLP_014,cost based query optimization for heterogeneous sources,levy,sigmod,1996
+DBLP_015,temporal data model and query language,snodgrass,is,1992
+DBLP_016,view maintenance in data warehouses,gupta,sigmod,1995
+DBLP_017,incremental view maintenance with outer joins,larson,sigmod,2000
+DBLP_018,mining association rules in relational databases,srikant,kdd,1995
+DBLP_019,efficient similarity joins for near duplicate detection,arasu,vldb,2006
+DBLP_020,probabilistic databases overview and challenges,dalvi,sigmod,2007
+DBLP_021,indexing moving objects,pfoser,vldb,2000
+DBLP_022,spatial join processing using packed r trees,lo,vldb,1994
+DBLP_023,buffering in databases and their applications,ioannidis,vldb,1993
+DBLP_024,k nearest neighbor queries on databases,weber,vldb,1998
+DBLP_025,adaptive query processing as a new database architecture,avnur,sigmod,2000
+DBLP_026,unrelated paper about neural networks,lecun,nature,2015
+DBLP_027,deep reinforcement learning for robotics,mnih,nips,2016
+DBLP_028,graph convolutional networks for node classification,kipf,iclr,2017
+DBLP_029,attention mechanism in sequence to sequence models,bahdanau,iclr,2015
+DBLP_030,generative adversarial networks,goodfellow,nips,2014
