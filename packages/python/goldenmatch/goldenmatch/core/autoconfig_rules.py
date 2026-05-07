@@ -282,11 +282,83 @@ def rule_no_matches(
     return new_cfg, decision
 
 
+def rule_blocking_key_swap(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when a prior iteration already loosened the threshold/block cap
+    but candidates still aren't matching. The blocking *key* is wrong —
+    swap to ``first_token`` on the dominant text field of the first weighted
+    matchkey.
+
+    Diagnosed from DBLP-ACM: ``__title_key__`` blocking groups records whose
+    full titles share too little for token_sort to score above 0.5 even at
+    threshold 0.5. ``first_token`` on raw ``title`` puts records sharing
+    the first word in the same block, giving the fuzzy scorer pairs whose
+    titles are textually similar enough to actually match.
+    """
+    sp = profile.scoring
+    # Only fire when fuzzy actually compared candidates AND nothing matched
+    if sp.candidates_compared == 0:
+        return None
+    if sp.mass_above_threshold > 0.0:
+        return None
+    # Only fire after a prior iteration already tried something else (avoid
+    # double-firing with rule_no_matches on iter 0; this is the iter-1+ fallback)
+    if not history.decisions:
+        return None
+    if current.blocking is None:
+        return None
+
+    # Target field: first text field in the first weighted matchkey
+    mk = _first_weighted_mk(current)
+    if mk is None:
+        return None
+    target_field = None
+    for f in mk.fields or []:
+        col_type = profile.data.column_types.get(f.field, "unknown")
+        if col_type in ("text", "name"):
+            target_field = f.field
+            break
+    if target_field is None:
+        return None
+
+    # Avoid proposing a config we already have (anti-oscillation belt-and-suspenders)
+    existing_first_key = (current.blocking.keys or [None])[0]
+    if (existing_first_key is not None
+            and existing_first_key.fields == [target_field]
+            and "first_token" in (existing_first_key.transforms or [])):
+        return None
+
+    new_blocking = current.blocking.model_copy(update={
+        "strategy": "static",
+        "keys": [BlockingKeyConfig(
+            fields=[target_field],
+            transforms=["lowercase", "first_token"],
+        )],
+    })
+    new_cfg = current.model_copy(update={"blocking": new_blocking})
+    decision = PolicyDecision(
+        rule_name="blocking_key_swap",
+        rationale=(
+            f"after {len(history.decisions)} prior decision(s), "
+            f"candidates_compared={sp.candidates_compared} "
+            f"but mass_above_threshold={sp.mass_above_threshold}; "
+            f"swapping blocking to first_token({target_field!r})"
+        ),
+        config_diff={
+            "blocking.keys[0].fields": [target_field],
+            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+        },
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
-    rule_blocking_singleton_trap,   # NEW: catches __title_key__-style traps before blocking_too_coarse
+    rule_blocking_singleton_trap,   # catches __title_key__-style traps before blocking_too_coarse
     rule_blocking_too_coarse,
     rule_unimodal_scoring,
     rule_low_reduction_ratio,
     rule_low_transitivity,
     rule_no_matches,
+    rule_blocking_key_swap,         # iter-1+ fallback when threshold/block loosening didn't help
 ]

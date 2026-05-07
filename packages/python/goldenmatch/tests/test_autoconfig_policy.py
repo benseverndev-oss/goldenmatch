@@ -414,7 +414,8 @@ def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
 
 def test_default_rules_list_has_five_entries():
     # Updated to 6 after rule_blocking_singleton_trap was added (2026-05-07)
-    assert len(DEFAULT_RULES) == 6
+    # Updated to 7 after rule_blocking_key_swap was added (2026-05-07)
+    assert len(DEFAULT_RULES) == 7
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -590,9 +591,10 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
 
 
 def test_default_rules_now_has_six_entries():
-    """Singleton-trap rule is added to DEFAULT_RULES."""
+    """Singleton-trap rule is added to DEFAULT_RULES.
+    Updated to 7 after rule_blocking_key_swap was added (2026-05-07)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 6
+    assert len(DEFAULT_RULES) == 7
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -604,3 +606,213 @@ def test_singleton_trap_runs_before_blocking_too_coarse():
     idx_trap = DEFAULT_RULES.index(rule_blocking_singleton_trap)
     idx_coarse = DEFAULT_RULES.index(rule_blocking_too_coarse)
     assert idx_trap < idx_coarse
+
+
+# ============================================================
+# rule_blocking_key_swap (added 2026-05-07)
+# ============================================================
+
+from goldenmatch.core.autoconfig_rules import rule_blocking_key_swap
+
+
+def _scoring_no_matches_with_candidates() -> ScoringProfile:
+    """ScoringProfile representing 'pairs were compared, none matched'."""
+    return ScoringProfile(
+        n_pairs_scored=0,
+        candidates_compared=33000,
+        mass_above_threshold=0.0,
+        dip_statistic=0.0,
+    )
+
+
+def _profile_for_swap_test() -> ComplexityProfile:
+    return ComplexityProfile(
+        data=DataProfile(
+            n_rows=4910, n_cols=4,
+            column_types={"title": "text", "authors": "text",
+                          "venue": "text", "year": "numeric"},
+            cardinality_ratio={"title": 0.99, "authors": 0.95,
+                                "venue": 0.005, "year": 0.005},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["__title_key__"]], n_blocks=1201,
+            total_comparisons=33563, reduction_ratio=0.997,
+            block_sizes_p50=4, block_sizes_p99=31, block_sizes_max=104,
+            singleton_block_count=0,
+        ),
+        scoring=_scoring_no_matches_with_candidates(),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+        matchkey=MatchkeyProfile(per_field={
+            "title": FieldStats(0.99, 0.0, 50),
+            "authors": FieldStats(0.95, 0.0, 30),
+        }),
+    )
+
+
+def _config_for_swap_test() -> GoldenMatchConfig:
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.5,
+            fields=[
+                MatchkeyField(field="title", scorer="token_sort", weight=1.5,
+                              transforms=["lowercase"]),
+                MatchkeyField(field="authors", scorer="token_sort", weight=1.0,
+                              transforms=["lowercase"]),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__title_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=50000, skip_oversized=False,
+        ),
+    )
+
+
+def _history_with_prior_decision() -> RunHistory:
+    """RunHistory with one prior iteration that already fired a rule."""
+    h = RunHistory()
+    h.entries.append(HistoryEntry(
+        iteration=0,
+        config=_config_for_swap_test(),
+        profile=_profile_for_swap_test(),
+        decision=PolicyDecision(rule_name="no_matches", rationale="prior",
+                                config_diff={}),
+        error=None, wall_clock_ms=10,
+    ))
+    return h
+
+
+def test_rule_key_swap_fires_after_prior_decision_with_no_matches():
+    """The DBLP-ACM scenario: iter 0 lowered threshold, iter 1 still has
+    candidates but no matches. Rule should propose first_token blocking
+    on the dominant text field."""
+    cfg = _config_for_swap_test()
+    profile = _profile_for_swap_test()
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "blocking_key_swap"
+    assert new_cfg.blocking.keys[0].fields == ["title"]
+    assert "first_token" in new_cfg.blocking.keys[0].transforms
+
+
+def test_rule_key_swap_does_not_fire_on_first_iteration():
+    """No prior decisions → rule does not fire (other rules handle iter 0)."""
+    cfg = _config_for_swap_test()
+    profile = _profile_for_swap_test()
+    history = RunHistory()  # empty — no prior decisions
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is None
+
+
+def test_rule_key_swap_does_not_fire_when_candidates_zero():
+    """No candidates compared → singleton-trap rule's territory, not this one."""
+    cfg = _config_for_swap_test()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                          column_types={"title": "text", "authors": "text"}),
+        blocking=BlockingProfile(keys_used=[["x"]], n_blocks=10,
+                                  reduction_ratio=0.95),
+        scoring=ScoringProfile(
+            n_pairs_scored=0,
+            candidates_compared=0,    # NOT this rule's case
+            mass_above_threshold=0.0,
+        ),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+        matchkey=MatchkeyProfile(per_field={"title": FieldStats(0.5, 0.0, 10)}),
+    )
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is None
+
+
+def test_rule_key_swap_does_not_fire_when_matches_exist():
+    """mass_above_threshold > 0 → blocking is producing matches; not the trap."""
+    cfg = _config_for_swap_test()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=4910, n_cols=2,
+                          column_types={"title": "text", "authors": "text"}),
+        blocking=BlockingProfile(keys_used=[["__title_key__"]], n_blocks=1201,
+                                  reduction_ratio=0.997, block_sizes_p99=31),
+        scoring=ScoringProfile(
+            n_pairs_scored=144,
+            candidates_compared=33000,
+            mass_above_threshold=0.4,    # matches exist
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+        matchkey=MatchkeyProfile(per_field={"title": FieldStats(0.99, 0.0, 50)}),
+    )
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is None
+
+
+def test_rule_key_swap_does_not_fire_when_already_first_token():
+    """Avoid oscillation: if blocking already uses first_token on the same field,
+    don't propose the same change."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.5,
+            fields=[MatchkeyField(field="title", scorer="token_sort",
+                                   weight=1.5, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["title"],
+                                     transforms=["lowercase", "first_token"])],
+            max_block_size=50000, skip_oversized=False,
+        ),
+    )
+    profile = _profile_for_swap_test()
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is None
+
+
+def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
+    """Need a text field in the first weighted matchkey to swap onto."""
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.5,
+            fields=[MatchkeyField(field="numeric_id", scorer="exact",
+                                   weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__some_key__"],
+                                     transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2,
+                          column_types={"numeric_id": "id-like",
+                                         "other": "id-like"}),
+        blocking=BlockingProfile(keys_used=[["x"]], n_blocks=10,
+                                  reduction_ratio=0.95),
+        scoring=_scoring_no_matches_with_candidates(),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+        matchkey=MatchkeyProfile(per_field={"numeric_id": FieldStats(0.99, 0.0, 5)}),
+    )
+    history = _history_with_prior_decision()
+    out = rule_blocking_key_swap(profile, cfg, history)
+    assert out is None
+
+
+def test_default_rules_now_has_seven_entries():
+    """Adding rule_blocking_key_swap brings the count to 7."""
+    from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+    assert len(DEFAULT_RULES) == 7
+
+
+def test_rule_key_swap_is_after_rule_no_matches():
+    """rule_no_matches gets first crack on iter 0 (it lowers threshold first);
+    rule_blocking_key_swap is the iter-1+ fallback when that didn't help."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_no_matches, rule_blocking_key_swap,
+    )
+    idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
+    idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
+    assert idx_no_matches < idx_swap

@@ -158,8 +158,16 @@ class AutoConfigController:
                 # Stop check
                 if profile_n.health() == HealthVerdict.GREEN:
                     break
+                # Convergence guard: only break when the profile is unchanged AND
+                # the previous iteration fired no rule (decision=None).  When a rule
+                # DID fire but the profile is still the same (e.g. rule_no_matches
+                # lowered the threshold but the blocking key still produces the same
+                # candidates), we must still call the policy so a follow-up rule
+                # (rule_blocking_key_swap) can try a different axis of change.
                 if history.profile_distance_to_prev() < self.budget.converge_epsilon:
-                    break
+                    prev_entry = history.entries[-2] if len(history.entries) >= 2 else None
+                    if prev_entry is None or prev_entry.decision is None:
+                        break
                 if history.is_oscillating():
                     break
 
