@@ -391,6 +391,30 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
     assert new_cfg.blocking.max_block_size >= 50000
 
 
+def test_rule_no_matches_fires_on_zero_pairs_scored():
+    """When blocking collapses everything into singletons, n_pairs_scored=0
+    AND mass_above_threshold=0.0. Rule should fire on this case too —
+    proposing a broader blocking strategy."""
+    cfg = _config_with_blocking(threshold=0.85)
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.99, n_blocks=100,
+                                 block_sizes_p99=1, singleton_block_count=100),
+        scoring=ScoringProfile(
+            n_pairs_scored=0,           # blocking trapped everything
+            mass_above_threshold=0.0,
+            dip_statistic=0.0,
+        ),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+    )
+    out = rule_no_matches(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.5)
+    assert new_cfg.blocking.max_block_size >= 50000
+    assert decision.rule_name == "no_matches"
+
+
 def test_default_rules_list_has_five_entries():
     assert len(DEFAULT_RULES) == 5
 

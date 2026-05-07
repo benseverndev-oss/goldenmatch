@@ -52,7 +52,7 @@ def rule_blocking_too_coarse(
     used = _existing_blocking_fields(current)
     candidates = [
         col for col, ratio in profile.data.cardinality_ratio.items()
-        if 0.05 <= ratio <= 0.5 and col not in used
+        if 0.01 <= ratio <= 0.95 and col not in used
     ]
     if not candidates:
         return None
@@ -173,8 +173,10 @@ def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
     sp = profile.scoring
-    if sp.mass_above_threshold > 0.0 or sp.n_pairs_scored == 0:
-        return None
+    # Fires on either (a) scored pairs but none above threshold,
+    # or (b) blocking produced no scorable pairs at all (singleton trap).
+    if sp.mass_above_threshold > 0.0:
+        return None  # something matched; not our case
     mk = _first_weighted_mk(current)
     if mk is None:
         return None
@@ -198,8 +200,11 @@ def rule_no_matches(
     new_cfg = current.model_copy(update=updates)
     decision = PolicyDecision(
         rule_name="no_matches",
-        rationale=f"mass_above_threshold={sp.mass_above_threshold} on "
-                  f"{sp.n_pairs_scored} pairs; resetting to permissive baseline",
+        rationale=(
+            f"mass_above_threshold={sp.mass_above_threshold} on "
+            f"{sp.n_pairs_scored} pairs scored; resetting to permissive baseline "
+            f"(lower threshold, broader blocking)"
+        ),
         config_diff=updates,
     )
     return new_cfg, decision
