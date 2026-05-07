@@ -563,6 +563,71 @@ def rule_recall_gap_suspected(
     return new_cfg, decision
 
 
+def _llm_api_key_available() -> bool:
+    """True when at least one supported LLM provider key is set in env."""
+    import os
+    return bool(
+        os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+    )
+
+
+def rule_enable_llm_scorer(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Enable per-pair LLM scoring (LLMScorerConfig) when there's a meaningful
+    borderline mass and an API key is available.
+
+    The hand-tuned DQbench adapter explicitly enables LLMScorerConfig with
+    candidate_lo=0.60 / candidate_hi=0.90 / auto_threshold=0.90 — this rule
+    auto-applies the same settings whenever the controller observes that
+    a non-trivial fraction of scored pairs land in the borderline band.
+
+    Silent no-op when no API key is set (key check via env). Bounded cost:
+    BudgetConfig(max_calls=500, max_cost_usd=1.0).
+    """
+    sp = profile.scoring
+    # Need real signal: scoring profile must have run at least once
+    if sp.candidates_compared == 0:
+        return None
+    # Borderline-heavy threshold: 10% of scored pairs in [threshold-0.1, threshold+0.1]
+    if sp.mass_in_borderline < 0.10:
+        return None
+    if not _llm_api_key_available():
+        return None
+    # Already enabled? Don't re-fire.
+    if current.llm_scorer is not None and current.llm_scorer.enabled:
+        return None
+
+    from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+
+    new_cfg = current.model_copy(update={
+        "llm_scorer": LLMScorerConfig(
+            enabled=True,
+            candidate_lo=0.60,
+            candidate_hi=0.90,
+            auto_threshold=0.90,
+            budget=BudgetConfig(max_calls=500, max_cost_usd=1.0),
+        ),
+    })
+    decision = PolicyDecision(
+        rule_name="enable_llm_scorer",
+        rationale=(
+            f"mass_in_borderline={sp.mass_in_borderline:.3f} > 0.10 with "
+            f"LLM API key available; enabling per-pair LLM scoring on "
+            f"pairs scoring 0.60-0.90 (auto-accept above 0.90, "
+            f"budget=$1.00 / 500 calls)"
+        ),
+        config_diff={
+            "llm_scorer.enabled": True,
+            "llm_scorer.candidate_lo": 0.60,
+            "llm_scorer.candidate_hi": 0.90,
+            "llm_scorer.auto_threshold": 0.90,
+        },
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
     rule_blocking_field_null_heavy,   # NEW: structural null-rate guard (runs first)
     rule_blocking_singleton_trap,     # catches __title_key__-style traps before blocking_too_coarse
@@ -572,5 +637,6 @@ DEFAULT_RULES = [
     rule_low_transitivity,
     rule_no_matches,
     rule_blocking_key_swap,           # iter-1+ fallback when threshold/block loosening didn't help
-    rule_recall_gap_suspected,        # NEW: probe-based recall signal (runs last)
+    rule_recall_gap_suspected,        # probe-based recall signal
+    rule_enable_llm_scorer,           # NEW: last — enables LLM scorer when borderline-heavy + key available
 ]

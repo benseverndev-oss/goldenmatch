@@ -415,7 +415,8 @@ def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
 def test_default_rules_list_has_five_entries():
     # Updated to 6 after rule_blocking_singleton_trap was added (2026-05-07)
     # Updated to 7 after rule_blocking_key_swap was added (2026-05-07)
-    assert len(DEFAULT_RULES) == 9
+    # Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -592,9 +593,10 @@ def test_rule_singleton_trap_returns_none_when_no_text_field_in_matchkey():
 
 def test_default_rules_now_has_six_entries():
     """Singleton-trap rule is added to DEFAULT_RULES.
-    Updated to 7 after rule_blocking_key_swap was added (2026-05-07)."""
+    Updated to 7 after rule_blocking_key_swap was added (2026-05-07).
+    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -802,9 +804,10 @@ def test_rule_key_swap_returns_none_when_no_text_field_in_matchkey():
 
 
 def test_default_rules_now_has_seven_entries():
-    """Adding rule_blocking_key_swap brings the count to 7."""
+    """Adding rule_blocking_key_swap brings the count to 7.
+    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
 def test_rule_key_swap_is_after_rule_no_matches():
@@ -1116,14 +1119,15 @@ def test_rule_null_heavy_does_not_fire_on_low_null_field():
 
 
 def test_default_rules_now_has_nine_entries():
-    """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brings the count to 9."""
+    """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brings the count to 9.
+    Updated to 10 after rule_enable_llm_scorer was added (2026-05-07)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 9
+    assert len(DEFAULT_RULES) == 10
 
 
-def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
+def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_before_llm_scorer():
     """Order: rule_blocking_field_null_heavy first (structural check),
-    rule_recall_gap_suspected last (probe signal)."""
+    rule_recall_gap_suspected before rule_enable_llm_scorer (probe signal before LLM)."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_blocking_field_null_heavy,
         rule_recall_gap_suspected, rule_no_matches,
@@ -1133,4 +1137,142 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
     assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
     assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
-    assert idx_recall_gap == len(DEFAULT_RULES) - 1, "recall_gap must be the last rule"
+    # recall_gap is second-to-last (rule_enable_llm_scorer is last)
+    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last"
+
+
+# ============================================================
+# rule_enable_llm_scorer (added 2026-05-07)
+# ============================================================
+
+from goldenmatch.core.autoconfig_rules import (
+    rule_enable_llm_scorer, _llm_api_key_available,
+)
+
+
+def _config_no_llm_scorer():
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="m", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+        # llm_scorer left as default None
+    )
+
+
+def _profile_borderline_heavy():
+    return ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10,
+                                  block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=300,
+            mass_above_threshold=0.4,
+            mass_in_borderline=0.25,    # > 0.10
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+
+
+def test_rule_enable_llm_scorer_fires_with_borderline_and_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _config_no_llm_scorer()
+    out = rule_enable_llm_scorer(_profile_borderline_heavy(), cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    assert decision.rule_name == "enable_llm_scorer"
+    assert new_cfg.llm_scorer is not None
+    assert new_cfg.llm_scorer.enabled is True
+    assert new_cfg.llm_scorer.candidate_lo == 0.60
+    assert new_cfg.llm_scorer.candidate_hi == 0.90
+
+
+def test_rule_enable_llm_scorer_silent_when_no_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cfg = _config_no_llm_scorer()
+    out = rule_enable_llm_scorer(_profile_borderline_heavy(), cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_enable_llm_scorer_does_not_fire_with_low_borderline(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _config_no_llm_scorer()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10,
+                                  block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=100, candidates_compared=300,
+            mass_above_threshold=0.4,
+            mass_in_borderline=0.05,    # < 0.10
+            dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+    )
+    out = rule_enable_llm_scorer(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_enable_llm_scorer_does_not_fire_when_no_candidates(monkeypatch):
+    """No scoring data yet → don't speculatively enable LLM."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _config_no_llm_scorer()
+    profile = ComplexityProfile(
+        data=DataProfile(n_rows=100, n_cols=2),
+        blocking=BlockingProfile(reduction_ratio=0.95, n_blocks=10,
+                                  block_sizes_p99=20),
+        scoring=ScoringProfile(
+            n_pairs_scored=0, candidates_compared=0,
+            mass_above_threshold=0.0,
+            mass_in_borderline=0.0,
+            dip_statistic=0.0,
+        ),
+        cluster=ClusterProfile(transitivity_rate=1.0),
+    )
+    out = rule_enable_llm_scorer(profile, cfg, RunHistory())
+    assert out is None
+
+
+def test_rule_enable_llm_scorer_does_not_fire_when_already_enabled(monkeypatch):
+    from goldenmatch.config.schemas import LLMScorerConfig
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = _config_no_llm_scorer().model_copy(update={
+        "llm_scorer": LLMScorerConfig(enabled=True, candidate_lo=0.7, candidate_hi=0.95),
+    })
+    out = rule_enable_llm_scorer(_profile_borderline_heavy(), cfg, RunHistory())
+    assert out is None
+
+
+def test_default_rules_now_has_ten_entries():
+    """Adding rule_enable_llm_scorer brings count to 10."""
+    from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
+    assert len(DEFAULT_RULES) == 10
+
+
+def test_rule_enable_llm_scorer_runs_last(monkeypatch):
+    """It's the LAST rule — runs only after structural fixes attempt to fix
+    blocking/scoring issues. Adding LLM scoring to a fundamentally broken
+    config is wasted spend."""
+    from goldenmatch.core.autoconfig_rules import (
+        DEFAULT_RULES, rule_enable_llm_scorer,
+    )
+    assert DEFAULT_RULES[-1] is rule_enable_llm_scorer
+
+
+def test_llm_api_key_helper_reads_openai_or_anthropic(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not _llm_api_key_available()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert _llm_api_key_available()
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-test")
+    assert _llm_api_key_available()
