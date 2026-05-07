@@ -123,7 +123,7 @@ class AutoConfigController:
                     with profile_capture() as emitter:
                         self._run_pipeline_sample(sample, sample_ref, config_n)
                     profile_n = self._assemble_profile(
-                        emitter, iteration=iteration, n_rows=sample.height,
+                        emitter, df=sample, iteration=iteration,
                     )
                     wall_ms = int((time.time() - iter_start) * 1000)
                     from goldenmatch.core.autoconfig_history import HistoryEntry
@@ -297,31 +297,23 @@ class AutoConfigController:
         self,
         emitter: Any,
         *,
+        df: pl.DataFrame,
         iteration: int,
-        n_rows: int,
         is_sample: bool = True,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
-        fall back to defaults (which produce RED via DataProfile.n_rows=0).
-
-        When the emitter did not write a DataProfile, we infer n_rows from the
-        blocking sub-profile (n_blocks * block_sizes_p50) if available, so
-        that the health verdict is calibrated against the blocking stats rather
-        than the potentially-tiny sample size.
-        """
+        fall back to defaults computed from ``df`` so the rollup gets a
+        real DataProfile (without it, n_rows=0 forces RED and the controller
+        can never converge on a healthy config)."""
         from goldenmatch.core.complexity_profile import (
             DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
             MatchkeyProfile, DomainProfile, ProfileMeta,
         )
-        if emitter.data is None and emitter.blocking is not None and emitter.blocking.n_blocks > 0:
-            # Use block count × median block size as a lower-bound n_rows estimate
-            # so health verdicts are calibrated against the blocking-profile scale.
-            inferred = max(n_rows, emitter.blocking.n_blocks * max(emitter.blocking.block_sizes_p50, 1))
-            fallback_data = DataProfile(n_rows=inferred)
-        else:
-            fallback_data = DataProfile(n_rows=n_rows)
+
+        data = emitter.data or self._compute_data_profile(df)
+
         return ComplexityProfile(
-            data=emitter.data or fallback_data,
+            data=data,
             domain=emitter.domain or DomainProfile(),
             matchkey=emitter.matchkey or MatchkeyProfile(),
             blocking=emitter.blocking or BlockingProfile(),
@@ -329,8 +321,57 @@ class AutoConfigController:
             cluster=emitter.cluster or ClusterProfile(),
             meta=ProfileMeta(
                 iteration=iteration, is_sample=is_sample,
-                sample_size=n_rows, n_rows_full=n_rows,
+                sample_size=df.height, n_rows_full=df.height,
             ),
+        )
+
+    def _compute_data_profile(self, df: pl.DataFrame) -> "DataProfile":
+        """Compute a real DataProfile from a DataFrame. Used as fallback when
+        no pipeline stage emitted one (sample iterations don't go through
+        the autoconfig column-profiling step)."""
+        from goldenmatch.core.complexity_profile import DataProfile
+
+        user_cols = [c for c in df.columns if not c.startswith("__")]
+        n_rows = df.height
+
+        column_types: dict[str, str] = {}
+        cardinality_ratio: dict[str, float] = {}
+        null_rate: dict[str, float] = {}
+        value_length_p50: dict[str, int] = {}
+        value_length_p99: dict[str, int] = {}
+
+        for col in user_cols:
+            ser = df[col]
+            non_null = ser.drop_nulls()
+            n_non_null = non_null.len()
+            cardinality_ratio[col] = (non_null.n_unique() / n_non_null) if n_non_null else 0.0
+            null_rate[col] = 1 - (n_non_null / n_rows) if n_rows else 0.0
+            dtype = str(ser.dtype).lower()
+            if "utf" in dtype or "str" in dtype:
+                column_types[col] = "text"
+            elif "int" in dtype or "float" in dtype:
+                column_types[col] = "numeric"
+            elif "date" in dtype or "time" in dtype:
+                column_types[col] = "date"
+            else:
+                column_types[col] = "unknown"
+            if column_types[col] == "text" and n_non_null:
+                try:
+                    lens = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
+                    if lens:
+                        value_length_p50[col] = int(lens[len(lens) // 2])
+                        value_length_p99[col] = int(lens[max(0, int(0.99 * len(lens)) - 1)])
+                except Exception:
+                    pass
+
+        return DataProfile(
+            n_rows=n_rows,
+            n_cols=len(user_cols),
+            column_types=column_types,
+            cardinality_ratio=cardinality_ratio,
+            null_rate=null_rate,
+            value_length_p50=value_length_p50,
+            value_length_p99=value_length_p99,
         )
 
     def _finalize(
@@ -347,5 +388,5 @@ class AutoConfigController:
         with profile_capture() as emitter:
             self._run_pipeline_sample(df, reference, config)
         return self._assemble_profile(
-            emitter, iteration=-1, n_rows=df.height, is_sample=False,
+            emitter, df=df, iteration=-1, is_sample=False,
         )

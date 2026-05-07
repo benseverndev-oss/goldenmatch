@@ -173,8 +173,18 @@ from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
 
 
 def _green_subprofiles():
-    """Return sub-profiles that yield ComplexityProfile.health() == GREEN."""
+    """Return sub-profiles that yield ComplexityProfile.health() == GREEN.
+
+    Includes a DataProfile with diverse column_types (name + numeric) so the
+    DataProfile.health() check (len(set(column_types.values())) != 1) returns
+    GREEN rather than YELLOW.  The emitter mock writes these into the emitter
+    so _assemble_profile uses them in preference to the computed fallback.
+    """
     return dict(
+        data=DataProfile(
+            n_rows=100, n_cols=2,
+            column_types={"a": "name", "b": "numeric"},
+        ),
         blocking=BlockingProfile(
             keys_used=[["a"]], n_blocks=10, total_comparisons=500,
             reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
@@ -236,15 +246,11 @@ def _make_controller_with_mocked_runner(profiles_per_iter, **budget_kwargs):
         if "domain" in sub: e.set_domain(sub["domain"])
 
     controller._run_pipeline_sample = fake_runner  # type: ignore[method-assign]
-    # Build the finalize return value with a DataProfile that has enough rows
-    # for the blocking/cluster health checks to yield GREEN (n_rows needs to
-    # be >= n_blocks * block_sizes_p99 / 10 = 10*20/10 = 20) and diverse
-    # column types so DataProfile.health() returns GREEN (not YELLOW).
+    # Build the finalize return value using the full green sub-profiles (which
+    # now include a DataProfile with n_rows=100 and diverse column types so
+    # DataProfile.health() returns GREEN rather than YELLOW).
     _green_subs = _green_subprofiles()
-    _green_full = ComplexityProfile(
-        data=DataProfile(n_rows=100, n_cols=2, column_types={"a": "name", "b": "numeric"}),
-        **_green_subs,
-    )
+    _green_full = ComplexityProfile(**_green_subs)
     controller._finalize = MagicMock(return_value=_green_full)
     return controller
 
@@ -346,15 +352,9 @@ def test_finalize_records_zero_drift_when_full_matches_sample(small_df):
     green = _green_subprofiles()
     controller = _make_controller_with_mocked_runner([green])
     # Replace finalize with one that returns the same green profile.
-    # n_rows=100 matches the inferred n_rows from blocking stats
-    # (n_blocks=10, p50=10 → max(12, 100) = 100) so the signal vectors
-    # are identical and drift == 0.  Diverse column_types avoids the
-    # DataProfile single-type YELLOW verdict.
-    full_profile = ComplexityProfile(
-        data=DataProfile(n_rows=100, n_cols=2,
-                         column_types={"a": "name", "b": "numeric"}),
-        **green,
-    )
+    # The green sub-profiles already include a DataProfile with n_rows=100
+    # and diverse column_types so the signal vectors are identical → drift == 0.
+    full_profile = ComplexityProfile(**green)
     controller._finalize = MagicMock(return_value=full_profile)
     config, profile, history = controller.run(small_df)
     # Drift recorded via history.full_vs_sample_drift
