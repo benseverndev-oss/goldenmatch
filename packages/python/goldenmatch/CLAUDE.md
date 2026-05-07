@@ -230,6 +230,8 @@ Hosted on Railway, registered on Smithery:
 - Controller iterates on ComplexityProfile signals (block-size dist, score histogram dip, transitivity, candidates_compared, mass_above_threshold). HeuristicRefitPolicy is the v1 policy; LearnedRefitPolicy / LLMRefitPolicy are v2 hooks.
 - Stage instrumentation in core/blocker.py, core/scorer.py, core/cluster.py, core/matchkey.py, core/autoconfig.py, core/domain.py emits sub-profiles via a thread-local ProfileEmitter stack (zero cost when no capture is active).
 - Controller history is on PostflightReport.controller_history (RunHistory with .decisions, .errors, .full_vs_sample_drift). RunHistory.decisions is the audit trail of which rules fired and why — useful for explaining auto-config output to users.
+- **Tier 3 (LLMRefitPolicy):** `GOLDENMATCH_AUTOCONFIG_LLM=1` enables LLM fallback when heuristic rules are exhausted but profile is RED/YELLOW. Requires `OPENAI_API_KEY`. Default OFF. Wraps `HeuristicRefitPolicy` — heuristic always fires first; LLM is last resort only. Max 5 LLM calls per run (configurable). See `core/autoconfig_policy.py::LLMRefitPolicy`.
+- **Tier 4 (AutoConfigMemory):** `GOLDENMATCH_AUTOCONFIG_MEMORY=0` disables cross-run memory (useful in CI). Default ON. Uses `~/.goldenmatch/autoconfig_memory.db`.
 
 ## Gotchas
 - `docs/superpowers/` is gitignored — specs and plans are local-only; do NOT `git add` them

@@ -39,9 +39,28 @@ def _config():
 # ── profile_signature tests ────────────────────────────────────────────────
 
 
-def test_signature_deterministic_for_same_shape():
+def test_signature_deterministic_for_same_columns():
+    """Same column names + dtypes → same signature regardless of values."""
     df1 = pl.DataFrame({"name": ["a"], "city": ["x"]})
     df2 = pl.DataFrame({"name": ["b"], "city": ["y"]})
+    assert profile_signature(df1) == profile_signature(df2)
+
+
+def test_signature_differs_by_column_names():
+    """Two frames with the same shape but different column names must
+    produce different signatures (otherwise a cached config would
+    reference column names absent from the new frame, crashing the
+    pipeline). Regression for the cache-poisoning bug found in CI."""
+    df1 = pl.DataFrame({"name": ["a"], "city": ["x"]})
+    df2 = pl.DataFrame({"col_0": ["a"], "col_1": ["x"]})
+    assert profile_signature(df1) != profile_signature(df2)
+
+
+def test_signature_independent_of_column_order():
+    """Reordering columns preserves the signature — the signature is over
+    the SET of (name, dtype) pairs, not the sequence."""
+    df1 = pl.DataFrame({"name": ["a"], "city": ["x"]})
+    df2 = pl.DataFrame({"city": ["x"], "name": ["a"]})
     assert profile_signature(df1) == profile_signature(df2)
 
 
