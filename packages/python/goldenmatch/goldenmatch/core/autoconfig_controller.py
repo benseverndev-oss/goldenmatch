@@ -12,7 +12,6 @@ The iteration loop body lands in Task 4.2 and _finalize in Task 4.3.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
-from enum import Enum
 from typing import Any
 import hashlib
 import logging
@@ -22,7 +21,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, HealthVerdict,
+    ComplexityProfile, DataProfile, HealthVerdict, StopReason,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
@@ -37,17 +36,6 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 
 class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
-
-
-class StopReason(Enum):
-    GREEN = "green"
-    CONVERGED = "converged"
-    BUDGET_ITERATIONS = "budget_iterations"
-    BUDGET_TIME = "budget_time"
-    POLICY_SATISFIED = "policy_satisfied"
-    POLICY_NO_PROGRESS = "policy_no_progress"
-    OSCILLATING = "oscillating"
-    CANCELLED = "cancelled"
 
 
 @dataclass
