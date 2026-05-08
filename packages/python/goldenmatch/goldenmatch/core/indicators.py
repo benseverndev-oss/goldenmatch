@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any
 
 import polars as pl
 
@@ -111,9 +110,15 @@ def _compute_corruption_score_inline(sample: pl.DataFrame, col: str) -> float:
     duplicates of another value in the sample. High value -> high
     corruption (Brian/BRIAN/brian/Brian ).
     """
+    # Pre-flight budget check: BUDGET_CORRUPTION <= 0.0 means "disabled".
+    if BUDGET_CORRUPTION <= 0.0:
+        return 0.0
+    start = time.time()
     try:
         vals = sample[col].cast(str).fill_null("").to_list()
     except Exception:
+        return 0.0
+    if (time.time() - start) > BUDGET_CORRUPTION:
         return 0.0
     if not vals:
         return 0.0

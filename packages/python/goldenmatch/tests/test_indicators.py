@@ -187,3 +187,12 @@ def test_cross_blocking_overlap_budget_returns_none(monkeypatch):
     df = pl.DataFrame({"city": ["nyc"] * 100, "state": ["NY"] * 100})
     result = indicators.compute_cross_blocking_overlap(df, "city", "state")
     assert result is None
+
+
+def test_compute_corruption_score_budget_returns_zero(monkeypatch):
+    """Budget exhaustion -> return 0.0 sentinel."""
+    from goldenmatch.core import indicators
+    monkeypatch.setattr(indicators, "BUDGET_CORRUPTION", 0.0)
+    df = pl.DataFrame({"name": ["Brian", "BRIAN"] * 100})
+    score = indicators.compute_corruption_score(df, "name")
+    assert score == 0.0
