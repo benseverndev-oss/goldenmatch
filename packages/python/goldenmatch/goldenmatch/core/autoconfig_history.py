@@ -91,7 +91,10 @@ class RunHistory:
         b = self.entries[-2].profile.normalized_signal_vector()
         return sum(abs(x - y) for x, y in zip(a, b))
 
-    def pick_committed(self) -> HistoryEntry | None:
+    def pick_committed(
+        self,
+        precision_collapse_floor: float | None = None,
+    ) -> HistoryEntry | None:
         """Pick the entry to commit. Returns None ONLY if every entry
         errored or has no profile — otherwise returns the best entry by
         lexicographic key, where RED entries are last resort but still
@@ -109,6 +112,12 @@ class RunHistory:
         Filter: ``e.error is None and e.profile is not None`` (per the
         ``HistoryEntry`` invariant — guards the sentinel-mismatch case
         defensively).
+
+        ``precision_collapse_floor`` (added v1.9 amendment): when set, RED
+        entries whose ``profile.scoring.mass_above_threshold`` exceeds the
+        floor are demoted in the lex key (rank=3 instead of 2). This
+        protects against the "everything matches" pathology. Typical
+        value: 0.9. Disabled by default to preserve backward compat.
         """
         survivors = [
             e for e in self.entries
@@ -118,14 +127,18 @@ class RunHistory:
             return None
 
         def key(e: HistoryEntry) -> tuple[int, float, int]:
-            h = e.profile.health()
+            verdict = e.profile.health()
             rank = {
                 HealthVerdict.GREEN: 0,
                 HealthVerdict.YELLOW: 1,
                 HealthVerdict.RED: 2,
-            }[h]
+            }[verdict]
             sp = e.profile.scoring
             sep = sp.mass_above_threshold - sp.mass_in_borderline
+            if (precision_collapse_floor is not None
+                    and verdict == HealthVerdict.RED
+                    and sp.mass_above_threshold > precision_collapse_floor):
+                rank = 3
             return (rank, -sep, e.iteration)
 
         return min(survivors, key=key)
@@ -151,4 +164,4 @@ class RunHistory:
             DeprecationWarning,
             stacklevel=2,
         )
-        return self.pick_committed()
+        return self.pick_committed()  # no precision_collapse_floor — preserve deprecated behavior

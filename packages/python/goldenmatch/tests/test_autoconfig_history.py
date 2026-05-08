@@ -386,3 +386,69 @@ def test_runhistory_stop_reason_can_be_set():
     h = RunHistory()
     h.stop_reason = StopReason.BUDGET_ITERATIONS
     assert h.stop_reason == StopReason.BUDGET_ITERATIONS
+
+
+# ============================================================
+# precision_collapse_floor (v1.9 amendment, 2026-05-08)
+# ============================================================
+
+def _make_red_entry_with_mass(iteration: int, mass_above: float, mass_borderline: float) -> "HistoryEntry":
+    """Build a HistoryEntry that is definitely RED (via dip_statistic < 0.005
+    with n_pairs_scored > 0) with the given mass values.
+
+    Used for precision_collapse_floor tests where we need RED entries with
+    varying mass_above values (including > 0.9 for the collapse pathology).
+    """
+    from goldenmatch.core.complexity_profile import (
+        ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
+        ClusterProfile, MatchkeyProfile, FieldStats,
+    )
+    return HistoryEntry(
+        iteration=iteration,
+        config=f"cfg_{iteration}",
+        profile=ComplexityProfile(
+            data=DataProfile(
+                n_rows=100, n_cols=4,
+                column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"},
+            ),
+            blocking=BlockingProfile(
+                keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+                reduction_ratio=0.95, block_sizes_p99=20,
+            ),
+            scoring=ScoringProfile(
+                n_pairs_scored=100,          # > 0 so dip_statistic check fires
+                candidates_compared=500,
+                mass_above_threshold=mass_above,
+                mass_in_borderline=mass_borderline,
+                dip_statistic=0.001,         # < 0.005 → RED
+            ),
+            cluster=ClusterProfile(transitivity_rate=0.95),
+            matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+        ),
+        decision=None, error=None, wall_clock_ms=10,
+    )
+
+
+def test_pick_committed_precision_floor_demotes_collapsed_red():
+    """RED entry with mass_above > 0.9 (precision collapse) is demoted to
+    rank=3. A non-collapsed RED entry (lower mass_separation) wins."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_entry_with_mass(0, mass_above=0.95, mass_borderline=0.10))
+    h.entries.append(_make_red_entry_with_mass(1, mass_above=0.40, mass_borderline=0.10))
+    assert h.entries[0].profile.health().name == "RED"
+    assert h.entries[1].profile.health().name == "RED"
+    best = h.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None
+    assert best.iteration == 1
+
+
+def test_pick_committed_precision_floor_default_is_off():
+    """Default behavior preserves v1.9 lex-key ranking (no demotion)."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_entry_with_mass(0, mass_above=0.95, mass_borderline=0.10))
+    h.entries.append(_make_red_entry_with_mass(1, mass_above=0.40, mass_borderline=0.10))
+    best = h.pick_committed()
+    assert best is not None
+    assert best.iteration == 0   # higher mass_separation wins (0.95-0.10=0.85 vs 0.40-0.10=0.30)
