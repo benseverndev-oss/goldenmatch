@@ -3,25 +3,43 @@
     "name": "dblp_acm",
     "rows": 4910,
     "blocking": {
-      "strategy": "static",
+      "strategy": "multi_pass",
       "keys": [
         {
           "fields": [
-            "__title_key__"
+            "title"
           ],
           "transforms": [
             "lowercase",
-            "strip"
+            "first_token"
           ]
         }
       ],
-      "passes": []
+      "passes": [
+        {
+          "fields": [
+            "title"
+          ],
+          "transforms": [
+            "lowercase",
+            "first_token"
+          ]
+        },
+        {
+          "fields": [
+            "authors"
+          ],
+          "transforms": [
+            "lowercase"
+          ]
+        }
+      ]
     },
     "matchkeys": [
       {
         "name": "fuzzy_match",
         "type": "weighted",
-        "threshold": 0.7,
+        "threshold": 0.5,
         "fields": [
           {
             "field": "title",
@@ -48,21 +66,6 @@
             "transforms": [
               "lowercase",
               "strip"
-            ]
-          }
-        ]
-      },
-      {
-        "name": "domain_exact_title_key",
-        "type": "exact",
-        "threshold": null,
-        "fields": [
-          {
-            "field": "__title_key__",
-            "scorer": null,
-            "weight": null,
-            "transforms": [
-              "lowercase"
             ]
           }
         ]
