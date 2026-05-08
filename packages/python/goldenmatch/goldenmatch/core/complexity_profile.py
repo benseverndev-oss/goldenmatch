@@ -17,6 +17,23 @@ class HealthVerdict(Enum):
     RED = "red"
 
 
+class StopReason(Enum):
+    """Why the controller stopped iterating.
+
+    Set on ``RunHistory.stop_reason`` at each break point in
+    ``AutoConfigController.run()``. Observable via
+    ``result.postflight_report.controller_history.stop_reason``.
+    """
+    GREEN = "green"                           # iteration produced a healthy profile
+    CONVERGED = "converged"                   # profile distance to prev < epsilon
+    BUDGET_ITERATIONS = "budget_iterations"   # max_iterations hit
+    BUDGET_TIME = "budget_time"               # max_seconds hit
+    POLICY_SATISFIED = "policy_satisfied"     # policy returned None on non-green
+    POLICY_NO_PROGRESS = "policy_no_progress" # policy returned identical config
+    OSCILLATING = "oscillating"               # is_oscillating() fired
+    CANCELLED = "cancelled"                   # KeyboardInterrupt
+
+
 def _max_severity(*verdicts: HealthVerdict) -> HealthVerdict:
     if HealthVerdict.RED in verdicts:
         return HealthVerdict.RED

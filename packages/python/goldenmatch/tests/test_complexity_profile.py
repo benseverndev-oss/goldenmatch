@@ -229,3 +229,12 @@ def test_version_field_defaults_to_1():
     assert DataProfile()._version == 1
     assert ScoringProfile()._version == 1
     assert ComplexityProfile()._version == 1
+
+
+def test_stop_reason_has_expected_values():
+    """StopReason captures all controller exit paths."""
+    from goldenmatch.core.complexity_profile import StopReason
+    expected = {"GREEN", "CONVERGED", "BUDGET_ITERATIONS", "BUDGET_TIME",
+                "POLICY_SATISFIED", "POLICY_NO_PROGRESS", "OSCILLATING",
+                "CANCELLED"}
+    assert {sr.name for sr in StopReason} == expected
