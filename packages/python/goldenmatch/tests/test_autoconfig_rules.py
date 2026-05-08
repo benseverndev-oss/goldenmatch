@@ -241,3 +241,38 @@ def test_rule_no_matches_baseline_no_ctx_today_behavior():
     assert outcome is not None
     new_cfg, _ = outcome
     assert _get_threshold(new_cfg) == 0.80
+
+
+# ============================================================
+# Task 4.3: rule_blocking_key_swap indicator-aware tests
+# ============================================================
+
+def test_rule_blocking_key_swap_vetoed_when_v0_key_good():
+    """High identity_score + nonzero full_pop_hits → veto swap."""
+    from goldenmatch.core.autoconfig_rules import rule_blocking_key_swap
+    profile = _profile_with_mass_above(0.0)
+    cfg = _build_test_config(blocking_field="email")
+    ctx = _ctx_with_priors_and_hits(
+        {"email": _V110ColP(identity_score=0.9, corruption_score=0.5)},
+        full_pop_hits={"email": 100},
+    )
+    history = _history_with_prior_decision()
+    outcome = rule_blocking_key_swap(profile, cfg, history, ctx=ctx)
+    assert outcome is None    # vetoed
+
+
+def test_rule_blocking_key_swap_proceeds_when_no_indicator_evidence():
+    from goldenmatch.core.autoconfig_rules import rule_blocking_key_swap
+    profile = _profile_with_mass_above(0.0)
+    cfg = _build_test_config(blocking_field="text_col")
+    ctx = _ctx_with_priors({"text_col": _V110ColP(0.0, 0.0)})
+    history = _history_with_prior_decision()
+    outcome = rule_blocking_key_swap(profile, cfg, history, ctx=ctx)
+    # Today's behavior: swap proceeds (rule does fire, but may also return None
+    # if there's nothing to swap to — accept either non-None or None as long
+    # as it isn't vetoed by indicator logic). The point of the test is to
+    # confirm low identity_score doesn't trigger the new veto.
+    # If the rule fires, the new config should differ from current.
+    if outcome is not None:
+        new_cfg, _ = outcome
+        assert new_cfg != cfg

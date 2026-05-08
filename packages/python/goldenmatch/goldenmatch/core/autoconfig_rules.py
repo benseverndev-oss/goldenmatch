@@ -372,7 +372,8 @@ def rule_no_matches(
 
 
 def rule_blocking_key_swap(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
     """Fires when a prior iteration already loosened the threshold/block cap
     but candidates still aren't matching. The blocking *key* is wrong —
@@ -384,6 +385,8 @@ def rule_blocking_key_swap(
     threshold 0.5. ``first_token`` on raw ``title`` puts records sharing
     the first word in the same block, giving the fuzzy scorer pairs whose
     titles are textually similar enough to actually match.
+
+    v1.10: vetoed when identity_score >= 0.8 AND full_pop_matchkey_hits > 0.
     """
     sp = profile.scoring
     # Only fire when fuzzy actually compared candidates AND nothing matched
@@ -397,6 +400,15 @@ def rule_blocking_key_swap(
         return None
     if current.blocking is None:
         return None
+
+    # v1.10: veto when identity_score >= 0.8 AND full_pop_matchkey_hits > 0
+    if ctx is not None and current.blocking.keys:
+        blocking_col = current.blocking.keys[0].fields[0]
+        cp = ctx.column_priors.get(blocking_col)
+        if cp is not None and cp.identity_score >= 0.8:
+            hits = ctx.full_pop_matchkey_hits(blocking_col)
+            if hits is not None and hits > 0:
+                return None    # vetoed: v0 blocking key is structurally good
 
     # Target field: first text field in the first weighted matchkey
     mk = _first_weighted_mk(current)
