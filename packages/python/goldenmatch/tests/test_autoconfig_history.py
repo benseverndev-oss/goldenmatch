@@ -74,13 +74,24 @@ def test_errors_property_filters_none():
 
 
 def test_cheapest_healthy_returns_none_when_all_red():
+    """Legacy test retained for documentation: v1.8 cheapest_healthy returned
+    None for all-RED. As of v1.9 it is a deprecated alias for pick_committed(),
+    which returns the best RED entry instead. This test now asserts the new
+    behavior (non-None) and that a DeprecationWarning is emitted."""
+    import warnings
     h = RunHistory()
     red = _profile(scoring=ScoringProfile(
         n_pairs_scored=0, score_histogram=[0]*20,
         mass_above_threshold=0.0, dip_statistic=0.001,
     ))
     h.entries.append(_entry(0, "x", red))
-    assert h.cheapest_healthy() is None
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = h.cheapest_healthy()
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    # v1.9 behavior: returns the RED entry rather than None
+    assert result is not None
+    assert result.config == "x"
 
 
 def test_cheapest_healthy_picks_highest_separation():
@@ -95,7 +106,7 @@ def test_cheapest_healthy_picks_highest_separation():
     ))
     h.entries.append(_entry(0, "weak", weak))
     h.entries.append(_entry(1, "strong", strong))
-    best = h.cheapest_healthy()
+    best = h.pick_committed()
     assert best is not None
     assert best.config == "strong"
 
@@ -129,7 +140,7 @@ def test_cheapest_healthy_prefers_green_over_yellow():
     h.entries.append(_entry(0, "yellow", yellow_profile))
     h.entries.append(_entry(1, "green", green))
     # Even though yellow has higher mass_above_threshold, GREEN beats YELLOW in lex key.
-    assert h.cheapest_healthy().config == "green"
+    assert h.pick_committed().config == "green"
 
 
 def test_cheapest_healthy_breaks_tie_on_iteration():
@@ -138,7 +149,7 @@ def test_cheapest_healthy_breaks_tie_on_iteration():
     same_profile = _profile()
     h.entries.append(_entry(0, "first", same_profile))
     h.entries.append(_entry(1, "second", same_profile))
-    assert h.cheapest_healthy().config == "first"
+    assert h.pick_committed().config == "first"
 
 
 def test_oscillation_detected_after_two_repeats_in_window():
@@ -331,6 +342,34 @@ def test_pick_committed_empty_history_returns_none():
     """No entries -> None. Edge case at the start of run() before any iter."""
     from goldenmatch.core.autoconfig_history import RunHistory
     assert RunHistory().pick_committed() is None
+
+
+def test_cheapest_healthy_emits_deprecation_warning_and_delegates():
+    """cheapest_healthy() now emits DeprecationWarning and delegates to
+    pick_committed(). Behavior change: returns RED entries that v1.8
+    callers expected to be None."""
+    import pytest
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_history_entry(0, 0.0, 0.0))
+    with pytest.warns(DeprecationWarning, match=r"pick_committed"):
+        result = h.cheapest_healthy()
+    assert result is not None
+    assert result.config == "cfg_0"
+
+
+def test_cheapest_healthy_warning_message_calls_out_behavior_change():
+    """The DeprecationWarning text mentions the behavior change explicitly."""
+    import warnings
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        h.cheapest_healthy()
+    assert len(caught) >= 1
+    msg = str(caught[0].message)
+    assert "pick_committed" in msg
+    assert "RED" in msg or "behavior" in msg.lower()
 
 
 def test_runhistory_stop_reason_default_is_none():

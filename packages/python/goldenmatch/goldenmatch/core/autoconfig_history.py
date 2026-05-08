@@ -131,18 +131,24 @@ class RunHistory:
         return min(survivors, key=key)
 
     def cheapest_healthy(self) -> HistoryEntry | None:
-        """Spec §Types & contracts § Cheapest-healthy ordering (S1-B):
-        lex key = (health_rank, -mass_separation, iteration).
+        """**DEPRECATED**: use ``pick_committed()`` instead.
 
-        Returns None when no entry has health != RED.
+        Behavior change in v1.9: this alias delegates to ``pick_committed()``,
+        which returns RED entries when no GREEN/YELLOW exists (instead of
+        returning None as in v1.8). Update callers that depended on the
+        v1.8 None-on-all-RED behavior to either:
+        * call ``pick_committed()`` and check the returned entry's
+          ``.profile.health()`` to handle RED explicitly, or
+        * inspect ``.health() != HealthVerdict.RED`` on the result.
+
+        Removed in v2.0.
         """
-        survivors = [e for e in self.entries if e.profile.health() != HealthVerdict.RED]
-        if not survivors:
-            return None
-
-        def key(e: HistoryEntry) -> tuple[int, float, int]:
-            health_rank = 0 if e.profile.health() == HealthVerdict.GREEN else 1
-            sep = e.profile.scoring.mass_above_threshold - e.profile.scoring.mass_in_borderline
-            return (health_rank, -sep, e.iteration)
-
-        return min(survivors, key=key)
+        import warnings
+        warnings.warn(
+            "RunHistory.cheapest_healthy() is deprecated; use pick_committed(). "
+            "Behavior change: pick_committed() returns RED entries when no "
+            "GREEN/YELLOW exists (cheapest_healthy() returned None in v1.8).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.pick_committed()
