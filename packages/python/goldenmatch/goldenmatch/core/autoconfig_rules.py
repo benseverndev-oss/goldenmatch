@@ -58,11 +58,13 @@ _DEFAULT_NORMALIZE_RULES = {
 
 def _with_lower_threshold(cfg, delta: float = 0.05):
     """Return (new_config, rationale) lowering matchkey threshold by delta.
-    Returns (cfg, "") if floor reached."""
+    Returns (cfg, "") if floor reached or no threshold set."""
     matchkeys = cfg.get_matchkeys()
     if not matchkeys:
         return cfg, ""
     primary = matchkeys[0]
+    if primary.threshold is None:
+        return cfg, ""
     new_threshold = round(primary.threshold - delta, 2)
     if new_threshold < _THRESHOLD_FLOOR:
         return cfg, ""
