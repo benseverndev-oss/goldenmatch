@@ -47,6 +47,66 @@ class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
 
 
+def _assemble_v0_history_entry(
+    sample: "pl.DataFrame",
+    reference: "pl.DataFrame | None",
+    config_v0: "GoldenMatchConfig",
+    history: "RunHistory",
+    controller: "AutoConfigController",
+) -> "HistoryEntry | None":
+    """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
+
+    Strategy:
+    1. If history.entries[0].config == config_v0, re-stamp that entry with
+       iteration=-1 and decision=None (avoids a second pipeline run when
+       iter-0 already profiled v0).
+    2. Otherwise, run config_v0 through the pipeline-sample path and wrap
+       the result as a new HistoryEntry(iteration=-1).
+    3. On any exception: return None (don't crash the controller).
+    """
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    try:
+        # Fast path: iter-0 already profiled config_v0 — re-stamp it.
+        if (history.entries
+                and history.entries[0].error is None
+                and history.entries[0].config == config_v0):
+            e0 = history.entries[0]
+            return HistoryEntry(
+                iteration=-1,
+                config=e0.config,
+                profile=e0.profile,
+                decision=None,
+                error=None,
+                wall_clock_ms=e0.wall_clock_ms,
+            )
+
+        # Slow path: run config_v0 through the sample pipeline.
+        import time
+        from goldenmatch.core.profile_emitter import profile_capture
+        t0 = time.time()
+        with profile_capture() as emitter:
+            controller._run_pipeline_sample(sample, reference, config_v0)
+        profile_v0 = controller._assemble_profile(
+            emitter, df=sample, iteration=-1,
+            reference=reference, config=config_v0,
+        )
+        return HistoryEntry(
+            iteration=-1,
+            config=config_v0,
+            profile=profile_v0,
+            decision=None,
+            error=None,
+            wall_clock_ms=int((time.time() - t0) * 1000),
+        )
+    except Exception as exc:
+        logger.debug(
+            "auto-config: could not build v0 virtual history entry (%s: %s); "
+            "skipping — pick_committed will select from regular iterations only",
+            type(exc).__name__, exc,
+        )
+        return None
+
+
 def _first_red_subprofile(profile: "ComplexityProfile") -> str:
     """Return the name of the first sub-profile in canonical declaration
     order whose health() is RED. Used by the WARNING log on commit-RED.
@@ -238,8 +298,18 @@ class AutoConfigController:
         if history.stop_reason is None:
             history.stop_reason = StopReason.BUDGET_ITERATIONS
 
+        # Append config_v0 as a synthetic virtual entry (iteration=-1) so
+        # pick_committed() can fall back to v0 when all real iterations are
+        # worse (e.g. the precision-collapse pathology: iter-3 RED with
+        # mass_above=1.0 would otherwise beat v0's healthier profile).
+        v0_entry = _assemble_v0_history_entry(
+            sample, sample_ref, config_v0, history, self,
+        )
+        if v0_entry is not None:
+            history.entries.append(v0_entry)
+
         # Pick committed config
-        best_entry = history.pick_committed()
+        best_entry = history.pick_committed(precision_collapse_floor=0.9)
         if best_entry is None:
             # Every iteration errored — no usable profile produced. Fall back to v0.
             n_errored = sum(1 for e in history.entries if e.error is not None)
@@ -259,14 +329,15 @@ class AutoConfigController:
             return config_v0, _RED_PROFILE, history
 
         committed_health = best_entry.profile.health()
+        iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
             failing = _first_red_subprofile(best_entry.profile)
             try:
                 logger.warning(
                     "auto-config committed best-effort RED config "
-                    "(iter=%d, stop_reason=%s, failing_subprofile=%s); "
+                    "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
                     "downstream pipeline will run but output may be low-precision",
-                    best_entry.iteration,
+                    iter_label,
                     history.stop_reason.name if history.stop_reason else "unset",
                     failing,
                 )
@@ -276,8 +347,8 @@ class AutoConfigController:
             try:
                 logger.info(
                     "auto-config committed YELLOW config "
-                    "(iter=%d, stop_reason=%s)",
-                    best_entry.iteration,
+                    "(iter=%s, stop_reason=%s)",
+                    iter_label,
                     history.stop_reason.name if history.stop_reason else "unset",
                 )
             except Exception:

@@ -256,13 +256,19 @@ def _make_controller_with_mocked_runner(profiles_per_iter, policy=None, **budget
 
 
 def test_run_exits_green_after_one_iteration(small_df):
-    """All-green sample profile → GREEN exit, finalize runs."""
+    """All-green sample profile → GREEN exit, finalize runs.
+
+    v1.9 amendment: after the loop, a virtual v0 entry (iteration=-1) is
+    appended, so total entries == 2 (one real iter + one virtual v0).
+    """
     green = _green_subprofiles()
     controller = _make_controller_with_mocked_runner([green])
     config, profile, history = controller.run(small_df)
     assert isinstance(config, GoldenMatchConfig)
     assert profile.health() == HealthVerdict.GREEN
-    assert history.iteration == 1
+    # Real iterations: 1 (iter-0 GREEN + break). Virtual v0 appended → total entries = 2.
+    real_iters = [e for e in history.entries if e.iteration >= 0]
+    assert len(real_iters) == 1
 
 
 def test_run_handles_iteration_crash_gracefully(small_df):
@@ -1140,3 +1146,20 @@ def test_controller_info_log_on_yellow_commit(small_df, caplog):
     assert any("YELLOW" in r.message for r in infos), (
         f"expected YELLOW-commit info; got: {[r.message for r in infos]}"
     )
+
+
+# ============================================================
+# Task 3.5.2 — virtual v0 HistoryEntry (v1.9 amendment, 2026-05-08)
+# ============================================================
+
+def test_controller_appends_v0_virtual_entry_before_pick_committed(small_df):
+    """After the iteration loop, the controller appends config_v0's profile
+    as a synthetic HistoryEntry with iteration=-1."""
+    red = _red_blocking_subprofile_dict()
+    controller = _make_controller_with_mocked_runner(
+        [red, red, red], max_iterations=2,
+    )
+    config, profile, history = controller.run(small_df)
+    v0_entries = [e for e in history.entries if e.iteration == -1]
+    assert len(v0_entries) == 1
+    assert v0_entries[0].decision is None
