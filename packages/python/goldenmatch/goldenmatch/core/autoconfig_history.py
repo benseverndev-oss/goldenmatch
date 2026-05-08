@@ -91,6 +91,45 @@ class RunHistory:
         b = self.entries[-2].profile.normalized_signal_vector()
         return sum(abs(x - y) for x, y in zip(a, b))
 
+    def pick_committed(self) -> HistoryEntry | None:
+        """Pick the entry to commit. Returns None ONLY if every entry
+        errored or has no profile — otherwise returns the best entry by
+        lexicographic key, where RED entries are last resort but still
+        beat 'no commit at all.'
+
+        Replaces ``cheapest_healthy()`` as of v1.9 — the new behavior
+        commits a best-effort entry whenever any iteration produced a
+        usable profile, even if that profile is RED. The user-visible
+        health verdict on the returned entry tells them what they got.
+
+        Lex key: ``(health_rank, -mass_separation, iteration)`` where
+        ``health_rank`` is 0/1/2 for GREEN/YELLOW/RED and
+        ``mass_separation = mass_above_threshold - mass_in_borderline``.
+
+        Filter: ``e.error is None and e.profile is not None`` (per the
+        ``HistoryEntry`` invariant — guards the sentinel-mismatch case
+        defensively).
+        """
+        survivors = [
+            e for e in self.entries
+            if e.error is None and e.profile is not None
+        ]
+        if not survivors:
+            return None
+
+        def key(e: HistoryEntry) -> tuple[int, float, int]:
+            h = e.profile.health()
+            rank = {
+                HealthVerdict.GREEN: 0,
+                HealthVerdict.YELLOW: 1,
+                HealthVerdict.RED: 2,
+            }[h]
+            sp = e.profile.scoring
+            sep = sp.mass_above_threshold - sp.mass_in_borderline
+            return (rank, -sep, e.iteration)
+
+        return min(survivors, key=key)
+
     def cheapest_healthy(self) -> HistoryEntry | None:
         """Spec §Types & contracts § Cheapest-healthy ordering (S1-B):
         lex key = (health_rank, -mass_separation, iteration).

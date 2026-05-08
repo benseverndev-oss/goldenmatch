@@ -209,6 +209,130 @@ def test_prior_runs_default_empty_list():
     assert h.prior_runs == ["v2-hook"]
 
 
+# ============================================================
+# pick_committed (added 2026-05-08)
+# ============================================================
+
+def _make_red_history_entry(iteration, mass_above, mass_borderline,
+                             dip_statistic=0.05):
+    """Helper: produce a HistoryEntry whose profile rolls up to RED via
+    ScoringProfile (mass_above==0 OR dip<0.01 forces scoring RED)."""
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    from goldenmatch.core.complexity_profile import (
+        ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
+        ClusterProfile, MatchkeyProfile, FieldStats,
+    )
+    return HistoryEntry(
+        iteration=iteration,
+        config=f"cfg_{iteration}",
+        profile=ComplexityProfile(
+            data=DataProfile(
+                n_rows=100, n_cols=4,
+                column_types={"a": "text", "b": "id-like",
+                              "c": "text", "d": "date"},
+            ),
+            blocking=BlockingProfile(
+                keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+                reduction_ratio=0.95, block_sizes_p99=20,
+            ),
+            scoring=ScoringProfile(
+                n_pairs_scored=0, candidates_compared=500,
+                mass_above_threshold=mass_above,
+                mass_in_borderline=mass_borderline,
+                dip_statistic=dip_statistic,
+            ),
+            cluster=ClusterProfile(transitivity_rate=0.95),
+            matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+        ),
+        decision=None, error=None, wall_clock_ms=10,
+    )
+
+
+def test_pick_committed_returns_red_when_no_green_or_yellow():
+    """The headline new behavior: pick_committed returns the best RED entry
+    when all entries are RED. cheapest_healthy() would return None here."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import HealthVerdict
+    h = RunHistory()
+    h.entries.append(_make_red_history_entry(0, 0.0, 0.4))
+    h.entries.append(_make_red_history_entry(1, 0.0, 0.1))
+    assert h.entries[0].profile.health() == HealthVerdict.RED
+    assert h.entries[1].profile.health() == HealthVerdict.RED
+    best = h.pick_committed()
+    assert best is not None
+    assert best.iteration == 1
+    assert best.config == "cfg_1"
+
+
+def test_pick_committed_excludes_errored_entries():
+    """Entries with error != None are filtered out before lex-key ranking."""
+    from goldenmatch.core.autoconfig_history import (
+        RunHistory, HistoryEntry, ErrorRecord,
+    )
+    from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
+    h = RunHistory()
+    h.entries.append(HistoryEntry(
+        iteration=0, config="errored",
+        profile=ComplexityProfile(data=DataProfile(n_rows=0)),
+        decision=None,
+        error=ErrorRecord(exception_type="RuntimeError", traceback_summary="..."),
+        wall_clock_ms=10,
+    ))
+    h.entries.append(_make_red_history_entry(1, 0.5, 0.1))
+    h.entries[1] = h.entries[1].__class__(
+        iteration=1, config="real_red",
+        profile=h.entries[1].profile,
+        decision=None, error=None, wall_clock_ms=10,
+    )
+    best = h.pick_committed()
+    assert best is not None
+    assert best.config == "real_red"
+
+
+def test_pick_committed_returns_none_when_all_errored():
+    """All entries errored -> pick_committed returns None.
+    Controller falls back to v0 in this case."""
+    from goldenmatch.core.autoconfig_history import (
+        RunHistory, HistoryEntry, ErrorRecord,
+    )
+    from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
+    h = RunHistory()
+    h.entries.append(HistoryEntry(
+        iteration=0, config="x",
+        profile=ComplexityProfile(data=DataProfile(n_rows=0)),
+        decision=None,
+        error=ErrorRecord(exception_type="RuntimeError", traceback_summary=""),
+        wall_clock_ms=10,
+    ))
+    h.entries.append(HistoryEntry(
+        iteration=1, config="y",
+        profile=ComplexityProfile(data=DataProfile(n_rows=0)),
+        decision=None,
+        error=ErrorRecord(exception_type="ValueError", traceback_summary=""),
+        wall_clock_ms=10,
+    ))
+    assert h.pick_committed() is None
+
+
+def test_pick_committed_lex_key_orders_red_by_mass_separation():
+    """Within RED tier, the entry with highest (mass_above - mass_borderline)
+    wins. Use dip<0.01 to force RED while still varying mass values."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_history_entry(0, 0.4, 0.3, dip_statistic=0.001))  # sep=0.1
+    h.entries.append(_make_red_history_entry(1, 0.6, 0.1, dip_statistic=0.001))  # sep=0.5
+    h.entries.append(_make_red_history_entry(2, 0.5, 0.4, dip_statistic=0.001))  # sep=0.1
+    best = h.pick_committed()
+    assert best is not None
+    assert best.iteration == 1
+
+
+def test_pick_committed_empty_history_returns_none():
+    """No entries -> None. Edge case at the start of run() before any iter."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    assert RunHistory().pick_committed() is None
+
+
 def test_runhistory_stop_reason_default_is_none():
     """Default stop_reason is None; controller sets it at each break point."""
     from goldenmatch.core.autoconfig_history import RunHistory
