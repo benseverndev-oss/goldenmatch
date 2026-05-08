@@ -1307,6 +1307,287 @@ git commit -m "release(goldenmatch): v1.9.0 — best-effort commit"
 
 ---
 
+## Phase 3.5 — Virtual v0 fallback + precision-collapse floor (post-Phase-5.2 amendment)
+
+> **Why this phase exists:** Phase 5.2 surfaced a DQbench regression (composite 62.87 → 22.19) caused by `pick_committed()` selecting an iter-3 RED config that's demonstrably worse than `config_v0` would have been. Spec amendment dated 2026-05-08 adds: (1) v0 as a virtual `HistoryEntry` in the candidate pool, (2) a precision-collapse floor that prefers v0 when the chosen RED entry has `mass_above_threshold > 0.9` ("everything matches" pathology). See spec §Amendment for full diagnosis.
+
+### Task 3.5.1: Add `precision_collapse_floor` parameter to `pick_committed()`
+
+**Files:**
+- Modify: `packages/python/goldenmatch/goldenmatch/core/autoconfig_history.py` — `RunHistory.pick_committed()`
+- Test: `packages/python/goldenmatch/tests/test_autoconfig_history.py`
+
+- [ ] **Step 1: Failing test for the floor behavior.**
+
+```python
+def test_pick_committed_precision_floor_demotes_collapsed_red():
+    """When a RED entry has mass_above > 0.9 (precision-collapse pathology),
+    pick_committed prefers a non-collapsed RED entry even if its
+    mass_separation is lower."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    # Entry 0: RED, mass_above=0.95 (precision collapse), mass_separation=0.85
+    h.entries.append(_make_red_history_entry(0, mass_above=0.95, mass_borderline=0.10))
+    # Entry 1: RED, mass_above=0.40, mass_separation=0.30 (lower mass_separation
+    # but not collapsed)
+    h.entries.append(_make_red_history_entry(1, mass_above=0.40, mass_borderline=0.10))
+    best = h.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None
+    assert best.iteration == 1   # the non-collapsed one wins under the floor
+
+
+def test_pick_committed_precision_floor_default_is_off():
+    """Default behavior (no floor) preserves v1.9 lex-key ranking."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_history_entry(0, mass_above=0.95, mass_borderline=0.10))
+    h.entries.append(_make_red_history_entry(1, mass_above=0.40, mass_borderline=0.10))
+    best = h.pick_committed()    # no floor kwarg
+    assert best is not None
+    assert best.iteration == 0   # higher mass_separation wins (lex key default)
+```
+
+- [ ] **Step 2: Run; expect FAIL** (kwarg doesn't exist).
+
+- [ ] **Step 3: Add the kwarg.** Update `pick_committed()`:
+
+```python
+    def pick_committed(
+        self,
+        precision_collapse_floor: float | None = None,
+    ) -> HistoryEntry | None:
+        """... (existing docstring) ...
+
+        ``precision_collapse_floor`` (added v1.9 amendment): when set, RED
+        entries whose ``profile.scoring.mass_above_threshold`` exceeds the
+        floor are demoted in the lex key (rank=3 instead of 2). This
+        protects against the "everything matches" pathology where
+        over-coarse blocking + low threshold makes the lex key reward
+        exactly the wrong config (high mass_above_threshold with
+        precision near 0). Typical value: 0.9. Disabled by default to
+        preserve backward compatibility with callers that don't know
+        about the floor.
+        """
+        survivors = [
+            e for e in self.entries
+            if e.error is None and e.profile is not None
+        ]
+        if not survivors:
+            return None
+
+        def key(e: HistoryEntry) -> tuple[int, float, int]:
+            verdict = e.profile.health()
+            rank = {
+                HealthVerdict.GREEN: 0,
+                HealthVerdict.YELLOW: 1,
+                HealthVerdict.RED: 2,
+            }[verdict]
+            sp = e.profile.scoring
+            sep = sp.mass_above_threshold - sp.mass_in_borderline
+            # Precision-collapse floor: RED entries with extreme
+            # mass_above are demoted to rank=3.
+            if (precision_collapse_floor is not None
+                    and verdict == HealthVerdict.RED
+                    and sp.mass_above_threshold > precision_collapse_floor):
+                rank = 3
+            return (rank, -sep, e.iteration)
+
+        return min(survivors, key=key)
+```
+
+- [ ] **Step 4: Run new tests; expect PASS.** Run full history tests; expect all pass.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add packages/python/goldenmatch/goldenmatch/core/autoconfig_history.py packages/python/goldenmatch/tests/test_autoconfig_history.py
+git commit -m "feat(autoconfig): add precision_collapse_floor to pick_committed (v1.9 amendment)"
+```
+
+### Task 3.5.2: Build virtual v0 HistoryEntry in the controller
+
+**Files:**
+- Modify: `packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py` — add helper + wire into `run()`'s commit branch
+- Test: `packages/python/goldenmatch/tests/test_autoconfig_controller.py`
+
+- [ ] **Step 1: Failing test.**
+
+```python
+def test_controller_appends_v0_virtual_entry_before_pick_committed(small_df):
+    """After the iteration loop, the controller appends config_v0's profile
+    as a synthetic HistoryEntry with iteration=-1 so pick_committed can
+    consider v0 as a candidate."""
+    red = _red_blocking_subprofile_dict()
+    controller = _make_controller_with_mocked_runner(
+        [red, red, red],
+        max_iterations=2,
+    )
+    config, profile, history = controller.run(small_df)
+    # The synthetic v0 entry is identifiable by iteration=-1
+    v0_entries = [e for e in history.entries if e.iteration == -1]
+    assert len(v0_entries) == 1, (
+        f"expected exactly one v0 virtual entry, got {len(v0_entries)}"
+    )
+    assert v0_entries[0].decision is None    # not produced by a refit rule
+
+
+def test_controller_picks_v0_when_v0_is_healthier_than_iterations(small_df):
+    """If v0's profile is YELLOW and all iterations are RED, the controller
+    commits v0's config (via pick_committed selecting the v0 virtual entry)."""
+    # Implementation note: this test depends on _assemble_v0_history_entry
+    # producing a real profile from running config_v0 through the same
+    # pipeline path the iterations use. The mocked runner returns RED for
+    # the iteration calls; we need it to return YELLOW for the v0 call.
+    # Use a side_effect callable that returns YELLOW for the v0 invocation
+    # (identifiable by config_v0's blocking strategy) and RED otherwise.
+    pass  # if the helper supports side-effect mode, fill in; else skip
+```
+
+- [ ] **Step 2: Run; expect FAIL.**
+
+- [ ] **Step 3: Add `_assemble_v0_history_entry()` helper at module level.**
+
+```python
+def _assemble_v0_history_entry(
+    sample: pl.DataFrame,
+    ref_dict: dict,
+    config_v0: GoldenMatchConfig,
+    history: RunHistory,
+) -> HistoryEntry | None:
+    """Run config_v0 through the sample pipeline and wrap as a synthetic
+    HistoryEntry with iteration=-1. Returns None if v0 raises (rare; v0
+    is the legacy heuristic and should not crash on inputs the controller
+    accepted).
+
+    If history.entries[0].config equals config_v0, this just returns
+    history.entries[0] re-stamped with iteration=-1 (avoids a second
+    pipeline run on the sample).
+    """
+    # Idempotency check
+    if history.entries and history.entries[0].config == config_v0:
+        e = history.entries[0]
+        return HistoryEntry(
+            iteration=-1, config=e.config, profile=e.profile,
+            decision=None, error=None, wall_clock_ms=e.wall_clock_ms,
+        )
+    try:
+        profile_v0 = _run_pipeline_sample(sample, ref_dict, config_v0)
+    except Exception:
+        return None
+    return HistoryEntry(
+        iteration=-1, config=config_v0, profile=profile_v0,
+        decision=None, error=None, wall_clock_ms=0,
+    )
+```
+
+(The exact name `_run_pipeline_sample` may differ in your codebase — find the equivalent function the iteration loop uses, and call the same one here. Same for `_assemble_profile` if profile assembly is a separate step.)
+
+- [ ] **Step 4: Wire into `run()`'s commit branch.**
+
+```python
+# After the iteration loop, before pick_committed:
+v0_entry = _assemble_v0_history_entry(sample, ref_dict, config_v0, history)
+if v0_entry is not None:
+    history.entries.append(v0_entry)
+
+best_entry = history.pick_committed(precision_collapse_floor=0.9)
+# (rest of commit-decision logic unchanged)
+```
+
+- [ ] **Step 5: Update the WARNING/INFO log to identify v0 vs iteration commits.**
+
+```python
+# Before logging the WARNING for RED commit:
+iter_label = "v0" if best_entry.iteration == -1 else best_entry.iteration
+# Then in log message: "iter=%s" % iter_label instead of "iter=%d" % best_entry.iteration
+```
+
+- [ ] **Step 6: Run tests; expect PASS.** Run controller + history tests; expect all pass except possibly the second test (v0-picks-when-v0-healthier) if the side-effect mocked-runner pattern isn't readily available — that's fine, leave it as `pytest.skip` placeholder for now.
+
+- [ ] **Step 7: Commit.**
+
+```bash
+git add packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py packages/python/goldenmatch/tests/test_autoconfig_controller.py
+git commit -m "feat(autoconfig): append config_v0 as virtual HistoryEntry in controller commit branch"
+```
+
+### Task 3.5.3: DQbench T1 integration test
+
+**Files:**
+- New test: `packages/python/goldenmatch/tests/test_dqbench_regression.py`
+
+- [ ] **Step 1: Add a guarded integration test.**
+
+```python
+"""DQbench T1/T2 regression guard for v1.9 best-effort commit.
+
+These tests are deliberately heavy (full pipeline on real DQbench data) and
+are skipped when the dataset is missing. They exist to lock in the v1.8
+baseline F1 on tiers where the v1.9 best-effort RED commit could otherwise
+catastrophically regress.
+"""
+import os
+from pathlib import Path
+import pytest
+
+
+def _dqbench_tier_path(tier: int) -> Path:
+    return Path.home() / ".dqbench" / "datasets" / f"er_tier{tier}" / "data.csv"
+
+
+@pytest.mark.skipif(
+    not _dqbench_tier_path(1).exists(),
+    reason="DQbench T1 dataset not available locally",
+)
+def test_dqbench_t1_does_not_regress_below_v18():
+    """v1.8 baseline: P=80.6%, R=100%, F1=89.3% on T1.
+    v1.9 with virtual-v0 + precision floor must hold F1 ≥ 0.85 (allow 4-pt
+    margin for nondeterminism in sampling)."""
+    import polars as pl
+    from goldenmatch import dedupe_df
+
+    os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
+    df = pl.read_csv(_dqbench_tier_path(1))
+    result = dedupe_df(df)
+    # The dataset has a `cluster_id` column (or similar) for ground truth —
+    # find the canonical name and compute F1. If the dataset uses a
+    # different ground-truth column, adapt.
+    assert hasattr(result, "clusters")
+    # Minimum F1 sanity check: precision should not collapse below 0.5
+    # (v1.9 unguarded was 0.01).
+    # If ground-truth comparison is non-trivial here, defer to a benchmark
+    # harness — this test's primary purpose is to prevent the catastrophic
+    # 1% precision regression from sneaking back in.
+    ...  # full F1 computation; skip if too involved for unit test
+```
+
+The full F1 computation may be too heavy for a unit test — keep it as a sanity check on `result.clusters` shape (e.g., assert clusters count ≤ 2x the row count, ruling out the "everything in one cluster" pathology). The deep verification is Phase 5.2 retry.
+
+- [ ] **Step 2: Run.**
+
+```bash
+cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/test_dqbench_regression.py -v --timeout=120
+```
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add packages/python/goldenmatch/tests/test_dqbench_regression.py
+git commit -m "test(autoconfig): DQbench T1 regression guard"
+```
+
+### Task 3.5.4: Re-run Phase 5.2 (DQbench) after the fix
+
+This is identical to the original Phase 5.2 (now logged as Task 5.2). After Phase 3.5 commits land:
+
+- [ ] **Step 1: Re-run no-LLM DQbench.** Same command as Phase 5.2 Task 5.2 Step 1.
+- [ ] **Step 2: Verify composite ≥ 65.** If yes → Phase 5.2 ✅. If still < 65 but > v1.8's 62.87 → DONE_WITH_CONCERNS, decide whether to ship without DQbench gain. If still ≤ v1.8 → real failure, escalate.
+- [ ] **Step 3: Re-run with-LLM DQbench** (skipped during the regression detection).
+- [ ] **Step 4: Re-run Phase 5.1 to confirm DBLP-ACM/Febrl3/NCVR didn't regress** from the precision floor + virtual v0 (mass_above on those benchmarks is ≤ 0.6, well under 0.9 floor, so should be safe — but verify).
+- [ ] **Step 5: Update `.profile_tmp/v19_phase5_2_results.md`** with the post-amendment numbers.
+
+---
+
 ## Final acceptance gate
 
 Before opening the release PR (or merging into a non-release feature branch):

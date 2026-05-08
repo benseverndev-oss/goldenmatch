@@ -344,3 +344,52 @@ v1.9 ships when:
 | S2-3 | DQbench acceptance criterion not reproducible | §Acceptance #5 now pins exact commands, env-var setup, harness file paths, and the "no LLM" definition |
 | S2-4 | Possible scope creep — committing RED through `_finalize` may regress existing benchmarks | §Acceptance #4 (new) requires zero RED-commits on existing benchmarks before merge |
 | S3-1, S3-2, S3-3 | Style/clarity polish | Folded into §Components total LOC and §Implementation sequence step 4
+
+---
+
+## Amendment: Phase 3.5 — virtual v0 fallback + precision-collapse floor (2026-05-08, post-implementation)
+
+### What we found
+
+Phase 5.1 (DBLP-ACM 0.9641 YELLOW, Febrl3 0.9443 YELLOW, NCVR 0.9719 YELLOW) confirmed the spec's premise on the published benchmarks. Phase 5.2 surfaced a **catastrophic regression on DQbench**: composite collapsed 62.87 → 22.19 (T1 89.3% → 2.0%, T2 58.7% → 0.7%). Diagnosis (`v0_vs_red_t1_findings.txt`):
+
+- **v0 picks `email` blocking + threshold 0.80 + exact matchkeys** for DQbench T1 (correct for person ER).
+- The 1000-row sample contains ~50 true duplicate pairs, most with corrupted emails (e.g. `…@gmail.com` vs `…@GMAIL.COM` post-typo), so under exact email blocking `mass_above_threshold = 0.0` on the sample.
+- `rule_no_matches` fires (iter 0) → drops threshold to 0.50; `rule_blocking_key_swap` fires (iter 1) → swaps blocking to `first_token(first_name)`. By iter 2 the controller has abandoned email entirely for a coarse 17-records-per-block key. At threshold 0.50 every pair in those blocks scores above threshold → 218k FPs on T2.
+- v1.9's `pick_committed()` selects the iter-3 RED config over discarded v0 — committing a config that's *demonstrably worse* than v0.
+
+The spec's framing was wrong on one premise: **v0 is not always RED on the same data the controller iterates on.** When it isn't, v0 should be in the candidate pool. And RED configs with `mass_above_threshold` near 1.0 are precision disasters that lex-key sort can't catch (high mass_above looks like "good" to the lex key, but means "matches everything").
+
+### Amendment
+
+Add a **virtual v0 entry** to the controller's `pick_committed()` candidate pool plus a **precision-collapse floor** for RED commits.
+
+**Architecture changes:**
+
+1. After the iteration loop and before calling `pick_committed()`, the controller runs `config_v0` through `_run_pipeline_sample` + `_assemble_profile` if it hasn't already been measured (it usually has — iter 0 typically uses v0 or a near-clone). Append the v0 result as a synthetic `HistoryEntry` with `iteration=-1` and `decision=None`. The lex key naturally orders entries by health then mass_separation; a YELLOW v0 beats a RED iter-3, a near-tied RED v0 beats a degraded RED iter-3 if v0 has higher mass_separation.
+
+2. Inside `pick_committed()` (or in the controller's commit-decision branch immediately after), apply a **precision-collapse floor**: if the chosen entry has `health == RED` AND `profile.scoring.mass_above_threshold > 0.9`, prefer the v0 virtual entry instead. If v0 is also `mass_above > 0.9` RED, fall back to v0 + `_RED_PROFILE` (today's all-errored path). This guards the "everything matches" pathology where over-coarse blocking + low threshold makes lex key reward exactly the wrong config.
+
+**Components added:**
+
+- `_assemble_v0_history_entry(controller, sample, ref_dict) -> HistoryEntry` — module-level helper, ~25 LOC. Idempotent: if iter 0's config equals v0, returns iter 0 verbatim with iteration=-1.
+- Modified `pick_committed()` accepts an optional `precision_collapse_floor: float = 0.9` kwarg. When the chosen entry trips the floor, returns the v0-virtual entry if present, else None.
+- Controller's commit-decision branch: appends v0 virtual entry, calls `pick_committed()`, logs which entry was selected (iteration number or `v0`).
+
+**Tests added:**
+
+- `test_pick_committed_prefers_v0_virtual_when_iterations_red` (history test)
+- `test_pick_committed_precision_floor_falls_back_to_v0` (history test, new entry has `mass_above=0.95` RED + v0-virtual is `mass_above=0.4` RED → v0 wins on floor)
+- `test_controller_logs_when_v0_virtual_is_committed` (controller test, INFO log includes `iteration=v0` or similar)
+- `test_dqbench_t1_does_not_regress_below_v18` (integration test guarded by dataset presence) — F1 ≥ 0.85 on T1 (recovers v1.8 89% with margin)
+
+### Acceptance update
+
+**§Acceptance #5 amended:** "DQbench composite ≥ 65 (no LLM)" stands. v1.8 was 62.87; v1.9 with this amendment must clear 65. If amendment under-delivers, branch is closed and v1.9 is shipped without DQbench gains (best-effort commit on benchmarks where v0 isn't already best, plus stop_reason telemetry, plus deprecation rename).
+
+**§Non-goals:** "stronger T1/T2 rules" still deferred. The amendment doesn't add rules — it changes commit-decision logic only.
+
+### Out of scope for this amendment
+
+- **Re-tuning `rule_no_matches`** to distinguish "blocking is wrong" from "sample has no visible matches". That's the deeper issue but requires adding a positive signal (e.g., "did v0's exact matchkeys match anything full-population?"), which is a separate workstream. The amendment lets the controller back off to v0 instead of fixing the rule.
+- **Adaptive `precision_collapse_floor`**. 0.9 is a conservative magic number that catches the DQbench T1 case (mass_above=1.0) without affecting DBLP-ACM/Febrl3/NCVR (mass_above ≤ 0.6). If users hit edge cases, we can adjust later.
