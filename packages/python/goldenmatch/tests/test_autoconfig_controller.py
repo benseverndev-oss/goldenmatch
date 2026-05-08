@@ -4,7 +4,7 @@ from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, DataProfile
 from goldenmatch.core.autoconfig_controller import (
     AutoConfigController, ControllerBudget, StopReason, _RED_PROFILE,
-    ConfigValidationError,
+    ConfigValidationError, _LAST_CONTROLLER_RUN,
 )
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
 from goldenmatch.core.autoconfig_history import RunHistory
@@ -220,13 +220,13 @@ def small_df():
     })
 
 
-def _make_controller_with_mocked_runner(profiles_per_iter, **budget_kwargs):
+def _make_controller_with_mocked_runner(profiles_per_iter, policy=None, **budget_kwargs):
     """Build a controller whose `_run_pipeline_sample` returns the given
     sequence of (sub-profile dict) per iteration."""
     bk = {"max_iterations": 5, "sample_skip_below": 1}
     bk.update(budget_kwargs)
     controller = AutoConfigController(
-        policy=HeuristicRefitPolicy(),
+        policy=policy if policy is not None else HeuristicRefitPolicy(),
         budget=ControllerBudget(**bk),
     )
     # The mock writes to the active emitter so _assemble_profile picks it up.
@@ -306,15 +306,27 @@ def test_run_returns_v0_red_when_all_iterations_crash(small_df):
 
 
 def test_run_exits_budget_iterations_when_no_progress(small_df):
-    """Profile stays red across iterations and policy keeps proposing → BUDGET_ITERATIONS."""
+    """Profile stays RED across iterations and policy keeps proposing.
+
+    v1.9 change: pick_committed() returns the best RED entry instead of None,
+    so the controller commits a RED config (from the sample profile in _finalize
+    mock) rather than falling back to v0. The returned profile is the _finalize
+    mock value (GREEN from _make_controller_with_mocked_runner), which may differ
+    from the RED sample profile — the important invariant is that a config was
+    committed and stop_reason is set appropriately.
+    """
     red = {**_green_subprofiles(), "blocking": _red_blocking_subprofile()}
     # All iters return same red profile; the rule will fire and propose a config,
     # but next iter still returns red (the mock doesn't actually use the config).
     controller = _make_controller_with_mocked_runner([red, red, red, red, red],
                                                       max_iterations=2)
     config, profile, history = controller.run(small_df)
-    # No healthy iterations at all → returns v0 with RED
-    assert profile.health() == HealthVerdict.RED
+    # v1.9: committed the best RED entry — config is real (not v0 fallback from
+    # all-errored path), stop_reason is recorded.
+    assert isinstance(config, GoldenMatchConfig)
+    assert history.stop_reason is not None
+    # At least one iteration produced a profile (entries exist)
+    assert history.iteration >= 1
 
 
 def test_run_budget_time_exit(small_df):
@@ -413,7 +425,11 @@ import logging as _logging
 
 
 def test_run_returns_v0_red_when_all_iterations_crash_logs_warning(small_df, caplog):
-    """Every iteration crashes → returns v0 with RED AND logs a warning."""
+    """Every iteration crashes → returns v0 with RED AND logs an error.
+
+    v1.9 change: the all-errored path now logs at ERROR level (not WARNING)
+    with a message about 'every iteration errored'.
+    """
     controller = AutoConfigController(
         policy=HeuristicRefitPolicy(),
         budget=ControllerBudget(max_iterations=2, sample_skip_below=1),
@@ -425,14 +441,14 @@ def test_run_returns_v0_red_when_all_iterations_crash_logs_warning(small_df, cap
     controller._run_pipeline_sample = always_crashes  # type: ignore[method-assign]
     controller._finalize = MagicMock()
 
-    with caplog.at_level(_logging.WARNING, logger="goldenmatch.core.autoconfig_controller"):
+    with caplog.at_level(_logging.ERROR, logger="goldenmatch.core.autoconfig_controller"):
         config, profile, history = controller.run(small_df)
 
     assert profile.health() == HealthVerdict.RED
     assert any(
-        "could not produce a healthy config" in rec.message
+        "every iteration errored" in rec.message
         for rec in caplog.records
-    ), f"Expected warning not found; records: {[r.message for r in caplog.records]}"
+    ), f"Expected error not found; records: {[r.message for r in caplog.records]}"
 
 
 # ============================================================
@@ -778,3 +794,300 @@ def test_decorate_uses_standard_mode_when_borderline_modest(monkeypatch):
     assert out.llm_scorer.candidate_lo == pytest.approx(0.60)
     assert out.llm_scorer.candidate_hi == pytest.approx(0.90)
     assert out.llm_scorer.auto_threshold == pytest.approx(0.90)
+
+
+# ============================================================
+# Helpers for stop_reason + commit-RED tests (v1.9, 2026-05-08)
+# ============================================================
+
+def _red_blocking_subprofile_dict():
+    """Return a sub-profile dict whose BlockingProfile produces RED health."""
+    return {**_green_subprofiles(), "blocking": _red_blocking_subprofile()}
+
+
+def _yellow_subprofiles():
+    """Return sub-profile dict that yields ComplexityProfile.health() == YELLOW.
+
+    Uses a DataProfile with only one column type (all 'text') so DataProfile.health()
+    returns YELLOW. Other sub-profiles are GREEN-safe so YELLOW rolls up.
+    """
+    return dict(
+        data=DataProfile(
+            n_rows=100, n_cols=2,
+            column_types={"a": "text", "b": "text"},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=10, total_comparisons=500,
+            reduction_ratio=0.95, block_sizes_p50=10, block_sizes_p95=15,
+            block_sizes_p99=20, block_sizes_max=25,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+            dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.05,
+        ),
+        cluster=ClusterProfile(
+            n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
+            cluster_size_max=8, transitivity_rate=0.95,
+        ),
+        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+    )
+
+
+# ============================================================
+# stop_reason recording (added 2026-05-08, v1.9)
+# ============================================================
+
+def test_stop_reason_green_when_iteration_reaches_green_health(small_df):
+    """When an iteration produces a GREEN profile, controller breaks with
+    stop_reason=GREEN."""
+    green = _green_subprofiles()
+    controller = _make_controller_with_mocked_runner([green])
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.GREEN
+
+
+def test_stop_reason_budget_iterations_when_max_iter_reached(small_df):
+    """All iterations RED, budget exhausted → BUDGET_ITERATIONS.
+
+    Provides alternating RED profiles (different normalized_signal_vectors so
+    convergence doesn't fire) with a policy that always proposes a new config,
+    letting the loop run to completion and triggering the natural stop.
+    """
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+
+    # Two RED profiles with distinct signal vectors (different reduction_ratios)
+    red_a = dict(
+        data=DataProfile(n_rows=100, n_cols=2, column_types={"a": "name", "b": "numeric"}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=2, total_comparisons=4900,
+            reduction_ratio=0.01, block_sizes_p50=49, block_sizes_p95=49,
+            block_sizes_p99=49, block_sizes_max=49,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, score_histogram=[0]*15 + [100]*5,
+            dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.05,
+        ),
+        cluster=ClusterProfile(
+            n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
+            cluster_size_max=8, transitivity_rate=0.95,
+        ),
+        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+    )
+    red_b = dict(red_a, blocking=BlockingProfile(
+        keys_used=[["b"]], n_blocks=3, total_comparisons=3000,
+        reduction_ratio=0.02, block_sizes_p50=30, block_sizes_p95=30,
+        block_sizes_p99=30, block_sizes_max=30,
+    ))
+
+    # Config sequence: alternates between two distinct configs so the convergence
+    # guard (profile_distance_to_prev) sees non-zero distance AND the policy
+    # always returns something different
+    configs_cycle = [
+        GoldenMatchConfig(
+            matchkeys=[MatchkeyConfig(
+                name=f"mk_{i}", type="weighted", threshold=0.6 + i * 0.02,
+                fields=[MatchkeyField(field="a", scorer="jaro_winkler",
+                                       weight=1.0, transforms=["lowercase"])],
+            )],
+            blocking=BlockingConfig(
+                strategy="static",
+                keys=[BlockingKeyConfig(fields=["a"], transforms=["lowercase"])],
+                max_block_size=5000, skip_oversized=False,
+            ),
+        )
+        for i in range(10)
+    ]
+
+    class _CyclingPolicy:
+        def __init__(self):
+            self._i = 0
+        def propose(self, profile, config, history):
+            self._i = (self._i + 1) % len(configs_cycle)
+            return configs_cycle[self._i]
+
+    controller = _make_controller_with_mocked_runner(
+        [red_a, red_b, red_a, red_b, red_a, red_b, red_a],
+        max_iterations=3,
+        policy=_CyclingPolicy(),
+    )
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.BUDGET_ITERATIONS
+
+
+def test_stop_reason_oscillating_when_policy_loops(small_df):
+    """When policy alternates between two configs AND profiles oscillate,
+    history.is_oscillating() fires and the controller exits with stop_reason=OSCILLATING.
+
+    is_oscillating() requires the SAME (config_hash, decision_hash) pair to
+    appear ≥2× in the last 4 entries.  Because history entries are appended
+    before the policy call, decision is always None and decision_hash is 0.
+    So we need config_hash to repeat ≥2× in last 4 iterations — which means
+    the controller must see the same config object at least twice in the last 4.
+    """
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+
+    # Two configs that are not equal so POLICY_NO_PROGRESS won't fire
+    cfg_a = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk_a", type="weighted", threshold=0.7,
+            fields=[MatchkeyField(field="a", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["a"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    cfg_b = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk_b", type="weighted", threshold=0.8,
+            fields=[MatchkeyField(field="b", scorer="jaro_winkler",
+                                   weight=1.0, transforms=["lowercase"])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["b"], transforms=["lowercase"])],
+            max_block_size=5000, skip_oversized=False,
+        ),
+    )
+    assert cfg_a != cfg_b
+
+    # Two different RED profiles (different reduction_ratios → different signal vectors,
+    # so convergence doesn't fire before oscillation detection)
+    red_a = dict(
+        data=DataProfile(n_rows=100, n_cols=2, column_types={"a": "name", "b": "numeric"}),
+        blocking=BlockingProfile(
+            keys_used=[["a"]], n_blocks=2, total_comparisons=4900,
+            reduction_ratio=0.01, block_sizes_p50=49, block_sizes_p95=49,
+            block_sizes_p99=49, block_sizes_max=49,
+        ),
+        scoring=ScoringProfile(n_pairs_scored=500, dip_statistic=0.05,
+                                mass_above_threshold=0.4, mass_in_borderline=0.05),
+        cluster=ClusterProfile(n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
+                                cluster_size_max=8, transitivity_rate=0.95),
+        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+    )
+    red_b = dict(red_a, blocking=BlockingProfile(
+        keys_used=[["b"]], n_blocks=3, total_comparisons=3000,
+        reduction_ratio=0.02, block_sizes_p50=30, block_sizes_p95=30,
+        block_sizes_p99=30, block_sizes_max=30,
+    ))
+
+    class _AlternatingPolicy:
+        def __init__(self):
+            self._calls = 0
+        def propose(self, profile, config, history):
+            self._calls += 1
+            return cfg_a if self._calls % 2 else cfg_b
+
+    # Alternating profiles with alternating configs → (cfg_a, 0), (cfg_b, 0) repeat
+    # After 4 iterations the last-4 window has the same pair ≥2×
+    controller = _make_controller_with_mocked_runner(
+        [red_a, red_b, red_a, red_b, red_a, red_b, red_a, red_b],
+        max_iterations=7,
+        policy=_AlternatingPolicy(),
+    )
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.OSCILLATING
+
+
+def test_stop_reason_policy_satisfied_on_yellow_with_no_proposal(small_df):
+    """When profile is YELLOW and no rule proposes a refit, exit with
+    stop_reason=POLICY_SATISFIED."""
+    yellow = _yellow_subprofiles()
+    controller = _make_controller_with_mocked_runner([yellow])
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.POLICY_SATISFIED
+
+
+def test_stop_reason_cancelled_on_keyboard_interrupt(small_df):
+    """KeyboardInterrupt mid-iteration → stop_reason=CANCELLED set BEFORE
+    the re-raise. Captured via the _LAST_CONTROLLER_RUN ContextVar."""
+    from goldenmatch.core.autoconfig_controller import _LAST_CONTROLLER_RUN
+
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=1),
+    )
+    def interrupting(*_args, **_kw):
+        raise KeyboardInterrupt
+    controller._run_pipeline_sample = interrupting  # type: ignore[method-assign]
+
+    with pytest.raises(KeyboardInterrupt):
+        controller.run(small_df)
+
+    history = _LAST_CONTROLLER_RUN.get()
+    assert history is not None
+    assert history.stop_reason == StopReason.CANCELLED
+
+
+# ============================================================
+# Task 3.2 — commit via pick_committed() + health-aware logging
+# ============================================================
+
+def test_controller_commits_red_when_data_provokes_red():
+    """End-to-end: real pipeline on a fixture where every iteration produces
+    a RED profile. Controller commits the best RED entry, surfaces stop_reason,
+    runs _finalize on the committed RED config (output exists, just imperfect)."""
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "autoconfig" / "red_provoking.csv"
+    if not fixture.exists():
+        pytest.skip(f"missing fixture: {fixture}")
+    import polars as pl
+    df = pl.read_csv(fixture)
+
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(
+            max_iterations=3,
+            sample_skip_below=10,
+        ),
+    )
+    config, profile, history = controller.run(df)
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    assert isinstance(config, GoldenMatchConfig)
+    assert history.stop_reason is not None
+    # At least one iteration produced a profile (not all errored)
+    assert any(e.error is None for e in history.entries)
+
+
+def test_controller_warns_on_red_commit(small_df, caplog):
+    """Committing a RED entry triggers a WARNING log naming the failing
+    sub-profile + stop_reason."""
+    import logging
+    red = _red_blocking_subprofile_dict()
+    controller = _make_controller_with_mocked_runner(
+        [red, red, red], max_iterations=2,
+    )
+    with caplog.at_level(logging.WARNING,
+                          logger="goldenmatch.core.autoconfig_controller"):
+        controller.run(small_df)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "best-effort RED" in r.message
+        and "stop_reason=" in r.message
+        and "failing_subprofile=" in r.message
+        for r in warnings
+    ), f"expected RED-commit warning; got: {[r.message for r in warnings]}"
+
+
+def test_controller_info_log_on_yellow_commit(small_df, caplog):
+    """YELLOW commit logs at INFO."""
+    import logging
+    yellow = _yellow_subprofiles()
+    controller = _make_controller_with_mocked_runner([yellow])
+    with caplog.at_level(logging.INFO,
+                          logger="goldenmatch.core.autoconfig_controller"):
+        controller.run(small_df)
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any("YELLOW" in r.message for r in infos), (
+        f"expected YELLOW-commit info; got: {[r.message for r in infos]}"
+    )

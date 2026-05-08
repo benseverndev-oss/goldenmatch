@@ -10,6 +10,7 @@ gates and returns v0 without entering the loop.
 The iteration loop body lands in Task 4.2 and _finalize in Task 4.3.
 """
 from __future__ import annotations
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -33,9 +34,39 @@ logger = logging.getLogger(__name__)
 # Sentinel: forces RED via DataProfile.health() when n_rows == 0.
 _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 
+# ContextVar populated at every exit path of AutoConfigController.run()
+# (including KeyboardInterrupt) so callers can inspect RunHistory after
+# either normal return or exception.  Stores RunHistory directly
+# (unlike autoconfig._LAST_CONTROLLER_RUN which stores (profile, history)).
+_LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
+    "_LAST_CONTROLLER_RUN", default=None
+)
+
 
 class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
+
+
+def _first_red_subprofile(profile: "ComplexityProfile") -> str:
+    """Return the name of the first sub-profile in canonical declaration
+    order whose health() is RED. Used by the WARNING log on commit-RED.
+
+    Canonical order: data, domain, matchkey, blocking, scoring, cluster.
+    Returns 'rollup' if no individual sub-profile is RED but the rollup is.
+    """
+    n_rows = profile.data.n_rows
+    checks = [
+        ("data", profile.data.health()),
+        ("domain", profile.domain.health()),
+        ("matchkey", profile.matchkey.health()),
+        ("blocking", profile.blocking.health(n_rows=n_rows)),
+        ("scoring", profile.scoring.health()),
+        ("cluster", profile.cluster.health(n_rows=n_rows)),
+    ]
+    for name, health in checks:
+        if health == HealthVerdict.RED:
+            return name
+    return "rollup"
 
 
 @dataclass
@@ -116,6 +147,7 @@ class AutoConfigController:
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
                 if elapsed > self.budget.max_seconds and iteration > 0:
+                    history.stop_reason = StopReason.BUDGET_TIME
                     break
                 iter_start = time.time()
                 try:
@@ -134,6 +166,8 @@ class AutoConfigController:
                     ))
                 except KeyboardInterrupt:
                     history.elapsed = timedelta(seconds=time.time() - start)
+                    history.stop_reason = StopReason.CANCELLED
+                    _LAST_CONTROLLER_RUN.set(history)
                     raise
                 except Exception as exc:
                     from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
@@ -169,6 +203,7 @@ class AutoConfigController:
                         and bp.reduction_ratio > 0.995
                     )
                     if not _suspicious_tight_blocking:
+                        history.stop_reason = StopReason.GREEN
                         break
                     # Fall through to policy check — if no rule fires, the policy
                     # returns None and we break naturally below.
@@ -181,37 +216,72 @@ class AutoConfigController:
                 if history.profile_distance_to_prev() < self.budget.converge_epsilon:
                     prev_entry = history.entries[-2] if len(history.entries) >= 2 else None
                     if prev_entry is None or prev_entry.decision is None:
+                        history.stop_reason = StopReason.CONVERGED
                         break
                 if history.is_oscillating():
+                    history.stop_reason = StopReason.OSCILLATING
                     break
 
                 # Ask policy for next config
                 config_next = self.policy.propose(profile_n, config_n, history)
                 if config_next is None:
+                    history.stop_reason = StopReason.POLICY_SATISFIED
                     break
                 if config_next == config_n:
+                    history.stop_reason = StopReason.POLICY_NO_PROGRESS
                     break
                 config_n = config_next
         finally:
             history.elapsed = timedelta(seconds=time.time() - start)
 
+        # Natural loop exhaustion (loop completed without break)
+        if history.stop_reason is None:
+            history.stop_reason = StopReason.BUDGET_ITERATIONS
+
         # Pick committed config
-        best_entry = history.cheapest_healthy()
+        best_entry = history.pick_committed()
         if best_entry is None:
-            # No healthy iterations → return v0 + RED sentinel.
-            # Fix 6: emit a warning so operators can diagnose.
-            n_crashed = len(history.errors)
+            # Every iteration errored — no usable profile produced. Fall back to v0.
+            n_errored = sum(1 for e in history.entries if e.error is not None)
             n_red = sum(
                 1 for e in history.entries
                 if e.profile.health() == HealthVerdict.RED and e.error is None
             )
-            logger.warning(
-                "auto-config controller could not produce a healthy config; "
-                "committing v0. Iterations: %d total, %d crashed, %d RED. "
-                "Inspect _LAST_CONTROLLER_RUN.get() for diagnostics.",
-                history.iteration, n_crashed, n_red,
+            logger.error(
+                "auto-config controller: every iteration errored (n=%d, "
+                "stop_reason=%s); falling back to v0 + RED sentinel. "
+                "Inspect _LAST_CONTROLLER_RUN.get() for tracebacks.",
+                n_errored,
+                history.stop_reason.name if history.stop_reason else "unset",
             )
+            _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
+
+        committed_health = best_entry.profile.health()
+        if committed_health == HealthVerdict.RED:
+            failing = _first_red_subprofile(best_entry.profile)
+            try:
+                logger.warning(
+                    "auto-config committed best-effort RED config "
+                    "(iter=%d, stop_reason=%s, failing_subprofile=%s); "
+                    "downstream pipeline will run but output may be low-precision",
+                    best_entry.iteration,
+                    history.stop_reason.name if history.stop_reason else "unset",
+                    failing,
+                )
+            except Exception:
+                pass
+        elif committed_health == HealthVerdict.YELLOW:
+            try:
+                logger.info(
+                    "auto-config committed YELLOW config "
+                    "(iter=%d, stop_reason=%s)",
+                    best_entry.iteration,
+                    history.stop_reason.name if history.stop_reason else "unset",
+                )
+            except Exception:
+                pass
+        # health == GREEN: silent success
 
         # Post-iteration: decorate committed config with LLM scorer if appropriate.
         # This runs ONCE, outside the iteration loop, so it never competes with
@@ -229,6 +299,7 @@ class AutoConfigController:
             # Return the best sample profile in lieu of a full-data profile.
             # history.full_vs_sample_drift is left None (drift not computed).
             self._record_run(df, reference, best_entry, history)
+            _LAST_CONTROLLER_RUN.set(history)
             return committed_config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
@@ -240,6 +311,7 @@ class AutoConfigController:
         history.full_vs_sample_drift = drift
 
         self._record_run(df, reference, best_entry, history)
+        _LAST_CONTROLLER_RUN.set(history)
         return committed_config, profile_full, history
 
     # ---- Internals --------------------------------------------------------
