@@ -182,6 +182,10 @@ def estimate_full_pop_hits(df: pl.DataFrame, blocking_col: str) -> int | None:
     to validate that v0's blocking key has structural signal even when
     sample's mass_above_threshold == 0.
     """
+    # Pre-flight budget check: BUDGET_FULL_POP_HITS=0.0 means "disabled".
+    if BUDGET_FULL_POP_HITS <= 0.0:
+        logger.info("estimate_full_pop_hits: budget is zero; returning None")
+        return None
     start = time.time()
     if blocking_col not in df.columns or df.is_empty():
         return 0
@@ -221,6 +225,10 @@ def compute_cross_blocking_overlap(
     """
     if key_a == key_b:
         return 1.0
+    # Pre-flight budget check: BUDGET_CROSS_BLOCKING=0.0 means "disabled".
+    if BUDGET_CROSS_BLOCKING <= 0.0:
+        logger.info("compute_cross_blocking_overlap: budget is zero; returning None")
+        return None
     start = time.time()
     if key_a not in df.columns or key_b not in df.columns or df.is_empty():
         return None
