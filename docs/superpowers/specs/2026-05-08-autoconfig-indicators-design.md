@@ -42,7 +42,7 @@ If the back-of-envelope is wrong (DQbench weights heavier on T3 than expected), 
 - **Adaptive budget tuning.** Per-indicator wall-clock budgets are fixed constants tuned for the v1.10 measurement workload. Tune later if needed.
 - **Indicator-driven LLM scorer policy.** Indicators feed the heuristic policy only; LLM policy is unchanged in v1.10.
 - **Cross-run learning of indicator thresholds.** Memory cache stores indicator values but doesn't tune from them.
-- **New public API.** No new `auto_configure_df` kwargs, no new env vars. The change is observable via existing `controller_profile` and `controller_history` fields on `PostflightReport`, plus new fields on `DataProfile` and `ComplexityProfile`.
+- **New public API.** No new `auto_configure_df` kwargs. One new opt-out env var (`GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast`) gates the two slowest indicators for users who prefer v1.9 wall-clock; everything else is observable via existing `controller_profile` and `controller_history` fields on `PostflightReport`, plus new fields on `DataProfile` and `ComplexityProfile`.
 
 ## Decision summary
 
@@ -57,7 +57,7 @@ If the back-of-envelope is wrong (DQbench weights heavier on T3 than expected), 
 
 ## Architecture
 
-Three layers added to the controller. No existing layer's contract changes (only `PolicyDecision` extends in a backward-compatible way).
+Three layers added to the controller. `PolicyDecision`'s shape is unchanged. The only contract change is `RefitPolicy.propose` gaining an optional `ctx` kwarg, with introspection-based backward compat for old-shape custom policies.
 
 ### 1. Indicator computation layer (`core/indicators.py` — new module)
 
@@ -170,7 +170,7 @@ auto_configure_df(df)
 
 **Per-iteration (lazy, on rule demand):**
 
-Each rule in the existing 10-rule + 3-new-rule ordered list now optionally consults `ctx` and returns an action-list. Existing rules without indicator integration return `[their_existing_action]` (a 1-element list). Modified existing rules and new rules return multi-action lists. The controller applies actions sequentially until one succeeds in changing the config; if all fail, treats as POLICY_NO_PROGRESS.
+Each rule in the existing 10-rule + 3-new-rule ordered list now optionally consults `ctx`. Rules still return a single `tuple[GoldenMatchConfig, PolicyDecision] | None` (contract unchanged). Modified + new rules implement multi-alternative logic *internally*: they construct candidate configs in preference order and return the first one that differs from `current`; if none differs, return None and the policy continues to the next rule. The controller's behavior is identical to today — apply the first non-None rule outcome, treat all-None as POLICY_SATISFIED.
 
 Detailed per-rule firing conditions are in §Components below.
 
@@ -208,7 +208,7 @@ The existing v1.8 rule order is preserved; new rules slot in at positions where 
 8. `rule_low_reduction_ratio`
 9. **NEW: `rule_cross_blocking_disagreement`** (after blocking diagnostics, before recall-gap)
 10. `rule_low_transitivity`
-11. `rule_no_matches` (modified — reads indicators, returns action-list)
+11. `rule_no_matches` (modified — reads indicators, tries alternatives internally before falling through)
 12. `rule_recall_gap_suspected`
 13. **NEW: `rule_sparse_match_expand`** (last — only fires if no other rule has, and only on early iterations)
 
@@ -254,7 +254,7 @@ Per-rule firing conditions (concrete):
 | `column_priors[col]` lookup miss | New rules reading priors | Treat missing key as `ColumnPrior(identity_score=0.0, corruption_score=0.0)`. Defensive |
 | Action application failure | `controller._apply_action(action, config) -> (config, applied: bool, error: str | None)` | Controller falls through to `actions[1]`; if all fail, treats as POLICY_NO_PROGRESS |
 | Memory cache deserialization | Loading v1.9-saved entries | **Profiles are not persisted to memory cache.** `autoconfig_memory.py` stores only `GoldenMatchConfig` (Pydantic) + a profile signature hash + `succeeded` flag. Adding `column_priors` / `indicators` fields to `DataProfile` / `ComplexityProfile` (both `@dataclass`, not Pydantic) has zero serialization impact on the on-disk SQLite schema. Verification: a "load v1.9-vintage cache entry" test asserts the entry round-trips intact (no schema migration required). |
-| `PolicyDecision.action` access on multi-action decision | Backward-compat property | Returns `actions[0]` + emits DeprecationWarning. Removed in v2.0 |
+| Custom policy with old 3-arg `propose` signature | `RefitPolicy.propose(profile, current, history)` (no `ctx` kwarg) | Controller introspects via `inspect.signature(policy.propose)`; falls back to 3-arg call when `ctx` isn't a parameter. Custom policies see no breakage; they just don't receive indicator data. Tier 3 covers with a deliberately-old-shape mock policy |
 
 **Determinism:** indicators that sample (corruption-score) use a fixed seed derived from df hash, not random. Memoization cache uses tuple keys with deterministic ordering. Cross-version determinism not guaranteed (indicator functions may evolve).
 
@@ -327,7 +327,7 @@ This is the in-CI guard the v1.9 review flagged as missing.
 2. **DBLP-ACM, Febrl3, NCVR hold.** F1 ≥ v1.8/v1.9 baselines (0.9641 / 0.9443 / 0.9719). Committed health YELLOW or GREEN.
 3. **DQbench composite ≥ 70 (no LLM)** — primary target.
 4. **DQbench composite ≥ 65 (no LLM)** — fallback contract; if (3) fails, branch can ship as v1.10 with the gap queued for v1.11.
-5. **Wall-clock budget**: `auto_configure_df(df)` on a 50K-row dataset completes within 75s.
+5. **Wall-clock budget**: `auto_configure_df(df)` on a 50K-row dataset completes within 90s typical-case (matching §Goals #4). `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast` mode preserves v1.9's ~30s ceiling.
 6. **Cache compat**: a v1.9-saved entry loads cleanly into v1.10. PR includes the v1.9 fixture snapshot.
 7. **PR description includes per-tier DQbench breakdown.** Indicator-attribution sweep (one disabled-indicator run per indicator, ~10 min each = 1hr total) is **conditional**: required only if shipping at composite ≥ 70 (so we can document which indicators delivered the win); not required if shipping the ≥65 fallback (per-tier breakdown alone is sufficient).
 
