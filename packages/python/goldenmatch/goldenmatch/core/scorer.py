@@ -107,6 +107,54 @@ def score_pair(row_a: dict, row_b: dict, fields: list[MatchkeyField]) -> float:
     return weighted_sum / weight_sum
 
 
+def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
+    """v1.11: compute the total negative-evidence penalty for a pair.
+
+    Returns the sum of penalties for NE fields whose similarity is below
+    their threshold. Defensive: skips NE entries with unknown scorers,
+    missing fields, or scorer-call exceptions; logs WARNING and continues.
+
+    ``pair`` maps field names to 2-tuples ``(val_a, val_b)`` — the same
+    shape used by the scoring loop when passing raw row values. Fields not
+    present in ``pair`` are silently skipped.
+
+    Caller is responsible for: ``final_score = max(0.0, score_positive - penalty)``.
+
+    Only applies to weighted matchkeys. Returns 0.0 immediately when
+    ``matchkey.negative_evidence`` is None or empty.
+    """
+    if not matchkey.negative_evidence:
+        return 0.0
+
+    total_penalty = 0.0
+    for ne in matchkey.negative_evidence:
+        if ne.field not in pair:
+            continue
+        try:
+            val_a, val_b = pair[ne.field]
+            val_a = apply_transforms(val_a, ne.transforms)
+            val_b = apply_transforms(val_b, ne.transforms)
+            sim = score_field(val_a, val_b, ne.scorer)
+        except (ValueError, KeyError) as exc:
+            logger.warning(
+                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; skipping",
+                ne.scorer, ne.field, exc,
+            )
+            continue
+        except Exception as exc:
+            logger.warning(
+                "auto-config: NE scoring of field '%s' raised %s; skipping",
+                ne.field, type(exc).__name__,
+            )
+            continue
+        if sim is None:
+            # One or both values are None — can't score, skip
+            continue
+        if sim < ne.threshold:
+            total_penalty += ne.penalty
+    return total_penalty
+
+
 def find_exact_matches(
     lf: pl.LazyFrame, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:

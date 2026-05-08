@@ -103,3 +103,157 @@ def test_matchkey_config_v110_cache_compat_no_field():
     }
     mk = MatchkeyConfig.model_validate(legacy_json)
     assert mk.negative_evidence is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1: _apply_negative_evidence helper tests
+# ---------------------------------------------------------------------------
+
+def test_apply_negative_evidence_returns_zero_when_no_ne():
+    """Empty/None negative_evidence → zero penalty."""
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+    )
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("555-1234", "555-9999")}
+    penalty = _apply_negative_evidence(mk, pair)
+    assert penalty == 0.0
+
+
+def test_apply_negative_evidence_subtracts_when_field_disagrees():
+    """NE field disagrees (sim < threshold) → penalty applied."""
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+        negative_evidence=[
+            NegativeEvidenceField(
+                field="phone", transforms=["digits_only"],
+                scorer="exact", threshold=0.5, penalty=0.3,
+            ),
+        ],
+    )
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("555-1234", "555-9999")}
+    penalty = _apply_negative_evidence(mk, pair)
+    assert penalty == 0.3   # phones disagree → full penalty
+
+
+def test_apply_negative_evidence_no_subtract_when_field_agrees():
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+        negative_evidence=[
+            NegativeEvidenceField(
+                field="phone", transforms=["digits_only"],
+                scorer="exact", threshold=0.5, penalty=0.3,
+            ),
+        ],
+    )
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("555-1234", "5551234")}
+    penalty = _apply_negative_evidence(mk, pair)
+    assert penalty == 0.0   # phones agree (after digits_only transform)
+
+
+def test_apply_negative_evidence_skips_unregistered_scorer(caplog):
+    """Defensive: unknown scorer → skip + WARNING."""
+    import logging
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+    )
+    bogus = NegativeEvidenceField.model_construct(
+        field="phone", transforms=[],
+        scorer="nonexistent_scorer", threshold=0.5, penalty=0.3,
+    )
+    mk.negative_evidence = [bogus]
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("555", "999")}
+    with caplog.at_level(logging.WARNING):
+        penalty = _apply_negative_evidence(mk, pair)
+    assert penalty == 0.0    # skipped, not crashed
+    assert any("nonexistent_scorer" in r.message for r in caplog.records)
+
+
+def test_apply_negative_evidence_skips_missing_field():
+    """Field not in pair dict → skip (defensive)."""
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+        negative_evidence=[
+            NegativeEvidenceField(
+                field="missing_field", transforms=[],
+                scorer="exact", threshold=0.5, penalty=0.3,
+            ),
+        ],
+    )
+    pair = {"email": ("a@x.com", "a@x.com")}    # no missing_field
+    penalty = _apply_negative_evidence(mk, pair)
+    assert penalty == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2: E2E scoring loop integration test
+# ---------------------------------------------------------------------------
+
+def test_score_pair_with_negative_evidence_drops_below_threshold():
+    """E2E: positive=1.0, NE penalty=0.4, threshold=0.8 → final=0.6 → no match."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        NegativeEvidenceField, BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch._api import dedupe_df
+
+    df = pl.DataFrame({
+        # 2 records: same name+email, different phones (collision pair)
+        "first_name": ["Brian", "Brian"],
+        "email": ["b@x.com", "b@x.com"],
+        "phone": ["5551234", "5559999"],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="primary", type="weighted", threshold=0.8,
+            fields=[
+                MatchkeyField(field="first_name", transforms=["lowercase"],
+                              scorer="ensemble", weight=0.5),
+                MatchkeyField(field="email", transforms=["lowercase"],
+                              scorer="exact", weight=0.5),
+            ],
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="phone", transforms=["digits_only"],
+                    scorer="exact", threshold=0.5, penalty=0.4,
+                ),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    result = dedupe_df(df, config=config)
+    # NE on phone disagrees → penalty 0.4 → final ≤ 1.0 - 0.4 = 0.6 < 0.8
+    # → 0 matches, 2 distinct clusters
+    assert len(result.clusters) == 2 or result.clusters == {}
