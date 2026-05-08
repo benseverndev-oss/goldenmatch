@@ -1066,6 +1066,175 @@ git commit -m "feat(autoconfig): controller introspects custom policy signature 
 
 ## Phase 4 — Rule helpers + modified existing rules
 
+> **DEVIATION FROM SPEC** — `rule_sparse_match_expand` (Task 5.3): the spec's `ExpandSample(2.0)` action requires a controller-level sample-expansion mechanism that doesn't exist in v1.9. Rather than scope-creep that work into v1.10, this rule fires `ctx.mark_fired("rule_sparse_match_expand")` to signal the side channel AND uses `_with_lower_threshold(delta=0.10)` as a partial proxy. Real `ExpandSample` is queued for v1.11. Spec amendment will land in §Non-goals if v1.10 ships.
+
+### Task 4.0: Scaffold shared test helpers (prerequisite)
+
+**Files:**
+- Modify: `packages/python/goldenmatch/tests/test_autoconfig_rules.py` (or create a `tests/_autoconfig_test_helpers.py` if cleaner — the existing test file is large)
+
+The Phase 4-5 rule tests reference helpers that don't exist yet. Define them ONCE before any rule test runs.
+
+- [ ] **Step 1: Inspect existing rule tests** to find names of any helpers that already exist:
+
+```bash
+grep -n "^def _\|@pytest.fixture" /d/show_case/goldenmatch/packages/python/goldenmatch/tests/test_autoconfig_rules.py | head -20
+```
+
+- [ ] **Step 2: Add the helper module/section** with these functions:
+
+```python
+"""Shared test helpers for v1.10 indicator-aware rule tests."""
+from __future__ import annotations
+import polars as pl
+
+from goldenmatch.config.schemas import (
+    GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig,
+    BlockingKeyConfig, StandardizationConfig,
+)
+from goldenmatch.core.complexity_profile import (
+    ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
+    ClusterProfile, MatchkeyProfile, FieldStats, HealthVerdict, ColumnPrior,
+    SparsityVerdict,
+)
+from goldenmatch.core.autoconfig_history import (
+    RunHistory, HistoryEntry, PolicyDecision,
+)
+
+
+def _build_test_config(
+    blocking_field: str = "email",
+    threshold: float = 0.85,
+) -> GoldenMatchConfig:
+    """Minimal valid GoldenMatchConfig with one weighted matchkey + blocking."""
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="primary",
+            type="weighted",
+            threshold=threshold,
+            fields=[MatchkeyField(
+                field="email", transforms=["lowercase"],
+                scorer="ensemble", weight=1.0,
+            )],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=[blocking_field], transforms=["lowercase"])],
+            max_block_size=1000,
+            skip_oversized=True,
+        ),
+    )
+
+
+def _build_test_config_with_email_standardization() -> GoldenMatchConfig:
+    cfg = _build_test_config(blocking_field="email")
+    return cfg.model_copy(update={
+        "standardization": StandardizationConfig(rules={
+            "email": ["lowercase", "strip"],
+        }),
+    })
+
+
+def _get_threshold(cfg: GoldenMatchConfig) -> float:
+    return cfg.get_matchkeys()[0].threshold
+
+
+def _get_blocking_field(cfg: GoldenMatchConfig) -> str:
+    return cfg.blocking.keys[0].fields[0]
+
+
+def _profile_with_mass_above(
+    mass_above: float, blocking_col: str = "email",
+) -> ComplexityProfile:
+    """Build a ComplexityProfile with the given scoring mass_above_threshold."""
+    return ComplexityProfile(
+        data=DataProfile(
+            n_rows=1000, n_cols=4,
+            column_types={blocking_col: "id-like", "name": "text",
+                          "city": "geo", "dob": "date"},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[[blocking_col]], n_blocks=100,
+            total_comparisons=500, reduction_ratio=0.95, block_sizes_p99=20,
+        ),
+        scoring=ScoringProfile(
+            n_pairs_scored=500, candidates_compared=500,
+            mass_above_threshold=mass_above,
+            mass_in_borderline=0.1, dip_statistic=0.05,
+        ),
+        cluster=ClusterProfile(transitivity_rate=0.95),
+        matchkey=MatchkeyProfile(per_field={
+            blocking_col: FieldStats(0.5, 0.0, 10),
+        }),
+    )
+
+
+def _profile_with_health_yellow() -> ComplexityProfile:
+    """Build a ComplexityProfile that rolls up to YELLOW."""
+    return _profile_with_mass_above(mass_above=0.3)
+
+
+def _empty_history() -> RunHistory:
+    return RunHistory()
+
+
+def _history_with_prior_decision() -> RunHistory:
+    h = RunHistory()
+    h.entries.append(HistoryEntry(
+        iteration=0, config=_build_test_config(),
+        profile=_profile_with_mass_above(0.0),
+        decision=PolicyDecision(
+            rule_name="rule_blocking_field_null_heavy",
+            rationale="prior", config_diff={},
+        ),
+        error=None, wall_clock_ms=10,
+    ))
+    return h
+
+
+def _ctx_with_priors(priors: dict[str, ColumnPrior]):
+    """Build an IndicatorContext with given column_priors and default sparsity."""
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    return IndicatorContext(
+        df=pl.DataFrame(),
+        column_priors=priors,
+        sparsity_verdict=SparsityVerdict(is_sparse=False, estimated_n_true_pairs=100),
+    )
+
+
+def _ctx_with_sparsity(sv: SparsityVerdict):
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    return IndicatorContext(
+        df=pl.DataFrame(),
+        column_priors={},
+        sparsity_verdict=sv,
+    )
+
+
+def _ctx_with_priors_and_hits(
+    priors: dict[str, ColumnPrior],
+    full_pop_hits: dict[str, int],
+):
+    """Build an IndicatorContext that returns mocked full_pop_matchkey_hits."""
+    ctx = _ctx_with_priors(priors)
+    # Pre-populate the memo cache so full_pop_matchkey_hits returns the mock
+    for col, hits in full_pop_hits.items():
+        ctx._memo[("full_pop_matchkey_hits", col)] = hits
+    return ctx
+```
+
+- [ ] **Step 3: Run the existing test file to make sure helpers don't conflict with anything**:
+
+```bash
+cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/test_autoconfig_rules.py -q --timeout=60 2>&1 | tail -5
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git commit -m "test(autoconfig): scaffold shared helpers for v1.10 rule tests"
+```
+
 ### Task 4.1: Rule helpers in `autoconfig_rules.py`
 
 **Files:**
@@ -1270,7 +1439,10 @@ def rule_no_matches(profile, current, history, ctx=None):
             if ortho is not None:
                 candidates.append(_with_multi_pass(current, ortho))
         elif ctx.sparsity_verdict.is_sparse:
-            candidates.append(_with_lower_threshold(current, 0.05))   # placeholder
+            # DEVIATION: spec wanted ExpandSample(2.0); v1.10 substitute is
+            # a sharper threshold drop + side-channel signal via mark_fired.
+            # rule_sparse_match_expand handles the full sparse path.
+            candidates.append(_with_lower_threshold(current, 0.10))
     else:
         candidates.append(_with_lower_threshold(current, 0.05))
 
@@ -1287,7 +1459,15 @@ def rule_no_matches(profile, current, history, ctx=None):
 
 (`_get_blocking_field` is an existing helper or trivial inline `current.blocking.keys[0].fields[0]`.)
 
-- [ ] **Step 3: Run, commit**
+- [ ] **Step 3: Run new tests + regression-check existing rule tests**
+
+```bash
+cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/test_autoconfig_rules.py -v --timeout=60 2>&1 | tail -20
+```
+
+Expected: ALL existing `rule_no_matches` tests still pass (the new identity-prior path activates only when ctx is provided; ctx=None preserves today's behavior). New tests pass too. If any pre-existing test fails, the new candidate-list logic broke a documented behavior — investigate before committing.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(autoconfig): rule_no_matches reads ctx and tries alternatives in priority order"
@@ -1555,30 +1735,106 @@ def run(self, df):
     # ... iteration loop, passing ctx to _call_policy_propose ...
 ```
 
-After `pick_committed()` selects an entry, attach indicators to its profile (mutate the dataclass via `dataclasses.replace`):
+After `pick_committed()` selects an entry, attach indicators to its profile (immutable dataclass — use `dataclasses.replace`) and **thread the result into `_finalize`**:
 
 ```python
 # Stamp the committed entry's profile with column_priors + indicators
 import dataclasses
 from goldenmatch.core.complexity_profile import IndicatorsProfile
+
+blocking_col = best_entry.config.blocking.keys[0].fields[0]
 new_data = dataclasses.replace(
     best_entry.profile.data,
     column_priors=column_priors,
 )
 new_indicators = IndicatorsProfile(
-    full_pop_matchkey_hit_rate=ctx._memo.get(("full_pop_matchkey_hits", _get_blocking_field(best_entry.config))),
-    cross_blocking_overlap=None,    # populated only if cross-blocking rule fired
+    full_pop_matchkey_hit_rate=(
+        ctx._memo.get(("full_pop_matchkey_hits", blocking_col))
+    ),
+    cross_blocking_overlap=None,    # populated only if cross-blocking rule cached
 )
-best_profile = dataclasses.replace(
+# Pull cross_blocking_overlap from any cached entry (sorted-key tuple)
+for memo_key, value in ctx._memo.items():
+    if memo_key[0] == "cross_blocking_overlap":
+        new_indicators = dataclasses.replace(
+            new_indicators, cross_blocking_overlap=value,
+        )
+        break
+
+stamped_profile = dataclasses.replace(
     best_entry.profile, data=new_data, indicators=new_indicators,
 )
-# ... use best_profile in subsequent _finalize calls ...
+
+# CRITICAL: thread stamped_profile into the finalize call. The existing
+# code path likely reads from best_entry.profile directly — replace those
+# reads. Verify by greping for the next _finalize call site:
+#   grep -n "_finalize\|_maybe_decorate_with_llm" autoconfig_controller.py
+# and substitute stamped_profile for best_entry.profile in each.
+final_config, final_profile = self._finalize(
+    df, best_entry.config, stamped_profile, history,
+)
+return final_config, final_profile, history
 ```
+
+The exact `_finalize` signature in the current codebase may differ — read it before substituting. The invariant: the profile passed downstream of `pick_committed()` MUST be `stamped_profile`, not `best_entry.profile`, otherwise the new fields don't appear on the final report and the Tier 4 integration test fails.
 
 - [ ] **Step 3: Run, commit**
 
 ```bash
 git commit -m "feat(autoconfig): controller computes eager indicators + threads IndicatorContext through propose"
+```
+
+### Task 6.1.5: `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast` env var
+
+**Files:**
+- Modify: `packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py` (`IndicatorContext`)
+- Test: `packages/python/goldenmatch/tests/test_autoconfig_controller.py`
+
+- [ ] **Step 1: Failing test**
+
+```python
+def test_indicator_context_fast_mode_skips_expensive(monkeypatch):
+    """When GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, the two expensive
+    lazy indicators return None instead of computing."""
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "fast")
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"email": ["a@x.com"] * 100})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    assert ctx.full_pop_matchkey_hits("email") is None
+    assert ctx.cross_blocking_overlap("email", "name") is None
+```
+
+- [ ] **Step 2: Add fast-mode guard to `IndicatorContext` lazy methods**
+
+```python
+import os
+
+class IndicatorContext:
+    # ... existing __init__ + properties ...
+
+    def _is_fast_mode(self) -> bool:
+        return os.environ.get("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "").lower() == "fast"
+
+    def full_pop_matchkey_hits(self, blocking_col: str) -> int | None:
+        if self._is_fast_mode():
+            return None
+        # ... existing memoized call ...
+
+    def cross_blocking_overlap(self, key_a: str, key_b: str) -> float | None:
+        if self._is_fast_mode():
+            return None
+        # ... existing memoized call ...
+```
+
+- [ ] **Step 3: Run, commit**
+
+```bash
+git commit -m "feat(autoconfig): GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast skips expensive indicators"
 ```
 
 ### Task 6.2: Tier 4 — DQbench T1-style synthetic regression test
@@ -1662,6 +1918,117 @@ def test_t1_synthetic_commits_email_blocking_with_normalize(t1_synthetic_df):
 
 ```bash
 git commit -m "test(autoconfig): T1-style synthetic regression guard for indicator stack"
+```
+
+---
+
+### Task 6.3: Tier 5 — v1.9 cache backward compat fixture + test
+
+**Files:**
+- Create: `packages/python/goldenmatch/tests/fixtures/autoconfig/v1_9_memory_snapshot.json` (committed fixture)
+- Create: `packages/python/goldenmatch/tests/test_autoconfig_memory_v1_9_compat.py`
+
+- [ ] **Step 1: Generate the v1.9 fixture**
+
+Write a one-shot script `packages/python/goldenmatch/tests/fixtures/autoconfig/_gen_v1_9_snapshot.py` (committed for reproducibility):
+
+```python
+"""Generate a v1.9-vintage memory cache entry as a JSON fixture.
+
+Run: python tests/fixtures/autoconfig/_gen_v1_9_snapshot.py
+Output: tests/fixtures/autoconfig/v1_9_memory_snapshot.json
+"""
+import json
+from pathlib import Path
+
+# Simulate what v1.9 stored: a serialized GoldenMatchConfig dict + signature
+# + succeeded flag. NOT a profile (profiles weren't persisted in v1.9).
+v1_9_entry = {
+    "signature": "abcdef1234567890",
+    "config_json": {
+        "matchkeys": [{
+            "name": "primary",
+            "type": "weighted",
+            "threshold": 0.85,
+            "fields": [{
+                "field": "email", "transforms": ["lowercase"],
+                "scorer": "ensemble", "weight": 1.0,
+            }],
+        }],
+        "blocking": {
+            "strategy": "static",
+            "keys": [{"fields": ["email"], "transforms": ["lowercase"]}],
+            "max_block_size": 1000,
+            "skip_oversized": True,
+        },
+    },
+    "succeeded": 1,
+    "version_written_by": "1.9.0",
+}
+
+out = Path(__file__).parent / "v1_9_memory_snapshot.json"
+out.write_text(json.dumps(v1_9_entry, indent=2))
+print(f"wrote {out}")
+```
+
+Run it once and commit the resulting JSON.
+
+- [ ] **Step 2: Failing tests**
+
+Create `tests/test_autoconfig_memory_v1_9_compat.py`:
+
+```python
+"""Verify v1.9-vintage memory cache entries load cleanly into v1.10.
+
+The point: indicator fields (column_priors on DataProfile, indicators on
+ComplexityProfile) must not break deserialization of any v1.9-saved
+GoldenMatchConfig. Profiles aren't persisted (only configs are), so this
+is mostly a sanity check that the new fields default cleanly.
+"""
+import json
+from pathlib import Path
+import pytest
+
+
+def test_v1_9_memory_snapshot_loads_cleanly():
+    """A v1.9-vintage memory entry deserializes into a valid GoldenMatchConfig."""
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    fixture = (
+        Path(__file__).parent / "fixtures" / "autoconfig"
+        / "v1_9_memory_snapshot.json"
+    )
+    if not fixture.exists():
+        pytest.skip(f"missing fixture: {fixture}")
+    entry = json.loads(fixture.read_text())
+    cfg = GoldenMatchConfig.model_validate(entry["config_json"])
+    assert cfg.get_matchkeys()[0].name == "primary"
+    assert cfg.get_matchkeys()[0].threshold == 0.85
+
+
+def test_v1_10_data_profile_column_priors_default_none_for_legacy_data():
+    """A DataProfile constructed without column_priors (as v1.9 did) has
+    column_priors == None — backward compat preserved."""
+    from goldenmatch.core.complexity_profile import DataProfile
+    dp = DataProfile(
+        n_rows=100, n_cols=4,
+        column_types={"a": "text", "b": "id-like", "c": "text", "d": "date"},
+    )
+    assert dp.column_priors is None
+
+
+def test_v1_10_complexity_profile_indicators_default_none():
+    from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
+    cp = ComplexityProfile(data=DataProfile(n_rows=100))
+    assert cp.indicators is None
+```
+
+- [ ] **Step 3: Run, commit**
+
+```bash
+git add packages/python/goldenmatch/tests/fixtures/autoconfig/v1_9_memory_snapshot.json
+git add packages/python/goldenmatch/tests/fixtures/autoconfig/_gen_v1_9_snapshot.py
+git add packages/python/goldenmatch/tests/test_autoconfig_memory_v1_9_compat.py
+git commit -m "test(autoconfig): v1.9 memory cache backward-compat fixture + tests"
 ```
 
 ---
