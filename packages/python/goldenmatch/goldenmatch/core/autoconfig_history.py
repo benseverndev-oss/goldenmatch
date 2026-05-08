@@ -28,6 +28,20 @@ class ErrorRecord:
 
 @dataclass
 class HistoryEntry:
+    """One iteration's record in the controller's audit trail.
+
+    Invariant: exactly one of ``error`` and ``profile`` is non-None,
+    never both, never neither. The controller's iteration-loop append
+    site enforces this — every code path either records a real profile
+    (success) or records an ``ErrorRecord`` paired with the
+    ``_RED_PROFILE_SENTINEL`` (failure path treats sentinel as the
+    profile slot for type compatibility, but the entry's ``error`` is
+    set, indicating no real profile was produced).
+
+    ``RunHistory.pick_committed()``'s filter relies on this invariant
+    (``error is None and profile is not None``); the invariant is
+    documented but not defensively re-checked at the filter site.
+    """
     iteration: int
     config: Any                # GoldenMatchConfig at runtime; Any to avoid import cycle
     profile: ComplexityProfile
