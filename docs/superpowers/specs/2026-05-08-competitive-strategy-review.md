@@ -1,272 +1,267 @@
-# Golden Suite — Competitive Strategy Review
+# Golden Suite — Engine Strategy Review
 
 **Date:** 2026-05-08
-**Author:** review pass requested on `claude/review-competitive-strategy-zy5de`
-**Scope:** `D:\show_case\goldenmatch` post-fold monorepo (Python + TS + Rust + dbt + Actions). Headline package goldenmatch v1.9.0; suite-wide.
-**Audience:** decision-maker. Pick what to fund next.
+**Author:** review pass on `claude/review-competitive-strategy-zy5de`
+**Scope:** the **engine**. Everything in this monorepo: the Python core, TS port, Rust extension, scorers, blockers, auto-config controller, Learning Memory, PPRL, graph_er, streaming. Postgres extension counts; web UI auth does not.
+**Out of scope (lives in `golden-showcase`):** pricing, hosted SaaS, marketplace listings, governance UI, SOC 2 posture, sales motion. Those are the product wrapper. This doc is about the part you `import`.
 
-This is a strategy doc, not a plan. Each direction below has a one-paragraph thesis, the evidence behind it, what shipping it actually means, and a frank effort estimate. Pick 3–5 to sequence; many are mutually compatible.
+The question this doc answers: **how do we become the best entity-resolution engine?**
 
 ---
 
 ## TL;DR
 
-GoldenMatch is already top-2 on F1 against the OSS field (Splink / Dedupe / RecordLinkage / Zingg) on bibliographic and personal-record benchmarks, and it is the only OSS ER tool I am aware of that ships a self-verifying introspective auto-config controller, a cross-language correctness parity harness, and an MCP/A2A surface in v1. The gap to private vendors (Tamr, Reltio, Senzing, Quantexa, Tilores, AWS Entity Resolution) is **not accuracy** — it is **scale, governance, identity-graph reasoning, reference data, and a managed-service GTM**.
+GoldenMatch is already the most consistent-across-data-shapes ER engine in OSS — top-2 F1 on Febrl, DBLP-ACM, NCVR, with the only self-verifying introspective auto-config controller in the field, and byte-level Python↔TS parity at the scorer layer. The engine gap to the next tier (Senzing, Quantexa research stack, Ditto-class fine-tuned transformers) is in five places:
 
-The five highest-ROI next directions, in priority order:
+1. **In-memory scale ceiling** at ~500K rows. Senzing handles 10M+ on a single node by design; Splink rides DuckDB to 1B. Today's `--backend duckdb` opt-in pays the credibility tax in every demo.
+2. **Identity graph as a first-class engine output**, not a clustering byproduct. Quantexa and Senzing won this category because their engines emit a graph; ours emits a clusters dict.
+3. **Auto-config controller v2** — the v1.8 controller is the strongest moat we have. It needs a predicted-F1-without-ground-truth signal, robustness to long-tail data shapes, and a memory that generalizes across runs. If we don't extend it, competitors will copy the v1.8 design within a year.
+4. **Hybrid LLM ↔ distilled-classifier scorer.** LLM scoring (`core/llm_scorer.py`) works and is budget-bounded but the engine is *dependent* on the LLM at the borderline. Distill the LLM votes into a local cross-encoder per dataset and the engine becomes accuracy-equivalent without an internet round-trip — a moat against Senzing-style offline shops and against vendors who can't get LLM keys past procurement.
+5. **Inner-loop speed.** The 2026-05-04 audit found the matchkey-transform hoist gave ~1.22× wall, well below the static-count framing implied. The next bottleneck is unmeasured. The audit's lesson — measure-first — applies here. Likely target: the scorer pair-emission loop. A Rust hot-path for that loop is the highest-leverage speed bet.
 
-1. **Lift the in-memory ceiling** so a single 64GB box handles 10M rows by default (not as an opt-in). Today's 500K OOM cliff costs us against any private vendor whose first slide is "we did 100M".
-2. **Identity graph as a first-class output**, not a clustering byproduct. Cross-time, cross-source entity edges with provenance — directly contests Senzing / Tilores / Quantexa, who own this category.
-3. **Postgres extension to parity** — promote `goldenmatch-extensions` from "Postgres+DuckDB UDFs" to "Postgres-native entity resolution" with incremental matching, stored configs, and ANN index living in the database. SQL-only buyers will install a Postgres extension before they install a Python library.
-4. **Public benchmark leaderboard (DQBench public + hosted)**. We already cite scores; making it the public reference (Hugging-Face-for-ER) anchors all future comparisons on our turf.
-5. **Managed cloud SaaS (`goldenmatch.cloud`)** with row-based pricing and BYO LLM. A single price umbrella against $250K Tamr / $400K Reltio is the only durable revenue path; the OSS-as-funnel motion needs the funnel to lead somewhere.
-
-Lower-priority but cumulative: stewardship UX (multi-user web + RBAC), reference-data plug-ins (USPS/NAICS/OpenCorporates), streaming-first parity, vertical accuracy packs, dbt-native ER, security/compliance posture (SOC 2 readiness statement). Detailed below.
+The full direction list (12 items, ROI-ordered) follows. None of these are about distribution, billing, or sales — all are about making the engine measurably better than every alternative.
 
 ---
 
-## Where we stand (honest assessment)
+## What "best engine" means, concretely
 
-### What we already win on
-- **Zero-config that beats hand-tuned.** v1.8.0 controller drove DBLP-ACM 0.51→0.964 zero-config (hand-tuned ceiling 0.918). Febrl3 0.944. NCVR 0.972. No competitor — OSS or paid — claims this. ([packages/python/goldenmatch/CHANGELOG.md], README v1.8.0 callout.)
-- **Polyglot parity at the byte level.** The 4-decimal scorer parity harness in `packages/typescript/goldenmatch/tests/parity/` and the byte-identical SHA-256 Learning Memory format are unique. Splink is Python-only; Dedupe is Python-only; Senzing is C/Java with thin language bindings; Tamr is server-side.
-- **AI-native by default.** 35+ MCP tools, A2A skills, REST API, and the MCP server is hosted on Smithery. No incumbent OSS or vendor ships an MCP-driveable ER engine; this is a 2026-shaped wedge.
-- **Privacy-preserving record linkage shipped, not promised.** PPRL auto-config 92.4% F1 on FEBRL4 with per-field HMAC. Tamr/Reltio talk about it; we benchmark it.
-- **Composable suite.** Five packages (Check / Flow / Match / Pipe / InferMap) with a dbt package and a GitHub Action — most ER vendors have one of these and call it a "platform".
+A buyer (or another tool that embeds us) compares ER engines on:
 
-### What we credibly don't win on
-- **Throughput at scale.** README says "OOM in-memory >500K rows; use DuckDB or Ray for 1M+". Splink scales to ~1B via Spark/DuckDB out of the box. Senzing handles 10M+ on a single node by design. AWS Entity Resolution is "scale is not your problem". Our 7,823 rec/s at 100K is on a laptop and falls off a cliff afterward.
-- **Identity graph + temporal.** `core/graph_er.py` and `core/graph.py` exist, but pair-clustering is not a graph product. Quantexa, Senzing, Tilores own this segment. We have the bones; we have not built the building.
-- **Stewardship at >1 user.** Web workbench is explicit "single-process, no auth — for the dev-on-a-laptop case". Reltio/Tamr's deployment moat is multi-user RBAC + audit + workflow, not their matcher.
-- **Reference data.** Senzing ships `libpostal`-equivalent normalizers, business-name dictionaries, watchlist matching. We have 7 domain packs, none with real reference data behind them.
-- **Distribution.** No Snowflake Native App, no Databricks Partner Connect, no AWS Marketplace, no Fivetran connector, no listing on dbt Hub for goldenmatch (we have it for goldencheck). We are a `pip install` business.
-
-### What we're roughly even on
-- **Probabilistic matching (Fellegi-Sunter).** Splink is the SOTA for this single pattern; we ship it as one strategy among many. Tied for capability on PII; we lose a few F1 points but win on portability.
-- **Active learning / labeling.** Dedupe and Zingg make this central; we have boost tab + Learning Memory. Functionality parity, UX gap.
-- **Cost on LLM-augmented ER.** Our $0.04 LLM budget on Abt-Buy is competitive. We don't have a reason customers should pay for our LLM orchestration vs roll-their-own; the moat is the budget cap + cached votes + Learning Memory replay, which is real but undermarketed.
-
----
-
-## The competitive landscape, segment by segment
-
-### 1. OSS libraries (the floor)
-| Tool | Pattern | Where they win | Where we win |
+| Axis | Today | Best in field | Gap |
 |---|---|---|---|
-| **Splink** | Probabilistic + Spark/DuckDB | PII, scale, EM training | Non-PII data, zero-config, polyglot |
-| **dedupe** (Python) | ML + active learning | Active learning UX | Out-of-the-box accuracy, no labels needed |
-| **RecordLinkage Toolkit** | Classical | DBLP-ACM (single benchmark) | Everything else |
-| **Zingg** | Spark + ML | Spark shops | Single-machine, polyglot, LLM, MCP |
-| **JedAI** (Java) | Toolkit | Java shops | Modern stack, zero-config |
-| **fuzzymatcher / py_stringmatching** | Fuzzy primitives | — | Whole-pipeline, golden records |
+| **Accuracy, structured/PII** | F1 0.971 (Febrl) | Splink 0.998 | -2.7 pts |
+| **Accuracy, bibliographic** | F1 0.972 (DBLP-ACM zero-config) | tied | none |
+| **Accuracy, product matching** | F1 0.722 (Abt-Buy +LLM) | Ditto 0.893 (fine-tuned) | -17 pts |
+| **Accuracy, zero-config** | DBLP-ACM 0.964, Febrl3 0.944, NCVR 0.972 | nobody else publishes zero-config numbers | leader |
+| **Throughput, single node** | 500K in-memory ceiling, 10M with `--backend duckdb` | Splink/DuckDB 1B; Senzing 10M+ default | 20×-2000× |
+| **Latency, match-one** | not benchmarked | Tilores < 50ms p95 | unknown |
+| **Runtime breadth** | Python, TS (parity), Postgres (partial), DuckDB (partial) | Splink: Spark + DuckDB. Senzing: C/Java + bindings. | wide on languages, narrow on databases |
+| **Privacy** | PPRL F1 0.924 (FEBRL4) | tied with research, ahead of vendors | leader |
+| **Provenance** | Per-field lineage + Learning Memory | Tamr golden-record provenance | parity |
+| **Adaptivity** | Introspective auto-config controller (v1.8) | nobody | leader |
+| **Determinism / offline** | LLM-required for borderline accuracy | Senzing fully offline | regression |
+| **Composability** | MIT, MCP/A2A surface, plugin SDK | Splink Python-only; Senzing closed core | leader |
 
-**Posture:** maintain the lead. Don't chase Splink's PII numbers (Splink-style EM is already a strategy in `core/probabilistic.py`); chase coverage breadth and zero-config primacy.
-
-### 2. Cloud-managed ER (rising)
-- **AWS Entity Resolution** — managed service, integrated with Glue/SageMaker, machine-learning + rule-based, opaque pricing.
-- **Google Cloud Entity Reconciliation** — Knowledge Graph-anchored.
-- **Snowflake / Databricks native** — both shipped first-party ER UDFs in 2025–2026.
-
-**Posture:** these win on integration and lose on portability + accuracy + price. Our wedge is "the same engine in your laptop, your edge worker, your Postgres, and your Spark — your data never leaves your tenant unless you tell it to". Snowflake Native App listing is the highest-leverage single GTM move (see direction #6 below).
-
-### 3. MDM enterprise (the money)
-- **Tamr** — ML + human-in-the-loop, $250K–$2M deals, 6-month deployments.
-- **Reltio** — cloud MDM, hub-and-spoke, $400K+ ARR typical, Salesforce-native.
-- **Informatica MDM / IDQ** — incumbent, slow but trusted.
-- **Stibo, Ataccama, SAP MDG, Profisee** — long tail; each owns a vertical or geography.
-
-**Posture:** do **not** build a competing MDM hub. We lose. Position GoldenMatch as the *engine* customers use to escape these vendors, or as the *engine* a new MDM startup would embed (we already license MIT). The path to revenue here is being acquired or being the matching layer inside a faster-moving MDM.
-
-### 4. Identity graph / KYC / fraud (the moat)
-- **Senzing G2** — semi-OSS, identity graph, deterministic + probabilistic, 30+ years of reference data.
-- **Quantexa** — graph-based contextual decisioning, fraud/AML/KYC.
-- **Tilores** — entity-API-as-a-service, GraphQL identity graph.
-- **TigerGraph + Neo4j ER recipes** — DIY graph ER on a graph DB.
-
-**Posture:** the most defensible mid-term direction (see direction #2 below). Today our `graph_er` module is rendered after clustering; an identity graph is the *primary product*, with edges, time, source-attribution, and re-resolution on new evidence. Senzing has spent 25 years on this; we can't win the dictionary game, but we *can* win the AI-native + composable + open-source game.
-
-### 5. Adjacent / DQ tooling
-- **Monte Carlo, Atlan, Alation, dbt Cloud, Soda** — observe data, don't fix it.
-- **Talend, Trifacta** — wrangling, not ER.
-
-**Posture:** these are partners, not competitors. dbt-goldencheck is already a partnership-shaped surface; extend with `dbt-goldenmatch` (DuckDB-based ER in dbt — referenced in `goldenmatch/CLAUDE.md` but not on PyPI yet).
+Five "leader" cells, two genuine deficits (throughput, product-matching SOTA), one sneaky deficit (LLM-dependence at the borderline). The directions below close the deficits without giving up the leader cells.
 
 ---
 
-## Strategic directions, ordered by ROI
+## Where the engine wins today (don't regress these)
+
+- **Zero-config controller (`core/autoconfig_controller.py`).** v1.8 introspective controller iterates on block-size distribution, score histogram, transitivity rate, and borderline mass; converges with cross-run memory. DBLP-ACM 0.51→0.964. *Nobody else publishes zero-config numbers because they don't have a story for it.*
+- **Polyglot byte-level parity.** `tests/parity/` locks scorer output at 4-decimal tolerance Py↔TS. Learning Memory is byte-identical SHA-256 across runtimes. Splink, Dedupe, Senzing, Tamr — none have this.
+- **PPRL in production shape, not research shape.** Auto-config 92.4% F1 FEBRL4. Per-field HMAC. Most ER engines treat privacy-preserving linkage as a research demo.
+- **AI-native scorer with budget caps.** $0.04 LLM cost on Abt-Buy with graceful degradation; cached votes survive re-runs via Learning Memory. Most "AI ER" tools wrap a single LLM call with no budget control.
+- **One pipeline, eleven scorers, eight blockers.** `core/scorer.py` and `core/blocker.py` are the broadest scorer/blocker zoo in any single OSS engine. Each is composable in YAML.
+
+Every direction below has to answer: *does it weaken any of these?*
+
+---
+
+## The competitor map (engine-only)
+
+### Tier-1 OSS engines (we benchmark against these)
+- **Splink** — Fellegi-Sunter + Spark/DuckDB. SOTA on PII. Weak on non-PII (DBLP-ACM 0.728). Python-only. Active learning is manual labelling. **Our edge:** zero-config, polyglot, non-PII.
+- **dedupe** — Active-learning forward, ML-based. Slowest of the field. **Our edge:** out-of-the-box accuracy, no labels needed.
+- **RecordLinkage Toolkit** — Classical. Strong on DBLP-ACM specifically. **Our edge:** every other dimension.
+- **Zingg** — Spark + ML. Java/Scala. **Our edge:** single-machine, polyglot, LLM, MCP.
+- **JedAI** — Java toolkit. Academic. **Our edge:** modern stack, zero-config.
+
+### Tier-1 closed engines (we don't benchmark against these — we should)
+- **Senzing G2** — Identity-graph engine, deterministic + probabilistic, 25 years of reference data, fully offline. Semi-OSS but the brain is closed. **Their edge:** identity graph + reference data + offline. **Our shot:** AI-native, composable, MCP, zero-config.
+- **Quantexa engine** — Graph contextual decisioning. Closed. **Their edge:** network reasoning. **Our shot:** open core lets researchers and toolmakers build on us.
+- **Tilores** — Identity-graph-as-a-service. **Their edge:** real-time latency. **Our shot:** identical engine in batch + streaming.
+
+### Research SOTA (the accuracy ceiling)
+- **Ditto** — Fine-tuned transformer, F1 0.893 on Abt-Buy (1000+ labels). **Their edge:** product matching. **Our gap:** -17 pts F1 with no labels. Hybrid scorer + reference data could close half.
+- **HierGAT, JointBERT, EMTransformer** — Research papers, not products. We should run their reference impl on our leaderboard.
+- **GPT-4 / Claude few-shot** — F1 0.92+ on Abt-Buy with zero training. We use this in `core/llm_scorer.py`. The next move is distillation (direction 4).
+
+### Cloud-managed engines
+- **AWS Entity Resolution, Google Cloud Entity Reconciliation, Snowflake/Databricks-native ER UDFs.** All shipped 2024-2026. Closed. Tied to one warehouse. **Their edge:** integration. **Our shot:** the same engine ports across; their results don't.
+
+---
+
+## Strategic directions, ROI-ordered
 
 Each item: **thesis · evidence · ship · effort · risk**.
 
-### Direction 1 — Lift the single-node throughput ceiling
+### Direction 1 — Lift the in-memory throughput ceiling
 
-**Thesis.** The 500K-row in-memory cliff is the single biggest credibility tax we pay in pilots. Lifting the default ceiling to ~10M on a 64GB box (no `--backend duckdb` flag, no Ray, no chunking) would close half the gap to AWS/Splink in one release.
+**Thesis.** The 500K row OOM cliff is the engine's single biggest weakness in any side-by-side. Lift the default ceiling to ~10M on a 64GB box without flags. This is *engine* work — not infra.
 
 **Evidence.**
 - `goldenmatch/CLAUDE.md` — "1M records: OOM in-memory — use DuckDB backend or chunked processing for >500K records".
-- The 2026-05-04 audit (`docs/superpowers/specs/2026-05-02-performance-audit-checklist.md`) found that the matchkey-transform hoist gave 1.22× wall, well below what static counts implied. **Actual wall-clock measurement on the 100K → 1M scale curve has not been done end-to-end since the audit's lessons landed.** Do that first.
-- Existing infrastructure: DuckDB backend (`backends/duckdb_backend.py`), chunked processing (`core/chunked.py`), Polars throughout.
+- 2026-05-04 audit (`docs/superpowers/specs/2026-05-02-performance-audit-checklist.md`) lesson: measure 5-run wall before designing. The matchkey-transform hoist gave 1.22×; the static count implied 5×.
+- `backends/duckdb_backend.py` and `core/chunked.py` exist; the engine just doesn't choose them.
 
 **Ship.**
-1. Re-do the bench at 100K, 500K, 1M, 5M with profiling + RSS tracking. Median 5 runs (audit lesson). Identify the actual bottleneck — likely the pair-list growth in the scorer, not Polars.
-2. Make DuckDB backend the default above a measured row threshold (e.g., 250K), transparently. The opt-in flag becomes opt-out.
-3. Add streaming pair-emission so we never hold N² pairs in memory.
-4. Acceptance: 10M rows on a 64GB box without OOM, end-to-end, no flags.
+1. **Re-bench** at 100K, 500K, 1M, 5M with RSS tracking. 5-run median. Identify the *measured* bottleneck — pair-list growth in the scorer is the prime suspect.
+2. **Streaming pair emission** in `core/scorer.py` — never hold N² pairs in memory; cluster-as-you-go via `core/cluster.py`'s union-find.
+3. **DuckDB-as-default above a measured row threshold**, gated to avoid regressing small-data wall time. Today's opt-in becomes opt-out.
+4. **Backpressure on the LLM scorer** — the queue can't grow unbounded under streaming pair emission.
 
-**Effort.** 2–4 weeks engineering, 1 week benchmarking. Mostly reuse + threshold tuning; the worst case is a bigger refactor of `core/pipeline.py` to honor a `pair_emit` interface.
+Acceptance: 10M rows on a 64GB box, no flags, no OOM, end-to-end (ingest → match → cluster → golden record). Wall time documented; not "fast enough", a number.
 
-**Risk.** Medium. Hidden allocations in transform paths (we just hoisted matchkey transforms; profile for the next set). DuckDB-as-default could regress small-data wall time — gate on row count.
+**Effort.** 3–5 weeks engineering, 1 week benchmarking. Risk concentrated in the scorer refactor; the rest is plumbing.
+
+**Risk.** Medium. DuckDB-as-default could regress small-data wall; gate on row count. Streaming pair emission interacts with `golden_rules.auto_split` (cluster-as-you-go vs split-after-cluster) — needs design.
 
 ---
 
-### Direction 2 — Identity graph as a primary product
+### Direction 2 — Identity graph as a primary engine output
 
-**Thesis.** A clustered output (the `cluster_id → members` dict we ship today) is a snapshot. An *identity graph* is a queryable, append-only entity store with edges, time, source attribution, and re-resolvability when new evidence arrives. Senzing/Tilores/Quantexa have built whole companies around this single insight. We have ~30% of the bones (`core/graph_er.py`, `core/lineage.py`, Learning Memory) and we should finish the building.
+**Thesis.** Today the engine emits `dict[int, dict]` (clusters with members + pair_scores). Tomorrow it emits a `GoldenGraph` with nodes (entities), edges (evidence), time, and source provenance. Senzing and Quantexa won the identity-graph category by emitting a graph from their engine. We have most of the pieces (`core/graph_er.py`, `core/lineage.py`, Learning Memory) and they don't compose into a graph output.
 
 **Evidence.**
-- `core/graph_er.py` exists. `core/lineage.py` records per-field provenance. `core/memory/store.py` already has the SQLite schema for persistent decisions. We have all the pieces; they don't compose into a graph product.
-- Buyer demand signal: every enterprise pilot mentions "person → account → device → transaction" linkage. This is graph-shaped, not pair-shaped.
-- Cross-time is unsolved in the OSS world. Splink doesn't do it. Dedupe doesn't do it. AWS Entity Resolution doesn't do it well.
+- `core/graph_er.py` and `core/graph.py` exist but are post-clustering renderers, not primary outputs.
+- `core/lineage.py` already records per-field provenance.
+- `core/memory/store.py` has the SQLite schema for persistent decisions.
+- Customer pattern across pilots: every "person ↔ account ↔ device ↔ transaction" question is graph-shaped, not pair-shaped. The engine doesn't have the right output for it.
 
 **Ship.**
-1. **`goldenmatch graph` subcommand + Python API.** `gm.graph.upsert(records, source=...)` returns a `GoldenGraph` whose nodes are entities, edges are evidence (each scored pair), and time is first-class.
-2. **Re-resolution on append.** When new records arrive, only re-score against the affected entity neighborhood. The streaming module + Postgres ANN index get us close; wire them through.
-3. **Edge provenance, not just pair scores.** Each edge knows source, score, scorer used, transform chain, timestamp. This is what makes a graph defensible against Senzing.
-4. **Query surface.** `graph.find(name="...", at="2024-01")`, `graph.timeline(entity_id)`, `graph.merge_history(entity_id)`. GraphQL is *not* required v1; a Python + REST surface beats Tilores' GraphQL on ergonomics.
-5. **Storage backends.** Start with SQLite + DuckDB. Postgres-native via the Rust extension. Neo4j adapter as a v2 wedge.
+1. **`gm.graph.upsert(records, source=...)` → `GoldenGraph`** as a new top-level engine API. Nodes are entities, edges are scored pairs with scorer-name + transform-chain + timestamp + source.
+2. **Re-resolution on append.** New records re-score only against the affected entity neighborhood (uses the existing ANN index + `core/streaming.py`).
+3. **Edge provenance carried through.** `edge.scorer = "jaro_winkler"`, `edge.transforms = ["lower", "strip"]`, `edge.timestamp`, `edge.source`. Defensible against Senzing because each edge is auditable in a way their closed graph isn't.
+4. **Graph-aware clustering.** Replace the post-hoc auto-split heuristic with graph-native components (modularity-based or F-S-weighted cuts).
+5. **Storage backends.** SQLite + DuckDB v1; Postgres via the Rust extension v2; Neo4j adapter v3.
+6. **Cross-time queries.** `graph.find(name="...", at="2024-01")`, `graph.timeline(entity_id)`. This is the wedge against Senzing-static-snapshot.
 
-**Effort.** 8–12 weeks for v1 (graph store + re-resolution + REST). The hard part is the data model — get it right once, evolve under it.
+**Effort.** 8–12 weeks for v1. Hardest part is the data-model spec; spend a week on it before code.
 
-**Risk.** High-reward, high-effort. The data model decision is permanent; spend a week on the design (a real spec, not a sketch). Don't try to be a graph database; be an identity-graph application that uses one.
+**Risk.** High-reward, high-effort. The data model decision is sticky; design first. Don't reimplement a graph database — be a graph application.
 
 ---
 
-### Direction 3 — Postgres extension to parity (then promote to headline)
+### Direction 3 — Auto-config controller v2
 
-**Thesis.** SQL-first buyers (the long tail of analytics teams) install a Postgres extension before they install a Python library. The Rust extension is currently a satellite; promote it to a coequal headline product with stored configs, incremental matching, and an ANN index that lives in the database.
+**Thesis.** v1.8's introspective controller is the strongest *engine* moat we have. It will be copied within a year; we should be at v2 by then. v2 means (a) predicted F1 without ground truth, (b) robustness to long-tail data shapes, (c) cross-run memory that generalizes (transfer learning, not exact-match lookup), (d) explanations the user can trust.
 
 **Evidence.**
-- `packages/rust/extensions/` exists; pgrx + DuckDB UDFs shipped.
-- README shows seven SQL functions; Postgres parity to the Python API is roughly 30% (no incremental, no Learning Memory replay, no PPRL, no review queue).
-- "DB-native ER" is a category Senzing and Splink-on-DuckDB are pushing into; we have the codebase advantage but not the polish.
+- v1.8 ships `core/autoconfig_controller.py` + `autoconfig_history.py` + `autoconfig_memory.py` + `autoconfig_policy.py` + `autoconfig_rules.py` + `autoconfig_verify.py`. Five-file architecture, well-documented.
+- DBLP-ACM 0.51→0.964 zero-config beats hand-tuned ceiling 0.918.
+- Cross-run memory (`~/.goldenmatch/autoconfig_memory.db`) currently uses an exact data-shape signature. Generalization gap is wide open.
+- LLM fallback (`LLMRefitPolicy`) is opt-in; underutilized for the diagnostic role.
 
 **Ship.**
-1. **`goldenmatch_run(config jsonb, source regclass)` returns a result set.** Today we have helper UDFs; we need an end-to-end orchestrator UDF that mirrors `gm.dedupe()`.
-2. **Incremental matching as a Postgres trigger.** Insert a row into a watched table → ANN-blocking → score-against-cluster → write back. The Python `core/streaming.py` is the model.
-3. **ANN index as a Postgres index type** (long-term, pgvector-adjacent). v1: ANN index in a sidecar table with maintenance triggers.
-4. **Stored configs as `goldenmatch_configs` table** with versioning. Lets a DBA review "the live ER config" in SQL.
-5. **DuckDB MotherDuck publishing.** A DuckDB extension on the MotherDuck registry with the same UDFs is a two-week shippable.
+1. **Predicted F1 without ground truth.** Train a meta-model on `complexity_profile.py` signals → measured F1 across all benchmarks we own. The controller emits "this run will land near F1 0.93±0.04" alongside the config. Honest uncertainty bounds — a number nobody else can show.
+2. **Long-tail robustness.** Build a stress benchmark: malformed data, mostly-nulls, all-identical, near-empty fields, non-Latin scripts, unicode confusables. Controller must converge or honestly report "I don't know" — never silently ship a bad config.
+3. **Generalizing memory.** Move the cross-run memory from exact-signature lookup to nearest-neighbor over normalized profile vectors. Past committed configs become *priors*, not *replays*.
+4. **LLM as diagnostic, not last-resort.** When heuristic rules disagree, the LLM judges the disagreement (cheap, structured, single call). Currently it only fires when rules exhaust.
+5. **Explanation surface.** Each controller iteration emits a one-line "I picked X because Y". Already partly there; promote to first-class output.
 
-**Effort.** 6–10 weeks (parity work), then ongoing. Distinct from direction 2 — they compose well: identity graph nodes/edges are Postgres tables, the extension queries them.
+**Effort.** 6–10 weeks. The meta-model (item 1) is the hard part — needs ~50 benchmark runs across diverse data to train.
 
-**Risk.** Medium. pgrx local-build issues are documented in `goldenmatch/CLAUDE.md` (`pgrx cannot build locally — needs libclang/LLVM. Use CI`). The dev loop is slow; budget for it.
+**Risk.** Medium. Predicted-F1 with bad uncertainty is worse than no prediction; calibrate aggressively or don't ship that piece.
 
 ---
 
-### Direction 4 — Public benchmark leaderboard
+### Direction 4 — Hybrid LLM ↔ distilled-classifier scorer
 
-**Thesis.** Whoever owns the reference benchmarks owns the conversation. Hugging Face owns model leaderboards. Nobody owns the ER leaderboard yet. DQBench (referenced in our README, score 95.30) should be the public artifact, hosted, with a submission flow.
+**Thesis.** LLM-augmented scoring is great when the LLM is available. It's a vulnerability when it's not (offline shops, procurement-blocked teams, latency-sensitive workloads). Distill the LLM votes a customer accumulates into a local cross-encoder per dataset; the engine becomes LLM-equivalent at the borderline *without* the LLM after a warm-up run. Closes the loop with Learning Memory.
 
 **Evidence.**
-- DQBench is already in our README with a real number, but the linked repo (`benzsevern/dqbench`) is referenced not promoted.
-- Existing benchmarks site templates (HF leaderboards, Papers With Code) are well-trodden.
-- Nobody in the ER OSS world has done this. RecordLinkage Toolkit's docs reference benchmarks; nobody hosts a leaderboard.
+- `core/llm_scorer.py` + `core/llm_budget.py` already cache votes via Learning Memory.
+- `core/cross_encoder.py` already loads HuggingFace cross-encoders for borderline rerank.
+- Distillation is a two-step training pipeline that already-cached votes make trivial.
+- Senzing's offline posture is a buying gate for finance/defense/healthcare we currently can't pass.
 
 **Ship.**
-1. **Public DQBench site.** Static site, GitHub Pages, leaderboard JSON committed in-repo. Submissions are PRs.
-2. **Reproducible run scripts** for every entry. Splink/Dedupe/Zingg already have public configs for DBLP-ACM/Febrl; we run them on the same hardware and publish.
-3. **Per-segment scoring**: PII, bibliographic, product, business records, healthcare, PPRL. Each segment has its own podium.
-4. **"Try It" button on every result** — Colab notebook with a tagged run that reproduces.
+1. **`gm distill`** CLI: read all cached LLM votes from Learning Memory, train a small local cross-encoder (DistilBERT-class), save to `~/.goldenmatch/distilled/{dataset_hash}.onnx`.
+2. **Engine auto-prefers** the distilled model for borderline pairs once it exists for the matching profile signature.
+3. **LLM fallback** only when the distilled model is uncertain (low-margin output) or when the data shape changes enough to invalidate the model.
+4. **Air-gap mode** (`--offline`): refuse to call the LLM, never. Hard guarantee.
+5. **Distillation benchmarks** on the leaderboard (direction 5): "with LLM 0.722, distilled 0.71x, no LLM 0.65x" on Abt-Buy. Honest numbers; the value prop is *good-enough offline*, not *better than LLM*.
 
-**Effort.** 2–4 weeks for v1. Largely a docs+CI project, not engineering.
+**Effort.** 4–6 weeks. Distillation tooling exists; integration into the borderline gate is the work.
 
-**Risk.** Low. Worst case it doesn't catch on; we still benefit from the discipline of running competitors regularly. Best case it becomes the citation other vendors have to reference.
+**Risk.** Medium. Distillation requires enough cached votes to be useful (~500+); document the warm-up requirement honestly.
 
 ---
 
-### Direction 5 — Managed cloud SaaS (`goldenmatch.cloud`)
+### Direction 5 — Public benchmark leaderboard
 
-**Thesis.** OSS-as-funnel only works if the funnel leads somewhere. A multi-tenant managed service with row-based pricing — say, $0.10 per 1K rows matched, free under 100K/mo — is the only durable revenue motion that doesn't require building an enterprise sales team. The price umbrella vs Tamr ($250K) and Reltio ($400K) is not 10×, it's 100×.
+**Thesis.** Whoever runs the leaderboard owns the conversation. DQBench is referenced in our README but not promoted. A hosted, reproducible, submission-PR leaderboard with per-segment podiums (PII, bibliographic, product, business, healthcare, PPRL) anchors every future comparison on our turf. *The engine work is the benchmark harness, not the website* — that part lives in golden-showcase.
 
 **Evidence.**
-- We already host an MCP server on Railway (`goldenmatch-mcp-production.up.railway.app`). The infra story is partly written.
-- AWS Entity Resolution charges per matching record; their pricing is a ceiling we sit comfortably under.
-- A Smithery-hosted MCP is a great free trial; converting "MCP user → cloud account" is a single-click flow we don't currently have.
+- DQBench is real (`benzsevern/dqbench`), referenced with score 95.30 in our README.
+- Comparison benchmark scripts already exist at `D:\show_case\golden-showcase\comparison_bench\` (Splink, Dedupe, RecordLinkage on Febrl/DBLP-ACM/NC Voter).
+- No OSS competitor hosts a leaderboard. Splink/Dedupe link to academic papers; nobody runs the comparison themselves.
+- The discipline of running competitors monthly catches our own regressions.
 
 **Ship.**
-1. **A real authenticated tenant.** Today the Railway MCP is anonymous; add API keys.
-2. **Row-billed dedup endpoint.** `POST /v1/dedupe` with usage metering.
-3. **Bring your own LLM.** Keys never leave the tenant; we provide budget caps and caching.
-4. **Stripe integration.** Free tier, paid tier, enterprise tier (with PPRL + SOC 2 statement).
-5. **A landing page that says "Splink, Tamr, and AWS Entity Resolution priced under one roof" with the actual price comparison.**
+1. **Reproducible run scripts** for every published number: ours + Splink + Dedupe + RecordLinkage + Zingg (Java/Spark) + research SOTA where reference impls exist.
+2. **Per-segment scoring**: PII, bibliographic, product, business, healthcare, PPRL, **adversarial** (the stress benchmark from direction 3).
+3. **Scheduled CI run** weekly against pinned competitor versions; commit the JSON, render in golden-showcase.
+4. **Stress benchmark on the leaderboard.** Adversarial / dirty-data scores. Nobody publishes these because most engines do badly. We use it as a moat.
 
-**Effort.** 6–10 weeks for a v1 cloud + 4 weeks of GTM (landing page, pricing page, signup flow). 1 FTE for ops thereafter.
+**Effort.** 3–5 weeks for the engine-side harness. Site lives in golden-showcase.
 
-**Risk.** High in the sense that running a cloud is a real commitment (uptime, on-call, billing disputes). Manageable if scoped to "we host the matcher; you keep your data and your LLM keys".
+**Risk.** Low. Worst case the discipline of weekly competitor runs catches our regressions before customers do.
 
 ---
 
-### Direction 6 — Marketplace listings (Snowflake / Databricks / Fivetran / dbt Hub)
+### Direction 6 — Postgres extension to engine-API parity
 
-**Thesis.** Distribution beats accuracy. The Snowflake Native App + Databricks Partner Connect listings put us in front of every buyer who has a budget and a data warehouse. Today our distribution is `pip install`.
+**Thesis.** The engine has two runtimes today (Python, TS) at parity, and a third (Postgres via pgrx) at ~30% parity. Lift the Postgres extension to the same surface — `dedupe`, `match`, `match_one`, PPRL, Learning Memory replay, review queue, identity graph (direction 2). The engine's reach grows by the number of teams whose first install is `CREATE EXTENSION goldenmatch;`.
 
 **Evidence.**
-- Snowflake Native Apps launched 2024; ER apps are conspicuously absent.
-- Databricks Partner Connect: similar gap.
-- We already have Snowflake/Databricks/BigQuery connectors in `connectors/`.
-- dbt-goldencheck is on dbt Hub; goldenmatch is not.
+- `packages/rust/extensions/` ships pgrx + DuckDB UDFs.
+- README shows ~7 SQL functions; full Python API has ~15 entry points.
+- Splink-on-DuckDB is the closest competitor in this lane; their UDFs are narrower.
+- Postgres-native ER is a buying gate for analytics teams who won't add a Python sidecar.
 
 **Ship.**
-1. **Snowflake Native App** — wraps `dedupe_df` over Snowpark; bills via Snowflake's marketplace. ~4 weeks.
-2. **Databricks Partner Connect listing** — DBR notebook + cluster init. ~3 weeks.
-3. **`dbt-goldenmatch` package** — DuckDB-based; the DB extension story (direction 3) feeds this. ~3 weeks.
-4. **Fivetran custom connector** — synced reverse-flow ER on the way in. ~2 weeks.
-5. **AWS Marketplace listing** — Lambda layer + container. ~3 weeks.
+1. **`goldenmatch_run(config jsonb, source regclass)`** end-to-end orchestrator UDF mirroring `gm.dedupe()`.
+2. **Incremental matching as a Postgres trigger.** Insert → ANN-block → score-against-cluster → write back. Mirrors `core/streaming.py`.
+3. **Stored configs** in `goldenmatch_configs` table with versioning; the live ER config is reviewable in SQL.
+4. **ANN index sidecar table + maintenance triggers.** v1; pgvector-native v2.
+5. **Identity graph nodes/edges as Postgres tables** (compounds with direction 2).
+6. **DuckDB MotherDuck publishing** of the same UDFs — two-week shippable.
 
-**Effort.** ~15 weeks total but parallelizable across listings. Each is its own paperwork mountain (Snowflake takes 6+ weeks of partner review).
+**Effort.** 6–10 weeks. pgrx local-build issues documented (`needs libclang/LLVM, use CI for builds`); dev loop is slow, budget for it.
 
-**Risk.** Low engineering risk, high partnership-bureaucracy risk. Start the Snowflake review process now even if the app isn't ready — the queue is the gating factor.
+**Risk.** Medium. Compounds well with direction 2 (the graph nodes/edges live as Postgres tables); sequence after #2 lands the data model.
 
 ---
 
-### Direction 7 — Active learning UX, made central not optional
+### Direction 7 — Inner-loop speed via measured Rust hot-paths
 
-**Thesis.** Dedupe and Zingg both make active learning the headline. We have it (`core/active_sampling.py`, boost tab in TUI), but it's discovery-gated. A web UI flow that surfaces the 20 most informative borderline pairs and writes labels into Learning Memory in one session is a credibility move at every demo.
+**Thesis.** The 2026-05-02 audit closed the matchkey-transform hoist for ~1.22× wall and noted "no Rust core for the Python path" — Rust calls Python via PyO3 in the SQL extension, not the other way. The next 2× wall isn't going to come from another Polars rewrite; it's going to come from a Rust hot-path for the scorer's pair-emission inner loop. *Only do this with measurement first.*
 
 **Evidence.**
-- `core/active_sampling.py` exists. Learning Memory writes are already wired through the web inspector ("Label pairs (mirrors to Learning Memory)" — README).
-- The transformation from "label 10 pairs in TUI" to "label 20 pairs in web" is mostly UX surfacing.
-- Customer pattern: the first thing every evaluator does is feed in their own corrections. We should make it 90 seconds.
+- Audit lesson literally on file: "measure wall-clock with the workload of interest before designing".
+- Matchkey hoist measured 1.22× wall vs implied 5×; the framing was wrong.
+- `core/scorer.py` parallel block scoring is in Python; `rapidfuzz.cdist` is Rust under the hood but the per-block dispatch and pair filtering is Python.
+- Splink's DuckDB UDFs run native; we run Polars + Python wrappers.
 
 **Ship.**
-1. **`/label` web page** with confusion-matrix-prioritized pairs (most-uncertain first, balanced by cluster).
-2. **Live F1 update** as labels are added — re-evaluate against the held-out labeled set.
-3. **Threshold-learner trigger at 10 corrections** (already implemented; surface the prompt).
-4. **Export the labeled set as a portable `labels.jsonl`** that any GoldenMatch project can replay.
+1. **Profile** the 5M-row scorer pipeline (direction 1's bench). Identify where the wall is — pair filter? scorer dispatch? cluster build?
+2. **Iff the bottleneck warrants** (>2× projected speedup measured on a Rust prototype), implement the hot loop in the existing `packages/rust/extensions/bridge/` crate, expose via PyO3.
+3. **TS parity.** Whatever Rust path lands, TS gets a WASM-built equivalent or a documented "Node-only acceleration via napi binding" path. Don't fork the engine.
+4. **Cargo workspace** stays as-is per `CLAUDE.md` ("Cargo doesn't allow nested workspaces sharing members"); the bridge crate already accommodates.
 
-**Effort.** 2–3 weeks. Mostly frontend; engine is in place.
+**Effort.** 2 weeks profiling + 4–6 weeks Rust hot-path if the measurement supports it. **If the measurement doesn't support a 2× speedup, kill the direction and reinvest the time elsewhere.**
 
-**Risk.** Low. Worst case it doesn't change conversion; cost is small.
+**Risk.** Medium. The audit's lesson is the lesson here too: don't refactor for speed without a measured target.
 
 ---
 
-### Direction 8 — Reference data plug-ins
+### Direction 8 — Reference data integration (engine accuracy)
 
-**Thesis.** Senzing's moat is 25 years of name dictionaries, address normalizers, and watchlists. We can never out-curate them, but we can match them on the 80% case using bundled OSS reference data + clean APIs. A "people pack" with US Census surnames + libpostal + USPS CASS-equivalent + SSA name frequencies, benchmarked, would let us claim parity for the 90% of cases that don't need defense-grade reference.
+**Thesis.** Senzing's accuracy moat on people/business matching isn't a smarter algorithm; it's 25 years of reference dictionaries. We can't out-curate them, but we can match them on the 80% case using bundled OSS reference data — US Census surnames, libpostal, OpenCorporates, NAICS, SSA name frequencies — wired into the scorer's normalization pipeline. *This is engine work, not a marketing pack.*
 
 **Evidence.**
 - `goldenmatch/domains/` has 7 packs but no reference data behind them — they're rule sets, not lookups.
-- libpostal (MIT) — address parsing.
-- US Census Bureau — surname/given-name frequency tables.
-- OpenCorporates — business-name normalization (CC-BY).
-- SEC EDGAR — public company tickers/CIKs.
-- NAICS / SIC — industry codes.
-- All free, all incorporable, none currently bundled.
+- libpostal (MIT), US Census (public domain), OpenCorporates (CC-BY), NAICS (public) — all incorporable.
+- Auto-config controller (direction 3) gets a stronger signal when names are normalized against a frequency table.
 
 **Ship.**
-1. **`goldenmatch[reference-people]`** extra: bundled name-frequency lookups, given-name aliases (William↔Bill), nickname tables.
-2. **`goldenmatch[reference-business]`** extra: legal-form normalization (Inc/LLC/GmbH), industry code lookups.
-3. **`goldenmatch[reference-address]`** extra: libpostal binding (we already have it as an opt-in for `pyap`/`usaddress`).
-4. **Benchmarks**: NCVR with reference-people pack, OpenCorporates merge with reference-business pack. Publish on the leaderboard (direction 4).
+1. **`goldenmatch[reference-people]`** extra: bundled name-frequency lookups, given-name aliases (William↔Bill), nickname tables, soundex variants per locale.
+2. **`goldenmatch[reference-business]`** extra: legal-form normalization (Inc/LLC/GmbH), industry code lookups, OpenCorporates company-name variants.
+3. **`goldenmatch[reference-address]`** extra: libpostal binding (we already have it as opt-in for `pyap`/`usaddress`), CASS-style normalization.
+4. **Scorer integration**: `name_freq_weighted_jw` becomes a first-class scorer; `address_libpostal_norm` becomes a transform.
+5. **Benchmarks**: NCVR with reference-people pack, OpenCorporates merge with reference-business pack. Publish on the leaderboard (direction 5).
 
 **Effort.** 4–6 weeks. Half is data-licensing diligence; half is integration.
 
@@ -274,132 +269,143 @@ Each item: **thesis · evidence · ship · effort · risk**.
 
 ---
 
-### Direction 9 — Stewardship governance (multi-user web + RBAC + audit)
+### Direction 9 — Active learning, as algorithm not as UX
 
-**Thesis.** Today's web workbench is "single-process, no auth — for the dev-on-a-laptop case". Every enterprise pilot fails on this. A multi-user web with at-minimum email-based auth, role separation (admin / steward / reviewer), and an immutable audit log is a hard gate for any deal over $50K.
+**Thesis.** `core/active_sampling.py` exists. The algorithm's quality — which 20 pairs to label — is the engine differentiator, not the UI that shows them. Make the sampling provably optimal (uncertainty + diversity + cluster coverage) and the engine becomes the one Dedupe and Splink both have to copy. UI lives in golden-showcase.
 
 **Evidence.**
-- `web/` README explicitly says single-user, dev-only.
-- Reltio's product moat is "the steward queue"; ours is functionally equivalent in `core/review_queue.py` but unhardened.
-- This direction is a deal-unblocker, not a moat. Don't over-invest, but ship it.
+- `core/active_sampling.py` already wired into Learning Memory.
+- Threshold learner already triggers at 10 corrections.
+- Dedupe's reputation rests on its active learning; the algorithm is publicly documented.
 
 **Ship.**
-1. **Auth layer** — start with magic-link email + GitHub SSO. Don't build SAML v1.
-2. **Role model** — admin / steward / reviewer / read-only.
-3. **Audit log** — append-only table of every label, merge, unmerge, config save. Already half-built in `core/lineage.py`.
-4. **Review queue UI** — the existing `core/review_queue.py` API → web pages with assignment + SLA timer.
-5. **Multi-project tenancy** — projects already exist as a directory layout; promote to first-class.
+1. **Confidence-calibrated uncertainty sampling.** Today the sampler is heuristic; replace with margin-from-decision-boundary + conformal prediction intervals.
+2. **Diversity via cluster coverage.** No two consecutive label asks come from the same cluster bucket.
+3. **Adversarial-pair injection.** Sometimes show a clearly-positive or clearly-negative pair to detect labeler drift.
+4. **Cold-start regime.** First 5 labels follow a different policy (broad coverage); next 5 narrow on the boundary.
+5. **Benchmark.** On NCVR, 20 active-learned labels should beat 200 random-sampled labels at threshold tuning. Publish.
 
-**Effort.** 4–6 weeks. The `[web]` extra picks up dependencies but the architecture decision is single-process today; lifting to multi-process is the real work.
+**Effort.** 3–4 weeks.
 
-**Risk.** Medium. Authentication done badly is worse than none. Use a well-known library (Authlib + FastAPI-Users) and resist the urge to build.
+**Risk.** Low. Worst case it doesn't beat the existing heuristic; we kept the heuristic.
 
 ---
 
-### Direction 10 — Streaming/CDC parity with offline
+### Direction 10 — Streaming/CDC parity with batch
 
-**Thesis.** "Same config that scored your batch overnight scores the next inserted row in <100ms" is a positioning we can almost claim. `core/streaming.py` exists. `core/match_one.py` exists. The Postgres extension (direction 3) makes this trigger-driven. Position GoldenMatch as the only ER tool where batch and streaming use the *same scorer code*.
+**Thesis.** "The same scorer code that ran your batch overnight scores the next inserted row in <100ms" is a positioning we can almost claim. `core/streaming.py` exists. `core/match_one.py` exists. The Postgres extension (direction 6) makes it trigger-driven. Position the engine as the only one where batch and streaming use the same scorer code.
 
 **Evidence.**
-- `core/streaming.py` and `core/match_one.py` are both shipped.
-- `goldenmatch/CLAUDE.md` notes `match_one()` returns empty list for exact matchkeys — fixable.
-- Reltio and Tilores both market real-time; both are slow relative to a co-located Postgres trigger.
+- `core/streaming.py` and `core/match_one.py` shipped.
+- `goldenmatch/CLAUDE.md`: `match_one()` returns empty list for exact matchkeys (broken edge case — fixable).
+- No OSS competitor has byte-identical batch/streaming results.
 
 **Ship.**
 1. **`gm.match_one_async()`** with sub-100ms p95 on a Postgres-co-located deployment.
-2. **CDC integration** — Debezium → Kafka → `match_one_async`. Reference deploy.
-3. **Streaming Learning Memory replay** — corrections apply to streaming events identically to batch.
-4. **Latency benchmark** alongside the accuracy leaderboard.
+2. **CDC reference deploy.** Debezium → Kafka → `match_one_async`. Document the wiring; ship the docker-compose.
+3. **Streaming Learning Memory replay.** Corrections apply to streaming events identically to batch. Already mostly true; close the gaps.
+4. **Latency benchmark on the leaderboard** (direction 5).
 
 **Effort.** 3–5 weeks v1.
 
-**Risk.** Medium. Latency claims are easy to make and hard to defend; benchmark them publicly.
+**Risk.** Medium. Latency claims are easy to make and hard to defend; benchmark publicly.
 
 ---
 
-### Direction 11 — Vertical accuracy packs with measurable wins
+### Direction 11 — TS parity catch-up on the asymmetric features
 
-**Thesis.** "7 domain packs" is currently a footnote. Pick three (people, business, healthcare) and turn each into a measurable benchmark win — a published F1 number against the segment's reference dataset, with a "vs Senzing/Tilores/Tamr" cell where we have third-party numbers.
+**Thesis.** `tests/parity/` locks scorer parity at 4-decimal Py↔TS. Beyond scorers, the TS port is asymmetric — autoconfig controller, PPRL auto-config, learned blocking, plugin SDK, reference data (direction 8) all live in Python. Closing the asymmetry keeps the polyglot story honest.
 
 **Evidence.**
-- Domain packs in `goldenmatch/domains/` are configs, not benchmarks.
-- NCVR (people) → we already have 0.972; cite it as "vs Senzing G2 published [X]".
-- OpenCorporates (business) → no published GoldenMatch number.
-- MIMIC-III patient deduplication (healthcare) → academic benchmark, no GoldenMatch entry.
+- TS version is 0.4.x; Python is 1.9.x. The version gap reflects feature gap.
+- TS package shipped 478 tests; Python ships ~1319.
+- Edge runtimes (Vercel Edge, Cloudflare Workers) are an engine reach we own only in TS.
+- `core/autoconfig_controller.py` has no TS analog; `_signals_view` parity only at the legacy-signals layer.
 
 **Ship.**
-1. Run benchmarks for the three packs.
-2. Publish to the leaderboard (direction 4).
-3. Each pack ships with a "what this pack does" doc and a "against [vendor], on [dataset]" table.
+1. **Auto-config controller v2 ports to TS** alongside the Python build (direction 3) — design with parity from the start.
+2. **PPRL auto-config to TS.** Privacy-preserving in the browser is a category nobody else has.
+3. **Learned blocking to TS.** Currently Python-only; needed for parity claims to be honest.
+4. **Plugin SDK to TS.** TS has the plugin protocol but lacks the registry/discovery surface Python has.
+5. **Parity harness extended** to cover autoconfig outputs at JSON-equality level.
 
-**Effort.** 3 weeks. Mostly running benchmarks and writing the page.
+**Effort.** 6–8 weeks staged across releases. Don't try to land it in one PR.
+
+**Risk.** Low-medium. Bigger Python releases without TS parity gradually erode the polyglot pitch.
+
+---
+
+### Direction 12 — Engine-side explainability + counterfactuals
+
+**Thesis.** Every match the engine emits should answer "what tipped this pair, and what would have flipped it?". Today we ship per-pair NL prose and per-field scores; add counterfactual minimal-edits ("if `address` had been `123 Main` instead of `123 Maine`, score would have dropped from 0.91 to 0.78") and the engine becomes the only one whose outputs are auditable in the way regulated industries need.
+
+**Evidence.**
+- `core/explain.py` + `core/explainer.py` + `core/diff.py` + `core/lineage.py` are already shipped.
+- One-line NL prose explanations per pair already in the web UI.
+- No competitor publishes counterfactual explanations as engine output. Tamr / Reltio describe their decisions; they don't show what would have flipped them.
+- Regulated industries (healthcare, finance, KYC) need this for compliance, not for nice-to-have.
+
+**Ship.**
+1. **`gm.explain_pair_counterfactual(a, b, config)`** returns the minimal field-edit set that would flip the decision.
+2. **Per-cluster explanations** that name the bottleneck pair and what it would take to split.
+3. **Lineage as an engine output**, not a debug log. JSON schema, queryable.
+4. **Confidence calibration plot** as part of the standard report — "your decisions at threshold 0.85 are right 94% of the time on this dataset".
+
+**Effort.** 3–5 weeks. Counterfactual generation is well-trodden; integration into the existing explainer is the work.
 
 **Risk.** Low.
 
 ---
 
-### Direction 12 — Compliance posture (SOC 2 readiness statement, HIPAA mapping, GDPR)
+## What NOT to do (engine traps)
 
-**Thesis.** A two-page "security & compliance" doc is enough to unblock 60% of mid-market pilots. Going for actual SOC 2 Type II costs $25–50K and 4–6 months; the *readiness statement* costs a week.
-
-**Ship.**
-1. **`/security` page** — encryption (TLS in MCP, at-rest in Postgres if user encrypts), data flow (everything is on-prem unless you opt into cloud), no-PII guarantee for telemetry (telemetry is opt-in if at all).
-2. **HIPAA appendix** — PPRL is the actual differentiator; lean on it. Document the BAA-shaped path.
-3. **GDPR appendix** — right to erasure means rolling back Learning Memory + lineage; document.
-4. **`docs/threat-model.md`** — explicit list of what we protect against and what we don't.
-
-**Effort.** 1–2 weeks.
-
-**Risk.** Low engineering. Wording must be true; involve legal once cloud SaaS launches (direction 5).
+1. **Don't add a new scorer just because it's in a paper.** The 2026-05-04 audit lesson applies: measure first. Today's ensemble is broad; another scorer adds maintenance, often loses accuracy.
+2. **Don't try to beat Ditto on Abt-Buy with a hand-tuned recipe.** That's a fine-tuned-transformer race. Win it with hybrid distillation (direction 4) and reference data (direction 8); lose the F1 vanity battle gracefully.
+3. **Don't fragment the polyglot story.** Every Python feature lands without a TS plan is a bill paid later. Direction 11 exists for a reason.
+4. **Don't ship more domain packs without benchmarks** — three benchmarked packs beat seven unbenchmarked.
+5. **Don't promise scale we haven't measured.** Today's "10M+ records with Ray backend" is technically true and operationally weak. Direction 1 fixes the *measured* claim; until then, soften the README.
+6. **Don't add SQL UDFs in `packages/rust/extensions/` ahead of the Python API parity.** The extension should never lead the engine; it should track it. Otherwise we're maintaining two engines.
+7. **Don't make the auto-config controller smarter without making it more honest.** Predicted-F1 with bad uncertainty (direction 3 item 1) is worse than no prediction. Calibrate or skip.
+8. **Don't deepen LLM-dependence in the borderline before distillation lands** (direction 4). Currently the engine is "LLM-augmented"; without distillation, it slides toward "LLM-dependent". That's a moat for OpenAI, not for us.
 
 ---
 
-## What NOT to do
+## Suggested 90-day cuts (engine-only)
 
-These are the strategic traps:
+If you can fund **one** direction in the next quarter, fund **direction 1 (throughput)**. The 500K cliff is the engine's weakest claim. Lift it, every other story gets more credible.
 
-1. **Don't build a competing MDM hub.** Tamr and Reltio have a 10-year head start on the workflow primitives (data steward queues, golden-record approval, source-priority rules) and the enterprise sales motion. Position GoldenMatch as the engine. If a buyer wants a hub, they should buy Reltio and put GoldenMatch underneath, or pick a smaller MDM vendor that embeds us.
-2. **Don't try to out-curate Senzing's reference data.** They've spent 25 years on it. Ship the bundled-OSS reference packs (direction 8), be honest about the gap, beat them on price + composability + LLM-native.
-3. **Don't ship more "domain packs" without benchmarks.** Three benchmarked packs beat seven unbenchmarked.
-4. **Don't add new data-quality features without re-running the perf audit's measurement protocol** (`docs/superpowers/specs/2026-05-02-performance-audit-checklist.md`). The lesson — *measure wall-clock with the real workload before designing* — was paid for in shipped optimizations that turned out small. Don't pay it again.
-5. **Don't fragment the polyglot story.** Every new feature must answer "what's the parity story for TS?" and "does the SQL extension expose this?". Letting Python drift ahead of TS once is a churn that costs more than skipping the feature.
-6. **Don't promise scale we haven't measured.** Today's claim "10M+ records with Ray backend" is technically true and operationally weak. Either invest (direction 1) or stop saying it.
+If **three**:
 
----
+1. **Weeks 1–4: direction 1** (throughput) + spec direction 2 (identity graph data model) in parallel.
+2. **Weeks 5–8: direction 3** (auto-config v2) + direction 5 (leaderboard harness). The accuracy story tightens around the same week.
+3. **Weeks 9–12: direction 4** (LLM distillation) + direction 9 (active-learning algorithm). The engine becomes accuracy-equivalent without LLM dependence; corrections become more sample-efficient.
 
-## Suggested 90-day cuts
+If **five**, add:
 
-If you can fund only one direction in Q3, fund **direction 1 (throughput ceiling)**. It's the single biggest credibility tax we pay, and it makes everything else more honest.
+- **Direction 2 (identity graph) v1 ships** — long-cycle bet; the others compound around it.
+- **Direction 7 (Rust hot-path)** *only if direction 1's profiling supports it*. If the bottleneck is elsewhere, swap for direction 8 (reference data).
 
-If you can fund three, sequence:
+Defer to 2026-Q4:
 
-1. **Weeks 1–4: direction 1** (throughput) + start direction 4 (leaderboard) in the background. Both are mostly engineering, parallelizable across people.
-2. **Weeks 5–8: direction 7** (active learning UX) + direction 11 (vertical benchmarks → leaderboard). UX and accuracy stories ship together.
-3. **Weeks 9–12: direction 6** (Snowflake Native App submission — start the partner review queue now even if v1 isn't ready) + direction 9 (stewardship governance v1).
-
-If you can fund five, add:
-
-- **Direction 2** (identity graph) — start a real spec in week 1, shape the data model in weeks 2–4, ship v1 in weeks 5–12. This is the long-cycle bet; the others compound around it.
-- **Direction 5** (cloud SaaS) — start the auth + metering work in week 5, public beta in week 12. Don't launch with strong SLAs; price to early-adopter risk.
-
-Defer: direction 3 (Postgres extension parity) until direction 2 lands the data model, since the extension is the SQL-native shape of the same graph. Direction 8 (reference data) and 10 (streaming) are leverage multipliers for direction 2 — schedule them after.
+- **Direction 6 (Postgres extension parity)** — sequenced after direction 2 lands the identity graph data model, since the extension is the SQL-native shape of the same graph.
+- **Direction 10 (streaming parity)** — depends on direction 1's pair-emission refactor and direction 6's trigger model.
+- **Direction 11 (TS catch-up)** — co-design with direction 3, then ship as a Q4 release pulse.
+- **Direction 12 (counterfactuals)** — regulated-industry pull; nice-to-have until a buyer asks.
 
 ---
 
-## Open questions for the next strategy iteration
+## Open questions for the next iteration
 
-These are the ones I couldn't answer from the repo alone:
-
-1. **Who is the buyer today?** OSS users are not customers. Map the last 20 inbound conversations: are they "data engineer at a startup", "data steward at a mid-market", or "ML lead at a Fortune 500"? Each implies a very different next direction.
-2. **What's our existing GitHub stars curve telling us?** Stars by week + referrer would tell us which content (MCP? PPRL? Web UI?) actually drives the funnel.
-3. **What's the Smithery MCP usage pattern?** If the hosted MCP is getting real traffic, that's the cloud-SaaS GTM (direction 5) signal. If it's getting laptop-developer traffic, the headline stays OSS.
-4. **What benchmarks do enterprise prospects ask about by name?** The ones we measure (DBLP-ACM, Febrl, NCVR, Abt-Buy) are academic. If buyers ask "did you run on the [vendor's reference] dataset?", we should publish that.
-5. **Pricing intuition for `goldenmatch.cloud`.** $0.10/1K is a guess. Survey 5 OSS-paying-for-cloud users; the right number is probably 3–10× lower than we think.
+1. **What's the measured wall on 5M rows today?** Direction 1 hinges on this number. We don't have it.
+2. **Does the auto-config controller's cross-run memory generalize at all today?** Direction 3 item 3 assumes it doesn't; verify before designing.
+3. **How many cached LLM votes does an average user accumulate?** Direction 4's distillation viability depends on it. If <50, the warm-up is too long.
+4. **Which Rust hot-path candidate is biggest?** Direction 7 doesn't pick one without measurement.
+5. **What's the right adversarial benchmark?** Direction 3 + 5 both need it; nobody has shipped a canonical adversarial ER benchmark. Designing one is its own contribution.
 
 ---
 
-## Closing note
+## Closing
 
-The shortest version of this doc: **GoldenMatch is technically ahead in zero-config and AI-native; commercially it's a `pip install` business. The next year's bets are about turning technical lead into distribution and trust.** None of the directions above require us to invent new science. They require us to ship things that match the ambition the README already claims.
+The shortest version: **the engine is already the most consistent ER engine in OSS. The next year's bets are about (a) lifting the scale ceiling, (b) emitting a graph instead of a clusters dict, (c) keeping the auto-config moat from being copied, (d) closing the LLM-dependence gap, (e) running competitors weekly so we know who's catching up.** Five engine moves, all measurable, none requiring us to invent new science.
 
 Pick three. Sequence them. Measure them.
