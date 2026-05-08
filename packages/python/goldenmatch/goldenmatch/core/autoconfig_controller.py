@@ -2,12 +2,6 @@
 
 Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-design.md
       §New: AutoConfigController, §Sample selection, §Pipeline integration.
-
-Task 4.1 implements: skeleton, ControllerBudget, StopReason, _RED_PROFILE,
-pathological-input gates, _take_sample, and a stub run() that handles the
-gates and returns v0 without entering the loop.
-
-The iteration loop body lands in Task 4.2 and _finalize in Task 4.3.
 """
 from __future__ import annotations
 from contextvars import ContextVar
@@ -99,9 +93,10 @@ def _assemble_v0_history_entry(
             wall_clock_ms=int((time.time() - t0) * 1000),
         )
     except Exception as exc:
-        logger.debug(
-            "auto-config: could not build v0 virtual history entry (%s: %s); "
-            "skipping — pick_committed will select from regular iterations only",
+        logger.warning(
+            "auto-config: could not build v0 virtual history entry "
+            "(%s: %s); pick_committed will select from regular iterations only — "
+            "committed config may be worse than v0",
             type(exc).__name__, exc,
         )
         return None
@@ -140,10 +135,7 @@ class ControllerBudget:
 
 
 class AutoConfigController:
-    """Drives iterative refit. Task 4.1 supplies skeleton + gates + sampling.
-
-    The actual iteration loop is in Task 4.2; finalize is in Task 4.3.
-    """
+    """Drives iterative refit: pathological-input gates, sampling, policy loop, finalize."""
 
     def __init__(
         self,
@@ -332,27 +324,21 @@ class AutoConfigController:
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
             failing = _first_red_subprofile(best_entry.profile)
-            try:
-                logger.warning(
-                    "auto-config committed best-effort RED config "
-                    "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
-                    "downstream pipeline will run but output may be low-precision",
-                    iter_label,
-                    history.stop_reason.name if history.stop_reason else "unset",
-                    failing,
-                )
-            except Exception:
-                pass
+            logger.warning(
+                "auto-config committed best-effort RED config "
+                "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
+                "downstream pipeline will run but output may be low-precision",
+                iter_label,
+                history.stop_reason.name if history.stop_reason else "unset",
+                failing,
+            )
         elif committed_health == HealthVerdict.YELLOW:
-            try:
-                logger.info(
-                    "auto-config committed YELLOW config "
-                    "(iter=%s, stop_reason=%s)",
-                    iter_label,
-                    history.stop_reason.name if history.stop_reason else "unset",
-                )
-            except Exception:
-                pass
+            logger.info(
+                "auto-config committed YELLOW config "
+                "(iter=%s, stop_reason=%s)",
+                iter_label,
+                history.stop_reason.name if history.stop_reason else "unset",
+            )
         # health == GREEN: silent success
 
         # Post-iteration: decorate committed config with LLM scorer if appropriate.

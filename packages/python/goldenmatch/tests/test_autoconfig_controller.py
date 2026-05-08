@@ -3,9 +3,10 @@ import polars as pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, DataProfile
 from goldenmatch.core.autoconfig_controller import (
-    AutoConfigController, ControllerBudget, StopReason, _RED_PROFILE,
+    AutoConfigController, ControllerBudget, _RED_PROFILE,
     ConfigValidationError, _LAST_CONTROLLER_RUN,
 )
+from goldenmatch.core.complexity_profile import StopReason
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
 from goldenmatch.core.autoconfig_history import RunHistory
 

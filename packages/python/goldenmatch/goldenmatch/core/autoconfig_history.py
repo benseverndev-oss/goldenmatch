@@ -30,17 +30,25 @@ class ErrorRecord:
 class HistoryEntry:
     """One iteration's record in the controller's audit trail.
 
-    Invariant: exactly one of ``error`` and ``profile`` is non-None,
-    never both, never neither. The controller's iteration-loop append
-    site enforces this — every code path either records a real profile
-    (success) or records an ``ErrorRecord`` paired with the
-    ``_RED_PROFILE_SENTINEL`` (failure path treats sentinel as the
-    profile slot for type compatibility, but the entry's ``error`` is
-    set, indicating no real profile was produced).
+    Invariant: ``error`` is the sole discriminant for success vs failure.
 
-    ``RunHistory.pick_committed()``'s filter relies on this invariant
-    (``error is None and profile is not None``); the invariant is
-    documented but not defensively re-checked at the filter site.
+    - **Success path:** ``error is None`` and ``profile`` is a real
+      ``ComplexityProfile`` (the iteration's measurement).
+    - **Failure path:** ``error`` is set (an ``ErrorRecord``) and
+      ``profile`` is the module-level ``_RED_PROFILE`` sentinel
+      (defined in ``autoconfig_controller.py``) — never ``None``, but
+      also not a real measurement. The sentinel is used only so that
+      type-checkers see ``profile: ComplexityProfile`` rather than
+      ``ComplexityProfile | None``.
+
+    The controller's iteration loop and ``_assemble_v0_history_entry``
+    (the post-loop virtual-v0 append site) both maintain this invariant.
+
+    ``RunHistory.pick_committed()``'s filter is
+    ``e.error is None and e.profile is not None``. The ``profile is not
+    None`` clause is defensive — under the invariant it's always true on
+    the success path — but guards against accidental misuse if a future
+    code path ever passes ``profile=None``.
     """
     iteration: int
     config: Any                # GoldenMatchConfig at runtime; Any to avoid import cycle
@@ -119,6 +127,12 @@ class RunHistory:
         protects against the "everything matches" pathology. Typical
         value: 0.9. Disabled by default to preserve backward compat.
         """
+        if (precision_collapse_floor is not None
+                and not (0.0 <= precision_collapse_floor <= 1.0)):
+            raise ValueError(
+                f"precision_collapse_floor must be in [0, 1]; got "
+                f"{precision_collapse_floor!r}"
+            )
         survivors = [
             e for e in self.entries
             if e.error is None and e.profile is not None

@@ -452,3 +452,17 @@ def test_pick_committed_precision_floor_default_is_off():
     best = h.pick_committed()
     assert best is not None
     assert best.iteration == 0   # higher mass_separation wins (0.95-0.10=0.85 vs 0.40-0.10=0.30)
+
+
+def test_pick_committed_floor_rejects_out_of_range():
+    """precision_collapse_floor must be in [0, 1]; values outside raise."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    h.entries.append(_make_red_history_entry(0, mass_above=0.5, mass_borderline=0.0))
+    with pytest.raises(ValueError, match=r"precision_collapse_floor"):
+        h.pick_committed(precision_collapse_floor=1.5)
+    with pytest.raises(ValueError, match=r"precision_collapse_floor"):
+        h.pick_committed(precision_collapse_floor=-0.1)
+    # Boundary values are valid
+    h.pick_committed(precision_collapse_floor=0.0)   # no raise
+    h.pick_committed(precision_collapse_floor=1.0)   # no raise
