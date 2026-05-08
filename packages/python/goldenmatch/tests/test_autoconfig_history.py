@@ -207,3 +207,19 @@ def test_prior_runs_default_empty_list():
     # Not frozen — caller can mutate, but v1 leaves it empty
     h.prior_runs.append("v2-hook")
     assert h.prior_runs == ["v2-hook"]
+
+
+def test_runhistory_stop_reason_default_is_none():
+    """Default stop_reason is None; controller sets it at each break point."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    assert h.stop_reason is None
+
+
+def test_runhistory_stop_reason_can_be_set():
+    """stop_reason is mutable (the controller writes to it)."""
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import StopReason
+    h = RunHistory()
+    h.stop_reason = StopReason.BUDGET_ITERATIONS
+    assert h.stop_reason == StopReason.BUDGET_ITERATIONS

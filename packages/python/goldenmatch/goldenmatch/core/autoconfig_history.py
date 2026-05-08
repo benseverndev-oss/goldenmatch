@@ -8,7 +8,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
-from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict
+from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, StopReason
 
 
 @dataclass
@@ -42,6 +42,7 @@ class RunHistory:
     full_vs_sample_drift: float | None = None
     elapsed: timedelta = field(default_factory=lambda: timedelta(0))
     prior_runs: list[Any] = field(default_factory=list)  # v2 hook for Learning Memory
+    stop_reason: StopReason | None = None
 
     @property
     def iteration(self) -> int:
