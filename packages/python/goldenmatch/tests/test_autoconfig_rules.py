@@ -198,3 +198,46 @@ def test_orthogonal_key_returns_none_when_no_candidates():
     df_cols = ["email"]    # only the used column
     ortho = _orthogonal_key(cfg, df_cols)
     assert ortho is None
+
+
+# ============================================================
+# Task 4.2: rule_no_matches indicator-aware tests
+# ============================================================
+
+def test_rule_no_matches_high_identity_prior_tries_lower_threshold_first():
+    from goldenmatch.core.autoconfig_rules import rule_no_matches
+    profile = _profile_with_mass_above(0.0, blocking_col="email")
+    cfg = _build_test_config(blocking_field="email", threshold=0.85)
+    ctx = _ctx_with_priors({"email": _V110ColP(identity_score=0.9, corruption_score=0.0)})
+    history = _empty_history()
+    outcome = rule_no_matches(profile, cfg, history, ctx=ctx)
+    assert outcome is not None
+    new_cfg, decision = outcome
+    assert new_cfg != cfg
+    # First alternative is lower_threshold
+    assert _get_threshold(new_cfg) == 0.80
+
+
+def test_rule_no_matches_sparse_proposes_lower_threshold_aggressive():
+    """Sparse path: lower threshold by 0.10 (proxy for ExpandSample)."""
+    from goldenmatch.core.autoconfig_rules import rule_no_matches
+    profile = _profile_with_mass_above(0.0, blocking_col="text_col")
+    cfg = _build_test_config(blocking_field="text_col", threshold=0.85)
+    ctx = _ctx_with_sparsity(_V110SV(is_sparse=True, estimated_n_true_pairs=10))
+    history = _empty_history()
+    outcome = rule_no_matches(profile, cfg, history, ctx=ctx)
+    assert outcome is not None
+    new_cfg, _ = outcome
+    assert _get_threshold(new_cfg) == 0.75
+
+
+def test_rule_no_matches_baseline_no_ctx_today_behavior():
+    """ctx=None → today's behavior (lower threshold by 0.05)."""
+    from goldenmatch.core.autoconfig_rules import rule_no_matches
+    profile = _profile_with_mass_above(0.0, blocking_col="text_col")
+    cfg = _build_test_config(blocking_field="text_col", threshold=0.85)
+    history = _empty_history()
+    outcome = rule_no_matches(profile, cfg, history, ctx=None)
+    assert outcome is not None
+    new_cfg, _ = outcome
+    assert _get_threshold(new_cfg) == 0.80

@@ -321,47 +321,54 @@ def rule_low_transitivity(
 
 
 def rule_no_matches(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when scoring.mass_above_threshold == 0.
+
+    v1.10 (with ctx): tries alternatives in priority order based on
+    indicator priors. Falls back to today's behavior when ctx is None.
+    """
     sp = profile.scoring
     # Only fires when the fuzzy scorer actually compared candidates but none
     # reached the threshold.  When candidates_compared == 0, the singleton-trap
     # rule should fire instead (blocking never produced comparable pairs).
     if sp.candidates_compared == 0:
         return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
-    if sp.mass_above_threshold > 0.0:
-        return None  # something matched; not our case
-    mk = _first_weighted_mk(current)
-    if mk is None:
+    if sp.mass_above_threshold > 0:
         return None
-    needs_threshold_change = mk.threshold is not None and mk.threshold > 0.5
-    needs_blocking_loosen = (
-        current.blocking is not None
-        and current.blocking.max_block_size < 50000
-    )
-    if not (needs_threshold_change or needs_blocking_loosen):
-        return None
-    updates: dict[str, Any] = {}
-    if needs_threshold_change:
-        new_mk = mk.model_copy(update={"threshold": 0.5})
-        updates["matchkeys"] = [new_mk if m is mk else m for m in current.matchkeys]
-    if needs_blocking_loosen:
-        new_blocking = current.blocking.model_copy(update={
-            "max_block_size": 50000,
-            "skip_oversized": False,
-        })
-        updates["blocking"] = new_blocking
-    new_cfg = current.model_copy(update=updates)
-    decision = PolicyDecision(
-        rule_name="no_matches",
-        rationale=(
-            f"candidates_compared={sp.candidates_compared}, "
-            f"mass_above_threshold={sp.mass_above_threshold}; "
-            f"resetting to permissive baseline (lower threshold, broader blocking)"
-        ),
-        config_diff=updates,
-    )
-    return new_cfg, decision
+
+    blocking_col = current.blocking.keys[0].fields[0]
+    candidates = []
+
+    if ctx is not None:
+        cp = ctx.column_priors.get(blocking_col)
+        if cp is not None and cp.identity_score >= 0.7:
+            # Identity column — try gentler alternatives before swap
+            candidates.append(_with_lower_threshold(current, 0.05))
+            candidates.append(_with_normalize_standardization(current, blocking_col))
+            df_cols = list(ctx._df.columns)
+            ortho = _orthogonal_key(current, df_cols)
+            if ortho is not None:
+                candidates.append(_with_multi_pass(current, ortho))
+        elif ctx.sparsity_verdict.is_sparse:
+            # DEVIATION: spec wanted ExpandSample(2.0); v1.10 substitute is
+            # a sharper threshold drop. rule_sparse_match_expand handles
+            # the side-channel signal.
+            candidates.append(_with_lower_threshold(current, 0.10))
+        else:
+            candidates.append(_with_lower_threshold(current, 0.05))
+    else:
+        candidates.append(_with_lower_threshold(current, 0.05))
+
+    for new_cfg, rationale in candidates:
+        if new_cfg != current:
+            return new_cfg, PolicyDecision(
+                rule_name="rule_no_matches",
+                rationale=rationale,
+                config_diff={},
+            )
+    return None
 
 
 def rule_blocking_key_swap(

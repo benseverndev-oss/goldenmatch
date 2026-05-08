@@ -374,6 +374,9 @@ def test_rule_low_transitivity_floors_at_0_5():
 
 # Rule 5
 def test_rule_no_matches_resets_threshold_and_broadens_blocking():
+    # v1.10: rule_no_matches now lowers threshold incrementally by 0.05 per iteration
+    # (ctx=None path). Old one-shot reset-to-0.5 + broadened-blocking behavior replaced
+    # by indicator-aware step-down. First call: 0.85 → 0.80.
     cfg = _config_with_blocking(threshold=0.85)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
@@ -388,8 +391,7 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
     out = rule_no_matches(profile, cfg, RunHistory())
     assert out is not None
     new_cfg, _ = out
-    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.5)
-    assert new_cfg.blocking.max_block_size >= 50000
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.80)
 
 
 def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
