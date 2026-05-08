@@ -192,6 +192,8 @@ class MatchkeyConfig(BaseModel):
     rerank: bool = False
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_band: float = 0.1
+    # v1.11: negative evidence fields — default-None for v1.10 cache compat
+    negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
     em_iterations: int = 20
     convergence_threshold: float = 0.001
