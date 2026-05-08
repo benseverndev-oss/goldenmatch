@@ -352,6 +352,55 @@ def test_run_budget_time_exit(small_df):
     config, profile, history = controller.run(small_df)
     # Should bail out quickly via BUDGET_TIME or BUDGET_ITERATIONS — either is acceptable
     assert history.iteration >= 1
+    assert history.stop_reason in (StopReason.BUDGET_TIME, StopReason.BUDGET_ITERATIONS)
+
+
+def test_stop_reason_budget_time_exit(small_df):
+    """Wall-clock budget exhaustion → stop_reason=BUDGET_TIME.
+
+    Uses a slow runner (10ms sleep per iteration) and a 0.1ms wall-clock
+    budget so the time guard fires before the second iteration starts.
+    """
+    import time
+
+    red = _red_blocking_subprofile_dict()
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(max_iterations=10, max_seconds=0.0001,
+                                sample_skip_below=1),
+    )
+
+    def slow_red_runner(sample, ref, config):
+        time.sleep(0.01)
+        from goldenmatch.core.profile_emitter import current_emitter
+        e = current_emitter()
+        if "blocking" in red: e.set_blocking(red["blocking"])
+        if "scoring" in red: e.set_scoring(red["scoring"])
+        if "cluster" in red: e.set_cluster(red["cluster"])
+        if "matchkey" in red: e.set_matchkey(red["matchkey"])
+        if "data" in red: e.set_data(red["data"])
+
+    _green_subs = _green_subprofiles()
+    controller._run_pipeline_sample = slow_red_runner  # type: ignore[method-assign]
+    controller._finalize = MagicMock(return_value=ComplexityProfile(**_green_subs))
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.BUDGET_TIME
+
+
+def test_stop_reason_policy_no_progress_when_policy_returns_same_config(small_df):
+    """Policy proposing the same config → stop_reason=POLICY_NO_PROGRESS."""
+    class _NoProgressPolicy:
+        def propose(self, profile, config, history):
+            return config  # same instance — equal to config_n
+
+    red = _red_blocking_subprofile_dict()
+    controller = _make_controller_with_mocked_runner(
+        [red, red, red],
+        max_iterations=5,
+        policy=_NoProgressPolicy(),
+    )
+    config, profile, history = controller.run(small_df)
+    assert history.stop_reason == StopReason.POLICY_NO_PROGRESS
 
 
 # ============================================================

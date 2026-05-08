@@ -248,10 +248,11 @@ class AutoConfigController:
                 if e.profile.health() == HealthVerdict.RED and e.error is None
             )
             logger.error(
-                "auto-config controller: every iteration errored (n=%d, "
-                "stop_reason=%s); falling back to v0 + RED sentinel. "
+                "auto-config controller: every iteration errored (n_errored=%d, "
+                "n_red=%d, stop_reason=%s); falling back to v0 + RED sentinel. "
                 "Inspect _LAST_CONTROLLER_RUN.get() for tracebacks.",
                 n_errored,
+                n_red,
                 history.stop_reason.name if history.stop_reason else "unset",
             )
             _LAST_CONTROLLER_RUN.set(history)

@@ -1349,6 +1349,13 @@ def test_autoconfig_parity_pins_unchanged():
     only. CI skips it gracefully. Contributors who want to exercise the
     parity guard should run `python tests/parity/capture_autoconfig_output.py`
     after pulling the Leipzig DBLP-ACM dataset into tests/benchmarks/datasets/.
+
+    **v1.9 update:** the `dblp_acm` pin was regenerated to reflect best-effort
+    RED commit semantics. In v1.8, this small synthetic fixture (50 rows,
+    designed to be RED-provoking) fell back to the v0 config. In v1.9, the
+    controller commits the best RED entry from history (multi_pass blocking,
+    threshold=0.5). Real-benchmark non-regression is verified separately by
+    the `measure_dblp_acm_controller.py` benchmark script.
     """
     import json
     import sys
