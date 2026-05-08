@@ -1164,3 +1164,53 @@ def test_controller_appends_v0_virtual_entry_before_pick_committed(small_df):
     v0_entries = [e for e in history.entries if e.iteration == -1]
     assert len(v0_entries) == 1
     assert v0_entries[0].decision is None
+
+
+# ============================================================
+# Task 3.1 — IndicatorContext
+# ============================================================
+
+def test_indicator_context_memoizes_calls():
+    """ctx.full_pop_matchkey_hits memoizes by (col)."""
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"email": ["a@x.com", "a@x.com", "b@x.com"]})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(is_sparse=False, estimated_n_true_pairs=1),
+    )
+    h1 = ctx.full_pop_matchkey_hits("email")
+    h2 = ctx.full_pop_matchkey_hits("email")
+    assert h1 == h2
+    assert ("full_pop_matchkey_hits", "email") in ctx._memo
+
+
+def test_indicator_context_has_fired_one_shot_guard():
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    ctx = IndicatorContext(
+        df=pl.DataFrame(), column_priors={},
+        sparsity_verdict=SparsityVerdict(is_sparse=True, estimated_n_true_pairs=0),
+    )
+    assert ctx.has_fired("rule_x") is False
+    ctx.mark_fired("rule_x")
+    assert ctx.has_fired("rule_x") is True
+
+
+def test_indicator_context_cross_blocking_overlap_canonicalizes_keys():
+    """Same key pair in different orders gets same memoized result."""
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"city": ["nyc"] * 10, "state": ["NY"] * 10})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    o1 = ctx.cross_blocking_overlap("city", "state")
+    o2 = ctx.cross_blocking_overlap("state", "city")
+    assert o1 == o2
+    # Memo key uses sorted ordering
+    assert ("cross_blocking_overlap", "city", "state") in ctx._memo

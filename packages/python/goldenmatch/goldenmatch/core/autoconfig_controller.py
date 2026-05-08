@@ -17,6 +17,7 @@ import polars as pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
     ComplexityProfile, DataProfile, HealthVerdict, StopReason,
+    ColumnPrior, SparsityVerdict,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
@@ -35,6 +36,74 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 _LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
     "_LAST_CONTROLLER_RUN", default=None
 )
+
+
+class IndicatorContext:
+    """v1.10: per-run object threading indicators through the policy/rule chain.
+
+    Memoizes lazy indicator calls by (function_name, args). Tracks
+    one-shot rule firings for guards like rule_sparse_match_expand.
+
+    Spec: docs/superpowers/specs/2026-05-08-autoconfig-indicators-design.md
+          §Architecture #2.
+
+    Fast-mode: when GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, the two
+    expensive lazy methods (full_pop_matchkey_hits, cross_blocking_overlap)
+    return None unconditionally — preserves v1.9 wall-clock at the cost of
+    indicator-driven gains. (Wired in Task 6.1.5; current Phase 3 omits the
+    fast-mode guard — Task 6.1.5 adds it.)
+    """
+
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        column_priors: dict[str, ColumnPrior],
+        sparsity_verdict: SparsityVerdict,
+    ) -> None:
+        self._df = df
+        self._column_priors = column_priors
+        self._sparsity_verdict = sparsity_verdict
+        self._memo: dict[tuple[str, ...], Any] = {}
+        self._fired: set[str] = set()
+
+    @property
+    def column_priors(self) -> dict[str, ColumnPrior]:
+        return self._column_priors
+
+    @property
+    def sparsity_verdict(self) -> SparsityVerdict:
+        return self._sparsity_verdict
+
+    def full_pop_matchkey_hits(self, blocking_col: str) -> int | None:
+        from goldenmatch.core.indicators import estimate_full_pop_hits
+        key = ("full_pop_matchkey_hits", blocking_col)
+        if key not in self._memo:
+            self._memo[key] = estimate_full_pop_hits(self._df, blocking_col)
+        return self._memo[key]
+
+    def cross_blocking_overlap(self, key_a: str, key_b: str) -> float | None:
+        from goldenmatch.core.indicators import compute_cross_blocking_overlap
+        a, b = sorted([key_a, key_b])
+        key = ("cross_blocking_overlap", a, b)
+        if key not in self._memo:
+            self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
+        return self._memo[key]
+
+    def has_fired(self, rule_name: str) -> bool:
+        return rule_name in self._fired
+
+    def mark_fired(self, rule_name: str) -> None:
+        self._fired.add(rule_name)
+
+
+def _call_policy_propose(policy, profile, current, history, ctx):
+    """Call policy.propose with ctx if its signature accepts it; else 3-arg.
+    Preserves backward compat for custom policies that pre-date v1.10."""
+    import inspect
+    params = inspect.signature(policy.propose).parameters
+    if "ctx" in params:
+        return policy.propose(profile, current, history, ctx=ctx)
+    return policy.propose(profile, current, history)
 
 
 class ConfigValidationError(Exception):
@@ -275,7 +344,8 @@ class AutoConfigController:
                     break
 
                 # Ask policy for next config
-                config_next = self.policy.propose(profile_n, config_n, history)
+                ctx = None  # Phase 3 placeholder; Task 6.1 builds the real ctx
+                config_next = _call_policy_propose(self.policy, profile_n, config_n, history, ctx)
                 if config_next is None:
                     history.stop_reason = StopReason.POLICY_SATISFIED
                     break
