@@ -28,6 +28,21 @@ The controller has all the right *information* (column priors detect email/phone
 4. **DBLP-ACM/Febrl3/NCVR hold at v1.10 baselines** (no benchmark regression).
 5. **Wall-clock budget**: `auto_configure_df(df)` on 50K-row dataset completes within 100s (v1.10's 90s + ~10s for collision-signal indicator).
 
+### Composite math (back-of-envelope)
+
+DQbench weights are opaque without harness inspection; assume roughly equal thirds across T1/T2/T3. v1.10 baseline T1=88.9%, T2=69.0%, T3=53.8% → composite 66.91.
+
+| T3 landing | Composite (T1+T2 unchanged) | Verdict |
+|---|---|---|
+| 65% | ~70.6 | Fallback ≥70 met; primary ≥75 missed |
+| 70% | ~72.3 | Fallback met; primary still short |
+| 80% | ~75.7 | **Primary ≥75 met** |
+| 90% | ~79.0 | Primary met with margin |
+
+Diagnostic projected T3 88-93% (Lever 1 alone). Sanity bound: T3 ≥ 80% clears primary; T3 ≥ 65% clears fallback. If T3 lands 60-65%, we ship at fallback. If T3 lands < 60%, escalate (lever didn't work as expected).
+
+**Caveat**: this assumes T1+T2 don't regress. If v1.11's clustered-identity demotion fires inappropriately on T1 (which has clean emails), T1 could regress. Tier 4 v1.10-compat fixture is the guardrail.
+
 ## Non-goals (this spec)
 
 - **Fellegi-Sunter promotion (Lever 2 of original v1.11 brainstorm).** T3 diagnostic showed zero leverage — the discriminating fields aren't even in the matchkey, so FS m/u-training can't help. Queue for v1.12 if measurement on other datasets surfaces a use case.
@@ -70,11 +85,11 @@ final_score = max(0.0, score_positive - score_negative)
 
 ### 2. New rule `rule_promote_negative_evidence` (eager)
 
-Module-level rule in `core/autoconfig_negative_evidence.py`. Fires once at config-build time (BEFORE iteration loop), called from `auto_configure_df`. For each weighted matchkey in `config_v0`: scan all df columns where `column_priors[col].identity_score >= 0.7` AND `cardinality_ratio >= 0.5` AND col NOT in matchkey's positive `fields` list AND col NOT in blocking keys. Promote each as `NegativeEvidenceField(field=col, scorer=_pick_scorer_for_column(col, col_type), threshold=0.4, penalty=0.3)`. Idempotent: skip if already in `negative_evidence`.
+Module-level rule in `core/autoconfig_negative_evidence.py`. Fires once at config-build time (BEFORE iteration loop), called from `auto_configure_df`. For each weighted matchkey in `config_v0`: scan all df columns where `column_priors[col].identity_score >= 0.7` AND `cardinality_ratio >= 0.5` AND col NOT in matchkey's positive `fields` list AND col NOT in blocking keys. Promote each as `NegativeEvidenceField(field=col, transforms=transforms, scorer=scorer, threshold=0.4, penalty=0.3)` where `(transforms, scorer) = _pick_scorer_for_column(col, col_type)`. Idempotent: skip if already in `negative_evidence`.
 
 This is an *eager* rule — it modifies `config_v0` directly, not via the iteration loop's `propose()` chain. Different shape from v1.10's post-iteration rules (which fire on profile signals). Logged at INFO with structured message per promoted column.
 
-T3 application: matchkey `fuzzy_match` gains `negative_evidence=[NE(phone, digits_only_exact, 0.5, 0.3), NE(address, token_sort, 0.4, 0.4)]`.
+T3 application: matchkey `fuzzy_match` gains `negative_evidence=[NE(phone, transforms=["digits_only"], scorer="exact", threshold=0.5, penalty=0.3), NE(address, transforms=[], scorer="token_sort", threshold=0.4, penalty=0.4)]`.
 
 ### 3. New indicator + rule for clustered-identity guard
 
@@ -88,7 +103,11 @@ def compute_identity_collision_signal(
 2. For each multi-record group (size ≥ 2), compute max pairwise divergence on `witness_cols` (max(`1 - jaro_winkler(a, b)`) across pairs across witness_cols).
 3. Returns `CollisionSignal(rate, witness_used)` where `rate` = fraction of multi-record groups with max-divergence > 0.5; `witness_used` = name of the witness col that drove the highest divergences.
 
+**Divergence threshold rationale (0.5)**: T3's adversarial collision pairs have within-group witness divergence > 0.7 (different addresses, different phones). Legitimate-duplicate cases (e.g., apartment moves with slightly-different addresses) have divergence 0.2-0.4. The 0.5 cutoff cleanly separates them with margin on both sides.
+
 Budget: 8s. On exhaustion, returns `CollisionSignal(rate=0.0, witness_used="")` sentinel.
+
+**Memo key**: `("identity_collision_signal", identity_col, tuple(sorted(witness_cols)))`. Canonicalizing witness_cols ordering ensures the same call from different rules (with witness_cols in different order) hits the same cache entry.
 
 **Rule** (`core/autoconfig_rules.py`, post-iteration):
 ```python
@@ -122,6 +141,8 @@ auto_configure_df(df)
   -> controller.run(df, config_v0, ctx)
 ```
 
+**Memory cache lookup ordering**: `auto_configure_df` may short-circuit on `autoconfig_memory.lookup_best(signature)` cache hit. v1.11 invariant: **`promote_negative_evidence` runs before any cache check** so the eager promotion always applies. The cache stores the *committed* config (post-iteration, post-finalize), which already has `negative_evidence` populated from a prior v1.11 run. v1.10-saved cache entries (no `negative_evidence` field) deserialize cleanly with `negative_evidence=None`; the next run on the same data shape *will* re-promote on the v0 raw config and overwrite the cache hit's behavior. Trade-off: a v1.10-saved cache hit doesn't get NE for the cached run, but the iteration that follows builds it correctly. Acceptable: cache hits are an optimization, not a correctness contract.
+
 **Per-iteration (lazy, on rule demand):** v1.10's 13 rules unchanged + new `rule_demote_clustered_identity` at position 14:
 ```
 iteration N:
@@ -141,7 +162,7 @@ iteration N:
 
 | Component | Type | LOC | Description |
 |---|---|---|---|
-| `NegativeEvidenceField` | New Pydantic model in `config/schemas.py` | ~25 | `field: str`, `scorer: str`, `threshold: float`, `penalty: float` (validators 0≤val≤1) |
+| `NegativeEvidenceField` | New Pydantic model in `config/schemas.py` | ~30 | `field: str`, `transforms: list[str] = []`, `scorer: str` (validated against `VALID_SCORERS`), `threshold: float`, `penalty: float` (validators 0≤val≤1). Mirrors `MatchkeyField`'s shape so transforms can normalize before scoring (e.g., `digits_only` transform + `exact` scorer for phone). |
 | `MatchkeyConfig.negative_evidence` | Field add | ~5 | `list[NegativeEvidenceField] \| None = None` |
 | `_apply_negative_evidence(matchkey, pair) -> float` | New helper in `core/scorer.py` | ~50 | Computes negative penalty; called from existing scoring loop |
 | `core/autoconfig_negative_evidence.py` | NEW module | ~120 | `promote_negative_evidence(config, df, column_priors) -> GoldenMatchConfig` (pure function) + `_pick_scorer_for_column` helper |
@@ -197,7 +218,7 @@ iteration N:
 - Returns sentinel when no witness cols pass identity_score gate
 
 `tests/test_autoconfig_negative_evidence.py` (NEW, ~70 LOC):
-- `_pick_scorer_for_column`: email → token_sort, phone → digits_only_exact, address → token_sort, unknown → ensemble
+- `_pick_scorer_for_column` returns `(transforms, scorer)` tuple: email → `([], "token_sort")`; phone → `(["digits_only"], "exact")`; address → `([], "token_sort")`; unknown → `([], "ensemble")`. Returned scorer is always in `VALID_SCORERS`.
 - `promote_negative_evidence`: enriches matchkey with phone+address on T3-shaped df
 - Idempotent on second call
 - Skips columns already in matchkey.fields
@@ -240,10 +261,13 @@ Two committed fixtures:
 
 ### Tier 5 — Cache backward-compat (~50 LOC)
 
-`tests/test_autoconfig_memory_v110_compat.py` (NEW):
-- v1.10-saved snapshot fixture (no `negative_evidence` key) loads cleanly
-- v1.11 entry with `negative_evidence` populated round-trips
+`tests/test_autoconfig_memory_v110_compat.py` (NEW). Commits a NEW fixture `tests/fixtures/autoconfig/v1_10_memory_snapshot.json` — a `MatchkeyConfig` JSON serialized using v1.10's schema (i.e., no `negative_evidence` key). Generated by a `_gen_v1_10_snapshot.py` script (mirrors v1.9's pattern in `tests/fixtures/autoconfig/_gen_v1_9_snapshot.py`).
+
+Tests:
+- v1.10-vintage `v1_10_memory_snapshot.json` (no `negative_evidence` key) loads cleanly into v1.11's `MatchkeyConfig.model_validate`
+- A v1.11 entry with `negative_evidence` populated round-trips through Pydantic
 - `MatchkeyConfig` constructed without `negative_evidence` arg defaults to None
+- The pre-existing `v1_9_memory_snapshot.json` (committed in v1.10) still loads cleanly into v1.11 — chain compat: v1.9 → v1.10 → v1.11 deserialization works through both schema additions
 
 ### Tier 6 — Property tests (~40 LOC)
 
