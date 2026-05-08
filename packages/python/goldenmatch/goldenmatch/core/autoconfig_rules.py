@@ -364,7 +364,7 @@ def rule_no_matches(
     for new_cfg, rationale in candidates:
         if new_cfg != current:
             return new_cfg, PolicyDecision(
-                rule_name="rule_no_matches",
+                rule_name="no_matches",
                 rationale=rationale,
                 config_diff={},
             )
