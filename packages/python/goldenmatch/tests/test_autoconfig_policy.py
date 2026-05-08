@@ -1511,3 +1511,50 @@ def test_default_rules_now_has_ten_entries_final():
     """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
     assert len(DEFAULT_RULES) == 10
+
+
+# ============================================================
+# Task 3.2 — RefitPolicy.propose accepts optional ctx kwarg
+# ============================================================
+
+def test_heuristic_propose_accepts_ctx_kwarg():
+    """HeuristicRefitPolicy.propose accepts an optional ctx kwarg."""
+    import inspect
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+    pol = HeuristicRefitPolicy()
+    sig = inspect.signature(pol.propose)
+    assert "ctx" in sig.parameters
+
+
+def test_llm_propose_accepts_and_forwards_ctx():
+    """LLMRefitPolicy.propose accepts ctx and forwards to base."""
+    import inspect
+    from goldenmatch.core.autoconfig_policy import LLMRefitPolicy, HeuristicRefitPolicy
+    pol = LLMRefitPolicy(base=HeuristicRefitPolicy())
+    sig = inspect.signature(pol.propose)
+    assert "ctx" in sig.parameters
+
+
+# ============================================================
+# Task 3.3 — Controller backward compat with old 3-arg custom policy
+# ============================================================
+
+def test_controller_supports_old_shape_3arg_custom_policy():
+    """A custom policy with 3-arg propose (no ctx) still works."""
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController, ControllerBudget,
+    )
+    import polars as pl
+
+    class _OldShapePolicy:
+        def propose(self, profile, current, history):
+            return None    # always satisfied
+
+    # Two columns, two rows → enters the iteration loop and calls policy.propose
+    df = pl.DataFrame({"name": ["alice", "bob"], "email": ["a@x.com", "b@x.com"]})
+    controller = AutoConfigController(
+        policy=_OldShapePolicy(),
+        budget=ControllerBudget(max_iterations=2, sample_skip_below=1),
+    )
+    config, profile, history = controller.run(df)
+    assert profile is not None    # didn't TypeError on 4-arg call

@@ -13,7 +13,10 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 """
 from __future__ import annotations
 import logging
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
 
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict
 from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
@@ -33,6 +36,7 @@ class RefitPolicy(Protocol):
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
+        ctx: "IndicatorContext | None" = None,
     ) -> Any | None: ...
 
 
@@ -56,11 +60,12 @@ class HeuristicRefitPolicy:
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
+        ctx: "IndicatorContext | None" = None,
     ) -> Any | None:
         if profile.health() == HealthVerdict.GREEN:
             return None
         for rule in self._rules:
-            outcome = rule(profile, current, history)
+            outcome = self._call_rule(rule, profile, current, history, ctx)
             if outcome is None:
                 continue
             new_config, decision = outcome
@@ -74,6 +79,15 @@ class HeuristicRefitPolicy:
             return new_config
         # No rule fired → satisfied
         return None
+
+    @staticmethod
+    def _call_rule(rule, profile, current, history, ctx):
+        """Call a rule with ctx if its signature accepts it; else 3-arg."""
+        import inspect
+        params = inspect.signature(rule).parameters
+        if "ctx" in params:
+            return rule(profile, current, history, ctx=ctx)
+        return rule(profile, current, history)
 
 
 class LLMRefitPolicy:
@@ -106,9 +120,10 @@ class LLMRefitPolicy:
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
+        ctx: "IndicatorContext | None" = None,
     ) -> Any | None:
-        # Try the base first (heuristic rules)
-        base_result = self._base.propose(profile, current, history)
+        # Try the base first (heuristic rules); forward ctx
+        base_result = self._base.propose(profile, current, history, ctx=ctx)
         if base_result is not None:
             return base_result
 
