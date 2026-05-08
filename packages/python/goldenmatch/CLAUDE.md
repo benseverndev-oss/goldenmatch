@@ -232,6 +232,11 @@ Hosted on Railway, registered on Smithery:
 - Controller history is on PostflightReport.controller_history (RunHistory with .decisions, .errors, .full_vs_sample_drift). RunHistory.decisions is the audit trail of which rules fired and why — useful for explaining auto-config output to users.
 - **Tier 3 (LLMRefitPolicy):** `GOLDENMATCH_AUTOCONFIG_LLM=1` enables LLM fallback when heuristic rules are exhausted but profile is RED/YELLOW. Requires `OPENAI_API_KEY`. Default OFF. Wraps `HeuristicRefitPolicy` — heuristic always fires first; LLM is last resort only. Max 5 LLM calls per run (configurable). See `core/autoconfig_policy.py::LLMRefitPolicy`.
 - **Tier 4 (AutoConfigMemory):** `GOLDENMATCH_AUTOCONFIG_MEMORY=0` disables cross-run memory (useful in CI). Default ON. Uses `~/.goldenmatch/autoconfig_memory.db`.
+- **`RunHistory.pick_committed()`** commits the best-effort entry by lex key `(health_rank, -mass_separation, iteration)` — returns a RED entry when no GREEN/YELLOW exists. `cheapest_healthy()` is a deprecated alias (removed in v2.0). `precision_collapse_floor=0.9` demotes RED entries with `mass_above_threshold > 0.9` to rank=3 to guard the "everything matches" pathology.
+- **`RunHistory.stop_reason: StopReason | None`** set at every break point in the iteration loop. Observable via `result.postflight_report.controller_history.stop_reason`. `StopReason` lives in `core/complexity_profile.py`.
+- **Virtual v0 entry:** after the loop, `config_v0`'s profile is appended as `HistoryEntry(iteration=-1)` so `pick_committed()` can fall back to v0 when all real iterations are worse. WARNING/INFO commit log uses `iter=v0` to identify virtual-entry commits.
+- **Health-aware commit logging:** WARNING when committed health is RED (with failing sub-profile name + stop_reason); INFO when YELLOW; silent on GREEN. ERROR when every iteration errored (falls back to v0 + RED sentinel).
+- **v1.10 forward note:** controller complexity indicators can't yet distinguish "blocking key is wrong" from "blocking key is right but sample has no visible matches" (both produce `mass_above_threshold=0.0`). v1.10 will add identity-column priors, cross-blocking overlap probe, and blocking-column corruption signal.
 
 ## Gotchas
 - `docs/superpowers/` is gitignored — specs and plans are local-only; do NOT `git add` them

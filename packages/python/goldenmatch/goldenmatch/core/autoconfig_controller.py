@@ -2,17 +2,11 @@
 
 Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-design.md
       §New: AutoConfigController, §Sample selection, §Pipeline integration.
-
-Task 4.1 implements: skeleton, ControllerBudget, StopReason, _RED_PROFILE,
-pathological-input gates, _take_sample, and a stub run() that handles the
-gates and returns v0 without entering the loop.
-
-The iteration loop body lands in Task 4.2 and _finalize in Task 4.3.
 """
 from __future__ import annotations
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import timedelta
-from enum import Enum
 from typing import Any
 import hashlib
 import logging
@@ -22,7 +16,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, HealthVerdict,
+    ComplexityProfile, DataProfile, HealthVerdict, StopReason,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
@@ -34,20 +28,100 @@ logger = logging.getLogger(__name__)
 # Sentinel: forces RED via DataProfile.health() when n_rows == 0.
 _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 
+# ContextVar populated at every exit path of AutoConfigController.run()
+# (including KeyboardInterrupt) so callers can inspect RunHistory after
+# either normal return or exception.  Stores RunHistory directly
+# (unlike autoconfig._LAST_CONTROLLER_RUN which stores (profile, history)).
+_LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
+    "_LAST_CONTROLLER_RUN", default=None
+)
+
 
 class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
 
 
-class StopReason(Enum):
-    GREEN = "green"
-    CONVERGED = "converged"
-    BUDGET_ITERATIONS = "budget_iterations"
-    BUDGET_TIME = "budget_time"
-    POLICY_SATISFIED = "policy_satisfied"
-    POLICY_NO_PROGRESS = "policy_no_progress"
-    OSCILLATING = "oscillating"
-    CANCELLED = "cancelled"
+def _assemble_v0_history_entry(
+    sample: "pl.DataFrame",
+    reference: "pl.DataFrame | None",
+    config_v0: "GoldenMatchConfig",
+    history: "RunHistory",
+    controller: "AutoConfigController",
+) -> "HistoryEntry | None":
+    """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
+
+    Strategy:
+    1. If history.entries[0].config == config_v0, re-stamp that entry with
+       iteration=-1 and decision=None (avoids a second pipeline run when
+       iter-0 already profiled v0).
+    2. Otherwise, run config_v0 through the pipeline-sample path and wrap
+       the result as a new HistoryEntry(iteration=-1).
+    3. On any exception: return None (don't crash the controller).
+    """
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+    try:
+        # Fast path: iter-0 already profiled config_v0 — re-stamp it.
+        if (history.entries
+                and history.entries[0].error is None
+                and history.entries[0].config == config_v0):
+            e0 = history.entries[0]
+            return HistoryEntry(
+                iteration=-1,
+                config=e0.config,
+                profile=e0.profile,
+                decision=None,
+                error=None,
+                wall_clock_ms=e0.wall_clock_ms,
+            )
+
+        # Slow path: run config_v0 through the sample pipeline.
+        import time
+        from goldenmatch.core.profile_emitter import profile_capture
+        t0 = time.time()
+        with profile_capture() as emitter:
+            controller._run_pipeline_sample(sample, reference, config_v0)
+        profile_v0 = controller._assemble_profile(
+            emitter, df=sample, iteration=-1,
+            reference=reference, config=config_v0,
+        )
+        return HistoryEntry(
+            iteration=-1,
+            config=config_v0,
+            profile=profile_v0,
+            decision=None,
+            error=None,
+            wall_clock_ms=int((time.time() - t0) * 1000),
+        )
+    except Exception as exc:
+        logger.warning(
+            "auto-config: could not build v0 virtual history entry "
+            "(%s: %s); pick_committed will select from regular iterations only — "
+            "committed config may be worse than v0",
+            type(exc).__name__, exc,
+        )
+        return None
+
+
+def _first_red_subprofile(profile: "ComplexityProfile") -> str:
+    """Return the name of the first sub-profile in canonical declaration
+    order whose health() is RED. Used by the WARNING log on commit-RED.
+
+    Canonical order: data, domain, matchkey, blocking, scoring, cluster.
+    Returns 'rollup' if no individual sub-profile is RED but the rollup is.
+    """
+    n_rows = profile.data.n_rows
+    checks = [
+        ("data", profile.data.health()),
+        ("domain", profile.domain.health()),
+        ("matchkey", profile.matchkey.health()),
+        ("blocking", profile.blocking.health(n_rows=n_rows)),
+        ("scoring", profile.scoring.health()),
+        ("cluster", profile.cluster.health(n_rows=n_rows)),
+    ]
+    for name, health in checks:
+        if health == HealthVerdict.RED:
+            return name
+    return "rollup"
 
 
 @dataclass
@@ -61,10 +135,7 @@ class ControllerBudget:
 
 
 class AutoConfigController:
-    """Drives iterative refit. Task 4.1 supplies skeleton + gates + sampling.
-
-    The actual iteration loop is in Task 4.2; finalize is in Task 4.3.
-    """
+    """Drives iterative refit: pathological-input gates, sampling, policy loop, finalize."""
 
     def __init__(
         self,
@@ -128,6 +199,7 @@ class AutoConfigController:
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
                 if elapsed > self.budget.max_seconds and iteration > 0:
+                    history.stop_reason = StopReason.BUDGET_TIME
                     break
                 iter_start = time.time()
                 try:
@@ -146,6 +218,8 @@ class AutoConfigController:
                     ))
                 except KeyboardInterrupt:
                     history.elapsed = timedelta(seconds=time.time() - start)
+                    history.stop_reason = StopReason.CANCELLED
+                    _LAST_CONTROLLER_RUN.set(history)
                     raise
                 except Exception as exc:
                     from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
@@ -181,6 +255,7 @@ class AutoConfigController:
                         and bp.reduction_ratio > 0.995
                     )
                     if not _suspicious_tight_blocking:
+                        history.stop_reason = StopReason.GREEN
                         break
                     # Fall through to policy check — if no rule fires, the policy
                     # returns None and we break naturally below.
@@ -193,37 +268,78 @@ class AutoConfigController:
                 if history.profile_distance_to_prev() < self.budget.converge_epsilon:
                     prev_entry = history.entries[-2] if len(history.entries) >= 2 else None
                     if prev_entry is None or prev_entry.decision is None:
+                        history.stop_reason = StopReason.CONVERGED
                         break
                 if history.is_oscillating():
+                    history.stop_reason = StopReason.OSCILLATING
                     break
 
                 # Ask policy for next config
                 config_next = self.policy.propose(profile_n, config_n, history)
                 if config_next is None:
+                    history.stop_reason = StopReason.POLICY_SATISFIED
                     break
                 if config_next == config_n:
+                    history.stop_reason = StopReason.POLICY_NO_PROGRESS
                     break
                 config_n = config_next
         finally:
             history.elapsed = timedelta(seconds=time.time() - start)
 
+        # Natural loop exhaustion (loop completed without break)
+        if history.stop_reason is None:
+            history.stop_reason = StopReason.BUDGET_ITERATIONS
+
+        # Append config_v0 as a synthetic virtual entry (iteration=-1) so
+        # pick_committed() can fall back to v0 when all real iterations are
+        # worse (e.g. the precision-collapse pathology: iter-3 RED with
+        # mass_above=1.0 would otherwise beat v0's healthier profile).
+        v0_entry = _assemble_v0_history_entry(
+            sample, sample_ref, config_v0, history, self,
+        )
+        if v0_entry is not None:
+            history.entries.append(v0_entry)
+
         # Pick committed config
-        best_entry = history.cheapest_healthy()
+        best_entry = history.pick_committed(precision_collapse_floor=0.9)
         if best_entry is None:
-            # No healthy iterations → return v0 + RED sentinel.
-            # Fix 6: emit a warning so operators can diagnose.
-            n_crashed = len(history.errors)
+            # Every iteration errored — no usable profile produced. Fall back to v0.
+            n_errored = sum(1 for e in history.entries if e.error is not None)
             n_red = sum(
                 1 for e in history.entries
                 if e.profile.health() == HealthVerdict.RED and e.error is None
             )
-            logger.warning(
-                "auto-config controller could not produce a healthy config; "
-                "committing v0. Iterations: %d total, %d crashed, %d RED. "
-                "Inspect _LAST_CONTROLLER_RUN.get() for diagnostics.",
-                history.iteration, n_crashed, n_red,
+            logger.error(
+                "auto-config controller: every iteration errored (n_errored=%d, "
+                "n_red=%d, stop_reason=%s); falling back to v0 + RED sentinel. "
+                "Inspect _LAST_CONTROLLER_RUN.get() for tracebacks.",
+                n_errored,
+                n_red,
+                history.stop_reason.name if history.stop_reason else "unset",
             )
+            _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
+
+        committed_health = best_entry.profile.health()
+        iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
+        if committed_health == HealthVerdict.RED:
+            failing = _first_red_subprofile(best_entry.profile)
+            logger.warning(
+                "auto-config committed best-effort RED config "
+                "(iter=%s, stop_reason=%s, failing_subprofile=%s); "
+                "downstream pipeline will run but output may be low-precision",
+                iter_label,
+                history.stop_reason.name if history.stop_reason else "unset",
+                failing,
+            )
+        elif committed_health == HealthVerdict.YELLOW:
+            logger.info(
+                "auto-config committed YELLOW config "
+                "(iter=%s, stop_reason=%s)",
+                iter_label,
+                history.stop_reason.name if history.stop_reason else "unset",
+            )
+        # health == GREEN: silent success
 
         # Post-iteration: decorate committed config with LLM scorer if appropriate.
         # This runs ONCE, outside the iteration loop, so it never competes with
@@ -241,6 +357,7 @@ class AutoConfigController:
             # Return the best sample profile in lieu of a full-data profile.
             # history.full_vs_sample_drift is left None (drift not computed).
             self._record_run(df, reference, best_entry, history)
+            _LAST_CONTROLLER_RUN.set(history)
             return committed_config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
@@ -252,6 +369,7 @@ class AutoConfigController:
         history.full_vs_sample_drift = drift
 
         self._record_run(df, reference, best_entry, history)
+        _LAST_CONTROLLER_RUN.set(history)
         return committed_config, profile_full, history
 
     # ---- Internals --------------------------------------------------------

@@ -1013,8 +1013,15 @@ class TestDomainAwareAutoConfig:
             all_fields.extend(f.field for f in mk.fields if f.field)
 
         domain_fields = [f for f in all_fields if f and f.startswith("__")]
-        assert len(domain_fields) > 0, f"Expected domain fields in matchkeys, got: {all_fields}"
-        assert any("brand" in f for f in domain_fields), f"Expected __brand__ field, got: {domain_fields}"
+        assert len(domain_fields) > 0, (
+            f"Expected at least one domain-extracted field (__ prefix) in matchkeys; "
+            f"got: {all_fields}. Domain extraction should fire on electronics-like data."
+        )
+        # v1.9 note: the specific domain field chosen depends on which extracted
+        # features have the highest cardinality on this small fixture.  The invariant
+        # is that SOME domain field was selected — not necessarily __brand__.
+        # (Previously asserted __brand__; on v1.9 the controller may commit a
+        # best-effort RED config that selects __specs__ instead.)
 
     def test_low_confidence_no_extraction(self):
         """Ambiguous data should not trigger domain extraction."""
@@ -1342,6 +1349,13 @@ def test_autoconfig_parity_pins_unchanged():
     only. CI skips it gracefully. Contributors who want to exercise the
     parity guard should run `python tests/parity/capture_autoconfig_output.py`
     after pulling the Leipzig DBLP-ACM dataset into tests/benchmarks/datasets/.
+
+    **v1.9 update:** the `dblp_acm` pin was regenerated to reflect best-effort
+    RED commit semantics. In v1.8, this small synthetic fixture (50 rows,
+    designed to be RED-provoking) fell back to the v0 config. In v1.9, the
+    controller commits the best RED entry from history (multi_pass blocking,
+    threshold=0.5). Real-benchmark non-regression is verified separately by
+    the `measure_dblp_acm_controller.py` benchmark script.
     """
     import json
     import sys
