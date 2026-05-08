@@ -590,6 +590,32 @@ def find_fuzzy_matches(
     ids_b = row_id_arr[cols_idx]
     scores = upper[rows_idx, cols_idx]
 
+    # v1.11: Apply negative-evidence penalty for weighted matchkeys.
+    # NE is per-pair (not vectorized), applied only when mk.negative_evidence is set.
+    if mk.negative_evidence:
+        block_rows = block_df.to_dicts()
+        ne_scores = []
+        for i, j, s in zip(rows_idx, cols_idx, scores):
+            row_a = block_rows[int(i)]
+            row_b = block_rows[int(j)]
+            ne_pair = {col: (row_a.get(col), row_b.get(col)) for col in row_a}
+            penalty = _apply_negative_evidence(mk, ne_pair)
+            final_s = max(0.0, float(s) - penalty)
+            ne_scores.append(final_s)
+        scores = ne_scores
+        # Re-filter: only keep pairs whose adjusted score meets threshold
+        if exclude_pairs is not None and len(exclude_pairs) > 0:
+            results = []
+            for a, b, s in zip(ids_a, ids_b, scores):
+                if s < mk.threshold:
+                    continue
+                pair_key = (min(int(a), int(b)), max(int(a), int(b)))
+                if pair_key not in exclude_pairs:
+                    results.append((int(a), int(b), float(s)))
+            return results
+        return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)
+                if s >= mk.threshold]
+
     if exclude_pairs is not None and len(exclude_pairs) > 0:
         results = []
         for a, b, s in zip(ids_a, ids_b, scores):
