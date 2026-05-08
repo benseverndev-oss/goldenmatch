@@ -7,11 +7,11 @@
       "keys": [
         {
           "fields": [
-            "__title_key__"
+            "title"
           ],
           "transforms": [
             "lowercase",
-            "strip"
+            "first_token"
           ]
         }
       ],
@@ -21,7 +21,7 @@
       {
         "name": "fuzzy_match",
         "type": "weighted",
-        "threshold": 0.7,
+        "threshold": 0.65,
         "fields": [
           {
             "field": "title",
@@ -48,21 +48,6 @@
             "transforms": [
               "lowercase",
               "strip"
-            ]
-          }
-        ]
-      },
-      {
-        "name": "domain_exact_title_key",
-        "type": "exact",
-        "threshold": null,
-        "fields": [
-          {
-            "field": "__title_key__",
-            "scorer": null,
-            "weight": null,
-            "transforms": [
-              "lowercase"
             ]
           }
         ]
