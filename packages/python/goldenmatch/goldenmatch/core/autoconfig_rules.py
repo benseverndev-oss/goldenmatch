@@ -817,17 +817,125 @@ def rule_enable_llm_scorer(
     return new_cfg, decision
 
 
+def rule_corruption_normalize(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10: when blocking column has high corruption + identity prior,
+    add normalize-standardization. One-shot via standardization-already-exists
+    check (so it doesn't fire repeatedly on the same column).
+
+    Spec: §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    from goldenmatch.core.complexity_profile import HealthVerdict
+    if profile.health() == HealthVerdict.GREEN:
+        return None
+    if current.blocking is None or not current.blocking.keys:
+        return None
+    blocking_col = current.blocking.keys[0].fields[0]
+    cp = ctx.column_priors.get(blocking_col)
+    if cp is None:
+        return None
+    if cp.corruption_score <= 0.4 or cp.identity_score <= 0.6:
+        return None
+    new_cfg, rationale = _with_normalize_standardization(current, blocking_col)
+    if new_cfg == current:
+        return None    # already has standardization for this column
+    decision = PolicyDecision(
+        rule_name="corruption_normalize",
+        rationale=rationale,
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
+def rule_cross_blocking_disagreement(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10: when iter ≥ 1, profile RED, mass_above < 0.1, and cross-blocking
+    overlap with an orthogonal key is low (< 0.3), propose adding a multi-pass.
+
+    Spec: §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    if len(history.entries) < 1:
+        return None
+    from goldenmatch.core.complexity_profile import HealthVerdict
+    if profile.health() != HealthVerdict.RED:
+        return None
+    if profile.scoring.mass_above_threshold >= 0.1:
+        return None
+    if current.blocking is None or not current.blocking.keys:
+        return None
+    blocking_col = current.blocking.keys[0].fields[0]
+    df_cols = list(ctx._df.columns) if ctx._df is not None else []
+    ortho = _orthogonal_key(current, df_cols)
+    if ortho is None:
+        return None
+    overlap = ctx.cross_blocking_overlap(blocking_col, ortho.fields[0])
+    if overlap is None or overlap >= 0.3:
+        return None
+    new_cfg, rationale = _with_multi_pass(current, ortho)
+    if new_cfg == current:
+        return None
+    decision = PolicyDecision(
+        rule_name="cross_blocking_disagreement",
+        rationale=f"cross_blocking_overlap={overlap:.2f}; {rationale}",
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
+def rule_sparse_match_expand(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10 DEVIATION: spec wanted ExpandSample(2.0) which requires
+    controller-level sample expansion (queued for v1.11). v1.10 substitute:
+    fire mark_fired("rule_sparse_match_expand") side-channel + lower
+    threshold by 0.10 as proxy.
+    """
+    if ctx is None:
+        return None
+    if not ctx.sparsity_verdict.is_sparse:
+        return None
+    if len(history.entries) > 1:
+        return None
+    if ctx.has_fired("rule_sparse_match_expand"):
+        return None
+    new_cfg, rationale = _with_lower_threshold(current, delta=0.10)
+    if new_cfg == current:
+        return None
+    ctx.mark_fired("rule_sparse_match_expand")
+    decision = PolicyDecision(
+        rule_name="sparse_match_expand",
+        rationale=(
+            f"sparse_sample (n_true_pairs={ctx.sparsity_verdict.estimated_n_true_pairs}); "
+            f"{rationale}"
+        ),
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
-    rule_blocking_field_null_heavy,   # structural: high-null blocking field (runs first)
-    rule_blocking_singleton_trap,     # structural: candidates_compared == 0
-    rule_blocking_key_swap,           # structural: mass_above==0 with prior decision (Fix 1: was pos 8)
-    rule_blocking_too_coarse,         # structural: p99 outlier (skewed distribution)
-    rule_uniform_heavy_blocking,      # structural: uniform-large blocks (Fix 2: new rule)
-    rule_unimodal_scoring,            # tuning: dip statistic low
-    rule_low_reduction_ratio,         # structural: too-tight blocking
-    rule_low_transitivity,            # tuning: transitivity low (Fix 1: demoted from pos 6)
-    rule_no_matches,                  # tuning: nothing matches
-    rule_recall_gap_suspected,        # tuning: random pair probe high OR over-tight signature
+    rule_blocking_field_null_heavy,        # 1  structural: high-null blocking field (runs first)
+    rule_blocking_singleton_trap,          # 2  structural: candidates_compared == 0
+    rule_blocking_key_swap,                # 3  structural: mass_above==0 with prior decision
+    rule_blocking_too_coarse,              # 4  structural: p99 outlier (skewed distribution)
+    rule_uniform_heavy_blocking,           # 5  structural: uniform-large blocks
+    rule_corruption_normalize,             # 6  NEW v1.10: normalize on high-corruption blocking col
+    rule_unimodal_scoring,                 # 7  tuning: dip statistic low
+    rule_low_reduction_ratio,              # 8  structural: too-tight blocking
+    rule_cross_blocking_disagreement,      # 9  NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_low_transitivity,                 # 10 tuning: transitivity low
+    rule_no_matches,                       # 11 tuning: nothing matches
+    rule_recall_gap_suspected,             # 12 tuning: random pair probe high OR over-tight signature
+    rule_sparse_match_expand,              # 13 NEW v1.10: lower threshold proxy for sparse datasets
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
