@@ -1164,3 +1164,102 @@ def test_controller_appends_v0_virtual_entry_before_pick_committed(small_df):
     v0_entries = [e for e in history.entries if e.iteration == -1]
     assert len(v0_entries) == 1
     assert v0_entries[0].decision is None
+
+
+# ============================================================
+# Task 3.1 — IndicatorContext
+# ============================================================
+
+def test_indicator_context_memoizes_calls():
+    """ctx.full_pop_matchkey_hits memoizes by (col)."""
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"email": ["a@x.com", "a@x.com", "b@x.com"]})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(is_sparse=False, estimated_n_true_pairs=1),
+    )
+    h1 = ctx.full_pop_matchkey_hits("email")
+    h2 = ctx.full_pop_matchkey_hits("email")
+    assert h1 == h2
+    assert ("full_pop_matchkey_hits", "email") in ctx._memo
+
+
+def test_indicator_context_has_fired_one_shot_guard():
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    ctx = IndicatorContext(
+        df=pl.DataFrame(), column_priors={},
+        sparsity_verdict=SparsityVerdict(is_sparse=True, estimated_n_true_pairs=0),
+    )
+    assert ctx.has_fired("rule_x") is False
+    ctx.mark_fired("rule_x")
+    assert ctx.has_fired("rule_x") is True
+
+
+def test_indicator_context_cross_blocking_overlap_canonicalizes_keys():
+    """Same key pair in different orders gets same memoized result."""
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"city": ["nyc"] * 10, "state": ["NY"] * 10})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    o1 = ctx.cross_blocking_overlap("city", "state")
+    o2 = ctx.cross_blocking_overlap("state", "city")
+    assert o1 == o2
+    # Memo key uses sorted ordering
+    assert ("cross_blocking_overlap", "city", "state") in ctx._memo
+
+
+# ============================================================
+# Task 6.1: eager indicator compute + ctx threading
+# ============================================================
+
+def test_controller_attaches_indicators_profile_after_run():
+    """After run(), committed profile has column_priors + indicators populated."""
+    import os
+    import polars as pl
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController, ControllerBudget,
+    )
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+    os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(20)],
+        "name": ["Brian"] * 20,
+    })
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_skip_below=1, max_iterations=2),
+    )
+    config, profile, history = controller.run(df)
+    # column_priors populated by eager compute
+    assert profile.data.column_priors is not None
+    assert "email" in profile.data.column_priors
+    # indicators object exists (may have None inner fields if no lazy call fired)
+    assert profile.indicators is not None
+
+
+# ============================================================
+# Task 6.1.5: GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast
+# ============================================================
+
+def test_indicator_context_fast_mode_skips_expensive(monkeypatch):
+    """When GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, expensive lazy
+    indicators return None instead of computing."""
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "fast")
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    import polars as pl
+    df = pl.DataFrame({"email": ["a@x.com"] * 100, "name": ["x"] * 100})
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    assert ctx.full_pop_matchkey_hits("email") is None
+    assert ctx.cross_blocking_overlap("email", "name") is None

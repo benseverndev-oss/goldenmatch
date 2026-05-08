@@ -42,6 +42,85 @@ def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
     return fields
 
 
+# ============================================================
+# v1.10 rule helpers — produce candidate configs for indicator-aware rules
+# ============================================================
+
+_THRESHOLD_FLOOR = 0.5
+
+_DEFAULT_NORMALIZE_RULES = {
+    "email": ["email", "strip"],
+    "phone": ["phone"],
+    "first_name": ["strip", "name_lower"],
+    "last_name": ["strip", "name_lower"],
+}
+
+
+def _with_lower_threshold(cfg, delta: float = 0.05):
+    """Return (new_config, rationale) lowering matchkey threshold by delta.
+    Returns (cfg, "") if floor reached or no threshold set."""
+    matchkeys = cfg.get_matchkeys()
+    if not matchkeys:
+        return cfg, ""
+    primary = matchkeys[0]
+    if primary.threshold is None:
+        return cfg, ""
+    new_threshold = round(primary.threshold - delta, 2)
+    if new_threshold < _THRESHOLD_FLOOR:
+        return cfg, ""
+    new_mk = primary.model_copy(update={"threshold": new_threshold})
+    new_matchkeys = [new_mk] + matchkeys[1:]
+    new_cfg = cfg.model_copy(update={"matchkeys": new_matchkeys})
+    return new_cfg, f"lowered threshold to {new_threshold}"
+
+
+def _with_normalize_standardization(cfg, col: str):
+    """Return (new_config, rationale) adding normalize-standardization on col.
+    Returns (cfg, "") if rule already exists for that column."""
+    from goldenmatch.config.schemas import StandardizationConfig
+    rules_dict = (
+        dict(cfg.standardization.rules) if cfg.standardization else {}
+    )
+    if col in rules_dict:
+        return cfg, ""
+    new_rule = _DEFAULT_NORMALIZE_RULES.get(col, ["strip"])
+    rules_dict[col] = new_rule
+    new_std = StandardizationConfig(rules=rules_dict)
+    new_cfg = cfg.model_copy(update={"standardization": new_std})
+    return new_cfg, f"added normalize_standardization({col}={new_rule})"
+
+
+def _with_multi_pass(cfg, additional_key):
+    """Return (new_config, rationale) adding a multi-pass blocking key."""
+    blocking = cfg.blocking
+    existing_keys = list(blocking.keys)
+    if any(k.fields == additional_key.fields for k in existing_keys):
+        return cfg, ""
+    new_keys = existing_keys + [additional_key]
+    new_blocking = blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "keys": new_keys,
+        "passes": new_keys,
+    })
+    new_cfg = cfg.model_copy(update={"blocking": new_blocking})
+    return new_cfg, f"added multi_pass({additional_key.fields})"
+
+
+def _orthogonal_key(cfg, df_columns):
+    """Pick an orthogonal blocking key from remaining columns.
+    Returns None if no candidate exists."""
+    used_cols: set[str] = set()
+    for k in cfg.blocking.keys:
+        used_cols.update(k.fields)
+    candidates = [
+        c for c in df_columns
+        if c not in used_cols and not c.startswith("__")
+    ]
+    if not candidates:
+        return None
+    return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
+
+
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
@@ -244,51 +323,59 @@ def rule_low_transitivity(
 
 
 def rule_no_matches(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """Fires when scoring.mass_above_threshold == 0.
+
+    v1.10 (with ctx): tries alternatives in priority order based on
+    indicator priors. Falls back to today's behavior when ctx is None.
+    """
     sp = profile.scoring
     # Only fires when the fuzzy scorer actually compared candidates but none
     # reached the threshold.  When candidates_compared == 0, the singleton-trap
     # rule should fire instead (blocking never produced comparable pairs).
     if sp.candidates_compared == 0:
         return None  # singleton trap territory; let rule_blocking_singleton_trap handle it
-    if sp.mass_above_threshold > 0.0:
-        return None  # something matched; not our case
-    mk = _first_weighted_mk(current)
-    if mk is None:
+    if sp.mass_above_threshold > 0:
         return None
-    needs_threshold_change = mk.threshold is not None and mk.threshold > 0.5
-    needs_blocking_loosen = (
-        current.blocking is not None
-        and current.blocking.max_block_size < 50000
-    )
-    if not (needs_threshold_change or needs_blocking_loosen):
-        return None
-    updates: dict[str, Any] = {}
-    if needs_threshold_change:
-        new_mk = mk.model_copy(update={"threshold": 0.5})
-        updates["matchkeys"] = [new_mk if m is mk else m for m in current.matchkeys]
-    if needs_blocking_loosen:
-        new_blocking = current.blocking.model_copy(update={
-            "max_block_size": 50000,
-            "skip_oversized": False,
-        })
-        updates["blocking"] = new_blocking
-    new_cfg = current.model_copy(update=updates)
-    decision = PolicyDecision(
-        rule_name="no_matches",
-        rationale=(
-            f"candidates_compared={sp.candidates_compared}, "
-            f"mass_above_threshold={sp.mass_above_threshold}; "
-            f"resetting to permissive baseline (lower threshold, broader blocking)"
-        ),
-        config_diff=updates,
-    )
-    return new_cfg, decision
+
+    blocking_col = current.blocking.keys[0].fields[0]
+    candidates = []
+
+    if ctx is not None:
+        cp = ctx.column_priors.get(blocking_col)
+        if cp is not None and cp.identity_score >= 0.7:
+            # Identity column — try gentler alternatives before swap
+            candidates.append(_with_lower_threshold(current, 0.05))
+            candidates.append(_with_normalize_standardization(current, blocking_col))
+            df_cols = list(ctx._df.columns)
+            ortho = _orthogonal_key(current, df_cols)
+            if ortho is not None:
+                candidates.append(_with_multi_pass(current, ortho))
+        elif ctx.sparsity_verdict.is_sparse:
+            # DEVIATION: spec wanted ExpandSample(2.0); v1.10 substitute is
+            # a sharper threshold drop. rule_sparse_match_expand handles
+            # the side-channel signal.
+            candidates.append(_with_lower_threshold(current, 0.10))
+        else:
+            candidates.append(_with_lower_threshold(current, 0.05))
+    else:
+        candidates.append(_with_lower_threshold(current, 0.05))
+
+    for new_cfg, rationale in candidates:
+        if new_cfg != current:
+            return new_cfg, PolicyDecision(
+                rule_name="no_matches",
+                rationale=rationale,
+                config_diff={},
+            )
+    return None
 
 
 def rule_blocking_key_swap(
-    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
     """Fires when a prior iteration already loosened the threshold/block cap
     but candidates still aren't matching. The blocking *key* is wrong —
@@ -300,6 +387,8 @@ def rule_blocking_key_swap(
     threshold 0.5. ``first_token`` on raw ``title`` puts records sharing
     the first word in the same block, giving the fuzzy scorer pairs whose
     titles are textually similar enough to actually match.
+
+    v1.10: vetoed when identity_score >= 0.8 AND full_pop_matchkey_hits > 0.
     """
     sp = profile.scoring
     # Only fire when fuzzy actually compared candidates AND nothing matched
@@ -313,6 +402,15 @@ def rule_blocking_key_swap(
         return None
     if current.blocking is None:
         return None
+
+    # v1.10: veto when identity_score >= 0.8 AND full_pop_matchkey_hits > 0
+    if ctx is not None and current.blocking.keys:
+        blocking_col = current.blocking.keys[0].fields[0]
+        cp = ctx.column_priors.get(blocking_col)
+        if cp is not None and cp.identity_score >= 0.8:
+            hits = ctx.full_pop_matchkey_hits(blocking_col)
+            if hits is not None and hits > 0:
+                return None    # vetoed: v0 blocking key is structurally good
 
     # Target field: first text field in the first weighted matchkey
     mk = _first_weighted_mk(current)
@@ -719,17 +817,125 @@ def rule_enable_llm_scorer(
     return new_cfg, decision
 
 
+def rule_corruption_normalize(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10: when blocking column has high corruption + identity prior,
+    add normalize-standardization. One-shot via standardization-already-exists
+    check (so it doesn't fire repeatedly on the same column).
+
+    Spec: §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    from goldenmatch.core.complexity_profile import HealthVerdict
+    if profile.health() == HealthVerdict.GREEN:
+        return None
+    if current.blocking is None or not current.blocking.keys:
+        return None
+    blocking_col = current.blocking.keys[0].fields[0]
+    cp = ctx.column_priors.get(blocking_col)
+    if cp is None:
+        return None
+    if cp.corruption_score <= 0.4 or cp.identity_score <= 0.6:
+        return None
+    new_cfg, rationale = _with_normalize_standardization(current, blocking_col)
+    if new_cfg == current:
+        return None    # already has standardization for this column
+    decision = PolicyDecision(
+        rule_name="corruption_normalize",
+        rationale=rationale,
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
+def rule_cross_blocking_disagreement(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10: when iter ≥ 1, profile RED, mass_above < 0.1, and cross-blocking
+    overlap with an orthogonal key is low (< 0.3), propose adding a multi-pass.
+
+    Spec: §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    if len(history.entries) < 1:
+        return None
+    from goldenmatch.core.complexity_profile import HealthVerdict
+    if profile.health() != HealthVerdict.RED:
+        return None
+    if profile.scoring.mass_above_threshold >= 0.1:
+        return None
+    if current.blocking is None or not current.blocking.keys:
+        return None
+    blocking_col = current.blocking.keys[0].fields[0]
+    df_cols = list(ctx._df.columns) if ctx._df is not None else []
+    ortho = _orthogonal_key(current, df_cols)
+    if ortho is None:
+        return None
+    overlap = ctx.cross_blocking_overlap(blocking_col, ortho.fields[0])
+    if overlap is None or overlap >= 0.3:
+        return None
+    new_cfg, rationale = _with_multi_pass(current, ortho)
+    if new_cfg == current:
+        return None
+    decision = PolicyDecision(
+        rule_name="cross_blocking_disagreement",
+        rationale=f"cross_blocking_overlap={overlap:.2f}; {rationale}",
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
+def rule_sparse_match_expand(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx=None,
+) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    """v1.10 DEVIATION: spec wanted ExpandSample(2.0) which requires
+    controller-level sample expansion (queued for v1.11). v1.10 substitute:
+    fire mark_fired("rule_sparse_match_expand") side-channel + lower
+    threshold by 0.10 as proxy.
+    """
+    if ctx is None:
+        return None
+    if not ctx.sparsity_verdict.is_sparse:
+        return None
+    if len(history.entries) > 1:
+        return None
+    if ctx.has_fired("rule_sparse_match_expand"):
+        return None
+    new_cfg, rationale = _with_lower_threshold(current, delta=0.10)
+    if new_cfg == current:
+        return None
+    ctx.mark_fired("rule_sparse_match_expand")
+    decision = PolicyDecision(
+        rule_name="sparse_match_expand",
+        rationale=(
+            f"sparse_sample (n_true_pairs={ctx.sparsity_verdict.estimated_n_true_pairs}); "
+            f"{rationale}"
+        ),
+        config_diff={},
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
-    rule_blocking_field_null_heavy,   # structural: high-null blocking field (runs first)
-    rule_blocking_singleton_trap,     # structural: candidates_compared == 0
-    rule_blocking_key_swap,           # structural: mass_above==0 with prior decision (Fix 1: was pos 8)
-    rule_blocking_too_coarse,         # structural: p99 outlier (skewed distribution)
-    rule_uniform_heavy_blocking,      # structural: uniform-large blocks (Fix 2: new rule)
-    rule_unimodal_scoring,            # tuning: dip statistic low
-    rule_low_reduction_ratio,         # structural: too-tight blocking
-    rule_low_transitivity,            # tuning: transitivity low (Fix 1: demoted from pos 6)
-    rule_no_matches,                  # tuning: nothing matches
-    rule_recall_gap_suspected,        # tuning: random pair probe high OR over-tight signature
+    rule_blocking_field_null_heavy,        # 1  structural: high-null blocking field (runs first)
+    rule_blocking_singleton_trap,          # 2  structural: candidates_compared == 0
+    rule_blocking_key_swap,                # 3  structural: mass_above==0 with prior decision
+    rule_blocking_too_coarse,              # 4  structural: p99 outlier (skewed distribution)
+    rule_uniform_heavy_blocking,           # 5  structural: uniform-large blocks
+    rule_corruption_normalize,             # 6  NEW v1.10: normalize on high-corruption blocking col
+    rule_unimodal_scoring,                 # 7  tuning: dip statistic low
+    rule_low_reduction_ratio,              # 8  structural: too-tight blocking
+    rule_cross_blocking_disagreement,      # 9  NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_low_transitivity,                 # 10 tuning: transitivity low
+    rule_no_matches,                       # 11 tuning: nothing matches
+    rule_recall_gap_suspected,             # 12 tuning: random pair probe high OR over-tight signature
+    rule_sparse_match_expand,              # 13 NEW v1.10: lower threshold proxy for sparse datasets
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once

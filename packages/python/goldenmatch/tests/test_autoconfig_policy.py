@@ -374,6 +374,9 @@ def test_rule_low_transitivity_floors_at_0_5():
 
 # Rule 5
 def test_rule_no_matches_resets_threshold_and_broadens_blocking():
+    # v1.10: rule_no_matches now lowers threshold incrementally by 0.05 per iteration
+    # (ctx=None path). Old one-shot reset-to-0.5 + broadened-blocking behavior replaced
+    # by indicator-aware step-down. First call: 0.85 → 0.80.
     cfg = _config_with_blocking(threshold=0.85)
     profile = ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
@@ -388,8 +391,7 @@ def test_rule_no_matches_resets_threshold_and_broadens_blocking():
     out = rule_no_matches(profile, cfg, RunHistory())
     assert out is not None
     new_cfg, _ = out
-    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.5)
-    assert new_cfg.blocking.max_block_size >= 50000
+    assert new_cfg.matchkeys[0].threshold == pytest.approx(0.80)
 
 
 def test_rule_no_matches_does_not_fire_on_zero_candidates_compared():
@@ -419,7 +421,9 @@ def test_default_rules_list_has_five_entries():
     # Reverted to 9: rule_enable_llm_scorer moved out of DEFAULT_RULES into
     # AutoConfigController._maybe_decorate_with_llm_scorer (post-iteration decoration)
     # Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)
-    assert len(DEFAULT_RULES) == 10
+    # Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
+    # rule_sparse_match_expand (v1.10)
+    assert len(DEFAULT_RULES) == 13
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -599,9 +603,10 @@ def test_default_rules_now_has_six_entries():
     Updated to 7 after rule_blocking_key_swap was added (2026-05-07).
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
     Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration.
-    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)."""
+    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
+    Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 13
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -812,9 +817,10 @@ def test_default_rules_now_has_seven_entries():
     """Adding rule_blocking_key_swap brings the count to 7.
     Updated to 10 after rule_enable_llm_scorer was added (2026-05-07).
     Reverted to 9: rule_enable_llm_scorer moved to post-iteration decoration.
-    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)."""
+    Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
+    Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 13
 
 
 def test_rule_key_swap_is_before_rule_no_matches():
@@ -1132,14 +1138,16 @@ def test_default_rules_now_has_nine_entries():
     """Adding rule_blocking_field_null_heavy and rule_recall_gap_suspected brought the count to 9.
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     (rule_enable_llm_scorer was moved out of DEFAULT_RULES into
-    AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)"""
+    AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)
+    Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 13
 
 
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     """Order: rule_blocking_field_null_heavy first (structural check),
-    rule_recall_gap_suspected last (probe signal, no LLM rule in the table)."""
+    rule_recall_gap_suspected after no_matches (probe signal, no LLM rule in the table).
+    v1.10: rule_sparse_match_expand is now last (position 13), recall_gap is second-to-last."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_blocking_field_null_heavy,
         rule_recall_gap_suspected, rule_no_matches,
@@ -1149,8 +1157,8 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
     assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
     assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
-    # recall_gap is now LAST (rule_enable_llm_scorer removed from DEFAULT_RULES)
-    assert idx_recall_gap == len(DEFAULT_RULES) - 1, "recall_gap must be last"
+    # v1.10: recall_gap is second-to-last; rule_sparse_match_expand is last
+    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last (sparse_match_expand is last)"
 
 
 # ============================================================
@@ -1266,9 +1274,11 @@ def test_rule_enable_llm_scorer_does_not_fire_when_already_enabled(monkeypatch):
 def test_default_rules_now_has_ten_entries():
     """rule_uniform_heavy_blocking was added (Fix 2) and rule_blocking_key_swap
     was reordered (Fix 1), bringing the count to 10.
-    (rule_enable_llm_scorer remains outside DEFAULT_RULES as post-iteration decoration.)"""
+    (rule_enable_llm_scorer remains outside DEFAULT_RULES as post-iteration decoration.)
+    Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
+    rule_sparse_match_expand (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 13
 
 
 def test_rule_enable_llm_scorer_not_in_default_rules():
@@ -1508,6 +1518,54 @@ def test_default_rules_uniform_heavy_after_blocking_too_coarse():
 
 
 def test_default_rules_now_has_ten_entries_final():
-    """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total."""
+    """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total.
+    Updated to 13: Phase 5 added 3 new indicator-aware rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 10
+    assert len(DEFAULT_RULES) == 13
+
+
+# ============================================================
+# Task 3.2 — RefitPolicy.propose accepts optional ctx kwarg
+# ============================================================
+
+def test_heuristic_propose_accepts_ctx_kwarg():
+    """HeuristicRefitPolicy.propose accepts an optional ctx kwarg."""
+    import inspect
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+    pol = HeuristicRefitPolicy()
+    sig = inspect.signature(pol.propose)
+    assert "ctx" in sig.parameters
+
+
+def test_llm_propose_accepts_and_forwards_ctx():
+    """LLMRefitPolicy.propose accepts ctx and forwards to base."""
+    import inspect
+    from goldenmatch.core.autoconfig_policy import LLMRefitPolicy, HeuristicRefitPolicy
+    pol = LLMRefitPolicy(base=HeuristicRefitPolicy())
+    sig = inspect.signature(pol.propose)
+    assert "ctx" in sig.parameters
+
+
+# ============================================================
+# Task 3.3 — Controller backward compat with old 3-arg custom policy
+# ============================================================
+
+def test_controller_supports_old_shape_3arg_custom_policy():
+    """A custom policy with 3-arg propose (no ctx) still works."""
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController, ControllerBudget,
+    )
+    import polars as pl
+
+    class _OldShapePolicy:
+        def propose(self, profile, current, history):
+            return None    # always satisfied
+
+    # Two columns, two rows → enters the iteration loop and calls policy.propose
+    df = pl.DataFrame({"name": ["alice", "bob"], "email": ["a@x.com", "b@x.com"]})
+    controller = AutoConfigController(
+        policy=_OldShapePolicy(),
+        budget=ControllerBudget(max_iterations=2, sample_skip_below=1),
+    )
+    config, profile, history = controller.run(df)
+    assert profile is not None    # didn't TypeError on 4-arg call

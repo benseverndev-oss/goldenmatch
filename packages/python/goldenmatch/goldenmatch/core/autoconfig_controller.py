@@ -17,6 +17,7 @@ import polars as pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
     ComplexityProfile, DataProfile, HealthVerdict, StopReason,
+    ColumnPrior, SparsityVerdict,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_policy import RefitPolicy
@@ -35,6 +36,82 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 _LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
     "_LAST_CONTROLLER_RUN", default=None
 )
+
+
+class IndicatorContext:
+    """v1.10: per-run object threading indicators through the policy/rule chain.
+
+    Memoizes lazy indicator calls by (function_name, args). Tracks
+    one-shot rule firings for guards like rule_sparse_match_expand.
+
+    Spec: docs/superpowers/specs/2026-05-08-autoconfig-indicators-design.md
+          §Architecture #2.
+
+    Fast-mode: when GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, the two
+    expensive lazy methods (full_pop_matchkey_hits, cross_blocking_overlap)
+    return None unconditionally — preserves v1.9 wall-clock at the cost of
+    indicator-driven gains. (Wired in Task 6.1.5; current Phase 3 omits the
+    fast-mode guard — Task 6.1.5 adds it.)
+    """
+
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        column_priors: dict[str, ColumnPrior],
+        sparsity_verdict: SparsityVerdict,
+    ) -> None:
+        self._df = df
+        self._column_priors = column_priors
+        self._sparsity_verdict = sparsity_verdict
+        self._memo: dict[tuple[str, ...], Any] = {}
+        self._fired: set[str] = set()
+
+    @property
+    def column_priors(self) -> dict[str, ColumnPrior]:
+        return self._column_priors
+
+    @property
+    def sparsity_verdict(self) -> SparsityVerdict:
+        return self._sparsity_verdict
+
+    def _is_fast_mode(self) -> bool:
+        import os
+        return os.environ.get("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "").lower() == "fast"
+
+    def full_pop_matchkey_hits(self, blocking_col: str) -> int | None:
+        if self._is_fast_mode():
+            return None
+        from goldenmatch.core.indicators import estimate_full_pop_hits
+        key = ("full_pop_matchkey_hits", blocking_col)
+        if key not in self._memo:
+            self._memo[key] = estimate_full_pop_hits(self._df, blocking_col)
+        return self._memo[key]
+
+    def cross_blocking_overlap(self, key_a: str, key_b: str) -> float | None:
+        if self._is_fast_mode():
+            return None
+        from goldenmatch.core.indicators import compute_cross_blocking_overlap
+        a, b = sorted([key_a, key_b])
+        key = ("cross_blocking_overlap", a, b)
+        if key not in self._memo:
+            self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
+        return self._memo[key]
+
+    def has_fired(self, rule_name: str) -> bool:
+        return rule_name in self._fired
+
+    def mark_fired(self, rule_name: str) -> None:
+        self._fired.add(rule_name)
+
+
+def _call_policy_propose(policy, profile, current, history, ctx):
+    """Call policy.propose with ctx if its signature accepts it; else 3-arg.
+    Preserves backward compat for custom policies that pre-date v1.10."""
+    import inspect
+    params = inspect.signature(policy.propose).parameters
+    if "ctx" in params:
+        return policy.propose(profile, current, history, ctx=ctx)
+    return policy.propose(profile, current, history)
 
 
 class ConfigValidationError(Exception):
@@ -195,6 +272,25 @@ class AutoConfigController:
         config_n = config_v0
         start = time.time()
 
+        # Task 6.1: eager indicator compute — runs once, before the iteration loop,
+        # on the full df (not the sample) so blocking cardinality/overlap signals
+        # are representative.
+        from goldenmatch.core.indicators import (
+            compute_column_priors, estimate_sparse_match_signal,
+        )
+        column_priors = compute_column_priors(df)
+        exact_columns: list[str] = []
+        for mk in config_v0.get_matchkeys():
+            if mk.type == "exact":
+                for f in mk.fields:
+                    exact_columns.append(f.field)
+        sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
+        ctx = IndicatorContext(
+            df=df,
+            column_priors=column_priors,
+            sparsity_verdict=sparsity_verdict,
+        )
+
         try:
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
@@ -274,8 +370,8 @@ class AutoConfigController:
                     history.stop_reason = StopReason.OSCILLATING
                     break
 
-                # Ask policy for next config
-                config_next = self.policy.propose(profile_n, config_n, history)
+                # Ask policy for next config (ctx built pre-loop in Task 6.1)
+                config_next = _call_policy_propose(self.policy, profile_n, config_n, history, ctx)
                 if config_next is None:
                     history.stop_reason = StopReason.POLICY_SATISFIED
                     break
@@ -320,6 +416,45 @@ class AutoConfigController:
             _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
 
+        # Task 6.1: stamp committed profile with eager column_priors + indicators.
+        import dataclasses
+        from goldenmatch.core.complexity_profile import IndicatorsProfile
+
+        blocking_col: str | None = None
+        if best_entry.config.blocking and best_entry.config.blocking.keys:
+            _bk = best_entry.config.blocking.keys[0]
+            if _bk.fields:
+                blocking_col = _bk.fields[0]
+
+        full_pop_hits = (
+            ctx._memo.get(("full_pop_matchkey_hits", blocking_col))
+            if blocking_col else None
+        )
+        cross_blocking_overlap_val: float | None = None
+        for _mk, _mv in ctx._memo.items():
+            if _mk[0] == "cross_blocking_overlap":
+                cross_blocking_overlap_val = _mv
+                break
+
+        _stamped_data = dataclasses.replace(
+            best_entry.profile.data,
+            column_priors=column_priors,
+        )
+        _stamped_indicators = IndicatorsProfile(
+            full_pop_matchkey_hit_rate=(
+                float(full_pop_hits) if full_pop_hits is not None else None
+            ),
+            cross_blocking_overlap=cross_blocking_overlap_val,
+        )
+        _stamped_profile = dataclasses.replace(
+            best_entry.profile,
+            data=_stamped_data,
+            indicators=_stamped_indicators,
+        )
+        best_entry = dataclasses.replace(best_entry, profile=_stamped_profile)
+        if best_entry.iteration >= 0 and best_entry.iteration < len(history.entries):
+            history.entries[best_entry.iteration] = best_entry
+
         committed_health = best_entry.profile.health()
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
@@ -362,6 +497,16 @@ class AutoConfigController:
 
         # Finalize on full data (Task 4.3)
         profile_full = self._finalize(committed_config, df, reference)
+        # Stamp full-data profile with eager column_priors + indicators too.
+        _full_stamped_data = dataclasses.replace(
+            profile_full.data,
+            column_priors=column_priors,
+        )
+        profile_full = dataclasses.replace(
+            profile_full,
+            data=_full_stamped_data,
+            indicators=_stamped_indicators,
+        )
         # Drift detection
         sample_vec = best_entry.profile.normalized_signal_vector()
         full_vec = profile_full.normalized_signal_vector()

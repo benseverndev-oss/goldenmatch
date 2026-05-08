@@ -208,8 +208,9 @@ def test_controller_direct_api_with_budget_cap():
     )
     config, profile, history = controller.run(df, skip_finalize=True)
     assert isinstance(config, GoldenMatchConfig)
-    # At most 2 entries: iteration 0 + iteration 1
-    assert history.iteration <= 2
+    # At most 3 entries: iteration 0, iteration 1 (max_iterations=1 → range(0,2)),
+    # plus the virtual v0 entry (iteration=-1) appended post-loop.
+    assert history.iteration <= 3
     # Profile populated from real pipeline run
     assert profile.data.n_rows > 0
     # Elapsed recorded

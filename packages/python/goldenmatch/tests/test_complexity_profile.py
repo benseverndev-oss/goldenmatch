@@ -238,3 +238,50 @@ def test_stop_reason_has_expected_values():
                 "POLICY_SATISFIED", "POLICY_NO_PROGRESS", "OSCILLATING",
                 "CANCELLED"}
     assert {sr.name for sr in StopReason} == expected
+
+
+def test_column_prior_dataclass_defaults():
+    """ColumnPrior is a frozen dataclass with identity_score and corruption_score."""
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    cp = ColumnPrior(identity_score=0.9, corruption_score=0.1)
+    assert cp.identity_score == 0.9
+    assert cp.corruption_score == 0.1
+    import pytest, dataclasses
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cp.identity_score = 0.5
+
+
+def test_sparsity_verdict_dataclass():
+    """SparsityVerdict carries is_sparse + estimated_n_true_pairs."""
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    sv = SparsityVerdict(is_sparse=True, estimated_n_true_pairs=20)
+    assert sv.is_sparse is True
+    assert sv.estimated_n_true_pairs == 20
+
+
+def test_indicators_profile_optional_fields():
+    """IndicatorsProfile has optional full_pop_matchkey_hit_rate +
+    cross_blocking_overlap; default None."""
+    from goldenmatch.core.complexity_profile import IndicatorsProfile
+    ip = IndicatorsProfile()
+    assert ip.full_pop_matchkey_hit_rate is None
+    assert ip.cross_blocking_overlap is None
+    ip2 = IndicatorsProfile(full_pop_matchkey_hit_rate=0.7,
+                             cross_blocking_overlap=0.4)
+    assert ip2.full_pop_matchkey_hit_rate == 0.7
+
+
+def test_data_profile_column_priors_default_none():
+    """DataProfile.column_priors defaults to None for backward compat."""
+    from goldenmatch.core.complexity_profile import DataProfile
+    dp = DataProfile(n_rows=100, n_cols=4,
+                     column_types={"a": "text", "b": "id-like",
+                                   "c": "text", "d": "date"})
+    assert dp.column_priors is None
+
+
+def test_complexity_profile_indicators_default_none():
+    """ComplexityProfile.indicators defaults to None for backward compat."""
+    from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
+    cp = ComplexityProfile(data=DataProfile(n_rows=100))
+    assert cp.indicators is None
