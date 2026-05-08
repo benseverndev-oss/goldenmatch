@@ -58,7 +58,7 @@ def _build_test_config(blocking_field="email", threshold=0.85):
 def _build_test_config_with_email_standardization():
     cfg = _build_test_config(blocking_field="email")
     return cfg.model_copy(update={
-        "standardization": _V110SC(rules={"email": ["lowercase", "strip"]}),
+        "standardization": _V110SC(rules={"email": ["email", "strip"]}),
     })
 
 
@@ -138,3 +138,63 @@ def _ctx_with_priors_and_hits(priors, full_pop_hits):
     for col, hits in full_pop_hits.items():
         ctx._memo[("full_pop_matchkey_hits", col)] = hits
     return ctx
+
+
+# ============================================================
+# Task 4.1: Rule helper tests
+# ============================================================
+
+def test_with_lower_threshold_returns_new_config():
+    from goldenmatch.core.autoconfig_rules import _with_lower_threshold
+    cfg = _build_test_config(threshold=0.85)
+    new_cfg, rationale = _with_lower_threshold(cfg, delta=0.05)
+    assert _get_threshold(new_cfg) == 0.80
+
+
+def test_with_lower_threshold_at_floor_returns_unchanged():
+    from goldenmatch.core.autoconfig_rules import _with_lower_threshold
+    cfg = _build_test_config(threshold=0.5)
+    new_cfg, _rationale = _with_lower_threshold(cfg, delta=0.05)
+    assert new_cfg == cfg
+
+
+def test_with_normalize_standardization_adds_rule():
+    from goldenmatch.core.autoconfig_rules import _with_normalize_standardization
+    cfg = _build_test_config()
+    new_cfg, _rationale = _with_normalize_standardization(cfg, "email")
+    assert new_cfg.standardization is not None
+    assert "email" in new_cfg.standardization.rules
+
+
+def test_with_normalize_standardization_idempotent():
+    from goldenmatch.core.autoconfig_rules import _with_normalize_standardization
+    cfg = _build_test_config_with_email_standardization()
+    new_cfg, _rationale = _with_normalize_standardization(cfg, "email")
+    assert new_cfg == cfg
+
+
+def test_with_multi_pass_adds_orthogonal_key():
+    from goldenmatch.core.autoconfig_rules import _with_multi_pass
+    from goldenmatch.config.schemas import BlockingKeyConfig
+    cfg = _build_test_config(blocking_field="email")
+    ortho = BlockingKeyConfig(fields=["last_name"], transforms=["lowercase"])
+    new_cfg, _rationale = _with_multi_pass(cfg, ortho)
+    assert new_cfg.blocking.strategy == "multi_pass"
+    assert any(k.fields == ["last_name"] for k in new_cfg.blocking.keys)
+
+
+def test_orthogonal_key_picks_unused_column():
+    from goldenmatch.core.autoconfig_rules import _orthogonal_key
+    cfg = _build_test_config(blocking_field="email")
+    df_cols = ["email", "name", "city", "dob"]
+    ortho = _orthogonal_key(cfg, df_cols)
+    assert ortho is not None
+    assert ortho.fields[0] not in {"email"}
+
+
+def test_orthogonal_key_returns_none_when_no_candidates():
+    from goldenmatch.core.autoconfig_rules import _orthogonal_key
+    cfg = _build_test_config(blocking_field="email")
+    df_cols = ["email"]    # only the used column
+    ortho = _orthogonal_key(cfg, df_cols)
+    assert ortho is None

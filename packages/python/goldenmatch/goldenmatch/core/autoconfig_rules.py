@@ -42,6 +42,83 @@ def _existing_blocking_fields(cfg: GoldenMatchConfig) -> set[str]:
     return fields
 
 
+# ============================================================
+# v1.10 rule helpers — produce candidate configs for indicator-aware rules
+# ============================================================
+
+_THRESHOLD_FLOOR = 0.5
+
+_DEFAULT_NORMALIZE_RULES = {
+    "email": ["email", "strip"],
+    "phone": ["phone"],
+    "first_name": ["strip", "name_lower"],
+    "last_name": ["strip", "name_lower"],
+}
+
+
+def _with_lower_threshold(cfg, delta: float = 0.05):
+    """Return (new_config, rationale) lowering matchkey threshold by delta.
+    Returns (cfg, "") if floor reached."""
+    matchkeys = cfg.get_matchkeys()
+    if not matchkeys:
+        return cfg, ""
+    primary = matchkeys[0]
+    new_threshold = round(primary.threshold - delta, 2)
+    if new_threshold < _THRESHOLD_FLOOR:
+        return cfg, ""
+    new_mk = primary.model_copy(update={"threshold": new_threshold})
+    new_matchkeys = [new_mk] + matchkeys[1:]
+    new_cfg = cfg.model_copy(update={"matchkeys": new_matchkeys})
+    return new_cfg, f"lowered threshold to {new_threshold}"
+
+
+def _with_normalize_standardization(cfg, col: str):
+    """Return (new_config, rationale) adding normalize-standardization on col.
+    Returns (cfg, "") if rule already exists for that column."""
+    from goldenmatch.config.schemas import StandardizationConfig
+    rules_dict = (
+        dict(cfg.standardization.rules) if cfg.standardization else {}
+    )
+    if col in rules_dict:
+        return cfg, ""
+    new_rule = _DEFAULT_NORMALIZE_RULES.get(col, ["strip"])
+    rules_dict[col] = new_rule
+    new_std = StandardizationConfig(rules=rules_dict)
+    new_cfg = cfg.model_copy(update={"standardization": new_std})
+    return new_cfg, f"added normalize_standardization({col}={new_rule})"
+
+
+def _with_multi_pass(cfg, additional_key):
+    """Return (new_config, rationale) adding a multi-pass blocking key."""
+    blocking = cfg.blocking
+    existing_keys = list(blocking.keys)
+    if any(k.fields == additional_key.fields for k in existing_keys):
+        return cfg, ""
+    new_keys = existing_keys + [additional_key]
+    new_blocking = blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "keys": new_keys,
+        "passes": new_keys,
+    })
+    new_cfg = cfg.model_copy(update={"blocking": new_blocking})
+    return new_cfg, f"added multi_pass({additional_key.fields})"
+
+
+def _orthogonal_key(cfg, df_columns):
+    """Pick an orthogonal blocking key from remaining columns.
+    Returns None if no candidate exists."""
+    used_cols: set[str] = set()
+    for k in cfg.blocking.keys:
+        used_cols.update(k.fields)
+    candidates = [
+        c for c in df_columns
+        if c not in used_cols and not c.startswith("__")
+    ]
+    if not candidates:
+        return None
+    return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
+
+
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
