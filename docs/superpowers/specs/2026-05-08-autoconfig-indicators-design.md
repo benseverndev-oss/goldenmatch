@@ -25,7 +25,17 @@ v1.10 adds five indicators that disambiguate these cases and let the controller 
 1. **DQbench composite ≥ 70 no-LLM** (primary; v1.9 was 62.87; halfway between current and with-LLM ceiling 95.30).
 2. **DQbench composite ≥ 65 no-LLM** (fallback contract; if (1) fails, branch can still ship at parity gain).
 3. **DBLP-ACM, Febrl3, NCVR hold at v1.8/v1.9 baselines** (no benchmark regression).
-4. **Wall-clock budget**: `auto_configure_df(df)` on a 50K-row dataset completes within 75s (today's typical ~30s + 45s indicator headroom).
+4. **Wall-clock budget**: `auto_configure_df(df)` on a 50K-row dataset completes within **90s** typical-case, with the understanding that struggling-iteration paths (where multiple expensive indicators fire) may approach this ceiling. Today's baseline is ~30s; indicator overhead is ~10s eager + up to ~50s lazy when both expensive indicators fire serially. A `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast` env var disables the two slowest indicators (cross-blocking, full-pop) for users who prefer the v1.9 wall-clock at the cost of v1.10 gains.
+
+### Composite math (back-of-envelope)
+
+DQbench's composite weighting is opaque without harness inspection, but we can bound the contribution. Current: T1=89.3% v0 / 2.0% unguarded, T2=58.7% / 0.7%, T3=53.8% (unchanged). v1.9 ships at parity (composite 62.87) using virtual-v0, so all three tiers are at the "v0" numbers. Targets:
+
+- **For ≥65 (fallback)**: T1 recovery from 89.3% → 92%+ via the corruption-normalize rule alone (catches `Brian/BRIAN` corrupted-email pairs that v0 misses). T1 contributes the largest single weight. Achievable from indicator 4 (corruption-normalize) alone.
+- **For ≥70 (primary)**: T1 ≥ 92% AND T2 ≥ 65% (from cross-blocking + sparse-expand). T2 is the harder tier — its 58.7% baseline indicates blocking is good but threshold is too tight on a sparse-match dataset.
+- **T3 ceiling**: 53.8% is roughly the indicator-stack's ceiling for T3 because none of the 5 indicators target T3's failure mode (which appears to be insufficient discriminative scoring on similar-but-not-duplicate records, not blocking or threshold). Higher T3 needs LLM scorer or richer matchkey design — both v1.11+.
+
+If the back-of-envelope is wrong (DQbench weights heavier on T3 than expected), the primary target may be unreachable even with all 5 indicators. The fallback contract preserves shipping value.
 
 ## Non-goals (this spec)
 
@@ -38,11 +48,11 @@ v1.10 adds five indicators that disambiguate these cases and let the controller 
 
 | Decision | Choice | Why |
 |---|---|---|
-| Scope | All 5 indicators | Aggressive — match the ≥70 target. Fallback to ≥65 if some indicators under-deliver |
+| Scope | All 5 indicators | Aggressive — match the ≥70 target. **T3 (currently 53.8%) is unaffected by these indicators**; gain comes from T1 + T2 recovery only. If T2 doesn't move enough, fallback contract ≥65 is met by T1 recovery alone |
 | Strategy | Hybrid: column-level priors integrate into existing rules; dynamic measurements get new dedicated rules | Negative-signal indicators (don't abandon) belong on existing rules; new-action indicators need new rules |
 | Data model | Hybrid: `DataProfile.column_priors` + new `IndicatorsProfile` sub-profile | Column properties belong with column metadata; controller-level measurements belong in their own bag |
 | Compute strategy | Tiered: cheap eager, expensive lazy via `IndicatorContext` | DBLP-ACM-class easy datasets shouldn't pay for indicators that exist to rescue T1/T2-class struggles |
-| Identity-prior + full-pop integration | Action-list `PolicyDecision`s + new `AddNormalizeStandardization` action | Vetoing abandonment isn't enough; need to introduce the missing normalize-then-exact action |
+| Identity-prior + full-pop integration | Modified rules try alternatives internally before swapping (action-list logic kept inside rules; no public type added) | Vetoing abandonment alone is insufficient — need to introduce normalize-then-exact alternatives without changing the public rule/policy contract |
 | Acceptance | DQbench ≥70 (primary) / ≥65 (fallback) | ≥70 sharpens design choices; fallback prevents v1.9-style "ship parity and hope" |
 
 ## Architecture
@@ -80,45 +90,70 @@ class IndicatorContext:
 
 Passed as 4th positional arg to `RefitPolicy.propose(profile, config, history, ctx)`. Existing rules ignore it (kwarg `ctx=None` default for backward compat). New rules and modified existing rules read from it.
 
-### 3. `PolicyDecision` action-list extension (`core/autoconfig_policy.py`)
+### 3. Rule signature changes (`core/autoconfig_policy.py`, `core/autoconfig_rules.py`)
 
-Today: `PolicyDecision(rule_name: str, action: ConfigAction, rationale: str)`. v1.10: `actions: list[ConfigAction]` replaces single `action`.
+**`PolicyDecision` is unchanged** — its current shape (`rule_name: str`, `rationale: str`, `config_diff: dict[str, Any]`) is preserved. The "action-list" pattern is implemented *inside* each new rule's body, not exposed as a public type. Each rule still returns `tuple[GoldenMatchConfig, PolicyDecision] | None` like today.
 
-`ConfigAction` is a tagged union (Pydantic `Field(discriminator='kind')`):
+**`RefitPolicy.propose()` signature gains an optional `ctx` kwarg:**
 
 ```python
-class SwapBlockingKey(BaseModel):
-    kind: Literal["swap_blocking_key"] = "swap_blocking_key"
-    new_key: BlockingKeyConfig
+class RefitPolicy(Protocol):
+    def propose(
+        self,
+        profile: ComplexityProfile,
+        current: Any,
+        history: RunHistory,
+        ctx: IndicatorContext | None = None,   # NEW (kwarg, default None)
+    ) -> Any | None: ...
+```
 
-class LowerThreshold(BaseModel):
-    kind: Literal["lower_threshold"] = "lower_threshold"
-    delta: float = 0.05
+`HeuristicRefitPolicy.propose` accepts and forwards `ctx` to each rule. Rules whose signature is widened to accept `ctx` receive it; rules unchanged ignore it. The `Rule` type alias becomes:
 
-class AddNormalizeStandardization(BaseModel):
-    kind: Literal["add_normalize_standardization"] = "add_normalize_standardization"
-    column: str
-    rule: StandardizationRule
-
-class AddMultiPass(BaseModel):
-    kind: Literal["add_multi_pass"] = "add_multi_pass"
-    additional_key: BlockingKeyConfig
-
-class ExpandSample(BaseModel):
-    kind: Literal["expand_sample"] = "expand_sample"
-    factor: float = 2.0
-
-class NoOp(BaseModel):
-    kind: Literal["no_op"] = "no_op"
-
-ConfigAction = Annotated[
-    SwapBlockingKey | LowerThreshold | AddNormalizeStandardization
-    | AddMultiPass | ExpandSample | NoOp,
-    Field(discriminator="kind"),
+```python
+Rule = Callable[
+    [ComplexityProfile, Any, RunHistory, IndicatorContext | None],
+    "tuple[Any, PolicyDecision] | None",
 ]
 ```
 
-Backward compat: `PolicyDecision.action` property returns `actions[0]` for the deprecation window (one release; removed in v2.0). Emits `DeprecationWarning` if `len(actions) > 1` to flag callers needing migration.
+Existing rules' signatures are widened to add `ctx: IndicatorContext | None = None` as a final kwarg-defaulted parameter. Their bodies don't reference `ctx`. New + modified rules read from it.
+
+**`LLMRefitPolicy.propose` is updated to accept and forward `ctx` to its wrapped base policy.** This is the only real signature change with backward-compat impact: any caller passing `LLMRefitPolicy.propose(profile, current, history)` positionally still works because `ctx` is kwarg-defaulted. Custom user implementations of `RefitPolicy` that don't accept `ctx` will receive a `TypeError` if called by the v1.10 controller. **Mitigation**: the controller calls `policy.propose(profile, current, history, ctx=ctx)` only if the policy's signature accepts the param (introspected via `inspect.signature`); else falls back to the 3-arg call. Custom policies see no breakage.
+
+**Rule-internal action-list logic.** New rules implement multi-alternative logic internally: they construct a list of candidate `(new_config, rationale)` pairs in preference order, then return the first whose `new_config` differs from `current`. If none differs, return None (treated as rule-not-fired by the policy).
+
+Pseudocode for `rule_no_matches` (modified):
+
+```python
+def rule_no_matches(profile, current, history, ctx=None):
+    if profile.scoring.mass_above_threshold > 0:
+        return None
+    blocking_col = current.blocking.keys[0].fields[0]
+    priors = ctx.column_priors if ctx else {}
+    cp = priors.get(blocking_col, ColumnPrior(0.0, 0.0))
+
+    candidates = []
+    if cp.identity_score >= 0.7:
+        # Identity column: try gentler alternatives before swap
+        candidates.append(_with_lower_threshold(current, 0.05))
+        candidates.append(_with_normalize_standardization(current, blocking_col))
+        candidates.append(_with_multi_pass(current, _orthogonal_key(current)))
+    elif ctx and ctx.sparsity_verdict.is_sparse:
+        candidates.append(_with_expanded_sample(current, factor=2.0))
+    else:
+        candidates.append(_with_lower_threshold(current, 0.05))
+
+    for new_config, rationale in candidates:
+        if new_config != current:
+            return (new_config, PolicyDecision(
+                rule_name="rule_no_matches",
+                rationale=rationale,
+                config_diff=_diff(current, new_config),
+            ))
+    return None
+```
+
+This pattern keeps the rule contract simple (still returns one `(config, decision)`); the "action list" is purely internal scaffolding.
 
 ### Data flow
 
@@ -145,8 +180,8 @@ Detailed per-rule firing conditions are in §Components below.
 |---|---|---|---|
 | `core/indicators.py` | New module | ~250 | 5 indicator functions + `ColumnPrior`, `IndicatorsProfile`, `SparsityVerdict` dataclasses |
 | `IndicatorContext` | New class in `autoconfig_controller.py` | ~50 | df + memoization cache; `__call__`-style API for rules |
-| `ConfigAction` discriminated union | New types in `autoconfig_policy.py` | ~80 | 6 action subclasses + Pydantic discriminator wiring |
-| `PolicyDecision.actions` | Extension | ~30 | List replaces single action; deprecation alias on `.action` for one release |
+| Rule helpers in `autoconfig_rules.py` | New module-private functions | ~120 | `_with_lower_threshold`, `_with_normalize_standardization`, `_with_multi_pass`, `_with_expanded_sample`, `_orthogonal_key`, `_diff`. Used by modified + new rules to build candidate configs |
+| `RefitPolicy.propose` signature widening | Protocol extension | ~30 | Optional `ctx: IndicatorContext \| None = None` kwarg; `HeuristicRefitPolicy` and `LLMRefitPolicy` both forward; controller introspects signature for custom-policy backward compat |
 | `DataProfile.column_priors: dict[str, ColumnPrior] \| None` | Field add | ~5 | Default-None for cache compat |
 | `ComplexityProfile.indicators: IndicatorsProfile \| None` | Field add | ~5 | Default-None |
 | `rule_no_matches` modification | Existing rule | ~40 | Returns `[LowerThreshold, AddNormalize, AddMultiPass, SwapBlockingKey]` ordered by indicator-driven preference. Sparsity-driven `[ExpandSample]` short-circuit when sparse |
@@ -196,9 +231,10 @@ Per-rule firing conditions (concrete):
   - Else: today's swap behavior
 
 **`rule_corruption_normalize` (NEW):**
-- Fires when `priors[blocking_col].corruption_score > 0.4` AND `priors[blocking_col].identity_score > 0.6` AND profile is YELLOW or RED
-- Returns `[AddNormalizeStandardization(blocking_col)]`
+- Fires when `priors[blocking_col].corruption_score > 0.4` AND `priors[blocking_col].identity_score > 0.6` AND profile is YELLOW or RED AND no normalization rule already exists for `blocking_col` in `current.standardization`
+- Returns a new config with `AddNormalizeStandardization(blocking_col)` applied
 - Standardization rule chosen by column type: email → `lowercase + strip + remove_invisible`; phone → `digits_only`; name → `casefold + strip`
+- **One-shot guard**: the "already-exists" check on `current.standardization[blocking_col]` prevents this rule firing twice on the same column. If `rule_no_matches` (position 11) also wants to add normalize on the same column in the same iteration, it'll see the rule already added by `rule_corruption_normalize` (position 6) and try the next alternative in its action list (lower_threshold or multi_pass).
 
 **`rule_cross_blocking_disagreement` (NEW):**
 - Fires when iter ≥ 1, profile RED, `mass_above_threshold < 0.1`, and `ctx.cross_blocking_overlap(blocking_a, blocking_b) < 0.3` (where `blocking_b` is a heuristically-chosen orthogonal key from remaining columns)
@@ -217,7 +253,7 @@ Per-rule firing conditions (concrete):
 | Exception inside indicator function | Any indicator function | Caught at `IndicatorContext` boundary; logged at WARNING with traceback hash; returns None. Accumulates in `_LAST_CONTROLLER_RUN.errors` |
 | `column_priors[col]` lookup miss | New rules reading priors | Treat missing key as `ColumnPrior(identity_score=0.0, corruption_score=0.0)`. Defensive |
 | Action application failure | `controller._apply_action(action, config) -> (config, applied: bool, error: str | None)` | Controller falls through to `actions[1]`; if all fail, treats as POLICY_NO_PROGRESS |
-| Memory cache deserialization | Loading v1.9-saved entries | Default-None on `column_priors` and `indicators` fields; round-trip verified by snapshot fixture in tests |
+| Memory cache deserialization | Loading v1.9-saved entries | **Profiles are not persisted to memory cache.** `autoconfig_memory.py` stores only `GoldenMatchConfig` (Pydantic) + a profile signature hash + `succeeded` flag. Adding `column_priors` / `indicators` fields to `DataProfile` / `ComplexityProfile` (both `@dataclass`, not Pydantic) has zero serialization impact on the on-disk SQLite schema. Verification: a "load v1.9-vintage cache entry" test asserts the entry round-trips intact (no schema migration required). |
 | `PolicyDecision.action` access on multi-action decision | Backward-compat property | Returns `actions[0]` + emits DeprecationWarning. Removed in v2.0 |
 
 **Determinism:** indicators that sample (corruption-score) use a fixed seed derived from df hash, not random. Memoization cache uses tuple keys with deterministic ordering. Cross-version determinism not guaranteed (indicator functions may evolve).
@@ -248,11 +284,13 @@ Per-rule firing conditions (concrete):
 - `rule_corruption_normalize` × 2 (fires when corruption + identity both pass; no-fire otherwise)
 - `rule_sparse_match_expand` × 1 (fires once on iter ≤1; not on iter > 1)
 
-### Tier 3 — Action-list mechanics (`tests/test_policy_decision.py`, ~80 LOC)
+### Tier 3 — Rule signature + ctx forwarding (`tests/test_autoconfig_policy.py`, ~80 LOC additions)
 
-- `PolicyDecision.action` returns `actions[0]` on single-action; emits DeprecationWarning on multi-action
-- Controller's apply-loop: tries `actions[0]`, falls through on `applied=False`, settles on POLICY_NO_PROGRESS if all fail
-- Single-action existing rules produce 1-element lists (no behavior change)
+- `HeuristicRefitPolicy.propose(profile, current, history, ctx=ctx)` forwards `ctx` to each rule
+- `LLMRefitPolicy.propose(profile, current, history, ctx=ctx)` forwards `ctx` to its wrapped base policy
+- Custom-policy backward compat: a 3-arg-only mock policy (no `ctx` param) still works via the controller's signature introspection — verify with a deliberately-old-shape mock policy
+- Existing rules called with `ctx=None` produce no warnings under `warnings.simplefilter("error", DeprecationWarning)` (no spurious deprecations)
+- Rule-internal alternative-tries: `rule_no_matches` with high identity prior tries `lower_threshold` first; if that yields `new_config == current` (already at floor), falls through to `add_normalize`; if THAT yields `new_config == current` (already normalized), falls through to `add_multi_pass`. Verify each fall-through path produces a different config or returns None when truly stuck.
 
 ### Tier 4 — Integration on T1-style fixture (`tests/test_dqbench_t1_recovery.py`, ~120 LOC)
 
@@ -291,11 +329,11 @@ This is the in-CI guard the v1.9 review flagged as missing.
 4. **DQbench composite ≥ 65 (no LLM)** — fallback contract; if (3) fails, branch can ship as v1.10 with the gap queued for v1.11.
 5. **Wall-clock budget**: `auto_configure_df(df)` on a 50K-row dataset completes within 75s.
 6. **Cache compat**: a v1.9-saved entry loads cleanly into v1.10. PR includes the v1.9 fixture snapshot.
-7. **PR description includes per-tier DQbench breakdown + indicator-attribution**: which indicators contributed how many composite points (run with each indicator individually disabled to attribute).
+7. **PR description includes per-tier DQbench breakdown.** Indicator-attribution sweep (one disabled-indicator run per indicator, ~10 min each = 1hr total) is **conditional**: required only if shipping at composite ≥ 70 (so we can document which indicators delivered the win); not required if shipping the ≥65 fallback (per-tier breakdown alone is sufficient).
 
 ## Risks
 
-- **Action-list refactor blast radius**: `PolicyDecision` is touched by ~5 places. Tier 3 tests catch most. Mitigation: deprecation alias on `.action` makes failures loud under `-Werror`.
+- **`RefitPolicy.propose` signature widening**: existing custom policy implementations (none in tree, but possible in user code) take 3 positional args. Mitigation: controller introspects via `inspect.signature(policy.propose)` and falls back to 3-arg call when `ctx` isn't a parameter — Tier 3 covers this with a deliberately-old-shape mock policy. No `__all__` exports `RefitPolicy` as a stable public type, so this is best-effort backward compat.
 - **Cross-blocking probe wall-cost variance**: 20s budget covers 50K rows, but bigger datasets may consistently timeout, eliminating the indicator's signal. Mitigation: corruption-normalize rule offers an alternative path that doesn't depend on cross-blocking.
 - **YAGNI risk on `ExpandSample`**: only fires on iter ≤ 1. If we never observe it firing on real benchmarks, drop the rule + indicator in v1.11.
 - **Indicator-attribution costs N+1 DQbench runs**: each disabled-indicator run is ~10 minutes. Mitigation: only run the attribution sweep once per major spec change, not per-PR.
@@ -304,7 +342,7 @@ This is the in-CI guard the v1.9 review flagged as missing.
 
 1. Build `core/indicators.py` with 5 functions + dataclasses (~250 LOC) + Tier 1 unit tests
 2. Add `ColumnPrior` and `IndicatorsProfile` to `complexity_profile.py`; default-None fields on `DataProfile` and `ComplexityProfile` + Tier 5 cache compat tests
-3. Add `ConfigAction` union + extend `PolicyDecision` with `actions` list + deprecation alias on `.action` + Tier 3 tests
+3. Widen `RefitPolicy.propose` signature with optional `ctx` kwarg; update `HeuristicRefitPolicy` + `LLMRefitPolicy` to forward; add controller signature-introspection for old-shape custom policies + Tier 3 tests
 4. Add `IndicatorContext` to controller + thread `ctx` through `policy.propose(...)` signature
 5. Modify `rule_no_matches` and `rule_blocking_key_swap` (smallest delta first) + Tier 2 tests
 6. Add `rule_corruption_normalize`, `rule_cross_blocking_disagreement`, `rule_sparse_match_expand` + Tier 2 tests
