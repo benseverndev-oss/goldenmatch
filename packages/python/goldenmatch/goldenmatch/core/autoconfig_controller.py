@@ -279,6 +279,14 @@ class AutoConfigController:
             compute_column_priors, estimate_sparse_match_signal,
         )
         column_priors = compute_column_priors(df)
+
+        # v1.11: eager NE promotion — runs before the iteration loop so that
+        # identity-prior columns (phone, address, etc.) are added as negative
+        # evidence on weighted matchkeys before the first iteration profiles them.
+        from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+        config_v0 = promote_negative_evidence(config_v0, df, column_priors)
+        config_n = config_v0
+
         exact_columns: list[str] = []
         for mk in config_v0.get_matchkeys():
             if mk.type == "exact":
