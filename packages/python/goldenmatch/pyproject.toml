@@ -157,4 +157,8 @@ exclude_lines = [
     "if __name__ == .__main__.",
     "if TYPE_CHECKING:",
 ]
+# Floor for the *overall* package. Per-module floors live in CI's coverage-gate
+# step (see .github/workflows/ci.yml — "coverage_gate") so per-module
+# regressions don't hide inside the global average.
+fail_under = 70
 show_missing = true
