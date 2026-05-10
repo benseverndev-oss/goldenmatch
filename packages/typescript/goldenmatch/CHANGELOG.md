@@ -4,6 +4,40 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [0.5.0] - 2026-05-10
+
+Auto-config controller parity with Python `goldenmatch` v1.7 + v1.8.
+
+### Added
+
+- `AutoConfigController` (async `.run()`) — iterative auto-config with
+  pathological-input gates, deterministic sampling, policy-driven refit loop,
+  and best-effort commit via `RunHistory.pickCommitted`.
+- `ComplexityProfile` + sub-profiles (`DataProfile`, `DomainProfile`,
+  `MatchkeyProfile`, `BlockingProfile`, `ScoringProfile`, `ClusterProfile`,
+  `ProfileMeta`, `IndicatorsProfile`) with `HealthVerdict` rollup.
+- `RunHistory` audit trail with `PolicyDecision` / `ErrorRecord` / `HistoryEntry`
+  and `pickCommitted(precisionCollapseFloor)` lexicographic commit selection.
+- `HeuristicRefitPolicy` rule dispatcher + 7 base v1.7/v1.8 rules:
+  `ruleBlockingSingletonTrap`, `ruleBlockingTooCoarse`, `ruleBlockingKeySwap`,
+  `ruleLowReductionRatio`, `ruleLowTransitivity`, `ruleNoMatches`,
+  `ruleUnimodalScoring`.
+- `StopReason` telemetry (8 variants matching Python).
+- `autoConfigureRowsIterate(rows)` async iterative entry point.
+- `AutoconfigOptions.iterate` field (default `false`; preserves pre-0.5.0
+  behavior).
+- `getLastControllerRun()` debug accessor mirroring Python's
+  `_LAST_CONTROLLER_RUN` ContextVar.
+- Parity test suite: 6 dataset fixtures generated from the Python sibling
+  via `packages/python/goldenmatch/scripts/emit_ts_parity_fixtures.py`.
+
+### Deferred to v0.6.0 (Wave 2)
+
+- 5 complexity indicators + `IndicatorContext` memoization.
+- Indicator-aware refit rules (`ruleCorruptionNormalize`,
+  `ruleCrossBlockingDisagreement`, `ruleSparseMatchExpand`).
+- Indicator-aware extensions to `ruleBlockingKeySwap` and `ruleNoMatches`.
+
 ## [0.4.0] - 2026-05-05
 
 ### BREAKING
