@@ -1,0 +1,62 @@
+# Dependabot configuration — security + version updates per ecosystem.
+# Security alerts fire on every push regardless; this file controls weekly
+# version-bump PR cadence so we don't get drowned in updates.
+
+version: 2
+updates:
+  # Python — workspace root pyproject.toml
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python-prod:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      python-dev:
+        dependency-type: "development"
+
+  # TypeScript — goldenmatch-js package
+  - package-ecosystem: "npm"
+    directory: "/packages/goldenmatch-js"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "typescript"
+    groups:
+      ts-prod:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      ts-dev:
+        dependency-type: "development"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # Docker — Dockerfile.mcp at repo root + per-package
+  - package-ecosystem: "docker"
+    directory: "/packages/python/goldenmatch"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "docker"
