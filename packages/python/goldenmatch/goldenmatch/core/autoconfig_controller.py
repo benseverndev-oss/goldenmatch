@@ -16,7 +16,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, HealthVerdict, StopReason,
+    CollisionSignal, ComplexityProfile, DataProfile, HealthVerdict, StopReason,
     ColumnPrior, SparsityVerdict,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
@@ -95,6 +95,20 @@ class IndicatorContext:
         key = ("cross_blocking_overlap", a, b)
         if key not in self._memo:
             self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
+        return self._memo[key]
+
+    def identity_collision_signal(
+        self, identity_col: str, witness_cols: list[str],
+    ) -> "CollisionSignal":
+        if self._is_fast_mode():
+            return CollisionSignal(rate=0.0, witness_used="")
+        from goldenmatch.core.indicators import compute_identity_collision_signal
+        canonical_witnesses = tuple(sorted(witness_cols))
+        key = ("identity_collision_signal", identity_col, canonical_witnesses)
+        if key not in self._memo:
+            self._memo[key] = compute_identity_collision_signal(
+                self._df, identity_col, list(canonical_witnesses),
+            )
         return self._memo[key]
 
     def has_fired(self, rule_name: str) -> bool:
