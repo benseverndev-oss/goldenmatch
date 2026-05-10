@@ -155,6 +155,59 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
     return total_penalty
 
 
+def _apply_negative_evidence_to_exact_pairs(
+    pairs: list[tuple[int, int, float]],
+    matchkey: MatchkeyConfig,
+    full_df: pl.DataFrame,
+) -> list[tuple[int, int, float]]:
+    """v1.12 Path Y: filter pairs from find_exact_matches by NE penalty.
+
+    ``pairs`` is the output of find_exact_matches: list of (row_id_a, row_id_b, 1.0)
+    where each pair already shares the matchkey value. v1.12: subtract NE
+    penalties; emit only if final_score >= threshold.
+
+    When matchkey.negative_evidence is None or empty: returns pairs unchanged
+    (today's binary behavior preserved).
+    """
+    if not matchkey.negative_evidence:
+        return pairs
+    threshold = matchkey.threshold if matchkey.threshold is not None else 0.5
+    if matchkey.threshold is None:
+        logger.info(
+            "auto-config: NE active on exact matchkey '%s' but threshold is None; "
+            "using default 0.5 (recommend setting matchkey.threshold explicitly)",
+            matchkey.name,
+        )
+
+    # Build a lookup of (row_id → row_index_in_full_df) for fast NE column access
+    row_id_to_idx: dict[int, int] = dict(
+        zip(full_df["__row_id__"].to_list(), range(full_df.height))
+    )
+
+    filtered: list[tuple[int, int, float]] = []
+    for row_a, row_b, _initial_score in pairs:
+        idx_a = row_id_to_idx.get(row_a)
+        idx_b = row_id_to_idx.get(row_b)
+        if idx_a is None or idx_b is None:
+            # Defensive: shouldn't happen if pairs came from find_exact_matches
+            continue
+        pair_dict: dict = {}
+        for ne in matchkey.negative_evidence:
+            if ne.field not in full_df.columns:
+                continue
+            try:
+                val_a = full_df[ne.field][idx_a]
+                val_b = full_df[ne.field][idx_b]
+                pair_dict[ne.field] = (val_a, val_b)
+            except Exception:
+                pair_dict[ne.field] = (None, None)
+        penalty = _apply_negative_evidence(matchkey, pair_dict)
+        final_score = max(0.0, 1.0 - penalty)
+        if final_score >= threshold:
+            filtered.append((row_a, row_b, final_score))
+    return filtered
+
+
 def find_exact_matches(
     lf: pl.LazyFrame, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
