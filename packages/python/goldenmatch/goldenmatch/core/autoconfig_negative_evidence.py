@@ -87,16 +87,25 @@ def promote_negative_evidence(
     df: pl.DataFrame,
     column_priors: dict[str, ColumnPrior],
 ) -> GoldenMatchConfig:
-    """Add NE fields to all weighted matchkeys based on column priors.
+    """Add NE fields to weighted AND exact matchkeys based on column priors.
 
-    Eligibility per column:
+    v1.12: walks all matchkey types (was weighted-only in v1.11).
+    Probabilistic matchkeys are still skipped (see §Non-goals in spec).
+
+    Eligibility per column (weighted matchkey branch):
         column_priors[col].identity_score >= _IDENTITY_SCORE_THRESHOLD (0.75)
         AND col is used as a field in at least one exact matchkey
-          (prevents recall regression on noisy ER data where phone/email
-           differ legitimately in duplicate pairs — Phase 7 fix)
+          (prevents recall regression on noisy ER data — Phase 7 fix)
         AND cardinality_ratio (n_unique / n_rows) >= _CARDINALITY_THRESHOLD (0.5)
         AND col NOT in this weighted matchkey's fields
         AND col NOT in blocking.keys
+
+    Eligibility per column (exact matchkey branch — v1.12):
+        Same identity_score + cardinality gates apply.
+        The _is_exact_matchkey_field gate is SKIPPED — its rationale
+        (anchor safety) doesn't apply when iterating the exact matchkey itself.
+        When NE is added to an exact matchkey with threshold=None, the
+        threshold is set to 0.5 to activate score-and-threshold filtering.
 
     Idempotent: skips columns already in the NE list for each matchkey.
 
@@ -110,7 +119,8 @@ def promote_negative_evidence(
 
     new_matchkeys: list[MatchkeyConfig] = []
     for mk in config.matchkeys:
-        if mk.type != "weighted":
+        # v1.12: walk weighted AND exact matchkeys; skip probabilistic + others
+        if mk.type not in ("weighted", "exact"):
             new_matchkeys.append(mk)
             continue
 
@@ -124,13 +134,13 @@ def promote_negative_evidence(
             # Identity score gate (0.75 excludes cardinality-only fallback of 0.7)
             if prior.identity_score < _IDENTITY_SCORE_THRESHOLD:
                 continue
-            # Exact-matchkey gate: only promote NE for columns that already have
-            # an exact matchkey counterpart. Without an exact matchkey, a
-            # disagreeing field in a pair captured by the weighted matchkey is
-            # ambiguous (corruption vs FP), and the penalty causes recall regression.
-            if not _is_exact_matchkey_field(col, all_matchkeys):
-                continue
-            # Positive matchkey fields gate (this weighted matchkey)
+            # v1.12: apply _is_exact_matchkey_field gate ONLY on weighted branch.
+            # The gate's rationale (anchor safety for NE-on-weighted) doesn't apply
+            # when iterating an exact matchkey for itself — skip gate on exact branch.
+            if mk.type == "weighted":
+                if not _is_exact_matchkey_field(col, all_matchkeys):
+                    continue
+            # Positive matchkey fields gate (this matchkey)
             if _is_in_matchkey_fields(col, mk):
                 continue
             # Blocking gate
@@ -164,18 +174,29 @@ def promote_negative_evidence(
                 penalty=_DEFAULT_NE_PENALTY,
             ))
             logger.info(
-                "auto-config: promoted negative_evidence field=%s "
-                "(identity_score=%.2f, cardinality_ratio=%.2f, "
-                "transforms=%s, scorer=%s, has_exact_matchkey=True)",
-                col,
-                prior.identity_score,
-                cardinality_ratio,
-                transforms,
-                scorer,
+                "auto-config: promoted negative_evidence field=%s on matchkey=%s "
+                "(identity_score=%.2f, cardinality_ratio=%.2f, scorer=%s)",
+                col, mk.name, prior.identity_score, cardinality_ratio, scorer,
             )
 
+        # v1.12: when NE was added to an exact matchkey with threshold=None,
+        # set threshold=0.5 to activate the score-and-threshold scoring path.
+        # Preserve user-set thresholds unchanged.
+        new_threshold = mk.threshold
+        if mk.type == "exact" and len(new_ne) > len(existing_ne_fields):
+            if mk.threshold is None:
+                new_threshold = 0.5
+                logger.info(
+                    "auto-config: set default threshold=0.5 on exact matchkey=%s "
+                    "(NE was added; threshold was None)",
+                    mk.name,
+                )
+
         new_matchkeys.append(
-            mk.model_copy(update={"negative_evidence": new_ne if new_ne else None})
+            mk.model_copy(update={
+                "negative_evidence": new_ne if new_ne else None,
+                "threshold": new_threshold,
+            })
         )
 
     return config.model_copy(update={"matchkeys": new_matchkeys})

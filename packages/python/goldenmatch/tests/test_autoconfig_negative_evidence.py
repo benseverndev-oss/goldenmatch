@@ -253,3 +253,201 @@ def test_auto_configure_df_calls_promote_negative_evidence():
                 f"NE should only be promoted when an exact matchkey counterpart exists; "
                 f"got NE on {mk.name} with no exact matchkeys"
             )
+
+
+# ============================================================
+# v1.12: promote_negative_evidence walks exact matchkeys too
+# ============================================================
+
+def test_promote_ne_populates_exact_matchkey_too():
+    """v1.12: promote_negative_evidence walks exact matchkeys, not just weighted."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+
+    df = pl.DataFrame({
+        "first_name": ["Brian"] * 10,
+        "email": [f"u{i}@x.com" for i in range(10)],
+        "phone": [f"555-{1000+i}" for i in range(10)],
+        "address": [f"{i} Main St" for i in range(10)],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_email", type="exact", threshold=None,
+                fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                                       scorer="exact", weight=1.0)],
+            ),
+            MatchkeyConfig(
+                name="fuzzy_match", type="weighted", threshold=0.8,
+                fields=[MatchkeyField(field="first_name", transforms=["lowercase"],
+                                       scorer="ensemble", weight=1.0)],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["first_name"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    column_priors = {
+        "first_name": ColumnPrior(identity_score=0.3, corruption_score=0.0),
+        "email": ColumnPrior(identity_score=0.95, corruption_score=0.0),
+        "phone": ColumnPrior(identity_score=0.85, corruption_score=0.0),
+        "address": ColumnPrior(identity_score=0.7, corruption_score=0.0),
+    }
+    new_config = promote_negative_evidence(config, df, column_priors)
+
+    # Find exact_email matchkey in new_config
+    exact_mk = next(mk for mk in new_config.matchkeys if mk.type == "exact")
+    assert exact_mk.negative_evidence is not None
+    ne_fields = {n.field for n in exact_mk.negative_evidence}
+    assert "phone" in ne_fields    # qualifies: identity 0.85, cardinality high
+    # NOTE: address has identity 0.7, which is below the v1.11 IDENTITY_SCORE_THRESHOLD
+    # of 0.75. So it does NOT qualify under current default. Adjust test as needed.
+
+
+def test_promote_ne_sets_default_threshold_on_exact_when_none():
+    """When NE is added to an exact matchkey with threshold=None, set threshold=0.5."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(10)],
+        "phone": [f"555-{1000+i}" for i in range(10)],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_email", type="exact", threshold=None,
+            fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                                   scorer="exact", weight=1.0)],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    priors = {
+        "email": ColumnPrior(0.95, 0.0),
+        "phone": ColumnPrior(0.85, 0.0),
+    }
+    new_config = promote_negative_evidence(config, df, priors)
+    exact_mk = next(mk for mk in new_config.matchkeys if mk.type == "exact")
+    if exact_mk.negative_evidence:
+        # NE was added; threshold should now be 0.5
+        assert exact_mk.threshold == 0.5
+
+
+def test_promote_ne_preserves_user_set_threshold_on_exact():
+    """User-set threshold on exact matchkey is NOT overwritten by promotion."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(10)],
+        "phone": [f"555-{1000+i}" for i in range(10)],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_email", type="exact", threshold=0.7,    # user set
+            fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                                   scorer="exact", weight=1.0)],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    priors = {"email": ColumnPrior(0.95, 0.0), "phone": ColumnPrior(0.85, 0.0)}
+    new_config = promote_negative_evidence(config, df, priors)
+    exact_mk = next(mk for mk in new_config.matchkeys if mk.type == "exact")
+    assert exact_mk.threshold == 0.7    # user value preserved
+
+
+def test_promote_ne_skips_is_exact_matchkey_field_gate_on_exact_branch():
+    """v1.12 fix: the _is_exact_matchkey_field gate should NOT apply when
+    iterating the exact matchkey itself. T3's phone is not in any exact
+    matchkey, but should still be promoted as NE on exact_email."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+
+    # Config with ONLY exact_email; phone is NOT in any exact matchkey
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(10)],
+        "phone": [f"555-{1000+i}" for i in range(10)],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_email", type="exact", threshold=None,
+            fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                                   scorer="exact", weight=1.0)],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    priors = {"email": ColumnPrior(0.95, 0.0), "phone": ColumnPrior(0.85, 0.0)}
+    new_config = promote_negative_evidence(config, df, priors)
+    exact_mk = next(mk for mk in new_config.matchkeys if mk.type == "exact")
+    # Phone should be NE on exact_email even though phone isn't in any exact matchkey
+    assert exact_mk.negative_evidence is not None
+    ne_fields = {n.field for n in exact_mk.negative_evidence}
+    assert "phone" in ne_fields
+
+
+def test_promote_ne_idempotent_on_exact_matchkey():
+    """Calling twice produces the same exact-matchkey NE list."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(10)],
+        "phone": [f"555-{1000+i}" for i in range(10)],
+    })
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_email", type="exact", threshold=None,
+            fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                                   scorer="exact", weight=1.0)],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    priors = {"email": ColumnPrior(0.95, 0.0), "phone": ColumnPrior(0.85, 0.0)}
+    once = promote_negative_evidence(config, df, priors)
+    twice = promote_negative_evidence(once, df, priors)
+    once_mk = next(mk for mk in once.matchkeys if mk.type == "exact")
+    twice_mk = next(mk for mk in twice.matchkeys if mk.type == "exact")
+    assert (once_mk.negative_evidence or []) == (twice_mk.negative_evidence or [])
+    assert once_mk.threshold == twice_mk.threshold
