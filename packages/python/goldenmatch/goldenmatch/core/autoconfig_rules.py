@@ -121,6 +121,86 @@ def _orthogonal_key(cfg, df_columns):
     return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
 
 
+def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
+    """Demote an exact matchkey on identity_col to a fuzzy participant
+    in the existing weighted matchkey. Add identity_col to blocking.
+
+    Returns (new_config, rationale). Returns (cfg, "") if no weighted
+    matchkey exists to add to (defensive — we can't demote without
+    a target).
+    """
+    weighted_indices = [
+        i for i, mk in enumerate(cfg.matchkeys) if mk.type == "weighted"
+    ]
+    if not weighted_indices:
+        return cfg, ""
+
+    exact_indices = [
+        i for i, mk in enumerate(cfg.matchkeys)
+        if mk.type == "exact" and any(f.field == identity_col for f in mk.fields)
+    ]
+    if not exact_indices:
+        return cfg, ""    # nothing to demote
+
+    target_idx = weighted_indices[0]
+    target_mk = cfg.matchkeys[target_idx]
+
+    # Add identity_col as a fuzzy field with low weight (0.3)
+    new_field = MatchkeyField(
+        field=identity_col,
+        transforms=["lowercase", "strip"],
+        scorer="token_sort",
+        weight=0.3,
+    )
+    if any(f.field == identity_col for f in target_mk.fields):
+        new_target_mk = target_mk    # already participating; just remove exact
+    else:
+        new_target_fields = list(target_mk.fields) + [new_field]
+        new_target_mk = target_mk.model_copy(update={"fields": new_target_fields})
+
+    # Build new matchkeys list: drop the exact matchkey(s); replace target
+    new_matchkeys = []
+    for i, mk in enumerate(cfg.matchkeys):
+        if i in exact_indices:
+            continue
+        if i == target_idx:
+            new_matchkeys.append(new_target_mk)
+        else:
+            new_matchkeys.append(mk)
+
+    # Add to blocking if not present
+    blocking = cfg.blocking
+    blocking_cols: set[str] = set()
+    for k in blocking.keys:
+        blocking_cols.update(k.fields)
+    if identity_col not in blocking_cols:
+        new_block_key = BlockingKeyConfig(
+            fields=[identity_col], transforms=["lowercase", "strip"],
+        )
+        new_keys = list(blocking.keys) + [new_block_key]
+        # passes: existing passes (or existing keys if no passes) + only the NEW key
+        existing_passes = list(blocking.passes) if blocking.passes else list(blocking.keys)
+        new_passes = existing_passes + [new_block_key]
+        new_blocking = blocking.model_copy(update={
+            "strategy": "multi_pass" if len(new_keys) > 1 else blocking.strategy,
+            "keys": new_keys,
+            "passes": new_passes if len(new_keys) > 1 else None,
+        })
+    else:
+        new_blocking = blocking
+
+    new_cfg = cfg.model_copy(update={
+        "matchkeys": new_matchkeys,
+        "blocking": new_blocking,
+    })
+
+    rationale = (
+        f"demoted exact_{identity_col} to fuzzy participant "
+        f"(witness_used={witness_col}); added {identity_col} to blocking"
+    )
+    return new_cfg, rationale
+
+
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":

@@ -140,6 +140,49 @@ def _ctx_with_priors_and_hits(priors, full_pop_hits):
     return ctx
 
 
+def _build_test_config_with_exact_email_and_weighted():
+    """Config with both an exact email matchkey and a weighted name matchkey."""
+    return _V110GMC(
+        matchkeys=[
+            _V110MK(
+                name="exact_email", type="exact", threshold=1.0,
+                fields=[_V110MKF(field="email", transforms=["lowercase"],
+                                 scorer="exact", weight=1.0)],
+            ),
+            _V110MK(
+                name="fuzzy_match", type="weighted", threshold=0.8,
+                fields=[
+                    _V110MKF(field="first_name", transforms=["lowercase"],
+                             scorer="ensemble", weight=0.5),
+                    _V110MKF(field="last_name", transforms=["lowercase"],
+                             scorer="ensemble", weight=0.5),
+                ],
+            ),
+        ],
+        blocking=_V110BC(
+            strategy="static",
+            keys=[_V110BKC(fields=["city"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=True,
+        ),
+    )
+
+
+def _build_test_config_with_only_exact_email():
+    """Config with only an exact email matchkey (no weighted matchkey)."""
+    return _V110GMC(
+        matchkeys=[_V110MK(
+            name="exact_email", type="exact", threshold=1.0,
+            fields=[_V110MKF(field="email", transforms=["lowercase"],
+                             scorer="exact", weight=1.0)],
+        )],
+        blocking=_V110BC(
+            strategy="static",
+            keys=[_V110BKC(fields=["city"], transforms=["lowercase"])],
+            max_block_size=1000, skip_oversized=True,
+        ),
+    )
+
+
 # ============================================================
 # Task 4.1: Rule helper tests
 # ============================================================
@@ -407,4 +450,132 @@ def test_rule_sparse_match_expand_no_fire_when_not_sparse():
     cfg = _build_test_config()
     ctx = _ctx_with_sparsity(_V110SV(is_sparse=False, estimated_n_true_pairs=100))
     outcome = rule_sparse_match_expand(profile, cfg, _empty_history(), ctx=ctx)
+    assert outcome is None
+
+
+# ============================================================
+# Task 5.1: _demote_exact_to_weighted_fuzzy helper tests
+# ============================================================
+
+def test_demote_exact_to_weighted_fuzzy_removes_exact_matchkey():
+    """The exact matchkey on email is removed; email becomes a fuzzy field."""
+    from goldenmatch.core.autoconfig_rules import _demote_exact_to_weighted_fuzzy
+    cfg = _build_test_config_with_exact_email_and_weighted()
+    new_cfg, rationale = _demote_exact_to_weighted_fuzzy(cfg, "email", "address")
+    # No more standalone exact matchkey on email
+    assert not any(
+        mk.type == "exact" and any(f.field == "email" for f in mk.fields)
+        for mk in new_cfg.matchkeys
+    )
+    # email is now a participant in the weighted matchkey
+    weighted = [mk for mk in new_cfg.matchkeys if mk.type == "weighted"][0]
+    assert any(f.field == "email" for f in weighted.fields)
+
+
+def test_demote_adds_to_blocking_when_not_present():
+    from goldenmatch.core.autoconfig_rules import _demote_exact_to_weighted_fuzzy
+    cfg = _build_test_config_with_exact_email_and_weighted()
+    new_cfg, _ = _demote_exact_to_weighted_fuzzy(cfg, "email", "address")
+    blocking_cols = set()
+    for k in new_cfg.blocking.keys:
+        blocking_cols.update(k.fields)
+    assert "email" in blocking_cols
+
+
+def test_demote_skips_when_no_weighted_matchkey():
+    """If no weighted matchkey to add to → no-op."""
+    from goldenmatch.core.autoconfig_rules import _demote_exact_to_weighted_fuzzy
+    cfg = _build_test_config_with_only_exact_email()
+    new_cfg, rationale = _demote_exact_to_weighted_fuzzy(cfg, "email", "address")
+    assert new_cfg == cfg
+
+
+# ============================================================
+# Task 5.2: rule_demote_clustered_identity tests
+# ============================================================
+
+def test_rule_demote_clustered_identity_fires_on_collision():
+    """High collision_rate + identity-prior + exact matchkey → fires."""
+    from goldenmatch.core.autoconfig_rules import rule_demote_clustered_identity
+    from goldenmatch.core.complexity_profile import CollisionSignal
+    cfg = _build_test_config_with_exact_email_and_weighted()
+    profile = _profile_with_mass_above(0.0)
+    import polars as pl
+    df = pl.DataFrame({
+        "email": [f"u{i // 3}@x.com" for i in range(15)],   # 5 unique emails × 3 records
+        "first_name": ["Brian"] * 15,
+        "last_name": ["Smith"] * 15,
+        "address": [f"{i} Main St" for i in range(15)],   # all different
+        "city": ["NYC"] * 15,
+    })
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    ctx = IndicatorContext(
+        df=df,
+        column_priors={
+            "email": _V110ColP(identity_score=0.95, corruption_score=0.0),
+            "address": _V110ColP(identity_score=0.7, corruption_score=0.0),
+        },
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    # Pre-populate collision_rate as high
+    ctx._memo[("identity_collision_signal", "email", ("address",))] = (
+        CollisionSignal(rate=0.6, witness_used="address")
+    )
+    history = _empty_history()
+    outcome = rule_demote_clustered_identity(profile, cfg, history, ctx=ctx)
+    assert outcome is not None
+    new_cfg, decision = outcome
+    # exact_email matchkey should be gone
+    assert not any(
+        mk.type == "exact" and any(f.field == "email" for f in mk.fields)
+        for mk in new_cfg.matchkeys
+    )
+    assert "demoted" in decision.rationale.lower()
+
+
+def test_rule_demote_clustered_identity_no_fire_when_collision_low():
+    from goldenmatch.core.autoconfig_rules import rule_demote_clustered_identity
+    from goldenmatch.core.complexity_profile import CollisionSignal
+    cfg = _build_test_config_with_exact_email_and_weighted()
+    profile = _profile_with_mass_above(0.0)
+    import polars as pl
+    df = pl.DataFrame({
+        "email": [f"u{i}@x.com" for i in range(15)],   # all unique
+        "address": [f"{i} Main St" for i in range(15)],
+    })
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    ctx = IndicatorContext(
+        df=df,
+        column_priors={
+            "email": _V110ColP(identity_score=0.95, corruption_score=0.0),
+            "address": _V110ColP(identity_score=0.7, corruption_score=0.0),
+        },
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    ctx._memo[("identity_collision_signal", "email", ("address",))] = (
+        CollisionSignal(rate=0.05, witness_used="")
+    )
+    outcome = rule_demote_clustered_identity(profile, cfg, _empty_history(), ctx=ctx)
+    assert outcome is None
+
+
+def test_rule_demote_clustered_identity_no_fire_no_exact_matchkey():
+    """If no exact matchkey on the candidate column → don't fire."""
+    from goldenmatch.core.autoconfig_rules import rule_demote_clustered_identity
+    cfg = _build_test_config(blocking_field="email")    # weighted only, no exact_email
+    profile = _profile_with_mass_above(0.0)
+    ctx = _ctx_with_priors({
+        "email": _V110ColP(identity_score=0.95, corruption_score=0.0),
+    })
+    outcome = rule_demote_clustered_identity(profile, cfg, _empty_history(), ctx=ctx)
+    assert outcome is None
+
+
+def test_rule_demote_clustered_identity_no_fire_when_ctx_none():
+    from goldenmatch.core.autoconfig_rules import rule_demote_clustered_identity
+    cfg = _build_test_config_with_exact_email_and_weighted()
+    profile = _profile_with_mass_above(0.0)
+    outcome = rule_demote_clustered_identity(profile, cfg, _empty_history(), ctx=None)
     assert outcome is None
