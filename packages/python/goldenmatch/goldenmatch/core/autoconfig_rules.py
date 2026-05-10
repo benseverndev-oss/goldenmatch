@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 from goldenmatch.config.schemas import (
     GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
+    BlockingKeyConfig,
 )
 from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
@@ -1011,12 +1011,14 @@ def rule_demote_clustered_identity(profile, current, history, ctx=None):
         AND some col has cardinality_ratio in [0.5, 0.95]
                   AND column_priors[col].identity_score >= 0.85
                   AND col is the field of an exact matchkey in current
-                  AND collision_signal(col, [other identity priors]).rate > 0.5
+                  AND collision_signal(col, [other identity priors]).rate > 0.75
 
-    The threshold of 0.5 (strict) prevents false positives on legitimate
-    deduplication data where duplicate pairs naturally diverge on witness
-    fields due to data corruption (T1-style). Adversarial reuse (T3-style)
-    produces rates of 1.0 and clears this bar easily.
+    The threshold of 0.75 prevents false positives on legitimate fuzzy ER
+    datasets where random email collisions produce collision rates of 0.5-0.65
+    (ER T2/T3 fuzzy shapes). Adversarial reuse (hospital/fraud-style: same
+    email shared across hundreds of unrelated entities) produces rates near
+    1.0 and clears this bar easily. Raised from 0.5 (Phase 6) after Phase 7
+    benchmark showed ER T2 false-fire at 0.62 causing 186 FNs.
 
     Spec: docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
           §Components rule firing conditions.
@@ -1060,7 +1062,7 @@ def rule_demote_clustered_identity(profile, current, history, ctx=None):
         if not witness_cols:
             continue
         signal = ctx.identity_collision_signal(identity_col, witness_cols)
-        if signal.rate > 0.5:
+        if signal.rate > 0.75:
             new_cfg, rationale = _demote_exact_to_weighted_fuzzy(
                 current, identity_col, signal.witness_used,
             )

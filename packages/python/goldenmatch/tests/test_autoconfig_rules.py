@@ -518,9 +518,9 @@ def test_rule_demote_clustered_identity_fires_on_collision():
         },
         sparsity_verdict=SparsityVerdict(False, 0),
     )
-    # Pre-populate collision_rate as high
+    # Pre-populate collision_rate as high (> 0.75 threshold — see Phase 7 threshold raise)
     ctx._memo[("identity_collision_signal", "email", ("address",))] = (
-        CollisionSignal(rate=0.6, witness_used="address")
+        CollisionSignal(rate=0.85, witness_used="address")
     )
     history = _empty_history()
     outcome = rule_demote_clustered_identity(profile, cfg, history, ctx=ctx)

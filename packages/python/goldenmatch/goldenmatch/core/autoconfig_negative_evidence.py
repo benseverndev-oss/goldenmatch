@@ -15,13 +15,12 @@ from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     MatchkeyConfig,
     NegativeEvidenceField,
-    VALID_SCORERS,
 )
 from goldenmatch.core.complexity_profile import ColumnPrior
 
 logger = logging.getLogger(__name__)
 
-_IDENTITY_SCORE_THRESHOLD = 0.7
+_IDENTITY_SCORE_THRESHOLD = 0.75
 _CARDINALITY_THRESHOLD = 0.5
 _DEFAULT_NE_THRESHOLD = 0.4
 _DEFAULT_NE_PENALTY = 0.3
@@ -58,6 +57,21 @@ def _is_in_matchkey_fields(col: str, mk: MatchkeyConfig) -> bool:
     return any(f.field == col for f in mk.fields)
 
 
+def _is_exact_matchkey_field(col: str, all_matchkeys: list[MatchkeyConfig]) -> bool:
+    """Return True if col is used as a field in any exact matchkey.
+
+    NE promotion is gated on this check (Phase 7 fix): auto-promoted NE is
+    only safe when the column already has an exact-matchkey counterpart.
+    Without an exact matchkey, a disagreeing phone/email in a pair captured
+    by the weighted matchkey is ambiguous (could be corruption, not an FP),
+    and the NE penalty will cause recall regression on noisy ER datasets.
+    """
+    return any(
+        mk.type == "exact" and any(f.field == col for f in mk.fields)
+        for mk in all_matchkeys
+    )
+
+
 def _is_in_blocking(col: str, blocking) -> bool:
     """Return True if col appears in any blocking key's fields list."""
     if blocking is None:
@@ -76,9 +90,12 @@ def promote_negative_evidence(
     """Add NE fields to all weighted matchkeys based on column priors.
 
     Eligibility per column:
-        column_priors[col].identity_score >= _IDENTITY_SCORE_THRESHOLD (0.7)
+        column_priors[col].identity_score >= _IDENTITY_SCORE_THRESHOLD (0.75)
+        AND col is used as a field in at least one exact matchkey
+          (prevents recall regression on noisy ER data where phone/email
+           differ legitimately in duplicate pairs — Phase 7 fix)
         AND cardinality_ratio (n_unique / n_rows) >= _CARDINALITY_THRESHOLD (0.5)
-        AND col NOT in matchkey.fields
+        AND col NOT in this weighted matchkey's fields
         AND col NOT in blocking.keys
 
     Idempotent: skips columns already in the NE list for each matchkey.
@@ -88,6 +105,8 @@ def promote_negative_evidence(
     """
     if df.is_empty() or not column_priors:
         return config
+
+    all_matchkeys = list(config.matchkeys)
 
     new_matchkeys: list[MatchkeyConfig] = []
     for mk in config.matchkeys:
@@ -102,10 +121,16 @@ def promote_negative_evidence(
             # Already in NE list (idempotency guard)
             if col in existing_ne_fields:
                 continue
-            # Identity score gate
+            # Identity score gate (0.75 excludes cardinality-only fallback of 0.7)
             if prior.identity_score < _IDENTITY_SCORE_THRESHOLD:
                 continue
-            # Positive matchkey fields gate
+            # Exact-matchkey gate: only promote NE for columns that already have
+            # an exact matchkey counterpart. Without an exact matchkey, a
+            # disagreeing field in a pair captured by the weighted matchkey is
+            # ambiguous (corruption vs FP), and the penalty causes recall regression.
+            if not _is_exact_matchkey_field(col, all_matchkeys):
+                continue
+            # Positive matchkey fields gate (this weighted matchkey)
             if _is_in_matchkey_fields(col, mk):
                 continue
             # Blocking gate
@@ -141,7 +166,7 @@ def promote_negative_evidence(
             logger.info(
                 "auto-config: promoted negative_evidence field=%s "
                 "(identity_score=%.2f, cardinality_ratio=%.2f, "
-                "transforms=%s, scorer=%s)",
+                "transforms=%s, scorer=%s, has_exact_matchkey=True)",
                 col,
                 prior.identity_score,
                 cardinality_ratio,
