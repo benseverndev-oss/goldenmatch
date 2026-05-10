@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-05-10
+
+### Added
+- **`_apply_negative_evidence_to_exact_pairs`** in `core/scorer.py`: post-filter helper that applies NE penalties to pairs produced by exact matchkeys. Called from `core/pipeline.py` after `find_exact_matches`. Score formula: `final = max(0, 1.0 - sum(penalties))`; pair emits only if `final >= matchkey.threshold`. Exact matchkeys without NE fields are unaffected (binary 1.0/0.0 emit preserved).
+- **Exact-matchkey NE threshold default**: when `promote_negative_evidence` adds NE fields to a threshold-None exact matchkey, the threshold is defaulted to 0.5 to activate the score-and-threshold path.
+- **`promote_negative_evidence` extended** to walk all matchkey types (was weighted-only in v1.11). The `_is_exact_matchkey_field` gate is selectively skipped when iterating an exact matchkey for itself — its v1.11 rationale (prevent recall regression on fuzzy data) doesn't apply to exact-matchkey self-iteration.
+
+### Changed
+- **`core/pipeline.py`**: calls `_apply_negative_evidence_to_exact_pairs` after `find_exact_matches` when any exact matchkey carries NE fields. Zero overhead when no NE fields are present.
+- **`promote_negative_evidence`** now populates NE on exact matchkeys in addition to weighted matchkeys. Exact matchkeys for high-identity-prior columns (email) gain NE from disagreeing secondary fields, allowing adversarial collision pairs to be filtered at the exact matchkey level.
+
+### Benchmarks (zero-config, no LLM)
+
+| Dataset | v1.11.0 | v1.12.0 | Delta |
+|---|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 | +0.0000 |
+| Febrl3 | 0.9443 | 0.9443 | +0.0000 |
+| NCVR | 0.9719 | 0.9719 | +0.0000 |
+| DQbench composite | 66.99 | 91.04 | +24.05 pp |
+
+DQbench tier detail (v1.12.0):
+
+| Tier | Precision | Recall | F1 | vs v1.11 |
+|---|---|---|---|---|
+| T1 | 80.6% | 100.0% | 89.3% | flat |
+| T2 | 95.1% | 100.0% | 97.5% | +28.5 pp |
+| T3 | 74.7% | 100.0% | 85.5% | +31.7 pp |
+
+Primary target (>= 75) met. T3 F1 headline target (>= 70%) met. All floor constraints met. The T3 gain resolves the v1.11 root cause: Path Y NE filtering now operates at the `exact_email` matchkey level, directly shedding adversarial collision pairs that share an email but disagree on name/address NE fields.
+
 ## [1.11.0] - 2026-05-10
 
 ### Added
