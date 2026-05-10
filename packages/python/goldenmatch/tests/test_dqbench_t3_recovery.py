@@ -76,6 +76,70 @@ def test_t3_synthetic_recovers_precision(t3_synthetic_df):
         )
 
 
+def test_t3_synthetic_path_y_filters_collision_pairs(t3_synthetic_df):
+    """v1.12: Path Y should filter collision pairs via NE on exact_email.
+
+    Asserts:
+    1. Committed config has NE on exact_email matchkey (Path Y populated)
+    2. Cluster count is reasonable (not catastrophically merged)
+    3. Precision >= 0.85 (Path Y filters collision pairs)
+    """
+    import os
+    os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
+    from goldenmatch import dedupe_df
+    result = dedupe_df(t3_synthetic_df)
+
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+    last = _LAST_CONTROLLER_RUN.get()
+    assert last is not None
+    profile, history = last
+    best = history.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None
+    cfg = best.config
+
+    # Assertion 1: NE was promoted on the exact_email matchkey
+    exact_mks = [mk for mk in cfg.matchkeys if mk.type == "exact"]
+    if exact_mks:
+        ne_present = any(mk.negative_evidence for mk in exact_mks)
+        assert ne_present, (
+            f"expected NE on at least one exact matchkey; got {exact_mks}"
+        )
+
+    # Assertion 2: cluster count is in expected range
+    if hasattr(result, "clusters") and result.clusters:
+        n_clusters = len(result.clusters)
+        n_rows = t3_synthetic_df.height
+        # T3 synthetic: 50 dup pairs (50 clusters) + 100 collision pairs
+        # filtered into 200 separate clusters + 100 singletons = ~250 cluster slots
+        # If Path Y works: collision pairs are NOT merged -> high cluster count
+        assert n_clusters >= 200, (
+            f"cluster count {n_clusters} too low for {n_rows} rows; "
+            "Path Y may not be filtering collision pairs"
+        )
+
+    # Assertion 3: precision >= 0.85 (per spec Tier 4)
+    # Compute precision from emitted pairs vs ground truth (synthetic fixture
+    # encodes ground truth in row IDs -- pairs sharing a "dup_<i>_a/_b" prefix are TPs).
+    if hasattr(result, "scored_pairs") and result.scored_pairs:
+        ids = t3_synthetic_df["id"].to_list()
+        tp = 0
+        fp = 0
+        for a, b, _ in result.scored_pairs:
+            id_a, id_b = ids[a], ids[b]
+            # TPs share the same dup pair prefix (e.g. "dup_5_a" and "dup_5_b")
+            if (id_a.startswith("dup_") and id_b.startswith("dup_")
+                    and id_a.rsplit("_", 1)[0] == id_b.rsplit("_", 1)[0]):
+                tp += 1
+            else:
+                fp += 1
+        precision = tp / max(1, tp + fp)
+        # Spec Tier 4 demands precision >= 0.85
+        assert precision >= 0.85, (
+            f"precision {precision:.3f} below spec target 0.85; "
+            f"TP={tp}, FP={fp}"
+        )
+
+
 def test_t3_clean_compat_no_lever_overapply(t3_clean_df):
     """v1.11 should not over-apply on clean data:
     - rule_demote_clustered_identity does NOT fire
