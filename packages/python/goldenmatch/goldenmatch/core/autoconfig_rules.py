@@ -1002,6 +1002,72 @@ def rule_sparse_match_expand(
     return new_cfg, decision
 
 
+def rule_demote_clustered_identity(profile, current, history, ctx=None):
+    """v1.11: when an exact matchkey's identity column is collision-prone,
+    demote it to a fuzzy participant + add to blocking.
+
+    Fires when:
+        ctx is not None
+        AND some col has cardinality_ratio in [0.5, 0.95]
+                  AND column_priors[col].identity_score >= 0.85
+                  AND col is the field of an exact matchkey in current
+                  AND collision_signal(col, [other identity priors]).rate > 0.2
+
+    Spec: docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
+          §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    df = ctx._df
+    if df is None or df.is_empty():
+        return None
+
+    # Find candidate columns: exact matchkey + identity-shaped + clustered cardinality
+    candidates = []
+    for mk in current.matchkeys:
+        if mk.type != "exact":
+            continue
+        for f in mk.fields:
+            col = f.field
+            if col not in df.columns:
+                continue
+            cp = ctx.column_priors.get(col)
+            if cp is None or cp.identity_score < 0.85:
+                continue
+            try:
+                cardinality_ratio = df[col].n_unique() / max(1, df.height)
+            except Exception:
+                continue
+            if not (0.5 <= cardinality_ratio <= 0.95):
+                continue
+            candidates.append(col)
+    if not candidates:
+        return None
+
+    for identity_col in candidates:
+        # Witness cols: other identity-prior columns with identity_score >= 0.7
+        witness_cols = [
+            c for c, p in ctx.column_priors.items()
+            if c != identity_col
+            and p.identity_score >= 0.7
+            and c in df.columns
+        ]
+        if not witness_cols:
+            continue
+        signal = ctx.identity_collision_signal(identity_col, witness_cols)
+        if signal.rate > 0.2:
+            new_cfg, rationale = _demote_exact_to_weighted_fuzzy(
+                current, identity_col, signal.witness_used,
+            )
+            if new_cfg != current:
+                return new_cfg, PolicyDecision(
+                    rule_name="demote_clustered_identity",
+                    rationale=f"collision_rate={signal.rate:.2f}; {rationale}",
+                    config_diff={},
+                )
+    return None
+
+
 DEFAULT_RULES = [
     rule_blocking_field_null_heavy,        # 1  structural: high-null blocking field (runs first)
     rule_blocking_singleton_trap,          # 2  structural: candidates_compared == 0
@@ -1016,6 +1082,7 @@ DEFAULT_RULES = [
     rule_no_matches,                       # 11 tuning: nothing matches
     rule_recall_gap_suspected,             # 12 tuning: random pair probe high OR over-tight signature
     rule_sparse_match_expand,              # 13 NEW v1.10: lower threshold proxy for sparse datasets
+    rule_demote_clustered_identity,        # 14 NEW v1.11: demote collision-prone exact matchkeys
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once

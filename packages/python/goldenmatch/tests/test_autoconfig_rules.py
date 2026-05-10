@@ -502,7 +502,7 @@ def test_rule_demote_clustered_identity_fires_on_collision():
     profile = _profile_with_mass_above(0.0)
     import polars as pl
     df = pl.DataFrame({
-        "email": [f"u{i // 3}@x.com" for i in range(15)],   # 5 unique emails × 3 records
+        "email": [f"u{i // 2}@x.com" for i in range(15)],   # 8 unique emails, ratio=0.53
         "first_name": ["Brian"] * 15,
         "last_name": ["Smith"] * 15,
         "address": [f"{i} Main St" for i in range(15)],   # all different
