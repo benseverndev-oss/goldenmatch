@@ -333,9 +333,9 @@ The `combined_lf.collect()` is potentially expensive (materializes the LazyFrame
 
 For better performance: if `combined_lf` is materialized elsewhere in the pipeline, pass that DataFrame directly to avoid double-collect. Check the surrounding code in `pipeline.py:587` and `:1053` to see if a `combined_df` is already available.
 
-- [ ] **Step 3: Update test fixtures**
+- [ ] **Step 3: REPLACE the two E2E tests added in Task 1.1 Step 1**
 
-The Phase 1.1 E2E tests need to pass a `LazyFrame` to `find_exact_matches`, then call `_apply_negative_evidence_to_exact_pairs` separately. Update those two tests:
+Task 1.1 Step 1 added `test_find_exact_matches_emits_when_ne_score_above_threshold` and `test_find_exact_matches_filters_when_ne_score_below_threshold` that call `find_exact_matches(df, mk)` with a bare `DataFrame`. That signature is wrong — the real `find_exact_matches` takes a `LazyFrame` and a pre-computed `__mk_<name>__` column. **Delete the Task 1.1 versions of those two tests and replace with these corrected versions** (which use the production pattern):
 
 ```python
 def test_find_exact_matches_emits_when_ne_score_above_threshold():
@@ -406,21 +406,6 @@ def test_find_exact_matches_filters_when_ne_score_below_threshold():
 ```
 
 This pattern (build df with `__mk_<name>__` precomputed; call `find_exact_matches(df.lazy(), mk)`; call `_apply_negative_evidence_to_exact_pairs(pairs, mk, df)`) mirrors the production pipeline flow.
-
-- [ ] **Step 3: Add INFO log on first NE-on-exact firing per matchkey-per-run**
-
-Inside `find_exact_matches`, just before the NE-aware loop:
-
-```python
-if mk.negative_evidence:
-    threshold = mk.threshold if mk.threshold is not None else 0.5
-    if mk.threshold is None:
-        logger.info(
-            "auto-config: NE active on exact matchkey '%s' but threshold is None; "
-            "using default 0.5 (recommend setting matchkey.threshold explicitly)",
-            mk.name,
-        )
-```
 
 - [ ] **Step 4: Run failing tests; expect 8 PASS**
 
