@@ -27,28 +27,14 @@ def t3_clean_df():
     return pl.read_csv(fixture)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Phase 5 rule_demote_clustered_identity does not fire on this fixture "
-        "because rule_cross_blocking_disagreement (position 9) exhausts the "
-        "iteration budget before rule_demote_clustered_identity (position 14) "
-        "gets a chance to propose. Collision signal IS computed correctly "
-        "(rate=1.0) but the rule ordering prevents it from applying. "
-        "Tracking as known Phase 5 limitation; see Phase 7 benchmark verification. "
-        "When fixed, remove @xfail and expect n_clusters >= 200."
-    ),
-    strict=False,
-)
 def test_t3_synthetic_recovers_precision(t3_synthetic_df):
     """v1.11 should:
     1. promote_negative_evidence ran → committed config has NE on phone+address
     2. rule_demote_clustered_identity fired → no standalone exact_email matchkey
     3. precision ≥ 0.80 (catches < 80% as a regression)
 
-    KNOWN LIMITATION: currently yields 150 clusters (not 200+) because
-    rule_demote_clustered_identity is outrun by rule_cross_blocking_disagreement.
-    The collision_signal.rate IS correctly computed as 1.0 on this fixture.
-    See xfail reason above.
+    rule_demote_clustered_identity is now at position 7 (before generic refit rules),
+    so it fires before rule_cross_blocking_disagreement can exhaust the iteration budget.
     """
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     from goldenmatch import dedupe_df
@@ -84,7 +70,6 @@ def test_t3_synthetic_recovers_precision(t3_synthetic_df):
         # Expected: 50 + 100 + 100 = 250 if collisions are split correctly
         # If collisions are still merged (regression): 50 + 50 + 100 = 150
         # Cluster count >= 200 means collisions are at least somewhat split
-        # Currently produces 150 (Phase 5 limitation); xfail documents the target
         assert n_clusters >= 200, (
             f"cluster count {n_clusters} suggests collisions are still merged "
             f"(expected >=200 when rule_demote_clustered_identity fires correctly)"

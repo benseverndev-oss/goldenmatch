@@ -1147,7 +1147,8 @@ def test_default_rules_now_has_nine_entries():
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     """Order: rule_blocking_field_null_heavy first (structural check),
     rule_recall_gap_suspected after no_matches (probe signal, no LLM rule in the table).
-    v1.10: rule_sparse_match_expand is now last (position 13), recall_gap is second-to-last."""
+    v1.11: rule_demote_clustered_identity moved to position 7 (before generic refit rules);
+    rule_sparse_match_expand is now last (position 14), recall_gap is second-to-last."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_blocking_field_null_heavy,
         rule_recall_gap_suspected, rule_no_matches,
@@ -1157,8 +1158,8 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
     assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
     assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
-    # v1.11: recall_gap is third-to-last; sparse_match_expand is second-to-last; demote_clustered_identity is last
-    assert idx_recall_gap == len(DEFAULT_RULES) - 3, "recall_gap must be third-to-last (sparse_match_expand second-to-last, demote_clustered_identity last)"
+    # v1.11: recall_gap is second-to-last; sparse_match_expand is last; demote_clustered_identity moved to position 7
+    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last (sparse_match_expand last, demote_clustered_identity at position 7)"
 
 
 # ============================================================

@@ -1011,7 +1011,12 @@ def rule_demote_clustered_identity(profile, current, history, ctx=None):
         AND some col has cardinality_ratio in [0.5, 0.95]
                   AND column_priors[col].identity_score >= 0.85
                   AND col is the field of an exact matchkey in current
-                  AND collision_signal(col, [other identity priors]).rate > 0.2
+                  AND collision_signal(col, [other identity priors]).rate > 0.5
+
+    The threshold of 0.5 (strict) prevents false positives on legitimate
+    deduplication data where duplicate pairs naturally diverge on witness
+    fields due to data corruption (T1-style). Adversarial reuse (T3-style)
+    produces rates of 1.0 and clears this bar easily.
 
     Spec: docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
           §Components rule firing conditions.
@@ -1055,7 +1060,7 @@ def rule_demote_clustered_identity(profile, current, history, ctx=None):
         if not witness_cols:
             continue
         signal = ctx.identity_collision_signal(identity_col, witness_cols)
-        if signal.rate > 0.2:
+        if signal.rate > 0.5:
             new_cfg, rationale = _demote_exact_to_weighted_fuzzy(
                 current, identity_col, signal.witness_used,
             )
@@ -1075,14 +1080,14 @@ DEFAULT_RULES = [
     rule_blocking_too_coarse,              # 4  structural: p99 outlier (skewed distribution)
     rule_uniform_heavy_blocking,           # 5  structural: uniform-large blocks
     rule_corruption_normalize,             # 6  NEW v1.10: normalize on high-corruption blocking col
-    rule_unimodal_scoring,                 # 7  tuning: dip statistic low
-    rule_low_reduction_ratio,              # 8  structural: too-tight blocking
-    rule_cross_blocking_disagreement,      # 9  NEW v1.10: multi-pass on low cross-blocking overlap
-    rule_low_transitivity,                 # 10 tuning: transitivity low
-    rule_no_matches,                       # 11 tuning: nothing matches
-    rule_recall_gap_suspected,             # 12 tuning: random pair probe high OR over-tight signature
-    rule_sparse_match_expand,              # 13 NEW v1.10: lower threshold proxy for sparse datasets
-    rule_demote_clustered_identity,        # 14 NEW v1.11: demote collision-prone exact matchkeys
+    rule_demote_clustered_identity,        # 7  NEW v1.11: demote collision-prone exact matchkeys (before generic refit rules)
+    rule_unimodal_scoring,                 # 8  tuning: dip statistic low
+    rule_low_reduction_ratio,              # 9  structural: too-tight blocking
+    rule_cross_blocking_disagreement,      # 10 NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_low_transitivity,                 # 11 tuning: transitivity low
+    rule_no_matches,                       # 12 tuning: nothing matches
+    rule_recall_gap_suspected,             # 13 tuning: random pair probe high OR over-tight signature
+    rule_sparse_match_expand,              # 14 NEW v1.10: lower threshold proxy for sparse datasets
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
