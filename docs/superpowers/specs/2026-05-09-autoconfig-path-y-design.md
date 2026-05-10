@@ -30,18 +30,20 @@ The fix is **Path Y**: extend NE to exact matchkeys. When an exact matchkey has 
 
 DQbench weights are opaque without harness inspection; assume roughly equal thirds. v1.11 baseline: T1=88.9%, T2=69.0%, T3=53.8% → composite 66.99.
 
-| T3 landing | Composite (T1+T2 unchanged) | Verdict |
+| T3 landing | Composite (equal-thirds estimate) | Verdict |
 |---|---|---|
-| 70% | ~73 | Fallback ≥70 met; primary ≥75 missed |
-| 80% | ~77 | **Primary ≥75 met** |
-| 85% | ~78 | Primary met with margin (diagnostic projects this) |
-| 90% | ~80 | Aggressive bound |
+| 70% | (88.9 + 69.0 + 70.0) / 3 ≈ 75.97 | Just clears primary ≥75 |
+| 80% | (88.9 + 69.0 + 80.0) / 3 ≈ 79.30 | **Primary met with margin** |
+| 85% | (88.9 + 69.0 + 85.0) / 3 ≈ 80.97 | Diagnostic projects this |
+| 90% | (88.9 + 69.0 + 90.0) / 3 ≈ 82.63 | Aggressive bound |
+
+**Footnote:** DQbench's actual composite formula is opaque without harness inspection. The equal-thirds estimate above is back-of-envelope. v1.10 measured composite 66.91 with T1/T2/T3 = 88.9/69.0/53.8 → equal-thirds estimate would be 70.57; actual was 66.91 (~3.5pt lower than equal-thirds). DQbench likely weights tiers non-uniformly or uses a non-arithmetic mean. Real composite at T3=70% may be in the 73-76 range; at T3=80% may be 76-79. Both still clear the ≥70 fallback; primary ≥75 depends on T3 landing closer to 80%+.
 
 Plus possible T1/T2 lift: same FP pattern (collision pairs with divergent witnesses) appears in T1 and T2 too. Path Y on those benchmarks' exact_email matchkeys may push T1 from 88.9% and T2 from 69.0% as well. Bound: T1+T2 lift is bonus; primary target depends only on T3.
 
 ## Non-goals (this spec)
 
-- **Drop `rule_demote_clustered_identity`** — kept dormant in v1.12. Path Y subsumes its T3 use case but the rule still passes its synthetic test. Drop in v1.13 if real-data telemetry never shows it firing.
+- **Drop `rule_demote_clustered_identity`** — kept dormant in v1.12. Phase 7 diagnostic showed the rule **never executes on T3** under v1.11's committed config (oscillation in `rule_blocking_too_coarse` exhausts iteration budget at position ~3, well before the demote rule at position 7). The rule's synthetic test passes because the test directly invokes the rule, bypassing the iteration controller. So the rule is effectively dead code for the use case it was designed for — Path Y subsumes its purpose for T3, and the rule has no measured firing on real data. Remove in v1.13 after telemetry confirms it never fires in production. Kept in v1.12 only because the test is green and removing now would shrink coverage of the synthetic-data behavior path.
 - **NE on probabilistic matchkeys** — Fellegi-Sunter has its own scoring framework; NE-as-subtraction doesn't fit. v1.13+ candidate.
 - **Adaptive penalty/threshold tuning** — fixed defaults `(threshold=0.4, penalty=0.3)` per NE field; `matchkey.threshold=0.5` default for NE-enabled exact matchkeys. Adaptive candidate for v1.13.
 - **Iteration oscillation fix** — Phase 7 surfaced this in `rule_blocking_too_coarse` but Path Y bypasses it (Path Y is eager via `promote_negative_evidence`, not iteration-driven). v1.13 candidate if other rules stall similarly.
@@ -87,7 +89,17 @@ for pair in candidate_pairs:
 
 ### 2. `promote_negative_evidence` extended to all matchkey types
 
-v1.11's eager rule iterates only weighted matchkeys. v1.12: walk all matchkey types (weighted + exact + probabilistic), applying the same gates (`identity_score >= 0.7 AND cardinality_ratio >= 0.5 AND col not in matchkey.fields AND col not in blocking`).
+v1.11's eager rule iterates only weighted matchkeys (`if mk.type != "weighted": continue`) AND applies a `_is_exact_matchkey_field` gate that blocks promotion when the candidate column is not present in any exact matchkey. v1.12 walks all matchkey types and selectively applies the v1.11 gates per matchkey type:
+
+| Gate | v1.11 behavior | v1.12 weighted branch | v1.12 exact branch |
+|---|---|---|---|
+| `identity_score >= 0.75` | Applied | Applied (unchanged) | **Applied** |
+| `cardinality_ratio >= 0.5` | Applied | Applied (unchanged) | **Applied** |
+| `col not in matchkey.fields` (this matchkey) | Applied | Applied (unchanged) | **Applied** |
+| `col not in blocking.keys` | Applied | Applied (unchanged) | **Applied** |
+| `_is_exact_matchkey_field(col, all_matchkeys)` (col must be in some exact matchkey) | Applied | Applied (unchanged) — protects against NE-on-weighted-without-anchor regression | **SKIPPED** — the gate's rationale ("phone disagreement on a weighted match is ambiguous when there's no exact phone matchkey") doesn't apply when we're iterating an exact matchkey for itself. Phone disagreement on `exact_email` is unambiguously a collision signal. |
+
+**Why the gate skip is critical for T3:** T3's v0 produces `exact_email` (not `exact_phone` or `exact_address`). With v1.11's gate active on the exact-matchkey iteration, phone and address would NOT pass — the gate looks for them in some exact matchkey, finds none. NE wouldn't be added; Path Y wouldn't deliver. Skipping the gate on the exact-matchkey branch is what makes T3 work.
 
 Plus: when NE is added to an exact matchkey by this function and `matchkey.threshold` is None, set `threshold = 0.5`. Existing user-set thresholds are respected. Existing exact matchkeys without qualifying NE candidates are unchanged.
 
@@ -115,7 +127,14 @@ T3 application:
 **T3 true duplicate** (same email + agreeing phone+address):
 - All NE fields agree → no penalty → final 1.0 → emitted
 
-**Multi-field-must-disagree invariant**: a pair must disagree on TWO+ NE fields to drop below threshold. Single-field disagreement (penalty 0.3 or 0.4) leaves final at 0.6 or 0.7, both above 0.5. This bounds the regression risk on T1: phone+address rarely both disagree on legitimate duplicates.
+**Single-field-disagreement invariant**: at default penalties (0.3 for phone, 0.4 for address), single-field NE disagreement keeps the pair above threshold:
+- phone alone disagrees → penalty 0.3 → final 0.7 ≥ 0.5 → match preserved
+- address alone disagrees → penalty 0.4 → final 0.6 ≥ 0.5 → match preserved
+- BOTH phone AND address disagree → penalty 0.7 → final 0.3 < 0.5 → filtered
+
+So a true duplicate where ONE of phone/address disagrees (e.g. apartment number drift, phone reformat) is preserved. A pair where BOTH disagree (T3's adversarial pattern) is filtered. The bound is "single-field disagreement at default penalties (≤0.4) is safe; cumulative penalty must exceed `1.0 - threshold = 0.5` to filter."
+
+Caveat: with two NE fields at default 0.3 penalty each (e.g. phone + zip), total penalty is 0.6 → final 0.4 → filtered. The invariant depends on the specific penalty values. T1 risk bound: TPs have phone agreement ≥ 0.95 (per Phase 7 diagnostic), so phone NE rarely fires; address NE alone is below the 0.5 cumulative threshold. Bounded.
 
 ### Memory cache
 
@@ -204,6 +223,11 @@ No schema change. v1.10 + v1.11 cache entries deserialize cleanly (NE field defa
 - `test_v1_11_cache_entry_loads_cleanly`
 - `test_v1_10_chain_compat_through_v112`
 - `test_v1_12_cache_entry_with_ne_on_exact_round_trips`
+
+### Tier 7 — Performance budget (1 test, ~30 LOC)
+
+`tests/test_indicators_budget.py` (extension):
+- `test_exact_matchkey_ne_scoring_overhead_under_budget`: build a 50K-row synthetic df with one exact matchkey + 2 NE fields; run `_apply_negative_evidence` over 50K candidate pairs; assert elapsed < 2s. Spec target is "~1s additional wall-clock"; the 2s test margin allows for CI shared-runner load while still catching O(N²) blowups.
 
 ## Acceptance criteria
 
