@@ -153,6 +153,153 @@ jobs:
           # PR #66 hit a goldencheck pytest hang on Linux that didn't
           # reproduce locally — this converts that into actionable signal.
           uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread $IGNORE
+      # Per-module coverage gate (goldenmatch only — other packages don't yet
+      # have floors defined). Fails CI if any tracked module regresses below
+      # its floor in scripts/check_coverage_floors.py. Ratchet floors upward
+      # over time; never silently drop a module from the dict.
+      - name: Coverage floors (goldenmatch only)
+        if: matrix.pkg == 'goldenmatch'
+        shell: bash
+        run: |
+          uv run pytest packages/python/goldenmatch --cov=goldenmatch \
+            --cov-report=xml:packages/python/goldenmatch/coverage.xml \
+            --cov-report=term \
+            --timeout=120 --timeout-method=thread \
+            --ignore=packages/python/goldenmatch/tests/test_db.py \
+            --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+            --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+            --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
+            --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
+            -q -x || true
+          uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
+
+  # Visibility lanes for tests that the main `python` job currently --ignores.
+  # Each lane runs the gated tests with explicit prerequisites; when prereqs
+  # aren't met (no DB credential, no API key), the lane reports "not-configured"
+  # with a ::notice:: annotation rather than silently passing or failing.
+  # This converts "we have tests but skip them in CI" into auditable signal.
+  python_skipped_lanes:
+    needs: changes
+    # Run when goldenmatch python changed OR the workflow itself changed.
+    # Matrix runs all lanes regardless of which prereqs are configured;
+    # each lane self-reports its prereq state.
+    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - { name: db,           tests: "tests/test_db.py tests/test_reconcile.py", needs: "POSTGRES (services container)" }
+          - { name: mcp_watch,    tests: "tests/test_mcp_and_watch.py",              needs: "MCP runtime + watch fixtures" }
+          - { name: llm_boost,    tests: "tests/test_llm_boost.py",                  needs: "OPENAI_API_KEY secret + torch (segfaults locally)" }
+          - { name: embedder,     tests: "tests/test_embedder.py",                   needs: "Vertex AI credentials + torch" }
+          - { name: benchmarks,   tests: "tests/test_autoconfig_benchmarks.py",      needs: "DBLP-ACM/Febrl3/NCVR datasets (gitignored)" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run ${{ matrix.lane.name }} lane
+        shell: bash
+        env:
+          LANE_NAME: ${{ matrix.lane.name }}
+          LANE_TESTS: ${{ matrix.lane.tests }}
+          LANE_NEEDS: ${{ matrix.lane.needs }}
+        run: |
+          set -euo pipefail
+          # Each lane decides whether its prereqs are met. Today none are
+          # configured in CI; lanes report "not-configured" with a clear
+          # message so the gap is visible. As prereqs land (Postgres
+          # service, API-key secret, etc.) the corresponding lane flips to
+          # "configured" and runs its tests.
+          case "$LANE_NAME" in
+            db)
+              CONFIGURED="false"  # No Postgres service container yet
+              ;;
+            mcp_watch)
+              CONFIGURED="false"  # No MCP runtime fixtures in CI
+              ;;
+            llm_boost)
+              # OPENAI_API_KEY is set as a repo secret only for nightly benchmark runs
+              if [ -n "${OPENAI_API_KEY:-}" ]; then CONFIGURED="true"; else CONFIGURED="false"; fi
+              ;;
+            embedder)
+              CONFIGURED="false"  # No Vertex AI service account in CI
+              ;;
+            benchmarks)
+              # benchmarks data lives in tests/benchmarks/datasets (gitignored).
+              # Synthetic-fixture benchmarks run separately in the synthetic_benchmarks job.
+              if [ -d packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM ]; then
+                CONFIGURED="true"
+              else
+                CONFIGURED="false"
+              fi
+              ;;
+            *)
+              CONFIGURED="false"
+              ;;
+          esac
+
+          if [ "$CONFIGURED" = "true" ]; then
+            echo "::notice title=lane $LANE_NAME::prereqs met — running"
+            cd packages/python/goldenmatch
+            uv run pytest $LANE_TESTS -n auto --timeout=180 --timeout-method=thread
+          else
+            # Use ::notice:: (not ::warning:: or ::error::) so the lane
+            # passes but is auditable. The lane name + needs string surface
+            # in the GitHub Checks UI so reviewers can see what's gated.
+            echo "::notice title=lane $LANE_NAME (not-configured)::tests skipped — needs: $LANE_NEEDS"
+            echo "::notice::To enable this lane, see docs/ci-lanes.md"
+            # Exit zero — "not-configured" is informational, not a failure.
+            exit 0
+          fi
+
+  # Synthetic-fixture benchmark smoke. Runs on every PR against committed
+  # synthetic fixtures (t3_synthetic.csv, t3_clean_compat.csv, red_provoking.csv,
+  # t1_synthetic.csv) so a regression in the auto-config controller is caught
+  # at PR time without needing the gitignored real benchmark datasets.
+  # Real-benchmark runs (DBLP-ACM/Febrl3/NCVR/DQbench) live in the separate
+  # benchmarks.yml workflow (schedule + workflow_dispatch).
+  synthetic_benchmarks:
+    needs: changes
+    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run synthetic benchmarks
+        shell: bash
+        run: |
+          # Each synthetic test asserts an end-to-end behavioral contract
+          # (T3 collision pairs filtered, T1 corruption pairs deduplicated,
+          # red_provoving fixture commits a config, etc.). Failure here means
+          # a PR broke something the unit tests didn't catch.
+          cd packages/python/goldenmatch
+          uv run pytest \
+            tests/test_dqbench_t1_recovery.py \
+            tests/test_dqbench_t3_recovery.py \
+            -n auto --timeout=180 --timeout-method=thread -v
+      - name: Synthetic benchmark summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Synthetic benchmark results"
+            echo ""
+            echo "These run against committed synthetic fixtures on every PR."
+            echo "Real-benchmark runs (DBLP-ACM/Febrl3/NCVR/DQbench) require gitignored datasets and run via the separate \`benchmarks.yml\` workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   typescript:
     needs: changes
