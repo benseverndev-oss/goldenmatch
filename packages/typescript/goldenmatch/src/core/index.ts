@@ -285,8 +285,77 @@ export { applyColumnMap, validateColumns, concatRows } from "./ingest.js";
 
 export { ReviewQueue, gatePairs } from "./review-queue.js";
 export type { ReviewItem, GatedResult } from "./review-queue.js";
-export { autoConfigureRows } from "./autoconfig.js";
+export { autoConfigureRows, autoConfigureRowsIterate } from "./autoconfig.js";
 export type { AutoconfigOptions } from "./autoconfig.js";
+export {
+  AutoConfigController,
+  ConfigValidationError as ControllerConfigValidationError,
+  makeControllerBudget,
+  getLastControllerRun,
+} from "./autoconfigController.js";
+export type {
+  ControllerBudget,
+  ControllerOptions,
+  ControllerRunResult,
+} from "./autoconfigController.js";
+export {
+  HeuristicRefitPolicy,
+  createDefaultPolicy,
+} from "./autoconfigPolicy.js";
+export type {
+  RefitPolicy,
+  Rule,
+  RuleContext,
+  RuleOutcome,
+} from "./autoconfigPolicy.js";
+export {
+  RunHistory,
+  RED_PROFILE,
+} from "./autoconfigHistory.js";
+export type {
+  PolicyDecision,
+  ErrorRecord,
+  HistoryEntry,
+} from "./autoconfigHistory.js";
+export {
+  HealthVerdict,
+  StopReason,
+  makeComplexityProfile,
+  makeDataProfile,
+  makeBlockingProfile,
+  makeScoringProfile,
+  makeClusterProfile,
+  makeProfileMeta,
+  makeDomainProfile as makeComplexityDomainProfile,
+  makeMatchkeyProfile,
+  complexityHealth,
+  computeDataProfile,
+  normalizedSignalVector,
+} from "./complexityProfile.js";
+export type {
+  ComplexityProfile,
+  DataProfile,
+  DomainProfile as ComplexityDomainProfile,
+  MatchkeyProfile,
+  BlockingProfile,
+  ScoringProfile,
+  ClusterProfile,
+  ProfileMeta,
+  IndicatorsProfile,
+  ColumnPrior,
+  SparsityVerdict,
+  CollisionSignal,
+} from "./complexityProfile.js";
+export {
+  DEFAULT_RULES_V1_7_V1_8,
+  ruleBlockingSingletonTrap,
+  ruleBlockingTooCoarse,
+  ruleBlockingKeySwap,
+  ruleLowReductionRatio,
+  ruleLowTransitivity,
+  ruleNoMatches,
+  ruleUnimodalScoring,
+} from "./autoconfigRules.js";
 export { detectDomain, extractFeatures } from "./domain.js";
 export type { DomainProfile } from "./domain.js";
 export { buildLineage, lineageToJson, lineageFromJson } from "./lineage.js";
