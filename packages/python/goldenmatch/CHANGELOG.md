@@ -6,8 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [Unreleased] / TypeScript port
-
 ## [1.11.0] - 2026-05-10
 
 ### Added
@@ -27,6 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 | Dataset | v1.10.0 | v1.11.0 |
 |---|---|---|
 | DBLP-ACM | 0.9641 | 0.9641 |
+| Febrl3 | 0.9443 | 0.9443 |
 | NCVR | 0.9719 | 0.9719 |
 | DQbench composite | 66.91 | 66.99 |
 
