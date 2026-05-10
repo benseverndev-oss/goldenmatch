@@ -235,69 +235,177 @@ def test_find_exact_matches_filters_when_ne_score_below_threshold(tmp_path):
     assert len(pairs) == 0
 ```
 
-- [ ] **Step 2: Run; expect 8 FAIL.** First 6 fail because the helper math is correct (already passing in v1.11) but `_apply_negative_evidence` returns 0.0 for all matchkeys (it's only invoked from weighted path today). Last 2 (`test_find_exact_matches_*`) fail because `find_exact_matches` doesn't yet honor NE — emits regardless.
+- [ ] **Step 2: Run; expect 6 PASS + 2 FAIL.**
+
+`_apply_negative_evidence` from v1.11 takes any matchkey (no `mk.type` check). The first 6 unit tests invoke `_apply_negative_evidence` directly, so they PASS without v1.12 changes. The 2 E2E tests via `find_exact_matches` + `_apply_negative_evidence_to_exact_pairs` FAIL because `_apply_negative_evidence_to_exact_pairs` doesn't exist yet.
 
 ```bash
 cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/test_negative_evidence_scoring.py -k "exact_matchkey or find_exact_matches" -v --timeout=60 2>&1 | tail -15
 ```
 
-Actually re-check: `_apply_negative_evidence` from v1.11 takes ANY matchkey (the function doesn't check `mk.type`). The first 6 unit tests should PASS even without v1.12 changes — they only invoke `_apply_negative_evidence` directly. The 2 E2E tests via `find_exact_matches` are the ones that fail.
-
-Confirm: run only the first 6 tests; expect PASS. Then run the 2 E2E tests; expect FAIL.
-
-### Task 1.2: Modify `find_exact_matches` to honor NE + threshold
+### Task 1.2: Apply NE post-`find_exact_matches` in the pipeline (NOT inside `find_exact_matches`)
 
 **Files:**
-- Modify: `packages/python/goldenmatch/goldenmatch/core/scorer.py:158-` (the `find_exact_matches` function)
+- Add: new helper `_apply_negative_evidence_to_exact_pairs(pairs, mk, full_df)` in `core/scorer.py`
+- Modify: `packages/python/goldenmatch/goldenmatch/core/pipeline.py` (both call sites at lines 587 and 1053 — `pairs = find_exact_matches(combined_lf, mk)` followed by NE filter)
 
-- [ ] **Step 1: Read current `find_exact_matches`**
+**Important:** `find_exact_matches(lf, mk)` takes a `LazyFrame` and only has access to `__row_id__ + __mk_<name>__`. NE field columns (phone, address, etc.) are NOT available inside the function. **Do NOT modify `find_exact_matches`'s signature.** Instead, apply NE filtering as a post-step in the pipeline where the full DataFrame is available.
 
-```bash
-grep -n "def find_exact_matches" /d/show_case/goldenmatch/packages/python/goldenmatch/goldenmatch/core/scorer.py
-sed -n '158,220p' /d/show_case/goldenmatch/packages/python/goldenmatch/goldenmatch/core/scorer.py
-```
+- [ ] **Step 1: Add helper function**
 
-The function emits (a, b, 1.0) for each pair where exact-fields are equal. Find where the per-pair emit happens.
-
-- [ ] **Step 2: Wrap the emit in NE-aware logic**
-
-Modify `find_exact_matches` so that when `matchkey.negative_evidence` is populated:
-- Build a per-pair dict `{field: (val_a, val_b)}` for each NE field
-- Call `_apply_negative_evidence(matchkey, pair_dict)` to compute penalty
-- Compute `final_score = max(0.0, 1.0 - penalty)`
-- Determine threshold: `matchkey.threshold if matchkey.threshold is not None else 0.5` (defensive default)
-- Emit only if `final_score >= threshold`; emit with `score=final_score` (not 1.0)
-
-When `matchkey.negative_evidence` is None or empty: today's binary emit at score 1.0 (unchanged).
-
-Sketch:
+In `core/scorer.py` (near `_apply_negative_evidence`), add:
 
 ```python
-def find_exact_matches(df: pl.DataFrame, mk: MatchkeyConfig) -> list[tuple[int, int, float]]:
-    # ... existing code that finds pairs of equal-field rows ...
-    pairs_to_emit: list[tuple[int, int, float]] = []
-    for row_id_a, row_id_b in candidate_pairs:
-        if not mk.negative_evidence:
-            pairs_to_emit.append((row_id_a, row_id_b, 1.0))
+def _apply_negative_evidence_to_exact_pairs(
+    pairs: list[tuple[int, int, float]],
+    matchkey: MatchkeyConfig,
+    full_df: pl.DataFrame,
+) -> list[tuple[int, int, float]]:
+    """v1.12 Path Y: filter pairs from find_exact_matches by NE penalty.
+
+    `pairs` is the output of find_exact_matches: list of (row_id_a, row_id_b, 1.0)
+    where each pair already shares the matchkey value. v1.12: subtract NE
+    penalties; emit only if final_score >= threshold.
+
+    When matchkey.negative_evidence is None or empty: returns pairs unchanged
+    (today's binary behavior preserved).
+    """
+    if not matchkey.negative_evidence:
+        return pairs
+    threshold = matchkey.threshold if matchkey.threshold is not None else 0.5
+    if matchkey.threshold is None:
+        logger.info(
+            "auto-config: NE active on exact matchkey '%s' but threshold is None; "
+            "using default 0.5 (recommend setting matchkey.threshold explicitly)",
+            matchkey.name,
+        )
+
+    # Build a lookup of (row_id → row_index_in_full_df) for fast NE column access
+    row_id_to_idx: dict[int, int] = dict(
+        zip(full_df["__row_id__"].to_list(), range(full_df.height))
+    )
+
+    filtered: list[tuple[int, int, float]] = []
+    for row_a, row_b, _initial_score in pairs:
+        idx_a = row_id_to_idx.get(row_a)
+        idx_b = row_id_to_idx.get(row_b)
+        if idx_a is None or idx_b is None:
+            # Defensive: shouldn't happen if pairs came from find_exact_matches
             continue
-        # NE-aware path
         pair_dict = {}
-        for ne in mk.negative_evidence:
+        for ne in matchkey.negative_evidence:
+            if ne.field not in full_df.columns:
+                continue
             try:
-                val_a = df[ne.field][row_id_a]
-                val_b = df[ne.field][row_id_b]
+                val_a = full_df[ne.field][idx_a]
+                val_b = full_df[ne.field][idx_b]
                 pair_dict[ne.field] = (val_a, val_b)
             except Exception:
                 pair_dict[ne.field] = (None, None)
-        penalty = _apply_negative_evidence(mk, pair_dict)
+        penalty = _apply_negative_evidence(matchkey, pair_dict)
         final_score = max(0.0, 1.0 - penalty)
-        threshold = mk.threshold if mk.threshold is not None else 0.5
         if final_score >= threshold:
-            pairs_to_emit.append((row_id_a, row_id_b, final_score))
-    return pairs_to_emit
+            filtered.append((row_a, row_b, final_score))
+    return filtered
 ```
 
-The exact integration depends on `find_exact_matches`'s current implementation (it likely uses Polars self-join for performance). Adapt the NE-aware path to fit. Do NOT regress the today's-binary-emit path's performance.
+- [ ] **Step 2: Wire into pipeline call sites**
+
+Find both `pairs = find_exact_matches(combined_lf, mk)` call sites in `pipeline.py` (lines 587 and 1053):
+
+```bash
+grep -n "find_exact_matches(combined_lf" /d/show_case/goldenmatch/packages/python/goldenmatch/goldenmatch/core/pipeline.py
+```
+
+Replace each with:
+
+```python
+pairs = find_exact_matches(combined_lf, mk)
+if mk.negative_evidence:
+    # v1.12 Path Y: filter pairs by NE penalty
+    from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+    pairs = _apply_negative_evidence_to_exact_pairs(
+        pairs, mk, combined_lf.collect()
+    )
+```
+
+The `combined_lf.collect()` is potentially expensive (materializes the LazyFrame). To minimize cost, only call collect when NE is active (the `if mk.negative_evidence:` gate ensures this).
+
+For better performance: if `combined_lf` is materialized elsewhere in the pipeline, pass that DataFrame directly to avoid double-collect. Check the surrounding code in `pipeline.py:587` and `:1053` to see if a `combined_df` is already available.
+
+- [ ] **Step 3: Update test fixtures**
+
+The Phase 1.1 E2E tests need to pass a `LazyFrame` to `find_exact_matches`, then call `_apply_negative_evidence_to_exact_pairs` separately. Update those two tests:
+
+```python
+def test_find_exact_matches_emits_when_ne_score_above_threshold():
+    """E2E: pair with agreeing NE emits as match."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    from goldenmatch.core.scorer import (
+        find_exact_matches, _apply_negative_evidence_to_exact_pairs,
+    )
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "email": ["a@x.com", "a@x.com"],
+        "phone": ["5551234", "555-1234"],
+    })
+    # Pre-compute the matchkey column (find_exact_matches expects __mk_<name>__)
+    df = df.with_columns(
+        pl.col("email").str.to_lowercase().alias("__mk_exact_email__"),
+    )
+    mk = MatchkeyConfig(
+        name="exact_email", type="exact", threshold=0.5,
+        fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                              scorer="exact", weight=1.0)],
+        negative_evidence=[
+            NegativeEvidenceField(field="phone", transforms=["digits_only"],
+                                  scorer="exact", threshold=0.4, penalty=0.3),
+        ],
+    )
+    pairs = find_exact_matches(df.lazy(), mk)
+    # Apply NE post-filter
+    filtered = _apply_negative_evidence_to_exact_pairs(pairs, mk, df)
+    assert any(score >= 0.5 for *_, score in filtered)
+
+
+def test_find_exact_matches_filters_when_ne_score_below_threshold():
+    """E2E: pair with disagreeing NE drops below threshold → not emitted."""
+    import polars as pl
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    from goldenmatch.core.scorer import (
+        find_exact_matches, _apply_negative_evidence_to_exact_pairs,
+    )
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "email": ["a@x.com", "a@x.com"],
+        "phone": ["5551234", "5559999"],
+        "address": ["123 Main", "999 Oak"],
+    })
+    df = df.with_columns(
+        pl.col("email").str.to_lowercase().alias("__mk_exact_email__"),
+    )
+    mk = MatchkeyConfig(
+        name="exact_email", type="exact", threshold=0.5,
+        fields=[MatchkeyField(field="email", transforms=["lowercase"],
+                              scorer="exact", weight=1.0)],
+        negative_evidence=[
+            NegativeEvidenceField(field="phone", transforms=["digits_only"],
+                                  scorer="exact", threshold=0.4, penalty=0.3),
+            NegativeEvidenceField(field="address", transforms=[],
+                                  scorer="token_sort", threshold=0.4, penalty=0.4),
+        ],
+    )
+    pairs = find_exact_matches(df.lazy(), mk)
+    filtered = _apply_negative_evidence_to_exact_pairs(pairs, mk, df)
+    assert len(filtered) == 0    # below threshold
+```
+
+This pattern (build df with `__mk_<name>__` precomputed; call `find_exact_matches(df.lazy(), mk)`; call `_apply_negative_evidence_to_exact_pairs(pairs, mk, df)`) mirrors the production pipeline flow.
 
 - [ ] **Step 3: Add INFO log on first NE-on-exact firing per matchkey-per-run**
 
@@ -721,6 +829,28 @@ def test_t3_synthetic_path_y_filters_collision_pairs(t3_synthetic_df):
             f"cluster count {n_clusters} too low for {n_rows} rows; "
             "Path Y may not be filtering collision pairs"
         )
+
+    # Assertion 3: precision >= 0.85 (per spec §Tier 4)
+    # Compute precision from emitted pairs vs ground truth (synthetic fixture
+    # encodes ground truth in row IDs — pairs sharing a "dup_<i>_a/_b" prefix are TPs).
+    if hasattr(result, "scored_pairs") and result.scored_pairs:
+        ids = t3_synthetic_df["id"].to_list()
+        tp = 0
+        fp = 0
+        for a, b, _ in result.scored_pairs:
+            id_a, id_b = ids[a], ids[b]
+            # TPs share the same dup pair prefix (e.g. "dup_5_a" and "dup_5_b")
+            if (id_a.startswith("dup_") and id_b.startswith("dup_")
+                    and id_a.rsplit("_", 1)[0] == id_b.rsplit("_", 1)[0]):
+                tp += 1
+            else:
+                fp += 1
+        precision = tp / max(1, tp + fp)
+        # Spec §Tier 4 demands precision ≥ 0.85
+        assert precision >= 0.85, (
+            f"precision {precision:.3f} below spec target 0.85; "
+            f"TP={tp}, FP={fp}"
+        )
 ```
 
 - [ ] **Step 4: Run + commit**
@@ -998,6 +1128,14 @@ C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -c "import g
 
 Expected: shows worktree path + 1.11.0. If stale: `python -m pip install -e packages/python/goldenmatch`.
 
+- [ ] **Step 0: Verify benchmark scripts exist**
+
+```bash
+ls /d/show_case/goldenmatch/.profile_tmp/run_phase5_1_gate.py /d/show_case/goldenmatch/.profile_tmp/goldenmatch_zeroconfig_adapter.py
+```
+
+If either missing: those scripts were created during v1.9/v1.10 work and live in the gitignored `.profile_tmp/` dir. Recreate from the v1.10 plan if needed (see `docs/superpowers/plans/2026-05-08-autoconfig-indicators.md` Phase 7) or from v1.11's plan.
+
 - [ ] **Step 1: DBLP-ACM/Febrl3/NCVR**
 
 ```bash
@@ -1071,7 +1209,7 @@ Expected: `1.12.0`.
 - [ ] **Step 5: Final test sweep + ruff**
 
 ```bash
-rm -f ~/.goldenmatch/autoconfig_memory.db && cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q --timeout=180 --ignore=tests/test_db.py --ignore=tests/test_reconcile.py --ignore=tests/test_mcp_and_watch.py --ignore=tests/test_embedder.py --ignore=tests/test_llm_boost.py --ignore=tests/benchmarks 2>&1 | tail -5
+rm -f ~/.goldenmatch/autoconfig_memory.db && cd /d/show_case/goldenmatch/packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q --timeout=180 --ignore=tests/test_db.py --ignore=tests/test_reconcile.py --ignore=tests/test_mcp_and_watch.py --ignore=tests/test_embedder.py --ignore=tests/test_llm_boost.py --ignore=tests/test_autoconfig_benchmarks.py --ignore=tests/benchmarks 2>&1 | tail -5
 ```
 
 Expected: ≥ 2005 passed (~+19 over v1.11's 1986).
