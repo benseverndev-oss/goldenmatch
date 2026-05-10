@@ -52,3 +52,55 @@ def test_negative_evidence_scoring_overhead_under_budget():
         _apply_negative_evidence(mk, pair)
     elapsed = time.time() - start
     assert elapsed < 2.0, f"NE scoring took {elapsed:.2f}s on 50K pairs (budget 2s)"
+
+
+def test_exact_matchkey_ne_scoring_overhead_under_budget():
+    """NE scoring on 50K candidate pairs via exact matchkey completes within 2s."""
+    import time
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
+    )
+    from goldenmatch.core.scorer import _apply_negative_evidence
+
+    mk = MatchkeyConfig(
+        name="exact_email",
+        type="exact",
+        threshold=0.5,
+        fields=[
+            MatchkeyField(field="email", transforms=["lowercase"],
+                          scorer="exact", weight=1.0)
+        ],
+        negative_evidence=[
+            NegativeEvidenceField(
+                field="phone",
+                transforms=["digits_only"],
+                scorer="exact",
+                threshold=0.4,
+                penalty=0.3,
+            ),
+            NegativeEvidenceField(
+                field="address",
+                transforms=[],
+                scorer="token_sort",
+                threshold=0.4,
+                penalty=0.4,
+            ),
+        ],
+    )
+    pairs = [
+        {
+            "email": ("a@x.com", "a@x.com"),
+            "phone": ("555-1234", "555-9999"),
+            "address": ("123 Main", "456 Oak"),
+        }
+        for _ in range(50_000)
+    ]
+    start = time.time()
+    for pair in pairs:
+        _apply_negative_evidence(mk, pair)
+    elapsed = time.time() - start
+    assert elapsed < 2.0, (
+        f"exact-matchkey NE scoring took {elapsed:.2f}s on 50K pairs (budget 2s)"
+    )
