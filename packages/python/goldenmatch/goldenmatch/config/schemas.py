@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_verify import PreflightReport
@@ -113,6 +113,37 @@ class MatchkeyField(BaseModel):
         return self
 
 
+class NegativeEvidenceField(BaseModel):
+    """v1.11: a field whose disagreement subtracts from a weighted matchkey's
+    score. Mirrors MatchkeyField's shape so transforms can normalize before
+    scoring (e.g., transforms=['digits_only'] + scorer='exact' for phone).
+
+    Spec: docs/superpowers/specs/2026-05-08-autoconfig-negative-evidence-and-clustered-identity-design.md
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    transforms: list[str] = Field(default_factory=list)
+    scorer: str
+    threshold: float = Field(ge=0.0, le=1.0)
+    penalty: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _validate_transforms_and_scorer(self) -> "NegativeEvidenceField":
+        for t in self.transforms:
+            if t not in VALID_SIMPLE_TRANSFORMS:
+                raise ValueError(
+                    f"Invalid transform '{t}'. Must be one of "
+                    f"{sorted(VALID_SIMPLE_TRANSFORMS)}"
+                )
+        if self.scorer not in VALID_SCORERS:
+            raise ValueError(
+                f"Invalid scorer '{self.scorer}'. Must be one of "
+                f"{sorted(VALID_SCORERS)}"
+            )
+        return self
+
+
 class RulesPayload(BaseModel):
     """Web-UI-facing wrapper around the matchkey + threshold portions of config.
 
@@ -161,6 +192,8 @@ class MatchkeyConfig(BaseModel):
     rerank: bool = False
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_band: float = 0.1
+    # v1.11: negative evidence fields — default-None for v1.10 cache compat
+    negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
     em_iterations: int = 20
     convergence_threshold: float = 0.001

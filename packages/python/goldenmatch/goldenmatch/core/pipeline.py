@@ -585,6 +585,12 @@ def _run_dedupe_pipeline(
     for mk in matchkeys:
         if mk.type == "exact":
             pairs = find_exact_matches(combined_lf, mk)
+            if mk.negative_evidence:
+                # v1.12 Path Y: filter pairs by NE penalty
+                from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+                pairs = _apply_negative_evidence_to_exact_pairs(
+                    pairs, mk, collected_df
+                )
             if across_files_only:
                 pairs = [
                     (a, b, s) for a, b, s in pairs
@@ -1051,6 +1057,12 @@ def _run_match_pipeline(
     for mk in matchkeys:
         if mk.type == "exact":
             pairs = find_exact_matches(combined_lf, mk)
+            if mk.negative_evidence:
+                # v1.12 Path Y: filter pairs by NE penalty
+                from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+                pairs = _apply_negative_evidence_to_exact_pairs(
+                    pairs, mk, combined_df
+                )
             # Filter to cross target/ref pairs only
             pairs = [
                 (a, b, s) for a, b, s in pairs

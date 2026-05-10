@@ -1263,3 +1263,49 @@ def test_indicator_context_fast_mode_skips_expensive(monkeypatch):
     )
     assert ctx.full_pop_matchkey_hits("email") is None
     assert ctx.cross_blocking_overlap("email", "name") is None
+
+
+# ============================================================
+# Task 4.2: IndicatorContext.identity_collision_signal
+# ============================================================
+
+def test_indicator_context_identity_collision_signal_memoizes():
+    """Same call twice → only one underlying compute (memoized via _memo)."""
+    import polars as pl
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    df = pl.DataFrame({
+        "email": ["a@x.com"] * 4 + ["b@x.com"] * 4,
+        "address": [f"{i}" for i in range(8)],
+    })
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    s1 = ctx.identity_collision_signal("email", ["address"])
+    s2 = ctx.identity_collision_signal("email", ["address"])
+    assert s1.rate == s2.rate
+    # Memo key uses sorted witnesses
+    assert ("identity_collision_signal", "email", ("address",)) in ctx._memo
+
+
+def test_indicator_context_identity_collision_signal_canonicalizes_witnesses():
+    """Different witness orderings hit same memo entry."""
+    import polars as pl
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
+    from goldenmatch.core.complexity_profile import SparsityVerdict
+    df = pl.DataFrame({
+        "email": ["a@x.com"] * 4,
+        "address": ["1", "2", "3", "4"],
+        "phone": ["a", "b", "c", "d"],
+    })
+    ctx = IndicatorContext(
+        df=df, column_priors={},
+        sparsity_verdict=SparsityVerdict(False, 0),
+    )
+    s1 = ctx.identity_collision_signal("email", ["address", "phone"])
+    s2 = ctx.identity_collision_signal("email", ["phone", "address"])
+    assert s1.rate == s2.rate
+    # Both should hit the same canonical key
+    canonical_key = ("identity_collision_signal", "email", ("address", "phone"))
+    assert canonical_key in ctx._memo

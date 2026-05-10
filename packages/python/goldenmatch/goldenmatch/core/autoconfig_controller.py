@@ -16,7 +16,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, HealthVerdict, StopReason,
+    CollisionSignal, ComplexityProfile, DataProfile, HealthVerdict, StopReason,
     ColumnPrior, SparsityVerdict,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
@@ -95,6 +95,20 @@ class IndicatorContext:
         key = ("cross_blocking_overlap", a, b)
         if key not in self._memo:
             self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
+        return self._memo[key]
+
+    def identity_collision_signal(
+        self, identity_col: str, witness_cols: list[str],
+    ) -> "CollisionSignal":
+        if self._is_fast_mode():
+            return CollisionSignal(rate=0.0, witness_used="")
+        from goldenmatch.core.indicators import compute_identity_collision_signal
+        canonical_witnesses = tuple(sorted(witness_cols))
+        key = ("identity_collision_signal", identity_col, canonical_witnesses)
+        if key not in self._memo:
+            self._memo[key] = compute_identity_collision_signal(
+                self._df, identity_col, list(canonical_witnesses),
+            )
         return self._memo[key]
 
     def has_fired(self, rule_name: str) -> bool:
@@ -279,6 +293,14 @@ class AutoConfigController:
             compute_column_priors, estimate_sparse_match_signal,
         )
         column_priors = compute_column_priors(df)
+
+        # v1.11: eager NE promotion — runs before the iteration loop so that
+        # identity-prior columns (phone, address, etc.) are added as negative
+        # evidence on weighted matchkeys before the first iteration profiles them.
+        from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+        config_v0 = promote_negative_evidence(config_v0, df, column_priors)
+        config_n = config_v0
+
         exact_columns: list[str] = []
         for mk in config_v0.get_matchkeys():
             if mk.type == "exact":

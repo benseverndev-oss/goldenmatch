@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 from goldenmatch.config.schemas import (
     GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
+    BlockingKeyConfig,
 )
 from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
@@ -119,6 +119,86 @@ def _orthogonal_key(cfg, df_columns):
     if not candidates:
         return None
     return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
+
+
+def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
+    """Demote an exact matchkey on identity_col to a fuzzy participant
+    in the existing weighted matchkey. Add identity_col to blocking.
+
+    Returns (new_config, rationale). Returns (cfg, "") if no weighted
+    matchkey exists to add to (defensive — we can't demote without
+    a target).
+    """
+    weighted_indices = [
+        i for i, mk in enumerate(cfg.matchkeys) if mk.type == "weighted"
+    ]
+    if not weighted_indices:
+        return cfg, ""
+
+    exact_indices = [
+        i for i, mk in enumerate(cfg.matchkeys)
+        if mk.type == "exact" and any(f.field == identity_col for f in mk.fields)
+    ]
+    if not exact_indices:
+        return cfg, ""    # nothing to demote
+
+    target_idx = weighted_indices[0]
+    target_mk = cfg.matchkeys[target_idx]
+
+    # Add identity_col as a fuzzy field with low weight (0.3)
+    new_field = MatchkeyField(
+        field=identity_col,
+        transforms=["lowercase", "strip"],
+        scorer="token_sort",
+        weight=0.3,
+    )
+    if any(f.field == identity_col for f in target_mk.fields):
+        new_target_mk = target_mk    # already participating; just remove exact
+    else:
+        new_target_fields = list(target_mk.fields) + [new_field]
+        new_target_mk = target_mk.model_copy(update={"fields": new_target_fields})
+
+    # Build new matchkeys list: drop the exact matchkey(s); replace target
+    new_matchkeys = []
+    for i, mk in enumerate(cfg.matchkeys):
+        if i in exact_indices:
+            continue
+        if i == target_idx:
+            new_matchkeys.append(new_target_mk)
+        else:
+            new_matchkeys.append(mk)
+
+    # Add to blocking if not present
+    blocking = cfg.blocking
+    blocking_cols: set[str] = set()
+    for k in blocking.keys:
+        blocking_cols.update(k.fields)
+    if identity_col not in blocking_cols:
+        new_block_key = BlockingKeyConfig(
+            fields=[identity_col], transforms=["lowercase", "strip"],
+        )
+        new_keys = list(blocking.keys) + [new_block_key]
+        # passes: existing passes (or existing keys if no passes) + only the NEW key
+        existing_passes = list(blocking.passes) if blocking.passes else list(blocking.keys)
+        new_passes = existing_passes + [new_block_key]
+        new_blocking = blocking.model_copy(update={
+            "strategy": "multi_pass" if len(new_keys) > 1 else blocking.strategy,
+            "keys": new_keys,
+            "passes": new_passes if len(new_keys) > 1 else None,
+        })
+    else:
+        new_blocking = blocking
+
+    new_cfg = cfg.model_copy(update={
+        "matchkeys": new_matchkeys,
+        "blocking": new_blocking,
+    })
+
+    rationale = (
+        f"demoted exact_{identity_col} to fuzzy participant "
+        f"(witness_used={witness_col}); added {identity_col} to blocking"
+    )
+    return new_cfg, rationale
 
 
 def rule_blocking_singleton_trap(
@@ -922,6 +1002,79 @@ def rule_sparse_match_expand(
     return new_cfg, decision
 
 
+def rule_demote_clustered_identity(profile, current, history, ctx=None):
+    """v1.11: when an exact matchkey's identity column is collision-prone,
+    demote it to a fuzzy participant + add to blocking.
+
+    Fires when:
+        ctx is not None
+        AND some col has cardinality_ratio in [0.5, 0.95]
+                  AND column_priors[col].identity_score >= 0.85
+                  AND col is the field of an exact matchkey in current
+                  AND collision_signal(col, [other identity priors]).rate > 0.75
+
+    The threshold of 0.75 prevents false positives on legitimate fuzzy ER
+    datasets where random email collisions produce collision rates of 0.5-0.65
+    (ER T2/T3 fuzzy shapes). Adversarial reuse (hospital/fraud-style: same
+    email shared across hundreds of unrelated entities) produces rates near
+    1.0 and clears this bar easily. Raised from 0.5 (Phase 6) after Phase 7
+    benchmark showed ER T2 false-fire at 0.62 causing 186 FNs.
+
+    Spec: docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
+          §Components rule firing conditions.
+    """
+    if ctx is None:
+        return None
+    df = ctx._df
+    if df is None or df.is_empty():
+        return None
+
+    # Find candidate columns: exact matchkey + identity-shaped + clustered cardinality
+    candidates = []
+    for mk in current.matchkeys:
+        if mk.type != "exact":
+            continue
+        for f in mk.fields:
+            col = f.field
+            if col not in df.columns:
+                continue
+            cp = ctx.column_priors.get(col)
+            if cp is None or cp.identity_score < 0.85:
+                continue
+            try:
+                cardinality_ratio = df[col].n_unique() / max(1, df.height)
+            except Exception:
+                continue
+            if not (0.5 <= cardinality_ratio <= 0.95):
+                continue
+            candidates.append(col)
+    if not candidates:
+        return None
+
+    for identity_col in candidates:
+        # Witness cols: other identity-prior columns with identity_score >= 0.7
+        witness_cols = [
+            c for c, p in ctx.column_priors.items()
+            if c != identity_col
+            and p.identity_score >= 0.7
+            and c in df.columns
+        ]
+        if not witness_cols:
+            continue
+        signal = ctx.identity_collision_signal(identity_col, witness_cols)
+        if signal.rate > 0.75:
+            new_cfg, rationale = _demote_exact_to_weighted_fuzzy(
+                current, identity_col, signal.witness_used,
+            )
+            if new_cfg != current:
+                return new_cfg, PolicyDecision(
+                    rule_name="demote_clustered_identity",
+                    rationale=f"collision_rate={signal.rate:.2f}; {rationale}",
+                    config_diff={},
+                )
+    return None
+
+
 DEFAULT_RULES = [
     rule_blocking_field_null_heavy,        # 1  structural: high-null blocking field (runs first)
     rule_blocking_singleton_trap,          # 2  structural: candidates_compared == 0
@@ -929,13 +1082,14 @@ DEFAULT_RULES = [
     rule_blocking_too_coarse,              # 4  structural: p99 outlier (skewed distribution)
     rule_uniform_heavy_blocking,           # 5  structural: uniform-large blocks
     rule_corruption_normalize,             # 6  NEW v1.10: normalize on high-corruption blocking col
-    rule_unimodal_scoring,                 # 7  tuning: dip statistic low
-    rule_low_reduction_ratio,              # 8  structural: too-tight blocking
-    rule_cross_blocking_disagreement,      # 9  NEW v1.10: multi-pass on low cross-blocking overlap
-    rule_low_transitivity,                 # 10 tuning: transitivity low
-    rule_no_matches,                       # 11 tuning: nothing matches
-    rule_recall_gap_suspected,             # 12 tuning: random pair probe high OR over-tight signature
-    rule_sparse_match_expand,              # 13 NEW v1.10: lower threshold proxy for sparse datasets
+    rule_demote_clustered_identity,        # 7  NEW v1.11: demote collision-prone exact matchkeys (before generic refit rules)
+    rule_unimodal_scoring,                 # 8  tuning: dip statistic low
+    rule_low_reduction_ratio,              # 9  structural: too-tight blocking
+    rule_cross_blocking_disagreement,      # 10 NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_low_transitivity,                 # 11 tuning: transitivity low
+    rule_no_matches,                       # 12 tuning: nothing matches
+    rule_recall_gap_suspected,             # 13 tuning: random pair probe high OR over-tight signature
+    rule_sparse_match_expand,              # 14 NEW v1.10: lower threshold proxy for sparse datasets
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once

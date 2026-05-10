@@ -107,6 +107,107 @@ def score_pair(row_a: dict, row_b: dict, fields: list[MatchkeyField]) -> float:
     return weighted_sum / weight_sum
 
 
+def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
+    """v1.11: compute the total negative-evidence penalty for a pair.
+
+    Returns the sum of penalties for NE fields whose similarity is below
+    their threshold. Defensive: skips NE entries with unknown scorers,
+    missing fields, or scorer-call exceptions; logs WARNING and continues.
+
+    ``pair`` maps field names to 2-tuples ``(val_a, val_b)`` — the same
+    shape used by the scoring loop when passing raw row values. Fields not
+    present in ``pair`` are silently skipped.
+
+    Caller is responsible for: ``final_score = max(0.0, score_positive - penalty)``.
+
+    Only applies to weighted matchkeys. Returns 0.0 immediately when
+    ``matchkey.negative_evidence`` is None or empty.
+    """
+    if not matchkey.negative_evidence:
+        return 0.0
+
+    total_penalty = 0.0
+    for ne in matchkey.negative_evidence:
+        if ne.field not in pair:
+            continue
+        try:
+            val_a, val_b = pair[ne.field]
+            val_a = apply_transforms(val_a, ne.transforms)
+            val_b = apply_transforms(val_b, ne.transforms)
+            sim = score_field(val_a, val_b, ne.scorer)
+        except (ValueError, KeyError) as exc:
+            logger.warning(
+                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; skipping",
+                ne.scorer, ne.field, exc,
+            )
+            continue
+        except Exception as exc:
+            logger.warning(
+                "auto-config: NE scoring of field '%s' raised %s; skipping",
+                ne.field, type(exc).__name__,
+            )
+            continue
+        if sim is None:
+            # One or both values are None — can't score, skip
+            continue
+        if sim < ne.threshold:
+            total_penalty += ne.penalty
+    return total_penalty
+
+
+def _apply_negative_evidence_to_exact_pairs(
+    pairs: list[tuple[int, int, float]],
+    matchkey: MatchkeyConfig,
+    full_df: pl.DataFrame,
+) -> list[tuple[int, int, float]]:
+    """v1.12 Path Y: filter pairs from find_exact_matches by NE penalty.
+
+    ``pairs`` is the output of find_exact_matches: list of (row_id_a, row_id_b, 1.0)
+    where each pair already shares the matchkey value. v1.12: subtract NE
+    penalties; emit only if final_score >= threshold.
+
+    When matchkey.negative_evidence is None or empty: returns pairs unchanged
+    (today's binary behavior preserved).
+    """
+    if not matchkey.negative_evidence:
+        return pairs
+    threshold = matchkey.threshold if matchkey.threshold is not None else 0.5
+    if matchkey.threshold is None:
+        logger.info(
+            "auto-config: NE active on exact matchkey '%s' but threshold is None; "
+            "using default 0.5 (recommend setting matchkey.threshold explicitly)",
+            matchkey.name,
+        )
+
+    # Build a lookup of (row_id → row_index_in_full_df) for fast NE column access
+    row_id_to_idx: dict[int, int] = dict(
+        zip(full_df["__row_id__"].to_list(), range(full_df.height))
+    )
+
+    filtered: list[tuple[int, int, float]] = []
+    for row_a, row_b, _initial_score in pairs:
+        idx_a = row_id_to_idx.get(row_a)
+        idx_b = row_id_to_idx.get(row_b)
+        if idx_a is None or idx_b is None:
+            # Defensive: shouldn't happen if pairs came from find_exact_matches
+            continue
+        pair_dict: dict = {}
+        for ne in matchkey.negative_evidence:
+            if ne.field not in full_df.columns:
+                continue
+            try:
+                val_a = full_df[ne.field][idx_a]
+                val_b = full_df[ne.field][idx_b]
+                pair_dict[ne.field] = (val_a, val_b)
+            except Exception:
+                pair_dict[ne.field] = (None, None)
+        penalty = _apply_negative_evidence(matchkey, pair_dict)
+        final_score = max(0.0, 1.0 - penalty)
+        if final_score >= threshold:
+            filtered.append((row_a, row_b, final_score))
+    return filtered
+
+
 def find_exact_matches(
     lf: pl.LazyFrame, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
@@ -541,6 +642,32 @@ def find_fuzzy_matches(
     ids_a = row_id_arr[rows_idx]
     ids_b = row_id_arr[cols_idx]
     scores = upper[rows_idx, cols_idx]
+
+    # v1.11: Apply negative-evidence penalty for weighted matchkeys.
+    # NE is per-pair (not vectorized), applied only when mk.negative_evidence is set.
+    if mk.negative_evidence:
+        block_rows = block_df.to_dicts()
+        ne_scores = []
+        for i, j, s in zip(rows_idx, cols_idx, scores):
+            row_a = block_rows[int(i)]
+            row_b = block_rows[int(j)]
+            ne_pair = {col: (row_a.get(col), row_b.get(col)) for col in row_a}
+            penalty = _apply_negative_evidence(mk, ne_pair)
+            final_s = max(0.0, float(s) - penalty)
+            ne_scores.append(final_s)
+        scores = ne_scores
+        # Re-filter: only keep pairs whose adjusted score meets threshold
+        if exclude_pairs is not None and len(exclude_pairs) > 0:
+            results = []
+            for a, b, s in zip(ids_a, ids_b, scores):
+                if s < mk.threshold:
+                    continue
+                pair_key = (min(int(a), int(b)), max(int(a), int(b)))
+                if pair_key not in exclude_pairs:
+                    results.append((int(a), int(b), float(s)))
+            return results
+        return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)
+                if s >= mk.threshold]
 
     if exclude_pairs is not None and len(exclude_pairs) > 0:
         results = []

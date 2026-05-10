@@ -423,7 +423,7 @@ def test_default_rules_list_has_five_entries():
     # Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1)
     # Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     # rule_sparse_match_expand (v1.10)
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 def test_heuristic_policy_with_default_rules_fires_on_red_blocking():
@@ -606,7 +606,7 @@ def test_default_rules_now_has_six_entries():
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 def test_singleton_trap_runs_before_blocking_too_coarse():
@@ -820,7 +820,7 @@ def test_default_rules_now_has_seven_entries():
     Updated to 10: rule_uniform_heavy_blocking added (Fix 2) + rule_blocking_key_swap reordered (Fix 1).
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 def test_rule_key_swap_is_before_rule_no_matches():
@@ -1141,13 +1141,14 @@ def test_default_rules_now_has_nine_entries():
     AutoConfigController._maybe_decorate_with_llm_scorer post-iteration decoration.)
     Updated to 13: Phase 5 added 3 new rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     """Order: rule_blocking_field_null_heavy first (structural check),
     rule_recall_gap_suspected after no_matches (probe signal, no LLM rule in the table).
-    v1.10: rule_sparse_match_expand is now last (position 13), recall_gap is second-to-last."""
+    v1.11: rule_demote_clustered_identity moved to position 7 (before generic refit rules);
+    rule_sparse_match_expand is now last (position 14), recall_gap is second-to-last."""
     from goldenmatch.core.autoconfig_rules import (
         DEFAULT_RULES, rule_blocking_field_null_heavy,
         rule_recall_gap_suspected, rule_no_matches,
@@ -1157,8 +1158,8 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     idx_recall_gap = DEFAULT_RULES.index(rule_recall_gap_suspected)
     assert idx_null_heavy < idx_no_matches, "null_heavy must run before no_matches"
     assert idx_recall_gap > idx_no_matches, "recall_gap must run after no_matches"
-    # v1.10: recall_gap is second-to-last; rule_sparse_match_expand is last
-    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last (sparse_match_expand is last)"
+    # v1.11: recall_gap is second-to-last; sparse_match_expand is last; demote_clustered_identity moved to position 7
+    assert idx_recall_gap == len(DEFAULT_RULES) - 2, "recall_gap must be second-to-last (sparse_match_expand last, demote_clustered_identity at position 7)"
 
 
 # ============================================================
@@ -1278,7 +1279,7 @@ def test_default_rules_now_has_ten_entries():
     Updated to 13: Phase 5 added rule_corruption_normalize, rule_cross_blocking_disagreement,
     rule_sparse_match_expand (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 def test_rule_enable_llm_scorer_not_in_default_rules():
@@ -1521,7 +1522,7 @@ def test_default_rules_now_has_ten_entries_final():
     """Fix 1 (reorder) + Fix 2 (new rule) → 10 rules total.
     Updated to 13: Phase 5 added 3 new indicator-aware rules (v1.10)."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
-    assert len(DEFAULT_RULES) == 13
+    assert len(DEFAULT_RULES) == 14
 
 
 # ============================================================

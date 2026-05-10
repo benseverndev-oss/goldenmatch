@@ -1,0 +1,39 @@
+{
+  "signature": "v110_test_signature",
+  "config_json": {
+    "matchkeys": [
+      {
+        "name": "primary",
+        "type": "weighted",
+        "threshold": 0.85,
+        "fields": [
+          {
+            "field": "email",
+            "transforms": [
+              "lowercase"
+            ],
+            "scorer": "ensemble",
+            "weight": 1.0
+          }
+        ]
+      }
+    ],
+    "blocking": {
+      "strategy": "static",
+      "keys": [
+        {
+          "fields": [
+            "email"
+          ],
+          "transforms": [
+            "lowercase"
+          ]
+        }
+      ],
+      "max_block_size": 1000,
+      "skip_oversized": true
+    }
+  },
+  "succeeded": 1,
+  "version_written_by": "1.10.0"
+}

@@ -1,0 +1,54 @@
+{
+  "signature": "v111_test_signature",
+  "config_json": {
+    "matchkeys": [
+      {
+        "name": "exact_email",
+        "type": "exact",
+        "threshold": null,
+        "fields": [
+          {
+            "field": "email",
+            "transforms": [
+              "lowercase"
+            ],
+            "scorer": "exact",
+            "weight": 1.0
+          }
+        ],
+        "negative_evidence": null
+      },
+      {
+        "name": "fuzzy_match",
+        "type": "weighted",
+        "threshold": 0.85,
+        "fields": [
+          {
+            "field": "first_name",
+            "transforms": [],
+            "scorer": "ensemble",
+            "weight": 1.0
+          }
+        ],
+        "negative_evidence": null
+      }
+    ],
+    "blocking": {
+      "strategy": "static",
+      "keys": [
+        {
+          "fields": [
+            "email"
+          ],
+          "transforms": [
+            "lowercase"
+          ]
+        }
+      ],
+      "max_block_size": 1000,
+      "skip_oversized": true
+    }
+  },
+  "succeeded": 1,
+  "version_written_by": "1.11.0"
+}

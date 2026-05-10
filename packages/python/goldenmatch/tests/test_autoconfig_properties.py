@@ -164,3 +164,165 @@ def test_history_audit_invariant(df: pl.DataFrame):
             f"decision rule_name={d.rule_name!r} not in known rules {rule_names}"
         )
         assert d.rationale, "rationale must not be empty"
+
+
+def test_apply_negative_evidence_monotonic_in_penalty():
+    """Higher penalty → ≤ final score (never increases)."""
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+    )
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("123", "999")}
+    base_mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="email", transforms=[],
+                              scorer="ensemble", weight=1.0)],
+    )
+    p_low = base_mk.model_copy(update={"negative_evidence": [
+        NegativeEvidenceField(field="phone", transforms=[],
+                              scorer="exact", threshold=0.5, penalty=0.1),
+    ]})
+    p_high = base_mk.model_copy(update={"negative_evidence": [
+        NegativeEvidenceField(field="phone", transforms=[],
+                              scorer="exact", threshold=0.5, penalty=0.5),
+    ]})
+    assert _apply_negative_evidence(p_low, pair) <= _apply_negative_evidence(p_high, pair)
+
+
+def test_promote_negative_evidence_idempotent_property():
+    """Applying twice yields the same result."""
+    import polars as pl
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig, BlockingKeyConfig,
+    )
+    df = pl.DataFrame({
+        "name": ["x"] * 10, "phone": [f"5551{i:03d}" for i in range(10)],
+    })
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="t", type="weighted", threshold=0.8,
+            fields=[MatchkeyField(field="name", transforms=[],
+                                  scorer="ensemble", weight=1.0)],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["name"], transforms=[])],
+            max_block_size=1000, skip_oversized=False,
+        ),
+    )
+    priors = {
+        "name": ColumnPrior(0.3, 0.0),
+        "phone": ColumnPrior(0.85, 0.0),
+    }
+    once = promote_negative_evidence(cfg, df, priors)
+    twice = promote_negative_evidence(once, df, priors)
+    assert once.matchkeys[0].negative_evidence == twice.matchkeys[0].negative_evidence
+
+
+def test_ne_on_exact_monotonic_in_penalty():
+    """Increasing penalty for NE on exact matchkey -> total penalty is monotonically non-decreasing."""
+    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.config.schemas import (
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
+    )
+    pair = {"email": ("a@x.com", "a@x.com"), "phone": ("a", "b")}
+    base_mk = MatchkeyConfig(
+        name="exact_email",
+        type="exact",
+        threshold=0.5,
+        fields=[
+            MatchkeyField(field="email", transforms=[], scorer="exact", weight=1.0)
+        ],
+    )
+    p_low = base_mk.model_copy(
+        update={
+            "negative_evidence": [
+                NegativeEvidenceField(
+                    field="phone",
+                    transforms=[],
+                    scorer="exact",
+                    threshold=0.5,
+                    penalty=0.1,
+                ),
+            ]
+        }
+    )
+    p_high = base_mk.model_copy(
+        update={
+            "negative_evidence": [
+                NegativeEvidenceField(
+                    field="phone",
+                    transforms=[],
+                    scorer="exact",
+                    threshold=0.5,
+                    penalty=0.5,
+                ),
+            ]
+        }
+    )
+    assert _apply_negative_evidence(p_low, pair) <= _apply_negative_evidence(p_high, pair)
+
+
+def test_promote_ne_extension_idempotent_property():
+    """promote_negative_evidence on a config with both weighted+exact matchkeys
+    is idempotent: calling twice produces identical output."""
+    import polars as pl
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+    )
+    df = pl.DataFrame(
+        {
+            "email": [f"u{i}@x.com" for i in range(10)],
+            "phone": [f"5551{i:03d}" for i in range(10)],
+        }
+    )
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_email",
+                type="exact",
+                threshold=None,
+                fields=[
+                    MatchkeyField(
+                        field="email", transforms=[], scorer="exact", weight=1.0
+                    )
+                ],
+            ),
+            MatchkeyConfig(
+                name="fuzzy_match",
+                type="weighted",
+                threshold=0.85,
+                fields=[
+                    MatchkeyField(
+                        field="email", transforms=[], scorer="ensemble", weight=1.0
+                    )
+                ],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["email"], transforms=[])],
+            max_block_size=1000,
+            skip_oversized=False,
+        ),
+    )
+    priors = {
+        "email": ColumnPrior(0.95, 0.0),
+        "phone": ColumnPrior(0.85, 0.0),
+    }
+    once = promote_negative_evidence(cfg, df, priors)
+    twice = promote_negative_evidence(once, df, priors)
+    for mk_a, mk_b in zip(once.matchkeys, twice.matchkeys):
+        assert (mk_a.negative_evidence or []) == (mk_b.negative_evidence or [])
+        assert mk_a.threshold == mk_b.threshold
