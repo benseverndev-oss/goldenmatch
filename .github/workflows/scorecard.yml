@@ -1,0 +1,59 @@
+name: OpenSSF Scorecard
+# Runs the OpenSSF Scorecard on a schedule and on default-branch pushes,
+# publishing results to the public scorecard.dev dashboard. The README badge
+# pulls its number from the dashboard endpoint — without this workflow the
+# badge would show "No data" forever.
+#
+# Read-only by default: `id-token: write` is needed for SLSA attestation,
+# `security-events: write` is needed to upload the SARIF to GitHub's Security
+# tab. No code or config is modified.
+
+on:
+  branch_protection_rule:  # rule changes trigger re-evaluation
+  schedule:
+    - cron: '37 13 * * 1'   # Mondays 13:37 UTC — off-peak slot
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for SARIF upload to the Security tab.
+      security-events: write
+      # Required for OIDC token retrieval used by Scorecard's signing step.
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # `publish_results: true` makes the score visible at
+          # https://scorecard.dev/viewer/?uri=github.com/<owner>/<repo>
+          # which is what the README badge points to. Required for the
+          # badge to ever flip from "No data" to a real number.
+          publish_results: true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+      - name: Upload artifact
+        # Keep the raw SARIF as an artifact for 30 days so failed-criteria
+        # diffs are inspectable across runs.
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 30
