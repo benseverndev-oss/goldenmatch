@@ -31,8 +31,8 @@ describe("autoConfigureRows", () => {
     // drops them as "near-unique, never agree".
     expect(names).not.toContain("exact_email");
     expect(names).not.toContain("exact_phone");
-    // Weighted matchkey survives.
-    expect(names).toContain("weighted_identity");
+    // Weighted matchkey survives (named "fuzzy_match" — Python parity).
+    expect(names).toContain("fuzzy_match");
     // The drop is surfaced as a repaired warning in the report.
     const report = cfg._preflightReport;
     expect(report).toBeDefined();
@@ -53,11 +53,14 @@ describe("autoConfigureRows", () => {
 
   it("exact matchkey skipped for columns with cardinality_ratio < 0.01", () => {
     // 200 rows, one constant id-like column with only 1 distinct value.
+    // Add a first_name so a weighted matchkey survives preflight.
     const rows: Row[] = [];
+    const firsts = ["Alice", "Bob", "Carol", "David"];
     for (let i = 0; i < 200; i++) {
       rows.push({
         __row_id__: i,
         email: `user${i}@example.com`,
+        first_name: firsts[i % firsts.length]!,
         account_id: "ACME-123", // constant -> cardinality ratio 1/200 = 0.005
       });
     }
@@ -104,8 +107,13 @@ describe("autoConfigureRows", () => {
     // the config by dropping exact_email. Autoconfig still builds it — the
     // preflight report records the repair.
     const rows: Row[] = [];
+    const firsts = ["Alice", "Bob", "Carol", "David"];
     for (let i = 0; i < 20; i++) {
-      rows.push({ __row_id__: i, email: `user${i}@x.com` });
+      rows.push({
+        __row_id__: i,
+        email: `user${i}@x.com`,
+        first_name: firsts[i % firsts.length]!,
+      });
     }
     const cfg = autoConfigureRows(rows);
     const names = (cfg.matchkeys ?? []).map((m) => m.name);

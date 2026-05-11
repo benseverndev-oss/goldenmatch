@@ -45,6 +45,13 @@ from goldenmatch.core.autoconfig_controller import (  # noqa: E402
 )
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy  # noqa: E402
 from goldenmatch.core.complexity_profile import HealthVerdict  # noqa: E402
+from goldenmatch.core.indicators import (  # noqa: E402
+    compute_column_priors,
+    estimate_sparse_match_signal,
+    compute_corruption_score,
+    estimate_full_pop_hits,
+    compute_cross_blocking_overlap,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +221,53 @@ def _history_dict(history) -> dict[str, Any]:
 # Runner
 # ---------------------------------------------------------------------------
 
+def _indicators_dict(df: pl.DataFrame) -> dict[str, Any]:
+    """Compute the 5 wave-2 indicators on `df` and return a JSON-serialisable dict."""
+    priors = compute_column_priors(df)
+    column_priors = {
+        col: {
+            "identity_score": round(float(cp.identity_score), 4),
+            "corruption_score": round(float(cp.corruption_score), 4),
+        }
+        for col, cp in priors.items()
+    }
+    # estimate_sparse_match_signal default: exact_columns=[] -> always sparse.
+    # For the fixture we feed the first text/email-like column if present.
+    candidates = [c for c in df.columns if not c.startswith("__")]
+    exact_candidates = [
+        c for c in candidates if "email" in c.lower() or "id" in c.lower()
+    ][:1]
+    sv = estimate_sparse_match_signal(df, exact_columns=exact_candidates or [])
+    sparsity = {
+        "is_sparse": bool(sv.is_sparse),
+        "estimated_n_true_pairs": int(sv.estimated_n_true_pairs),
+    }
+    # Per-column corruption: scalar map (mirrors Python public API).
+    corruption_per_col = {
+        col: round(float(compute_corruption_score(df, col)), 4)
+        for col in candidates
+    }
+    # Full-pop hits on each candidate column.
+    full_pop = {}
+    for col in candidates:
+        hits = estimate_full_pop_hits(df, col)
+        full_pop[col] = None if hits is None else int(hits)
+    # Cross-blocking overlap matrix (upper triangle) for first 4 candidates.
+    overlap: dict[str, float | None] = {}
+    short = candidates[:4]
+    for i, a in enumerate(short):
+        for b in short[i + 1:]:
+            v = compute_cross_blocking_overlap(df, a, b)
+            overlap[f"{a}|{b}"] = None if v is None else round(float(v), 4)
+    return {
+        "column_priors": column_priors,
+        "sparsity": sparsity,
+        "corruption_per_column": corruption_per_col,
+        "full_pop_hits": full_pop,
+        "cross_blocking_overlap": overlap,
+    }
+
+
 def _run_one(name: str, rows: list[dict]) -> dict[str, Any]:
     df = pl.DataFrame(rows)
     policy = HeuristicRefitPolicy()
@@ -234,6 +288,100 @@ def _run_one(name: str, rows: list[dict]) -> dict[str, Any]:
         "expected_run_history": _history_dict(history),
         "expected_complexity_profile": {"data": _profile_data_dict(profile_full)},
         "expected_stop_reason": history.stop_reason.value if history.stop_reason else None,
+        "expected_indicators_profile": _indicators_dict(df),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Indicator-only fixtures (Task 2 Step 2)
+# ---------------------------------------------------------------------------
+
+def _id_high_prevalence() -> list[dict]:
+    return [
+        {"user_id": f"U{i:04d}", "name": f"Name{i}", "city": "NY"}
+        for i in range(20)
+    ]
+
+
+def _all_null_col() -> list[dict]:
+    return [
+        {"name": "Alice", "phone": None, "city": "NY"},
+        {"name": "Bob",   "phone": None, "city": "LA"},
+        {"name": "Carol", "phone": None, "city": "SF"},
+    ]
+
+
+def _heavy_typos() -> list[dict]:
+    return [
+        {"name": "Alice", "email": "ALICE@example.com"},
+        {"name": "alice", "email": "alice@Example.com"},
+        {"name": "ALICE", "email": "alice@example.com"},
+        {"name": "Bob",   "email": "bob@example.com"},
+        {"name": "BOB",   "email": "BOB@example.com"},
+    ]
+
+
+def _low_overlap_blocking() -> list[dict]:
+    return [
+        {"city": "NY", "category": "A"},
+        {"city": "NY", "category": "B"},
+        {"city": "LA", "category": "A"},
+        {"city": "LA", "category": "B"},
+        {"city": "SF", "category": "C"},
+        {"city": "SF", "category": "D"},
+    ]
+
+
+def _identity_collision() -> list[dict]:
+    return [
+        {"email": "share@example.com", "name": "Alice Anderson"},
+        {"email": "share@example.com", "name": "Zachary Zykov"},
+        {"email": "other@example.com", "name": "Bob"},
+        {"email": "other@example.com", "name": "Bob B"},
+    ]
+
+
+def _dense_unique() -> list[dict]:
+    return [
+        {"first": f"Name{i}", "last": f"Last{i}", "email": f"u{i}@x.com"}
+        for i in range(10)
+    ]
+
+
+def _sparse_minimal() -> list[dict]:
+    return [
+        {"a": "x", "b": None},
+        {"a": None, "b": "y"},
+        {"a": None, "b": None},
+    ]
+
+
+def _booleans_dates() -> list[dict]:
+    return [
+        {"name": "Alice", "active": True, "joined": "2024-01-01"},
+        {"name": "Bob",   "active": False, "joined": "2024-02-02"},
+        {"name": "Carol", "active": True, "joined": "2024-03-03"},
+    ]
+
+
+INDICATOR_DATASETS: dict[str, list[dict]] = {
+    "id_high_prevalence": _id_high_prevalence(),
+    "all_null_col": _all_null_col(),
+    "heavy_typos": _heavy_typos(),
+    "low_overlap_blocking": _low_overlap_blocking(),
+    "identity_collision": _identity_collision(),
+    "dense_unique": _dense_unique(),
+    "sparse_minimal": _sparse_minimal(),
+    "booleans_dates": _booleans_dates(),
+}
+
+
+def _run_indicator_one(name: str, rows: list[dict]) -> dict[str, Any]:
+    df = pl.DataFrame(rows)
+    return {
+        "name": name,
+        "input_rows": rows,
+        "expected_indicators": _indicators_dict(df),
     }
 
 
@@ -242,6 +390,11 @@ def main() -> None:
     parser.add_argument(
         "--out", type=Path, required=True,
         help="Output JSON path (typically tests/parity/controller-stoppoint-fixtures.json)",
+    )
+    parser.add_argument(
+        "--indicators-out", type=Path, default=None,
+        help="Optional path for indicator-only fixtures (wave-2). When set, "
+             "emits a parallel JSON containing per-dataset indicator values.",
     )
     args = parser.parse_args()
 
@@ -253,6 +406,21 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.out} ({len(payload)} datasets)", file=sys.stderr)
+
+    if args.indicators_out is not None:
+        ind_payload: dict[str, dict] = {}
+        for name, rows in INDICATOR_DATASETS.items():
+            print(f"  indicators {name} ({len(rows)} rows)...", file=sys.stderr)
+            ind_payload[name] = _run_indicator_one(name, rows)
+        args.indicators_out.parent.mkdir(parents=True, exist_ok=True)
+        args.indicators_out.write_text(
+            json.dumps(ind_payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        print(
+            f"wrote {args.indicators_out} ({len(ind_payload)} indicator datasets)",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
