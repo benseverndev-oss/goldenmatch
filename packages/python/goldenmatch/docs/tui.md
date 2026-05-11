@@ -15,9 +15,9 @@ goldenmatch interactive customers.csv --config config.yaml
 
 ---
 
-## 6 Tabs
+## 7 Tabs
 
-The TUI has 6 tabs, accessible via keyboard shortcuts `1` through `6`.
+The TUI has 7 tabs, accessible via keyboard shortcuts `1` through `7`.
 
 ### Tab 1: Data
 
@@ -68,14 +68,27 @@ Output options:
 - Export lineage JSON
 - Generate HTML report
 
+### Tab 7: Controller (v1.7-v1.12)
+
+AutoConfigController telemetry from the most recent `Ctrl+A` invocation:
+- Health verdict badge (green / yellow / red)
+- `StopReason` with one-line hover explanation
+- Committed matchkeys with `Path Y · N NE` indicator + expandable NE field rows
+- Complexity profile cells (pairs, above-threshold, borderline, blocks, p99, clusters, transitivity)
+- Indicator column priors table (identity / corruption scores)
+- Refit decisions table (iter / rule / rationale / wall-clock)
+
+Same JSON shape as the web `/api/v1/controller/telemetry` endpoint and the CLI `goldenmatch autoconfig` output.
+
 ---
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| `1`--`6` | Jump to tab (Data, Config, Matches, Golden, Boost, Export) |
+| `1`--`7` | Jump to tab (Data, Config, Matches, Golden, Boost, Export, Controller) |
 | `F5` | Run the pipeline |
+| `Ctrl+A` | **Auto-configure**: run AutoConfigController; adopt config; switch to Controller tab |
 | `?` | Show all keyboard shortcuts |
 | `Ctrl+E` | Export results |
 | `Left`/`Right` | Adjust threshold (Matches tab) |
