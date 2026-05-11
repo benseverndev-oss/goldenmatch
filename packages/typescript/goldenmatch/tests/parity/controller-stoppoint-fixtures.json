@@ -85,6 +85,50 @@
         "n_rows": 6
       }
     },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "first": 0.0,
+        "last": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 1.0,
+        "first|email": 1.0,
+        "first|last": 1.0,
+        "first|zip": 1.0,
+        "last|email": 1.0,
+        "last|zip": 1.0
+      },
+      "full_pop_hits": {
+        "email": 0,
+        "first": 0,
+        "last": 0,
+        "zip": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
     "expected_run_history": {
       "entries": [
         {
@@ -217,6 +261,50 @@
         },
         "n_cols": 4,
         "n_rows": 8
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.1429,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.125,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.2,
+          "identity_score": 0.7
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.1429,
+        "first": 0.125,
+        "last": 0.2,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 0.1429,
+        "first|email": 0.0,
+        "first|last": 0.0,
+        "first|zip": 0.0,
+        "last|email": 0.25,
+        "last|zip": 0.5714
+      },
+      "full_pop_hits": {
+        "email": 1,
+        "first": 0,
+        "last": 4,
+        "zip": 7
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 1,
+        "is_sparse": true
       }
     },
     "expected_run_history": {
@@ -366,6 +454,41 @@
         "n_rows": 6
       }
     },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.0,
+        "email": 0.0,
+        "name": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|city": 1.0,
+        "name|city": 0.5,
+        "name|email": 0.5
+      },
+      "full_pop_hits": {
+        "city": 2,
+        "email": 2,
+        "name": 1
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 2,
+        "is_sparse": true
+      }
+    },
     "expected_run_history": {
       "entries": [
         {
@@ -496,6 +619,50 @@
         },
         "n_cols": 4,
         "n_rows": 7
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "phone": {
+          "corruption_score": 0.0,
+          "identity_score": 0.85
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "first": 0.0,
+        "last": 0.0,
+        "phone": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "first|last": 0.0,
+        "first|phone": 0.6667,
+        "first|zip": 0.6667,
+        "last|phone": 0.3333,
+        "last|zip": 0.3333,
+        "phone|zip": 1.0
+      },
+      "full_pop_hits": {
+        "first": 2,
+        "last": 1,
+        "phone": 3,
+        "zip": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
       }
     },
     "expected_run_history": {
@@ -665,6 +832,50 @@
         "n_rows": 4
       }
     },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "first": 0.0,
+        "last": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 0.2,
+        "first|email": 0.2,
+        "first|last": 0.2,
+        "first|zip": 0.2,
+        "last|email": 0.2,
+        "last|zip": 0.2
+      },
+      "full_pop_hits": {
+        "email": 3,
+        "first": 3,
+        "last": 3,
+        "zip": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 3,
+        "is_sparse": true
+      }
+    },
     "expected_run_history": {
       "entries": [
         {
@@ -785,6 +996,41 @@
         },
         "n_cols": 3,
         "n_rows": 6
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.2,
+          "identity_score": 0.7
+        },
+        "name": {
+          "corruption_score": 0.3333,
+          "identity_score": 0.7
+        },
+        "phone": {
+          "corruption_score": 0.0,
+          "identity_score": 0.85
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.2,
+        "name": 0.3333,
+        "phone": 0.0
+      },
+      "cross_blocking_overlap": {
+        "city|phone": 0.0,
+        "name|city": 0.0,
+        "name|phone": 0.0
+      },
+      "full_pop_hits": {
+        "city": 1,
+        "name": 0,
+        "phone": 1
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
       }
     },
     "expected_run_history": {
