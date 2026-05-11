@@ -385,6 +385,193 @@ def _run_indicator_one(name: str, rows: list[dict]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Wave 3 — negative-evidence parity fixtures
+# ---------------------------------------------------------------------------
+
+def _ne_clustered_email_diff_surname() -> list[dict]:
+    """Shared-email pairs with conflicting surnames — Path Y target."""
+    return [
+        {"email": "share@x.com", "last_name": "Smith",      "first_name": "Alice"},
+        {"email": "share@x.com", "last_name": "Smith",      "first_name": "Alice"},
+        {"email": "share@x.com", "last_name": "Vanderbilt", "first_name": "Zach"},
+        {"email": "other@x.com", "last_name": "Brown",      "first_name": "Bob"},
+        {"email": "other@x.com", "last_name": "Brown",      "first_name": "Bob"},
+    ]
+
+
+def _ne_clustered_phone_diff_name() -> list[dict]:
+    """Same shape but on phone instead of email."""
+    return [
+        {"phone": "555-1111", "last_name": "Smith",   "first_name": "Alice"},
+        {"phone": "555-1111", "last_name": "Smith",   "first_name": "Alice"},
+        {"phone": "555-1111", "last_name": "Zykov",   "first_name": "Zach"},
+        {"phone": "555-2222", "last_name": "Brown",   "first_name": "Bob"},
+        {"phone": "555-2222", "last_name": "Browne",  "first_name": "Bob"},
+    ]
+
+
+def _ne_dense_population() -> list[dict]:
+    """Dense identity columns — promotion should add NE on phone."""
+    return [
+        {"email": f"u{i}@x.com", "phone": f"555-{i:04d}", "first_name": f"N{i}"}
+        for i in range(12)
+    ]
+
+
+def _ne_sparse_no_promotion() -> list[dict]:
+    """Sparse — no identity columns trigger NE promotion."""
+    return [
+        {"first_name": "Alice"},
+        {"first_name": "Bob"},
+        {"first_name": "Carol"},
+    ]
+
+
+def _ne_blocking_field_skipped() -> list[dict]:
+    """Phone is in blocking, so it should NOT be promoted as NE."""
+    return [
+        {"email": "alice@x.com",  "phone": "555-1111", "last": "Smith"},
+        {"email": "alice2@x.com", "phone": "555-1111", "last": "Smith"},
+        {"email": "bob@x.com",    "phone": "555-2222", "last": "Brown"},
+        {"email": "carol@x.com",  "phone": "555-3333", "last": "Davis"},
+    ]
+
+
+def _ne_idempotent() -> list[dict]:
+    """Same as dense; we verify idempotency by running promote twice."""
+    return [
+        {"email": f"u{i}@x.com", "phone": f"555-{i:04d}", "last": f"L{i}"}
+        for i in range(10)
+    ]
+
+
+NE_DATASETS: dict[str, list[dict]] = {
+    "ne_clustered_email_diff_surname": _ne_clustered_email_diff_surname(),
+    "ne_clustered_phone_diff_name":    _ne_clustered_phone_diff_name(),
+    "ne_dense_population":             _ne_dense_population(),
+    "ne_sparse_no_promotion":          _ne_sparse_no_promotion(),
+    "ne_blocking_field_skipped":       _ne_blocking_field_skipped(),
+    "ne_idempotent":                   _ne_idempotent(),
+}
+
+
+def _ne_field_dict(ne) -> dict[str, Any]:
+    return {
+        "field": ne.field,
+        "transforms": list(ne.transforms or []),
+        "scorer": ne.scorer,
+        "threshold": round(float(ne.threshold), 4),
+        "penalty": round(float(ne.penalty), 4),
+    }
+
+
+def _ne_matchkey_dict(mk) -> dict[str, Any]:
+    out = _matchkey_dict(mk)
+    ne_list = getattr(mk, "negative_evidence", None) or []
+    out["negative_evidence"] = [_ne_field_dict(ne) for ne in ne_list]
+    return out
+
+
+def _run_ne_one(name: str, rows: list[dict]) -> dict[str, Any]:
+    """Build a tiny zero-config, run promote_negative_evidence, emit before/after."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.indicators import compute_column_priors
+
+    df = pl.DataFrame(rows)
+    cols = [c for c in df.columns if not c.startswith("__")]
+
+    # Build a tiny synthetic config: exact_<first-identity-col> + weighted fuzzy
+    # over the remaining cols. This isolates NE behavior from the
+    # auto_configure_df pipeline (which may differ across versions).
+    identity_col: str | None = None
+    for c in cols:
+        cl = c.lower()
+        if "email" in cl or "phone" in cl or "id" == cl:
+            identity_col = c
+            break
+    blocking_fields: list[str] = []
+    if name == "ne_blocking_field_skipped":
+        blocking_fields = ["phone"]
+
+    matchkeys: list[MatchkeyConfig] = []
+    if identity_col is not None:
+        matchkeys.append(
+            MatchkeyConfig(
+                name=f"exact_{identity_col}",
+                type="exact",
+                fields=[
+                    MatchkeyField(
+                        field=identity_col,
+                        transforms=["lowercase", "strip"],
+                        scorer="exact",
+                        weight=1.0,
+                    )
+                ],
+            )
+        )
+    weighted_fields = [
+        MatchkeyField(
+            field=c,
+            transforms=["lowercase", "strip"],
+            scorer="ensemble",
+            weight=1.0,
+        )
+        for c in cols
+        if c != identity_col
+    ]
+    if weighted_fields:
+        matchkeys.append(
+            MatchkeyConfig(
+                name="weighted_fuzzy",
+                type="weighted",
+                fields=weighted_fields,
+                threshold=0.85,
+            )
+        )
+
+    if blocking_fields:
+        blocking = BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=blocking_fields, transforms=[])],
+        )
+    else:
+        # Pydantic requires a blocking config when weighted MKs exist; pick a
+        # neutral default that doesn't affect NE promotion.
+        first_col = cols[0]
+        blocking = BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=[first_col], transforms=[])],
+        )
+
+    cfg = GoldenMatchConfig(matchkeys=matchkeys, blocking=blocking)
+
+    priors = compute_column_priors(df)
+    promoted = promote_negative_evidence(cfg, df, priors)
+    # Idempotency check (re-run; expect no further changes).
+    promoted_twice = promote_negative_evidence(promoted, df, priors)
+
+    def _summary(c):  # serialize matchkeys-of-interest
+        return {
+            "matchkeys": [_ne_matchkey_dict(m) for m in c.matchkeys],
+        }
+
+    return {
+        "name": name,
+        "input_rows": rows,
+        "before": _summary(cfg),
+        "expected_after": _summary(promoted),
+        "expected_after_idempotent": _summary(promoted_twice),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -395,6 +582,10 @@ def main() -> None:
         "--indicators-out", type=Path, default=None,
         help="Optional path for indicator-only fixtures (wave-2). When set, "
              "emits a parallel JSON containing per-dataset indicator values.",
+    )
+    parser.add_argument(
+        "--ne-out", type=Path, default=None,
+        help="Optional path for wave-3 negative-evidence fixtures.",
     )
     args = parser.parse_args()
 
@@ -419,6 +610,21 @@ def main() -> None:
         )
         print(
             f"wrote {args.indicators_out} ({len(ind_payload)} indicator datasets)",
+            file=sys.stderr,
+        )
+
+    if args.ne_out is not None:
+        ne_payload: dict[str, dict] = {}
+        for name, rows in NE_DATASETS.items():
+            print(f"  ne {name} ({len(rows)} rows)...", file=sys.stderr)
+            ne_payload[name] = _run_ne_one(name, rows)
+        args.ne_out.parent.mkdir(parents=True, exist_ok=True)
+        args.ne_out.write_text(
+            json.dumps(ne_payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        print(
+            f"wrote {args.ne_out} ({len(ne_payload)} NE datasets)",
             file=sys.stderr,
         )
 
