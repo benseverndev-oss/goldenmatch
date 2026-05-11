@@ -344,6 +344,12 @@ just build
 
 ---
 
+## Reproducing benchmarks
+
+Published GoldenMatch numbers (DQbench composite 91.04, DBLP-ACM 0.9641 F1, Febrl3 0.9443 F1, NCVR 0.9719 F1) map back to a single committed runner: `scripts/run_benchmarks.py`. See [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, expected output (with tolerance), variance notes (deterministic vs LLM-augmented), and a copy-pasteable one-click reproduction snippet for the DQbench composite. The same runner powers the weekly `benchmarks.yml` workflow.
+
+---
+
 ## Contributing
 
 - Feature work goes on `feature/<name>` branches; merge via squash PR.
