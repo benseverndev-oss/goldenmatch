@@ -51,6 +51,7 @@ Local CWD = package dir (e.g. `packages/python/goldencheck`); CI CWD = repo root
 ## Post-fold GitHub Actions
 Only `.github/workflows/` at the repo root runs. Workflow files left under `packages/python/<pkg>/.github/workflows/` from pre-fold repos are orphaned (silently ignored). v1.6.0 release shipped no PyPI publish until `publish-goldenmatch.yml` was added at the root.
 - `publish-goldenmatch.yml` — fires on `release: published` for `v*` tags (skips `goldenmatch-js-v*`); `workflow_dispatch` with `ref` input for retro-publish. Uses `PYPI_TOKEN` (trusted publishing not configured).
+- `publish-mcp.yml` — auto-syncs `packages/python/<pkg>/server.json` to the official MCP Registry (`registry.modelcontextprotocol.io`) after every PyPI publish. Same tag patterns as the per-package PyPI workflows. Auth via GitHub OIDC (`id-token: write`); no secrets needed. `workflow_dispatch` with `package` input (`all` / one of five) lets you force-refresh listings without re-tagging. Updating the registry directly via the web UI also works, but the workflow keeps versions in lockstep with PyPI automatically.
 
 ## Pre-fold archive
 `_archive/goldenmatch-pre-fold/` retains the standalone repo's git history. Old specs/plans under `_archive/goldenmatch-pre-fold/docs/superpowers/` are sometimes the foundation for current work — search there before assuming a feature is undesigned.
