@@ -597,12 +597,13 @@ export const ruleCollisionSignalTooHigh: Rule = (ctx) => {
     const ratio = profile.data.cardinalityRatio[field] ?? 0.0;
     if (!(ratio >= 0.5 && ratio <= 0.95)) continue;
     // Witnesses: other identity-score-high columns not equal to `field`.
+    // Python parity: identity_score >= 0.7, rate > 0.75 (strict).
     const witnesses = Object.entries(priors)
-      .filter(([col, p]) => col !== field && p.identityScore >= 0.5)
+      .filter(([col, p]) => col !== field && p.identityScore >= 0.7)
       .map(([col]) => col);
     if (witnesses.length === 0) continue;
     const sig = indicators.collisionSignal(field, witnesses);
-    if (sig.rate < COLLISION_RATE_THRESHOLD) continue;
+    if (sig.rate <= COLLISION_RATE_THRESHOLD) continue;
 
     // Demote: drop the exact matchkey, add as fuzzy participant in first
     // weighted matchkey, and add field to blocking.
