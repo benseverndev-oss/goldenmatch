@@ -667,7 +667,7 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
 
     scored_pairs = []
     for block in sample_blocks:
-        block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+        block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
         pairs = find_fuzzy_matches(block_df, score_mk)
         scored_pairs.extend(pairs)
 
@@ -774,7 +774,8 @@ def select_best_blocking_key(
         groups = df_with_key.filter(pl.col("__block_key__").is_not_null()).group_by("__block_key__").agg(
             pl.len().alias("size")
         )
-        max_size = groups["size"].max()
+        # polars Series.max() returns PythonLiteral; "size" is i64 at runtime.
+        max_size = int(groups["size"].max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "size" is int64 at runtime
         group_count = groups.height
 
         logger.debug(

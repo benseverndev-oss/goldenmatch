@@ -328,7 +328,7 @@ def compute_cluster_confidence(
     avg_edge = sum(scores) / len(scores)
     max_possible_edges = size * (size - 1) / 2
     connectivity = len(pair_scores) / max_possible_edges if max_possible_edges > 0 else 0.0
-    bottleneck_pair = min(pair_scores, key=pair_scores.get)
+    bottleneck_pair = min(pair_scores, key=lambda p: pair_scores[p])
 
     # Weighted confidence: weakest link matters most
     confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity

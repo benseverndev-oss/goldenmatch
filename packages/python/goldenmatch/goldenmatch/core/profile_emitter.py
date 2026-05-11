@@ -9,9 +9,10 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Union
 
 from goldenmatch.core.complexity_profile import (
     BlockingProfile,
@@ -51,12 +52,12 @@ class ProfileEmitter:
 class _NullEmitter:
     """Singleton no-op. Stages call ``set_*`` and the writes vanish."""
     __slots__ = ()
-    def set_blocking(self, p): pass
-    def set_scoring(self, p): pass
-    def set_cluster(self, p): pass
-    def set_data(self, p): pass
-    def set_domain(self, p): pass
-    def set_matchkey(self, p): pass
+    def set_blocking(self, p: BlockingProfile) -> None: pass
+    def set_scoring(self, p: ScoringProfile) -> None: pass
+    def set_cluster(self, p: ClusterProfile) -> None: pass
+    def set_data(self, p: DataProfile) -> None: pass
+    def set_domain(self, p: DomainProfile) -> None: pass
+    def set_matchkey(self, p: MatchkeyProfile) -> None: pass
 
 
 _NULL_EMITTER = _NullEmitter()
@@ -66,14 +67,14 @@ _emitter_stack: ContextVar[tuple[ProfileEmitter, ...]] = ContextVar(
 )
 
 
-def current_emitter():
+def current_emitter() -> Union[ProfileEmitter, "_NullEmitter"]:
     """Return the active emitter, or the null singleton when none is set."""
     stack = _emitter_stack.get()
     return stack[-1] if stack else _NULL_EMITTER
 
 
 @contextmanager
-def profile_capture() -> Iterator[ProfileEmitter]:
+def profile_capture() -> Generator[ProfileEmitter, None, None]:
     """Push a new ProfileEmitter onto the stack; pop on exit (incl. exception).
 
     Concurrency:

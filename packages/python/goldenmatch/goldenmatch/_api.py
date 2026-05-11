@@ -372,13 +372,19 @@ def dedupe_df(
             )
             _used_controller = True
 
+    # All branches above bind config to GoldenMatchConfig (load_config returns
+    # GoldenMatchConfig; _build_config returns GoldenMatchConfig;
+    # auto_configure_df returns GoldenMatchConfig). The Optional in the type
+    # signature is the public input contract, not a runtime state here.
+    assert config is not None, "dedupe_df: config resolution above must bind config"
+
     # Apply overrides uniformly regardless of config source
-    if backend and hasattr(config, "backend"):
+    if backend:
         config.backend = backend
-    if llm_scorer and hasattr(config, "llm_scorer"):
+    if llm_scorer:
         from goldenmatch.config.schemas import LLMScorerConfig
         config.llm_scorer = LLMScorerConfig(enabled=True)
-    if llm_auto and hasattr(config, "llm_auto"):
+    if llm_auto:
         config.llm_auto = llm_auto
 
     result = run_dedupe_df(
@@ -477,7 +483,9 @@ def match_df(
             )
             _used_controller = True
 
-    if backend and hasattr(config, "backend"):
+    assert config is not None, "match_df: config resolution above must bind config"
+
+    if backend:
         config.backend = backend
 
     result = run_match_df(target, reference, config, auto_config=False)
@@ -1033,7 +1041,7 @@ def memory_stats(path: str | None = None) -> dict:
 def _extract_pairs(result: dict) -> list:
     """Extract scored pairs from cluster pair_scores."""
     pairs = []
-    for cid, cinfo in result.get("clusters", {}).items():
+    for _cid, cinfo in result.get("clusters", {}).items():
         for (a, b), score in cinfo.get("pair_scores", {}).items():
             pairs.append((a, b, score))
     return pairs
