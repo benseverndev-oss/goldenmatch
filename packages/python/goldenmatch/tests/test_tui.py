@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from goldenmatch.tui.app import GoldenMatchApp
 from goldenmatch.tui.tabs.config_tab import ConfigTab
+from goldenmatch.tui.tabs.controller_tab import ControllerTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
@@ -30,12 +31,12 @@ class TestTUIApp:
 
     @pytest.mark.asyncio
     async def test_tabs_exist(self, sample_csv):
-        """All six tab panes should be present."""
+        """All seven tab panes should be present (Controller added in v1.13+)."""
         app = GoldenMatchApp(files=[str(sample_csv)])
         async with app.run_test() as pilot:
             await pilot.pause()
             panes = app.query("TabPane")
-            assert len(panes) == 6
+            assert len(panes) == 7
 
     @pytest.mark.asyncio
     async def test_app_launches_without_files(self):
@@ -157,6 +158,56 @@ class TestGoldenTab:
             await pilot.pause()
             table = app.query_one("#golden-table")
             assert table.display is False
+
+
+class TestControllerTab:
+    @pytest.mark.asyncio
+    async def test_controller_tab_renders(self, sample_csv):
+        """Controller tab should render when switched to."""
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-controller"
+            await pilot.pause()
+            controller_tab = app.query_one(ControllerTab)
+            assert controller_tab is not None
+
+    @pytest.mark.asyncio
+    async def test_controller_tab_shows_placeholder_initially(self, sample_csv):
+        """Placeholder visible before any auto-configure run."""
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-controller"
+            await pilot.pause()
+            empty = app.query_one("#controller-empty")
+            assert empty.display is True
+
+    @pytest.mark.asyncio
+    async def test_controller_tab_renders_after_auto_configure(self, sample_csv):
+        """After auto_configure, telemetry fields should be visible.
+
+        Bypasses the keyboard binding to keep the test deterministic — calls
+        the engine's auto_configure synchronously and pushes the result into
+        the tab, which is what the @work-decorated action does in production
+        once the worker thread completes.
+        """
+        app = GoldenMatchApp(files=[str(sample_csv)])
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Engine is created on mount when files are provided.
+            assert app.engine is not None
+            _config, telemetry = app.engine.auto_configure()
+            controller_tab = app.query_one(ControllerTab)
+            controller_tab.update_telemetry(telemetry)
+            await pilot.pause()
+            # Placeholder hides; header surfaces.
+            empty = app.query_one("#controller-empty")
+            header = app.query_one("#controller-header")
+            assert empty.display is False
+            assert header.display is True
 
 
 class TestExportTab:

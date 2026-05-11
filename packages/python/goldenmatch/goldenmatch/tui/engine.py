@@ -6,8 +6,9 @@ No Textual dependency — pure Python + Polars.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -40,6 +41,23 @@ class EngineResult:
     stats: EngineStats
 
 
+@dataclass
+class ControllerTelemetry:
+    """v1.7-v1.12 AutoConfigController output, captured by ``auto_configure``.
+
+    Loosely typed (Any) to dodge import cycles — the consumer
+    (``tabs/controller_tab.py``) uses ``getattr`` on the inner sub-profiles.
+    Populated only when the user actually triggered auto-config from the TUI;
+    None on every cold start and after manual ConfigTab edits.
+    """
+    profile: Any = None          # ComplexityProfile
+    history: Any = None          # RunHistory
+    committed_config: Any = None # GoldenMatchConfig the controller committed
+    source: str = "auto_configure"
+    recorded_at: str | None = None
+    column_priors: dict[str, Any] = field(default_factory=dict)
+
+
 class MatchEngine:
     """Wraps the pipeline into a clean API for the TUI and preview mode."""
 
@@ -48,6 +66,7 @@ class MatchEngine:
         self._data: pl.DataFrame | None = None
         self._profile: dict | None = None
         self._last_result: EngineResult | None = None
+        self._last_telemetry: ControllerTelemetry | None = None
         self._load()
 
     def _load(self) -> None:
@@ -301,6 +320,70 @@ class MatchEngine:
             scored_pairs=all_pairs,
             stats=stats,
         )
+
+    def auto_configure(self, domain: str | None = None) -> tuple[Any, ControllerTelemetry]:
+        """Run AutoConfigController on the loaded data, capture telemetry.
+
+        Returns ``(committed_config, telemetry)``. The committed config is the
+        same shape ``ConfigTab.set_config`` accepts, so callers can apply it
+        directly. ``telemetry`` is stashed on the engine for later inspection
+        by the Controller tab.
+
+        Mirrors the web router's ``_LAST_CONTROLLER_RUN`` capture (see
+        ``web/routers/autoconfig.py``) so we surface the same stop_reason /
+        decisions / NE the workbench shows.
+        """
+        # Lazy imports: ``auto_configure_df`` pulls in the policy + indicator
+        # graph (heavy). Keeping the import here means ``MatchEngine.__init__``
+        # stays cheap for TUI sessions that never trigger Ctrl+A.
+        from datetime import UTC, datetime
+
+        from goldenmatch.config.schemas import DomainConfig
+        from goldenmatch.core.autoconfig import (
+            _LAST_CONTROLLER_RUN,
+            auto_configure_df,
+        )
+
+        # Profile/extract priors before the controller wipes the ContextVar
+        # state — these come from the eager indicator pass and aren't on
+        # ComplexityProfile.data.column_priors until the controller publishes.
+        domain_cfg = DomainConfig(enabled=True, mode=domain) if domain else None
+        config = auto_configure_df(
+            self._data,
+            allow_remote_assets=False,
+            domain_config=domain_cfg,
+        )
+        ctrl_state = _LAST_CONTROLLER_RUN.get()
+        profile = ctrl_state[0] if ctrl_state else None
+        history = ctrl_state[1] if ctrl_state else None
+
+        # Lift column_priors off DataProfile so the tab can render without
+        # walking the frozen dataclass tree at render time.
+        priors: dict[str, Any] = {}
+        if profile is not None:
+            data_profile = getattr(profile, "data", None)
+            cp = getattr(data_profile, "column_priors", None) or {}
+            for col, p in cp.items():
+                priors[col] = {
+                    "identity_score": float(getattr(p, "identity_score", 0.0)),
+                    "corruption_score": float(getattr(p, "corruption_score", 0.0)),
+                }
+
+        telemetry = ControllerTelemetry(
+            profile=profile,
+            history=history,
+            committed_config=config,
+            source="auto_configure",
+            recorded_at=datetime.now(UTC).isoformat(),
+            column_priors=priors,
+        )
+        self._last_telemetry = telemetry
+        return config, telemetry
+
+    @property
+    def last_telemetry(self) -> ControllerTelemetry | None:
+        """Most recent controller telemetry from ``auto_configure``, if any."""
+        return self._last_telemetry
 
     def run_sample(self, config, sample_size: int = 1000) -> EngineResult:
         """Run the pipeline on a sample of the data."""
