@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Union
 
 from goldenmatch.core.complexity_profile import (
     BlockingProfile,
@@ -67,7 +66,7 @@ _emitter_stack: ContextVar[tuple[ProfileEmitter, ...]] = ContextVar(
 )
 
 
-def current_emitter() -> Union[ProfileEmitter, "_NullEmitter"]:
+def current_emitter() -> ProfileEmitter | _NullEmitter:
     """Return the active emitter, or the null singleton when none is set."""
     stack = _emitter_stack.get()
     return stack[-1] if stack else _NULL_EMITTER
