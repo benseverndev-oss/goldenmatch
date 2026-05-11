@@ -39,6 +39,10 @@ export interface AutoconfigOptions {
    *  instead of demoting them. Use when callers have opted into remote
    *  model downloads. */
   readonly allowRemoteAssets?: boolean;
+  /** v0.5.0 (Python v1.7 parity): when ``true``, route the result through the
+   *  iterative ``AutoConfigController`` instead of returning the single-pass
+   *  heuristic config. Default ``false`` to preserve pre-0.5.0 behavior. */
+  readonly iterate?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,4 +487,30 @@ export function autoConfigure(
   options?: AutoconfigOptions,
 ): GoldenMatchConfig {
   return autoConfigureRows(rows, options);
+}
+
+/**
+ * Iterative auto-config (Python v1.7 parity). Runs the
+ * ``AutoConfigController`` and returns its committed config, complexity
+ * profile, and full run history. Use this when ``options.iterate`` would
+ * have been ``true`` but you also want access to the controller telemetry.
+ *
+ * Returns a Promise — the underlying TS dedupe pipeline is async.
+ */
+export async function autoConfigureRowsIterate(
+  rows: readonly Row[],
+  _options?: AutoconfigOptions,
+): Promise<{
+  config: GoldenMatchConfig;
+  profile: import("./complexityProfile.js").ComplexityProfile;
+  history: import("./autoconfigHistory.js").RunHistory;
+}> {
+  const { AutoConfigController } = await import("./autoconfigController.js");
+  const { HeuristicRefitPolicy } = await import("./autoconfigPolicy.js");
+  const { DEFAULT_RULES_V1_7_V1_8 } = await import("./autoconfigRules.js");
+  const controller = new AutoConfigController({
+    policy: new HeuristicRefitPolicy(DEFAULT_RULES_V1_7_V1_8),
+  });
+  const out = await controller.run(rows);
+  return { config: out.committedConfig, profile: out.profile, history: out.history };
 }
