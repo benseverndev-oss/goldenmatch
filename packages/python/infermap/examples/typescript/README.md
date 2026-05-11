@@ -45,5 +45,5 @@ npx tsx path/to/example.ts
 ## See also
 
 - [Python examples](../README.md) for equivalent patterns in the Python package
-- [Package README](../../packages/infermap-js/README.md) for API reference
+- [TypeScript package README](../../../../typescript/infermap/README.md) for API reference
 - [npm](https://www.npmjs.com/package/infermap) for install instructions
