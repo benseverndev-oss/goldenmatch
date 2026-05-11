@@ -11,7 +11,7 @@ pip install -e ".[mcp]"          # With MCP server
 pip install -e ".[baseline]"     # With deep profiling baseline
 goldencheck baseline data.csv    # Create statistical baseline
 goldencheck scan data.csv --baseline goldencheck_baseline.yaml  # Drift detection
-pytest --tb=short -v             # Run tests (189+ passing)
+pytest --tb=short -v             # Run tests (550+ passing)
 ruff check .                     # Lint
 ruff check . --fix               # Auto-fix lint
 goldencheck data.csv --no-tui    # Scan a file (CLI output)
@@ -186,10 +186,10 @@ goldencheck scan data.csv --domain ecommerce
 - Adapter: `dqbench/adapters/goldencheck.py`
 - Run: `pip install dqbench && dqbench run goldencheck`
 
-## TypeScript Port (packages/goldencheck-js/)
+## TypeScript Port (packages/typescript/goldencheck/)
 
 ```bash
-cd packages/goldencheck-js
+cd packages/typescript/goldencheck
 npm install                      # Install deps
 npm run typecheck                # tsc --noEmit
 npm run test                     # vitest (144+ tests)
