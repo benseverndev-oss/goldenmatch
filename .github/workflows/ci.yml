@@ -392,7 +392,7 @@ jobs:
       # without needing any gitignored dataset. The other three datasets
       # (DBLP-ACM, NCVR, DQbench) are gracefully skipped by the runner
       # when their files / CLIs aren't on disk.
-      - run: uv pip install recordlinkage
+      - run: uv pip install recordlinkage pyarrow
       - name: Import smoke
         shell: bash
         run: |
