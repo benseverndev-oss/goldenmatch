@@ -40,6 +40,7 @@ import {
 import type { RefitPolicy } from "./autoconfigPolicy.js";
 import { autoConfigureRows } from "./autoconfig.js";
 import { runDedupePipeline } from "./pipeline.js";
+import { IndicatorContext } from "./indicators.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -206,8 +207,12 @@ export class AutoConfigController {
         break;
       }
 
+      // Provision a fresh IndicatorContext for this iteration. Cheap eager
+      // indicators (column priors, sparsity) are memoized; the lazy ones
+      // remain lazy until a rule reads them.
+      const indicators = new IndicatorContext(sample, configN);
       // Ask the policy for the next config
-      const next = this.policy.propose(profileN, configN, history);
+      const next = this.policy.propose(profileN, configN, history, indicators);
       if (next === null) {
         history.stopReason = StopReason.POLICY_SATISFIED;
         break;
