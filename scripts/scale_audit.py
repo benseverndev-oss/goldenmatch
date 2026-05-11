@@ -31,9 +31,12 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import sys
+import threading
 import time
 import tracemalloc
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -170,8 +173,128 @@ def _tracking(result: ScaleAuditResult, process: psutil.Process):
         tracemalloc.stop()
 
 
-def run_audit(rows: int, dupe_rate: float = 0.15, fixture_dir: Path | None = None) -> ScaleAuditResult:
-    """Run one audit pass against a synthetic fixture of the given size."""
+def _write_snapshot(result: ScaleAuditResult, out_path: Path | None) -> None:
+    """Flush `result` to disk. No-op when no out_path was supplied.
+
+    Called after every stage so an OS-level OOM-kill (which never reaches
+    our `except`) still leaves us with the completed stages' measurements.
+    Without this, a kill mid-`run_dedupe` would lose `auto_configure`'s
+    50-minute result too — total loss instead of partial evidence.
+    """
+    if out_path is None:
+        return
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write to a temp file then atomic-replace so a kill mid-write
+        # doesn't leave a corrupt JSON on disk.
+        tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(asdict(result), indent=2))
+        os.replace(tmp, out_path)
+    except Exception as exc:
+        # Snapshot is best-effort; never let it crash the run.
+        sys.stderr.write(f"[scale-audit] snapshot flush failed: {exc}\n")
+
+
+class _RSSWatchdog:
+    """Background thread that aborts the run when RSS exceeds a budget.
+
+    The OS will kill the process before Python sees `MemoryError` on
+    most allocations that matter (large Polars buffers, Arrow chunks,
+    pyo3 round-trips). This watchdog gives us a chance to flush the
+    partial result and exit cleanly before the OS gets to us.
+
+    Trip behaviour: write a final snapshot with `note` populated, then
+    `os._exit(1)`. Regular `sys.exit` won't unwind if the main thread
+    is in a long-running C call (rapidfuzz, Polars), so we hard-exit.
+    """
+
+    def __init__(
+        self,
+        budget_mb: float,
+        process: psutil.Process,
+        result: ScaleAuditResult,
+        out_path: Path | None,
+        flush_fn: Callable[[ScaleAuditResult, Path | None], None],
+        sample_interval_s: float = 0.5,
+    ):
+        # Trip at 90% of budget so we flush before the OS kills us.
+        self.trip_bytes = int(budget_mb * 0.9 * 1024 * 1024)
+        self.budget_mb = budget_mb
+        self.process = process
+        self.result = result
+        self.out_path = out_path
+        self.flush_fn = flush_fn
+        self.sample_interval_s = sample_interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._peak_rss_bytes = 0
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="rss-watchdog")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+    @property
+    def peak_rss_mb(self) -> float:
+        return self._peak_rss_bytes / 1024 / 1024
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.sample_interval_s):
+            try:
+                rss = self.process.memory_info().rss
+            except Exception:
+                continue
+            if rss > self._peak_rss_bytes:
+                self._peak_rss_bytes = rss
+            if rss > self.trip_bytes:
+                # Trip. Record the abort reason on the result, flush, hard-exit.
+                self.result.failed = (
+                    f"RSSBudgetExceeded: {rss/1024/1024:.0f}MB > "
+                    f"budget {self.budget_mb:.0f}MB (trip at "
+                    f"{self.trip_bytes/1024/1024:.0f}MB)"
+                )
+                self.result.notes = (self.result.notes or "") + (
+                    "; aborted by RSS watchdog before OS OOM-kill"
+                )
+                # Capture whatever timing we have. tracemalloc may still be
+                # active — guard against that.
+                try:
+                    _, tm_peak = tracemalloc.get_traced_memory()
+                    self.result.peak_tracemalloc_mb = max(
+                        self.result.peak_tracemalloc_mb, tm_peak / 1024 / 1024
+                    )
+                except Exception:
+                    pass
+                self.result.peak_rss_mb = max(self.result.peak_rss_mb, rss / 1024 / 1024)
+                try:
+                    self.flush_fn(self.result, self.out_path)
+                finally:
+                    sys.stderr.write(
+                        f"[scale-audit] aborted: RSS exceeded {self.budget_mb:.0f}MB budget\n"
+                    )
+                    os._exit(1)
+
+
+def run_audit(
+    rows: int,
+    dupe_rate: float = 0.15,
+    fixture_dir: Path | None = None,
+    out_path: Path | None = None,
+    rss_budget_mb: float | None = None,
+) -> ScaleAuditResult:
+    """Run one audit pass against a synthetic fixture of the given size.
+
+    `out_path` (optional): if supplied, a JSON snapshot is written after
+    every stage. An OS-level OOM-kill mid-run still leaves us with the
+    completed stages.
+
+    `rss_budget_mb` (optional): start an RSS watchdog that aborts and
+    flushes when the process's RSS exceeds `budget * 0.9`. None disables.
+    """
     fixture_dir = fixture_dir or (Path(__file__).parent.parent / ".profile_tmp" / "scale_fixtures")
     fixture_path = ensure_fixture(rows, dupe_rate, fixture_dir)
 
@@ -187,6 +310,21 @@ def run_audit(rows: int, dupe_rate: float = 0.15, fixture_dir: Path | None = Non
 
     process = psutil.Process()
 
+    # Flush a snapshot before the run starts too — gives consumers a file
+    # to wait on, and proves the out_path is writable before the long run.
+    _write_snapshot(result, out_path)
+
+    watchdog: _RSSWatchdog | None = None
+    if rss_budget_mb is not None:
+        watchdog = _RSSWatchdog(
+            budget_mb=rss_budget_mb,
+            process=process,
+            result=result,
+            out_path=out_path,
+            flush_fn=_write_snapshot,
+        )
+        watchdog.start()
+
     try:
         with _tracking(result, process):
             import polars as pl
@@ -195,14 +333,17 @@ def run_audit(rows: int, dupe_rate: float = 0.15, fixture_dir: Path | None = Non
 
             with _StageTimer("read_csv", result, process):
                 df = pl.read_csv(fixture_path, encoding="utf8-lossy", ignore_errors=True)
+            _write_snapshot(result, out_path)
 
             with _StageTimer("auto_configure", result, process):
                 # The zero-config controller path — same one
                 # `goldenmatch dedupe customers.csv` exercises with no flags.
                 config = auto_configure_df(df)
+            _write_snapshot(result, out_path)
 
             with _StageTimer("run_dedupe", result, process):
                 pipeline_result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
+            _write_snapshot(result, out_path)
 
             clusters = pipeline_result.get("clusters") or {}
             result.cluster_count = len(clusters)
@@ -211,6 +352,15 @@ def run_audit(rows: int, dupe_rate: float = 0.15, fixture_dir: Path | None = Non
         # from earlier stages are still informative (often the OOM hits in a
         # specific stage and the others' timings are still valid).
         result.failed = f"{type(exc).__name__}: {exc}"
+    finally:
+        if watchdog is not None:
+            # If the watchdog observed a higher RSS than _tracking's
+            # start/end snapshots, promote that — the watchdog samples
+            # every 0.5s and catches transient peaks the endpoint check
+            # misses.
+            result.peak_rss_mb = max(result.peak_rss_mb, watchdog.peak_rss_mb)
+            watchdog.stop()
+        _write_snapshot(result, out_path)
 
     return result
 
@@ -261,7 +411,24 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--rows", type=int, help="row count for a single audit pass")
     ap.add_argument("--dupe-rate", type=float, default=0.15)
-    ap.add_argument("--out", type=Path, help="write JSON result to this path")
+    ap.add_argument(
+        "--out",
+        type=Path,
+        help=(
+            "write JSON result to this path. With per-stage flushing enabled, "
+            "a partial snapshot is written after every stage — if the process "
+            "is OOM-killed, completed stages' data is preserved on disk."
+        ),
+    )
+    ap.add_argument(
+        "--rss-budget-mb",
+        type=float,
+        help=(
+            "abort the run when peak RSS exceeds this budget. The watchdog "
+            "trips at 90%% of the budget so it gets to flush before the OS "
+            "OOM-kills the process. Recommended for runs above 500K rows."
+        ),
+    )
     ap.add_argument(
         "--summarize",
         nargs="+",
@@ -298,13 +465,18 @@ def main() -> None:
     if not args.rows:
         ap.error("--rows or --summarize required")
 
-    result = run_audit(rows=args.rows, dupe_rate=args.dupe_rate)
-    blob = asdict(result)
+    # run_audit handles per-stage flushing when out_path is provided.
+    # No extra write here unless --out was omitted, in which case we
+    # still emit the final blob to stdout for piping.
+    result = run_audit(
+        rows=args.rows,
+        dupe_rate=args.dupe_rate,
+        out_path=args.out,
+        rss_budget_mb=args.rss_budget_mb,
+    )
     if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(blob, indent=2))
         print(f"wrote {args.out}")
-    print(json.dumps(blob, indent=2))
+    print(json.dumps(asdict(result), indent=2))
 
 
 if __name__ == "__main__":
