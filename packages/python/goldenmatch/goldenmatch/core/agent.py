@@ -450,28 +450,48 @@ class AgentSession:
         file_path: str,
         config: Any = None,
     ) -> dict[str, Any]:
-        """Full deduplication with profiling, strategy, gating, and review queue."""
+        """Full deduplication with profiling, strategy, gating, and review queue.
+
+        When ``config`` is None, delegates to ``dedupe_df(df)`` with no config
+        so the AutoConfigController fires and produces telemetry. When
+        ``config`` is supplied, runs the explicit config and zeros
+        ``last_telemetry`` so a prior auto-config's blob can't leak into the
+        result. ``select_strategy()`` still runs for the ``reasoning`` payload
+        — that's a separate legacy heuristic-driven explanation, not the
+        controller's authoritative output.
+        """
         from goldenmatch._api import dedupe_df
 
         df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
         self.data = df
 
+        # Profile + decision are kept ONLY for the `reasoning` field; they do
+        # not back the actual dedupe config when the caller didn't pass one.
+        # See PR #169: routing the default path through dedupe_df()'s
+        # AutoConfigController gives us the v1.7-v1.12 telemetry that the
+        # legacy `_decision_to_config(decision)` heuristic does not.
         profile = profile_for_agent(df)
         decision = select_strategy(profile)
 
         if config is not None:
             cfg = config
+            # Explicit config means the controller doesn't fire; clear any
+            # cached telemetry so callers can't read a stale blob from a
+            # prior auto-config call.
+            self.last_telemetry = None
+            result = dedupe_df(df, config=cfg)
         else:
-            cfg = _decision_to_config(decision)
+            # No config -> let dedupe_df run its zero-config AutoConfigController
+            # path. The committed config comes back on result.config.
+            cfg = None
+            result = dedupe_df(df)
+            committed_cfg = getattr(result, "config", None)
+            self.last_telemetry = self._capture_telemetry(
+                committed_cfg, source="deduplicate"
+            )
+            cfg = committed_cfg
         self.config = cfg
-
-        result = dedupe_df(df, config=cfg)
         self.result = result
-
-        # Capture controller telemetry from this call (None when caller
-        # passed an explicit config and the controller didn't fire).
-        committed_cfg = getattr(result, "config", cfg)
-        self.last_telemetry = self._capture_telemetry(committed_cfg, source="deduplicate")
 
         # Gate scored pairs through review queue
         scored_pairs = result.scored_pairs or []
@@ -520,27 +540,37 @@ class AgentSession:
         file_b: str,
         config: Any = None,
     ) -> dict[str, Any]:
-        """Match two CSV sources with profiling, strategy, and gating."""
+        """Match two CSV sources with profiling, strategy, and gating.
+
+        ``config=None`` delegates to ``match_df(df_a, df_b)`` (no config) so
+        the AutoConfigController fires; explicit config clears cached
+        telemetry to prevent stale-blob leaks. Mirror of ``deduplicate``.
+        """
         from goldenmatch._api import match_df
 
         df_a = pl.read_csv(file_a, encoding="utf8-lossy", ignore_errors=True)
         df_b = pl.read_csv(file_b, encoding="utf8-lossy", ignore_errors=True)
 
-        # Profile the target (first file)
+        # Profile the target (first file) — used only for the `reasoning`
+        # payload, NOT to build the actual matching config when config is None
+        # (see deduplicate() for the rationale).
         profile = profile_for_agent(df_a)
         decision = select_strategy(profile)
 
         if config is not None:
             cfg = config
+            self.last_telemetry = None
+            result = match_df(df_a, df_b, config=cfg)
         else:
-            cfg = _decision_to_config(decision)
+            cfg = None
+            result = match_df(df_a, df_b)
+            committed_cfg = getattr(result, "config", None)
+            self.last_telemetry = self._capture_telemetry(
+                committed_cfg, source="match_sources"
+            )
+            cfg = committed_cfg
         self.config = cfg
-
-        result = match_df(df_a, df_b, config=cfg)
         self.result = result
-
-        committed_cfg = getattr(result, "config", cfg)
-        self.last_telemetry = self._capture_telemetry(committed_cfg, source="match_sources")
 
         self.reasoning = {
             "strategy": decision.strategy,
