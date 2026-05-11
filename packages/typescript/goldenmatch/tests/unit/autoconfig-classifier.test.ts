@@ -3,8 +3,11 @@ import { autoConfigureRows } from "../../src/core/autoconfig.js";
 
 describe("cardinality guard", () => {
   it("unique-value column routes to id, not phone/zip/numeric", () => {
+    // Add a name column so a weighted matchkey survives preflight; voter_reg_num
+    // (id-classified) must still not appear in any matchkey field.
     const rows = Array.from({ length: 10 }, (_, i) => ({
       voter_reg_num: String(9000000 + i), // phone-shaped, all unique
+      first_name: ["Alice", "Bob", "Carol"][i % 3]!,
     }));
     const cfg = autoConfigureRows(rows);
     for (const mk of cfg.matchkeys ?? []) {
