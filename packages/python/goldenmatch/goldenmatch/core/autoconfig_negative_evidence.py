@@ -12,6 +12,7 @@ import logging
 import polars as pl
 
 from goldenmatch.config.schemas import (
+    BlockingConfig,
     GoldenMatchConfig,
     MatchkeyConfig,
     NegativeEvidenceField,
@@ -72,7 +73,7 @@ def _is_exact_matchkey_field(col: str, all_matchkeys: list[MatchkeyConfig]) -> b
     )
 
 
-def _is_in_blocking(col: str, blocking) -> bool:
+def _is_in_blocking(col: str, blocking: BlockingConfig | None) -> bool:
     """Return True if col appears in any blocking key's fields list."""
     if blocking is None:
         return False
@@ -115,10 +116,10 @@ def promote_negative_evidence(
     if df.is_empty() or not column_priors:
         return config
 
-    all_matchkeys = list(config.matchkeys)
+    all_matchkeys = list(config.matchkeys or [])
 
     new_matchkeys: list[MatchkeyConfig] = []
-    for mk in config.matchkeys:
+    for mk in (config.matchkeys or []):
         # v1.12: walk weighted AND exact matchkeys; skip probabilistic + others
         if mk.type not in ("weighted", "exact"):
             new_matchkeys.append(mk)

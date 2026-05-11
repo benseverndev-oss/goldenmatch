@@ -289,7 +289,7 @@ def _render_memory_line(stats: Any) -> str:
     )
 
 
-def _signals_view(pf: "PostflightReport") -> dict:
+def _signals_view(pf: "PostflightReport") -> dict:  # pyright: ignore[reportUnusedFunction]  # legacy helper, kept for compat
     """Read postflight signals as the legacy ``PostflightSignals`` dict shape.
 
     Prefers ``controller_profile`` (typed ``ComplexityProfile``) when
@@ -491,7 +491,7 @@ def _check_cardinality(
         if drop:
             report.findings.append(
                 PreflightFinding(
-                    check=reason_check or "cardinality",
+                    check=reason_check or "cardinality",  # pyright: ignore[reportArgumentType]  # "cardinality" legacy fallback predates PreflightCheckName Literal; unreachable in practice (reason_check always set above)
                     severity="warning",
                     subject=mk.name,
                     message=reason_msg or "",
@@ -1084,7 +1084,7 @@ def postflight(
     )
 
     # Block size percentiles
-    report.signals["block_size_percentiles"] = _signal_block_size_percentiles(
+    report.signals["block_size_percentiles"] = _signal_block_size_percentiles(  # pyright: ignore[reportGeneralTypeIssues]  # helper returns dict[str, Any]; TypedDict shape matches at runtime
         df, config
     )
 

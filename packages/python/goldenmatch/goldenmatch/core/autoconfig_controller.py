@@ -5,9 +5,9 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 """
 from __future__ import annotations
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import hashlib
 import logging
 import time
@@ -20,6 +20,9 @@ from goldenmatch.core.complexity_profile import (
     ColumnPrior, SparsityVerdict,
 )
 from goldenmatch.core.autoconfig_history import RunHistory
+
+if TYPE_CHECKING:
+    from goldenmatch.core.autoconfig_history import HistoryEntry
 from goldenmatch.core.autoconfig_policy import RefitPolicy
 from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
 
@@ -63,7 +66,7 @@ class IndicatorContext:
         self._df = df
         self._column_priors = column_priors
         self._sparsity_verdict = sparsity_verdict
-        self._memo: dict[tuple[str, ...], Any] = {}
+        self._memo: dict[tuple[Any, ...], Any] = {}
         self._fired: set[str] = set()
 
     @property
@@ -118,7 +121,13 @@ class IndicatorContext:
         self._fired.add(rule_name)
 
 
-def _call_policy_propose(policy, profile, current, history, ctx):
+def _call_policy_propose(
+    policy: Any,
+    profile: Any,
+    current: Any,
+    history: Any,
+    ctx: Any,
+) -> Any:
     """Call policy.propose with ctx if its signature accepts it; else 3-arg.
     Preserves backward compat for custom policies that pre-date v1.10."""
     import inspect
@@ -305,7 +314,8 @@ class AutoConfigController:
         for mk in config_v0.get_matchkeys():
             if mk.type == "exact":
                 for f in mk.fields:
-                    exact_columns.append(f.field)
+                    if f.field is not None:
+                        exact_columns.append(f.field)
         sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
         ctx = IndicatorContext(
             df=df,
@@ -623,7 +633,7 @@ class AutoConfigController:
         for n_cols==1 or uniform column types).
         """
         from goldenmatch.core.complexity_profile import (
-            BlockingProfile, ScoringProfile, ClusterProfile,
+            BlockingProfile, ScoringProfile,
         )
         # BlockingProfile: avoid RED by faking one block with good reduction
         blocking = BlockingProfile(
@@ -705,7 +715,6 @@ class AutoConfigController:
         Returns None when no weighted matchkey is configured or the sample is
         too small to probe meaningfully.
         """
-        import dataclasses
         import random
         from goldenmatch.core.scorer import score_field
         from goldenmatch.utils.transforms import apply_transforms
@@ -736,7 +745,7 @@ class AutoConfigController:
             weighted_sum = 0.0
             weight_sum = 0.0
             for f in (weighted_mk.fields or []):
-                if f.scorer is None:
+                if f.scorer is None or f.field is None:
                     continue
                 # Map composite/compound scorers to a single-pair-friendly fallback.
                 # 'ensemble' is a block-level scorer (not supported by score_field);
@@ -784,7 +793,7 @@ class AutoConfigController:
         """
         import dataclasses
         from goldenmatch.core.complexity_profile import (
-            DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
+            BlockingProfile, ScoringProfile, ClusterProfile,
             MatchkeyProfile, DomainProfile, ProfileMeta,
         )
 
@@ -871,7 +880,8 @@ class AutoConfigController:
         return DataProfile(
             n_rows=n_rows,
             n_cols=len(user_cols),
-            column_types=column_types,
+            column_types=column_types,  # pyright: ignore[reportArgumentType]  # runtime values match ColumnType literal set
+
             cardinality_ratio=cardinality_ratio,
             null_rate=null_rate,
             value_length_p50=value_length_p50,

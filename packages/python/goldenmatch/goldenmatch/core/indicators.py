@@ -14,7 +14,7 @@ import time
 import polars as pl
 
 from goldenmatch.core.complexity_profile import (
-    CollisionSignal, ColumnPrior, IndicatorsProfile, SparsityVerdict,
+    CollisionSignal, ColumnPrior, SparsityVerdict,
 )
 
 logger = logging.getLogger(__name__)
