@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.5 (2026-05-11)
+
+Maintenance release. No transform / API behaviour changes.
+
+### Fixed
+
+- `goldenflow/__init__.py` `__version__` was `1.1.1`, lagging behind the
+  PyPI `1.1.2` release. Both now report `1.1.5`.
+
+### Infrastructure
+
+- New `.github/workflows/publish-goldenflow.yml` mirrors the per-package
+  PyPI publish workflows used by goldenmatch / goldencheck / goldenpipe /
+  infermap. Fires on `release: published` for `goldenflow-v*` tags;
+  `workflow_dispatch` with `ref` input for retro-publish. Brings goldenflow
+  into the same release pipeline the rest of the suite uses.
+- Companion MCP Registry sync (`.github/workflows/publish-mcp.yml`,
+  added in monorepo PR #165) flips
+  `registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/goldenflow`
+  from 1.1.4 → 1.1.5 automatically after this release lands on PyPI.
+
 ## 1.1.0 (2026-04-03)
 
 ### New Transforms (33 new, 43 → 76 total)
