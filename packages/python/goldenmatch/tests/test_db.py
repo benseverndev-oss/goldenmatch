@@ -5,27 +5,24 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-# Check if testing.postgresql is available
-try:
-    import psycopg2  # noqa: F401  # availability check for optional dep
-    import testing.postgresql
-    HAS_POSTGRES = True
-except (ImportError, Exception):
-    HAS_POSTGRES = False
+from ._pg_helpers import HAS_POSTGRES, pg_url_fixture
 
 
 @pytest.fixture
 def pg():
-    """Create a temporary PostgreSQL instance."""
-    if not HAS_POSTGRES:
-        pytest.skip("testing.postgresql or PostgreSQL not available")
-    with testing.postgresql.Postgresql() as postgresql:
-        yield postgresql
+    """Yield an object with a `.url()` method pointing at a per-test Postgres database.
+
+    Two modes:
+    - CI (services container): `GOLDENMATCH_TEST_DATABASE_URL` is set; we provision
+      a unique database off that admin URL and drop it on teardown.
+    - Local: fall back to `testing.postgresql` if available, else skip.
+    """
+    yield from pg_url_fixture()
 
 
 @pytest.fixture
 def connector(pg):
-    """Create a PostgresConnector connected to temp Postgres."""
+    """Create a PostgresConnector connected to per-test Postgres."""
     from goldenmatch.db.connector import PostgresConnector
     conn = PostgresConnector(pg.url())
     conn.connect()

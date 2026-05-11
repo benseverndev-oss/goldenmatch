@@ -108,9 +108,14 @@ def _measure_dblp_acm(
         b = pl.read_csv(acm_path, encoding="latin-1", ignore_errors=True)
         a = a.with_columns(pl.lit("DBLP").alias("__source__"))
         b = b.with_columns(pl.lit("ACM").alias("__source__"))
-        # Align columns (both have id, title, authors, venue, year)
+        # Align columns (both have id, title, authors, venue, year).
+        # DBLP ids are strings like "conf/..."; ACM ids are integers. Cast both
+        # to Utf8 before concat so the schemas line up (polars requires identical
+        # dtypes for vstack).
         common = sorted(set(a.columns) & set(b.columns))
-        return pl.concat([a.select(common), b.select(common)])
+        a = a.select(common).with_columns(pl.all().cast(pl.Utf8, strict=False))
+        b = b.select(common).with_columns(pl.all().cast(pl.Utf8, strict=False))
+        return pl.concat([a, b])
 
     def gt_loader(df: pl.DataFrame) -> set[tuple[int, int]]:
         gt = pl.read_csv(gt_path, encoding="latin-1", ignore_errors=True)

@@ -21,6 +21,7 @@ jobs:
       dbt: ${{ steps.filter.outputs.dbt }}
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -37,6 +38,11 @@ jobs:
               - 'uv.lock'
             python_goldenmatch:
               - 'packages/python/goldenmatch/**'
+            python_goldenmatch_postgres:
+              - 'packages/python/goldenmatch/tests/test_db.py'
+              - 'packages/python/goldenmatch/tests/test_reconcile.py'
+              - 'packages/python/goldenmatch/tests/_pg_helpers.py'
+              - 'packages/python/goldenmatch/goldenmatch/db/**'
             python_goldencheck:
               - 'packages/python/goldencheck/**'
             python_goldenflow:
@@ -190,7 +196,8 @@ jobs:
       fail-fast: false
       matrix:
         lane:
-          - { name: db,           tests: "tests/test_db.py tests/test_reconcile.py", needs: "POSTGRES (services container)" }
+          # `db` lane removed 2026-05-10: now runs for real in the
+          # `python_postgres` job below, against a services Postgres container.
           - { name: mcp_watch,    tests: "tests/test_mcp_and_watch.py",              needs: "MCP runtime + watch fixtures" }
           - { name: llm_boost,    tests: "tests/test_llm_boost.py",                  needs: "OPENAI_API_KEY secret + torch (segfaults locally)" }
           - { name: embedder,     tests: "tests/test_embedder.py",                   needs: "Vertex AI credentials + torch" }
@@ -218,9 +225,6 @@ jobs:
           # service, API-key secret, etc.) the corresponding lane flips to
           # "configured" and runs its tests.
           case "$LANE_NAME" in
-            db)
-              CONFIGURED="false"  # No Postgres service container yet
-              ;;
             mcp_watch)
               CONFIGURED="false"  # No MCP runtime fixtures in CI
               ;;
@@ -258,6 +262,58 @@ jobs:
             # Exit zero — "not-configured" is informational, not a failure.
             exit 0
           fi
+
+  # Real Postgres lane for goldenmatch.db tests. Boots a Postgres 16 services
+  # container (matches the pinned PG version in packages/rust/extensions) and
+  # runs `tests/test_db.py` + `tests/test_reconcile.py` against it. The shared
+  # fixture in `tests/_pg_helpers.py` provisions a unique database per test
+  # off the admin URL and drops it on teardown — no cross-test pollution.
+  # Gated by path filter so the lane only fires when DB code or DB tests
+  # change (plus workflow self-edits).
+  python_postgres:
+    needs: changes
+    if: |
+      needs.changes.outputs.python_goldenmatch_postgres == 'true' ||
+      needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # `pg_isready` health-check so GH Actions only marks the job started
+        # after Postgres is actually accepting connections.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # _pg_helpers reads this to provision per-test databases off the admin
+      # connection instead of spawning a local `testing.postgresql`.
+      GOLDENMATCH_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run Postgres-backed tests
+        shell: bash
+        run: |
+          cd packages/python/goldenmatch
+          # -n 0 (serial): per-test DB provisioning + the shared admin
+          # connection make xdist worker contention plausible; serial avoids
+          # the headache for a small (~30-test) lane.
+          uv run pytest tests/test_db.py tests/test_reconcile.py \
+            -n 0 --timeout=180 --timeout-method=thread -v
 
   # Synthetic-fixture benchmark smoke. Runs on every PR against committed
   # synthetic fixtures (t3_synthetic.csv, t3_clean_compat.csv, red_provoking.csv,
