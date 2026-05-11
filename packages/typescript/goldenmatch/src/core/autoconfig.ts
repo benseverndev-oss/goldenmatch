@@ -427,7 +427,39 @@ export function autoConfigureRows(
   const profiles = profile.columns;
 
   const exactKeys = buildExactMatchkeys(profiles);
-  const weighted = buildWeightedMatchkey(profiles);
+  let weighted = buildWeightedMatchkey(profiles);
+
+  // Python parity: post-build adaptive threshold adjustment based on data
+  // quality of the fuzzy fields.  avg_null > 0.15 → drop by 0.05 (floor 0.5);
+  // else avg_len < 5 → raise by 0.05 (cap 0.95).
+  if (weighted && weighted.type === "weighted") {
+    const profileByName: Record<string, ColumnProfile> = {};
+    for (const p of profiles) profileByName[p.name] = p;
+    const fuzzyProfiles: ColumnProfile[] = [];
+    for (const f of weighted.fields) {
+      const pp = profileByName[f.field];
+      if (pp !== undefined) fuzzyProfiles.push(pp);
+    }
+    if (fuzzyProfiles.length > 0) {
+      const avgNull =
+        fuzzyProfiles.reduce((acc, p) => acc + p.nullRate, 0) /
+        fuzzyProfiles.length;
+      const avgLen =
+        fuzzyProfiles.reduce((acc, p) => acc + p.avgLength, 0) /
+        fuzzyProfiles.length;
+      const current = weighted.threshold;
+      let next = current;
+      if (avgNull > 0.15) {
+        next = Math.max(current - 0.05, 0.5);
+      } else if (avgLen < 5) {
+        next = Math.min(current + 0.05, 0.95);
+      }
+      if (next !== current) {
+        weighted = { ...weighted, threshold: +next.toFixed(2) };
+      }
+    }
+  }
+
   const matchkeys: MatchkeyConfig[] = [...exactKeys];
   if (weighted) matchkeys.push(weighted);
 
