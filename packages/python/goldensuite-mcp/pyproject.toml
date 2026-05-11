@@ -43,6 +43,7 @@ goldensuite-mcp = "goldensuite_mcp.cli:main"
 [project.urls]
 Homepage = "https://github.com/benzsevern/goldenmatch"
 Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldensuite-mcp#readme"
 Issues = "https://github.com/benzsevern/goldenmatch/issues"
 
 [tool.uv.sources]

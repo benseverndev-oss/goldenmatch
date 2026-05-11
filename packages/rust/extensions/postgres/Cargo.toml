@@ -5,6 +5,8 @@ edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
 description = "GoldenMatch entity resolution as a PostgreSQL extension"
+repository = "https://github.com/benzsevern/goldenmatch"
+homepage = "https://github.com/benzsevern/goldenmatch"
 
 [lib]
 crate-type = ["cdylib", "lib"]

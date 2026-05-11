@@ -41,11 +41,11 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://benzsevern.github.io/goldenmatch/"
-Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/CHANGELOG.md"
-Author = "https://bensevern.dev"
 Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenmatch#readme"
 Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [project.optional-dependencies]
 dev = [
