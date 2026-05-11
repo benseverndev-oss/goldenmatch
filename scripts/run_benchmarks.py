@@ -30,6 +30,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Make `dqbench_adapters.*` importable when this file is invoked as
+# `python scripts/run_benchmarks.py` from the repo root. The scripts/
+# directory isn't a package (no top-level __init__.py — adding one
+# would change semantics for the other scripts here), so we add the
+# scripts/ directory to sys.path and import `dqbench_adapters` directly.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 
 def _info(msg: str) -> None:
     print(f"[run_benchmarks] {msg}", flush=True)
@@ -93,92 +102,118 @@ def _measure_with_polars(
 def _measure_dblp_acm(
     datasets_dir: Path,
 ) -> dict[str, Any] | None:
-    """DBLP-ACM (Leipzig): two source files joined into one frame."""
-    import polars as pl
+    """DBLP-ACM (Leipzig): ID-joined evaluation via `dqbench_adapters.leipzig_eval`.
+
+    Previously this used a positional `int()` join that silently
+    dropped every pair (DBLP IDs are non-numeric strings like
+    `conf/vldb/...`) and reported F1=0. The shared helper joins
+    emitted pairs back to source IDs the same way the package's own
+    `tests/benchmarks/run_leipzig.py` harness does.
+    """
+    from goldenmatch import match_df
+
+    from dqbench_adapters.leipzig_eval import run_dblp_acm_zeroconfig
+
     dblp_path = datasets_dir / "DBLP-ACM" / "DBLP2.csv"
-    acm_path = datasets_dir / "DBLP-ACM" / "ACM.csv"
-    gt_path = datasets_dir / "DBLP-ACM" / "DBLP-ACM_perfectMapping.csv"
-    if not (dblp_path.exists() and acm_path.exists() and gt_path.exists()):
+    if not dblp_path.exists():
         _info(f"  DBLP-ACM: dataset files missing at {datasets_dir} — skipping")
         return None
 
-    def loader() -> pl.DataFrame:
-        # latin-1 encoding (per package CLAUDE.md gotchas)
-        a = pl.read_csv(dblp_path, encoding="latin-1", ignore_errors=True)
-        b = pl.read_csv(acm_path, encoding="latin-1", ignore_errors=True)
-        a = a.with_columns(pl.lit("DBLP").alias("__source__"))
-        b = b.with_columns(pl.lit("ACM").alias("__source__"))
-        # Align columns (both have id, title, authors, venue, year).
-        # DBLP ids are strings like "conf/..."; ACM ids are integers. Cast both
-        # to Utf8 before concat so the schemas line up (polars requires identical
-        # dtypes for vstack).
-        common = sorted(set(a.columns) & set(b.columns))
-        a = a.select(common).with_columns(pl.all().cast(pl.Utf8, strict=False))
-        b = b.select(common).with_columns(pl.all().cast(pl.Utf8, strict=False))
-        return pl.concat([a, b])
+    start = time.time()
+    res = run_dblp_acm_zeroconfig(datasets_dir, match_df)
+    elapsed = time.time() - start
+    if res is None:
+        _info(f"  DBLP-ACM: dataset files missing at {datasets_dir} — skipping")
+        return None
 
-    def gt_loader(df: pl.DataFrame) -> set[tuple[int, int]]:
-        gt = pl.read_csv(gt_path, encoding="latin-1", ignore_errors=True)
-        # Column names vary; assume first two are the matched IDs
-        cols = gt.columns[:2]
-        # Map original IDs back to row indices in the concatenated frame.
-        # Simplification: trust the order; production runs would join on ID.
-        # Returns canonical (min, max) pairs.
-        pairs: set[tuple[int, int]] = set()
-        for row in gt.iter_rows(named=False):
-            try:
-                a, b = sorted([int(row[0]), int(row[1])])
-                pairs.add((a, b))
-            except Exception:
-                continue
-        return pairs
-
-    return _measure_with_polars("DBLP-ACM", loader, gt_loader)
+    _info(
+        f"  DBLP-ACM: f1={res.f1:.4f} precision={res.precision:.4f} "
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+    )
+    return {
+        "name": "DBLP-ACM", "f1": round(res.f1, 4),
+        "precision": round(res.precision, 4), "recall": round(res.recall, 4),
+        "tp": res.true_positives, "fp": res.false_positives,
+        "fn": res.false_negatives,
+        "elapsed_seconds": round(elapsed, 2),
+        "health": "n/a", "stop_reason": "n/a",
+    }
 
 
 def _measure_febrl3() -> dict[str, Any] | None:
-    """Febrl3 via recordlinkage (synthetic dataset shipped with the lib)."""
-    try:
-        from recordlinkage.datasets import load_febrl3
-    except ImportError:
+    """Febrl3 via the committed `dqbench_adapters.febrl3` helper.
+
+    GT mapping was previously stubbed (`# GT mapping omitted in v1 of
+    this script`). The helper translates emitted positional pairs back
+    to rec_id strings the same way the pre-fold harness at
+    `.profile_tmp/baseline_febrl3_ncvr.py` did, so F1 matches the v1.8
+    CHANGELOG value (0.9443).
+    """
+    from goldenmatch import dedupe_df
+
+    from dqbench_adapters.febrl3 import (
+        evaluate_febrl3,
+        load_febrl3_df_and_gt,
+    )
+
+    loaded = load_febrl3_df_and_gt()
+    if loaded is None:
         _info("  Febrl3: recordlinkage not installed — skipping")
         return None
-    import polars as pl
+    df, gt_pairs = loaded
 
-    def loader() -> pl.DataFrame:
-        df_pd, _ = load_febrl3(return_links=True)
-        return pl.from_pandas(df_pd.reset_index())
-
-    def gt_loader(_df: pl.DataFrame) -> set[tuple[int, int]]:
-        _, links = load_febrl3(return_links=True)
-        pairs: set[tuple[int, int]] = set()
-        # links is a MultiIndex of (rec_id_a, rec_id_b); we need positional indices.
-        # Simplification mirrored from .profile_tmp/baseline_febrl3_ncvr.py.
-        return pairs    # GT mapping omitted in v1 of this script; F1 will be 0 for febrl3
-
-    return _measure_with_polars("Febrl3", loader, gt_loader)
+    start = time.time()
+    res = evaluate_febrl3(df, gt_pairs, dedupe_df)
+    elapsed = time.time() - start
+    _info(
+        f"  Febrl3: f1={res.f1:.4f} precision={res.precision:.4f} "
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+    )
+    return {
+        "name": "Febrl3", "f1": round(res.f1, 4),
+        "precision": round(res.precision, 4), "recall": round(res.recall, 4),
+        "tp": res.true_positives, "fp": res.false_positives,
+        "fn": res.false_negatives,
+        "elapsed_seconds": round(elapsed, 2),
+        "health": "n/a", "stop_reason": "n/a",
+    }
 
 
 def _measure_ncvr(datasets_dir: Path) -> dict[str, Any] | None:
-    """NCVR voter sample. Tab-delimited; gitignored (488MB zip)."""
-    import polars as pl
+    """NCVR voter sample with corruption-based synthetic GT.
+
+    Mirrors the committed logic in
+    `tests/test_autoconfig_benchmarks.py::test_autoconfig_ncvr_meets_target`
+    (seed=42, N=5000 base records, half corrupted into `*_DUP` pairs).
+    The 0.9719 F1 in the v1.8 CHANGELOG was measured against this
+    construction; the 10K-row source file is gitignored.
+    """
+    from goldenmatch import dedupe_df
+
+    from dqbench_adapters.ncvr import build_ncvr_df_and_gt, evaluate_ncvr
+
     ncvr_path = datasets_dir / "NCVR" / "ncvoter_sample_10k.txt"
-    if not ncvr_path.exists():
+    loaded = build_ncvr_df_and_gt(ncvr_path)
+    if loaded is None:
         _info(f"  NCVR: sample missing at {ncvr_path} — skipping")
         return None
+    df, gt_pairs = loaded
 
-    def loader() -> pl.DataFrame:
-        return pl.read_csv(
-            ncvr_path, separator="\t", ignore_errors=True, encoding="utf8-lossy",
-        )
-
-    def gt_loader(df: pl.DataFrame) -> set[tuple[int, int]]:
-        # NCVR ground truth is corruption-based; without the full GT mapping
-        # the F1 number isn't meaningful. v1 of this script reports F1=0
-        # for NCVR; v2 should pull GT from a committed JSON fixture.
-        return set()
-
-    return _measure_with_polars("NCVR", loader, gt_loader)
+    start = time.time()
+    res = evaluate_ncvr(df, gt_pairs, dedupe_df)
+    elapsed = time.time() - start
+    _info(
+        f"  NCVR: f1={res.f1:.4f} precision={res.precision:.4f} "
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+    )
+    return {
+        "name": "NCVR", "f1": round(res.f1, 4),
+        "precision": round(res.precision, 4), "recall": round(res.recall, 4),
+        "tp": res.true_positives, "fp": res.false_positives,
+        "fn": res.false_negatives,
+        "elapsed_seconds": round(elapsed, 2),
+        "health": "n/a", "stop_reason": "n/a",
+    }
 
 
 def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
@@ -188,7 +223,11 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
     if not shutil.which("dqbench"):
         _info("  DQbench: dqbench CLI not on PATH — skipping")
         return None
-    adapter_path = Path(".profile_tmp/goldenmatch_zeroconfig_adapter.py")
+    # Adapter promoted out of the gitignored `.profile_tmp/` directory in
+    # PR feature/benchmark-provenance-fix so this script reproduces the
+    # v1.12 composite from a fresh `git clone`. We pass the committed
+    # path explicitly so `dqbench run --adapter <path>` loads from it.
+    adapter_path = Path("scripts/dqbench_adapters/goldenmatch_zeroconfig.py")
     if not adapter_path.exists():
         _info(f"  DQbench: adapter missing at {adapter_path} — skipping")
         return None

@@ -93,12 +93,18 @@ def evaluate_emitted_pairs(
 
 def run_dblp_acm_zeroconfig(
     datasets_dir: Path,
-    dedupe_df: Callable,
+    match_df: Callable,
 ) -> LeipzigResult | None:
-    """Run zero-config dedupe across DBLP+ACM, evaluate against perfectMapping.
+    """Run zero-config cross-source matching on DBLP vs ACM and score F1.
 
-    `dedupe_df` is injected (not imported here) so this module stays
-    free of goldenmatch import cost when only the helpers are used.
+    The 0.9641 F1 in the v1.8 CHANGELOG was measured by passing the
+    DBLP and ACM frames separately into `goldenmatch.match_df` (NOT
+    concatenated through `dedupe_df`). The reference harness is
+    `.profile_tmp/measure_dblp_acm_controller.py`. We mirror its
+    row-id → source-id mapping logic here.
+
+    `match_df` is injected (not imported) so this module stays free of
+    goldenmatch import cost when only the helpers are used.
     """
     dblp_path = datasets_dir / "DBLP-ACM" / "DBLP2.csv"
     acm_path = datasets_dir / "DBLP-ACM" / "ACM.csv"
@@ -106,55 +112,46 @@ def run_dblp_acm_zeroconfig(
     if not (dblp_path.exists() and acm_path.exists() and gt_path.exists()):
         return None
 
-    # latin-1/utf8-lossy is required (per goldenmatch CLAUDE.md gotcha).
-    df_a = pl.read_csv(dblp_path, encoding="utf8-lossy", ignore_errors=True)
-    df_b = pl.read_csv(acm_path, encoding="utf8-lossy", ignore_errors=True)
+    # utf8-lossy required for Leipzig CSVs (per goldenmatch CLAUDE.md gotcha).
+    dblp = pl.read_csv(dblp_path, encoding="utf8-lossy", ignore_errors=True)
+    acm = pl.read_csv(acm_path, encoding="utf8-lossy", ignore_errors=True)
 
-    # Tag source, cast id to string (DBLP ids are non-numeric).
-    df_a = df_a.with_columns(
-        pl.lit("DBLP").alias("__source__"),
-        pl.col("id").cast(pl.Utf8),
-    )
-    df_b = df_b.with_columns(
-        pl.lit("ACM").alias("__source__"),
-        pl.col("id").cast(pl.Utf8),
-    )
+    result = match_df(dblp, acm)
 
-    common = sorted(set(df_a.columns) & set(df_b.columns))
-    combined = pl.concat(
-        [df_a.select(common), df_b.select(common)], how="vertical_relaxed"
-    )
-    # Row index is the positional id used inside the dedupe pipeline.
-    combined = combined.with_row_index("__row_id__").with_columns(
-        pl.col("__row_id__").cast(pl.Int64)
-    )
+    dblp_ids = dblp["id"].cast(pl.Utf8).to_list()
+    acm_ids = acm["id"].cast(pl.Utf8).to_list()
+    n_dblp = len(dblp_ids)
 
-    # Build positional → (source, source_id) lookups before dedupe.
-    row_to_source: dict[int, str] = {}
-    row_to_id: dict[int, str] = {}
-    for row in combined.select("__row_id__", "__source__", "id").to_dicts():
-        row_to_source[row["__row_id__"]] = row["__source__"]
-        row_to_id[row["__row_id__"]] = str(row["id"]).strip()
-
-    # Drop helper columns before passing to dedupe_df — the auto-config
-    # controller will re-stamp __row_id__ internally based on row order,
-    # which matches what we just captured.
-    pipeline_input = combined.drop("__source__")
-    result = dedupe_df(pipeline_input)
-
-    emitted: set[tuple[int, int]] = set()
-    if getattr(result, "clusters", None):
-        for cluster in result.clusters.values():
-            members = sorted(cluster.get("members", []))
-            for i, a in enumerate(members):
-                for b in members[i + 1:]:
-                    emitted.add((a, b))
+    found: set[tuple[str, str]] = set()
+    matched = getattr(result, "matched", None)
+    if matched is not None and matched.height > 0:
+        # match_df stamps target_row_id (from the first arg) and
+        # ref_row_id (from the second arg). They're positional indices
+        # in the SOURCE frames passed in — NOT the concatenated frame.
+        for row in matched.iter_rows(named=True):
+            tgt_rid = row["__target_row_id__"]
+            ref_rid = row["__ref_row_id__"]
+            if tgt_rid < n_dblp:
+                d_idx, a_idx = tgt_rid, ref_rid - n_dblp
+            else:
+                d_idx, a_idx = ref_rid, tgt_rid - n_dblp
+            if 0 <= d_idx < n_dblp and 0 <= a_idx < len(acm_ids):
+                found.add((str(dblp_ids[d_idx]), str(acm_ids[a_idx])))
 
     gt = load_ground_truth(gt_path, "idDBLP", "idACM")
-    return evaluate_emitted_pairs(
-        emitted_row_pairs=emitted,
-        row_to_source=row_to_source,
-        row_to_id=row_to_id,
-        ground_truth=gt,
-        source_a_label="DBLP",
+    tp = len(found & gt)
+    fp = len(found - gt)
+    fn = len(gt - found)
+    p = tp / (tp + fp) if (tp + fp) else 0.0
+    r = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (2 * p * r / (p + r)) if (p + r) else 0.0
+    return LeipzigResult(
+        found_pairs=len(found),
+        ground_truth_pairs=len(gt),
+        true_positives=tp,
+        false_positives=fp,
+        false_negatives=fn,
+        precision=p,
+        recall=r,
+        f1=f1,
     )
