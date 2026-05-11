@@ -112,6 +112,40 @@ class MatchkeyField(BaseModel):
                 )
         return self
 
+    # ── Typed accessors ──
+    # ``field``, ``scorer``, ``weight`` are Optional at the schema level for
+    # serialization round-trip, but the MatchkeyConfig validator guarantees
+    # they're non-None for fuzzy/weighted matchkeys. These accessors narrow
+    # the type for code paths that have already gone through that validator.
+    @property
+    def resolved_field(self) -> str:
+        """``field`` narrowed to ``str`` after MatchkeyField validation."""
+        if self.field is None:
+            raise ValueError(
+                "MatchkeyField.resolved_field accessed before field/column resolved."
+            )
+        return self.field
+
+    @property
+    def fuzzy_scorer(self) -> str:
+        """``scorer`` narrowed to ``str`` for fields inside a weighted/probabilistic matchkey."""
+        if self.scorer is None:
+            raise ValueError(
+                f"MatchkeyField (field={self.field!r}): fuzzy_scorer accessed but scorer is None. "
+                "Only fields inside weighted/probabilistic matchkeys are guaranteed to have a scorer."
+            )
+        return self.scorer
+
+    @property
+    def fuzzy_weight(self) -> float:
+        """``weight`` narrowed to ``float`` for fields inside a weighted matchkey."""
+        if self.weight is None:
+            raise ValueError(
+                f"MatchkeyField (field={self.field!r}): fuzzy_weight accessed but weight is None. "
+                "Only fields inside weighted matchkeys are guaranteed to have a weight."
+            )
+        return self.weight
+
 
 class NegativeEvidenceField(BaseModel):
     """v1.11: a field whose disagreement subtracts from a weighted matchkey's
@@ -183,6 +217,27 @@ _VALID_MK_TYPES = ("exact", "weighted", "probabilistic")
 
 
 class MatchkeyConfig(BaseModel):
+    """A matchkey: rule for declaring two records 'the same' on a field/field-set.
+
+    Per-type field invariants (enforced by ``_validate_weighted`` after init):
+
+    - ``type == "exact"``: ``fields`` populated; ``threshold`` optional (binary
+      emit at 1.0 when no negative_evidence). No per-field scorer/weight.
+    - ``type == "weighted"``: ``threshold`` REQUIRED (non-None); every field
+      has ``scorer`` AND ``weight`` REQUIRED (non-None).
+    - ``type == "probabilistic"``: every field has ``scorer`` REQUIRED. EM
+      learns the weights at runtime.
+
+    The Pydantic fields stay ``Optional`` at the schema level (so YAML
+    round-trips and ``model_dump(exclude_none=True)`` continue to work) but
+    callers in fuzzy/weighted code paths can use the typed-accessor
+    properties (``fuzzy_threshold``, plus ``MatchkeyField.fuzzy_scorer`` /
+    ``fuzzy_weight``) to consume them as ``float`` / ``str`` without
+    re-asserting non-None at every call site. The accessors assert the
+    invariant — if it fires, a caller has bypassed the validator (e.g. by
+    mutating fields post-construction) and the crash points at the bug.
+    """
+
     name: str
     type: Literal["exact", "weighted", "probabilistic"] | None = None
     comparison: str | None = None
@@ -229,6 +284,30 @@ class MatchkeyConfig(BaseModel):
                         f"Field '{f.field}' is missing it."
                     )
         return self
+
+    # ── Typed accessors ──
+    # The Pydantic field-level types stay Optional so YAML serialization keeps
+    # working unchanged, but downstream code paths that have already gone
+    # through the weighted/fuzzy branch can use these to drop the Optional
+    # without re-asserting at every call site. Each accessor enforces the
+    # invariant the validator promised — if a property raises, a caller has
+    # mutated the model after construction (or skipped validation) and the
+    # crash points at the bug.
+    @property
+    def fuzzy_threshold(self) -> float:
+        """``threshold`` narrowed to ``float`` for weighted matchkeys.
+
+        Raises ``ValueError`` if the matchkey is not weighted or threshold
+        is unset — the validator guarantees this never fires on a Pydantic-
+        validated weighted matchkey.
+        """
+        if self.threshold is None:
+            raise ValueError(
+                f"MatchkeyConfig '{self.name}' (type={self.type!r}): "
+                "fuzzy_threshold accessed but threshold is None. "
+                "Only weighted matchkeys are guaranteed to have a threshold."
+            )
+        return self.threshold
 
 
 # ── BlockingKeyConfig / BlockingConfig ──────────────────────────────────────

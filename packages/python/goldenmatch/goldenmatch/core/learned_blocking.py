@@ -81,7 +81,7 @@ def generate_predicates(columns: list[str]) -> list[BlockingPredicate]:
     return predicates
 
 
-def _apply_predicate(value, predicate: BlockingPredicate) -> str:
+def _apply_predicate(value: object, predicate: BlockingPredicate) -> str:
     """Apply a predicate transform to a value."""
     fn = _TRANSFORM_MAP.get(predicate.transform, _TRANSFORM_MAP["exact"])
     return fn(value)
