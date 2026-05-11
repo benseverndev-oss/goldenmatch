@@ -1,0 +1,542 @@
+{
+  "all_null_col": {
+    "expected_indicators": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "phone": {
+          "corruption_score": 0.0,
+          "identity_score": 0.85
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.0,
+        "name": 0.0,
+        "phone": 0.0
+      },
+      "cross_blocking_overlap": {
+        "name|city": 1.0,
+        "name|phone": 0.0,
+        "phone|city": 0.0
+      },
+      "full_pop_hits": {
+        "city": 0,
+        "name": 0,
+        "phone": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "city": "NY",
+        "name": "Alice",
+        "phone": null
+      },
+      {
+        "city": "LA",
+        "name": "Bob",
+        "phone": null
+      },
+      {
+        "city": "SF",
+        "name": "Carol",
+        "phone": null
+      }
+    ],
+    "name": "all_null_col"
+  },
+  "booleans_dates": {
+    "expected_indicators": {
+      "column_priors": {
+        "active": {
+          "corruption_score": 0.0,
+          "identity_score": 0.0
+        },
+        "joined": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "active": 0.0,
+        "joined": 0.0,
+        "name": 0.0
+      },
+      "cross_blocking_overlap": {
+        "active|joined": 0.0,
+        "name|active": 0.0,
+        "name|joined": 1.0
+      },
+      "full_pop_hits": {
+        "active": 1,
+        "joined": 0,
+        "name": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "active": true,
+        "joined": "2024-01-01",
+        "name": "Alice"
+      },
+      {
+        "active": false,
+        "joined": "2024-02-02",
+        "name": "Bob"
+      },
+      {
+        "active": true,
+        "joined": "2024-03-03",
+        "name": "Carol"
+      }
+    ],
+    "name": "booleans_dates"
+  },
+  "dense_unique": {
+    "expected_indicators": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "first": 0.0,
+        "last": 0.0
+      },
+      "cross_blocking_overlap": {
+        "first|email": 1.0,
+        "first|last": 1.0,
+        "last|email": 1.0
+      },
+      "full_pop_hits": {
+        "email": 0,
+        "first": 0,
+        "last": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "email": "u0@x.com",
+        "first": "Name0",
+        "last": "Last0"
+      },
+      {
+        "email": "u1@x.com",
+        "first": "Name1",
+        "last": "Last1"
+      },
+      {
+        "email": "u2@x.com",
+        "first": "Name2",
+        "last": "Last2"
+      },
+      {
+        "email": "u3@x.com",
+        "first": "Name3",
+        "last": "Last3"
+      },
+      {
+        "email": "u4@x.com",
+        "first": "Name4",
+        "last": "Last4"
+      },
+      {
+        "email": "u5@x.com",
+        "first": "Name5",
+        "last": "Last5"
+      },
+      {
+        "email": "u6@x.com",
+        "first": "Name6",
+        "last": "Last6"
+      },
+      {
+        "email": "u7@x.com",
+        "first": "Name7",
+        "last": "Last7"
+      },
+      {
+        "email": "u8@x.com",
+        "first": "Name8",
+        "last": "Last8"
+      },
+      {
+        "email": "u9@x.com",
+        "first": "Name9",
+        "last": "Last9"
+      }
+    ],
+    "name": "dense_unique"
+  },
+  "heavy_typos": {
+    "expected_indicators": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.6,
+          "identity_score": 0.95
+        },
+        "name": {
+          "corruption_score": 0.6,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.6,
+        "name": 0.6
+      },
+      "cross_blocking_overlap": {
+        "name|email": 1.0
+      },
+      "full_pop_hits": {
+        "email": 0,
+        "name": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "email": "ALICE@example.com",
+        "name": "Alice"
+      },
+      {
+        "email": "alice@Example.com",
+        "name": "alice"
+      },
+      {
+        "email": "alice@example.com",
+        "name": "ALICE"
+      },
+      {
+        "email": "bob@example.com",
+        "name": "Bob"
+      },
+      {
+        "email": "BOB@example.com",
+        "name": "BOB"
+      }
+    ],
+    "name": "heavy_typos"
+  },
+  "id_high_prevalence": {
+    "expected_indicators": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.0,
+          "identity_score": 0.0
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "user_id": {
+          "corruption_score": 0.0,
+          "identity_score": 0.9
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.0,
+        "name": 0.0,
+        "user_id": 0.0
+      },
+      "cross_blocking_overlap": {
+        "name|city": 0.0,
+        "user_id|city": 0.0,
+        "user_id|name": 1.0
+      },
+      "full_pop_hits": {
+        "city": 190,
+        "name": 0,
+        "user_id": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "city": "NY",
+        "name": "Name0",
+        "user_id": "U0000"
+      },
+      {
+        "city": "NY",
+        "name": "Name1",
+        "user_id": "U0001"
+      },
+      {
+        "city": "NY",
+        "name": "Name2",
+        "user_id": "U0002"
+      },
+      {
+        "city": "NY",
+        "name": "Name3",
+        "user_id": "U0003"
+      },
+      {
+        "city": "NY",
+        "name": "Name4",
+        "user_id": "U0004"
+      },
+      {
+        "city": "NY",
+        "name": "Name5",
+        "user_id": "U0005"
+      },
+      {
+        "city": "NY",
+        "name": "Name6",
+        "user_id": "U0006"
+      },
+      {
+        "city": "NY",
+        "name": "Name7",
+        "user_id": "U0007"
+      },
+      {
+        "city": "NY",
+        "name": "Name8",
+        "user_id": "U0008"
+      },
+      {
+        "city": "NY",
+        "name": "Name9",
+        "user_id": "U0009"
+      },
+      {
+        "city": "NY",
+        "name": "Name10",
+        "user_id": "U0010"
+      },
+      {
+        "city": "NY",
+        "name": "Name11",
+        "user_id": "U0011"
+      },
+      {
+        "city": "NY",
+        "name": "Name12",
+        "user_id": "U0012"
+      },
+      {
+        "city": "NY",
+        "name": "Name13",
+        "user_id": "U0013"
+      },
+      {
+        "city": "NY",
+        "name": "Name14",
+        "user_id": "U0014"
+      },
+      {
+        "city": "NY",
+        "name": "Name15",
+        "user_id": "U0015"
+      },
+      {
+        "city": "NY",
+        "name": "Name16",
+        "user_id": "U0016"
+      },
+      {
+        "city": "NY",
+        "name": "Name17",
+        "user_id": "U0017"
+      },
+      {
+        "city": "NY",
+        "name": "Name18",
+        "user_id": "U0018"
+      },
+      {
+        "city": "NY",
+        "name": "Name19",
+        "user_id": "U0019"
+      }
+    ],
+    "name": "id_high_prevalence"
+  },
+  "identity_collision": {
+    "expected_indicators": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "name": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|name": 0.0
+      },
+      "full_pop_hits": {
+        "email": 2,
+        "name": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 2,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "email": "share@example.com",
+        "name": "Alice Anderson"
+      },
+      {
+        "email": "share@example.com",
+        "name": "Zachary Zykov"
+      },
+      {
+        "email": "other@example.com",
+        "name": "Bob"
+      },
+      {
+        "email": "other@example.com",
+        "name": "Bob B"
+      }
+    ],
+    "name": "identity_collision"
+  },
+  "low_overlap_blocking": {
+    "expected_indicators": {
+      "column_priors": {
+        "category": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "city": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        }
+      },
+      "corruption_per_column": {
+        "category": 0.0,
+        "city": 0.0
+      },
+      "cross_blocking_overlap": {
+        "city|category": 0.0
+      },
+      "full_pop_hits": {
+        "category": 2,
+        "city": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "category": "A",
+        "city": "NY"
+      },
+      {
+        "category": "B",
+        "city": "NY"
+      },
+      {
+        "category": "A",
+        "city": "LA"
+      },
+      {
+        "category": "B",
+        "city": "LA"
+      },
+      {
+        "category": "C",
+        "city": "SF"
+      },
+      {
+        "category": "D",
+        "city": "SF"
+      }
+    ],
+    "name": "low_overlap_blocking"
+  },
+  "sparse_minimal": {
+    "expected_indicators": {
+      "column_priors": {
+        "a": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "b": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "a": 0.0,
+        "b": 0.0
+      },
+      "cross_blocking_overlap": {
+        "a|b": 0.0
+      },
+      "full_pop_hits": {
+        "a": 1,
+        "b": 1
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "input_rows": [
+      {
+        "a": "x",
+        "b": null
+      },
+      {
+        "a": null,
+        "b": "y"
+      },
+      {
+        "a": null,
+        "b": null
+      }
+    ],
+    "name": "sparse_minimal"
+  }
+}
