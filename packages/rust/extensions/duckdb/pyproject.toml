@@ -25,8 +25,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenmatch-extensions"
-Repository = "https://github.com/benzsevern/goldenmatch-extensions"
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/rust/extensions/duckdb#readme"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
