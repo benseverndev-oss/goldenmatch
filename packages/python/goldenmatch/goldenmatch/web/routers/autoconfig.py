@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
     RulesPayload,
 )
-from goldenmatch.core.autoconfig import auto_configure_df
+from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
 
 router = APIRouter(prefix="/api/v1")
 
@@ -153,7 +154,6 @@ def _autoconfigure(
     # auto_configure_df stashes (profile, history) on a ContextVar the engine
     # uses to wire PostflightReport.controller_*. Pull them here so the
     # workbench can show the same telemetry without re-running the controller.
-    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
     _ctrl_state = _LAST_CONTROLLER_RUN.get()
     if _ctrl_state is not None:
         ctrl_profile, ctrl_history = _ctrl_state
@@ -212,11 +212,10 @@ async def autoconfigure(request: Request, domain: str | None = None) -> dict:
     # Stash controller telemetry so /api/v1/controller/telemetry returns the
     # latest. We overwrite even when telemetry is partially missing — better
     # to clear stale state than show telemetry from a prior, unrelated run.
-    from datetime import UTC, datetime as _dt
     state.last_controller_profile = ctrl_profile
     state.last_controller_history = ctrl_history
     state.last_controller_committed_config = cfg
     state.last_controller_source = "autoconfig"
     state.last_controller_run_name = None
-    state.last_controller_recorded_at = _dt.now(UTC).isoformat()
+    state.last_controller_recorded_at = datetime.now(UTC).isoformat()
     return payload.model_dump()

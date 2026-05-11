@@ -232,11 +232,10 @@ async def run_real(payload: RunRequest, request: Request) -> dict:
     _history = result.pop("_ctrl_history", None)
     _cfg = result.pop("_ctrl_config", None)
     if payload.auto_config:
-        from datetime import UTC, datetime as _dt
         state.last_controller_profile = _profile
         state.last_controller_history = _history
         state.last_controller_committed_config = _cfg
         state.last_controller_source = "run"
         state.last_controller_run_name = result.get("run_name")
-        state.last_controller_recorded_at = _dt.now(UTC).isoformat()
+        state.last_controller_recorded_at = datetime.now(UTC).isoformat()
     return result
