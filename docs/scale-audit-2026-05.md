@@ -1,6 +1,6 @@
 # Scale audit — May 2026
 
-**Status**: Round 1 closed — 10K, 100K, 500K complete; 1M run hit a C-extension SystemError mid-`auto_configure` after 30 min wall (per-stage flush preserved the data). Round 2 will narrow allocation attribution and investigate the SystemError.
+**Status**: Round 1 closed; Round 2 fixed two bugs that surfaced. 10K, 100K, 500K complete (clean); 1M originally hit a SystemError/MemoryError after 30 min wall, **now fixed and runs in 151s** until a separate third-package bug surfaces in goldenflow.
 
 **Why**: Issue #171, the scale-gate workstream. PR #120's strategy doc ranks throughput-ceiling lift as the #1 highest-leverage next direction. The CLAUDE.md note that says "1M records: OOM in-memory" is ~6 months old and predates the v1.7-v1.12 controller. Before we change any code path or wire an autoselect threshold, we need a current profile.
 
@@ -128,9 +128,22 @@ This is the cpython idiom for "a C extension returned NULL without setting an ex
 
 **What this tells us:**
 
-1. **The cliff at 1M is not memory.** Peak RSS at the failure point was 5 GB on a 64 GB box; the heap was at 1.4 GB. Both well below where any sane limit would trip.
+1. **The cliff at 1M is memory after all — but it's a hidden cliff, not the OS budget.** Peak RSS at the failure point was 5 GB on a 64 GB box; the heap was at 1.4 GB. The OS-level OOM-killer never fired. The 5 GB ceiling is presumably a Windows working-set commit limit or a contiguous-large-allocation failure mode — Python's `malloc` returns NULL well before the OS would have OOM'd us.
 2. **`auto_configure` scales as projected** — 1,809s at 1M vs 755s at 500K is a 2.4× factor for 2× rows. Slightly super-linear in wall, **2.94× RSS Δ for 2× rows** (worse than 500K's 1.46×/5×). The working-set plateau hypothesis from 500K may be breaking; need more data to know.
-3. **There is a reproducible C-extension fault inside the controller path at 1M rows.** This is a real bug, not a scale issue. Independent of any throughput-ceiling work, this needs investigation — `goldenmatch dedupe 1M-row.csv` on default settings doesn't currently work.
+3. **There is a reproducible memory fault inside the controller path at 1M rows.** This is a real bug, not a scale issue. Independent of any throughput-ceiling work, this needs investigation — `goldenmatch dedupe 1M-row.csv` on default settings doesn't currently work.
+
+### Second 1M run (different failure path, same root cause)
+
+A re-run with `faulthandler.enable()` and `except BaseException` failed slightly differently:
+
+| run | wall (s) | peak RSS (MB) | auto_configure RSS Δ | failure |
+|---|---:|---:|---:|---|
+| 1M attempt #1 | 1,811 | 5,037 | +3,180 | `SystemError: error return without exception set` |
+| 1M attempt #2 | 1,767 | 5,579 | +3,472 | `MemoryError: ` (no message) |
+
+Same general failure mode (memory pressure around 5 GB → C-extension allocation fails) but the propagation path differs run-to-run. `MemoryError` (run 2) is the polite Python idiom; `SystemError` (run 1) is what happens when the same C code returns NULL without calling `PyErr_SetString` first. Both indicate **an allocation in C code failing**, which fits the hypothesis that some matrix in fuzzy block scoring is being allocated above Windows's effective large-contiguous-block ceiling.
+
+Stderr-vs-stdout redirect bug in the harness meant the first traceback dump landed in the void; fixed for run #3 (3rd 1M attempt in progress).
 
 ### Scaling 500K → 1M (partial, auto_configure only)
 
@@ -205,5 +218,53 @@ Round 2 is now a two-track investigation:
 - `tracemalloc.snapshot()` at peak inside `run_dedupe_df` (need a clean 1M run first — Track A blocks this).
 - `tracemalloc.snapshot()` at end of each controller iteration to confirm the working-set plateau holds at 1M or breaks (`auto_configure`'s 2.94× RSS Δ growth at 1M suggests it may be breaking).
 - Profile `score_blocks_parallel` — at 500K it consumed roughly half the `run_dedupe` wall.
+
+---
+
+## Round 2 results (2026-05-11)
+
+Track A turned up **two real goldenmatch bugs**, both fixed in this PR. Track B's `run_dedupe`-internal allocation profile is still blocked, but on a separate goldenflow bug (filed as follow-up), not on goldenmatch.
+
+### Bug 1 — float64 NxN matrices in scorer at 1M
+
+The Round 1 1M run crashed inside `find_fuzzy_matches`. With `faulthandler.enable()` + `except BaseException` + redirected stderr (harness hardening, also in this PR), we got a clean traceback the second time. Phase 1 (cheap accumulators) and Phase 3 (fuzzy accumulators) in `core/scorer.py` were allocating `np.zeros((n, n), dtype=np.float64)` — at the largest block that's hundreds of MB of pure zeros for similarity scores that live in `[0, 1]` and never need 64-bit precision.
+
+**Fix:** changed Phase 1, Phase 3, and the `_fuzzy_score_matrix` ensemble paths (`jw`, `ts`, `sx`) to `dtype=np.float32`. Single-scorer paths (`jaro_winkler`, `levenshtein`, `token_sort`) wrapped in `np.asarray(..., dtype=np.float32)` so rapidfuzz's float64 output gets downcast at the boundary. Net effect: roughly halves matrix memory inside scoring.
+
+### Bug 2 — O(N²) pair-set materialization in learned blocking
+
+After the float32 fix, the 1M run got past the first scorer phase and crashed again — this time in `core/learned_blocking.py:127`, inside `evaluate_rule`. The old code built `blocked_pairs: set[tuple[int, int]]` from `itertools.combinations(members, 2)` for every block, then took `recall = len(true_pairs & blocked_pairs) / len(true_pairs)`. With a low-cardinality candidate key at 1M rows, one block can hold 200K members → 20 billion tuples → ~600 GB of Python set memory. That's the actual MemoryError, not the float64 matrices.
+
+**Fix:** count blocked pairs in closed form (`sum(len(m) * (len(m) - 1) // 2 for m in blocks.values())`) and compute recall by iterating `true_pairs` against a `block_of: dict[row_id, block_key]` O(1) lookup table. The explicit pair set was never used elsewhere — only `len()` and `len(... & true_pairs)` mattered. New code is O(N) memory + O(|true_pairs|) recall work; old code was O(blocked_pairs) memory before any recall arithmetic ran.
+
+### Bug 3 — PanicException in goldenflow (filed as follow-up, not fixed here)
+
+With both goldenmatch fixes in place, 1M now runs auto_configure cleanly in **151s** with **2103 MB peak RSS** (a 12× wall improvement and 2.4× RSS improvement over Round 1's pre-crash partial), then dies with `PanicException: PyObject pointer is null` inside goldenflow's `transform_df` at a `Polars Series._s.to_list()` call. Different package, different root cause; not in scope for this PR.
+
+### Updated 1M datapoint
+
+| rows      | wall (s) | peak RSS (MB) | peak heap (MB) | clusters | status |
+|----------:|---------:|--------------:|---------------:|---------:|:-------|
+| 1,000,000 | 153.84   | 2,103.3       | 713.6          | 0        | auto_configure complete (151s); run_dedupe blocked on goldenflow PanicException |
+
+Round 1's 1M row in the summary table (1,811s, 5,038 MB, SystemError) is now obsolete — that partial result reflected two bugs piled on top of each other. The fixed run is roughly an order of magnitude better on both axes, before run_dedupe has even started.
+
+### Implications for the throughput-ceiling priority order
+
+- **Memory is not the cliff at 1M.** 2.1 GB peak RSS for the heaviest stage on default settings makes the CLAUDE.md "1M records: OOM in-memory" note officially stale — the warning predates v1.7-v1.12 controller, and the OOM was bug-driven not architectural. **CLAUDE.md update is a follow-up.**
+- **Wall is still the cliff, but the slope just shifted.** auto_configure at 1M is now 151s instead of crashing-after-30-min. The 10M projection from Round 1 (7 hr) was extrapolating from a buggy curve; the real curve is gentler. Need a clean 10M run to re-project.
+- **The user's step 4** ("memory reduction only if (2) shows it's still a problem at 1M+") is **answered no for now** — at 1M, RSS is fine. Revisit at 5M+.
+- **The user's step 3** ("attack wall time") is unblocked for goldenmatch internals but blocked end-to-end on the goldenflow PanicException. Filing that as `goldenflow#TBD: transform_df Polars Series PanicException at 1M rows` is the next concrete deliverable after this PR lands.
+
+### Harness changes shipped alongside the fixes
+
+`scripts/scale_audit.py` got four hardening improvements while we were chasing the crashes:
+
+- `faulthandler.enable()` at startup so C-level crashes write a Python-side stack to stderr before the process dies.
+- Per-stage atomic JSON flush (`tmp + os.replace`) so a mid-run crash still leaves the completed stages on disk.
+- `_RSSWatchdog` daemon thread sampling at 0.5s — catches transient spikes that one-shot psutil reads at stage boundaries miss.
+- `except BaseException` (not just `Exception`) with `traceback.format_exc()` dumped to stderr — `SystemError` from a C extension would otherwise sail past `except Exception` silently.
+
+These changes are kept regardless of what the 10M curve looks like — they're cheap diagnostics insurance.
 
 The discipline from PR #120 holds: **measure, don't speculate**. This doc is the measurement step before any code change. Round 1 closes with a real bug surfaced that wasn't on anyone's radar.

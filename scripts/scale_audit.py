@@ -29,6 +29,7 @@ harness, not a regression test. CI gating arrives in step 4 of #171.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import gc
 import json
 import os
@@ -41,6 +42,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+# Enable faulthandler at import time. Catches segfaults / SIGABRT /
+# stack overflows from C extensions that don't propagate as Python
+# exceptions. The 1M auto_configure SystemError might be the polite
+# variant of a C-level crash; faulthandler will surface the C stack
+# (modulo symbol availability) when the polite path doesn't.
+faulthandler.enable()
 
 try:
     import psutil

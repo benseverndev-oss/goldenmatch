@@ -316,18 +316,22 @@ def _fuzzy_score_matrix(
     # Replace None with empty string for cdist (we handle nulls separately)
     clean = [v if v is not None else "" for v in values]
 
+    # All NxN return matrices use float32 — see find_fuzzy_matches' Phase 1
+    # comment for the memory math. Ensemble's intermediate matrices in
+    # particular allocated 4× NxN float64 = 800 MB at N=5000, which was the
+    # largest single contributor to the 1M-row OOM cliff (PR #173).
     if scorer_name == "ensemble":
         # Combine multiple scorers, take element-wise max
-        jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float64)
-        ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float64) / 100.0
-        sx = _soundex_score_matrix(values) * 0.8
+        jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+        ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+        sx = _soundex_score_matrix(values).astype(np.float32) * 0.8
         matrix = np.maximum(np.maximum(jw, ts), sx)
     elif scorer_name == "jaro_winkler":
-        matrix = cdist(clean, clean, scorer=JaroWinkler.similarity)
+        matrix = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
     elif scorer_name == "levenshtein":
-        matrix = cdist(clean, clean, scorer=Levenshtein.normalized_similarity)
+        matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
     elif scorer_name == "token_sort":
-        matrix = cdist(clean, clean, scorer=token_sort_ratio) / 100.0
+        matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
     elif scorer_name == "dice":
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
@@ -546,9 +550,20 @@ def find_fuzzy_matches(
     if total_weight == 0.0:
         return []
 
-    # Phase 1: Score cheap fields (exact + soundex) and build null masks
-    cheap_numerator = np.zeros((n, n))
-    cheap_denominator = np.zeros((n, n))
+    # Phase 1: Score cheap fields (exact + soundex) and build null masks.
+    #
+    # `dtype=np.float32` not the numpy default float64 — the find_fuzzy_matches
+    # function holds ~8-10 NxN arrays in scope at peak (cheap_num/den,
+    # max_poss_num/den/result, fuzzy_num/den, per-field scores, plus
+    # short-lived best_*/total_* in the early-termination loop). At a
+    # 5000-row block that's ~1.6 GB per call in float64; float32 halves it.
+    # With 4 parallel workers in `score_blocks_parallel`, 1M-row runs were
+    # hitting Windows's effective ~5 GB contiguous-allocation ceiling and
+    # dying via SystemError / MemoryError / silent crash (PR #173, scale
+    # audit). Scores are 0-1 similarities — float32's 7 digits of precision
+    # is well within tolerance.
+    cheap_numerator = np.zeros((n, n), dtype=np.float32)
+    cheap_denominator = np.zeros((n, n), dtype=np.float32)
 
     for f in exact_fields:
         values = _get_transformed_values(block_df, f)
@@ -588,9 +603,10 @@ def find_fuzzy_matches(
         # Pairs that can't possibly reach threshold — mark them
         impossible = max_possible < mk_threshold
 
-        # Phase 3: Score fuzzy fields with intra-field early termination
-        fuzzy_numerator = np.zeros((n, n))
-        fuzzy_denominator = np.zeros((n, n))
+        # Phase 3: Score fuzzy fields with intra-field early termination.
+        # float32 — matches Phase 1's accumulators (see comment there).
+        fuzzy_numerator = np.zeros((n, n), dtype=np.float32)
+        fuzzy_denominator = np.zeros((n, n), dtype=np.float32)
 
         all_expensive_fields = list(fuzzy_fields) + list(record_emb_fields)
         for f_idx, f in enumerate(all_expensive_fields):
