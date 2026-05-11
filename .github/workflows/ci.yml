@@ -21,6 +21,7 @@ jobs:
       dbt: ${{ steps.filter.outputs.dbt }}
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -67,6 +68,20 @@ jobs:
               - 'packages/dbt/**'
             action:
               - 'packages/actions/**'
+            pyright_slice:
+              - 'pyrightconfig.json'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_history.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_policy.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_rules.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_negative_evidence.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_memory.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_verify.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/indicators.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
+              - 'packages/python/goldenmatch/goldenmatch/config/**'
       # Build the python matrix dynamically: only include packages whose code
       # actually changed. A workflow-file or root-pyproject change expands to
       # all packages so dependency-resolution changes can't slip through.
@@ -407,3 +422,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"
+
+  # Pyright strict-mode type check on the goldenmatch core slice. Scope
+  # (include list) is pinned in pyrightconfig.json at repo root; CI mirrors
+  # that scope via the path filter above. Blocking — any new error in the
+  # slice fails CI. To extend the slice, update both pyrightconfig.json's
+  # `include` and the `pyright_slice` filter above.
+  pyright:
+    needs: changes
+    if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - run: uv run pyright
