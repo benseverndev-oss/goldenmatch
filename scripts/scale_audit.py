@@ -347,11 +347,20 @@ def run_audit(
 
             clusters = pipeline_result.get("clusters") or {}
             result.cluster_count = len(clusters)
-    except Exception as exc:
+    except BaseException as exc:
         # Capturing the failure rather than re-raising — partial measurements
         # from earlier stages are still informative (often the OOM hits in a
-        # specific stage and the others' timings are still valid).
+        # specific stage and the others' timings are still valid). Use
+        # BaseException (not Exception) because some C-extension faults
+        # propagate as SystemError or SystemExit on the cpython side.
         result.failed = f"{type(exc).__name__}: {exc}"
+        # Also surface the full traceback on stderr — getting "SystemError:
+        # error return without exception set" with no stack frame is useless
+        # for debugging. Doesn't change the JSON shape; just helps the human
+        # reading the log file.
+        import traceback as _tb
+        sys.stderr.write("[scale-audit] caught during audit run:\n")
+        sys.stderr.write(_tb.format_exc())
     finally:
         if watchdog is not None:
             # If the watchdog observed a higher RSS than _tracking's

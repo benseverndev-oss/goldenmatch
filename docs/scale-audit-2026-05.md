@@ -1,6 +1,6 @@
 # Scale audit — May 2026
 
-**Status**: Round 1 (10K + 100K + 500K done; 1M running). See _Pending_ for the rest.
+**Status**: Round 1 closed — 10K, 100K, 500K complete; 1M run hit a C-extension SystemError mid-`auto_configure` after 30 min wall (per-stage flush preserved the data). Round 2 will narrow allocation attribution and investigate the SystemError.
 
 **Why**: Issue #171, the scale-gate workstream. PR #120's strategy doc ranks throughput-ceiling lift as the #1 highest-leverage next direction. The CLAUDE.md note that says "1M records: OOM in-memory" is ~6 months old and predates the v1.7-v1.12 controller. Before we change any code path or wire an autoselect threshold, we need a current profile.
 
@@ -33,11 +33,12 @@ The 1M run (in progress) will confirm whether the convergence flips or holds. Af
 
 ## Summary table
 
-| rows    | wall (s) | peak RSS (MB) | peak Python heap (MB) | clusters | status |
-|--------:|---------:|--------------:|----------------------:|---------:|:-------|
-|  10,000 |    81.32 |         262.3 |                 101.8 |    2,604 | ok     |
-| 100,000 |   564.51 |       1,159.0 |               1,340.9 |   84,695 | ok     |
-| 500,000 | 1,424.49 |       3,669.0 |               1,470.3 |  432,159 | ok     |
+| rows      | wall (s) | peak RSS (MB) | peak Python heap (MB) | clusters | status |
+|----------:|---------:|--------------:|----------------------:|---------:|:-------|
+|    10,000 |    81.32 |         262.3 |                 101.8 |    2,604 | ok     |
+|   100,000 |   564.51 |       1,159.0 |               1,340.9 |   84,695 | ok     |
+|   500,000 | 1,424.49 |       3,669.0 |               1,470.3 |  432,159 | ok     |
+| 1,000,000 | 1,811.51 |       5,037.6 |               1,355.9 |        0 | **SystemError mid-`auto_configure` (partial)** |
 
 ---
 
@@ -109,6 +110,37 @@ The 1M run (in progress) will confirm whether the convergence flips or holds. Af
 | auto_configure RSS Δ  | 1.46× | Working set bounded |
 | run_dedupe RSS Δ      | 3.0× | Super-linear; the next thing to attack |
 
+### 1,000,000 rows (dupe_rate = 0.15) — partial / FAILED
+
+| stage           | wall (s) | RSS Δ (MB) | tracemalloc peak (MB) |
+|-----------------|---------:|-----------:|----------------------:|
+| `read_csv`      |     0.12 |      369.0 |                  27.4 |
+| `auto_configure`| 1,809.35 |    3,180.3 |               1,355.9 |
+| `run_dedupe`    |     _DNF_ |       _—_ |                   _—_ |
+
+**Failed during `auto_configure`** after 30 min wall, peak RSS 5,037 MB (well under the 30 GB watchdog budget — this isn't an OOM):
+
+```
+SystemError: error return without exception set
+```
+
+This is the cpython idiom for "a C extension returned NULL without setting an exception state" — usually a bug in a native module (Polars, rapidfuzz, pyo3) or an undefined-behaviour path in C code. No traceback was captured by the original `except` clause (now fixed: subsequent runs will dump `traceback.format_exc()` to stderr).
+
+**What this tells us:**
+
+1. **The cliff at 1M is not memory.** Peak RSS at the failure point was 5 GB on a 64 GB box; the heap was at 1.4 GB. Both well below where any sane limit would trip.
+2. **`auto_configure` scales as projected** — 1,809s at 1M vs 755s at 500K is a 2.4× factor for 2× rows. Slightly super-linear in wall, **2.94× RSS Δ for 2× rows** (worse than 500K's 1.46×/5×). The working-set plateau hypothesis from 500K may be breaking; need more data to know.
+3. **There is a reproducible C-extension fault inside the controller path at 1M rows.** This is a real bug, not a scale issue. Independent of any throughput-ceiling work, this needs investigation — `goldenmatch dedupe 1M-row.csv` on default settings doesn't currently work.
+
+### Scaling 500K → 1M (partial, auto_configure only)
+
+| metric | factor (2×) | character |
+|---|---:|---|
+| auto_configure wall   | 2.4× | Slightly super-linear; was 2.5× per 5× at 500K |
+| auto_configure RSS Δ  | **2.94×** | Super-linear; worse than 500K projection. Working-set plateau may be breaking |
+| auto_configure heap   | 1.01× | Heap plateau holding |
+| read_csv RSS Δ        | 2.33× | Slightly super-linear; CSV stays 3-4 KB/row |
+
 ---
 
 ## Pending
@@ -118,9 +150,9 @@ The full audit grid:
 - [x] 10K rows — done
 - [x] 100K rows — done
 - [x] 500K rows — done (peak RSS 3.7 GB; no OOM near the historical "cliff" CLAUDE.md cites — that note is stale)
-- [ ] 1M rows — running (projected ~50 min wall, ~7 GB peak RSS)
-- [ ] 5M rows — _skipped per OOM-risk discussion_; would project ~30 GB but would tie up the box for ~3 hrs and we'd learn nothing the 1M didn't already say
-- [ ] 10M rows — _skipped per OOM-risk discussion_; we need a code change before measuring this
+- [x] 1M rows — **partial**: `auto_configure` measured (30 min wall, 5 GB peak RSS); `run_dedupe` not reached. Failure is a C-extension SystemError, not memory.
+- [ ] 5M rows — _skipped per OOM-risk discussion_; can't run cleanly until the 1M SystemError is fixed
+- [ ] 10M rows — _skipped per OOM-risk discussion_; we need code changes (both the SystemError fix and probably memory reduction) before measuring this
 
 Each row count also wants a `tracemalloc.snapshot()` at the moment of peak allocation, broken out by code location, so we can identify the actual dominant allocation source line. This first round establishes "where in the pipeline" (stage); the next round narrows to "which expression in that stage."
 
@@ -140,23 +172,38 @@ Fixtures live under `.profile_tmp/scale_fixtures/` (gitignored). JSON outputs un
 
 ---
 
-## Next moves (revised after 500K)
+## Next moves (Round 1 close — 1M data forces another revision)
 
-The Round 1 priority order changes substantially based on 500K data:
+The 1M failure changes the priority order again. **The leading concern is no longer wall time, RSS, or run_dedupe — it's the SystemError at 1M.**
 
-1. **`run_dedupe`'s wall + super-linear RSS** is now the leading concern. Its RSS Δ scales 3× per 5× rows; its wall is the fastest-growing stage. At 5M+ rows it will be the dominant bottleneck, not `auto_configure`. Round 2 should `tracemalloc.snapshot()` inside `run_dedupe_df` at peak to identify the allocation site.
-2. **`auto_configure`'s working set is bounded** — heap plateau at 500K confirms it. Don't prioritize this anymore. The "controller's finalize step re-runs the pipeline" hypothesis from 100K analysis is right but it's not actually the problem — the cost is the per-iteration sample matching, not memory retention across iterations.
-3. **Wall time is the cliff, not RAM.** Issue #171's success criterion (10M on 64 GB) is likely already memory-feasible. The throughput-ceiling problem is reframed: hit wall time first. Candidate attacks:
-   - Cap controller iterations more aggressively when the data shape is "easy" (the controller currently runs the same iteration count regardless of input size — that's why `auto_configure` wall grows at all)
-   - Parallelize fuzzy block scoring more aggressively (current `score_blocks_parallel` already does this; check if the per-block fan-out is row-count-aware)
-   - Polars-native fast paths for matchkey transforms that currently round-trip through Python
-4. **Step 2 of issue #171 (autoselect backend) deprioritized further.** 500K-on-default-settings consumes 3.7 GB peak RSS in 24 minutes wall. We don't need an autoselect threshold — we need to make the default faster.
-5. **Small-win parking lot**: noisy `auto-config: NE scorer 'ensemble' for field 'id' not registered or failed` warning still fires ~14× per run regardless of row count. Quick PR; not blocking.
+1. **Investigate the SystemError at 1M `auto_configure`** (highest priority). Reproducing on a 1M synthetic fixture is the easiest debug path: re-run with the harness's now-fixed traceback dumping, identify which C extension call returns NULL without an exception state. Candidates from CLAUDE.md:
+   - rapidfuzz cdist on a too-large NxN block (CLAUDE.md notes "blocking key choice dominates fuzzy performance — coarse keys create huge blocks")
+   - Polars expression evaluation on a column the controller's matchkey introspection has invalidated
+   - pyo3 boundary in the bridge or in `goldenmatch.core.probabilistic`'s EM training
+   - Could also be a memory-fragmentation hit even at 5 GB RSS — Windows handles large allocations poorly when fragmented
 
-Round 2 scope (to land as a separate PR after 1M):
+2. **Once 1M completes cleanly, re-measure to land the full 1M datapoint.** Auto_configure's 2.94× RSS Δ for 2× rows is the next concerning signal — the 500K plateau hypothesis may be breaking. We need clean 1M numbers to know whether `auto_configure` or `run_dedupe` is the actual leading concern.
 
-- Add `tracemalloc.snapshot()` at peak inside `run_dedupe_df`, attribute the 1.5 GB heap allocation to specific code locations
-- Add `tracemalloc.snapshot()` at end of each controller iteration to confirm the working set really doesn't accumulate
-- Profile `score_blocks_parallel` specifically — at 500K it's ~half the `run_dedupe` wall
+3. **`run_dedupe`'s super-linear RSS growth** (3× per 5× rows from 100K→500K) remains a parking-lot item for Round 2, but is downgraded until we have 1M data showing whether it actually happens.
 
-The discipline from PR #120 holds: **measure, don't speculate**. This doc is the measurement step before any code change.
+4. **Throughput-ceiling work (issue #171) is functionally blocked on (1).** We cannot ship "10M on 64 GB by default" if 1M crashes on default settings.
+
+5. **Step 2 of issue #171 (autoselect backend) deprioritized further** — even though the strategic answer hasn't changed (500K fits comfortably; autoselect threshold isn't urgent), the immediate path forward is fixing the SystemError.
+
+6. **Small-win parking lot**: noisy `auto-config: NE scorer 'ensemble' for field 'id' not registered or failed` warning still fires ~14× per run regardless of row count. Quick PR; not blocking. May be related to the SystemError if the scorer name is leaking into a downstream C-extension call.
+
+### Round 2 scope (separate PR)
+
+Round 2 is now a two-track investigation:
+
+**Track A: SystemError attribution**
+- Reproduce 1M on the synthetic fixture with the harness's traceback dump (now committed).
+- If traceback points at a specific Polars / rapidfuzz / pyo3 call, write a minimal repro.
+- Filing it as a goldenmatch issue is enough deliverable — fix may belong upstream.
+
+**Track B: Allocation attribution** (the original Round 2 scope, kept)
+- `tracemalloc.snapshot()` at peak inside `run_dedupe_df` (need a clean 1M run first — Track A blocks this).
+- `tracemalloc.snapshot()` at end of each controller iteration to confirm the working-set plateau holds at 1M or breaks (`auto_configure`'s 2.94× RSS Δ growth at 1M suggests it may be breaking).
+- Profile `score_blocks_parallel` — at 500K it consumed roughly half the `run_dedupe` wall.
+
+The discipline from PR #120 holds: **measure, don't speculate**. This doc is the measurement step before any code change. Round 1 closes with a real bug surfaced that wasn't on anyone's radar.
