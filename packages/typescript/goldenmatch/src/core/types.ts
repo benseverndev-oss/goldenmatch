@@ -35,10 +35,29 @@ export interface MatchkeyField {
   readonly partialThreshold?: number;
 }
 
+/**
+ * v1.11: a field whose disagreement subtracts from a matchkey's score.
+ * Mirrors the Python ``NegativeEvidenceField`` Pydantic model. Used both on
+ * weighted matchkeys (penalty subtracted from weighted-sum score) and, in
+ * v1.12 Path Y, on exact matchkeys (penalty filters the binary 1.0 emit).
+ */
+export interface NegativeEvidenceField {
+  readonly field: string;
+  readonly transforms: readonly string[];
+  readonly scorer: string;
+  readonly threshold: number;
+  readonly penalty: number;
+}
+
 export interface ExactMatchkey {
   readonly name: string;
   readonly type: "exact";
   readonly fields: readonly MatchkeyField[];
+  /** v1.12 Path Y: post-filter exact pairs via negative evidence. */
+  readonly negativeEvidence?: readonly NegativeEvidenceField[];
+  /** v1.12: when NE is set on an exact matchkey, threshold defaults to 0.5
+   *  in ``promoteNegativeEvidence`` so the score-and-threshold path activates. */
+  readonly threshold?: number;
 }
 
 export interface WeightedMatchkey {
@@ -50,6 +69,8 @@ export interface WeightedMatchkey {
   readonly rerank?: boolean;
   readonly rerankModel?: string;
   readonly rerankBand?: number;
+  /** v1.11: negative evidence fields — subtract penalty on disagreement. */
+  readonly negativeEvidence?: readonly NegativeEvidenceField[];
 }
 
 export interface ProbabilisticMatchkey {
@@ -61,6 +82,9 @@ export interface ProbabilisticMatchkey {
   readonly convergenceThreshold?: number;
   readonly linkThreshold?: number;
   readonly reviewThreshold?: number;
+  /** v1.11: negative evidence — unused at scoring time on probabilistic but
+   *  preserved here for round-trip parity with Python's MatchkeyConfig. */
+  readonly negativeEvidence?: readonly NegativeEvidenceField[];
 }
 
 export type MatchkeyConfig =
@@ -468,6 +492,23 @@ export function makeMatchkeyField(
 }
 
 /**
+ * Create a NegativeEvidenceField with v1.11 defaults.
+ * Mirrors the Python ``NegativeEvidenceField`` Pydantic constructor.
+ * - ``threshold`` default 0.5 (per spec; eager-promote rule uses 0.4)
+ * - ``penalty`` default 0.5 (per spec; eager-promote rule uses 0.3)
+ */
+export function makeNegativeEvidenceField(
+  partial: Partial<NegativeEvidenceField> & Pick<NegativeEvidenceField, "field" | "scorer">,
+): NegativeEvidenceField {
+  return {
+    transforms: [],
+    threshold: 0.5,
+    penalty: 0.5,
+    ...partial,
+  };
+}
+
+/**
  * Shape accepted by `makeMatchkeyConfig`. All variant-specific fields are
  * optional; the factory picks the right variant based on `type`.
  */
@@ -484,6 +525,8 @@ export interface MakeMatchkeyConfigInput {
   readonly convergenceThreshold?: number;
   readonly linkThreshold?: number;
   readonly reviewThreshold?: number;
+  /** v1.11: negative evidence (round-trips through the factory). */
+  readonly negativeEvidence?: readonly NegativeEvidenceField[];
 }
 
 /** Create a MatchkeyConfig with sensible defaults. Produces the correct variant. */
@@ -493,7 +536,18 @@ export function makeMatchkeyConfig(
   const type = partial.type ?? "weighted";
   const fields = partial.fields ?? [];
   if (type === "exact") {
-    return { name: partial.name, type: "exact", fields };
+    const out: ExactMatchkey = {
+      name: partial.name,
+      type: "exact",
+      fields,
+      ...(partial.negativeEvidence !== undefined
+        ? { negativeEvidence: partial.negativeEvidence }
+        : {}),
+      ...(partial.threshold !== undefined
+        ? { threshold: partial.threshold }
+        : {}),
+    };
+    return out;
   }
   if (type === "probabilistic") {
     const out: ProbabilisticMatchkey = {
@@ -515,6 +569,9 @@ export function makeMatchkeyConfig(
       ...(partial.reviewThreshold !== undefined
         ? { reviewThreshold: partial.reviewThreshold }
         : {}),
+      ...(partial.negativeEvidence !== undefined
+        ? { negativeEvidence: partial.negativeEvidence }
+        : {}),
     };
     return out;
   }
@@ -533,6 +590,9 @@ export function makeMatchkeyConfig(
       : {}),
     ...(partial.rerankBand !== undefined
       ? { rerankBand: partial.rerankBand }
+      : {}),
+    ...(partial.negativeEvidence !== undefined
+      ? { negativeEvidence: partial.negativeEvidence }
       : {}),
   };
   return out;
