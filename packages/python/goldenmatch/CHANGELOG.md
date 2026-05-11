@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-05-11
+
+This is a release-plumbing wave: typed-accessor API additions, PyPI metadata refresh, and contributor-facing quality improvements. **No DQbench / Febrl3 / NCVR / DBLP-ACM number changes** — algorithm is unchanged this wave.
+
+### Added
+- **Typed accessor API on `MatchkeyConfig` / `MatchkeyField`** (PR #151). New properties: `MatchkeyConfig.fuzzy_threshold`, `MatchkeyField.fuzzy_scorer`, `MatchkeyField.fuzzy_weight`, `MatchkeyField.resolved_field`. Each raises `ValueError` when the underlying matchkey isn't a fuzzy/weighted type, so the invariant is now enforceable in pyright strict mode rather than asserted in callers.
+
+  ```python
+  from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+  mk = MatchkeyConfig(
+      name="identity",
+      type="weighted",
+      threshold=0.85,
+      fields=[MatchkeyField(field="name", transforms=["lowercase"], scorer="jaro_winkler", weight=1.0)],
+  )
+  assert mk.fuzzy_threshold == 0.85  # safe access on weighted matchkey
+  # mk.fuzzy_threshold on an exact matchkey raises ValueError
+  ```
+
+- **`docs/scale-envelope.md`** (PR #149): documents the Polars / DuckDB / Ray operating ranges plus block-size failure modes so callers can pick a backend before hitting an OOM.
+- **Postgres CI lane** (PR #144): flipped from skipped to live so DB integration tests now run on every PR.
+
+### Changed
+- **PyPI metadata corrected** (PR #148): `[project.urls]` Homepage / Repository / Documentation entries now point at the monorepo at `benzsevern/goldenmatch`. The pre-fold standalone-repo URLs are gone. Metadata only refreshes on a wheel build, so this release is what makes the corrected URLs visible on PyPI.
+
+### Fixed
+- **Reproducibility of all four published benchmark numbers** (PR #152, replaces #150): DQbench composite 91.04, DBLP-ACM 0.9641, Febrl3 0.9443, NCVR 0.9719 now all reproduce from a fresh clone. See `docs/reproducing-benchmarks.md` for the exact commands and dataset prep steps.
+
+### Internal (contributors only)
+- Ruff lint expanded to F / I / B-narrowed / UP rule sets across `packages/python/` (PR #146).
+- Pyright strict mode now enforced on the 21-file core slice of `goldenmatch` (PR #147). The new typed accessors in PR #151 eliminated 7 type-suppression workarounds in callers.
+
+### Benchmarks (zero-config, no LLM)
+
+Unchanged vs v1.12.0 — algorithm not touched this wave.
+
+| Dataset | v1.12.0 | v1.13.0 | Delta |
+|---|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 | +0.0000 |
+| Febrl3 | 0.9443 | 0.9443 | +0.0000 |
+| NCVR | 0.9719 | 0.9719 | +0.0000 |
+| DQbench composite | 91.04 | 91.04 | +0.00 |
+
 ## [1.12.0] - 2026-05-10
 
 ### Added
