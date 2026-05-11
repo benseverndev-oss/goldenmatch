@@ -86,6 +86,28 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR"], "VARCHAR",
     )
 
+    # AutoConfig + telemetry (v1.7-v1.12 surface)
+    con.create_function(
+        "goldenmatch_autoconfig",
+        lambda table_name: _autoconfig_table(con, table_name),
+        ["VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_autoconfig_telemetry",
+        lambda table_name: _autoconfig_telemetry_table(con, table_name),
+        ["VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_dedupe_full",
+        lambda table_name, config_json: _dedupe_full_table(con, table_name, config_json),
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "gm_telemetry",
+        lambda name: _gm_telemetry(con, name),
+        ["VARCHAR"], "VARCHAR",
+    )
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
@@ -236,6 +258,10 @@ def _gm_run(con: duckdb.DuckDBPyConnection, job_name: str, table_name: str) -> s
     else:
         job["golden"] = []
 
+    # Capture controller telemetry (v1.7-v1.12). Stays None when the caller
+    # supplied an explicit config and dedupe_df bypassed auto-config.
+    job["telemetry"] = _capture_telemetry(getattr(result, "config", None))
+
     job["status"] = "completed"
     return json.dumps(result.stats)
 
@@ -262,6 +288,128 @@ def _gm_drop(con: duckdb.DuckDBPyConnection, job_name: str) -> str:
     if job_name in state["jobs"]:
         del state["jobs"][job_name]
     return f"Job '{job_name}' dropped"
+
+
+def _gm_telemetry(con: duckdb.DuckDBPyConnection, job_name: str) -> str:
+    """Return the most-recent run's controller telemetry for a job.
+
+    Returns the unavailable sentinel when the job hasn't run, used an
+    explicit config (controller never fired), or was created on an older
+    install that didn't capture telemetry.
+    """
+    state = _get_state(con)
+    if job_name not in state["jobs"]:
+        return json.dumps({"available": False, "error": f"Job '{job_name}' not found"})
+    telemetry = state["jobs"][job_name].get("telemetry")
+    if telemetry is None:
+        return json.dumps({"available": False})
+    return telemetry
+
+
+# ── AutoConfig + telemetry (v1.7-v1.12) ──────────────────────────────────
+
+
+def _autoconfig_table(con: duckdb.DuckDBPyConnection, table_name: str) -> str:
+    """Run AutoConfigController on a DuckDB table; return committed config JSON."""
+    cfg = _run_autoconfig(con, table_name)
+    return json.dumps(cfg.model_dump(mode="json", exclude_none=True))
+
+
+def _autoconfig_telemetry_table(
+    con: duckdb.DuckDBPyConnection, table_name: str,
+) -> str:
+    """Run AutoConfigController and return the telemetry JSON.
+
+    Re-runs the controller. For a single-shot autoconfig+telemetry flow,
+    call ``goldenmatch_autoconfig`` once, store the result, and use the
+    paired telemetry from the same call site in Python — but the SQL
+    surface is two functions because DuckDB UDFs can only return scalars.
+    """
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+    cfg = _run_autoconfig(con, table_name)
+    state = _LAST_CONTROLLER_RUN.get()
+    if state is None:
+        return json.dumps({"available": False, "source": "autoconfig"})
+    profile, history = state
+    return _serialize_telemetry(profile, history, cfg, source="autoconfig")
+
+
+def _dedupe_full_table(
+    con: duckdb.DuckDBPyConnection, table_name: str, config_json: str,
+) -> str:
+    """Deduplicate using a full GoldenMatchConfig JSON (supports NE / Path Y)."""
+    from goldenmatch import dedupe_df
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    _validate_table_name(table_name)
+    cursor = con.cursor()
+    df = cursor.sql(f"SELECT * FROM {table_name}").pl()
+    cursor.close()
+
+    cfg = GoldenMatchConfig.model_validate_json(config_json)
+    result = dedupe_df(df, config=cfg)
+    if result.golden is not None:
+        return result.golden.write_json()
+    return json.dumps(result.stats)
+
+
+def _run_autoconfig(con: duckdb.DuckDBPyConnection, table_name: str):
+    """Shared helper: read table, run auto_configure_df, return the config."""
+    from goldenmatch.core.autoconfig import auto_configure_df
+    _validate_table_name(table_name)
+    cursor = con.cursor()
+    df = cursor.sql(f"SELECT * FROM {table_name}").pl()
+    cursor.close()
+    return auto_configure_df(df)
+
+
+def _capture_telemetry(committed_config) -> Optional[str]:
+    """Read the AutoConfigController ContextVar and serialise to JSON.
+
+    Returns ``None`` when the controller didn't run on the current thread
+    (the typical signal that the caller passed an explicit config).
+    """
+    try:
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        state = _LAST_CONTROLLER_RUN.get()
+    except Exception:
+        return None
+    if state is None:
+        return None
+    profile, history = state
+    return _serialize_telemetry(profile, history, committed_config, source="gm_run")
+
+
+def _serialize_telemetry(profile, history, committed_config, *, source: str) -> str:
+    """Delegate to ``goldenmatch.web.controller_telemetry`` when available.
+
+    Falls back to a minimal hand-rolled JSON when the ``[web]`` extra isn't
+    installed so the SQL contract still resolves to something parseable.
+    """
+    try:
+        from goldenmatch.web.controller_telemetry import serialize_telemetry
+        return json.dumps(serialize_telemetry(
+            profile=profile,
+            history=history,
+            committed_config=committed_config,
+            source=source,
+            run_name=None,
+            recorded_at=None,
+        ))
+    except Exception:
+        # Minimal fallback — surface at least stop_reason + health.
+        out: dict = {"available": profile is not None or history is not None, "source": source}
+        try:
+            if history is not None and getattr(history, "stop_reason", None) is not None:
+                out["stop_reason"] = history.stop_reason.value
+        except Exception:
+            pass
+        try:
+            if profile is not None:
+                out["health"] = profile.health().value
+        except Exception:
+            pass
+        return json.dumps(out)
 
 
 # Global pipeline state (shared across all UDF calls)

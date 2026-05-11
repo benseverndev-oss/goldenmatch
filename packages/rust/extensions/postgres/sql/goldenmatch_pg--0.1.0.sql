@@ -9,8 +9,13 @@ CREATE TABLE IF NOT EXISTS goldenmatch._jobs (
     config_json JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     last_run_at TIMESTAMPTZ,
-    status TEXT DEFAULT 'configured'
+    status TEXT DEFAULT 'configured',
+    -- v1.7-v1.12: most-recent run's AutoConfigController telemetry. NULL when
+    -- the job used an explicit config (controller didn't fire) or hasn't run.
+    last_telemetry_json JSONB
 );
+-- ALTER for upgrades from extension installs that pre-date the telemetry column.
+ALTER TABLE goldenmatch._jobs ADD COLUMN IF NOT EXISTS last_telemetry_json JSONB;
 
 CREATE TABLE IF NOT EXISTS goldenmatch._pairs (
     job_name TEXT REFERENCES goldenmatch._jobs(name) ON DELETE CASCADE,
@@ -180,3 +185,54 @@ CREATE FUNCTION "goldenmatch_match"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_match_wrapper';
+
+-- ══════════════════════════════════════════════════════════════════════
+-- AutoConfig + controller telemetry (v1.7-v1.12)
+-- ══════════════════════════════════════════════════════════════════════
+
+-- Run AutoConfigController on a table and return the committed GoldenMatchConfig
+-- as JSON. Pipe the output into goldenmatch_dedupe_full to apply it.
+CREATE FUNCTION "goldenmatch_autoconfig"(
+    "table_name" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_autoconfig_wrapper';
+
+-- Same as above but returns the controller telemetry blob (stop_reason,
+-- decisions, health, indicator priors, committed NE).
+CREATE FUNCTION "goldenmatch_autoconfig_telemetry"(
+    "table_name" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_autoconfig_telemetry_wrapper';
+
+-- Deduplicate a table with a *full* GoldenMatchConfig JSON (supports
+-- negative_evidence / Path Y, per-matchkey scorers, standardization, etc.).
+CREATE FUNCTION "goldenmatch_dedupe_full"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_dedupe_full_wrapper';
+
+-- Same as above but returns the controller telemetry from that run.
+CREATE FUNCTION "goldenmatch_dedupe_full_telemetry"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_dedupe_full_telemetry_wrapper';
+
+-- Retrieve the telemetry from the most recent gm_run of a named job.
+-- Returns '{"available":false}' for jobs that haven't run or used an
+-- explicit config.
+CREATE FUNCTION "gm_telemetry"(
+    "job_name" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'gm_telemetry_wrapper';

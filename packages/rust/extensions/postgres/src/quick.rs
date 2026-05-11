@@ -159,3 +159,89 @@ pub fn goldenmatch_match(
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
+
+// ── AutoConfig + telemetry (v1.7-v1.12 surface) ────────────────────────
+
+/// Run AutoConfigController on a table and return the committed config JSON.
+///
+/// Pipe the output into `goldenmatch_dedupe_full(table, <result>)` to run the
+/// pipeline with the auto-configured shape. The committed config is the same
+/// `GoldenMatchConfig` JSON the CLI `goldenmatch autoconfig` would write to
+/// disk, including any `negative_evidence` (Path Y) fields the controller
+/// added.
+///
+/// To inspect what the controller decided, pair with `goldenmatch_autoconfig_telemetry()`
+/// — the two functions share the same telemetry blob; this one returns only
+/// the config payload.
+///
+/// ```sql
+/// SELECT goldenmatch_autoconfig('customers');
+/// ```
+#[pg_extern]
+pub fn goldenmatch_autoconfig(table_name: String) -> String {
+    let rows_json =
+        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::autoconfig(&rows_json) {
+        Ok(result) => result.config_json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Run AutoConfigController and return the telemetry JSON (stop_reason,
+/// health verdict, refit decisions, indicator column priors, committed NE).
+///
+/// Same shape as the web UI's `/api/v1/controller/telemetry` endpoint.
+/// Run alongside `goldenmatch_autoconfig()` when you want to inspect WHY the
+/// controller picked what it did — typical SQL pattern is:
+///
+/// ```sql
+/// WITH cfg AS (SELECT goldenmatch_autoconfig('customers') AS json),
+///      tel AS (SELECT goldenmatch_autoconfig_telemetry('customers') AS json)
+/// SELECT (SELECT json FROM cfg) AS config, (SELECT json FROM tel) AS telemetry;
+/// ```
+///
+/// Note: this re-runs the controller. For a single-shot variant that
+/// returns both, persist the result of one call to a temp table.
+#[pg_extern]
+pub fn goldenmatch_autoconfig_telemetry(table_name: String) -> String {
+    let rows_json =
+        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::autoconfig(&rows_json) {
+        Ok(result) => result.telemetry_json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Deduplicate a Postgres table using a *full* `GoldenMatchConfig` JSON.
+///
+/// Unlike `goldenmatch_dedupe_table`, which forwards only the slim
+/// `exact`/`fuzzy`/`blocking`/`threshold` keys, this accepts the full
+/// Pydantic shape — including `negative_evidence` (Path Y), per-matchkey
+/// `comparison` / `scorer` / `weight`, `standardization`, `golden_rules`,
+/// and so on. Use this when you've already obtained a committed config from
+/// `goldenmatch_autoconfig()` and want to apply it unchanged.
+#[pg_extern]
+pub fn goldenmatch_dedupe_full(table_name: String, config_json: String) -> String {
+    let rows_json =
+        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::dedupe_full(&rows_json, &config_json) {
+        Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Deduplicate a table with the full config and return the controller telemetry.
+///
+/// Useful for the "auto-configure once, run with telemetry, store both" flow
+/// without re-running the controller.
+#[pg_extern]
+pub fn goldenmatch_dedupe_full_telemetry(table_name: String, config_json: String) -> String {
+    let rows_json =
+        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::dedupe_full(&rows_json, &config_json) {
+        Ok(result) => result
+            .telemetry_json
+            .unwrap_or_else(|| "{\"available\":false}".to_string()),
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}

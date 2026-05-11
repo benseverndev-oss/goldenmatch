@@ -136,8 +136,53 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
         });
     }
 
+    // Persist controller telemetry on the job row (NULL when explicit config).
+    if let Some(ref telemetry) = result.telemetry_json {
+        let update = format!(
+            "UPDATE goldenmatch._jobs SET last_telemetry_json = '{}'::jsonb, last_run_at = now() WHERE name = '{}'",
+            telemetry.replace('\'', "''"),
+            escaped
+        );
+        Spi::connect(|mut client| {
+            let _ = client.update(&update, None, None);
+        });
+    } else {
+        let update = format!(
+            "UPDATE goldenmatch._jobs SET last_telemetry_json = NULL, last_run_at = now() WHERE name = '{}'",
+            escaped
+        );
+        Spi::connect(|mut client| {
+            let _ = client.update(&update, None, None);
+        });
+    }
+
     set_job_status(&job_name, "completed");
     result.stats_json
+}
+
+/// Return the controller telemetry from the most recent `gm_run` of a job.
+///
+/// Returns `'{"available":false}'` if the job hasn't run or the run used an
+/// explicit config (controller never fired).
+#[pg_extern]
+pub fn gm_telemetry(job_name: String) -> String {
+    let query = format!(
+        "SELECT coalesce(last_telemetry_json::text, '{{\"available\":false}}') \
+         FROM goldenmatch._jobs WHERE name = '{}'",
+        job_name.replace('\'', "''")
+    );
+
+    Spi::connect(|client| {
+        let result = client
+            .select(&query, None, None)
+            .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+        for row in result {
+            if let Ok(Some(json)) = row.get::<String>(1) {
+                return json;
+            }
+        }
+        "{\"available\":false}".to_string()
+    })
 }
 
 /// List all configured jobs.
