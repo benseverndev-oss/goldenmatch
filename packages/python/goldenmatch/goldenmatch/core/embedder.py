@@ -88,7 +88,7 @@ def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder:
     """
     if model_name not in _embedders:
         try:
-            from goldenmatch.core.gpu import detect_gpu_mode, GPUMode
+            from goldenmatch.core.gpu import detect_gpu_mode
             mode = detect_gpu_mode()
         except Exception:
             logger.warning("GPU detection failed, defaulting to local embedder.", exc_info=True)

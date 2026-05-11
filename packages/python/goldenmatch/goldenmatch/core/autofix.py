@@ -6,7 +6,6 @@ import re
 
 import polars as pl
 
-
 # Strings that should be treated as null
 _NULL_STRINGS = frozenset({
     "NULL", "N/A", "NA", "n/a", "None", "none", "", "-", ".", "nan", "NaN",

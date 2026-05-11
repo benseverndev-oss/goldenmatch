@@ -8,6 +8,7 @@ complete within their wall-clock budgets on 50K-row inputs.
 def test_compute_identity_collision_signal_50k_under_budget():
     """8s budget on 50K rows."""
     import time
+
     import polars as pl
     from goldenmatch.core.indicators import compute_identity_collision_signal
     n = 50_000
@@ -26,8 +27,11 @@ def test_compute_identity_collision_signal_50k_under_budget():
 def test_negative_evidence_scoring_overhead_under_budget():
     """NE scoring on 50K candidate pairs completes within 2s."""
     import time
+
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
     from goldenmatch.core.scorer import _apply_negative_evidence
 
@@ -57,6 +61,7 @@ def test_negative_evidence_scoring_overhead_under_budget():
 def test_exact_matchkey_ne_scoring_overhead_under_budget():
     """NE scoring on 50K candidate pairs via exact matchkey completes within 2s."""
     import time
+
     from goldenmatch.config.schemas import (
         MatchkeyConfig,
         MatchkeyField,

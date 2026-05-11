@@ -1,11 +1,18 @@
 import threading
-import pytest
-from goldenmatch.core.profile_emitter import (
-    ProfileEmitter, profile_capture, current_emitter, _NullEmitter,
-)
+
 from goldenmatch.core.complexity_profile import (
-    BlockingProfile, ScoringProfile, ClusterProfile,
-    DataProfile, DomainProfile, MatchkeyProfile,
+    BlockingProfile,
+    ClusterProfile,
+    DataProfile,
+    DomainProfile,
+    MatchkeyProfile,
+    ScoringProfile,
+)
+from goldenmatch.core.profile_emitter import (
+    ProfileEmitter,
+    _NullEmitter,
+    current_emitter,
+    profile_capture,
 )
 
 

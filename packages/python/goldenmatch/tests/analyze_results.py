@@ -1,19 +1,18 @@
 """Analyze 1M benchmark results for matching accuracy."""
 
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import polars as pl
 from goldenmatch.config.loader import load_config
-from goldenmatch.core.ingest import load_file
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
+from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.matchkey import compute_matchkeys
 from goldenmatch.core.scorer import find_exact_matches
-from goldenmatch.core.cluster import build_clusters
+from goldenmatch.core.standardize import apply_standardization
 
 
 def main():
@@ -48,7 +47,7 @@ def main():
     multi = {k: v for k, v in clusters.items() if v["size"] > 1}
 
     print(f"\n{'='*60}")
-    print(f"ACCURACY ANALYSIS")
+    print("ACCURACY ANALYSIS")
     print(f"{'='*60}")
     print(f"\nTotal records: {df.height:,}")
     print(f"Total pairs found: {len(all_pairs):,}")
@@ -58,7 +57,7 @@ def main():
     # ── Cluster size distribution ──
     sizes = [v["size"] for v in multi.values()]
     size_dist = Counter(sizes)
-    print(f"\nCluster size distribution:")
+    print("\nCluster size distribution:")
     for size in sorted(size_dist.keys()):
         print(f"  Size {size}: {size_dist[size]:,} clusters")
 

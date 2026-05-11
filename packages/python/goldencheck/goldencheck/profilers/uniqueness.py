@@ -1,8 +1,11 @@
 """Uniqueness profiler — detects primary key candidates and duplicates."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
 
 class UniquenessProfiler(BaseProfiler):
     def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:

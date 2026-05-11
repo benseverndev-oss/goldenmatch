@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 def _attach_memory_to_postflight(
     postflight_report: PostflightReport | None,
-    memory_stats: "CorrectionStats | None",
+    memory_stats: CorrectionStats | None,
 ) -> PostflightReport | None:
     """Attach memory_stats onto the postflight report so str(report) renders
     a 'Memory:' line. Creates an empty report when memory ran but no
@@ -89,7 +89,7 @@ class DedupeResult:
     # this field to a property delegating to postflight_report would break the
     # pipeline's direct field assignment pattern. Single source of truth would
     # require refactoring _attach_memory_to_postflight; tracked as follow-up.
-    memory_stats: "CorrectionStats | None" = None
+    memory_stats: CorrectionStats | None = None
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -183,7 +183,7 @@ class MatchResult:
     stats: dict = field(default_factory=dict)
     postflight_report: PostflightReport | None = None
     # See DedupeResult.memory_stats note — same intentional duplication.
-    memory_stats: "CorrectionStats | None" = None
+    memory_stats: CorrectionStats | None = None
 
     def to_csv(self, path: str) -> Path:
         """Write matched results to CSV."""
@@ -272,10 +272,6 @@ def dedupe(
         result = gm.dedupe("products.csv", fuzzy={"title": 0.80}, llm_scorer=True)
     """
     from goldenmatch.core.pipeline import run_dedupe
-    from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig, LLMScorerConfig,
-    )
 
     # Build config
     if isinstance(config, str):
@@ -351,8 +347,8 @@ def dedupe_df(
         is populated when auto-config was used; ``None`` for hand-written
         configs.
     """
-    from goldenmatch.core.pipeline import run_dedupe_df
     import goldenmatch._api as _self_api
+    from goldenmatch.core.pipeline import run_dedupe_df
 
     _used_controller = False
     if isinstance(config, str):
@@ -460,8 +456,8 @@ def match_df(
         is populated when auto-config was used; ``None`` for hand-written
         configs.
     """
-    from goldenmatch.core.pipeline import run_match_df
     import goldenmatch._api as _self_api
+    from goldenmatch.core.pipeline import run_match_df
 
     _used_controller = False
     if isinstance(config, str):
@@ -554,8 +550,8 @@ def score_pair_df(
     Returns:
         Overall match score between 0.0 and 1.0.
     """
-    from goldenmatch.core.scorer import score_pair
     from goldenmatch.config.schemas import MatchkeyField
+    from goldenmatch.core.scorer import score_pair
 
     fields = []
     if exact:
@@ -596,9 +592,9 @@ def explain_pair_df(
     Returns:
         Human-readable explanation string.
     """
-    from goldenmatch.core.scorer import score_field
-    from goldenmatch.core.explain import explain_pair_nl
     from goldenmatch.config.schemas import MatchkeyField
+    from goldenmatch.core.explain import explain_pair_nl
+    from goldenmatch.core.scorer import score_field
     from goldenmatch.utils.transforms import apply_transforms
 
     fields = []
@@ -664,8 +660,8 @@ def match(
         result = gm.match("new_customers.csv", "master.csv", fuzzy={"name": 0.85})
         result.matched.write_csv("matches.csv")
     """
-    from goldenmatch.core.pipeline import run_match
     from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.pipeline import run_match
 
     _auto_config = False
 
@@ -731,8 +727,8 @@ def pprl_link(
         result = gm.pprl_link("hospital_a.csv", "hospital_b.csv", fields=["name", "dob", "zip"])
         print(f"Found {result['match_count']} matches across {len(result['clusters'])} clusters")
     """
-    from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
     from goldenmatch.pprl.autoconfig import auto_configure_pprl
+    from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
     df_a = pl.read_csv(file_a, ignore_errors=True, encoding="utf8-lossy")
     df_b = pl.read_csv(file_b, ignore_errors=True, encoding="utf8-lossy")
@@ -794,8 +790,8 @@ def evaluate(
         metrics = gm.evaluate("data.csv", config="config.yaml", ground_truth="gt.csv")
         print(f"F1: {metrics['f1']:.1%}")
     """
-    from goldenmatch.core.pipeline import run_dedupe
     from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
+    from goldenmatch.core.pipeline import run_dedupe
 
     if isinstance(config, str):
         cfg = load_config(config)
@@ -825,8 +821,12 @@ def _build_config(
 ) -> Any:
     """Build a GoldenMatchConfig from simple kwargs."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig, LLMScorerConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        LLMScorerConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     matchkeys = []
@@ -972,9 +972,8 @@ def add_correction(
     """
     import uuid
     from datetime import datetime
-    from goldenmatch.core.memory.store import Correction
 
-    from goldenmatch.core.memory.store import trust_for_source
+    from goldenmatch.core.memory.store import Correction, trust_for_source
     trust = trust_for_source(source)
     store = get_memory(path)
     try:

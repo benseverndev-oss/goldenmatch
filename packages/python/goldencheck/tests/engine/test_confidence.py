@@ -1,4 +1,4 @@
-from goldencheck.engine.confidence import apply_corroboration_boost, apply_confidence_downgrade
+from goldencheck.engine.confidence import apply_confidence_downgrade, apply_corroboration_boost
 from goldencheck.models.finding import Finding, Severity
 
 

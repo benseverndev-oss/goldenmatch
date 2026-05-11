@@ -1,7 +1,9 @@
 """JSON reporter — machine-readable output matching spec schema."""
 from __future__ import annotations
+
 import json
 from typing import IO
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import DatasetProfile
 

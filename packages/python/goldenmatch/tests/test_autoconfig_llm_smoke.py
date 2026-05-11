@@ -1,5 +1,6 @@
 """Smoke test that hits the real OpenAI API -- gated on env var."""
 import os
+
 import pytest
 
 
@@ -13,15 +14,23 @@ import pytest
 )
 def test_llm_policy_real_api_round_trip():
     """One real API call to verify the prompt + parsing actually work."""
-    from goldenmatch.core.autoconfig_policy import LLMRefitPolicy, HeuristicRefitPolicy
-    from goldenmatch.core.autoconfig_history import RunHistory
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
     from goldenmatch.core.complexity_profile import (
-        ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-        ClusterProfile, MatchkeyProfile, FieldStats,
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+        FieldStats,
+        MatchkeyProfile,
+        ScoringProfile,
     )
 
     profile = ComplexityProfile(

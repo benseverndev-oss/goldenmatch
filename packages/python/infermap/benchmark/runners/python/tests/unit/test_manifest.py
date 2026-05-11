@@ -5,14 +5,13 @@ import json
 from pathlib import Path
 
 import pytest
-
+from infermap_bench import MANIFEST_VERSION
 from infermap_bench.manifest import (
     CaseRef,
     IncompatibleManifestError,
     InvalidManifestError,
     load_manifest,
 )
-from infermap_bench import MANIFEST_VERSION
 
 
 def _write_manifest(tmp_path: Path, data: dict) -> Path:

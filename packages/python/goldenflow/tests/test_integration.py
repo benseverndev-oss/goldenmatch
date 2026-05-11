@@ -1,16 +1,14 @@
 """End-to-end integration tests for the full GoldenFlow pipeline."""
 from pathlib import Path
 
-import polars as pl
-
 import goldenflow
+import polars as pl
 from goldenflow.config.schema import (
     DedupSpec,
     GoldenFlowConfig,
     TransformSpec,
 )
 from goldenflow.engine.transformer import TransformEngine
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -102,7 +100,7 @@ def test_schema_mapping_roundtrip(tmp_path: Path):
 def test_learn_and_apply(sample_csv: Path, tmp_path: Path):
     """Learn a config from data and re-apply it."""
     from goldenflow.config.learner import learn_config
-    from goldenflow.config.loader import save_config, load_config
+    from goldenflow.config.loader import load_config, save_config
 
     config = learn_config(sample_csv)
     config_path = tmp_path / "learned.yaml"

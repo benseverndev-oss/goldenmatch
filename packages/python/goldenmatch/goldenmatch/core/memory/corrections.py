@@ -111,7 +111,7 @@ def _build_hash_to_rids(df: pl.DataFrame) -> dict[str, list[int]]:
 
 def apply_corrections(
     scored_pairs: list[tuple[int, int, float]],
-    store: "MemoryStore",
+    store: MemoryStore,
     df: pl.DataFrame,
     matchkey_fields: list[str],
     dataset: str | None = None,

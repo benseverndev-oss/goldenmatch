@@ -25,9 +25,9 @@ def create_app(state: AppState) -> FastAPI:
     from goldenmatch.web.routers import labels as labels_router
     from goldenmatch.web.routers import match as match_router
     from goldenmatch.web.routers import memory as memory_router
-    from goldenmatch.web.routers import quality as quality_router
     from goldenmatch.web.routers import preview as preview_router
     from goldenmatch.web.routers import project as project_router
+    from goldenmatch.web.routers import quality as quality_router
     from goldenmatch.web.routers import rules as rules_router
     from goldenmatch.web.routers import run as run_router
     from goldenmatch.web.routers import runs as runs_router

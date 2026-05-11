@@ -99,10 +99,11 @@ def generate_rules(
     provider: str = "anthropic",
 ) -> list[GeneratedRule]:
     """Send data sample to LLM and generate validation rules."""
-    from goldencheck.llm.sample_block import build_sample_blocks
-    from goldencheck.llm.providers import check_llm_available, DEFAULT_MODELS
-    from goldencheck.llm.budget import CostReport, estimate_cost, check_budget
     import re
+
+    from goldencheck.llm.budget import CostReport, check_budget, estimate_cost
+    from goldencheck.llm.providers import DEFAULT_MODELS, check_llm_available
+    from goldencheck.llm.sample_block import build_sample_blocks
 
     check_llm_available(provider)
 

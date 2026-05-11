@@ -8,12 +8,18 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §Types & contracts § "Profile emitter (S1-C)".
 """
 from __future__ import annotations
+
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
+
 from goldenmatch.core.complexity_profile import (
-    BlockingProfile, ScoringProfile, ClusterProfile,
-    DataProfile, DomainProfile, MatchkeyProfile,
+    BlockingProfile,
+    ClusterProfile,
+    DataProfile,
+    DomainProfile,
+    MatchkeyProfile,
+    ScoringProfile,
 )
 
 

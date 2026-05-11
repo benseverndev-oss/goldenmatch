@@ -8,8 +8,8 @@ DQBench Transform Score: 100.00
 """
 if __name__ == "__main__":
     from dqbench.adapters.goldenflow import GoldenFlowAdapter
-    from dqbench.runner import run_transform_benchmark
     from dqbench.report import report_transform_rich
+    from dqbench.runner import run_transform_benchmark
 
     sc = run_transform_benchmark(GoldenFlowAdapter())
     report_transform_rich(sc)

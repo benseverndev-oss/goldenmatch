@@ -10,7 +10,6 @@ os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0692108803")
 
 import numpy as np
 import polars as pl
-
 from goldenmatch.core.active_sampling import select_active_pairs
 from goldenmatch.core.vertex_embedder import VertexEmbedder
 
@@ -148,11 +147,11 @@ def main():
     print("\n" + "=" * 55)
     print("SUMMARY (Abt-Buy with Vertex AI embeddings)")
     print("=" * 55)
-    print(f"  Zero-shot (no labels):   F1=84.8%  cost=$0")
-    print(f"  Random 300 labels:       shown above  cost=~$0.30")
-    print(f"  Active 300 (3 rounds):   shown above  cost=~$0.30")
-    print(f"  Active 150 (half):       shown above  cost=~$0.15")
-    print(f"  Active 100 (third):      shown above  cost=~$0.10")
+    print("  Zero-shot (no labels):   F1=84.8%  cost=$0")
+    print("  Random 300 labels:       shown above  cost=~$0.30")
+    print("  Active 300 (3 rounds):   shown above  cost=~$0.30")
+    print("  Active 150 (half):       shown above  cost=~$0.15")
+    print("  Active 100 (third):      shown above  cost=~$0.10")
 
 
 if __name__ == "__main__":

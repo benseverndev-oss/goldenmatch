@@ -1,7 +1,6 @@
 import polars as pl
-
-from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler, _find_max_pairs
 from goldencheck.models.finding import Severity
+from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler, _find_max_pairs
 
 
 def test_find_max_pairs_amount_limit():

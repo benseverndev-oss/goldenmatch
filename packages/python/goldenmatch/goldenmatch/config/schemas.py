@@ -40,7 +40,7 @@ class FieldTransform(BaseModel):
     transform: str
 
     @model_validator(mode="after")
-    def _validate_transform(self) -> "FieldTransform":
+    def _validate_transform(self) -> FieldTransform:
         t = self.transform
         if t in VALID_SIMPLE_TRANSFORMS:
             return self
@@ -85,7 +85,7 @@ class MatchkeyField(BaseModel):
     em_iterations: int | None = None
 
     @model_validator(mode="after")
-    def _resolve_field_column(self) -> "MatchkeyField":
+    def _resolve_field_column(self) -> MatchkeyField:
         # record_embedding uses columns (plural), not field
         if self.scorer == "record_embedding":
             if not self.columns:
@@ -129,7 +129,7 @@ class NegativeEvidenceField(BaseModel):
     penalty: float = Field(ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def _validate_transforms_and_scorer(self) -> "NegativeEvidenceField":
+    def _validate_transforms_and_scorer(self) -> NegativeEvidenceField:
         for t in self.transforms:
             if t not in VALID_SIMPLE_TRANSFORMS:
                 raise ValueError(
@@ -161,10 +161,10 @@ class RulesPayload(BaseModel):
     threshold: float = Field(ge=0.0, le=1.0)
     matchkeys: list[MatchkeyField]
     standardization: dict[str, list[str]] | None = None
-    blocking: "BlockingConfig | None" = None
+    blocking: BlockingConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_standardizers(self) -> "RulesPayload":
+    def _validate_standardizers(self) -> RulesPayload:
         if self.standardization:
             for column, std_names in self.standardization.items():
                 for name in std_names:
@@ -201,7 +201,7 @@ class MatchkeyConfig(BaseModel):
     review_threshold: float | None = None  # auto-computed if None
 
     @model_validator(mode="after")
-    def _validate_weighted(self) -> "MatchkeyConfig":
+    def _validate_weighted(self) -> MatchkeyConfig:
         # Allow 'comparison' as alias for 'type'
         if self.type is None and self.comparison is not None:
             if self.comparison in _VALID_MK_TYPES:
@@ -239,7 +239,7 @@ class BlockingKeyConfig(BaseModel):
     transforms: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_fields_nonempty(self) -> "BlockingKeyConfig":
+    def _validate_fields_nonempty(self) -> BlockingKeyConfig:
         if not self.fields:
             raise ValueError("Blocking key must have at least one field.")
         return self
@@ -281,7 +281,7 @@ class BlockingConfig(BaseModel):
     canopy: CanopyConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_keys_or_passes(self) -> "BlockingConfig":
+    def _validate_keys_or_passes(self) -> BlockingConfig:
         """Ensure at least keys or passes is provided for strategies that need them."""
         if self.auto_suggest:
             return self  # auto_suggest discovers keys at runtime
@@ -309,7 +309,7 @@ class GoldenFieldRule(BaseModel):
     source_priority: list[str] | None = None
 
     @model_validator(mode="after")
-    def _validate_strategy(self) -> "GoldenFieldRule":
+    def _validate_strategy(self) -> GoldenFieldRule:
         if self.strategy not in VALID_STRATEGIES:
             raise ValueError(
                 f"Invalid strategy '{self.strategy}'. Must be one of {sorted(VALID_STRATEGIES)}."
@@ -331,7 +331,7 @@ class GoldenRulesConfig(BaseModel):
     weak_cluster_threshold: float = 0.3
 
     @model_validator(mode="after")
-    def _validate_default(self) -> "GoldenRulesConfig":
+    def _validate_default(self) -> GoldenRulesConfig:
         # Resolve default_strategy from either field
         if self.default is not None and self.default_strategy is None:
             self.default_strategy = self.default.strategy
@@ -382,7 +382,7 @@ class StandardizationConfig(BaseModel):
     rules: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_standardizers(self) -> "StandardizationConfig":
+    def _validate_standardizers(self) -> StandardizationConfig:
         for column, std_names in self.rules.items():
             for name in std_names:
                 if name not in VALID_STANDARDIZERS:
@@ -531,12 +531,12 @@ class GoldenMatchConfig(BaseModel):
     # These attrs are set by auto_configure_df and read by the pipeline;
     # they are NOT persisted to YAML. Declaring them as PrivateAttr insulates
     # the hand-off contract from Pydantic v2 private-attr handling changes.
-    _preflight_report: "PreflightReport | None" = PrivateAttr(default=None)
+    _preflight_report: PreflightReport | None = PrivateAttr(default=None)
     _strict_autoconfig: bool = PrivateAttr(default=False)
     _domain_profile: Any = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _validate_fuzzy_needs_blocking(self) -> "GoldenMatchConfig":
+    def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:
         mks = self.get_matchkeys()
         has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in mks)
         if has_fuzzy and self.blocking is None:

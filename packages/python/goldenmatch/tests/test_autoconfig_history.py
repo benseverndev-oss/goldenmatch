@@ -1,11 +1,19 @@
+
 import pytest
-from datetime import timedelta
-from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-    ClusterProfile, MatchkeyProfile, DomainProfile, ProfileMeta, HealthVerdict,
-)
 from goldenmatch.core.autoconfig_history import (
-    RunHistory, HistoryEntry, PolicyDecision, ErrorRecord,
+    ErrorRecord,
+    HistoryEntry,
+    PolicyDecision,
+    RunHistory,
+)
+from goldenmatch.core.complexity_profile import (
+    BlockingProfile,
+    ClusterProfile,
+    ComplexityProfile,
+    DataProfile,
+    HealthVerdict,
+    MatchkeyProfile,
+    ScoringProfile,
 )
 
 
@@ -230,8 +238,12 @@ def _make_red_history_entry(iteration, mass_above, mass_borderline,
     ScoringProfile (mass_above==0 OR dip<0.01 forces scoring RED)."""
     from goldenmatch.core.autoconfig_history import HistoryEntry
     from goldenmatch.core.complexity_profile import (
-        ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-        ClusterProfile, MatchkeyProfile, FieldStats,
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+        FieldStats,
+        ScoringProfile,
     )
     return HistoryEntry(
         iteration=iteration,
@@ -263,7 +275,6 @@ def test_pick_committed_returns_red_when_no_green_or_yellow():
     """The headline new behavior: pick_committed returns the best RED entry
     when all entries are RED. cheapest_healthy() would return None here."""
     from goldenmatch.core.autoconfig_history import RunHistory
-    from goldenmatch.core.complexity_profile import HealthVerdict
     h = RunHistory()
     h.entries.append(_make_red_history_entry(0, 0.0, 0.4))
     h.entries.append(_make_red_history_entry(1, 0.0, 0.1))
@@ -278,7 +289,9 @@ def test_pick_committed_returns_red_when_no_green_or_yellow():
 def test_pick_committed_excludes_errored_entries():
     """Entries with error != None are filtered out before lex-key ranking."""
     from goldenmatch.core.autoconfig_history import (
-        RunHistory, HistoryEntry, ErrorRecord,
+        ErrorRecord,
+        HistoryEntry,
+        RunHistory,
     )
     from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
     h = RunHistory()
@@ -304,7 +317,9 @@ def test_pick_committed_returns_none_when_all_errored():
     """All entries errored -> pick_committed returns None.
     Controller falls back to v0 in this case."""
     from goldenmatch.core.autoconfig_history import (
-        RunHistory, HistoryEntry, ErrorRecord,
+        ErrorRecord,
+        HistoryEntry,
+        RunHistory,
     )
     from goldenmatch.core.complexity_profile import ComplexityProfile, DataProfile
     h = RunHistory()
@@ -361,6 +376,7 @@ def test_cheapest_healthy_emits_deprecation_warning_and_delegates():
 def test_cheapest_healthy_warning_message_calls_out_behavior_change():
     """The DeprecationWarning text mentions the behavior change explicitly."""
     import warnings
+
     from goldenmatch.core.autoconfig_history import RunHistory
     h = RunHistory()
     with warnings.catch_warnings(record=True) as caught:
@@ -400,8 +416,12 @@ def _make_red_entry_with_mass(iteration: int, mass_above: float, mass_borderline
     varying mass_above values (including > 0.9 for the collapse pathology).
     """
     from goldenmatch.core.complexity_profile import (
-        ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-        ClusterProfile, MatchkeyProfile, FieldStats,
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+        FieldStats,
+        ScoringProfile,
     )
     return HistoryEntry(
         iteration=iteration,

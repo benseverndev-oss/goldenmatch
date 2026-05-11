@@ -1,6 +1,8 @@
 """Cardinality profiler — detects low-cardinality columns that may be enum candidates."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 

@@ -1,5 +1,5 @@
-from typer.testing import CliRunner
 from goldenflow.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

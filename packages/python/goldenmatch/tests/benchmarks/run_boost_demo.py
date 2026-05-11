@@ -20,9 +20,8 @@ os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0692108803")
 import numpy as np
 import polars as pl
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.vertex_embedder import VertexEmbedder
-from goldenmatch.core.active_sampling import select_active_pairs
 from goldenmatch.core.boost import extract_feature_matrix
+from goldenmatch.core.vertex_embedder import VertexEmbedder
 
 DATASETS = Path(__file__).parent / "datasets"
 
@@ -157,7 +156,7 @@ def run_boost_demo(
     print(f"    Labeled: {match_count} matches, {nonmatch_count} non-matches")
 
     # Show sample labels
-    print(f"\n    Sample labeled pairs:")
+    print("\n    Sample labeled pairs:")
     for i, idx in enumerate(selected[:5]):
         a, b, s = scored_pairs[idx]
         label = "MATCH" if labels[idx] else "NON-MATCH"
@@ -213,14 +212,14 @@ def run_boost_demo(
             best_boost_f1 = f1
             best_boost_thresh = float(t)
 
-    print(f"\n    BEFORE (Vertex embeddings only):")
+    print("\n    BEFORE (Vertex embeddings only):")
     evaluate_at_threshold(scored_pairs, best_thresh, f"  t={best_thresh}")
 
     print(f"\n    AFTER (Vertex + {n_labels} labels reranked):")
     evaluate_at_threshold(boosted_pairs, best_boost_thresh, f"  t={best_boost_thresh}")
 
     # Also try different label counts
-    print(f"\n  Bonus: Sweeping label counts...")
+    print("\n  Bonus: Sweeping label counts...")
     for n_lab in [10, 20, 30, 50, 100]:
         if n_lab > len(scored_pairs):
             break

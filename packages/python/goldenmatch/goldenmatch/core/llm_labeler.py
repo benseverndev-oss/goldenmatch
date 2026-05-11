@@ -65,8 +65,8 @@ def build_prompt(
         f"You are deduplicating a {context}. Determine if these two records "
         f"refer to the same real-world entity.\n\n"
         f"Record A:\n" + "\n".join(lines_a) + "\n\n"
-        f"Record B:\n" + "\n".join(lines_b) + "\n\n"
-        f"Same entity? Reply with only: yes or no"
+        "Record B:\n" + "\n".join(lines_b) + "\n\n"
+        "Same entity? Reply with only: yes or no"
     )
 
 

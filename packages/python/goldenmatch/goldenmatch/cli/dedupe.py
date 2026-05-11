@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -65,11 +64,11 @@ def dedupe_cmd(
     files: list[str] = typer.Argument(
         ..., help="Input files as path or path:source_name"
     ),
-    config: Optional[str] = typer.Option(
+    config: str | None = typer.Option(
         None, "--config", "-c", help="Path to YAML config file (optional - auto-detects if omitted)"
     ),
     no_tui: bool = typer.Option(False, "--no-tui", help="Skip TUI, run with auto-config directly"),
-    model: Optional[str] = typer.Option(None, "--model", help="Override embedding model selection"),
+    model: str | None = typer.Option(None, "--model", help="Override embedding model selection"),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
     preview_random: bool = typer.Option(False, "--preview-random", help="Random sample instead of first N"),
@@ -82,9 +81,9 @@ def dedupe_cmd(
     html_report: bool = typer.Option(False, "--html-report", help="Generate standalone HTML report"),
     dashboard: bool = typer.Option(False, "--dashboard", help="Generate before/after data quality dashboard"),
     across_files_only: bool = typer.Option(False, "--across-files-only", help="Only match across different sources"),
-    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
-    format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
-    run_name: Optional[str] = typer.Option(None, "--run-name", help="Run name for output files"),
+    output_dir: str | None = typer.Option(None, "--output-dir", help="Output directory"),
+    format: str | None = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
+    run_name: str | None = typer.Option(None, "--run-name", help="Run name for output files"),
     auto_fix: bool = typer.Option(False, "--auto-fix", help="Run auto-fix before matching"),
     auto_block: bool = typer.Option(False, "--auto-block", help="Auto-suggest blocking keys"),
     chunked: bool = typer.Option(False, "--chunked", help="Large dataset mode - process in chunks for files >1M records"),
@@ -96,9 +95,9 @@ def dedupe_cmd(
     anomaly_sensitivity: str = typer.Option("medium", "--anomaly-sensitivity", help="low, medium, or high"),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Boost accuracy with LLM-labeled training data"),
     llm_retrain: bool = typer.Option(False, "--llm-retrain", help="Force re-labeling (ignore saved model)"),
-    llm_provider: Optional[str] = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
+    llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
     llm_max_labels: int = typer.Option(500, "--llm-max-labels", help="Max pairs to label with LLM"),
-    backend: Optional[str] = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
@@ -135,7 +134,6 @@ def dedupe_cmd(
                     console.print("[yellow]No config file - auto-detecting column types...[/yellow]")
                 cfg = auto_configure(parsed_files)
                 if not quiet:
-                    from goldenmatch.core.autoconfig import profile_columns
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
                 if not quiet:
@@ -160,13 +158,13 @@ def dedupe_cmd(
 
     # ── Preview mode ──
     if preview:
-        from goldenmatch.tui.engine import MatchEngine
         from goldenmatch.core.preview import (
-            format_preview_stats,
             format_preview_clusters,
             format_preview_golden,
+            format_preview_stats,
             format_score_histogram,
         )
+        from goldenmatch.tui.engine import MatchEngine
 
         file_paths = [fp for fp, _name in parsed_files]
         engine = MatchEngine(file_paths)

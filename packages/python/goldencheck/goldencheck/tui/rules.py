@@ -1,9 +1,11 @@
 """Rules tab — pinned rules from findings + existing config rules."""
 from __future__ import annotations
-from textual.widgets import Static, DataTable
+
 from textual.containers import Vertical
-from goldencheck.models.finding import Finding
+from textual.widgets import DataTable, Static
+
 from goldencheck.config.schema import GoldenCheckConfig
+from goldencheck.models.finding import Finding
 
 
 class RulesPane(Vertical):

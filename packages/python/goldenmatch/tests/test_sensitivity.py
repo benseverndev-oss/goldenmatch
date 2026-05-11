@@ -1,12 +1,14 @@
 """Tests for parameter sensitivity analysis."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from goldenmatch.core.sensitivity import (
-    SweepParam, SweepPoint, SensitivityResult, run_sensitivity,
-    _validate_field, _generate_values,
+    SensitivityResult,
+    SweepParam,
+    _generate_values,
+    _validate_field,
+    run_sensitivity,
 )
-from goldenmatch.core.compare_clusters import CompareResult
 
 
 def _make_clusters(cluster_map: dict[int, list[int]]) -> dict[int, dict]:

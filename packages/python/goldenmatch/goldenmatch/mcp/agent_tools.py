@@ -11,7 +11,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def _write_agent_correction(
     *,
-    memory_store: "MemoryStore",
+    memory_store: MemoryStore,
     session: Any,
     id_a: int,
     id_b: int,
@@ -342,7 +342,7 @@ def _dispatch(
     args: dict,
     session_cls: type,
     *,
-    memory_store: "MemoryStore | None" = None,
+    memory_store: MemoryStore | None = None,
     dataset: str | None = None,
 ) -> dict:
     """Dispatch to the appropriate handler by tool name."""
@@ -355,7 +355,7 @@ def _dispatch(
         session = session_cls()
         analysis = session.analyze(args["file_path"])
         # Build config from the analysis
-        from goldenmatch.core.agent import _decision_to_config, select_strategy, profile_for_agent
+        from goldenmatch.core.agent import _decision_to_config, profile_for_agent, select_strategy
         profile = profile_for_agent(session.data)
         decision = select_strategy(profile)
         config = _decision_to_config(decision)
@@ -399,7 +399,6 @@ def _dispatch(
         return {"explanation": explanation}
 
     if name == "agent_explain_cluster":
-        from goldenmatch.core.explain import explain_cluster_nl
         cluster_id = args["cluster_id"]
         # With no global state, return a descriptive message
         return {
@@ -490,8 +489,9 @@ def _dispatch(
 
     if name == "scan_quality":
         import polars as pl
-        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
+
         from goldenmatch.config.schemas import QualityConfig
+        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
 
         if not _goldencheck_available():
             return {
@@ -523,8 +523,9 @@ def _dispatch(
 
     if name == "fix_quality":
         import polars as pl
-        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
+
         from goldenmatch.config.schemas import QualityConfig
+        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
 
         if not _goldencheck_available():
             return {
@@ -572,8 +573,9 @@ def _dispatch(
 
     if name == "run_transforms":
         import polars as pl
-        from goldenmatch.core.transform import _goldenflow_available, run_transform
+
         from goldenmatch.config.schemas import TransformConfig
+        from goldenmatch.core.transform import _goldenflow_available, run_transform
 
         if not _goldenflow_available():
             return {

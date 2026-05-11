@@ -7,8 +7,8 @@ build derived columns). Runs after ingest, before matchkey computation.
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 
 import polars as pl
 

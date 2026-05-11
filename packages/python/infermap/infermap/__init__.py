@@ -2,14 +2,14 @@
 
 __version__ = "0.4.0"
 
-from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
-from infermap.errors import ApplyError, ConfigError, InferMapError
-from infermap.engine import MapEngine
 from infermap.config import from_config
-from infermap.scorers import default_scorers, scorer
-from infermap.providers import extract_schema
-from infermap.domain_pack import DomainPackTarget
 from infermap.detect import detect_domain, detect_domain_detailed
+from infermap.domain_pack import DomainPackTarget
+from infermap.engine import MapEngine
+from infermap.errors import ApplyError, ConfigError, InferMapError
+from infermap.providers import extract_schema
+from infermap.scorers import default_scorers, scorer
+from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
 
 
 def map(source, target, **kwargs) -> MapResult:

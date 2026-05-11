@@ -1,6 +1,5 @@
 import polars as pl
-
-from goldencheck.engine.differ import diff_files, format_diff_report, DiffReport
+from goldencheck.engine.differ import DiffReport, diff_files, format_diff_report
 from goldencheck.models.finding import Finding, Severity
 
 

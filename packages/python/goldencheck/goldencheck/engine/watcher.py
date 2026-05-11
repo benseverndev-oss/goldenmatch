@@ -26,10 +26,11 @@ def watch_directory(
 
     Returns exit code: 0 if clean, 1 if findings at exit_on threshold.
     """
-    from goldencheck.engine.scanner import scan_file
-    from goldencheck.engine.confidence import apply_confidence_downgrade
-    from goldencheck.reporters.json_reporter import report_json
     import sys
+
+    from goldencheck.engine.confidence import apply_confidence_downgrade
+    from goldencheck.engine.scanner import scan_file
+    from goldencheck.reporters.json_reporter import report_json
 
     path = Path(path)
     if not path.is_dir():

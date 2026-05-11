@@ -9,8 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-import polars as pl
-
 from goldenmatch.config.loader import load_config
 from goldenmatch.core.pipeline import run_dedupe
 

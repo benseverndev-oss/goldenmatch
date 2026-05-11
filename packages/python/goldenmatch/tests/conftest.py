@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import polars as pl
 import pytest
-from pathlib import Path
 
 
 @pytest.fixture(autouse=True)

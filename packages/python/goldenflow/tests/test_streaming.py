@@ -1,6 +1,6 @@
 import polars as pl
-from goldenflow.streaming import StreamProcessor
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+from goldenflow.streaming import StreamProcessor
 
 
 def test_transform_one():

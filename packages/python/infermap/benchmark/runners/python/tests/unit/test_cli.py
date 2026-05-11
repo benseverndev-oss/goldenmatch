@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from click.testing import CliRunner
-
 from infermap_bench.cli import main
 from infermap_bench.manifest import CaseRef, CaseSource
 

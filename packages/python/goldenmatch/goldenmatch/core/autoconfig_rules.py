@@ -8,13 +8,17 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §HeuristicRefitPolicy rule table (v1).
 """
 from __future__ import annotations
+
 from typing import Any
+
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
     BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
 from goldenmatch.core.complexity_profile import ComplexityProfile
-from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
 
 
 def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
@@ -203,7 +207,7 @@ def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
 
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking produced blocks but the scorer saw zero candidate
     pairs to compare.  This covers two related pathologies:
 
@@ -272,7 +276,7 @@ def rule_blocking_singleton_trap(
 
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     bp = profile.blocking
     n_rows = profile.data.n_rows
     if bp.n_blocks == 0 or n_rows == 0:
@@ -306,7 +310,7 @@ def rule_blocking_too_coarse(
 
 def rule_unimodal_scoring(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     sp = profile.scoring
     if sp.dip_statistic >= 0.01 or sp.n_pairs_scored == 0:
         return None
@@ -348,7 +352,7 @@ def rule_unimodal_scoring(
 
 def rule_low_reduction_ratio(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     bp = profile.blocking
     if bp.reduction_ratio >= 0.5:
         return None
@@ -380,7 +384,7 @@ def rule_low_reduction_ratio(
 
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     cp = profile.cluster
     if cp.transitivity_rate >= 0.85 or cp.n_clusters == 0:
         return None
@@ -405,7 +409,7 @@ def rule_low_transitivity(
 def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when scoring.mass_above_threshold == 0.
 
     v1.10 (with ctx): tries alternatives in priority order based on
@@ -456,7 +460,7 @@ def rule_no_matches(
 def rule_blocking_key_swap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when a prior iteration already loosened the threshold/block cap
     but candidates still aren't matching. The blocking *key* is wrong —
     swap to ``first_token`` on the dominant text field of the first weighted
@@ -564,7 +568,7 @@ def rule_blocking_key_swap(
 
 def rule_uniform_heavy_blocking(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking creates many candidates but scoring can't separate
     matches from non-matches — signature of over-coarse blocking on a
     low-discriminating key.
@@ -655,7 +659,7 @@ def rule_uniform_heavy_blocking(
 
 def rule_blocking_field_null_heavy(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking on a single field whose null_rate > 0.10.
     Records with null/missing blocking values can't appear in any block,
     capping recall structurally.
@@ -718,7 +722,7 @@ def rule_blocking_field_null_heavy(
 
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when the random-pair probe finds a non-trivial fraction of
     non-blocked pairs that score above threshold — signal that blocking is
     excluding real matches.
@@ -843,7 +847,7 @@ def _llm_api_key_available() -> bool:
 
 def rule_enable_llm_scorer(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Enable per-pair LLM scoring (LLMScorerConfig) when there's a meaningful
     borderline mass and an API key is available.
 
@@ -868,7 +872,7 @@ def rule_enable_llm_scorer(
     if current.llm_scorer is not None and current.llm_scorer.enabled:
         return None
 
-    from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+    from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
 
     new_cfg = current.model_copy(update={
         "llm_scorer": LLMScorerConfig(
@@ -900,7 +904,7 @@ def rule_enable_llm_scorer(
 def rule_corruption_normalize(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10: when blocking column has high corruption + identity prior,
     add normalize-standardization. One-shot via standardization-already-exists
     check (so it doesn't fire repeatedly on the same column).
@@ -934,7 +938,7 @@ def rule_corruption_normalize(
 def rule_cross_blocking_disagreement(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10: when iter ≥ 1, profile RED, mass_above < 0.1, and cross-blocking
     overlap with an orthogonal key is low (< 0.3), propose adding a multi-pass.
 
@@ -973,7 +977,7 @@ def rule_cross_blocking_disagreement(
 def rule_sparse_match_expand(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10 DEVIATION: spec wanted ExpandSample(2.0) which requires
     controller-level sample expansion (queued for v1.11). v1.10 substitute:
     fire mark_fired("rule_sparse_match_expand") side-channel + lower

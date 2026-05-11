@@ -1,8 +1,9 @@
 """Tests for MemoryLearner -- threshold tuning and weight adjustment."""
-import pytest
 from datetime import datetime
-from goldenmatch.core.memory.store import MemoryStore, Correction, LearnedAdjustment
+
+import pytest
 from goldenmatch.core.memory.learner import MemoryLearner
+from goldenmatch.core.memory.store import Correction, MemoryStore
 
 
 @pytest.fixture

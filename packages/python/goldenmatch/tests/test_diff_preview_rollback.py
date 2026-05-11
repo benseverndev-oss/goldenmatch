@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
 import polars as pl
-import pytest
 
 
 class TestCSVDiff:
@@ -93,7 +90,7 @@ class TestMergePreview:
         assert preview["total_field_changes"] == 0
 
     def test_format_preview(self):
-        from goldenmatch.core.merge_preview import generate_merge_preview, format_preview_text
+        from goldenmatch.core.merge_preview import format_preview_text, generate_merge_preview
 
         df = pl.DataFrame({
             "__row_id__": [0, 1],
@@ -110,7 +107,7 @@ class TestMergePreview:
 
 class TestRollback:
     def test_save_and_list_runs(self, tmp_path):
-        from goldenmatch.core.rollback import save_run_snapshot, list_runs
+        from goldenmatch.core.rollback import list_runs, save_run_snapshot
 
         save_run_snapshot(
             run_id="test-run-1",
@@ -125,7 +122,7 @@ class TestRollback:
         assert runs[0]["run_id"] == "test-run-1"
 
     def test_rollback_deletes_files(self, tmp_path):
-        from goldenmatch.core.rollback import save_run_snapshot, rollback_run
+        from goldenmatch.core.rollback import rollback_run, save_run_snapshot
 
         # Create fake output files
         (tmp_path / "golden.csv").write_text("data")
@@ -152,7 +149,7 @@ class TestRollback:
         assert "error" in result
 
     def test_double_rollback(self, tmp_path):
-        from goldenmatch.core.rollback import save_run_snapshot, rollback_run
+        from goldenmatch.core.rollback import rollback_run, save_run_snapshot
 
         (tmp_path / "out.csv").write_text("data")
         save_run_snapshot("r1", tmp_path, {}, {}, ["out.csv"])

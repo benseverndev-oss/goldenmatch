@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldencheck.semantic.classifier import (
     ColumnClassification,
     classify_columns,
     list_available_domains,
     load_type_defs,
 )
-
 
 # ---------------------------------------------------------------------------
 # test_classify_empty_dataframe

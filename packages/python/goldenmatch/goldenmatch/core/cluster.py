@@ -8,9 +8,9 @@ from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
-from goldenmatch.core.complexity_profile import ClusterProfile
 from goldenmatch.core._profile_helpers import transitivity_rate
+from goldenmatch.core.complexity_profile import ClusterProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
@@ -20,7 +20,7 @@ _log = logging.getLogger("goldenmatch.memory")
 
 def _record_unmerge_corrections(
     pairs: list[tuple[int, int]],
-    memory_store: "MemoryStore | None",
+    memory_store: MemoryStore | None,
     dataset: str | None,
 ) -> None:
     """Write reject corrections with empty hashes for each unmerged pair."""
@@ -156,7 +156,7 @@ def split_oversized_cluster(
     return result
 
 
-def _emit_cluster_profile(clusters: "dict[int, dict]") -> None:
+def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
     """Emit ClusterProfile to current emitter. No-op when no capture is active."""
     import math
     if not _emitter_stack.get():
@@ -182,7 +182,7 @@ def _emit_cluster_profile(clusters: "dict[int, dict]") -> None:
     members_by_cluster = {cid: c["members"] for cid, c in clusters.items()}
 
     # Aggregate pair_scores across clusters
-    aggregated_scores: "dict[tuple[int, int], float]" = {}
+    aggregated_scores: dict[tuple[int, int], float] = {}
     for c in clusters.values():
         for k, v in c.get("pair_scores", {}).items():
             if isinstance(k, tuple) and len(k) == 2:
@@ -211,7 +211,7 @@ def _emit_cluster_profile(clusters: "dict[int, dict]") -> None:
 
 def build_clusters(
     pairs: list[tuple[int, int, float]],
-    all_ids: "list[int] | None" = None,
+    all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
@@ -469,7 +469,7 @@ def unmerge_record(
     clusters: dict[int, dict],
     threshold: float = 0.0,
     *,
-    memory_store: "MemoryStore | None" = None,
+    memory_store: MemoryStore | None = None,
     dataset: str | None = None,
 ) -> dict[int, dict]:
     """Remove a record from its cluster and re-cluster remaining members.
@@ -554,7 +554,7 @@ def unmerge_cluster(
     cluster_id: int,
     clusters: dict[int, dict],
     *,
-    memory_store: "MemoryStore | None" = None,
+    memory_store: MemoryStore | None = None,
     dataset: str | None = None,
 ) -> dict[int, dict]:
     """Shatter a cluster back into individual singletons.

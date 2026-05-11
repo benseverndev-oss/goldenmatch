@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations
 
 import polars as pl
@@ -279,7 +279,6 @@ def estimate_recall(
     """
     from rapidfuzz.distance import JaroWinkler
     from rapidfuzz.process import cdist
-    import numpy as np
 
     n = len(df)
     if n < 2:

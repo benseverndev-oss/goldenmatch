@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import polars as pl
 import pytest
-
+from goldenmatch.core.ingest import load_file
 from goldenmatch.core.smart_ingest import (
     detect_blocks,
     detect_delimiter,
@@ -21,8 +19,6 @@ from goldenmatch.core.smart_ingest import (
     parse_key_value,
     smart_load,
 )
-from goldenmatch.core.ingest import load_file
-
 
 # ---------------------------------------------------------------------------
 # Encoding Detection

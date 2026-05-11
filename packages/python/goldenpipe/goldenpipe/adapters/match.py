@@ -73,8 +73,11 @@ def _build_config_from_contexts(contexts: list, df) -> object | None:
     """
     try:
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            BlockingConfig, BlockingKeyConfig,
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
         )
     except ImportError:
         logger.warning(

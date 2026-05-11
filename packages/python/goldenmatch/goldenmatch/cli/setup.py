@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import typer
-
 
 def setup_cmd() -> None:
     """Launch the interactive setup wizard."""
+    from textual.app import App
+
     from goldenmatch.tui.screens.setup_wizard import SetupWizard
-    from textual.app import App, ComposeResult
 
     class SetupApp(App):
         TITLE = "GoldenMatch Setup"

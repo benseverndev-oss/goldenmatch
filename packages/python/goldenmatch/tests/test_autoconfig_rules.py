@@ -2,35 +2,64 @@
 
 v1.10 Phase 4 (Tasks 4.0–4.3).
 """
-import pytest
 
 # ============================================================
 # v1.10 indicator-aware rule test helpers (added 2026-05-08)
 # ============================================================
 import polars as _v110_pl
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig as _V110GMC,
-    MatchkeyConfig as _V110MK,
-    MatchkeyField as _V110MKF,
     BlockingConfig as _V110BC,
+)
+from goldenmatch.config.schemas import (
     BlockingKeyConfig as _V110BKC,
+)
+from goldenmatch.config.schemas import (
+    GoldenMatchConfig as _V110GMC,
+)
+from goldenmatch.config.schemas import (
+    MatchkeyConfig as _V110MK,
+)
+from goldenmatch.config.schemas import (
+    MatchkeyField as _V110MKF,
+)
+from goldenmatch.config.schemas import (
     StandardizationConfig as _V110SC,
 )
-from goldenmatch.core.complexity_profile import (
-    ComplexityProfile as _V110CP,
-    DataProfile as _V110DP,
-    BlockingProfile as _V110BP,
-    ScoringProfile as _V110SP,
-    ClusterProfile as _V110ClP,
-    MatchkeyProfile as _V110MP,
-    FieldStats as _V110FS,
-    ColumnPrior as _V110ColP,
-    SparsityVerdict as _V110SV,
+from goldenmatch.core.autoconfig_history import (
+    HistoryEntry as _V110HE,
+)
+from goldenmatch.core.autoconfig_history import (
+    PolicyDecision as _V110PD,
 )
 from goldenmatch.core.autoconfig_history import (
     RunHistory as _V110RH,
-    HistoryEntry as _V110HE,
-    PolicyDecision as _V110PD,
+)
+from goldenmatch.core.complexity_profile import (
+    BlockingProfile as _V110BP,
+)
+from goldenmatch.core.complexity_profile import (
+    ClusterProfile as _V110ClP,
+)
+from goldenmatch.core.complexity_profile import (
+    ColumnPrior as _V110ColP,
+)
+from goldenmatch.core.complexity_profile import (
+    ComplexityProfile as _V110CP,
+)
+from goldenmatch.core.complexity_profile import (
+    DataProfile as _V110DP,
+)
+from goldenmatch.core.complexity_profile import (
+    FieldStats as _V110FS,
+)
+from goldenmatch.core.complexity_profile import (
+    MatchkeyProfile as _V110MP,
+)
+from goldenmatch.core.complexity_profile import (
+    ScoringProfile as _V110SP,
+)
+from goldenmatch.core.complexity_profile import (
+    SparsityVerdict as _V110SV,
 )
 
 
@@ -217,8 +246,8 @@ def test_with_normalize_standardization_idempotent():
 
 
 def test_with_multi_pass_adds_orthogonal_key():
-    from goldenmatch.core.autoconfig_rules import _with_multi_pass
     from goldenmatch.config.schemas import BlockingKeyConfig
+    from goldenmatch.core.autoconfig_rules import _with_multi_pass
     cfg = _build_test_config(blocking_field="email")
     ortho = BlockingKeyConfig(fields=["last_name"], transforms=["lowercase"])
     new_cfg, _rationale = _with_multi_pass(cfg, ortho)
@@ -378,8 +407,8 @@ def test_rule_corruption_normalize_no_ctx_no_fire():
 # ============================================================
 
 def test_rule_cross_blocking_disagreement_fires_on_low_overlap():
-    from goldenmatch.core.autoconfig_rules import rule_cross_blocking_disagreement
     import polars as pl
+    from goldenmatch.core.autoconfig_rules import rule_cross_blocking_disagreement
     df = pl.DataFrame({
         "email": ["a@x.com"] * 10 + ["b@x.com"] * 10,
         "name": ["alice"] * 10 + ["bob"] * 10,
@@ -404,8 +433,8 @@ def test_rule_cross_blocking_disagreement_fires_on_low_overlap():
 
 def test_rule_cross_blocking_disagreement_no_fire_high_overlap():
     """High overlap (≥0.3) → don't fire."""
-    from goldenmatch.core.autoconfig_rules import rule_cross_blocking_disagreement
     import polars as pl
+    from goldenmatch.core.autoconfig_rules import rule_cross_blocking_disagreement
     df = pl.DataFrame({"email": ["a@x.com"], "name": ["alice"]})
     profile = _profile_with_mass_above(0.05)
     cfg = _build_test_config(blocking_field="email")

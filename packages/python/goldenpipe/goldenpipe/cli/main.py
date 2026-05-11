@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -15,8 +14,8 @@ console = Console()
 @app.command()
 def run(
     source: str = typer.Argument(..., help="Input file path"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Pipeline YAML config"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Pipeline YAML config"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output file path"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show reasoning and timing"),
 ) -> None:
     """Run a pipeline on a data file."""
@@ -138,6 +137,7 @@ def serve(
     """Start the REST API server."""
     try:
         import uvicorn
+
         from goldenpipe.api.server import create_app
         uvicorn.run(create_app(), host="0.0.0.0", port=port)
     except ImportError:

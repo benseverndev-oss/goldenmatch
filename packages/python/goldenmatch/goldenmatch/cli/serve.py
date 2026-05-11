@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 
 
 def serve_cmd(
     files: list[str] = typer.Argument(..., help="Data files to load"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML file"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config YAML file"),
     host: str = typer.Option("127.0.0.1", "--host", help="Server host"),
     port: int = typer.Option(8080, "--port", "-p", help="Server port"),
 ) -> None:

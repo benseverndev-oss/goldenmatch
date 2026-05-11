@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 
 import polars as pl
 
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
 from goldenmatch.core.complexity_profile import DomainProfile as PublicDomainProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
 logger = logging.getLogger(__name__)
 
@@ -411,7 +411,7 @@ def extract_biblio_features(text: str) -> dict[str, str | None]:
 # ── DataFrame-Level Extraction ────────────────────────────────────────────
 
 
-def _emit_domain_profile(domain: "DomainProfile", df_after: pl.DataFrame, low_conf_ids) -> None:
+def _emit_domain_profile(domain: DomainProfile, df_after: pl.DataFrame, low_conf_ids) -> None:
     """Emit PublicDomainProfile. No-op when null emitter."""
     if not _emitter_stack.get():
         return

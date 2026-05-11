@@ -4,8 +4,9 @@ Two fixtures:
 - t3_synthetic.csv: collision-prone (50 dup pairs, 50 collision pairs, 100 singletons)
 - t3_clean_compat.csv: clean (50 dup pairs, 100 singletons; no collisions)
 """
-from pathlib import Path
 import os
+from pathlib import Path
+
 import pytest
 
 

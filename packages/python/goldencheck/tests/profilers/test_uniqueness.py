@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.uniqueness import UniquenessProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.uniqueness import UniquenessProfiler
+
 
 def test_fully_unique_column():
     df = pl.DataFrame({"id": list(range(100))})

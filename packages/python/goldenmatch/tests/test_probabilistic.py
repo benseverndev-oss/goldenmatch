@@ -1,10 +1,8 @@
 """Tests for Fellegi-Sunter probabilistic matching."""
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -12,7 +10,6 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
 )
-
 
 # ── Schema Tests ──────────────────────────────────────────────────────────
 
@@ -375,13 +372,13 @@ class TestScorePairProbabilistic:
 
 from goldenmatch.core.probabilistic import (
     ContinuousEMResult,
-    continuous_scores,
-    train_em_continuous,
-    score_probabilistic_continuous,
-    _fallback_result,
-    _sample_pairs,
     _build_comparison_matrix,
     _build_continuous_matrix,
+    _fallback_result,
+    _sample_pairs,
+    continuous_scores,
+    score_probabilistic_continuous,
+    train_em_continuous,
 )
 
 

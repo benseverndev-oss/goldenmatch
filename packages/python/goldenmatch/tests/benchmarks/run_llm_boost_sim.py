@@ -13,21 +13,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import polars as pl
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.boost import (
+    _sample_initial_pairs,
+    extract_feature_matrix,
+    finetune_and_rescore,
+)
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_score
-
-from goldenmatch.core.ingest import load_file
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
-from goldenmatch.core.boost import extract_feature_matrix, _sample_initial_pairs, finetune_and_rescore
-from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig, OutputConfig,
-    GoldenRulesConfig,
-)
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -243,7 +246,7 @@ def run_boost_sim(dataset_name, df_a, df_b, gt, matchkeys, blocking, standardiza
 
     # Fine-tuning simulation
     if try_finetune:
-        print(f"\n  --- Fine-Tuning Results ---")
+        print("\n  --- Fine-Tuning Results ---")
         print(f"  {'Labels':<8} {'Noise':<8} {'Prec':<8} {'Rec':<8} {'F1':<8} {'Best Thresh'}")
         print(f"  {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*11}")
 

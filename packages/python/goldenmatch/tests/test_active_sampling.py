@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from goldenmatch.core.active_sampling import (
-    select_active_pairs,
     estimate_label_savings,
+    select_active_pairs,
 )
 
 

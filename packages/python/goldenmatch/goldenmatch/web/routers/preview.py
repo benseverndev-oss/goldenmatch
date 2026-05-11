@@ -66,7 +66,7 @@ async def preview(payload: PreviewRequest, request: Request) -> dict:
             ),
             timeout=PREVIEW_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408,
             detail=f"preview exceeded {PREVIEW_TIMEOUT_S}s; lower sample size",

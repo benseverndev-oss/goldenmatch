@@ -130,7 +130,7 @@ async def sensitivity(payload: SensitivityRequest, request: Request) -> dict:
             ),
             timeout=RUN_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408,
             detail=f"sensitivity sweep exceeded {RUN_TIMEOUT_S}s — try fewer points or a smaller sample",

@@ -21,7 +21,7 @@ import argparse
 import hashlib
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Import path: the package lives one level up from this file's parents (3).
@@ -48,7 +48,7 @@ MemoryStore = _store_mod.MemoryStore
 _canon_pair = _store_mod._canon_pair
 
 FIXTURE_DIR = HERE.parent / "fixtures"
-BASE_TS = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+BASE_TS = datetime(2026, 5, 5, 12, 0, 0, tzinfo=UTC)
 
 
 def uuid(i: int) -> str:
@@ -256,7 +256,7 @@ def correction_to_dict(c: Correction) -> dict:
         "matchkey_name": c.matchkey_name,
         "reason": c.reason,
         "dataset": c.dataset,
-        "created_at": c.created_at.astimezone(timezone.utc)
+        "created_at": c.created_at.astimezone(UTC)
         .isoformat()
         .replace("+00:00", "Z"),
     }

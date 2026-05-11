@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 try:
-    import testing.postgresql
     import psycopg2
+    import testing.postgresql
     HAS_POSTGRES = True
 except (ImportError, Exception):
     HAS_POSTGRES = False
@@ -67,7 +67,7 @@ class TestClusterManagement:
         assert sorted(members) == [1, 2]
 
     def test_add_to_cluster(self, connector, setup_tables):
-        from goldenmatch.db.clusters import create_cluster, add_to_cluster, get_cluster_members
+        from goldenmatch.db.clusters import add_to_cluster, create_cluster, get_cluster_members
 
         cid = create_cluster(connector, [1], "customers", "run-1")
         add_to_cluster(connector, cid, [2, 3], "customers", "run-2")
@@ -75,7 +75,7 @@ class TestClusterManagement:
         assert sorted(members) == [1, 2, 3]
 
     def test_merge_clusters(self, connector, setup_tables):
-        from goldenmatch.db.clusters import create_cluster, merge_clusters, get_cluster_members
+        from goldenmatch.db.clusters import create_cluster, get_cluster_members, merge_clusters
 
         cid1 = create_cluster(connector, [1, 2], "customers", "run-1")
         cid2 = create_cluster(connector, [3, 4], "customers", "run-1")
@@ -98,7 +98,7 @@ class TestClusterManagement:
         assert get_cluster_size(connector, cid) == 3
 
     def test_next_cluster_id(self, connector, setup_tables):
-        from goldenmatch.db.clusters import create_cluster, next_cluster_id
+        from goldenmatch.db.clusters import create_cluster
 
         cid1 = create_cluster(connector, [1], "customers", "run-1")
         cid2 = create_cluster(connector, [2], "customers", "run-1")
@@ -195,7 +195,6 @@ class TestGoldenVersioning:
         assert df["version"][0] == 1
 
     def test_version_increment(self, connector, setup_tables):
-        from goldenmatch.db.clusters import create_cluster
         from goldenmatch.db.reconcile import reconcile_match
 
         # Create initial cluster + golden record

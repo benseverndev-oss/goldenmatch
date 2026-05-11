@@ -2,8 +2,8 @@
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 from goldenmatch.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

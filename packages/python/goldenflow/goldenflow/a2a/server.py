@@ -63,7 +63,7 @@ AGENT_CARD = {
 }
 
 
-def create_app() -> "web.Application":
+def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/.well-known/agent.json", agent_card)
     app.router.add_get("/health", health)
@@ -71,15 +71,15 @@ def create_app() -> "web.Application":
     return app
 
 
-async def agent_card(request: "web.Request") -> "web.Response":
+async def agent_card(request: web.Request) -> web.Response:
     return web.json_response(AGENT_CARD)
 
 
-async def health(request: "web.Request") -> "web.Response":
+async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "version": "1.0.0"})
 
 
-async def handle_task(request: "web.Request") -> "web.Response":
+async def handle_task(request: web.Request) -> web.Response:
     body = await request.json()
     skill_id = body.get("skill", "")
     params = body.get("params", {})

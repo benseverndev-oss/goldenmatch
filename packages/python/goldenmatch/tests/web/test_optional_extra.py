@@ -14,7 +14,6 @@ import types
 import pytest
 from typer.testing import CliRunner
 
-
 WEB_MODULES = {
     "fastapi",
     "fastapi.staticfiles",

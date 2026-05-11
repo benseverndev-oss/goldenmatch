@@ -1,5 +1,5 @@
-import pytest
 import polars as pl
+import pytest
 from goldenmatch.tui.engine import EngineResult, EngineStats
 
 
@@ -90,8 +90,12 @@ class TestMatchEngineLoad:
 
 
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    OutputConfig, GoldenRulesConfig, GoldenFieldRule,
+    GoldenFieldRule,
+    GoldenMatchConfig,
+    GoldenRulesConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+    OutputConfig,
 )
 
 

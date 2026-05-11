@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.names import (
     initial_expand,
     merge_name,

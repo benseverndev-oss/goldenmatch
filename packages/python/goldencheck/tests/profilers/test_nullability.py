@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.nullability import NullabilityProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.nullability import NullabilityProfiler
+
 
 def test_no_nulls_suggests_required():
     df = pl.DataFrame({"email": ["a@b.com", "c@d.com", "e@f.com"] * 100})

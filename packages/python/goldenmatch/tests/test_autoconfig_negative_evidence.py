@@ -1,6 +1,5 @@
 """v1.11: tests for promote_negative_evidence + _pick_scorer_for_column."""
 import polars as pl
-import pytest
 
 
 def test_pick_scorer_for_column_email():
@@ -49,11 +48,14 @@ def test_promote_negative_evidence_t3_pattern():
     exact matchkey → does NOT qualify. Email is in blocking → skipped.
     """
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "first_name": ["Brian"] * 10,
@@ -109,11 +111,14 @@ def test_promote_negative_evidence_idempotent():
     Config includes exact_phone matchkey so phone qualifies for NE promotion.
     """
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "first_name": ["x"] * 10, "phone": [f"5551{i:03d}" for i in range(10)],
@@ -152,11 +157,14 @@ def test_promote_negative_evidence_idempotent():
 def test_promote_negative_evidence_skips_blocking_columns():
     """A column used in blocking should not be promoted as NE."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "name": ["x"] * 10, "phone": [f"5551{i:03d}" for i in range(10)],
@@ -185,8 +193,11 @@ def test_promote_negative_evidence_skips_blocking_columns():
 
 def test_promote_negative_evidence_empty_df_returns_unchanged():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
     config = GoldenMatchConfig(
@@ -217,11 +228,11 @@ def test_auto_configure_df_calls_promote_negative_evidence():
     """
     import os
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
-    from goldenmatch.core.autoconfig import auto_configure_df
-
     # Use a realistic person dataset where email/phone cardinality < 0.95
     # (some repeats so the profiler keeps col_type=email/phone, not identifier)
     import random
+
+    from goldenmatch.core.autoconfig import auto_configure_df
     rng = random.Random(42)
     n = 100
     emails = [f"user{i % 70}@example.com" for i in range(n)]  # cardinality ~0.70
@@ -263,11 +274,14 @@ def test_promote_ne_populates_exact_matchkey_too():
     """v1.12: promote_negative_evidence walks exact matchkeys, not just weighted."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "first_name": ["Brian"] * 10,
@@ -315,11 +329,14 @@ def test_promote_ne_sets_default_threshold_on_exact_when_none():
     """When NE is added to an exact matchkey with threshold=None, set threshold=0.5."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "email": [f"u{i}@x.com" for i in range(10)],
@@ -352,11 +369,14 @@ def test_promote_ne_preserves_user_set_threshold_on_exact():
     """User-set threshold on exact matchkey is NOT overwritten by promotion."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "email": [f"u{i}@x.com" for i in range(10)],
@@ -386,11 +406,14 @@ def test_promote_ne_skips_is_exact_matchkey_field_gate_on_exact_branch():
     matchkey, but should still be promoted as NE on exact_email."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     # Config with ONLY exact_email; phone is NOT in any exact matchkey
     df = pl.DataFrame({
@@ -422,11 +445,14 @@ def test_promote_ne_idempotent_on_exact_matchkey():
     """Calling twice produces the same exact-matchkey NE list."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.complexity_profile import ColumnPrior
     from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+    from goldenmatch.core.complexity_profile import ColumnPrior
 
     df = pl.DataFrame({
         "email": [f"u{i}@x.com" for i in range(10)],

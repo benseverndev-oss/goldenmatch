@@ -9,10 +9,11 @@ are the same product.
 Requires OPENAI_API_KEY environment variable.
 """
 import os
-import goldenmatch as gm
-import polars as pl
 import tempfile
 from pathlib import Path
+
+import goldenmatch as gm
+import polars as pl
 
 # Check for API key
 if not os.environ.get("OPENAI_API_KEY"):

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
-from textual.widgets import TabbedContent
-
-from textual.widgets import Button
-
 from goldenmatch.tui.app import GoldenMatchApp
 from goldenmatch.tui.tabs.config_tab import ConfigTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
+from textual.widgets import Button, TabbedContent
 
 
 class TestTUIApp:

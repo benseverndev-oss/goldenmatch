@@ -14,18 +14,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import polars as pl
-
-from goldenmatch.core.ingest import load_file
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_fuzzy_matches
-from goldenmatch.core.boost import finetune_and_rescore, _sample_initial_pairs
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.boost import _sample_initial_pairs, finetune_and_rescore
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -183,7 +183,7 @@ def run_ann_finetune(name, df_a, df_b, gt, text_col, extra_cols, standardization
             print(f"  Baseline (thresh={thresh}): P={p:.1%} R={r:.1%} F1={f1:.1%}")
 
     # Fine-tune at different label counts
-    print(f"\n  --- Fine-Tuning (ANN blocking + fine-tuned embeddings) ---")
+    print("\n  --- Fine-Tuning (ANN blocking + fine-tuned embeddings) ---")
     print(f"  {'Labels':<8} {'Noise':<8} {'Prec':<8} {'Rec':<8} {'F1':<8} {'Thresh':<8} {'Time'}")
     print(f"  {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
 

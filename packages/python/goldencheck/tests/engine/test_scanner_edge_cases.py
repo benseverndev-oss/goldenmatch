@@ -5,10 +5,8 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.scanner import scan_file
-
 
 # ---------------------------------------------------------------------------
 # Helpers

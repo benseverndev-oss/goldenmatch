@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
-import tempfile
 
 import pytest
 
@@ -27,7 +25,7 @@ class TestMCPServer:
         assert server is not None
 
     def test_mcp_tool_get_stats(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("get_stats", {})
@@ -36,7 +34,7 @@ class TestMCPServer:
         assert "match_rate" in result
 
     def test_mcp_tool_find_duplicates(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("find_duplicates", {
@@ -47,7 +45,7 @@ class TestMCPServer:
         assert result["count"] >= 0
 
     def test_mcp_tool_explain_match(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("explain_match", {
@@ -59,7 +57,7 @@ class TestMCPServer:
         assert len(result["fields"]) > 0
 
     def test_mcp_tool_list_clusters(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("list_clusters", {"min_size": 2, "limit": 10})
@@ -67,7 +65,7 @@ class TestMCPServer:
         assert "total" in result
 
     def test_mcp_tool_profile_data(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("profile_data", {})
@@ -77,7 +75,7 @@ class TestMCPServer:
         assert "name" in col_names
 
     def test_mcp_tool_export_results(self, demo_file, tmp_path):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         output = str(tmp_path / "export.json")
@@ -89,7 +87,7 @@ class TestMCPServer:
         assert (tmp_path / "export.json").exists()
 
     def test_mcp_tool_unknown(self, demo_file):
-        from goldenmatch.mcp.server import create_server, _handle_tool
+        from goldenmatch.mcp.server import _handle_tool, create_server
         create_server([demo_file])
 
         result = _handle_tool("nonexistent_tool", {})
@@ -98,7 +96,7 @@ class TestMCPServer:
 
 class TestWatchMode:
     def test_watch_imports(self):
-        from goldenmatch.db.watch import watch, _print_header, _log_event, _print_summary
+        from goldenmatch.db.watch import watch
         assert callable(watch)
 
     def test_log_event_formats(self, capsys):

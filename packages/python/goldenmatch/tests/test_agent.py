@@ -4,21 +4,17 @@ from __future__ import annotations
 
 import os
 import tempfile
-from unittest.mock import patch, MagicMock
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.agent import (
     AgentSession,
     DataProfile,
     FieldProfile,
-    StrategyDecision,
     build_alternatives,
     profile_for_agent,
     select_strategy,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -310,7 +306,9 @@ class TestAgentSession:
 
     def test_deduplicate_with_custom_config(self, tmp_csv):
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
         )
         cfg = GoldenMatchConfig(matchkeys=[
             MatchkeyConfig(

@@ -69,19 +69,21 @@ def generate_synthetic(n: int, dupe_rate: float = 0.15) -> pl.DataFrame:
 
 def run_benchmark(n: int) -> dict:
     """Run full pipeline benchmark at scale n."""
+    import psutil
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenRulesConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
     from goldenmatch.core.autofix import auto_fix_dataframe
-    from goldenmatch.core.standardize import apply_standardization
-    from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.blocker import build_blocks
-    from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
     from goldenmatch.core.cluster import build_clusters
     from goldenmatch.core.golden import build_golden_record
-    from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
-        GoldenRulesConfig,
-    )
-
-    import psutil
+    from goldenmatch.core.matchkey import compute_matchkeys
+    from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+    from goldenmatch.core.standardize import apply_standardization
     mem_before = psutil.Process().memory_info().rss / 1e6
 
     timings = {}

@@ -6,23 +6,23 @@ Tests both exact and fuzzy matching strategies.
 
 import sys
 import time
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-from goldenmatch.core.ingest import load_file
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig, OutputConfig,
-    GoldenRulesConfig, GoldenFieldRule, StandardizationConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -833,8 +833,8 @@ def run_amazon_google():
 
 def _run_ncvr_synth_f1() -> float:
     """Run zero-config dedupe on the NCVR synth fixture; return F1."""
-    from tests.fixtures.ncvr_synth_dupes import build_ncvr_synth_df
     from goldenmatch._api import dedupe_df
+    from tests.fixtures.ncvr_synth_dupes import build_ncvr_synth_df
 
     df, gt_pairs = build_ncvr_synth_df()
     result = dedupe_df(df)

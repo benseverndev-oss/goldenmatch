@@ -4,7 +4,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import polars as pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 
 
@@ -27,7 +26,10 @@ def test_explicit_config_does_not_call_autoconfig():
     """When explicit config is provided, auto_configure_df is never called."""
     from goldenmatch._api import dedupe_df
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     df = pl.DataFrame({

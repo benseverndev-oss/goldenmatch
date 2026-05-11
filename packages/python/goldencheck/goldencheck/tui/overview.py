@@ -1,7 +1,9 @@
 """Overview tab — health score and dataset stats."""
 from __future__ import annotations
-from textual.widgets import Static
+
 from textual.containers import Vertical
+from textual.widgets import Static
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import DatasetProfile
 

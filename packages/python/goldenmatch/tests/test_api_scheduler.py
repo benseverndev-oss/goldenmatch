@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import polars as pl
 import pytest
 
 
@@ -105,8 +104,9 @@ class TestAPIConnector:
             fetch_from_api(source="nonexistent")
 
     def test_salesforce_requires_package(self):
-        from goldenmatch.core.api_connector import fetch_from_api
         import sys
+
+        from goldenmatch.core.api_connector import fetch_from_api
 
         # Remove simple_salesforce if present
         if "simple_salesforce" not in sys.modules:
@@ -140,8 +140,10 @@ class TestScheduler:
         assert parse_cron("30 * * * *") == 3600   # every hour at :30
 
     def test_scheduled_job_run_once(self):
+        import csv
+        import tempfile
+
         from goldenmatch.core.scheduler import ScheduledJob
-        import csv, tempfile
 
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="") as f:
             w = csv.writer(f)

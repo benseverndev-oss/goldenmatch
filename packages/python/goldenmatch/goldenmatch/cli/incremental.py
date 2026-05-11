@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -19,17 +18,18 @@ def incremental_cmd(
     base_file: str = typer.Argument(..., help="Base dataset file path"),
     new_records: Path = typer.Option(..., "--new-records", "-n", help="New records CSV to match"),
     config: Path = typer.Option(..., "--config", "-c", help="Config YAML path"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output CSV path"),
-    threshold: Optional[float] = typer.Option(None, "--threshold", "-t", help="Override threshold"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path"),
+    threshold: float | None = typer.Option(None, "--threshold", "-t", help="Override threshold"),
 ) -> None:
     """Match new records against an existing base dataset incrementally."""
     import polars as pl
-    from goldenmatch.core.ingest import load_file
+
     from goldenmatch.core.autofix import auto_fix_dataframe
-    from goldenmatch.core.standardize import apply_standardization
-    from goldenmatch.core.matchkey import compute_matchkeys
+    from goldenmatch.core.ingest import load_file
     from goldenmatch.core.match_one import match_one
+    from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.scorer import find_exact_matches
+    from goldenmatch.core.standardize import apply_standardization
 
     if not new_records.exists():
         err_console.print(f"[red]New records file not found: {new_records}[/red]")

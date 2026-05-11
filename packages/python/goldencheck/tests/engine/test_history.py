@@ -1,9 +1,9 @@
 import json
 
 from goldencheck.engine import history as history_mod
-from goldencheck.engine.history import record_scan, load_history, get_previous_scan
+from goldencheck.engine.history import get_previous_scan, load_history, record_scan
 from goldencheck.models.finding import Finding, Severity
-from goldencheck.models.profile import DatasetProfile, ColumnProfile
+from goldencheck.models.profile import ColumnProfile, DatasetProfile
 
 
 def _make_profile(rows: int = 10, cols: int = 2) -> DatasetProfile:

@@ -2,13 +2,13 @@
 Skipped by default -- run with `pytest -m benchmark`.
 """
 from __future__ import annotations
+
 import random
 from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
 import pytest
-
 
 pytestmark = pytest.mark.benchmark
 

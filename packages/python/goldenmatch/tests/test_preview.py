@@ -1,10 +1,13 @@
-import pytest
 import polars as pl
+import pytest
 from goldenmatch.core.preview import (
-    format_preview_stats, format_preview_clusters,
-    format_preview_golden, format_score_histogram,
+    format_preview_clusters,
+    format_preview_golden,
+    format_preview_stats,
+    format_score_histogram,
 )
 from goldenmatch.tui.engine import EngineResult, EngineStats
+
 
 @pytest.fixture
 def sample_engine_result():

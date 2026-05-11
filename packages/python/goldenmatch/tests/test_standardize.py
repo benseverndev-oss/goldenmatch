@@ -1,25 +1,23 @@
 """Tests for data standardization module."""
 
+
 import polars as pl
 import pytest
 import yaml
-from pathlib import Path
-
 from goldenmatch.core.standardize import (
+    apply_standardization,
+    get_standardizer,
+    std_address,
     std_email,
+    std_name_lower,
     std_name_proper,
     std_name_upper,
-    std_name_lower,
     std_phone,
-    std_zip5,
-    std_address,
     std_state,
     std_strip,
     std_trim_whitespace,
-    apply_standardization,
-    get_standardizer,
+    std_zip5,
 )
-
 
 # ── Individual standardizer tests ────────────────────────────────────────────
 
@@ -306,8 +304,12 @@ class TestStandardizationInPipeline:
         }).write_csv(path)
 
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            OutputConfig, GoldenRulesConfig, GoldenFieldRule,
+            GoldenFieldRule,
+            GoldenMatchConfig,
+            GoldenRulesConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
             StandardizationConfig,
         )
         from goldenmatch.core.pipeline import run_dedupe

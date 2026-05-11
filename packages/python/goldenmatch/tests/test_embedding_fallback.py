@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch, MagicMock
-
-import numpy as np
+from unittest.mock import MagicMock, patch
 
 from goldenmatch.core.scorer import _fuzzy_score_matrix
 

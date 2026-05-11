@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.format_detection import FormatDetectionProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.format_detection import FormatDetectionProfiler
+
 
 def test_email_format_detected():
     df = pl.DataFrame({"contact": ["a@b.com", "c@d.com", "not-email", "e@f.com"]})

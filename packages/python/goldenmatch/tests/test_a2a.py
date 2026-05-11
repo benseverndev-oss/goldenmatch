@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -155,8 +154,9 @@ def test_agent_card_has_quality_and_transform_skills():
 
 def test_dispatch_quality_without_goldencheck(tmp_path):
     """quality skill returns error when goldencheck is not installed."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.a2a.skills import dispatch_skill
 
     csv_path = tmp_path / "data.csv"
@@ -170,8 +170,9 @@ def test_dispatch_quality_without_goldencheck(tmp_path):
 
 def test_dispatch_transform_without_goldenflow(tmp_path):
     """transform skill returns error when goldenflow is not installed."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.a2a.skills import dispatch_skill
 
     csv_path = tmp_path / "data.csv"
@@ -198,8 +199,9 @@ def test_mcp_scan_quality_tool_registered():
 
 def test_mcp_scan_quality_without_goldencheck(tmp_path):
     """scan_quality returns error when goldencheck is not installed."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -216,8 +218,9 @@ def test_mcp_scan_quality_without_goldencheck(tmp_path):
 
 def test_mcp_fix_quality_without_goldencheck(tmp_path):
     """fix_quality returns error when goldencheck is not installed."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -234,8 +237,9 @@ def test_mcp_fix_quality_without_goldencheck(tmp_path):
 
 def test_mcp_run_transforms_without_goldenflow(tmp_path):
     """run_transforms returns error when goldenflow is not installed."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -256,6 +260,7 @@ def test_mcp_run_transforms_without_goldenflow(tmp_path):
 def test_mcp_scan_quality_file_not_found():
     """scan_quality returns actionable error for missing file."""
     from unittest.mock import patch
+
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     with patch("goldenmatch.core.quality._goldencheck_available", return_value=True):
@@ -269,6 +274,7 @@ def test_mcp_scan_quality_file_not_found():
 def test_mcp_scan_quality_missing_file_path():
     """scan_quality returns error when file_path is missing."""
     from unittest.mock import patch
+
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     with patch("goldenmatch.core.quality._goldencheck_available", return_value=True):
@@ -282,6 +288,7 @@ def test_mcp_scan_quality_missing_file_path():
 def test_a2a_quality_file_not_found():
     """A2A quality skill returns error for missing file."""
     from unittest.mock import patch
+
     from goldenmatch.a2a.skills import dispatch_skill
 
     with patch("goldenmatch.core.quality._goldencheck_available", return_value=True):
@@ -293,6 +300,7 @@ def test_a2a_quality_file_not_found():
 def test_a2a_quality_missing_file_path():
     """A2A quality skill returns error when file_path is missing."""
     from unittest.mock import patch
+
     from goldenmatch.a2a.skills import dispatch_skill
 
     with patch("goldenmatch.core.quality._goldencheck_available", return_value=True):
@@ -306,8 +314,9 @@ def test_a2a_quality_missing_file_path():
 
 def test_mcp_scan_quality_happy_path(tmp_path):
     """scan_quality returns correct response shape when goldencheck works."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -332,8 +341,9 @@ def test_mcp_scan_quality_happy_path(tmp_path):
 
 def test_mcp_fix_quality_happy_path(tmp_path):
     """fix_quality returns fixes and writes output file."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -361,8 +371,9 @@ def test_mcp_fix_quality_happy_path(tmp_path):
 
 def test_mcp_run_transforms_happy_path(tmp_path):
     """run_transforms returns transforms and writes output file."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"
@@ -388,8 +399,9 @@ def test_mcp_run_transforms_happy_path(tmp_path):
 
 def test_a2a_quality_happy_path(tmp_path):
     """A2A quality skill returns correct response with fixes."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.a2a.skills import dispatch_skill
 
     csv_path = tmp_path / "data.csv"
@@ -410,8 +422,9 @@ def test_a2a_quality_happy_path(tmp_path):
 
 def test_a2a_transform_happy_path(tmp_path):
     """A2A transform skill returns correct response."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.a2a.skills import dispatch_skill
 
     csv_path = tmp_path / "data.csv"
@@ -434,8 +447,9 @@ def test_a2a_transform_happy_path(tmp_path):
 
 def test_mcp_fix_quality_write_failure_preserves_results(tmp_path):
     """fix_quality preserves results when output write fails."""
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenmatch.mcp.agent_tools import handle_agent_tool
 
     csv_path = tmp_path / "data.csv"

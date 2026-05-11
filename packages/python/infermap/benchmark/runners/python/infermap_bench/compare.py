@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 _METRIC_KEYS = ("f1", "top1", "mrr", "ece")
 _ZERO_METRIC_SET = {k: 0.0 for k in _METRIC_KEYS} | {"n": 0}
 

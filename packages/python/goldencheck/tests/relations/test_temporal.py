@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.relations.temporal import TemporalOrderProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.relations.temporal import TemporalOrderProfiler
+
 
 def test_valid_temporal_order():
     df = pl.DataFrame({

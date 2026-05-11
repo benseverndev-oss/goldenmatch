@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import random
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
     _classify_by_data,
@@ -338,20 +337,20 @@ class TestSelectModel:
 
 class TestAdaptiveThreshold:
     def test_all_exact(self):
-        from goldenmatch.core.autoconfig import _adaptive_threshold
         from goldenmatch.config.schemas import MatchkeyField
+        from goldenmatch.core.autoconfig import _adaptive_threshold
         fields = [MatchkeyField(field="email", scorer="exact", weight=1.0)]
         assert _adaptive_threshold(fields) == 0.95
 
     def test_all_fuzzy(self):
-        from goldenmatch.core.autoconfig import _adaptive_threshold
         from goldenmatch.config.schemas import MatchkeyField
+        from goldenmatch.core.autoconfig import _adaptive_threshold
         fields = [MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)]
         assert _adaptive_threshold(fields) == 0.85  # single field
 
     def test_embedding(self):
-        from goldenmatch.core.autoconfig import _adaptive_threshold
         from goldenmatch.config.schemas import MatchkeyField
+        from goldenmatch.core.autoconfig import _adaptive_threshold
         fields = [
             MatchkeyField(scorer="record_embedding", columns=["title"], weight=1.0),
         ]
@@ -526,7 +525,7 @@ class TestLLMColumnClassification:
 
     def test_happy_path_corrects_ambiguous_types(self):
         """LLM response should override ambiguous classifications."""
-        from goldenmatch.core.autoconfig import _llm_classify_columns, ColumnProfile
+        from goldenmatch.core.autoconfig import ColumnProfile, _llm_classify_columns
 
         profiles = [
             ColumnProfile("SalesID", "Utf8", "phone", 0.7, ["1139246", "1139248"]),
@@ -548,7 +547,7 @@ class TestLLMColumnClassification:
 
     def test_markdown_wrapped_json(self):
         """LLM response wrapped in markdown code blocks should be parsed."""
-        from goldenmatch.core.autoconfig import _llm_classify_columns, ColumnProfile
+        from goldenmatch.core.autoconfig import ColumnProfile, _llm_classify_columns
 
         profiles = [
             ColumnProfile("col1", "Utf8", "string", 0.3, ["abc"]),
@@ -563,7 +562,7 @@ class TestLLMColumnClassification:
 
     def test_unparseable_response_returns_original(self):
         """Garbage LLM response should return profiles unchanged."""
-        from goldenmatch.core.autoconfig import _llm_classify_columns, ColumnProfile
+        from goldenmatch.core.autoconfig import ColumnProfile, _llm_classify_columns
 
         profiles = [
             ColumnProfile("col1", "Utf8", "string", 0.3, ["abc"]),
@@ -576,8 +575,9 @@ class TestLLMColumnClassification:
 
     def test_api_failure_returns_original(self):
         """LLM API failure should return profiles unchanged."""
-        from goldenmatch.core.autoconfig import _llm_classify_columns, ColumnProfile
         import urllib.error
+
+        from goldenmatch.core.autoconfig import ColumnProfile, _llm_classify_columns
 
         profiles = [
             ColumnProfile("col1", "Utf8", "string", 0.3, ["abc"]),
@@ -591,7 +591,7 @@ class TestLLMColumnClassification:
 
     def test_non_string_type_ignored(self):
         """LLM returning non-string type values should not crash."""
-        from goldenmatch.core.autoconfig import _llm_classify_columns, ColumnProfile
+        from goldenmatch.core.autoconfig import ColumnProfile, _llm_classify_columns
 
         profiles = [
             ColumnProfile("col1", "Utf8", "string", 0.3, ["abc"]),
@@ -746,7 +746,6 @@ class TestAutoConfigBenchmarkDatasets:
 
         df_rl, _links = recordlinkage.datasets.load_febrl3(return_links=True)
         # Convert to Polars — recordlinkage returns pandas with index as rec_id
-        import pandas as pd
         df_pd = df_rl.reset_index()
         df = pl.from_pandas(df_pd)
 
@@ -1047,9 +1046,10 @@ class TestDomainAwareAutoConfig:
         of the legacy heuristic's domain_config bypass path, which the controller
         does not expose via the public auto_configure_df signature.
         """
-        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
-        from goldenmatch.config.schemas import DomainConfig
         from unittest.mock import patch
+
+        from goldenmatch.config.schemas import DomainConfig
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
 
         df = pl.DataFrame({
             "brand": ["Sony", "Samsung", "Apple"],
@@ -1194,8 +1194,9 @@ class TestLLMMemoryAutoEnablement:
         # legacy-heuristic kwarg not threaded through the controller; the
         # controller always returns the committed config without LLM scorer
         # injection from the public auto_configure_df signature.
-        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         from unittest.mock import patch
+
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
             config = _legacy_auto_configure_v0(df, llm_auto=True)
@@ -1204,9 +1205,10 @@ class TestLLMMemoryAutoEnablement:
         assert config.llm_scorer.budget.max_cost_usd == 0.05
 
     def test_llm_auto_no_key(self):
-        from goldenmatch.core.autoconfig import auto_configure_df
-        from unittest.mock import patch
         import os
+        from unittest.mock import patch
+
+        from goldenmatch.core.autoconfig import auto_configure_df
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": ""}):
             os.environ.pop("OPENAI_API_KEY", None)
@@ -1215,8 +1217,9 @@ class TestLLMMemoryAutoEnablement:
         assert config.llm_scorer is None
 
     def test_llm_auto_off(self):
-        from goldenmatch.core.autoconfig import auto_configure_df
         from unittest.mock import patch
+
+        from goldenmatch.core.autoconfig import auto_configure_df
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
             config = auto_configure_df(df, llm_auto=False)
@@ -1226,8 +1229,9 @@ class TestLLMMemoryAutoEnablement:
         # Uses _legacy_auto_configure_v0 directly because llm_auto memory
         # enablement is a legacy-heuristic kwarg not threaded through the
         # controller's public auto_configure_df.
-        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         from unittest.mock import patch
+
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
         df = pl.DataFrame({"name": ["John", "Jane", "Bob"], "email": ["a@t.com", "b@t.com", "c@t.com"]})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
             config = _legacy_auto_configure_v0(df, llm_auto=True)

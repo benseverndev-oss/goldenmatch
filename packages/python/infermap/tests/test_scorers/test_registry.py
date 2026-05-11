@@ -1,9 +1,10 @@
 """Tests for scorer registry and helpers."""
 from __future__ import annotations
 
-from infermap.scorers import default_scorers, scorer, _REGISTRY, ExactScorer, AliasScorer
+from infermap.scorers import _REGISTRY, AliasScorer, ExactScorer, default_scorers, scorer
 from infermap.scorers.base import Scorer
 from infermap.types import FieldInfo, ScorerResult
+
 from tests.conftest import make_field
 
 

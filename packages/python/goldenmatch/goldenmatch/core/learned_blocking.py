@@ -19,13 +19,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 
 import polars as pl
-
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 
 logger = logging.getLogger(__name__)
 

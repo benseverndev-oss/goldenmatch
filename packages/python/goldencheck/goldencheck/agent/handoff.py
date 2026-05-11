@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from goldencheck import __version__
@@ -118,7 +118,7 @@ def generate_handoff(
         "schema_version": 1,
         "source_tool": "goldencheck",
         "source_version": __version__,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "job_name": job_name,
         "file_path": file_path,
         "file_hash": _compute_file_hash(file_path),

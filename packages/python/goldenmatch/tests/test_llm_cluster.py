@@ -1,20 +1,19 @@
 """Tests for in-context LLM clustering."""
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
 import json
+from unittest.mock import patch
 
 import polars as pl
 import pytest
-
+from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
 from goldenmatch.core.llm_cluster import (
-    _build_components,
-    _split_component,
-    _parse_cluster_response,
     _apply_cluster_results,
+    _build_components,
+    _parse_cluster_response,
+    _split_component,
     llm_cluster_pairs,
 )
-from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
 
 
 class TestBuildComponents:

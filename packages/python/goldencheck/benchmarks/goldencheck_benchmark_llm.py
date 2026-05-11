@@ -4,10 +4,10 @@ Runs the same benchmark as goldencheck_benchmark.py but uses scan_file_with_llm
 to measure the improvement from the LLM enhancement pass.
 """
 import json
-import time
 import sys
-from pathlib import Path
+import time
 from collections import defaultdict
+from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

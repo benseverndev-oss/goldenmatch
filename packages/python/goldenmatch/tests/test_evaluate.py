@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 
 import polars as pl
 import pytest
+from goldenmatch.core.evaluate import EvalResult, evaluate_clusters, evaluate_pairs
 from typer.testing import CliRunner
-
-from goldenmatch.core.evaluate import evaluate_clusters, evaluate_pairs, EvalResult
 
 
 class TestEvaluatePairs:

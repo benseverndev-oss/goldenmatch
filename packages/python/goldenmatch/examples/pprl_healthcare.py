@@ -5,15 +5,18 @@ Two hospitals need to find shared patients without sharing raw data.
 GoldenMatch encrypts records into bloom filters and matches on the
 encrypted representations.
 """
-import sys, os
+import os
+import sys
+
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-import goldenmatch as gm
-import polars as pl
 import tempfile
 from pathlib import Path
+
+import goldenmatch as gm
+import polars as pl
 
 # Hospital A patient records
 hospital_a = pl.DataFrame({

@@ -10,7 +10,12 @@ from typing import Any
 
 import yaml
 
-from goldenmatch.core.agent import AgentSession, _decision_to_config, profile_for_agent, select_strategy
+from goldenmatch.core.agent import (
+    AgentSession,
+    _decision_to_config,
+    profile_for_agent,
+    select_strategy,
+)
 
 
 def dispatch_skill(skill_id: str, params: dict) -> dict:
@@ -63,6 +68,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "explain":
         import polars as pl
+
         from goldenmatch import explain_pair_df
 
         record_a = pl.DataFrame([params["record_a"]])
@@ -101,8 +107,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "quality":
         import polars as pl
-        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
+
         from goldenmatch.config.schemas import QualityConfig
+        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
 
         if not _goldencheck_available():
             return {"error": "goldencheck not installed. pip install goldenmatch[quality]"}
@@ -144,8 +151,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "transform":
         import polars as pl
-        from goldenmatch.core.transform import _goldenflow_available, run_transform
+
         from goldenmatch.config.schemas import TransformConfig
+        from goldenmatch.core.transform import _goldenflow_available, run_transform
 
         if not _goldenflow_available():
             return {"error": "goldenflow not installed. pip install goldenmatch[transform]"}

@@ -11,13 +11,17 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.ingest import load_file, validate_columns, apply_column_map
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.validate import ValidationRule, validate_dataframe
-from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
 from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel, rerank_top_pairs
+from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
+from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
+from goldenmatch.core.scorer import (
+    find_exact_matches,
+    rerank_top_pairs,
+    score_blocks_parallel,
+)
+from goldenmatch.core.standardize import apply_standardization
+from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
 
 def _get_block_scorer(config):
@@ -29,8 +33,8 @@ def _get_block_scorer(config):
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.golden import build_golden_record
-from goldenmatch.output.writer import write_output
 from goldenmatch.output.report import generate_dedupe_report, generate_match_report
+from goldenmatch.output.writer import write_output
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +294,8 @@ def _apply_postflight(
     """
     from goldenmatch.core.autoconfig_verify import (
         PreflightReport as _PfR,
+    )
+    from goldenmatch.core.autoconfig_verify import (
         postflight as _postflight,
     )
 
@@ -621,7 +627,7 @@ def _run_dedupe_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
+            from goldenmatch.core.probabilistic import score_probabilistic, train_em
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
@@ -1090,13 +1096,12 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
+            from goldenmatch.core.probabilistic import score_probabilistic, train_em
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
             if config.blocking and config.blocking.keys:
                 for bk in config.blocking.keys:
                     blocking_fields.extend(bk.fields)
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
             em_result = train_em(
                 combined_df, mk,
                 max_iterations=mk.em_iterations,

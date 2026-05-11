@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mcp.types import Tool
 
+from goldencheck.agent.handoff import generate_handoff
 from goldencheck.agent.intelligence import (
     build_alternatives,
     compare_domains,
@@ -14,7 +15,6 @@ from goldencheck.agent.intelligence import (
     explain_finding,
     select_strategy,
 )
-from goldencheck.agent.handoff import generate_handoff
 from goldencheck.agent.review_queue import ReviewQueue
 from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.fixer import apply_fixes

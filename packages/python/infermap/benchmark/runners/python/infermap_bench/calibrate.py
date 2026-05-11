@@ -10,12 +10,11 @@ accidentally gaming a different measure.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
-
 from infermap.calibration import (
     Calibrator,
     IdentityCalibrator,
@@ -27,7 +26,6 @@ from infermap.engine import MapEngine
 
 from .cases import Case
 from .metrics import Prediction, expected_calibration_error
-
 
 METHODS: dict[str, type[Calibrator]] = {
     "identity": IdentityCalibrator,
@@ -136,7 +134,7 @@ def run_calibrate_command(
 ) -> FitReport:
     """Programmatic entrypoint used by the CLI and tests."""
     from .cases import load_case
-    from .cli import BENCHMARK_ROOT, SELF_TEST_ROOT, _matches_filter, _load_synthetic_cases
+    from .cli import BENCHMARK_ROOT, SELF_TEST_ROOT, _load_synthetic_cases, _matches_filter
     from .manifest import load_manifest
 
     root = SELF_TEST_ROOT if self_test else BENCHMARK_ROOT

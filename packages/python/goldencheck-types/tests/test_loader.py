@@ -1,5 +1,4 @@
 import pytest
-
 from goldencheck_types import list_domains, load_domain
 
 

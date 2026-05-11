@@ -5,10 +5,11 @@ Combines CRM, marketing, and vendor data into a unified golden record set.
 Shows: multi-file dedupe, cross-source matching, golden record merging,
 cluster inspection, and explainability.
 """
-import goldenmatch as gm
-import polars as pl
 import tempfile
 from pathlib import Path
+
+import goldenmatch as gm
+import polars as pl
 
 # CRM data
 crm = pl.DataFrame({

@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
 from dataclasses import dataclass
+from unittest.mock import patch
 
 import polars as pl
-
 from goldenmatch.core.transform import run_transform
 
 

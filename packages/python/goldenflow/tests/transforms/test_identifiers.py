@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.identifiers import ein_format, ssn_format, ssn_mask
 
 

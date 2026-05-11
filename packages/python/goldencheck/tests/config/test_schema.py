@@ -1,4 +1,11 @@
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, RelationRule, IgnoreEntry, Settings
+from goldencheck.config.schema import (
+    ColumnRule,
+    GoldenCheckConfig,
+    IgnoreEntry,
+    RelationRule,
+    Settings,
+)
+
 
 def test_column_rule_minimal():
     rule = ColumnRule(type="string")

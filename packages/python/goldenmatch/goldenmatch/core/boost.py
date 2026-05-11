@@ -238,7 +238,7 @@ def finetune_and_rescore(
     This is the key function that closes the gap to SOTA on semantic matching.
     """
     try:
-        from sentence_transformers import SentenceTransformer, InputExample, losses
+        from sentence_transformers import InputExample, SentenceTransformer, losses
         from torch.utils.data import DataLoader
     except ImportError:
         raise ImportError(
@@ -565,8 +565,14 @@ def boost_accuracy(
 
     try:
         from goldenmatch.core.cross_encoder import (
-            serialize_record, train_cross_encoder, score_pairs as ce_score_pairs,
-            augment_training_data, merge_scores, CROSS_ENCODER_DIR,
+            CROSS_ENCODER_DIR,
+            augment_training_data,
+            merge_scores,
+            serialize_record,
+            train_cross_encoder,
+        )
+        from goldenmatch.core.cross_encoder import (
+            score_pairs as ce_score_pairs,
         )
 
         # Label 300 more pairs for Level 3

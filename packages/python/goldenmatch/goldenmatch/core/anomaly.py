@@ -105,7 +105,7 @@ def detect_anomalies(
                         "type": "fake_phone",
                         "value": val_str,
                         "severity": "medium",
-                        "reason": f"Suspicious phone number pattern",
+                        "reason": "Suspicious phone number pattern",
                     })
                     break
 
@@ -140,7 +140,7 @@ def detect_anomalies(
                     "type": "placeholder",
                     "value": str(row.get(col)),
                     "severity": "high",
-                    "reason": f"Placeholder value detected",
+                    "reason": "Placeholder value detected",
                 })
 
     # Detect duplicate exact rows (copy-paste data)

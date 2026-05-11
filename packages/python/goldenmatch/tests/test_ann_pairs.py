@@ -5,9 +5,11 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import (
-    BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
 
 try:
@@ -89,6 +91,7 @@ class TestAnnPairsBlocking:
 
     def test_ann_pairs_returns_pre_scored(self):
         from unittest.mock import patch
+
         from goldenmatch.core.blocker import build_blocks
 
         fake = self._make_fake_embedder()
@@ -114,6 +117,7 @@ class TestAnnPairsBlocking:
 
     def test_ann_pairs_no_union_find(self):
         from unittest.mock import patch
+
         from goldenmatch.core.blocker import build_blocks
 
         fake = self._make_fake_embedder()

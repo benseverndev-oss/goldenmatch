@@ -7,8 +7,8 @@ This is ideal for production pipelines where the schema is stable.
 
 import os
 
-import polars as pl
 import infermap
+import polars as pl
 
 CONFIG_PATH = "data/crm_to_erp_mapping.yaml"
 
@@ -40,7 +40,7 @@ remapped = loaded.apply(df)
 
 print(f"\nOriginal columns:  {df.columns}")
 print(f"Remapped columns:  {remapped.columns}")
-print(f"\nFirst 3 rows of remapped data:")
+print("\nFirst 3 rows of remapped data:")
 print(remapped.head(3).to_pandas().to_string(index=False))
 
 # --- Step 3: Demonstrate the speed advantage ---

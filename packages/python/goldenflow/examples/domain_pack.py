@@ -6,10 +6,10 @@ Domain packs teach GoldenFlow about field types specific to an industry
 Usage:
     python domain_pack.py patients.csv
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from goldenflow import TransformEngine, load_domain, list_transforms
+from goldenflow import TransformEngine, list_transforms, load_domain
 
 
 def main():

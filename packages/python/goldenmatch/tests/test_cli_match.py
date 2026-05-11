@@ -6,9 +6,8 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from goldenmatch.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
