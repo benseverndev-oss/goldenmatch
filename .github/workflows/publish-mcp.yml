@@ -113,29 +113,60 @@ jobs:
           chmod +x mcp-publisher
           ./mcp-publisher --help >/dev/null   # smoke
 
-      - name: Look up current PyPI version
-        id: pypi
+      - name: Resolve target version
+        # Source of truth depends on the event:
+        #
+        # - release: read from the git tag. The tag (e.g. `goldenflow-v1.1.5`)
+        #   is the canonical declaration of what's being shipped. PyPI lookup
+        #   would race against the parallel `publish-<pkg>.yml` workflow that
+        #   triggered off the same release event — the prior 1.1.5 release
+        #   hit exactly that bug (workflow saw the prior PyPI version because
+        #   the PyPI publish hadn't completed yet).
+        #
+        # - workflow_dispatch: read from pyproject.toml in the package dir.
+        #   Race-free; also lets us force-refresh listings without going
+        #   through PyPI/release.
+        id: ver
         shell: bash
         env:
           PKG: ${{ matrix.pkg }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          V=$(curl -fsSL "https://pypi.org/pypi/${PKG}/json" | jq -r '.info.version')
-          if [ -z "$V" ] || [ "$V" = "null" ]; then
-            echo "::error::PyPI returned no version for ${PKG}"
+          if [ "$EVENT" = "release" ]; then
+            # Tag patterns:
+            #   v1.13.0                  -> goldenmatch
+            #   goldencheck-v1.2.0       -> goldencheck
+            #   goldenflow-v1.1.5        -> goldenflow
+            #   goldenpipe-v1.1.0        -> goldenpipe
+            #   infermap-v0.4.0          -> infermap
+            # In every case the version is whatever follows the last `-v`
+            # (or the leading `v` for the unprefixed goldenmatch case).
+            V="${TAG##*-v}"
+            V="${V#v}"
+          else
+            # pyproject.toml is the canonical version source per package.
+            # `awk` instead of `python` so we don't need a setup-python step.
+            FILE="packages/python/${PKG}/pyproject.toml"
+            V=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$FILE")
+          fi
+          if [ -z "$V" ] || ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::could not resolve version for ${PKG} (event=${EVENT}, raw=${V})"
             exit 1
           fi
           echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "::notice::publishing ${PKG} version ${V} (source: ${EVENT})"
 
       - name: Inject version into server.json
         # Keep the registry-level `version` and `packages[0].version` in
-        # lockstep with PyPI. server.json's other fields (name, title,
-        # description, repository, remotes) stay whatever the file in the
-        # repo says — those are publisher-curated, not synced from PyPI.
+        # lockstep with the resolved source. server.json's other fields
+        # (name, title, description, repository, remotes) stay whatever the
+        # file in the repo says — those are publisher-curated, not synced.
         shell: bash
         env:
           PKG: ${{ matrix.pkg }}
-          V: ${{ steps.pypi.outputs.version }}
+          V: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           FILE="packages/python/${PKG}/server.json"
@@ -164,7 +195,7 @@ jobs:
         shell: bash
         env:
           PKG: ${{ matrix.pkg }}
-          V: ${{ steps.pypi.outputs.version }}
+          V: ${{ steps.ver.outputs.version }}
         run: |
           {
             echo "## MCP Registry: ${PKG}"
