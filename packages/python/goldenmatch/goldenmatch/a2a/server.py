@@ -86,6 +86,28 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    {
+        "id": "autoconfig",
+        "name": "AutoConfig",
+        "description": (
+            "Run AutoConfigController on a CSV; return committed config (incl. "
+            "negative_evidence / Path Y) and controller telemetry (stop_reason, "
+            "health, decisions, indicator column priors). v1.7-v1.12 surface."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "controller_telemetry",
+        "name": "Controller Telemetry",
+        "description": (
+            "Return the AutoConfigController telemetry from the most recent "
+            "autoconfig / deduplicate call. Same JSON shape as the web "
+            "/api/v1/controller/telemetry endpoint."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
