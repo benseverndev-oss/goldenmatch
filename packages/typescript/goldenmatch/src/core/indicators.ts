@@ -97,21 +97,20 @@ function computeIdentityScore(rows: readonly Row[], col: string): number {
   for (const [pat, score] of IDENTITY_NAME_PATTERNS) {
     if (pat.test(col)) return score;
   }
-  // High-cardinality string column = id-like
+  // High-cardinality column = id-like. Python uses polars' ``n_unique``
+  // which counts nulls as one distinct value too — mirror that here so the
+  // ratio matches for all-null / mostly-null columns.
   const distinct = new Set<unknown>();
-  let n = 0;
   for (const r of rows) {
     const v = (r as Record<string, unknown>)[col];
-    if (v === null || v === undefined || v === "") continue;
-    distinct.add(v);
-    n += 1;
+    // Treat null/undefined/empty-string as a single "null" sentinel.
+    distinct.add(v === null || v === undefined || v === "" ? "__NULL__" : v);
   }
   const total = rows.length;
   const cardinalityRatio = distinct.size / Math.max(1, total);
   if (cardinalityRatio > 0.5) return 0.7;
   if (cardinalityRatio > 0.1) return 0.3;
   return 0.0;
-  void n;
 }
 
 function computeCorruptionScoreInline(
@@ -172,14 +171,15 @@ export function estimateSparseMatchSignal(
   }
   const sample = rows.length > sampleSize ? rows.slice(0, sampleSize) : rows;
   const cols = userColumns(sample);
+  const NULL_KEY = "__NULL__";
   let nPairs = 0;
   for (const col of exactColumns) {
     if (!cols.includes(col)) continue;
     const counts = new Map<unknown, number>();
     for (const r of sample) {
       const v = (r as Record<string, unknown>)[col];
-      if (v === null || v === undefined || v === "") continue;
-      counts.set(v, (counts.get(v) ?? 0) + 1);
+      const key = v === null || v === undefined || v === "" ? NULL_KEY : v;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     for (const n of counts.values()) {
       if (n > 1) nPairs += (n * (n - 1)) / 2;
@@ -203,11 +203,14 @@ export function estimateFullPopHits(
   if (!cols.includes(blockingCol)) return 0;
   if (elapsedSec(start) > BUDGET_FULL_POP_HITS) return null;
   try {
+    // Python parity: polars ``group_by`` keeps nulls as a single group, so
+    // multiple null rows in the blocking column count as a collision group.
     const counts = new Map<unknown, number>();
+    const NULL_KEY = "__NULL__";
     for (const r of rows) {
-      const v = (r as Record<string, unknown>)[blockingCol];
-      if (v === null || v === undefined || v === "") continue;
-      counts.set(v, (counts.get(v) ?? 0) + 1);
+      const raw = (r as Record<string, unknown>)[blockingCol];
+      const key = raw === null || raw === undefined || raw === "" ? NULL_KEY : raw;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     if (elapsedSec(start) > BUDGET_FULL_POP_HITS) return null;
     let nPairs = 0;
@@ -238,21 +241,25 @@ export function computeCrossBlockingOverlap(
   }
   if (elapsedSec(start) > BUDGET_CROSS_BLOCKING) return null;
   try {
+    // Python parity: polars ``group_by`` includes nulls as a single group.
+    const NULL_KEY = "__NULL__";
     const groupA = new Map<unknown, number[]>();
     const groupB = new Map<unknown, number[]>();
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i] as Record<string, unknown>;
       const va = r[keyA];
       const vb = r[keyB];
-      if (va !== null && va !== undefined && va !== "") {
-        const arr = groupA.get(va);
+      const ka = va === null || va === undefined || va === "" ? NULL_KEY : va;
+      const kb = vb === null || vb === undefined || vb === "" ? NULL_KEY : vb;
+      {
+        const arr = groupA.get(ka);
         if (arr) arr.push(i);
-        else groupA.set(va, [i]);
+        else groupA.set(ka, [i]);
       }
-      if (vb !== null && vb !== undefined && vb !== "") {
-        const arr = groupB.get(vb);
+      {
+        const arr = groupB.get(kb);
         if (arr) arr.push(i);
-        else groupB.set(vb, [i]);
+        else groupB.set(kb, [i]);
       }
     }
     if (elapsedSec(start) > BUDGET_CROSS_BLOCKING) return null;
