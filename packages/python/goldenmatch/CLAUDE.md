@@ -17,6 +17,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - **Release tags:** Python = `v1.x.y` (triggers `publish-goldenmatch.yml` → PyPI). TypeScript = `goldenmatch-js-v0.x.y` (triggers `publish-goldenmatch-js.yml` → npm). Never push an unprefixed version tag for TS.
 
 ## Testing
+- `CliRunner(mix_stderr=False)` errors on click ≥8.3 (currently installed) with `TypeError: unexpected keyword argument 'mix_stderr'`. Drop the kwarg — default already routes stderr separately; `result.stderr` is still accessible.
 - **TypeScript:** `cd packages/goldenmatch-js && npx vitest run` — 478 tests currently. Full check: `npx tsc --noEmit && npx vitest run && npm run build`
 - TS parity check: `tests/parity/` — add new parity cases when porting any new scorer or algorithm
 - `pytest --tb=short` from project root — all tests must pass after every change
@@ -105,6 +106,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - LLM+embedding benchmark: `python tests/benchmarks/run_llm_budget_bench.py` (requires OPENAI_API_KEY)
 
 ## Code Patterns
+- **Cross-surface controller telemetry uses ONE serializer**: `goldenmatch.web.controller_telemetry.serialize_telemetry(profile, history, committed_config, source, run_name, recorded_at)`. Every v1.7-v1.12 surface (web `/api/v1/controller/telemetry`, TUI Controller tab, CLI `goldenmatch autoconfig`, REST `/autoconfig`, MCP `auto_configure` tool, A2A `autoconfig` skill, SQL `goldenmatch_autoconfig_telemetry()`, Rust bridge `autoconfig()`) delegates here. SQL bridge + DuckDB UDFs fall back to a minimal hand-rolled blob (`{available, source, stop_reason, health}`) when `goldenmatch[web]` extra isn't installed. Capture telemetry by reading `goldenmatch.core.autoconfig._LAST_CONTROLLER_RUN.get()` post-`auto_configure_df()` — returns `(profile, history)` or `None`.
 - **Pydantic typed-accessor pattern for Optional invariants.** `MatchkeyConfig.threshold` / `MatchkeyField.scorer`/`weight`/`field` are typed Optional at the Pydantic level (YAML round-trip) but guaranteed non-None for `weighted`/`fuzzy` matchkey types post-validation. Pattern (PR #151): keep the field Optional, add a `@property` accessor (`fuzzy_threshold`, `fuzzy_scorer`, `fuzzy_weight`, `resolved_field`) that raises `ValueError` if the invariant was broken via post-construction mutation, and use the accessor at call sites that need the narrowed type. Pyright stops seeing Optional — dropped 7 `# pyright: ignore` suppressions in `scorer.py`.
 - **Pyright suppressions on multi-line imports.** `# pyright: ignore[reportMissingImports]` must sit on the `from X import (` line itself, NOT on the imported-symbol continuation line. Pyright reports the error at the `from X` column; a comment on a later line doesn't satisfy it. Bit us on `autoconfig_policy.py` (openai) and `scorer.py` (sentence_transformers) in PR #147.
 - Auto-config exact matchkeys: `col_type in ("zip","geo")` NEVER backs an exact matchkey (blocking signal, not identity claim). Exact matchkeys require `cardinality_ratio >= 0.5`. Skipped columns still flow into `build_blocking()`.

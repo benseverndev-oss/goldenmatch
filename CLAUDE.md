@@ -83,3 +83,9 @@ A `continue-on-error: true` step that exits non-zero still flips the parent job'
 
 ## pypistats.org throttling
 pypistats `/api/packages/<pkg>/recent` 429s aggressively on unauthenticated bursts. Any script hitting it needs retry+backoff plus inter-request sleep (~1.5s). `scripts/suite_download_badges.py` is the reference implementation — preserves the prior badge value when throttled so the workflow exits 0.
+
+## MCP Registry vs mcp-marketplace.io
+Official registry is `registry.modelcontextprotocol.io` (suite is listed at `io.github.benzsevern/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`). `mcp-marketplace.io` is a third-party aggregator and does NOT list this suite. Maintainer dashboard for the official registry uses `io.github.X/Y` package identifiers + Approved/Remote/Edit buttons — that's the screenshot you'll see, not the marketplace site. `publish-mcp.yml` auto-syncs all five listings on `release: published`; `workflow_dispatch` with `package=all` force-refreshes without re-tagging.
+
+## Publish workflows: read version from git tag, not PyPI
+`publish-mcp.yml` and the per-package `publish-<pkg>.yml` workflows both fire off `release: published`. If the MCP sync queries PyPI for the version, it races against the parallel PyPI publish and reads the prior version → registry returns 400 "cannot publish duplicate version". Always derive version from the git tag (`${TAG##*-v}`, then `${V#v}`) for release events and from `pyproject.toml` for `workflow_dispatch`. PR #167 has the canonical pattern.

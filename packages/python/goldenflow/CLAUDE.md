@@ -282,9 +282,13 @@ dqbench run all                                  # Compare against other tools
 
 ## Publishing
 
+CI auto-publishes via `.github/workflows/publish-goldenflow.yml` (PR #166) on `release: published` for `goldenflow-v*` tags. The MCP Registry listing auto-syncs off the same event via `publish-mcp.yml`. Manual fallback:
+
 ```bash
 python -m build && source .testing/.env && python -m twine upload dist/*
 ```
+
+- **Version source**: `pyproject.toml` `[project] version` is canonical. `goldenflow/__init__.py:__version__` MUST match. They drifted in v1.1.x (pyproject=1.1.2, `__init__`=1.1.1) and shipped that way — fixed in 1.1.5. Bumping a release means touching both atomically.
 
 ## Remote MCP Server
 
