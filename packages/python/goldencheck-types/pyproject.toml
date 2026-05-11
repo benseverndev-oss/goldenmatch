@@ -8,6 +8,12 @@ dependencies = ["pyyaml>=6.0"]
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.urls]
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldencheck-types#readme"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
