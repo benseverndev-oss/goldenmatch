@@ -41,7 +41,7 @@ def _ensure_ray():
 
 def score_blocks_ray(
     blocks: list,
-    mk: MatchkeyConfig,
+    mk: MatchkeyConfig,  # noqa: F821  # forward ref, resolved lazily via __future__ annotations
     matched_pairs: set[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,

@@ -222,7 +222,7 @@ def is_embedding_available() -> bool:
         return True
     if mode == GPUMode.LOCAL:
         try:
-            import sentence_transformers
+            import sentence_transformers  # noqa: F401  # availability check for optional dep
             return True
         except ImportError:
             return False

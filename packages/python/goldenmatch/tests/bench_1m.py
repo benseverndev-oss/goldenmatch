@@ -97,7 +97,7 @@ def main():
         for cid, cinfo in sample_clusters.items():
             if not cinfo["oversized"]:
                 cluster_df = df.filter(pl.col("__row_id__").is_in(cinfo["members"]))
-                golden = build_golden_record(cluster_df, cfg.golden_rules)
+                _golden = build_golden_record(cluster_df, cfg.golden_rules)
                 golden_count += 1
     print(f"    Golden records built: {golden_count}")
 

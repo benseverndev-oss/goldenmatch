@@ -65,8 +65,8 @@ def run_abt_buy():
     combined = combined.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     combined, _ = auto_fix_dataframe(combined)
 
-    ids = combined["id"].to_list()
-    srcs = combined["__source__"].to_list()
+    _ids = combined["id"].to_list()
+    _srcs = combined["__source__"].to_list()
     rows = combined.to_dicts()
     row_ids = combined["__row_id__"].to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}

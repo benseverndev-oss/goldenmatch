@@ -526,7 +526,9 @@ def boost_accuracy(
     level2_f1 = 0.0
 
     try:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import (
+            SentenceTransformer,  # noqa: F401  # availability check for optional dep
+        )
         logger.info("Level 2: Fine-tuning bi-encoder on %d labeled pairs...", len(all_labels))
         level2_result = finetune_and_rescore(
             candidate_pairs, df, matchable_columns,

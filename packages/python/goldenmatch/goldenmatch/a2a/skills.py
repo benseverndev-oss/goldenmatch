@@ -86,7 +86,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id == "configure":
         import polars as pl
 
-        analysis = session.analyze(params["file_path"])
+        _analysis = session.analyze(params["file_path"])
         decision = select_strategy(
             profile_for_agent(
                 pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)

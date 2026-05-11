@@ -133,7 +133,7 @@ def run_cross_encoder_sim(name, df_a, df_b, gt, text_col, extra_cols, standardiz
     print(f"{name} — Level 3 Cross-Encoder Simulation")
     print(f"{'='*70}")
 
-    all_cols = [text_col] + extra_cols
+    _all_cols = [text_col] + extra_cols
     fields = [MatchkeyField(column=text_col, transforms=["lowercase", "strip"], scorer="token_sort", weight=1.0)]
 
     pairs, combined = run_pipeline_get_pairs(df_a, df_b,

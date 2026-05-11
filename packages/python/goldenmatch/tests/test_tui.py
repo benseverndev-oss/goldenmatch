@@ -16,7 +16,7 @@ class TestTUIApp:
     async def test_app_launches(self, sample_csv):
         """App should render without crashing when given a valid file."""
         app = GoldenMatchApp(files=[str(sample_csv)])
-        async with app.run_test() as pilot:
+        async with app.run_test():
             assert app.is_running
 
     @pytest.mark.asyncio
@@ -41,7 +41,7 @@ class TestTUIApp:
     async def test_app_launches_without_files(self):
         """App should launch even with no files provided."""
         app = GoldenMatchApp(files=[])
-        async with app.run_test() as pilot:
+        async with app.run_test():
             assert app.is_running
 
     @pytest.mark.asyncio

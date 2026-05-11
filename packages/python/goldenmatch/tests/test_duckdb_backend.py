@@ -5,7 +5,7 @@ import polars as pl
 import pytest
 
 try:
-    import duckdb
+    import duckdb  # noqa: F401  # availability check for optional dep
     HAS_DUCKDB = True
 except ImportError:
     HAS_DUCKDB = False

@@ -255,7 +255,7 @@ def _ann_sub_block(
     pairs = blocker.query(record_embeddings)
 
     # Group into sub-blocks via Union-Find
-    row_ids = block_df["__row_id__"].to_list()
+    _row_ids = block_df["__row_id__"].to_list()
     uf = UnionFind()
     for a, b in pairs:
         real_a = valid_records[a]

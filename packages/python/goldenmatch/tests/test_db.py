@@ -7,7 +7,7 @@ import pytest
 
 # Check if testing.postgresql is available
 try:
-    import psycopg2
+    import psycopg2  # noqa: F401  # availability check for optional dep
     import testing.postgresql
     HAS_POSTGRES = True
 except (ImportError, Exception):

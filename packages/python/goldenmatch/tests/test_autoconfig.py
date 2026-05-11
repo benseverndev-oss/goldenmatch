@@ -1057,7 +1057,7 @@ class TestDomainAwareAutoConfig:
         })
 
         with patch("goldenmatch.core.domain.detect_domain") as mock_detect:
-            config = _legacy_auto_configure_v0(df, domain_config=DomainConfig(enabled=False))
+            _config = _legacy_auto_configure_v0(df, domain_config=DomainConfig(enabled=False))
 
         # detect_domain should NOT have been called
         mock_detect.assert_not_called()

@@ -407,7 +407,7 @@ class AgentSession:
             )
 
         # Confidence distribution
-        scores = [s for _, _, s in scored_pairs]
+        _scores = [s for _, _, s in scored_pairs]
         confidence_distribution = {
             "auto_merged": len(auto_merged),
             "review": len(review),

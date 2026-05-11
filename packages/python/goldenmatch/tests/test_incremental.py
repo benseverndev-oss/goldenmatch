@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 try:
-    import faiss
+    import faiss  # noqa: F401  # availability check for optional dep
     HAS_FAISS = True
 except ImportError:
     HAS_FAISS = False

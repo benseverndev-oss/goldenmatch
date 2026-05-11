@@ -113,7 +113,7 @@ class TestStreamProcessor:
         proc = StreamProcessor(df, config)
 
         # Process records -- even if one fails, others should work
-        results = proc.process_batch([
+        _results = proc.process_batch([
             {"name": "Alice", "zip": "12345"},
             {"name": "Bob", "zip": "67890"},
         ])

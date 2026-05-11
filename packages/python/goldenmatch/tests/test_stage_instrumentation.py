@@ -22,7 +22,7 @@ def test_build_blocks_emits_blocking_profile():
         max_block_size=5000, skip_oversized=False,
     )
     with profile_capture() as e:
-        blocks = build_blocks(_make_test_lf(), cfg)
+        _blocks = build_blocks(_make_test_lf(), cfg)
     assert e.blocking is not None
     assert isinstance(e.blocking, BlockingProfile)
     assert e.blocking.n_blocks == 4
@@ -119,7 +119,7 @@ def test_build_clusters_emits_cluster_profile():
         (10, 11, 0.85),                              # cluster {10,11}
     ]
     with profile_capture() as e:
-        clusters = build_clusters(pairs)
+        _clusters = build_clusters(pairs)
     assert e.cluster is not None
     assert isinstance(e.cluster, ClusterProfile)
     assert e.cluster.n_clusters == 2

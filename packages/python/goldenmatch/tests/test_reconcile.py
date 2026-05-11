@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 try:
-    import psycopg2
+    import psycopg2  # noqa: F401  # availability check for optional dep
     import testing.postgresql
     HAS_POSTGRES = True
 except (ImportError, Exception):
@@ -205,7 +205,7 @@ class TestGoldenVersioning:
         cid = result1.cluster_id
 
         # Add another record → should create version 2
-        result2 = reconcile_match(
+        _result2 = reconcile_match(
             {"id": 3, "name": "Jon Smith"}, 3, [cid], {cid: 0.9},
             connector, "customers", run_id="run-2",
         )

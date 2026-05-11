@@ -17,7 +17,7 @@ def test_compute_identity_collision_signal_50k_under_budget():
         "address": [f"{i % 100} Main St" for i in range(n)],
     })
     start = time.time()
-    signal = compute_identity_collision_signal(df, "email", ["address"])
+    _signal = compute_identity_collision_signal(df, "email", ["address"])
     elapsed = time.time() - start
     # Spec budget is 8s; allow CI margin (post-fold shared runners)
     # without masking O(N^2) blowups

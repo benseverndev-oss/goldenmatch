@@ -144,7 +144,7 @@ def _assemble_v0_history_entry(
     config_v0: GoldenMatchConfig,
     history: RunHistory,
     controller: AutoConfigController,
-) -> HistoryEntry | None:
+) -> HistoryEntry | None:  # noqa: F821  # forward ref, resolved lazily
     """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
 
     Strategy:

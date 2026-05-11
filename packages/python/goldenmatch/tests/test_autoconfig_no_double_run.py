@@ -99,7 +99,7 @@ def test_dedupe_df_explicit_config_unaffected():
         ),
     )
     with patch("goldenmatch.core.autoconfig.auto_configure_df") as mock_auto:
-        result = gm.dedupe_df(df, config=cfg)
+        _result = gm.dedupe_df(df, config=cfg)
     mock_auto.assert_not_called()
 
 

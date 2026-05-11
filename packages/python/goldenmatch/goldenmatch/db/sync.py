@@ -381,7 +381,7 @@ def _incremental_pipeline(
 
 def _embed_next_chunk(
     connector: DatabaseConnector,
-    ann_index: PersistentANNIndex,
+    ann_index: PersistentANNIndex,  # noqa: F821  # forward ref, resolved lazily
     source_table: str,
     columns: list[str],
     chunk_size: int = 100000,
@@ -392,7 +392,7 @@ def _embed_next_chunk(
         from goldenmatch.db.connector import _quote_ident
 
         # Find records not yet embedded
-        already_embedded = ann_index.record_count
+        _already_embedded = ann_index.record_count
         query = (
             f"SELECT id FROM {_quote_ident(source_table)} "
             f"WHERE id NOT IN ("

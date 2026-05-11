@@ -162,8 +162,8 @@ def train_and_rescore(
 
 def evaluate(found_pairs, gt_pairs):
     tp = found_pairs & gt_pairs
-    fp = found_pairs - gt_pairs
-    fn = gt_pairs - found_pairs
+    _fp = found_pairs - gt_pairs
+    _fn = gt_pairs - found_pairs
     precision = len(tp) / len(found_pairs) if found_pairs else 0.0
     recall = len(tp) / len(gt_pairs) if gt_pairs else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
@@ -203,7 +203,7 @@ def run_boost_sim(dataset_name, df_a, df_b, gt, matchkeys, blocking, standardiza
     # Get candidate pairs
     t0 = time.perf_counter()
     pairs, combined = run_pipeline_get_pairs(df_a, df_b, matchkeys, blocking, standardization)
-    pipeline_time = time.perf_counter() - t0
+    _pipeline_time = time.perf_counter() - t0
 
     # Baseline (no boost)
     for thresh in [0.50, 0.60, 0.70, 0.80]:

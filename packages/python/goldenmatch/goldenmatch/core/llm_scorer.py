@@ -104,7 +104,7 @@ def llm_score_pairs(
     batch_size: int = 20,
     max_workers: int = 5,
     display_columns: list[str] | None = None,
-    config: LLMScorerConfig | None = None,
+    config: LLMScorerConfig | None = None,  # noqa: F821  # forward ref, resolved lazily
     return_budget: bool = False,
     memory_store: MemoryStore | None = None,
     matchkey_fields: list[str] | None = None,
@@ -317,7 +317,7 @@ def llm_explain_pair(
     provider: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
-    budget: BudgetTracker | None = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_chars: int = 240,
 ) -> str:
     """Generate a one-sentence prose explanation for a record pair.
@@ -409,7 +409,7 @@ def _batch_score(
     api_key: str,
     model: str,
     batch_size: int,
-    budget: BudgetTracker | None = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_workers: int = 5,
 ) -> dict[int, bool]:
     """Score candidate pairs in batches with concurrent requests.
@@ -667,7 +667,7 @@ def _iterative_calibrate(
     api_key: str,
     model: str,
     batch_size: int,
-    budget: BudgetTracker | None = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_workers: int = 5,
     sample_size: int = 100,
     max_rounds: int = 5,

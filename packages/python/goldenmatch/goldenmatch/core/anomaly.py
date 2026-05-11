@@ -63,8 +63,8 @@ def detect_anomalies(
     email_cols = [c for c in cols if _is_likely_column(c, ["email", "mail", "e_mail"])]
     phone_cols = [c for c in cols if _is_likely_column(c, ["phone", "tel", "mobile", "cell"])]
     zip_cols = [c for c in cols if _is_likely_column(c, ["zip", "postal", "postcode"])]
-    name_cols = [c for c in cols if _is_likely_column(c, ["name", "first_name", "last_name", "full_name"])]
-    date_cols = [c for c in cols if _is_likely_column(c, ["date", "dob", "birth", "created"])]
+    _name_cols = [c for c in cols if _is_likely_column(c, ["name", "first_name", "last_name", "full_name"])]
+    _date_cols = [c for c in cols if _is_likely_column(c, ["date", "dob", "birth", "created"])]
 
     rows = df.to_dicts()
 

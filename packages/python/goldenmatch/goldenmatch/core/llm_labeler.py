@@ -27,7 +27,7 @@ _CONTEXT_MAP = {
 
 def detect_context(column_types: dict[str, str]) -> str:
     """Detect dataset context from column types for LLM prompt."""
-    type_set = frozenset(column_types.values())
+    _type_set = frozenset(column_types.values())
     col_names = frozenset(c.lower() for c in column_types.keys())
 
     # Try column types first
@@ -103,7 +103,7 @@ def detect_provider() -> tuple[str, str] | None:
     try:
         from goldenmatch.config.settings import load_global_settings
         settings = load_global_settings()
-        raw = settings.to_dict().get("defaults", {})
+        _raw = settings.to_dict().get("defaults", {})
         # Check for llm keys in settings (future extension)
     except Exception:
         pass

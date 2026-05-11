@@ -173,7 +173,7 @@ class TestLLMClusterPairsIntegration:
         pairs = [(1, 2, 0.96), (3, 4, 0.50)]
 
         with patch("goldenmatch.core.llm_cluster._call_llm_cluster") as mock_llm:
-            result = llm_cluster_pairs(pairs, sample_df, config, api_key="test")
+            _result = llm_cluster_pairs(pairs, sample_df, config, api_key="test")
             mock_llm.assert_not_called()
 
     def test_small_component_falls_back_to_pairwise(self, sample_df):
@@ -182,7 +182,7 @@ class TestLLMClusterPairsIntegration:
         pairs = [(1, 2, 0.80)]
 
         with patch("goldenmatch.core.llm_cluster._pairwise_fallback") as mock_pw:
-            result = llm_cluster_pairs(pairs, sample_df, config, api_key="test")
+            _result = llm_cluster_pairs(pairs, sample_df, config, api_key="test")
             mock_pw.assert_called_once()
 
     def test_budget_tracking(self, sample_df):

@@ -414,7 +414,7 @@ def run_dblp_scholar():
     results.append(r)
 
     # Cascaded exact + multi-pass fuzzy
-    found_exact_ds = found  # reuse exact from above
+    _found_exact_ds = found  # reuse exact from above
     found_exact_ds2, _ = run_matching(df_a, df_b, matchkeys=[
         MatchkeyConfig(
             name="title_exact",

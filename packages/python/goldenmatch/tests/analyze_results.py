@@ -170,8 +170,8 @@ def main():
         cluster_df = df.filter(pl.col("__row_id__").is_in(members))
 
         # Check: do all members have the same last_name (after standardization)?
-        last_names = cluster_df["last_name"].drop_nulls().unique().to_list()
-        emails_raw = cluster_df["email"].drop_nulls().to_list()
+        _last_names = cluster_df["last_name"].drop_nulls().unique().to_list()
+        _emails_raw = cluster_df["email"].drop_nulls().to_list()
 
         # For exact email matching, all standardized emails should be the same
         if mk_col in cluster_df.columns:

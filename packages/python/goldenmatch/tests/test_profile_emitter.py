@@ -78,7 +78,7 @@ def test_emitter_isolation_across_threads():
     seen: dict[str, ProfileEmitter] = {}
 
     def worker(label: str) -> None:
-        with profile_capture() as e:
+        with profile_capture():
             barrier.wait()
             # ContextVar gives each thread its own stack
             seen[label] = current_emitter()

@@ -128,7 +128,7 @@ def test_finalize_drift_real_data_path_exercised():
     code is never executed on non-mocked profiles."""
     df = _read_fixture("clean_dedupe.csv")
     # Direct call to auto_configure_df runs _finalize (not the _api skip path)
-    cfg = goldenmatch.auto_configure_df(df)
+    _cfg = goldenmatch.auto_configure_df(df)
     state = _LAST_CONTROLLER_RUN.get()
     assert state is not None
     profile, history = state

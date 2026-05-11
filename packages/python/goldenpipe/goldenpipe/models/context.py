@@ -8,13 +8,13 @@ from typing import Any
 import polars as pl
 
 
-class StageStatus(str, Enum):
+class StageStatus(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     SUCCESS = "success"
     SKIPPED = "skipped"
     FAILED = "failed"
 
 
-class PipeStatus(str, Enum):
+class PipeStatus(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     SUCCESS = "success"
     PARTIAL = "partial"
     FAILED = "failed"

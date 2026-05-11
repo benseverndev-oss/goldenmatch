@@ -255,8 +255,8 @@ def main():
         print("Projected performance (extrapolated):")
         # Use last two points to estimate scaling factor
         r1, r2 = results[-2], results[-1]
-        scale_factor = r2['total_seconds'] / r1['total_seconds']
-        size_factor = r2['n'] / r1['n']
+        _scale_factor = r2['total_seconds'] / r1['total_seconds']
+        _size_factor = r2['n'] / r1['n']
         # Estimate O(n log n) or O(n) scaling
         for target in [50_000_000, 100_000_000, 500_000_000]:
             ratio = target / r2['n']

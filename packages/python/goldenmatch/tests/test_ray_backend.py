@@ -11,7 +11,7 @@ from goldenmatch.config.schemas import (
 )
 
 try:
-    import ray
+    import ray  # noqa: F401  # availability check for optional dep
     HAS_RAY = True
 except ImportError:
     HAS_RAY = False

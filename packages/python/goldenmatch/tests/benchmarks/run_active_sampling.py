@@ -91,7 +91,7 @@ def main():
 
     # === Active 300 (3 rounds) ===
     print("\n=== Active Sampling (300 labels, 3 rounds) ===")
-    scores_arr = np.array([s for _, _, s in candidate_pairs])
+    _scores_arr = np.array([s for _, _, s in candidate_pairs])
     labeled = set()
     all_idx, all_lbl = [], []
 

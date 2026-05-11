@@ -100,8 +100,8 @@ def simulate_labels(pairs, combined_df, gt_pairs, n_labels, noise_rate=0.05):
 
 def evaluate(found_pairs, gt_pairs):
     tp = found_pairs & gt_pairs
-    fp = found_pairs - gt_pairs
-    fn = gt_pairs - found_pairs
+    _fp = found_pairs - gt_pairs
+    _fn = gt_pairs - found_pairs
     p = len(tp) / len(found_pairs) if found_pairs else 0.0
     r = len(tp) / len(gt_pairs) if gt_pairs else 0.0
     f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
@@ -135,7 +135,7 @@ def run_ann_finetune(name, df_a, df_b, gt, text_col, extra_cols, standardization
     print(f"{'='*70}")
 
     # Use ann_pairs blocking for high recall
-    all_cols = [text_col] + extra_cols
+    _all_cols = [text_col] + extra_cols
     fields = [MatchkeyField(column=text_col, transforms=["lowercase", "strip"], scorer="token_sort", weight=1.0)]
 
     pairs, combined = run_pipeline_get_pairs(df_a, df_b,
@@ -154,7 +154,7 @@ def run_ann_finetune(name, df_a, df_b, gt, text_col, extra_cols, standardization
     )
 
     # Check blocking recall
-    gt_in_pairs = 0
+    _gt_in_pairs = 0
     row_to_source = {}
     row_to_id = {}
     for row in combined.select("__row_id__", "__source__", "id").to_dicts():

@@ -76,7 +76,7 @@ def test_auto_config_profiles_cleaned_data():
         return real_ac(df_in, **kwargs)
 
     with patch("goldenmatch.core.autoconfig.auto_configure_df", side_effect=capture_autoconfig):
-        result = run_dedupe_df(df, config, auto_config=True)
+        _result = run_dedupe_df(df, config, auto_config=True)
 
     assert len(autoconfig_input_heights) == 1
     assert autoconfig_input_heights[0] == 3

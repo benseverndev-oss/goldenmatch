@@ -7,7 +7,7 @@ import json
 import pytest
 
 try:
-    import aiohttp
+    import aiohttp  # noqa: F401  # availability check for optional dep
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False
