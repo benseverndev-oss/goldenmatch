@@ -101,7 +101,12 @@ AGENT_TOOLS = [
     ),
     Tool(
         name="auto_configure",
-        description="Generate optimal matching config from data analysis",
+        description=(
+            "Run AutoConfigController on a CSV; return the committed "
+            "GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) "
+            "plus telemetry — stop_reason, health, decision trace, indicator "
+            "column priors. Programmatic equivalent of `goldenmatch autoconfig`."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -109,6 +114,18 @@ AGENT_TOOLS = [
                 "constraints": {"type": "object"},
             },
             "required": ["file_path"],
+        },
+    ),
+    Tool(
+        name="controller_telemetry",
+        description=(
+            "Return the AutoConfigController telemetry from the most recent "
+            "`auto_configure` or `agent_deduplicate` call in this MCP session. "
+            "Same JSON shape as the web /api/v1/controller/telemetry endpoint."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
         },
     ),
     Tool(
@@ -352,18 +369,25 @@ def _dispatch(
         return session.analyze(args["file_path"])
 
     if name == "auto_configure":
+        # v1.7-v1.12: route through AgentSession.autoconfigure which calls
+        # auto_configure_df and captures controller telemetry. The legacy
+        # `select_strategy` heuristic path is still reachable via
+        # `analyze_data` if a caller wants the lighter profile-only view.
         session = session_cls()
-        analysis = session.analyze(args["file_path"])
-        # Build config from the analysis
-        from goldenmatch.core.agent import _decision_to_config, profile_for_agent, select_strategy
-        profile = profile_for_agent(session.data)
-        decision = select_strategy(profile)
-        config = _decision_to_config(decision)
-        # Serialize config to dict
-        config_dict = config.model_dump() if hasattr(config, "model_dump") else {}
+        return session.autoconfigure(args["file_path"])
+
+    if name == "controller_telemetry":
+        # Stateless MCP — each tool call instantiates a fresh AgentSession,
+        # so we can't read telemetry from a prior call. Surface that clearly
+        # rather than silently returning the unavailable sentinel.
         return {
-            "analysis": analysis,
-            "config": config_dict,
+            "available": False,
+            "note": (
+                "controller_telemetry is per-session, but MCP tool calls are "
+                "stateless. Call auto_configure or agent_deduplicate in the "
+                "same tool invocation chain to get telemetry alongside the "
+                "result; that tool already returns telemetry inline."
+            ),
         }
 
     if name == "agent_deduplicate":
@@ -374,6 +398,8 @@ def _dispatch(
             "reasoning": raw.get("reasoning", {}),
             "confidence_distribution": raw.get("confidence_distribution", {}),
             "storage": raw.get("storage", "memory"),
+            "telemetry": session.last_telemetry
+                or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
 
@@ -383,6 +409,8 @@ def _dispatch(
         raw = session.match_sources(args["file_a"], args["file_b"], config=config_arg)
         return {
             "reasoning": raw.get("reasoning", {}),
+            "telemetry": session.last_telemetry
+                or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
 

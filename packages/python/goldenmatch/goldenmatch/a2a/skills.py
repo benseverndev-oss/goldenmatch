@@ -44,13 +44,35 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id == "analyze_data":
         return session.analyze(params["file_path"])
 
+    if skill_id == "autoconfig":
+        # v1.7-v1.12: AutoConfigController via AgentSession. Returns committed
+        # config + telemetry blob (stop_reason, health, decisions, NE fields).
+        return session.autoconfigure(params["file_path"])
+
+    if skill_id == "controller_telemetry":
+        # Stateless A2A dispatch (one AgentSession per request) means we
+        # can't recall telemetry from a prior request. Mirrors MCP's note —
+        # callers should use the inline telemetry returned by autoconfig /
+        # deduplicate / match instead.
+        return {
+            "available": False,
+            "note": (
+                "controller_telemetry is per-session and A2A dispatch is "
+                "stateless. Telemetry is returned inline by autoconfig, "
+                "deduplicate, and match skills."
+            ),
+        }
+
     if skill_id == "deduplicate":
         result = session.deduplicate(
             params["file_path"],
             config=params.get("config"),
         )
-        # Serialise -- strip non-JSON-friendly objects
-        return _serialise_result(result)
+        serialised = _serialise_result(result)
+        # Plumb telemetry onto the wire result so callers see stop_reason /
+        # decisions / NE alongside the dedupe output, not as a separate call.
+        serialised["telemetry"] = session.last_telemetry or {"available": False, "source": None}
+        return serialised
 
     if skill_id == "match":
         result = session.match_sources(
@@ -58,7 +80,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             params["file_b"],
             config=params.get("config"),
         )
-        return _serialise_result(result)
+        serialised = _serialise_result(result)
+        serialised["telemetry"] = session.last_telemetry or {"available": False, "source": None}
+        return serialised
 
     if skill_id == "compare_strategies":
         return session.compare_strategies(

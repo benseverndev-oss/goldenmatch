@@ -327,6 +327,83 @@ class AgentSession:
         self.result: Any = None
         self.review_queue = ReviewQueue(backend="memory")
         self.reasoning: dict[str, Any] = {}
+        # v1.7-v1.12: last controller run's serialised telemetry blob. Set by
+        # ``autoconfigure()`` and by ``deduplicate()`` / ``match_sources()`` on
+        # paths where the controller actually fired. Same JSON shape the web
+        # /api/v1/controller/telemetry endpoint and the SQL surfaces return.
+        self.last_telemetry: dict[str, Any] | None = None
+
+    # ── controller telemetry helpers ─────────────────────────────────────
+
+    def _capture_telemetry(self, committed_config: Any, source: str) -> dict[str, Any] | None:
+        """Serialize the most recent ``_LAST_CONTROLLER_RUN`` ContextVar.
+
+        Returns ``None`` when the controller didn't run on the current thread
+        (the typical signal that the caller passed an explicit ``config=``).
+        The shape mirrors what the web ``/api/v1/controller/telemetry``
+        endpoint returns so MCP / A2A / REST consumers can reuse the same
+        schema across surfaces.
+        """
+        try:
+            from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+            state = _LAST_CONTROLLER_RUN.get()
+        except Exception:
+            return None
+        if state is None:
+            return None
+        profile, history = state
+        try:
+            from goldenmatch.web.controller_telemetry import serialize_telemetry
+            return serialize_telemetry(
+                profile=profile,
+                history=history,
+                committed_config=committed_config,
+                source=source,
+                run_name=None,
+                recorded_at=None,
+            )
+        except Exception:
+            # web extra not installed — minimal fallback so the contract
+            # still resolves (just stop_reason + health). Same fallback
+            # pattern the SQL bridge + DuckDB UDFs use.
+            out: dict[str, Any] = {
+                "available": profile is not None or history is not None,
+                "source": source,
+            }
+            try:
+                if history is not None and getattr(history, "stop_reason", None) is not None:
+                    out["stop_reason"] = history.stop_reason.value
+            except Exception:
+                pass
+            try:
+                if profile is not None:
+                    out["health"] = profile.health().value
+            except Exception:
+                pass
+            return out
+
+    # ── autoconfigure ────────────────────────────────────────────────────
+
+    def autoconfigure(self, file_path: str) -> dict[str, Any]:
+        """Run AutoConfigController on the input file; return committed config + telemetry.
+
+        Programmatic equivalent of the CLI ``goldenmatch autoconfig <file>``.
+        Caller can adopt ``config`` for a follow-up ``deduplicate(file, config=...)``
+        call; ``telemetry`` is also stashed on ``self.last_telemetry``.
+        """
+        from goldenmatch.core.autoconfig import auto_configure_df
+
+        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        self.data = df
+        cfg = auto_configure_df(df)
+        self.config = cfg
+        telemetry = self._capture_telemetry(cfg, source="autoconfigure")
+        self.last_telemetry = telemetry
+        return {
+            "config": cfg.model_dump(mode="json", exclude_none=True)
+            if hasattr(cfg, "model_dump") else {},
+            "telemetry": telemetry or {"available": False, "source": "autoconfigure"},
+        }
 
     # ── analyze ──────────────────────────────────────────────────────────
 
@@ -390,6 +467,11 @@ class AgentSession:
 
         result = dedupe_df(df, config=cfg)
         self.result = result
+
+        # Capture controller telemetry from this call (None when caller
+        # passed an explicit config and the controller didn't fire).
+        committed_cfg = getattr(result, "config", cfg)
+        self.last_telemetry = self._capture_telemetry(committed_cfg, source="deduplicate")
 
         # Gate scored pairs through review queue
         scored_pairs = result.scored_pairs or []
@@ -456,6 +538,9 @@ class AgentSession:
 
         result = match_df(df_a, df_b, config=cfg)
         self.result = result
+
+        committed_cfg = getattr(result, "config", cfg)
+        self.last_telemetry = self._capture_telemetry(committed_cfg, source="match_sources")
 
         self.reasoning = {
             "strategy": decision.strategy,
