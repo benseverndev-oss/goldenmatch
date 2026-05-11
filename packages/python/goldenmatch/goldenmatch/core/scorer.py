@@ -877,8 +877,8 @@ def rerank_top_pairs(
         return pairs
 
     try:
-        from sentence_transformers import (
-            CrossEncoder,  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+        from sentence_transformers import (  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+            CrossEncoder,
         )
     except ImportError:
         logger.warning("Cross-encoder reranking unavailable: sentence-transformers not installed")

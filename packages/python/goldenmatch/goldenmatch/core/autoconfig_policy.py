@@ -183,8 +183,8 @@ class LLMRefitPolicy:
 
         # Lazy import to keep openai an optional dep
         try:
-            from openai import (
-                OpenAI,  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+            from openai import (  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+                OpenAI,
             )
         except ImportError:
             return None
