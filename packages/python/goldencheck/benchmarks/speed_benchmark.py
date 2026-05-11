@@ -1,9 +1,11 @@
+import tempfile
 import time
 import tracemalloc
-import tempfile
 from pathlib import Path
+
 import polars as pl
 from goldencheck.engine.scanner import scan_file
+
 
 def generate_dataset(n_rows: int, path: Path):
     """Generate a realistic dataset with intentional quality issues."""

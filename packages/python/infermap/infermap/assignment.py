@@ -1,5 +1,6 @@
 """Optimal assignment via the Hungarian algorithm."""
 from __future__ import annotations
+
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from goldenflow.engine.profiler_bridge import ColumnProfile
 from goldenflow.transforms import TransformInfo, list_transforms
 
-
 # Finding check → transform mapping for --from-findings integration
 # Keys are real GoldenCheck check names (14 total from column + relation profilers)
 FINDING_TRANSFORM_MAP: dict[str, list[str]] = {

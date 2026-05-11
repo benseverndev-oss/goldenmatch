@@ -5,8 +5,8 @@ Clean pipeline: embedding blocking -> fuzzy scoring -> LLM precision filter.
 No domain extraction (software titles lack precise identifiers).
 """
 
-import sys
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -24,15 +24,19 @@ if env_file.exists():
             os.environ[k.strip()] = v.strip().strip('"').strip("'")
 
 import polars as pl
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_fuzzy_matches
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
-    LLMScorerConfig, BudgetConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    BudgetConfig,
+    LLMScorerConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets" / "Amazon-GoogleProducts"
 

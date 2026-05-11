@@ -28,14 +28,14 @@ from goldenmatch.config.schemas import (
     MemoryConfig,
     OutputConfig,
 )
-from goldenmatch.core.profiler import _guess_type
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
 from goldenmatch.core.complexity_profile import DataProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
+from goldenmatch.core.profiler import _guess_type
 
 logger = logging.getLogger(__name__)
 
 
-def _emit_data_profile(df: "pl.DataFrame") -> None:
+def _emit_data_profile(df: pl.DataFrame) -> None:
     """Emit DataProfile from the input DataFrame. No-op when null emitter."""
     if not _emitter_stack.get():
         return
@@ -1256,10 +1256,10 @@ _AUTOCONFIG_LLM_ENABLED: bool = (
 
 # Module-level default memory singleton (uses ~/.goldenmatch/autoconfig_memory.db).
 # Lazily initialised on first use to avoid creating the directory at import time.
-_DEFAULT_MEMORY: "AutoConfigMemory | None" = None
+_DEFAULT_MEMORY: AutoConfigMemory | None = None
 
 
-def _get_default_memory() -> "AutoConfigMemory | None":
+def _get_default_memory() -> AutoConfigMemory | None:
     """Return the default AutoConfigMemory, or None when disabled via env var."""
     global _DEFAULT_MEMORY
     if _AUTOCONFIG_MEMORY_DISABLED:
@@ -1277,16 +1277,16 @@ def _get_default_memory() -> "AutoConfigMemory | None":
 
 
 def auto_configure_df(
-    df: "pl.DataFrame | pl.LazyFrame",
+    df: pl.DataFrame | pl.LazyFrame,
     llm_provider: str | None = None,
     domain_config: Any = None,
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
     *,
-    reference: "pl.DataFrame | pl.LazyFrame | None" = None,
+    reference: pl.DataFrame | pl.LazyFrame | None = None,
     _skip_finalize: bool = False,
-) -> "GoldenMatchConfig":
+) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
     Runs an iterative refit loop:
@@ -1335,13 +1335,14 @@ def auto_configure_df(
 
     # Lazy import to avoid circular imports (controller imports back here)
     from goldenmatch.core.autoconfig_controller import (
-        AutoConfigController, ControllerBudget,
+        AutoConfigController,
+        ControllerBudget,
     )
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
 
     memory = _get_default_memory()
     if _AUTOCONFIG_LLM_ENABLED:
-        policy: "HeuristicRefitPolicy | LLMRefitPolicy" = LLMRefitPolicy(HeuristicRefitPolicy())
+        policy: HeuristicRefitPolicy | LLMRefitPolicy = LLMRefitPolicy(HeuristicRefitPolicy())
     else:
         policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
@@ -1697,7 +1698,7 @@ def _rebuild_from_decisions(
     transient_blocking: BlockingConfig | None,
     llm_scorer_config: LLMScorerConfig | None,
     memory_config: MemoryConfig | None,
-    standardization_config: "StandardizationConfig | None" = None,
+    standardization_config: StandardizationConfig | None = None,
 ) -> GoldenMatchConfig:
     """Assemble a GoldenMatchConfig from decisions (+ runtime hand-offs).
 

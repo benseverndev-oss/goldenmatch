@@ -1,14 +1,13 @@
 """Tests for goldenmatch matchkey builder."""
 
 import polars as pl
-
+from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.matchkey import (
     _xform_sig,
     build_matchkey_expr,
     compute_matchkeys,
     precompute_matchkey_transforms,
 )
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 
 
 class TestBuildMatchkeyExpr:
@@ -214,10 +213,14 @@ def test_run_dedupe_pipeline_populates_xform_columns():
     import csv
     import tempfile
     from pathlib import Path
+
     from goldenmatch import dedupe
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig,
-        GoldenRulesConfig, OutputConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        GoldenRulesConfig,
+        OutputConfig,
     )
 
     tmp = Path(tempfile.mkdtemp()) / "t.csv"

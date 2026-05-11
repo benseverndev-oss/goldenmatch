@@ -11,11 +11,11 @@ import numpy as np
 import yaml
 
 from infermap.assignment import optimal_assign
+from infermap.calibration import Calibrator
 from infermap.dictionaries import merge_domains
 from infermap.providers import extract_schema
 from infermap.scorers import default_scorers
-from infermap.scorers.alias import ALIASES, _ALIAS_LOOKUP, AliasScorer
-from infermap.calibration import Calibrator
+from infermap.scorers.alias import _ALIAS_LOOKUP, ALIASES, AliasScorer
 from infermap.types import FieldMapping, MapResult, SchemaInfo
 
 logger = logging.getLogger("infermap")

@@ -6,10 +6,8 @@ task lifecycle, and skill dispatch via aiohttp.
 
 from __future__ import annotations
 
-import json
 import os
 import uuid
-from typing import Any, Optional
 
 from aiohttp import web
 
@@ -142,8 +140,8 @@ class TaskRegistry:
         self,
         task_id: str,
         state: str,
-        result: Optional[dict] = None,
-        progress: Optional[float] = None,
+        result: dict | None = None,
+        progress: float | None = None,
     ) -> None:
         """Update task state, optionally setting result and progress."""
         task = self._tasks[task_id]

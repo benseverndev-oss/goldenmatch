@@ -18,7 +18,7 @@ import os
 import signal
 import time
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 
@@ -135,13 +135,13 @@ def _print_header(table: str, interval: int, connector: DatabaseConnector) -> No
         row_count = 0
 
     print()
-    print(f"  \033[33m⚡ GoldenMatch Watch Mode\033[0m")
+    print("  \033[33m⚡ GoldenMatch Watch Mode\033[0m")
     print(f"  {'─' * 40}")
     print(f"  Table:    \033[1m{table}\033[0m ({row_count:,} rows)")
     print(f"  Interval: every {interval}s")
     print(f"  Started:  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  {'─' * 40}")
-    print(f"  Press Ctrl+C to stop.")
+    print("  Press Ctrl+C to stop.")
     print()
 
 
@@ -164,8 +164,8 @@ def _log_waiting(interval: int) -> None:
 
 def _print_summary(total_syncs: int, total_merged: int, total_new: int, elapsed: float) -> None:
     """Print summary on shutdown."""
-    print(f"\n")
-    print(f"  \033[33m⚡ Watch Mode Summary\033[0m")
+    print("\n")
+    print("  \033[33m⚡ Watch Mode Summary\033[0m")
     print(f"  {'─' * 40}")
     print(f"  Syncs:    {total_syncs}")
     print(f"  Merged:   {total_merged}")

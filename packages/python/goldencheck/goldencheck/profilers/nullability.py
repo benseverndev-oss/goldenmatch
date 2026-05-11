@@ -1,8 +1,11 @@
 """Nullability profiler — detects required vs. optional columns."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
 
 class NullabilityProfiler(BaseProfiler):
     def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:

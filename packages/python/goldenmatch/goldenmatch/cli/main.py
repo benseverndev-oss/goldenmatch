@@ -4,34 +4,32 @@ from __future__ import annotations
 
 import platform
 import sys
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
 
 from goldenmatch import __version__
-from goldenmatch.cli.dedupe import dedupe_cmd
-from goldenmatch.cli.match import match_cmd
-from goldenmatch.cli.sync import sync_cmd
-from goldenmatch.cli.serve import serve_cmd
-from goldenmatch.cli.serve_ui import serve_ui_cmd
-from goldenmatch.cli.mcp_serve import mcp_serve_cmd
-from goldenmatch.cli.watch import watch_cmd
-from goldenmatch.cli.setup import setup_cmd
-from goldenmatch.cli.demo import demo_cmd
-from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
-from goldenmatch.cli.schedule import schedule_cmd
-from goldenmatch.cli.evaluate import evaluate_cmd
-from goldenmatch.cli.incremental import incremental_cmd
-from goldenmatch.cli.pprl import pprl_app
-from goldenmatch.cli.memory import memory_app
-from goldenmatch.cli.label import label_cmd
 from goldenmatch.cli.agent_serve import agent_serve_cmd
 from goldenmatch.cli.compare import compare_clusters_cmd
+from goldenmatch.cli.dedupe import dedupe_cmd
+from goldenmatch.cli.demo import demo_cmd
+from goldenmatch.cli.evaluate import evaluate_cmd
+from goldenmatch.cli.incremental import incremental_cmd
+from goldenmatch.cli.label import label_cmd
+from goldenmatch.cli.match import match_cmd
+from goldenmatch.cli.mcp_serve import mcp_serve_cmd
+from goldenmatch.cli.memory import memory_app
+from goldenmatch.cli.pprl import pprl_app
+from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
+from goldenmatch.cli.schedule import schedule_cmd
 from goldenmatch.cli.sensitivity import sensitivity_cmd
+from goldenmatch.cli.serve import serve_cmd
+from goldenmatch.cli.serve_ui import serve_ui_cmd
+from goldenmatch.cli.setup import setup_cmd
+from goldenmatch.cli.sync import sync_cmd
+from goldenmatch.cli.watch import watch_cmd
 from goldenmatch.prefs.store import PresetStore
 
 LOGO = r"""[bold bright_yellow]
@@ -288,7 +286,7 @@ def config_show(
 
 @app.command("init")
 def init_cmd(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path for generated config"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output path for generated config"),
 ) -> None:
     """Launch the interactive config wizard."""
     from goldenmatch.config.wizard import run_wizard

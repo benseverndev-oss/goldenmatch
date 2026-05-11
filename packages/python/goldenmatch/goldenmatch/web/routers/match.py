@@ -158,7 +158,7 @@ async def match_run(payload: MatchRequest, request: Request) -> dict:
             ),
             timeout=MATCH_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408,
             detail=f"match exceeded {MATCH_TIMEOUT_S}s",

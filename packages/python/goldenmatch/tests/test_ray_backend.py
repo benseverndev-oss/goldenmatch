@@ -1,13 +1,17 @@
 """Tests for Ray distributed backend."""
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
-import pytest
+from unittest.mock import patch
 
-from goldenmatch.config.schemas import GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig
+import pytest
+from goldenmatch.config.schemas import (
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 
 try:
-    import ray
+    import ray  # noqa: F401  # availability check for optional dep
     HAS_RAY = True
 except ImportError:
     HAS_RAY = False

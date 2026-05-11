@@ -188,8 +188,8 @@ def sample_typos(
 
 import hashlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 
 @dataclass(frozen=True)
@@ -207,7 +207,7 @@ class GeneratedCase:
     applied_transforms: list[str]
 
 
-def load_synthetic_config(path: "Path | str") -> dict:
+def load_synthetic_config(path: Path | str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
@@ -353,7 +353,7 @@ def generate_all_synthetic(cfg: dict) -> Iterator[GeneratedCase]:
             )
 
 
-def write_generated_json(cases, output_path: "Path | str") -> None:
+def write_generated_json(cases, output_path: Path | str) -> None:
     cases_list = list(cases)
     data = {
         "version": 1,

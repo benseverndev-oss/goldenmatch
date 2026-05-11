@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from goldenmatch.config.schemas import MatchkeyField
 from goldenmatch.core.explainer import explain_pair, format_explanation_text
 

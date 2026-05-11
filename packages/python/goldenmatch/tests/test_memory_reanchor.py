@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime
 
 import polars as pl
-
 from goldenmatch.core.memory.corrections import (
     apply_corrections,
     build_row_lookup,

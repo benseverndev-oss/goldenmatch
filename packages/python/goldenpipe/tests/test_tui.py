@@ -2,8 +2,8 @@
 import pytest
 
 try:
-    from textual.app import App  # noqa: F401
     from goldenpipe.tui.app import GoldenPipeApp
+    from textual.app import App  # noqa: F401
     HAS_TEXTUAL = True
 except ImportError:
     HAS_TEXTUAL = False

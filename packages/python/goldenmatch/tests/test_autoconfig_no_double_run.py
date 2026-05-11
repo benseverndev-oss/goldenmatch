@@ -8,9 +8,9 @@ This eliminates the double-pipeline-run failure mode introduced by Task 5.1
 (auto_configure_df now runs the controller's iteration loop, which itself
 calls dedupe_df/match_df on samples).
 """
-import pytest
-import polars as pl
 from unittest.mock import patch
+
+import polars as pl
 
 
 def _trivial_dedupe_pipeline_return(df: pl.DataFrame) -> dict:
@@ -79,8 +79,11 @@ def test_dedupe_df_explicit_config_unaffected():
     """When config=GoldenMatchConfig is provided explicitly, no auto-config is invoked."""
     import goldenmatch as gm
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     df = pl.DataFrame({"email": ["a@x", "a@x", "b@y"]})
@@ -96,7 +99,7 @@ def test_dedupe_df_explicit_config_unaffected():
         ),
     )
     with patch("goldenmatch.core.autoconfig.auto_configure_df") as mock_auto:
-        result = gm.dedupe_df(df, config=cfg)
+        _result = gm.dedupe_df(df, config=cfg)
     mock_auto.assert_not_called()
 
 
@@ -142,9 +145,9 @@ def test_dedupe_df_zero_config_postflight_has_controller_fields():
     """Zero-config dedupe_df should populate controller_profile and
     controller_history on the returned postflight_report."""
     import goldenmatch as gm
-    from goldenmatch.core.complexity_profile import ComplexityProfile
-    from goldenmatch.core.autoconfig_history import RunHistory
     from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import ComplexityProfile
 
     df = pl.DataFrame({
         "name": ["alice", "alyce", "bob", "bobby"] * 4,

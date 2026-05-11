@@ -63,8 +63,8 @@ def detect_anomalies(
     email_cols = [c for c in cols if _is_likely_column(c, ["email", "mail", "e_mail"])]
     phone_cols = [c for c in cols if _is_likely_column(c, ["phone", "tel", "mobile", "cell"])]
     zip_cols = [c for c in cols if _is_likely_column(c, ["zip", "postal", "postcode"])]
-    name_cols = [c for c in cols if _is_likely_column(c, ["name", "first_name", "last_name", "full_name"])]
-    date_cols = [c for c in cols if _is_likely_column(c, ["date", "dob", "birth", "created"])]
+    _name_cols = [c for c in cols if _is_likely_column(c, ["name", "first_name", "last_name", "full_name"])]
+    _date_cols = [c for c in cols if _is_likely_column(c, ["date", "dob", "birth", "created"])]
 
     rows = df.to_dicts()
 
@@ -105,7 +105,7 @@ def detect_anomalies(
                         "type": "fake_phone",
                         "value": val_str,
                         "severity": "medium",
-                        "reason": f"Suspicious phone number pattern",
+                        "reason": "Suspicious phone number pattern",
                     })
                     break
 
@@ -140,7 +140,7 @@ def detect_anomalies(
                     "type": "placeholder",
                     "value": str(row.get(col)),
                     "severity": "high",
-                    "reason": f"Placeholder value detected",
+                    "reason": "Placeholder value detected",
                 })
 
     # Detect duplicate exact rows (copy-paste data)

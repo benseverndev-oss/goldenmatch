@@ -1,7 +1,7 @@
 """Tests for Stage protocol and @stage decorator."""
 import polars as pl
-from goldenpipe.models.stage import StageInfo, stage
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
+from goldenpipe.models.stage import StageInfo, stage
 
 
 class TestStageInfo:

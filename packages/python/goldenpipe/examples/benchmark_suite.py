@@ -9,22 +9,23 @@ Usage:
 For best ER results, set OPENAI_API_KEY for LLM scoring (~$0.25).
 """
 from __future__ import annotations
-import time
+
 import os
+import time
 
 
 def main():
-    from dqbench.runner import (
-        run_benchmark,
-        run_transform_benchmark,
-        run_er_benchmark,
-        run_pipeline_benchmark,
-    )
     from dqbench.report import (
-        report_rich,
-        report_transform_rich,
         report_er_rich,
         report_pipeline_rich,
+        report_rich,
+        report_transform_rich,
+    )
+    from dqbench.runner import (
+        run_benchmark,
+        run_er_benchmark,
+        run_pipeline_benchmark,
+        run_transform_benchmark,
     )
 
     results = {}

@@ -1,5 +1,5 @@
 """Tests for built-in decision functions."""
-from goldenpipe.decisions import severity_gate, pii_router, row_count_gate
+from goldenpipe.decisions import pii_router, row_count_gate, severity_gate
 from goldenpipe.models.context import PipeContext
 
 

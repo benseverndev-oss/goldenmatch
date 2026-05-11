@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.text import (
     collapse_whitespace,
     extract_numbers,

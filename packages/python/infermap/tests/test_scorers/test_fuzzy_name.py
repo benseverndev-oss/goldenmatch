@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import make_field
 from infermap.scorers.fuzzy_name import FuzzyNameScorer
+
+from tests.conftest import make_field
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@ pipeline stages and consumed by AutoConfigController + RefitPolicy.
 Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-design.md §Types & contracts.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal

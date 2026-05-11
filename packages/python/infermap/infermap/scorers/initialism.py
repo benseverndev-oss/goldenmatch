@@ -23,7 +23,6 @@ import re
 
 from infermap.types import FieldInfo, ScorerResult
 
-
 _TOKEN_RE = re.compile(r"[A-Za-z][a-z]*|[A-Z]+(?=[A-Z][a-z]|\b)|\d+")
 
 

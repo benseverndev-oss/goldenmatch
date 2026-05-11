@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.domain_registry import (
     DomainRulebook,
     discover_rulebooks,

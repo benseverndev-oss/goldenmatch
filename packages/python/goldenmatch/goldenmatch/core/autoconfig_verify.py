@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 
 
 def _sample_block_sizes(
-    df: "pl.DataFrame",
-    blocking: "BlockingConfig",
+    df: pl.DataFrame,
+    blocking: BlockingConfig,
     *,
     sample_cap: int = 10_000,
 ) -> list[int]:
@@ -52,8 +52,8 @@ def _sample_block_sizes(
 
 
 def _sample_block_sizes_per_key(
-    df: "pl.DataFrame",
-    blocking: "BlockingConfig",
+    df: pl.DataFrame,
+    blocking: BlockingConfig,
     *,
     sample_cap: int = 10_000,
 ) -> list[tuple[Any, list[int], Exception | None]]:
@@ -197,7 +197,7 @@ class PostflightAdjustment:
     signal: str
 
 
-def _empty_signals() -> "PostflightSignals":
+def _empty_signals() -> PostflightSignals:
     """Factory for PostflightReport.signals.
 
     Returns an empty dict typed as PostflightSignals; ``postflight()``
@@ -224,7 +224,7 @@ class PostflightReport:
     Kept loosely typed to avoid import cycles with autoconfig modules.
     """
 
-    signals: "PostflightSignals" = field(default_factory=_empty_signals)
+    signals: PostflightSignals = field(default_factory=_empty_signals)
     adjustments: list[PostflightAdjustment] = field(default_factory=list)
     advisories: list[str] = field(default_factory=list)
     # Set at result-build time when Learning Memory ran. Kept loosely typed
@@ -289,7 +289,7 @@ def _render_memory_line(stats: Any) -> str:
     )
 
 
-def _signals_view(pf: "PostflightReport") -> dict:  # pyright: ignore[reportUnusedFunction]  # legacy helper, kept for compat
+def _signals_view(pf: PostflightReport) -> dict:  # pyright: ignore[reportUnusedFunction]  # legacy helper, kept for compat
     """Read postflight signals as the legacy ``PostflightSignals`` dict shape.
 
     Prefers ``controller_profile`` (typed ``ComplexityProfile``) when
@@ -331,7 +331,7 @@ class ConfigValidationError(Exception):
 # ── Column collection ────────────────────────────────────────────────────
 
 
-def _collect_referenced_columns(config: "GoldenMatchConfig") -> set[str]:
+def _collect_referenced_columns(config: GoldenMatchConfig) -> set[str]:
     """Walk the config and return every raw column name it references.
 
     Collects from blocking (keys + passes) and all matchkey fields.
@@ -354,7 +354,7 @@ def _collect_referenced_columns(config: "GoldenMatchConfig") -> set[str]:
 
 
 def _check_columns(
-    df: "pl.DataFrame", config: "GoldenMatchConfig", report: PreflightReport
+    df: pl.DataFrame, config: GoldenMatchConfig, report: PreflightReport
 ) -> None:
     """Check 1: every referenced column exists, or is pipeline-synthesized,
     or is a domain-extracted column recoverable via domain repair.
@@ -393,7 +393,7 @@ def _check_columns(
 
 
 def _repair_domain(
-    config: "GoldenMatchConfig",
+    config: GoldenMatchConfig,
     domain_profile: object,
     report: PreflightReport,
     *,
@@ -433,7 +433,7 @@ def _repair_domain(
 
 
 def _check_cardinality(
-    df: "pl.DataFrame", config: "GoldenMatchConfig", report: PreflightReport
+    df: pl.DataFrame, config: GoldenMatchConfig, report: PreflightReport
 ) -> None:
     """Checks 2 & 3: drop exact matchkeys whose column cardinality is useless.
 
@@ -528,7 +528,7 @@ def _check_cardinality(
 
 
 def _check_block_sizes(
-    df: "pl.DataFrame", config: "GoldenMatchConfig", report: PreflightReport
+    df: pl.DataFrame, config: GoldenMatchConfig, report: PreflightReport
 ) -> None:
     """Check 4: per-key block-size sanity (P50/P99 distribution).
 
@@ -598,7 +598,7 @@ _REMOTE_SCORERS = frozenset({"embedding", "record_embedding"})
 
 
 def _check_remote_assets(
-    config: "GoldenMatchConfig",
+    config: GoldenMatchConfig,
     report: PreflightReport,
     *,
     allow_remote_assets: bool,
@@ -730,8 +730,8 @@ def _check_remote_assets(
 
 
 def _check_weight_confidence(
-    config: "GoldenMatchConfig",
-    profiles: "list[ColumnProfile]",
+    config: GoldenMatchConfig,
+    profiles: list[ColumnProfile],
     report: PreflightReport,
 ) -> None:
     """Check 6: cap weight at 0.5 for fields whose column profile has
@@ -772,7 +772,7 @@ def _check_weight_confidence(
 
 
 def _signal_score_histogram(
-    pair_scores: "list[tuple[int, int, float]]",
+    pair_scores: list[tuple[int, int, float]],
     current_threshold: float,
 ) -> dict[str, Any]:
     """Build a 100-bin histogram of pair scores and detect bimodality.
@@ -866,7 +866,7 @@ def _signal_score_histogram(
 
 
 def _resolve_current_threshold(
-    config: "GoldenMatchConfig", override: float | None
+    config: GoldenMatchConfig, override: float | None
 ) -> float:
     """Return the threshold to evaluate postflight against.
 
@@ -881,9 +881,9 @@ def _resolve_current_threshold(
 
 
 def _signal_blocking_recall(
-    df: "pl.DataFrame",
-    config: "GoldenMatchConfig",
-    pair_scores: "list[tuple[int, int, float]]",
+    df: pl.DataFrame,
+    config: GoldenMatchConfig,
+    pair_scores: list[tuple[int, int, float]],
     current_threshold: float,
 ) -> float | Literal["deferred"]:
     """Estimate blocking recall by brute-forcing a sample.
@@ -905,7 +905,7 @@ def _signal_blocking_recall(
 
 
 def _signal_cluster_sizes(
-    pair_scores: "list[tuple[int, int, float]]",
+    pair_scores: list[tuple[int, int, float]],
     current_threshold: float,
 ) -> dict[str, Any]:
     """Union-find over above-threshold pairs; report size percentiles and
@@ -988,7 +988,7 @@ def _signal_cluster_sizes(
 
 
 def _signal_threshold_overlap(
-    pair_scores: "list[tuple[int, int, float]]",
+    pair_scores: list[tuple[int, int, float]],
     current_threshold: float,
 ) -> float:
     """Fraction of pairs whose score lies in [threshold - 0.02, threshold + 0.02]."""
@@ -1001,7 +1001,7 @@ def _signal_threshold_overlap(
 
 
 def _signal_block_size_percentiles(
-    df: "pl.DataFrame", config: "GoldenMatchConfig"
+    df: pl.DataFrame, config: GoldenMatchConfig
 ) -> dict[str, Any]:
     """Compute P50/P95/P99/max block sizes across all blocking keys.
 
@@ -1030,10 +1030,10 @@ def _signal_block_size_percentiles(
 
 
 def postflight(
-    df: "pl.DataFrame",
-    config: "GoldenMatchConfig",
+    df: pl.DataFrame,
+    config: GoldenMatchConfig,
     *,
-    pair_scores: "list[tuple[int, int, float]]",
+    pair_scores: list[tuple[int, int, float]],
     current_threshold: float | None = None,
 ) -> PostflightReport:
     """Run all postflight signals on (df, config, pair_scores).
@@ -1116,10 +1116,10 @@ def postflight(
 
 
 def preflight(
-    df: "pl.DataFrame",
-    config: "GoldenMatchConfig",
+    df: pl.DataFrame,
+    config: GoldenMatchConfig,
     *,
-    profiles: "list[ColumnProfile] | None" = None,
+    profiles: list[ColumnProfile] | None = None,
     allow_remote_assets: bool = False,
 ) -> PreflightReport:
     """Run all preflight checks on (df, config).

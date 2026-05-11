@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import polars as pl
-
 from goldenflow.connectors.file import read_file, write_file
 
 

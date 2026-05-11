@@ -15,16 +15,14 @@ Run:
 """
 from __future__ import annotations
 
-import json
-
+import numpy as np
 from infermap import FieldInfo, MapEngine, SchemaInfo
 from infermap.calibration import (
     IsotonicCalibrator,
     PlattCalibrator,
-    save_calibrator,
     load_calibrator,
+    save_calibrator,
 )
-import numpy as np
 
 
 def make_schema(name: str, fields: list[tuple[str, str, list[str]]]) -> SchemaInfo:

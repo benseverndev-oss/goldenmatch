@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import logging
 
-import numpy as np
 import polars as pl
 
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core.scorer import score_pair
-from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 

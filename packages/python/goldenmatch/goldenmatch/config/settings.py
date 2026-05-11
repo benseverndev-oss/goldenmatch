@@ -37,7 +37,7 @@ class UserSettings:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "UserSettings":
+    def from_dict(cls, data: dict) -> UserSettings:
         defaults = data.get("defaults", {})
         return cls(
             output_mode=defaults.get("output_mode", "tui"),

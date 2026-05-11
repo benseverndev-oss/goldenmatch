@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from infermap import MapEngine
 from infermap.dictionaries import (
     UnknownDomainError,
@@ -12,7 +11,6 @@ from infermap.dictionaries import (
 )
 from infermap.scorers.alias import AliasScorer, build_lookup
 from infermap.types import FieldInfo, SchemaInfo
-
 
 # --- module-level loader ----------------------------------------------------
 

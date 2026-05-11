@@ -1,6 +1,8 @@
 """Drift detection profiler — detects distribution drift between first and second half of data."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 

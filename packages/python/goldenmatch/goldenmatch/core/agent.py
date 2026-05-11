@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import polars as pl
 
@@ -52,10 +52,10 @@ class StrategyDecision:
 
     strategy: str
     why: str
-    domain: Optional[str] = None
+    domain: str | None = None
     strong_ids: list[str] = field(default_factory=list)
     fuzzy_fields: list[str] = field(default_factory=list)
-    backend: Optional[str] = None
+    backend: str | None = None
     auto_execute: bool = True
 
 
@@ -252,8 +252,11 @@ def build_alternatives(
 def _decision_to_config(decision: StrategyDecision) -> Any:
     """Translate a StrategyDecision into a GoldenMatchConfig."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     matchkeys: list[MatchkeyConfig] = []
@@ -404,7 +407,7 @@ class AgentSession:
             )
 
         # Confidence distribution
-        scores = [s for _, _, s in scored_pairs]
+        _scores = [s for _, _, s in scored_pairs]
         confidence_distribution = {
             "auto_merged": len(auto_merged),
             "review": len(review),
@@ -528,7 +531,10 @@ class AgentSession:
                 # Evaluate against ground truth if provided
                 if ground_truth is not None:
                     try:
-                        from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
+                        from goldenmatch.core.evaluate import (
+                            evaluate_clusters,
+                            load_ground_truth_csv,
+                        )
                         gt = load_ground_truth_csv(ground_truth)
                         eval_result = evaluate_clusters(clusters, gt)
                         metrics["precision"] = round(eval_result.precision, 4)

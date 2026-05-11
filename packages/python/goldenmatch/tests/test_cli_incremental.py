@@ -6,9 +6,8 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
-
 from goldenmatch.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

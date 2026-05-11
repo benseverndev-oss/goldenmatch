@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -34,9 +33,9 @@ def main(
 @app.command()
 def transform(
     path: Path = typer.Argument(..., help="Input data file"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config", help="YAML config file"),
-    output_dir: Optional[Path] = typer.Option(None, "-o", "--output-dir", help="Output directory"),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack to use"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="YAML config file"),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir", help="Output directory"),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack to use"),
     from_findings: bool = typer.Option(False, "--from-findings", help="Read findings from stdin"),
     llm_mode: bool = typer.Option(False, "--llm", help="Enable LLM-enhanced transforms"),
     strict: bool = typer.Option(False, "--strict", help="Fail if any transform errors occur"),
@@ -45,10 +44,10 @@ def transform(
     from goldenflow.cli.errors import cli_error_handler
 
     with cli_error_handler():
-        import sys
-        import json
         import io
+        import json
         import os
+        import sys
 
         import polars as pl
 
@@ -122,7 +121,7 @@ def transform(
 @app.command()
 def validate(
     path: Path = typer.Argument(..., help="Input data file"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config"),
+    config: Path | None = typer.Option(None, "-c", "--config"),
 ):
     """Dry-run: show what would change without writing."""
     from goldenflow.cli.errors import cli_error_handler
@@ -197,8 +196,8 @@ def diff(
 def map_cmd(
     source: Path = typer.Option(..., "--source", "-s", help="Source data file"),
     target: Path = typer.Option(..., "--target", "-t", help="Target data file or schema"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config", help="Mapping config"),
-    output: Optional[Path] = typer.Option(None, "-o", "--output", help="Save mapping config"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="Mapping config"),
+    output: Path | None = typer.Option(None, "-o", "--output", help="Save mapping config"),
 ):
     """Auto-map schemas between source and target."""
     from goldenflow.cli.errors import cli_error_handler
@@ -226,7 +225,7 @@ def map_cmd(
 
 @app.command()
 def interactive(
-    path: Optional[Path] = typer.Argument(None, help="Input data file"),
+    path: Path | None = typer.Argument(None, help="Input data file"),
 ):
     """Launch the interactive TUI."""
     from goldenflow.tui.app import GoldenFlowApp
@@ -241,6 +240,7 @@ def serve(
 ):
     """Launch the REST API server."""
     import uvicorn
+
     from goldenflow.api.server import create_app
     uvicorn.run(create_app(), host=host, port=port)
 
@@ -277,8 +277,8 @@ def agent_serve(
 @app.command()
 def watch(
     path: Path = typer.Argument(".", help="Directory to watch"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config"),
-    output_dir: Optional[Path] = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config"),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
     interval: float = typer.Option(2.0, "--interval", help="Poll interval in seconds"),
 ):
     """Watch a directory and auto-transform new/changed files."""
@@ -290,8 +290,8 @@ def watch(
 def schedule(
     path: Path = typer.Argument(..., help="Data file to transform"),
     interval: str = typer.Option("1h", "--every", help="Interval (e.g., 5m, 1h, 30s)"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config"),
-    output_dir: Optional[Path] = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config"),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
 ):
     """Run transforms on a schedule."""
     from goldenflow.cli.schedule import run_schedule
@@ -300,7 +300,7 @@ def schedule(
 
 @app.command(name="init")
 def init_cmd(
-    data: Optional[Path] = typer.Argument(None, help="Data file to profile"),
+    data: Path | None = typer.Argument(None, help="Data file to profile"),
     output: Path = typer.Option("goldenflow.yaml", "-o", "--output"),
 ):
     """Interactive setup wizard to generate a config file."""
@@ -313,9 +313,10 @@ def history(
     limit: int = typer.Option(20, "-n", "--limit", help="Number of recent runs to show"),
 ):
     """Show recent transform runs."""
+    from rich.table import Table
+
     from goldenflow.history import list_runs
     from goldenflow.reporters.rich_console import console
-    from rich.table import Table
 
     runs = list_runs(limit=limit)
     if not runs:
@@ -394,17 +395,17 @@ transforms:
 def stream(
     path: Path = typer.Argument(..., help="Input data file"),
     chunk_size: int = typer.Option(10000, "--chunk-size", help="Rows per batch"),
-    config: Optional[Path] = typer.Option(None, "-c", "--config"),
-    output_dir: Optional[Path] = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config"),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
 ):
     """Stream-process a large file in chunks."""
     import polars as pl
+    from rich.progress import Progress
 
     from goldenflow.config.loader import load_config
     from goldenflow.config.schema import GoldenFlowConfig
-    from goldenflow.streaming import StreamProcessor
     from goldenflow.reporters.rich_console import console
-    from rich.progress import Progress
+    from goldenflow.streaming import StreamProcessor
 
     cfg = load_config(config) if config else GoldenFlowConfig()
     processor = StreamProcessor(config=cfg)

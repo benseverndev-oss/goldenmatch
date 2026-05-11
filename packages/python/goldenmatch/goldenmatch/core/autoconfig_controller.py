@@ -4,28 +4,34 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §New: AutoConfigController, §Sample selection, §Pipeline integration.
 """
 from __future__ import annotations
-from contextvars import ContextVar
-from dataclasses import dataclass
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+
 import hashlib
 import logging
 import time
 import traceback
+from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any
+
 import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
-from goldenmatch.core.complexity_profile import (
-    CollisionSignal, ComplexityProfile, DataProfile, HealthVerdict, StopReason,
-    ColumnPrior, SparsityVerdict,
-)
 from goldenmatch.core.autoconfig_history import RunHistory
+from goldenmatch.core.complexity_profile import (
+    CollisionSignal,
+    ColumnPrior,
+    ComplexityProfile,
+    DataProfile,
+    HealthVerdict,
+    SparsityVerdict,
+    StopReason,
+)
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_history import HistoryEntry
-from goldenmatch.core.autoconfig_policy import RefitPolicy
 from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
-
+from goldenmatch.core.autoconfig_policy import RefitPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,7 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 # (including KeyboardInterrupt) so callers can inspect RunHistory after
 # either normal return or exception.  Stores RunHistory directly
 # (unlike autoconfig._LAST_CONTROLLER_RUN which stores (profile, history)).
-_LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
+_LAST_CONTROLLER_RUN: ContextVar[RunHistory | None] = ContextVar(
     "_LAST_CONTROLLER_RUN", default=None
 )
 
@@ -102,7 +108,7 @@ class IndicatorContext:
 
     def identity_collision_signal(
         self, identity_col: str, witness_cols: list[str],
-    ) -> "CollisionSignal":
+    ) -> CollisionSignal:
         if self._is_fast_mode():
             return CollisionSignal(rate=0.0, witness_used="")
         from goldenmatch.core.indicators import compute_identity_collision_signal
@@ -142,12 +148,12 @@ class ConfigValidationError(Exception):
 
 
 def _assemble_v0_history_entry(
-    sample: "pl.DataFrame",
-    reference: "pl.DataFrame | None",
-    config_v0: "GoldenMatchConfig",
-    history: "RunHistory",
-    controller: "AutoConfigController",
-) -> "HistoryEntry | None":
+    sample: pl.DataFrame,
+    reference: pl.DataFrame | None,
+    config_v0: GoldenMatchConfig,
+    history: RunHistory,
+    controller: AutoConfigController,
+) -> HistoryEntry | None:
     """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
 
     Strategy:
@@ -176,6 +182,7 @@ def _assemble_v0_history_entry(
 
         # Slow path: run config_v0 through the sample pipeline.
         import time
+
         from goldenmatch.core.profile_emitter import profile_capture
         t0 = time.time()
         with profile_capture() as emitter:
@@ -202,7 +209,7 @@ def _assemble_v0_history_entry(
         return None
 
 
-def _first_red_subprofile(profile: "ComplexityProfile") -> str:
+def _first_red_subprofile(profile: ComplexityProfile) -> str:
     """Return the name of the first sub-profile in canonical declaration
     order whose health() is RED. Used by the WARNING log on commit-RED.
 
@@ -299,7 +306,8 @@ class AutoConfigController:
         # on the full df (not the sample) so blocking cardinality/overlap signals
         # are representative.
         from goldenmatch.core.indicators import (
-            compute_column_priors, estimate_sparse_match_signal,
+            compute_column_priors,
+            estimate_sparse_match_signal,
         )
         column_priors = compute_column_priors(df)
 
@@ -350,7 +358,7 @@ class AutoConfigController:
                     _LAST_CONTROLLER_RUN.set(history)
                     raise
                 except Exception as exc:
-                    from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
+                    from goldenmatch.core.autoconfig_history import ErrorRecord, HistoryEntry
                     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
                     tb_summary = "".join(tb_lines[:5] + tb_lines[-3:])[:2000]
                     history.entries.append(HistoryEntry(
@@ -450,6 +458,7 @@ class AutoConfigController:
 
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
+
         from goldenmatch.core.complexity_profile import IndicatorsProfile
 
         blocking_col: str | None = None
@@ -633,7 +642,8 @@ class AutoConfigController:
         for n_cols==1 or uniform column types).
         """
         from goldenmatch.core.complexity_profile import (
-            BlockingProfile, ScoringProfile,
+            BlockingProfile,
+            ScoringProfile,
         )
         # BlockingProfile: avoid RED by faking one block with good reduction
         blocking = BlockingProfile(
@@ -677,7 +687,7 @@ class AutoConfigController:
 
     def _seed_for(self, df: pl.DataFrame) -> int:
         """Hash of data shape for reproducible sampling."""
-        key = f"{df.height}|{','.join(df.columns)}".encode("utf-8")
+        key = f"{df.height}|{','.join(df.columns)}".encode()
         digest = hashlib.sha256(key).hexdigest()
         return int(digest[:8], 16)
 
@@ -701,10 +711,10 @@ class AutoConfigController:
     def _compute_recall_probe(
         self,
         sample: pl.DataFrame,
-        config: "GoldenMatchConfig",
+        config: GoldenMatchConfig,
         *,
         n_samples: int = 100,
-    ) -> "float | None":
+    ) -> float | None:
         """Score N random pairs (i, j with i != j, uniform from the sample) using
         the first weighted matchkey's scoring logic. Returns the fraction whose
         weighted score is >= the matchkey's threshold.
@@ -716,6 +726,7 @@ class AutoConfigController:
         too small to probe meaningfully.
         """
         import random
+
         from goldenmatch.core.scorer import score_field
         from goldenmatch.utils.transforms import apply_transforms
 
@@ -779,7 +790,7 @@ class AutoConfigController:
         iteration: int,
         is_sample: bool = True,
         reference: pl.DataFrame | None = None,
-        config: "GoldenMatchConfig | None" = None,
+        config: GoldenMatchConfig | None = None,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
         fall back to defaults computed from ``df`` (plus ``reference`` in match
@@ -792,9 +803,14 @@ class AutoConfigController:
         size calculation use the wrong denominator (Bug A).
         """
         import dataclasses
+
         from goldenmatch.core.complexity_profile import (
-            BlockingProfile, ScoringProfile, ClusterProfile,
-            MatchkeyProfile, DomainProfile, ProfileMeta,
+            BlockingProfile,
+            ClusterProfile,
+            DomainProfile,
+            MatchkeyProfile,
+            ProfileMeta,
+            ScoringProfile,
         )
 
         data = emitter.data or self._compute_data_profile(df, reference=reference)
@@ -821,7 +837,7 @@ class AutoConfigController:
 
     def _compute_data_profile(
         self, df: pl.DataFrame, reference: pl.DataFrame | None = None
-    ) -> "DataProfile":
+    ) -> DataProfile:
         """Compute a real DataProfile from a DataFrame. Used as fallback when
         no pipeline stage emitted one (sample iterations don't go through
         the autoconfig column-profiling step).
@@ -965,7 +981,7 @@ class AutoConfigController:
             auto_threshold = candidate_hi
             mode = "standard"
 
-        from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+        from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
         new_cfg = config.model_copy(update={
             "llm_scorer": LLMScorerConfig(
                 enabled=True,
@@ -987,8 +1003,8 @@ class AutoConfigController:
     def _record_run(
         self,
         df: pl.DataFrame,
-        reference: "pl.DataFrame | None",
-        best_entry: "Any",
+        reference: pl.DataFrame | None,
+        best_entry: Any,
         history: RunHistory,
     ) -> None:
         """Persist the committed config to memory (if memory is configured).

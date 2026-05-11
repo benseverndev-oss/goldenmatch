@@ -1,5 +1,5 @@
 import polars as pl
-from goldenflow.transforms.auto_correct import category_auto_correct, _build_canonical_map
+from goldenflow.transforms.auto_correct import _build_canonical_map, category_auto_correct
 
 
 def test_case_variant_correction():

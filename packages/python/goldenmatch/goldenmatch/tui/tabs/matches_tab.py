@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import polars as pl
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
-
-import polars as pl
 
 from goldenmatch.tui.engine import EngineResult
 

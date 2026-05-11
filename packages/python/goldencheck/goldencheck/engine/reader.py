@@ -1,7 +1,9 @@
 """File reader — loads CSV, Parquet, and Excel files into Polars DataFrames."""
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 import polars as pl
 
 logger = logging.getLogger(__name__)

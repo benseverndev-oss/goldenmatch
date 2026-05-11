@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import jellyfish
@@ -103,7 +103,7 @@ def main() -> None:
                 })
 
     lineage = {
-        "generated_at": datetime(2026, 5, 6, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
+        "generated_at": datetime(2026, 5, 6, 12, 0, 0, tzinfo=UTC).isoformat(),
         "run_name": RUN_NAME,
         "total_pairs": len(pairs),
         "pairs": pairs,

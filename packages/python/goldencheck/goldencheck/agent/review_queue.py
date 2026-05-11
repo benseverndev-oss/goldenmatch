@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from goldencheck.models.finding import Finding, Severity
@@ -94,7 +94,7 @@ class _MemoryBackend(_Backend):
             raise KeyError(msg)
         item.status = status
         item.decided_by = decided_by
-        item.decided_at = datetime.now(timezone.utc)
+        item.decided_at = datetime.now(UTC)
 
     def get_stats(self, job_name: str) -> dict[str, int]:
         counts: dict[str, int] = {"pending": 0, "pinned": 0, "dismissed": 0}
@@ -208,7 +208,7 @@ class _SQLiteBackend(_Backend):
         decided_by: str,
         reason: str,  # noqa: ARG002
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         cur = self._conn.execute(
             "UPDATE reviews SET status = ?, decided_by = ?, decided_at = ? "
             "WHERE item_id = ?",
@@ -340,7 +340,7 @@ class _PostgresBackend(_Backend):
         decided_by: str,
         reason: str,  # noqa: ARG002
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             cur.execute(
                 "UPDATE goldencheck._reviews "

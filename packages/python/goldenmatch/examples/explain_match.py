@@ -10,8 +10,8 @@ Usage:
 """
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 if sys.stdout.encoding != "utf-8":

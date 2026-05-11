@@ -28,7 +28,7 @@ def llm_cluster_pairs(
     config: LLMScorerConfig,
     api_key: str | None = None,
     return_budget: bool = False,
-) -> "list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]":
+) -> list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]:
     """Cluster borderline records via in-context LLM prompting.
 
     Replaces pairwise LLM scoring with block-level clustering. Records in the
@@ -292,7 +292,7 @@ def _call_llm_cluster(
     provider: str,
     model: str,
     api_key: str,
-    budget: "BudgetTracker | None",
+    budget: BudgetTracker | None,
 ) -> dict:
     """Call the LLM to cluster a block of records.
 
@@ -426,7 +426,7 @@ def _pairwise_fallback(
     provider: str,
     model: str,
     api_key: str,
-    budget: "BudgetTracker | None",
+    budget: BudgetTracker | None,
 ) -> None:
     """Fall back to pairwise LLM scoring for a set of pairs."""
     from goldenmatch.core.llm_scorer import _batch_score

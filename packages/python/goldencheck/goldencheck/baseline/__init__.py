@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
 
 import polars as pl
 
@@ -12,7 +11,7 @@ __all__ = ["create_baseline", "load_baseline"]
 
 
 def create_baseline(
-    df_or_path: Union[pl.DataFrame, Path, str],
+    df_or_path: pl.DataFrame | Path | str,
     *,
     source: str = "",
     skip: list[str] | None = None,
@@ -137,8 +136,8 @@ def create_baseline(
     from goldencheck.baseline.models import ConfidencePrior
     priors_flat: dict[str, ConfidencePrior] = {}
     if "priors" not in skip_set and path is not None:
-        from goldencheck.engine.scanner import scan_file
         from goldencheck.baseline.priors import build_priors
+        from goldencheck.engine.scanner import scan_file
         findings, _profile = scan_file(path)
         nested_priors = build_priors(findings, row_count=df.height)
         # Flatten nested {check: {col: prior}} → {"check:col": prior}
@@ -168,7 +167,7 @@ def create_baseline(
     )
 
 
-def load_baseline(path: Union[Path, str]) -> BaselineProfile:
+def load_baseline(path: Path | str) -> BaselineProfile:
     """Load a :class:`~goldencheck.baseline.models.BaselineProfile` from YAML.
 
     Parameters

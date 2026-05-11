@@ -1,6 +1,7 @@
 import polars as pl
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 
+
 def test_correlated_nulls_detected():
     df = pl.DataFrame({
         "addr": ["123 St", None, "456 Ave", None],

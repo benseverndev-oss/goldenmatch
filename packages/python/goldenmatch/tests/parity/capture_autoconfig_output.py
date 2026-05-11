@@ -2,8 +2,11 @@
 Run ONCE before the AutoConfigDecisions refactor.
 Output lives in autoconfig-classification.json."""
 from __future__ import annotations
-import json, sys
+
+import json
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import polars as pl
 from goldenmatch.core.autoconfig import auto_configure_df

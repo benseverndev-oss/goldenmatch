@@ -8,6 +8,7 @@ Usage:
     python examples/full_suite_demo.py
 """
 from __future__ import annotations
+
 import csv
 import tempfile
 from pathlib import Path
@@ -72,7 +73,7 @@ def demo_goldenflow(csv_path: Path) -> pl.DataFrame:
     print(f"After:  {result.df.shape[0]} rows")
 
     # Show before/after for first record
-    print(f"\nSample transform:")
+    print("\nSample transform:")
     for col in ["first_name", "email", "phone", "city"]:
         if col in df.columns:
             print(f"  {col}: \"{df[col][0]}\" → \"{result.df[col][0]}\"")

@@ -1,7 +1,6 @@
 """Tests for CCMS cluster comparison."""
 import pytest
-
-from goldenmatch.core.compare_clusters import compare_clusters, CompareResult
+from goldenmatch.core.compare_clusters import CompareResult, compare_clusters
 
 
 def test_identical_clusters_all_unchanged():

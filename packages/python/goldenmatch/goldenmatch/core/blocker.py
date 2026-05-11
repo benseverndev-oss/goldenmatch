@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 import polars as pl
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, CanopyConfig
-from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.complexity_profile import BlockingProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
+from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def _percentile(xs: list[int], q: float) -> int:
 
 
 def _emit_blocking_profile(
-    blocks: list["BlockResult"],
+    blocks: list[BlockResult],
     config: BlockingConfig,
     lf: pl.LazyFrame,
 ) -> None:
@@ -255,7 +255,7 @@ def _ann_sub_block(
     pairs = blocker.query(record_embeddings)
 
     # Group into sub-blocks via Union-Find
-    row_ids = block_df["__row_id__"].to_list()
+    _row_ids = block_df["__row_id__"].to_list()
     uf = UnionFind()
     for a, b in pairs:
         real_a = valid_records[a]
@@ -650,8 +650,8 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
     sample_blocks = _build_static_blocks(sample_df.lazy(), sample_config)
 
     # Score sample blocks to get training pairs
-    from goldenmatch.core.scorer import find_fuzzy_matches
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.scorer import find_fuzzy_matches
 
     # Build a simple weighted matchkey for scoring
     cols = [c for c in df.columns if not c.startswith("__")]

@@ -5,8 +5,8 @@ import json
 import logging
 import urllib.request
 
-from goldencheck.models.finding import Finding, Severity
 from goldencheck.engine.history import ScanRecord
+from goldencheck.models.finding import Finding, Severity
 
 logger = logging.getLogger(__name__)
 

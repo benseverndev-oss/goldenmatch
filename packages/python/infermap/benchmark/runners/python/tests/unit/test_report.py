@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from infermap_bench.metrics import Prediction
 from infermap_bench.report import (
     CaseResult,

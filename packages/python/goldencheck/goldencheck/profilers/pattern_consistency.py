@@ -1,6 +1,8 @@
 """Pattern consistency profiler — detects inconsistent string patterns within a column."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 

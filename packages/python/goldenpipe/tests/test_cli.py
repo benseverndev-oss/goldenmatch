@@ -1,6 +1,6 @@
 """Tests for CLI commands."""
-from typer.testing import CliRunner
 from goldenpipe.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

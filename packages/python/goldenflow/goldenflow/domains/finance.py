@@ -1,9 +1,13 @@
 from __future__ import annotations
+
 import re
+
 import polars as pl
+
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.domains.base import DomainPack
 from goldenflow.transforms import register_transform
+
 
 @register_transform(name="account_mask", input_types=["string"], auto_apply=False, priority=50, mode="series")
 def account_mask(series: pl.Series) -> pl.Series:

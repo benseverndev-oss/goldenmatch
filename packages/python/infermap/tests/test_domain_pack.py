@@ -7,8 +7,8 @@ import pytest
 # when it's not installed (per packages/python/CLAUDE.md guidance).
 pd = pytest.importorskip("pandas")
 from goldencheck_types import load_domain
-
-from infermap import DomainPackTarget, detect_domain, map as infermap_map
+from infermap import DomainPackTarget, detect_domain
+from infermap import map as infermap_map
 
 
 def test_domain_pack_target_to_schema_info():
@@ -44,7 +44,8 @@ def test_soft_mode_threshold_governs_per_field():
     earlier `if X in mappings` shape would have allowed the engine to drop
     soft-mode entirely without failing."""
     import dataclasses
-    from goldencheck_types import DomainPack, FieldSpec
+
+    from goldencheck_types import DomainPack
 
     base = load_domain("finance")
     permissive_pack = DomainPack(

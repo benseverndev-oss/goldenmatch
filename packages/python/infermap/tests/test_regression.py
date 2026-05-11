@@ -4,9 +4,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import polars as pl
-
 import infermap
+import polars as pl
 from infermap.config import from_config
 from infermap.engine import MapEngine
 from infermap.providers import extract_schema

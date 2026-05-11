@@ -1,4 +1,5 @@
-from goldenflow.history import RunRecord, save_run, list_runs, generate_run_id
+from goldenflow.history import RunRecord, generate_run_id, list_runs, save_run
+
 
 def test_generate_run_id():
     rid = generate_run_id()

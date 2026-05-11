@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 import polars as pl

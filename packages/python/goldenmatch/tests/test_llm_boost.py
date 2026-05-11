@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import polars as pl
 import pytest
-
 from goldenmatch.core.llm_labeler import (
     build_prompt,
     detect_context,
@@ -18,7 +15,6 @@ from goldenmatch.core.llm_labeler import (
     get_default_model,
     parse_response,
 )
-
 
 # ── LLM Labeler Tests ─────────────────────────────────────────────────────
 
@@ -169,7 +165,7 @@ class TestPairSampling:
 
 class TestModelPersistence:
     def test_save_and_load(self, tmp_path):
-        from goldenmatch.core.boost import save_model, load_model
+        from goldenmatch.core.boost import load_model, save_model
         from sklearn.linear_model import LogisticRegression
 
         X = np.array([[0.1, 0.2], [0.9, 0.8], [0.1, 0.3], [0.8, 0.9]])
@@ -191,7 +187,7 @@ class TestModelPersistence:
         np.testing.assert_array_almost_equal(orig_probs, loaded_probs)
 
     def test_column_mismatch_returns_none(self, tmp_path):
-        from goldenmatch.core.boost import save_model, load_model
+        from goldenmatch.core.boost import load_model, save_model
         from sklearn.linear_model import LogisticRegression
 
         X = np.array([[0.1, 0.2], [0.9, 0.8], [0.1, 0.3], [0.8, 0.9]])

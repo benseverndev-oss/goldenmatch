@@ -1,13 +1,12 @@
 """Tests for ANN sub-block fallback in blocker."""
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import polars as pl
-import pytest
-from unittest.mock import patch, MagicMock
-
-from goldenmatch.core.blocker import _ann_sub_block, _build_static_blocks
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.core.blocker import _ann_sub_block, _build_static_blocks
 
 
 class TestANNSubBlock:

@@ -7,7 +7,6 @@ import tempfile
 
 import polars as pl
 import pytest
-
 from infermap.errors import ApplyError
 from infermap.types import (
     FieldInfo,
@@ -16,8 +15,8 @@ from infermap.types import (
     SchemaInfo,
     ScorerResult,
 )
-from tests.conftest import make_field, make_schema
 
+from tests.conftest import make_field, make_schema
 
 # ---------------------------------------------------------------------------
 # FieldInfo

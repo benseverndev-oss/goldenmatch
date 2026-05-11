@@ -1,7 +1,11 @@
 """Tests for goldenpipe.models.context."""
 from goldenpipe.models.context import (
-    PipeContext, StageResult, Decision, PipeResult,
-    StageStatus, PipeStatus,
+    Decision,
+    PipeContext,
+    PipeResult,
+    PipeStatus,
+    StageResult,
+    StageStatus,
 )
 
 

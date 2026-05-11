@@ -283,9 +283,9 @@ def create_server():
 
 def run_server():
     """Run the MCP server over stdio. Requires mcp package."""
-    from mcp.server.stdio import stdio_server
-
     import asyncio
+
+    from mcp.server.stdio import stdio_server
 
     server = create_server()
     asyncio.run(stdio_server(server))

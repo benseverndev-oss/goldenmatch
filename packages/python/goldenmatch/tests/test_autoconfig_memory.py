@@ -1,16 +1,15 @@
 """Tests for AutoConfigMemory (Tier 4 cross-run memory)."""
-import pytest
 import polars as pl
-from goldenmatch.core.autoconfig_memory import (
-    AutoConfigMemory,
-    profile_signature,
-)
 from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
     GoldenMatchConfig,
     MatchkeyConfig,
     MatchkeyField,
-    BlockingConfig,
-    BlockingKeyConfig,
+)
+from goldenmatch.core.autoconfig_memory import (
+    AutoConfigMemory,
+    profile_signature,
 )
 
 

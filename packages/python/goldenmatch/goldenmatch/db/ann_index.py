@@ -64,7 +64,7 @@ class PersistentANNIndex:
     def load_or_build(self) -> None:
         """Load index from disk if fresh, rebuild from DB if stale."""
         try:
-            import faiss
+            import faiss  # noqa: F401  # availability check for optional dep
         except ImportError:
             logger.warning("faiss-cpu not installed. ANN index unavailable.")
             return

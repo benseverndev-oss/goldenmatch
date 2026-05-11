@@ -1,6 +1,8 @@
 """Range and distribution profiler — detects outliers and reports min/max for numeric columns."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 

@@ -4,8 +4,9 @@ Two fixtures:
 - t3_synthetic.csv: collision-prone (50 dup pairs, 50 collision pairs, 100 singletons)
 - t3_clean_compat.csv: clean (50 dup pairs, 100 singletons; no collisions)
 """
-from pathlib import Path
 import os
+from pathlib import Path
+
 import pytest
 
 
@@ -63,7 +64,7 @@ def test_t3_synthetic_recovers_precision(t3_synthetic_df):
     # Assertion 2: cluster count is in expected range
     if hasattr(result, "clusters") and result.clusters:
         n_clusters = len(result.clusters)
-        n_rows = t3_synthetic_df.height
+        _n_rows = t3_synthetic_df.height
         # 50 dup pairs → 50 merged clusters
         # 50 collision pairs → 100 separate (if rule worked) or 50 merged (if not)
         # 100 singletons → 100 clusters

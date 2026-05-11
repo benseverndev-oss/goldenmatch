@@ -1,5 +1,6 @@
 """Pydantic models for goldencheck.yml configuration."""
 from __future__ import annotations
+
 from pydantic import BaseModel
 
 __all__ = ["GoldenCheckConfig", "ColumnRule", "Settings", "RelationRule", "IgnoreEntry"]

@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import polars as pl
-import pytest
-
 from goldenmatch.core.review_queue import ReviewItem, ReviewQueue
 
 

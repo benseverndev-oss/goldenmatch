@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import polars as pl
-
 from infermap.providers import detect_provider
 
 

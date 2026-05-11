@@ -2,8 +2,8 @@
 import pytest
 
 try:
-    from goldenflow.a2a.server import create_app  # noqa: F401
     import pytest_aiohttp  # noqa: F401
+    from goldenflow.a2a.server import create_app  # noqa: F401
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False

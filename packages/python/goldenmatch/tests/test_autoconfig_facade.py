@@ -1,7 +1,8 @@
-import pytest
-import polars as pl
 from unittest.mock import patch
+
 import goldenmatch
+import polars as pl
+import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
 
 
@@ -22,8 +23,8 @@ def test_auto_configure_df_invokes_controller_run():
         "city": ["nyc"] * 100,
     })
     with patch("goldenmatch.core.autoconfig_controller.AutoConfigController.run") as mock_run:
-        from goldenmatch.core.complexity_profile import ComplexityProfile
         from goldenmatch.core.autoconfig_history import RunHistory
+        from goldenmatch.core.complexity_profile import ComplexityProfile
         mock_run.return_value = (
             GoldenMatchConfig(matchkeys=[]),
             ComplexityProfile(),
@@ -95,8 +96,8 @@ def test_last_controller_run_contextvar_populated():
     state = _LAST_CONTROLLER_RUN.get()
     assert state is not None
     profile, history = state
-    from goldenmatch.core.complexity_profile import ComplexityProfile
     from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.complexity_profile import ComplexityProfile
     assert isinstance(profile, ComplexityProfile)
     assert isinstance(history, RunHistory)
 
@@ -120,8 +121,7 @@ def test_legacy_auto_configure_v0_still_callable():
 def test_kwargs_threaded_to_v0():
     """auto_configure_df forwards strict/llm_auto kwargs into _legacy_auto_configure_v0."""
     from unittest.mock import patch as _patch
-    from goldenmatch.core.autoconfig_history import RunHistory
-    from goldenmatch.core.complexity_profile import ComplexityProfile
+
 
     df = pl.DataFrame({"name": ["a", "b"] * 5, "city": ["x", "y"] * 5})
     with _patch("goldenmatch.core.autoconfig._legacy_auto_configure_v0") as mock_v0:

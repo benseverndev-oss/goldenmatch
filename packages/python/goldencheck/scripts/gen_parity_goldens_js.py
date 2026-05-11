@@ -10,9 +10,8 @@ import json
 from pathlib import Path
 
 import polars as pl
-
-from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Severity
 
 FIXTURES_DIR = Path("tests/fixtures")

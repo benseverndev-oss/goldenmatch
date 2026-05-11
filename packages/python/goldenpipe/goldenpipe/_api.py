@@ -7,9 +7,9 @@ import polars as pl
 
 from goldenpipe.config.loader import load_config
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.engine.reporter import Reporter
 from goldenpipe.engine.resolver import Resolver
 from goldenpipe.engine.runner import Runner
-from goldenpipe.engine.reporter import Reporter
 from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.context import PipeContext, PipeResult
 

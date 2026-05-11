@@ -2,8 +2,11 @@
 import polars as pl
 import pytest
 from goldenmatch.core.autoconfig_verify import (
-    PreflightReport, PreflightFinding, ConfigValidationError,
-    PostflightReport, PostflightAdjustment,
+    ConfigValidationError,
+    PostflightAdjustment,
+    PostflightReport,
+    PreflightFinding,
+    PreflightReport,
 )
 
 
@@ -31,8 +34,13 @@ def test_postflight_report_defaults_empty():
 
 def test_postflight_bimodal_histogram_adjusts_threshold():
     import random
+
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     random.seed(42)
@@ -55,8 +63,13 @@ def test_postflight_bimodal_histogram_adjusts_threshold():
 
 def test_postflight_unimodal_histogram_no_adjustment():
     import random
+
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     random.seed(42)
@@ -75,10 +88,14 @@ def test_postflight_signals_schema():
     """Contract test: PostflightReport.signals must contain EXACTLY the 8
     keys documented in the stable schema. New keys require explicit spec
     amendment + schema bump — a subset-check would silently accept drift."""
-    from goldenmatch.core.autoconfig_verify import postflight
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.autoconfig_verify import postflight
     df = pl.DataFrame({"a": list(range(100))})
     cfg = GoldenMatchConfig(
         blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["a"])]),
@@ -100,7 +117,11 @@ def test_postflight_signals_schema():
 
 def test_postflight_threshold_overlap_triggers_llm_advisory():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     # 30% of pairs in 0.70 ± 0.02 band.
@@ -119,7 +140,11 @@ def test_postflight_threshold_overlap_triggers_llm_advisory():
 
 def test_postflight_cluster_sizes_identifies_oversized():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     # Force one big component of 150 rows via chain of edges.
@@ -139,7 +164,11 @@ def test_postflight_cluster_sizes_identifies_oversized():
 
 def test_postflight_blocking_recall_gated_below_10k():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     df = pl.DataFrame({"name": [f"n{i}" for i in range(500)]})
@@ -155,8 +184,13 @@ def test_postflight_blocking_recall_gated_below_10k():
 def test_postflight_strict_mode_no_adjustment():
     """Strict mode: all signals computed, zero adjustments."""
     import random
+
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import postflight
     random.seed(42)
@@ -197,7 +231,11 @@ def test_config_validation_error_carries_report():
 
 def test_preflight_check1_missing_raw_column_errors():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"name": ["a"]})
@@ -213,7 +251,11 @@ def test_preflight_check1_missing_raw_column_errors():
 
 def test_preflight_check1_domain_auto_repair():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"title": ["a"], "authors": ["b"]})
@@ -234,7 +276,11 @@ def test_preflight_check1_domain_auto_repair():
 
 def test_preflight_check2_drops_high_cardinality_exact_matchkey():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"id": list(range(100)), "name": ["alice"] * 100})
@@ -255,7 +301,11 @@ def test_preflight_check2_drops_high_cardinality_exact_matchkey():
 
 def test_preflight_check3_drops_low_cardinality_exact_matchkey():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"state": ["NC"] * 100, "last_name": [f"name{i}" for i in range(100)]})
@@ -275,7 +325,11 @@ def test_preflight_check3_drops_low_cardinality_exact_matchkey():
 
 def test_preflight_no_matchkeys_after_drops_is_hard_error():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"id": list(range(100))})
@@ -290,7 +344,11 @@ def test_preflight_no_matchkeys_after_drops_is_hard_error():
 
 def test_preflight_check4_warns_on_mega_block():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     # 10000 rows, all same state code → one mega-block
@@ -308,7 +366,11 @@ def test_preflight_check4_warns_on_mega_block():
 
 def test_preflight_check5_demotes_embedding_by_default():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"name": ["alice", "bob"], "desc": ["x", "y"]})
@@ -327,7 +389,11 @@ def test_preflight_check5_demotes_embedding_by_default():
 
 def test_preflight_check5_keeps_embedding_when_allowed():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"name": ["alice", "bob"], "desc": ["x", "y"]})
@@ -343,7 +409,11 @@ def test_preflight_check5_keeps_embedding_when_allowed():
 
 def test_preflight_check6_caps_weight_for_low_confidence():
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig import ColumnProfile
     from goldenmatch.core.autoconfig_verify import preflight
@@ -383,7 +453,11 @@ def test_auto_configure_df_attaches_preflight_report():
 def test_preflight_check5_drops_empty_matchkey_after_record_embedding_removal():
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.core.autoconfig_verify import preflight
     df = pl.DataFrame({"title": ["a", "b"]})
@@ -415,6 +489,7 @@ def test_auto_configure_df_dblp_acm_does_not_crash():
     coverage lives in tests/test_autoconfig_benchmarks.py (marked @benchmark).
     """
     from pathlib import Path
+
     import pytest
     from goldenmatch._api import dedupe_df
     d = Path("tests/benchmarks/datasets/DBLP-ACM")
@@ -481,8 +556,8 @@ def test_preflight_check1_domain_repair_works_with_manual_domain_config():
     heuristic; the controller-backed auto_configure_df does not thread these kwargs.
     """
     import polars as pl
-    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
     from goldenmatch.config.schemas import DomainConfig
+    from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
     df = pl.DataFrame({"title": [f"paper {i}" for i in range(50)]})
     # Force manual domain selection
     cfg = _legacy_auto_configure_v0(df, domain_config=DomainConfig(enabled=True, mode="bibliographic"))
@@ -495,8 +570,9 @@ def test_postflight_threshold_adjustment_applied_before_clustering():
     """End-to-end: bimodal score distribution causes postflight to nudge
     threshold; the pipeline must apply the nudge to all_pairs BEFORE
     clustering (not just attach the report)."""
-    import polars as pl
     import random
+
+    import polars as pl
     from goldenmatch._api import dedupe_df
 
     random.seed(42)
@@ -563,10 +639,14 @@ def test_postflight_strict_mode_pipeline_does_not_filter_all_pairs():
 def test_postflight_empty_pair_scores():
     """Postflight must not crash on empty pair_scores."""
     import polars as pl
-    from goldenmatch.core.autoconfig_verify import postflight
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.autoconfig_verify import postflight
     df = pl.DataFrame({"a": list(range(10))})
     cfg = GoldenMatchConfig(
         blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["a"])]),
@@ -581,10 +661,14 @@ def test_postflight_empty_pair_scores():
 def test_postflight_all_identical_scores():
     """All pairs at the same score — no bimodality, no valley."""
     import polars as pl
-    from goldenmatch.core.autoconfig_verify import postflight
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.autoconfig_verify import postflight
     df = pl.DataFrame({"a": list(range(20))})
     cfg = GoldenMatchConfig(
         blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["a"])]),
@@ -601,10 +685,14 @@ def test_postflight_all_identical_scores():
 def test_postflight_zero_height_df():
     """Postflight must not crash on zero-row DataFrame."""
     import polars as pl
-    from goldenmatch.core.autoconfig_verify import postflight
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.autoconfig_verify import postflight
     df = pl.DataFrame({"a": []}, schema={"a": pl.Int64})
     cfg = GoldenMatchConfig(
         blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["a"])]),

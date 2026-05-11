@@ -1,8 +1,8 @@
 """Generate 1M synthetic messy records for performance testing."""
 
+import csv
 import random
 import string
-import csv
 from pathlib import Path
 
 FIRST_NAMES = [

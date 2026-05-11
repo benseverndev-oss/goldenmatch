@@ -28,7 +28,7 @@ import asyncio
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +129,7 @@ def _execute_run(
         clusters=clusters,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run_name = now.strftime("%Y%m%d_%H%M%S")
     lineage = {
         "generated_at": now.isoformat(),
@@ -196,7 +196,7 @@ async def run_real(payload: RunRequest, request: Request) -> dict:
             ),
             timeout=RUN_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408,
             detail=f"run exceeded {RUN_TIMEOUT_S}s — try a smaller dataset or break the work up",

@@ -4,10 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
-
 from goldencheck.baseline import create_baseline, load_baseline
 from goldencheck.baseline.models import BaselineProfile
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -18,8 +18,8 @@ def hartigan_dip(scores: list[float]) -> float:
     """
     if not scores:
         return 0.0
-    import numpy as np
     import diptest
+    import numpy as np
     return float(diptest.dipstat(np.asarray(scores)))
 
 

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from textual.app import ComposeResult
-from textual.containers import Center, Vertical, Horizontal
+from textual.containers import Center, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Static, RadioSet, RadioButton
+from textual.widgets import Button, Footer, Header, Static
 
 
 class SetupWizard(Screen):
@@ -131,17 +130,17 @@ class SetupWizard(Screen):
         elif endpoint:
             checks.append(f"  [#2ecc71]✓[/] Remote GPU: [bold]{endpoint}[/]")
         else:
-            checks.append(f"  [#e67e22]○[/] GPU/Embeddings: not configured")
+            checks.append("  [#e67e22]○[/] GPU/Embeddings: not configured")
 
         if anthropic:
-            checks.append(f"  [#2ecc71]✓[/] LLM Boost: API key set")
+            checks.append("  [#2ecc71]✓[/] LLM Boost: API key set")
         else:
-            checks.append(f"  [#8892a0]○[/] LLM Boost: not configured (optional)")
+            checks.append("  [#8892a0]○[/] LLM Boost: not configured (optional)")
 
         if db:
-            checks.append(f"  [#2ecc71]✓[/] Database: configured")
+            checks.append("  [#2ecc71]✓[/] Database: configured")
         else:
-            checks.append(f"  [#8892a0]○[/] Database: not configured (optional)")
+            checks.append("  [#8892a0]○[/] Database: not configured (optional)")
 
         content.update(
             "[bold]Welcome![/]\n\n"
@@ -289,7 +288,7 @@ class SetupWizard(Screen):
         )
 
         if db_url:
-            status.update(f"[#2ecc71]✓ Database configured[/]")
+            status.update("[#2ecc71]✓ Database configured[/]")
         else:
             status.update("[#8892a0]○ No database configured (skip if not needed)[/]")
 
@@ -308,23 +307,23 @@ class SetupWizard(Screen):
             endpoint = os.environ.get("GOLDENMATCH_GPU_ENDPOINT", "(not set)")
             lines.append(f"  [#d4a017]GPU:[/] Remote ({endpoint})")
         elif mode == "local":
-            lines.append(f"  [#d4a017]GPU:[/] Local")
+            lines.append("  [#d4a017]GPU:[/] Local")
         else:
-            lines.append(f"  [#d4a017]GPU:[/] CPU-safe (no embeddings)")
+            lines.append("  [#d4a017]GPU:[/] CPU-safe (no embeddings)")
 
         # LLM
         if os.environ.get("ANTHROPIC_API_KEY"):
-            lines.append(f"  [#d4a017]LLM:[/] Anthropic (configured)")
+            lines.append("  [#d4a017]LLM:[/] Anthropic (configured)")
         elif os.environ.get("OPENAI_API_KEY"):
-            lines.append(f"  [#d4a017]LLM:[/] OpenAI (configured)")
+            lines.append("  [#d4a017]LLM:[/] OpenAI (configured)")
         else:
-            lines.append(f"  [#d4a017]LLM:[/] Not configured")
+            lines.append("  [#d4a017]LLM:[/] Not configured")
 
         # DB
         if os.environ.get("GOLDENMATCH_DATABASE_URL"):
-            lines.append(f"  [#d4a017]Database:[/] Configured")
+            lines.append("  [#d4a017]Database:[/] Configured")
         else:
-            lines.append(f"  [#d4a017]Database:[/] Not configured")
+            lines.append("  [#d4a017]Database:[/] Not configured")
 
         lines.append("\n[bold]To save these settings permanently,[/]")
         lines.append("add the environment variables to your shell profile")

@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldencheck.baseline.correlation import _cramers_v, analyze_correlations
-
 
 # ---------------------------------------------------------------------------
 # Helpers

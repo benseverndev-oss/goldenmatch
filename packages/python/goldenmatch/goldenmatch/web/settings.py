@@ -115,7 +115,7 @@ class WebSettings(BaseModel):
     # Surface env state on read so the UI can show "LLM available" without a separate call.
     # Computed fresh each GET — never persisted.
     @classmethod
-    def with_env_status(cls, base: "WebSettings") -> dict[str, Any]:
+    def with_env_status(cls, base: WebSettings) -> dict[str, Any]:
         return {
             **base.model_dump(),
             "llm_keys_present": {

@@ -20,9 +20,9 @@ import goldenflow  # noqa: F401 – registers transforms
 from goldenflow.mapping.schema_mapper import SchemaMapper
 
 try:
+    from rich import box
     from rich.console import Console
     from rich.table import Table
-    from rich import box
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False

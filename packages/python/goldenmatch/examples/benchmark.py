@@ -14,8 +14,8 @@ Without LLM: ~77.  With LLM: ~95.
 """
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 if sys.stdout.encoding != "utf-8":
@@ -23,8 +23,8 @@ if sys.stdout.encoding != "utf-8":
 
 if __name__ == "__main__":
     from dqbench.adapters.goldenmatch_adapter import GoldenMatchAdapter
-    from dqbench.runner import run_er_benchmark
     from dqbench.report import report_er_rich
+    from dqbench.runner import run_er_benchmark
 
     print("=" * 60)
     print("GoldenMatch -- DQBench ER Benchmark")

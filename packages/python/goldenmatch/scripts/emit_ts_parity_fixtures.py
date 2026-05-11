@@ -41,18 +41,17 @@ _PKG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PKG))
 
 from goldenmatch.core.autoconfig_controller import (  # noqa: E402
-    AutoConfigController, ControllerBudget,
+    AutoConfigController,
+    ControllerBudget,
 )
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy  # noqa: E402
-from goldenmatch.core.complexity_profile import HealthVerdict  # noqa: E402
 from goldenmatch.core.indicators import (  # noqa: E402
     compute_column_priors,
-    estimate_sparse_match_signal,
     compute_corruption_score,
-    estimate_full_pop_hits,
     compute_cross_blocking_overlap,
+    estimate_full_pop_hits,
+    estimate_sparse_match_signal,
 )
-
 
 # ---------------------------------------------------------------------------
 # Curated mini-datasets

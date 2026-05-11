@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from dateutil import parser as dateutil_parser
 import polars as pl
+from dateutil import parser as dateutil_parser
 
 from goldenflow.transforms import register_transform
 

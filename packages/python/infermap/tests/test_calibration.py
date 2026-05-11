@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from infermap import MapEngine
 from infermap.calibration import (
     IdentityCalibrator,

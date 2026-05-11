@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from goldenmatch.core.domain_registry import discover_rulebooks, load_rulebook
 
 DOMAINS_DIR = Path(__file__).parent.parent / "goldenmatch" / "domains"

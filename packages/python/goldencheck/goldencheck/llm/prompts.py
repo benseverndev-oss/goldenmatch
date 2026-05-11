@@ -1,5 +1,6 @@
 """LLM prompt templates and response Pydantic models."""
 from __future__ import annotations
+
 from pydantic import BaseModel
 
 SYSTEM_PROMPT = """You are a data quality analyst. You are given a dataset summary with representative samples for each column, along with findings from automated profilers.

@@ -4,10 +4,12 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §Types & contracts § "RunHistory".
 """
 from __future__ import annotations
+
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
+
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, StopReason
 
 

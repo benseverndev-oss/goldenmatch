@@ -3,14 +3,14 @@
 
 def test_top_level_imports():
     from goldencheck import (
+        ColumnProfile,
+        DatasetProfile,
+        Finding,
+        ScanResult,
+        Severity,
+        __version__,
         scan_file,
         scan_file_with_llm,
-        Finding,
-        Severity,
-        DatasetProfile,
-        ColumnProfile,
-        ScanResult,
-        __version__,
     )
     assert callable(scan_file)
     assert callable(scan_file_with_llm)

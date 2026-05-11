@@ -7,10 +7,8 @@ from unittest.mock import patch
 import numpy as np
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.embedder import Embedder
-
 
 # ---------------------------------------------------------------------------
 # Disk cache tests (no model needed)

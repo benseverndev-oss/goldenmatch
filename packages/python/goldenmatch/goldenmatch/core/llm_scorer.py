@@ -24,7 +24,6 @@ import os
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -39,7 +38,7 @@ def _record_llm_corrections(
     llm_results: dict[int, bool],
     pairs: list[tuple[int, int, float]],
     df: pl.DataFrame,
-    memory_store: "MemoryStore | None",
+    memory_store: MemoryStore | None,
     matchkey_fields: list[str] | None,
     matchkey_name: str | None,
     dataset: str | None,
@@ -52,12 +51,12 @@ def _record_llm_corrections(
         import uuid
         from datetime import datetime
 
-        from goldenmatch.core.memory.store import Correction, _canon_pair
         from goldenmatch.core.memory.corrections import (
             build_row_lookup,
             compute_field_hash,
             compute_record_hash,
         )
+        from goldenmatch.core.memory.store import Correction, _canon_pair
 
         fields = matchkey_fields or cols
         lookup = build_row_lookup(df, fields)
@@ -105,13 +104,13 @@ def llm_score_pairs(
     batch_size: int = 20,
     max_workers: int = 5,
     display_columns: list[str] | None = None,
-    config: "LLMScorerConfig | None" = None,
+    config: LLMScorerConfig | None = None,  # noqa: F821  # forward ref, resolved lazily
     return_budget: bool = False,
-    memory_store: "MemoryStore | None" = None,
+    memory_store: MemoryStore | None = None,
     matchkey_fields: list[str] | None = None,
     matchkey_name: str | None = None,
     dataset: str | None = None,
-) -> "list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]":
+) -> list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], dict | None]:
     """Score borderline pairs with an LLM.
 
     Three-tier approach:
@@ -138,7 +137,6 @@ def llm_score_pairs(
         LLM-approved pairs get score=1.0. LLM-rejected or unconfirmed pairs
         keep their original fuzzy score (never demoted).
     """
-    from goldenmatch.config.schemas import LLMScorerConfig
 
     # Resolve config -> individual params
     calibration_sample_size = 100
@@ -319,7 +317,7 @@ def llm_explain_pair(
     provider: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
-    budget: "BudgetTracker | None" = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_chars: int = 240,
 ) -> str:
     """Generate a one-sentence prose explanation for a record pair.
@@ -411,7 +409,7 @@ def _batch_score(
     api_key: str,
     model: str,
     batch_size: int,
-    budget: "BudgetTracker | None" = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_workers: int = 5,
 ) -> dict[int, bool]:
     """Score candidate pairs in batches with concurrent requests.
@@ -669,7 +667,7 @@ def _iterative_calibrate(
     api_key: str,
     model: str,
     batch_size: int,
-    budget: "BudgetTracker | None" = None,
+    budget: BudgetTracker | None = None,  # noqa: F821  # forward ref, resolved lazily
     max_workers: int = 5,
     sample_size: int = 100,
     max_rounds: int = 5,

@@ -1,13 +1,14 @@
 """Tests for MemoryStore CRUD operations."""
-import pytest
 from datetime import datetime
+
+import pytest
 from goldenmatch.core.memory.store import (
+    HIGH_TRUST_SOURCES,
+    Correction,
     CorrectionSource,
     Decision,
-    HIGH_TRUST_SOURCES,
-    MemoryStore,
-    Correction,
     LearnedAdjustment,
+    MemoryStore,
     trust_for_source,
 )
 

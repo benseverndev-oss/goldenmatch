@@ -77,7 +77,9 @@ def test_matchkey_config_negative_evidence_default_none():
 
 def test_matchkey_config_accepts_negative_evidence():
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
     mk = MatchkeyConfig(
         name="test", type="weighted", threshold=0.85,
@@ -111,8 +113,8 @@ def test_matchkey_config_v110_cache_compat_no_field():
 
 def test_apply_negative_evidence_returns_zero_when_no_ne():
     """Empty/None negative_evidence → zero penalty."""
-    from goldenmatch.core.scorer import _apply_negative_evidence
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.scorer import _apply_negative_evidence
     mk = MatchkeyConfig(
         name="t", type="weighted", threshold=0.8,
         fields=[MatchkeyField(field="email", transforms=[],
@@ -125,10 +127,12 @@ def test_apply_negative_evidence_returns_zero_when_no_ne():
 
 def test_apply_negative_evidence_subtracts_when_field_disagrees():
     """NE field disagrees (sim < threshold) → penalty applied."""
-    from goldenmatch.core.scorer import _apply_negative_evidence
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
+    from goldenmatch.core.scorer import _apply_negative_evidence
     mk = MatchkeyConfig(
         name="t", type="weighted", threshold=0.8,
         fields=[MatchkeyField(field="email", transforms=[],
@@ -146,10 +150,12 @@ def test_apply_negative_evidence_subtracts_when_field_disagrees():
 
 
 def test_apply_negative_evidence_no_subtract_when_field_agrees():
-    from goldenmatch.core.scorer import _apply_negative_evidence
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
+    from goldenmatch.core.scorer import _apply_negative_evidence
     mk = MatchkeyConfig(
         name="t", type="weighted", threshold=0.8,
         fields=[MatchkeyField(field="email", transforms=[],
@@ -169,8 +175,11 @@ def test_apply_negative_evidence_no_subtract_when_field_agrees():
 def test_apply_negative_evidence_skips_unregistered_scorer(caplog):
     """Defensive: unknown scorer → skip + WARNING."""
     import logging
+
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
     from goldenmatch.core.scorer import _apply_negative_evidence
     mk = MatchkeyConfig(
@@ -192,10 +201,12 @@ def test_apply_negative_evidence_skips_unregistered_scorer(caplog):
 
 def test_apply_negative_evidence_skips_missing_field():
     """Field not in pair dict → skip (defensive)."""
-    from goldenmatch.core.scorer import _apply_negative_evidence
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
+    from goldenmatch.core.scorer import _apply_negative_evidence
     mk = MatchkeyConfig(
         name="t", type="weighted", threshold=0.8,
         fields=[MatchkeyField(field="email", transforms=[],
@@ -219,11 +230,15 @@ def test_apply_negative_evidence_skips_missing_field():
 def test_score_pair_with_negative_evidence_drops_below_threshold():
     """E2E: positive=1.0, NE penalty=0.4, threshold=0.8 → final=0.6 → no match."""
     import polars as pl
-    from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        NegativeEvidenceField, BlockingConfig, BlockingKeyConfig,
-    )
     from goldenmatch._api import dedupe_df
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
+    )
 
     df = pl.DataFrame({
         # 2 records: same name+email, different phones (collision pair)
@@ -266,7 +281,8 @@ def test_score_pair_with_negative_evidence_drops_below_threshold():
 def _build_exact_matchkey_with_ne(threshold=None, ne_fields=None):
     """Helper: build an exact matchkey with optional NE + threshold."""
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     return MatchkeyConfig(
         name="exact_email", type="exact", threshold=threshold,
@@ -389,10 +405,13 @@ def test_find_exact_matches_emits_when_ne_score_above_threshold():
     """E2E: pair with agreeing NE emits as match."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
     from goldenmatch.core.scorer import (
-        find_exact_matches, _apply_negative_evidence_to_exact_pairs,
+        _apply_negative_evidence_to_exact_pairs,
+        find_exact_matches,
     )
     df = pl.DataFrame({
         "__row_id__": [0, 1],
@@ -422,10 +441,13 @@ def test_find_exact_matches_filters_when_ne_score_below_threshold():
     """E2E: pair with disagreeing NE drops below threshold → not emitted."""
     import polars as pl
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, NegativeEvidenceField,
+        MatchkeyConfig,
+        MatchkeyField,
+        NegativeEvidenceField,
     )
     from goldenmatch.core.scorer import (
-        find_exact_matches, _apply_negative_evidence_to_exact_pairs,
+        _apply_negative_evidence_to_exact_pairs,
+        find_exact_matches,
     )
     df = pl.DataFrame({
         "__row_id__": [0, 1],

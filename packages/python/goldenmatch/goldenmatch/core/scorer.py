@@ -14,20 +14,25 @@ from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core._profile_helpers import (
+    hartigan_dip,
+    histogram_20,
+    mass_above,
+    mass_borderline,
+)
 from goldenmatch.core.complexity_profile import ScoringProfile
-from goldenmatch.core._profile_helpers import histogram_20, hartigan_dip, mass_above, mass_borderline
+from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
 
 def _emit_scoring_profile(
-    pairs: "list[tuple[int, int, float]]",
+    pairs: list[tuple[int, int, float]],
     threshold: float,
     *,
     candidates_compared: int = 0,
-    per_field_variance: "dict[str, float] | None" = None,
+    per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
 
@@ -257,7 +262,7 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     callers that bypass the pipeline (DataFrame entry points, tests calling
     find_fuzzy_matches directly).
     """
-    from goldenmatch.core.matchkey import _xform_sig, _try_native_chain
+    from goldenmatch.core.matchkey import _try_native_chain, _xform_sig
 
     sig = _xform_sig(field)
     if sig in block_df.columns:
@@ -482,7 +487,7 @@ def _build_null_mask(values: list) -> np.ndarray:
 def find_fuzzy_matches(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,
-    exclude_pairs: "set[tuple[int, int]] | frozenset[tuple[int, int]] | None" = None,
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
     pre_scored_pairs: list[tuple[int, int, float]] | None = None,
 ) -> list[tuple[int, int, float]]:
     """Find fuzzy matches within a block DataFrame.
@@ -705,7 +710,7 @@ def find_fuzzy_matches(
 def _score_one_block(
     block: Any,
     mk: MatchkeyConfig,
-    exclude_pairs: "set[tuple[int, int]] | frozenset[tuple[int, int]]",
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
 ) -> list[tuple[int, int, float]]:
@@ -872,7 +877,9 @@ def rerank_top_pairs(
         return pairs
 
     try:
-        from sentence_transformers import CrossEncoder  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+        from sentence_transformers import (
+            CrossEncoder,  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+        )
     except ImportError:
         logger.warning("Cross-encoder reranking unavailable: sentence-transformers not installed")
         return pairs

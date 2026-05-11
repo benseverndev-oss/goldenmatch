@@ -9,8 +9,9 @@ This test guards:
 2. email's identity_score is high (>= 0.8) and corruption_score > 0 (correct detection)
 3. indicators profile is non-None on the committed entry
 """
-from pathlib import Path
 import os
+from pathlib import Path
+
 import pytest
 
 

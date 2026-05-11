@@ -8,8 +8,6 @@ from typing import Any
 import polars as pl
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
-
 
 # ── Heuristic type detection helpers ────────────────────────────────────────
 

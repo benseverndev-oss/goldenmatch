@@ -7,10 +7,10 @@ and adding domain-specific checks.
 Usage:
     python domain_pack.py patients.csv
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from goldencheck import scan_file, list_available_domains
+from goldencheck import list_available_domains, scan_file
 
 
 def main():

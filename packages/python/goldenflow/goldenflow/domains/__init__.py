@@ -14,7 +14,7 @@ _DOMAINS: dict[str, str] = {
 }
 
 
-def load_domain(name: str) -> "DomainPack | None":
+def load_domain(name: str) -> DomainPack | None:
     module_path = _DOMAINS.get(name.lower().replace("-", "_").replace("/", "_"))
     if module_path is None:
         raise NotImplementedError(f"Domain pack '{name}' is not yet available")

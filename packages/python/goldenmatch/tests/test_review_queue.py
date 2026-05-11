@@ -1,11 +1,8 @@
 """Tests for confidence-gated review queue."""
 
-import os
 
 import pytest
-
 from goldenmatch.core.review_queue import ReviewItem, ReviewQueue, gate_pairs
-
 
 # ── ReviewItem ──────────────────────────────────────────────────────────
 
