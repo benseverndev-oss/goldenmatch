@@ -1,11 +1,13 @@
 """Semantic type classifier — infers what each column represents."""
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import yaml
+
 import polars as pl
+import yaml
 
 logger = logging.getLogger(__name__)
 

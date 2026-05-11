@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Iterator
+from collections.abc import Iterator
 from urllib.parse import urlparse, urlunparse
 
 import pytest

@@ -11,7 +11,6 @@ from datetime import datetime
 
 import polars as pl
 import pytest
-
 from goldenmatch import dedupe_df
 from goldenmatch.config.schemas import (
     BlockingConfig,

@@ -7,7 +7,6 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, Input, Label, Select, Static, Switch
 
-
 # ── Available options ────────────────────────────────────────────────────────
 
 COMPARISON_TYPES = [("Exact", "exact"), ("Weighted", "weighted")]

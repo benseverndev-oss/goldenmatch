@@ -18,13 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import goldenflow  # noqa: F401 – registers transforms
-from goldenflow.engine.transformer import TransformEngine
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+from goldenflow.engine.transformer import TransformEngine
 
 try:
+    from rich import box
     from rich.console import Console
     from rich.table import Table
-    from rich import box
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False

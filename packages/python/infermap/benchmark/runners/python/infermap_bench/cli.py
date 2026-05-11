@@ -8,7 +8,8 @@ from pathlib import Path
 
 import click
 
-from . import MANIFEST_VERSION, __version__ as RUNNER_VERSION
+from . import MANIFEST_VERSION
+from . import __version__ as RUNNER_VERSION
 from .cases import Case, Expected, load_case
 from .compare import compute_delta
 from .manifest import CaseRef, load_manifest
@@ -45,6 +46,7 @@ def main(verbose: bool):
 def run(output: str, seed: int, only: str | None, self_test: bool, assert_against: str | None, calibrator_path: str | None):
     """Run the benchmark and write a report.json."""
     import time
+
     import infermap
     from infermap.calibration import load_calibrator
 
@@ -163,7 +165,7 @@ def rebuild_manifest():
     entries.sort(key=lambda e: e["id"])
     manifest = {
         "version": MANIFEST_VERSION,
-        "generated_at": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "generated_at": _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "cases": entries,
     }
     manifest_path = BENCHMARK_ROOT / "manifest.json"
@@ -181,7 +183,7 @@ def rebuild_manifest():
 @main.command("regenerate-synthetic")
 def regenerate_synthetic():
     """Regenerate benchmark/cases/synthetic/generated.json from synthetic.config.json."""
-    from .synthetic import load_synthetic_config, generate_all_synthetic, write_generated_json
+    from .synthetic import generate_all_synthetic, load_synthetic_config, write_generated_json
     cfg = load_synthetic_config(BENCHMARK_ROOT / "synthetic.config.json")
     cases = list(generate_all_synthetic(cfg))
     output = BENCHMARK_ROOT / "cases" / "synthetic" / "generated.json"

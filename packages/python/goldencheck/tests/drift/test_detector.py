@@ -1,10 +1,8 @@
 """Tests for goldencheck.drift.detector — TDD drift detection."""
 from __future__ import annotations
 
-
 import numpy as np
 import polars as pl
-
 from goldencheck.baseline.models import (
     BaselineProfile,
     CorrelationEntry,
@@ -15,7 +13,6 @@ from goldencheck.baseline.models import (
 )
 from goldencheck.drift.detector import run_drift_checks
 from goldencheck.models.finding import Severity
-
 
 # ---------------------------------------------------------------------------
 # Helpers

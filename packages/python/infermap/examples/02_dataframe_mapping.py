@@ -4,8 +4,8 @@ Works with both Polars and Pandas — infermap auto-detects
 the type and returns the same type from apply().
 """
 
-import polars as pl
 import infermap
+import polars as pl
 
 # --- Polars example ---
 print("=== Polars DataFrames ===\n")
@@ -35,7 +35,7 @@ for m in result.mappings:
 remapped = result.apply(source)
 print(f"\nOriginal columns:  {source.columns}")
 print(f"Remapped columns:  {remapped.columns}")
-print(f"\nRemapped data (first 3 rows):")
+print("\nRemapped data (first 3 rows):")
 print(remapped.head(3).to_pandas().to_string(index=False))
 
 # --- Pandas example ---

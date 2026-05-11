@@ -7,14 +7,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS = Path(__file__).parent / "datasets"
 

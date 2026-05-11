@@ -18,12 +18,12 @@ class AppState:
     # In-memory edited rules; seeded lazily from goldenmatch.yml on first
     # /api/v1/rules read. Stored as a validated RulesPayload so Task 5's
     # preview can feed the matching engine without re-validating per request.
-    rules: "RulesPayload | None" = None
+    rules: RulesPayload | None = None
     runs_dir: Path | None = None
     registry: PreviewRegistry = field(default_factory=PreviewRegistry)
 
     @classmethod
-    def from_project_dir(cls, project_dir: Path, runs_dir: Path | None = None) -> "AppState":
+    def from_project_dir(cls, project_dir: Path, runs_dir: Path | None = None) -> AppState:
         cfg = project_dir / "goldenmatch.yml"
         return cls(
             project_root=project_dir,

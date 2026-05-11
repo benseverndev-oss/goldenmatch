@@ -1,5 +1,6 @@
 """CI reporter — determines exit code based on findings and fail_on threshold."""
 from __future__ import annotations
+
 from goldencheck.models.finding import Finding, Severity
 
 SEVERITY_MAP = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}

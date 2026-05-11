@@ -69,8 +69,8 @@ class VertexEmbedder:
 
     def _refresh_adc_token(self) -> str:
         """Refresh token from application default credentials."""
-        import urllib.request
         import urllib.parse
+        import urllib.request
 
         # Check for service account key
         sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
@@ -103,12 +103,10 @@ class VertexEmbedder:
 
     def _get_sa_token(self, key_path: str) -> str:
         """Get token from service account key using JWT."""
-        import time
-        import urllib.request
-        import urllib.parse
-        import hashlib
-        import hmac
         import base64
+        import time
+        import urllib.parse
+        import urllib.request
 
         sa_key = json.loads(Path(key_path).read_text())
 

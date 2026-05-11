@@ -1,7 +1,9 @@
 """Rich console reporter — prints findings as formatted table."""
 from __future__ import annotations
+
 from rich.console import Console
 from rich.table import Table
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import DatasetProfile
 

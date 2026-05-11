@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
 from goldenflow.api.server import create_app
 
 

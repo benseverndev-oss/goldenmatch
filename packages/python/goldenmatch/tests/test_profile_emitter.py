@@ -1,11 +1,18 @@
 import threading
-import pytest
-from goldenmatch.core.profile_emitter import (
-    ProfileEmitter, profile_capture, current_emitter, _NullEmitter,
-)
+
 from goldenmatch.core.complexity_profile import (
-    BlockingProfile, ScoringProfile, ClusterProfile,
-    DataProfile, DomainProfile, MatchkeyProfile,
+    BlockingProfile,
+    ClusterProfile,
+    DataProfile,
+    DomainProfile,
+    MatchkeyProfile,
+    ScoringProfile,
+)
+from goldenmatch.core.profile_emitter import (
+    ProfileEmitter,
+    _NullEmitter,
+    current_emitter,
+    profile_capture,
 )
 
 
@@ -71,7 +78,7 @@ def test_emitter_isolation_across_threads():
     seen: dict[str, ProfileEmitter] = {}
 
     def worker(label: str) -> None:
-        with profile_capture() as e:
+        with profile_capture():
             barrier.wait()
             # ContextVar gives each thread its own stack
             seen[label] = current_emitter()

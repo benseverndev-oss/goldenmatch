@@ -40,7 +40,7 @@ class Calibrator(ABC):
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Calibrator": ...
+    def from_dict(cls, d: dict[str, Any]) -> Calibrator: ...
 
 
 class IdentityCalibrator(Calibrator):
@@ -58,7 +58,7 @@ class IdentityCalibrator(Calibrator):
         return {"kind": self.kind}
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "IdentityCalibrator":
+    def from_dict(cls, d: dict[str, Any]) -> IdentityCalibrator:
         return cls()
 
 
@@ -128,7 +128,7 @@ class IsotonicCalibrator(Calibrator):
         return {"kind": self.kind, "x": self.x.tolist(), "y": self.y.tolist()}
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "IsotonicCalibrator":
+    def from_dict(cls, d: dict[str, Any]) -> IsotonicCalibrator:
         return cls(x=np.array(d["x"], dtype=float), y=np.array(d["y"], dtype=float))
 
 
@@ -172,7 +172,7 @@ class PlattCalibrator(Calibrator):
         return {"kind": self.kind, "a": self.a, "b": self.b}
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "PlattCalibrator":
+    def from_dict(cls, d: dict[str, Any]) -> PlattCalibrator:
         return cls(a=float(d["a"]), b=float(d["b"]))
 
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -27,10 +26,11 @@ def pprl_link(
     security: str = typer.Option("high", "--security", "-s", help="Security level: standard, high, paranoid"),
     protocol: str = typer.Option("trusted_third_party", "--protocol", "-p", help="Protocol: trusted_third_party or smc"),
     scorer: str = typer.Option("dice", "--scorer", help="Similarity scorer: dice or jaccard"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output CSV path for cluster assignments"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path for cluster assignments"),
 ) -> None:
     """Link records across two parties without sharing raw data."""
     import polars as pl
+
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
     if not file_a.exists():
@@ -59,7 +59,7 @@ def pprl_link(
     if security in _LEVELS:
         config.ngram_size, config.hash_functions, config.bloom_filter_size = _LEVELS[security]
 
-    console.print(f"[bold]Loading data...[/bold]")
+    console.print("[bold]Loading data...[/bold]")
     df_a = pl.read_csv(file_a)
     df_b = pl.read_csv(file_b)
 
@@ -70,7 +70,7 @@ def pprl_link(
     console.print(f"  Security: {security}")
     console.print()
 
-    console.print(f"[bold]Running PPRL linkage...[/bold]")
+    console.print("[bold]Running PPRL linkage...[/bold]")
     result = run_pprl(
         df_a, df_b, config,
         party_a_id="party_a", party_b_id="party_b",
@@ -88,7 +88,7 @@ def pprl_link(
     console.print(table)
 
     if result.clusters:
-        console.print(f"\n[bold]Cluster details:[/bold]")
+        console.print("\n[bold]Cluster details:[/bold]")
         for cid, members in sorted(result.clusters.items())[:10]:
             member_strs = [f"{pid}:{rid}" for pid, rid in members]
             console.print(f"  Cluster {cid}: {', '.join(member_strs)}")
@@ -116,6 +116,7 @@ def pprl_auto_config(
 ) -> None:
     """Analyze data and recommend optimal PPRL configuration."""
     import polars as pl
+
     from goldenmatch.pprl.autoconfig import auto_configure_pprl, auto_configure_pprl_llm
 
     if not file.exists():
@@ -151,15 +152,15 @@ def pprl_auto_config(
 
     # Display recommended config
     config = result.recommended_config
-    console.print(f"\n[bold]Recommended Configuration:[/bold]")
+    console.print("\n[bold]Recommended Configuration:[/bold]")
     console.print(f"  Fields: {', '.join(result.recommended_fields)}")
     console.print(f"  Threshold: {config.threshold}")
     console.print(f"  Security: {config.security_level}")
     console.print(f"  Bloom filter: {config.ngram_size}-gram, {config.hash_functions} hashes, {config.bloom_filter_size}-bit")
 
     # Print as YAML config
-    console.print(f"\n[bold]YAML config:[/bold]")
-    console.print(f"  pprl:")
+    console.print("\n[bold]YAML config:[/bold]")
+    console.print("  pprl:")
     console.print(f"    fields: [{', '.join(result.recommended_fields)}]")
     console.print(f"    threshold: {config.threshold}")
     console.print(f"    security_level: {config.security_level}")

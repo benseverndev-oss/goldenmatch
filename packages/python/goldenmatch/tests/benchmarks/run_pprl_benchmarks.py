@@ -90,12 +90,16 @@ def evaluate_pprl(result, gt):
 
 def run_normal_benchmark(df_a, df_b, gt, fields, threshold=0.85):
     """Run normal (non-PPRL) fuzzy matching for comparison."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
     from goldenmatch.core.autofix import auto_fix_dataframe
-    from goldenmatch.core.standardize import apply_standardization
-    from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.scorer import score_blocks_parallel
-    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig
 
     df_a2 = df_a.with_columns(pl.lit("a").alias("__source__"))
     df_b2 = df_b.with_columns(pl.lit("b").alias("__source__"))
@@ -214,7 +218,7 @@ if df_a is not None:
         print(f"{'PPRL (' + level + ', t=' + str(thresh) + ')':<40s}  {pr:5.1%}  {rc:5.1%}  {f1:5.1%}  {pairs:>7d}  {t:>7.2f}s")
 
     # Higher threshold sweep for precision-focused use
-    print(f"\n  Threshold sweep (high security):")
+    print("\n  Threshold sweep (high security):")
     for thresh in [0.75, 0.80, 0.85, 0.90, 0.95]:
         pr, rc, f1, pairs, t = run_pprl_benchmark(df_a, df_b, gt, fields, thresh, "high")
         print(f"    t={thresh:.2f}:  P={pr:5.1%}  R={rc:5.1%}  F1={f1:5.1%}  pairs={pairs}")

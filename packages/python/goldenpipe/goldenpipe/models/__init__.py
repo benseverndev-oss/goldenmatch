@@ -1,10 +1,14 @@
 """Data models for GoldenPipe."""
+from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.context import (
-    PipeContext, StageResult, Decision, PipeResult,
-    StageStatus, PipeStatus,
+    Decision,
+    PipeContext,
+    PipeResult,
+    PipeStatus,
+    StageResult,
+    StageStatus,
 )
-from goldenpipe.models.stage import StageInfo, Stage, stage
-from goldenpipe.models.config import StageSpec, PipelineConfig
+from goldenpipe.models.stage import Stage, StageInfo, stage
 
 __all__ = [
     "PipeContext", "StageResult", "Decision", "PipeResult",

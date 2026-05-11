@@ -2,7 +2,6 @@
 
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.matchkey import _xform_sig, precompute_matchkey_transforms
 from goldenmatch.core.scorer import (
@@ -476,14 +475,13 @@ class TestDiceJaccardScoreField:
 # Internal matrix helpers
 # ---------------------------------------------------------------------------
 
-import numpy as np
 from goldenmatch.core.scorer import (
-    _exact_score_matrix,
-    _soundex_score_matrix,
-    _dice_score_matrix,
-    _jaccard_score_matrix,
     _build_null_mask,
+    _dice_score_matrix,
+    _exact_score_matrix,
     _fuzzy_score_matrix,
+    _jaccard_score_matrix,
+    _soundex_score_matrix,
 )
 
 
@@ -588,9 +586,8 @@ class TestFuzzyScoreMatrix:
 # score_blocks_parallel tests
 # ---------------------------------------------------------------------------
 
-from unittest.mock import MagicMock
-from goldenmatch.core.scorer import score_blocks_parallel
 from goldenmatch.core.blocker import BlockResult
+from goldenmatch.core.scorer import score_blocks_parallel
 
 
 def _make_block(row_ids, names, block_key="k1"):

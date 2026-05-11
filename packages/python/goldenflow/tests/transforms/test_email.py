@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.email import (
     email_extract_domain,
     email_lowercase,

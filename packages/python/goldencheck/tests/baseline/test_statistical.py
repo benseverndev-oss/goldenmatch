@@ -5,9 +5,7 @@ import math
 
 import polars as pl
 import pytest
-
 from goldencheck.baseline.statistical import profile_statistical
-
 
 # ---------------------------------------------------------------------------
 # Helpers

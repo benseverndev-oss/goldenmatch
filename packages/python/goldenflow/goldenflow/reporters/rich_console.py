@@ -6,7 +6,6 @@ from rich.table import Table
 from goldenflow.engine.manifest import Manifest
 from goldenflow.engine.profiler_bridge import DatasetProfile
 
-
 console = Console()
 
 

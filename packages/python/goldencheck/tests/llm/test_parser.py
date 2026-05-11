@@ -1,6 +1,8 @@
 import json
+
 from goldencheck.llm.parser import parse_llm_response
 from goldencheck.llm.prompts import LLMResponse
+
 
 def test_parse_valid_json():
     raw = json.dumps({

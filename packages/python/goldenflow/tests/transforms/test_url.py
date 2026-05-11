@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.url import url_extract_domain, url_normalize
 
 

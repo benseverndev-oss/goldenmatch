@@ -12,14 +12,16 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §HeuristicRefitPolicy rule table (v1).
 """
 from __future__ import annotations
+
 import logging
-from typing import Any, Callable, Protocol, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_controller import IndicatorContext
 
+from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict
-from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ class RefitPolicy(Protocol):
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
-        ctx: "IndicatorContext | None" = None,
+        ctx: IndicatorContext | None = None,
     ) -> Any | None: ...
 
 
@@ -60,7 +62,7 @@ class HeuristicRefitPolicy:
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
-        ctx: "IndicatorContext | None" = None,
+        ctx: IndicatorContext | None = None,
     ) -> Any | None:
         if profile.health() == HealthVerdict.GREEN:
             return None
@@ -106,7 +108,7 @@ class LLMRefitPolicy:
         provider: str = "openai",
         model: str = "gpt-4o-mini",
         max_calls_per_run: int = 5,
-        budget: "Any | None" = None,
+        budget: Any | None = None,
     ) -> None:
         self._base = base or HeuristicRefitPolicy()
         self._provider = provider
@@ -120,7 +122,7 @@ class LLMRefitPolicy:
         profile: ComplexityProfile,
         current: Any,
         history: RunHistory,
-        ctx: "IndicatorContext | None" = None,
+        ctx: IndicatorContext | None = None,
     ) -> Any | None:
         # Try the base first (heuristic rules); forward ctx
         base_result = self._base.propose(profile, current, history, ctx=ctx)
@@ -166,8 +168,8 @@ class LLMRefitPolicy:
     ) -> Any | None:
         """Call the LLM, parse response into a GoldenMatchConfig.
         Returns None when the LLM declines to propose changes."""
-        import os
         import json
+        import os
 
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:

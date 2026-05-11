@@ -12,14 +12,11 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
 from goldenmatch.mcp.memory_tools import (
-    MEMORY_TOOLS,
     _MEMORY_TOOL_NAMES,
+    MEMORY_TOOLS,
     handle_memory_tool,
 )
-
 
 EXPECTED_NAMES = {
     "list_corrections",

@@ -20,11 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
-from urllib.parse import urlparse, parse_qs
-
-import polars as pl
+from urllib.parse import parse_qs, urlparse
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 
@@ -373,7 +371,7 @@ def start_server(
     global _server_instance
     _server_instance = MatchServer(engine, config)
 
-    print(f"Initializing GoldenMatch API...")
+    print("Initializing GoldenMatch API...")
     _server_instance.initialize()
 
     server = HTTPServer((host, port), APIHandler)
@@ -382,17 +380,17 @@ def start_server(
     print(f"\n⚡ GoldenMatch API running at http://{host}:{port}")
     print(f"   Records: {stats.get('total_records', 0):,}")
     print(f"   Clusters: {stats.get('total_clusters', 0):,}")
-    print(f"\n   Endpoints:")
-    print(f"   GET  /health              Health check")
-    print(f"   GET  /stats               Dataset statistics")
-    print(f"   POST /match               Match a record")
-    print(f"   POST /match/batch         Match multiple records")
-    print(f"   POST /explain             Explain a match")
-    print(f"   GET  /clusters            List clusters")
-    print(f"   GET  /clusters/<id>       Cluster detail")
-    print(f"   GET  /reviews             Review queue (steward)")
-    print(f"   POST /reviews/decide      Approve/reject a pair")
-    print(f"\n   Press Ctrl+C to stop.\n")
+    print("\n   Endpoints:")
+    print("   GET  /health              Health check")
+    print("   GET  /stats               Dataset statistics")
+    print("   POST /match               Match a record")
+    print("   POST /match/batch         Match multiple records")
+    print("   POST /explain             Explain a match")
+    print("   GET  /clusters            List clusters")
+    print("   GET  /clusters/<id>       Cluster detail")
+    print("   GET  /reviews             Review queue (steward)")
+    print("   POST /reviews/decide      Approve/reject a pair")
+    print("\n   Press Ctrl+C to stop.\n")
 
     try:
         server.serve_forever()

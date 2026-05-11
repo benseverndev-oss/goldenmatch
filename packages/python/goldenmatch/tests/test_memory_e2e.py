@@ -17,8 +17,6 @@ from datetime import datetime
 from pathlib import Path
 
 import polars as pl
-import pytest
-
 from goldenmatch import dedupe_df
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -29,7 +27,6 @@ from goldenmatch.config.schemas import (
     MemoryConfig,
 )
 from goldenmatch.core.memory.store import Correction, MemoryStore
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

@@ -5,7 +5,6 @@ import json
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[5]
 BENCHMARK_DIR = REPO_ROOT / "benchmark"
 if str(BENCHMARK_DIR) not in sys.path:

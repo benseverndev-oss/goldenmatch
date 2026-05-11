@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # ── Enums for type-safe column classification ────────────────────────────
 
 
-class ColumnType(str, Enum):
+class ColumnType(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     """Semantic column type. str base class allows direct string comparison."""
 
     NAME = "name"
@@ -28,7 +28,7 @@ class ColumnType(str, Enum):
     DESCRIPTION = "description"
 
 
-class CardinalityBand(str, Enum):
+class CardinalityBand(str, Enum):  # noqa: UP042  # explicit str+Enum preserves __str__ semantics; StrEnum behaves differently
     """Where a column sits in the IQR cardinality distribution."""
 
     UNSET = ""

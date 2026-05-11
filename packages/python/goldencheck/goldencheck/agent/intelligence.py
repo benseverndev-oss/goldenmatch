@@ -48,7 +48,7 @@ class AgentSession:
     sample: pl.DataFrame | None = None
     profile: DatasetProfile | None = None
     findings: list[Finding] = field(default_factory=list)
-    review_queue: "ReviewQueue | None" = None  # noqa: F821 — forward ref
+    review_queue: ReviewQueue | None = None  # noqa: F821 — forward ref
     reasoning: dict = field(default_factory=dict)
     job_name: str = ""
 

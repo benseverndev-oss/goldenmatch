@@ -2,15 +2,12 @@
 from __future__ import annotations
 
 import polars as pl
-import pytest
-
 from goldenmatch.core.domain import (
     DomainProfile,
-    ExtractionResult,
     detect_domain,
+    extract_biblio_features,
     extract_features,
     extract_product_features,
-    extract_biblio_features,
 )
 
 
@@ -198,7 +195,12 @@ class TestDataFrameExtraction:
 
 class TestPipelineIntegration:
     def test_domain_in_config(self):
-        from goldenmatch.config.schemas import GoldenMatchConfig, DomainConfig, BlockingConfig, BlockingKeyConfig
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            DomainConfig,
+            GoldenMatchConfig,
+        )
 
         cfg = GoldenMatchConfig(
             matchkeys=[{
@@ -224,7 +226,10 @@ class TestPipelineIntegration:
             w.writerow(["Canon EOS R5 Camera", "3899"])
 
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, DomainConfig, BlockingConfig, BlockingKeyConfig,
+            BlockingConfig,
+            BlockingKeyConfig,
+            DomainConfig,
+            GoldenMatchConfig,
         )
         from goldenmatch.core.pipeline import run_dedupe
 

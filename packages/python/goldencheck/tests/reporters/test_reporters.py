@@ -1,9 +1,10 @@
 import io
 import json
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import DatasetProfile
-from goldencheck.reporters.json_reporter import report_json
 from goldencheck.reporters.ci_reporter import report_ci
+from goldencheck.reporters.json_reporter import report_json
 
 
 def test_json_reporter_schema():

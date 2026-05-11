@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -28,6 +27,7 @@ def label_cmd(
     Saves labeled pairs to a CSV for use with 'goldenmatch evaluate'.
     """
     import polars as pl
+
     from goldenmatch.core.pipeline import run_dedupe
 
     cfg = load_config(str(config))
@@ -66,8 +66,8 @@ def label_cmd(
     df = result.get("_df")
     if df is None:
         # Reconstruct from files
-        from goldenmatch.core.ingest import load_file
         from goldenmatch.core.autofix import auto_fix_dataframe
+        from goldenmatch.core.ingest import load_file
         frames = []
         for spec in file_specs:
             path = spec[0] if isinstance(spec, tuple) else spec

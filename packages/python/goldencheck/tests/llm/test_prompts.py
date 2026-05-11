@@ -1,4 +1,5 @@
-from goldencheck.llm.prompts import LLMResponse, LLMColumnAssessment
+from goldencheck.llm.prompts import LLMColumnAssessment, LLMResponse
+
 
 def test_parse_full_response():
     data = {

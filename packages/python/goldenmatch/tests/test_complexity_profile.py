@@ -1,8 +1,14 @@
 import pytest
 from goldenmatch.core.complexity_profile import (
-    HealthVerdict, BlockingProfile, ScoringProfile, ClusterProfile,
-    DataProfile, DomainProfile, MatchkeyProfile, ProfileMeta,
-    ComplexityProfile, FieldStats,
+    BlockingProfile,
+    ClusterProfile,
+    ComplexityProfile,
+    DataProfile,
+    DomainProfile,
+    FieldStats,
+    HealthVerdict,
+    MatchkeyProfile,
+    ScoringProfile,
 )
 
 
@@ -246,7 +252,9 @@ def test_column_prior_dataclass_defaults():
     cp = ColumnPrior(identity_score=0.9, corruption_score=0.1)
     assert cp.identity_score == 0.9
     assert cp.corruption_score == 0.1
-    import pytest, dataclasses
+    import dataclasses
+
+    import pytest
     with pytest.raises(dataclasses.FrozenInstanceError):
         cp.identity_score = 0.5
 

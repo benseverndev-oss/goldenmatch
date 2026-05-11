@@ -1,8 +1,8 @@
 """Tests for label CLI command."""
 from __future__ import annotations
 
-from typer.testing import CliRunner
 from goldenmatch.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

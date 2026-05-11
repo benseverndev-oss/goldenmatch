@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +93,7 @@ class BaselineProfile(BaseModel):
     """Full deep-profile baseline for a dataset."""
 
     version: str = "1.0"
-    created: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    created: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     source: str
     rows: int
     columns: list[str]
@@ -126,7 +126,7 @@ class BaselineProfile(BaseModel):
         return name
 
     @property
-    def confidence_priors(self) -> dict[str, dict[str, "ConfidencePrior"]]:
+    def confidence_priors(self) -> dict[str, dict[str, ConfidencePrior]]:
         """Return priors as a nested dict ``{check: {column: ConfidencePrior}}``.
 
         The flat ``priors`` field stores keys as ``"check:col"``.  This property

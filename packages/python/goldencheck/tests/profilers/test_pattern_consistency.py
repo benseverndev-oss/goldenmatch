@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
+
 
 def test_mixed_patterns_flagged():
     # 10% minority → INFO (5-30% range = valid variant, not WARNING)

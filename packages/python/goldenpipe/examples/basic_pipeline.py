@@ -8,7 +8,7 @@ Usage:
 """
 import sys
 
-from goldenpipe import run, PipeStatus
+from goldenpipe import PipeStatus, run
 
 
 def main():

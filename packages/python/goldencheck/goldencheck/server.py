@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Severity
 
 logger = logging.getLogger(__name__)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -14,13 +12,13 @@ err_console = Console(stderr=True)
 
 def sync_cmd(
     source_type: str = typer.Option("postgres", "--source-type", help="Database type"),
-    connection_string: Optional[str] = typer.Option(None, "--connection-string", help="Database URL"),
+    connection_string: str | None = typer.Option(None, "--connection-string", help="Database URL"),
     table: str = typer.Option(..., "--table", help="Source table name"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML file"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config YAML file"),
     output_mode: str = typer.Option("separate", "--output-mode", help="separate or in_place"),
     full_rescan: bool = typer.Option(False, "--full-rescan", help="Force full rescan"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Match without writing results"),
-    incremental_column: Optional[str] = typer.Option(None, "--incremental-column", help="Column for incremental detection"),
+    incremental_column: str | None = typer.Option(None, "--incremental-column", help="Column for incremental detection"),
     chunk_size: int = typer.Option(10000, "--chunk-size", help="Records per chunk"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
@@ -67,7 +65,6 @@ def sync_cmd(
             # Read sample for profiling
             sample = next(connector.read_table(table, chunk_size=1000))
             import tempfile
-            from pathlib import Path
             with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
                 sample.write_csv(f.name)
                 cfg = auto_configure([(f.name, table)])

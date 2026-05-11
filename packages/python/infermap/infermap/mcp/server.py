@@ -7,8 +7,12 @@ import logging
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
-    Tool, TextContent, Resource, Prompt,
-    PromptArgument, PromptMessage,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    Resource,
+    TextContent,
+    Tool,
 )
 
 logger = logging.getLogger("infermap.mcp")
@@ -456,10 +460,10 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
     from collections.abc import AsyncIterator
 
     import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server()
     session_manager = StreamableHTTPSessionManager(

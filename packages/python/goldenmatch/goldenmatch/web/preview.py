@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -199,7 +199,7 @@ def run_preview(
 
     run_name = f"preview-{uuid.uuid4().hex[:8]}"
     lineage = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "run_name": run_name,
         "total_pairs": len(lineage_records),
         "pairs": lineage_records,

@@ -1,8 +1,9 @@
 """Stage protocol and @stage decorator."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from goldenpipe.models.context import PipeContext, StageResult
 

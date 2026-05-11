@@ -1,18 +1,18 @@
 """infermap scorer registry and helpers."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from infermap.types import FieldInfo, ScorerResult
 
+from .alias import AliasScorer
 from .base import Scorer
 from .exact import ExactScorer
-from .alias import AliasScorer
-from .pattern_type import PatternTypeScorer
-from .profile import ProfileScorer
 from .fuzzy_name import FuzzyNameScorer
 from .initialism import InitialismScorer
 from .llm import LLMScorer
+from .pattern_type import PatternTypeScorer
+from .profile import ProfileScorer
 
 _REGISTRY: dict[str, Scorer] = {}
 

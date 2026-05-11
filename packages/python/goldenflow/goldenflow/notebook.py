@@ -1,9 +1,9 @@
 """Jupyter notebook integration for GoldenFlow."""
 from __future__ import annotations
 
-from goldenflow.engine.transformer import TransformResult
 from goldenflow.engine.manifest import Manifest
 from goldenflow.engine.profiler_bridge import DatasetProfile
+from goldenflow.engine.transformer import TransformResult
 
 
 def _transform_result_repr_html(self: TransformResult) -> str:

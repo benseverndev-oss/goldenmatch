@@ -5,7 +5,6 @@ import textwrap
 
 import pytest
 import yaml
-
 from infermap.config import from_config
 from infermap.errors import ConfigError
 from infermap.types import MapResult

@@ -28,11 +28,9 @@ Protocol:
 from __future__ import annotations
 
 import json
-import sys
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
-
 
 # Cache loaded models
 _models = {}
@@ -40,8 +38,8 @@ _models = {}
 
 def get_model(model_name: str):
     if model_name not in _models:
-        from sentence_transformers import SentenceTransformer
         import torch
+        from sentence_transformers import SentenceTransformer
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading {model_name} on {device}...")
@@ -109,7 +107,7 @@ def main():
     server = HTTPServer((args.host, args.port), EmbedHandler)
     print(f"\nGoldenMatch GPU Endpoint running at http://{args.host}:{args.port}")
     print(f"Set: export GOLDENMATCH_GPU_ENDPOINT=http://localhost:{args.port}")
-    print(f"Press Ctrl+C to stop.\n")
+    print("Press Ctrl+C to stop.\n")
 
     try:
         server.serve_forever()

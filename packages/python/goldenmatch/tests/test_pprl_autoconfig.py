@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.pprl.autoconfig import (
+    PPRLAutoConfigResult,
     auto_configure_pprl,
     profile_for_pprl,
-    PPRLAutoConfigResult,
 )
 
 
@@ -209,8 +208,9 @@ class TestEstimateThreshold:
 class TestAutoConfigurePPRLLlm:
     def test_no_api_key_falls_back_to_baseline(self, person_df):
         """Without API key, returns baseline result."""
-        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         import os
+
+        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         # Ensure no key is in env
         old_key = os.environ.pop("OPENAI_API_KEY", None)
         try:
@@ -223,8 +223,9 @@ class TestAutoConfigurePPRLLlm:
 
     def test_llm_call_mocked(self, person_df):
         """Mock the LLM call and verify JSON parsing."""
-        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         from unittest.mock import patch
+
+        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
 
         mock_response = (
             '{"fields": ["first_name", "last_name", "zip_code"], '
@@ -239,8 +240,9 @@ class TestAutoConfigurePPRLLlm:
 
     def test_llm_call_returns_json_in_markdown(self, person_df):
         """LLM response wrapped in markdown code block."""
-        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         from unittest.mock import patch
+
+        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
 
         mock_response = (
             '```json\n{"fields": ["first_name", "last_name"], '
@@ -253,8 +255,9 @@ class TestAutoConfigurePPRLLlm:
 
     def test_llm_call_fails_gracefully(self, person_df):
         """LLM failure falls back to baseline."""
-        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         from unittest.mock import patch
+
+        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
 
         with patch("goldenmatch.core.llm_scorer._call_openai", side_effect=Exception("API error")):
             result = auto_configure_pprl_llm(person_df, api_key="fake-key")
@@ -263,8 +266,9 @@ class TestAutoConfigurePPRLLlm:
 
     def test_llm_returns_invalid_fields(self, person_df):
         """LLM returns field names that don't exist in the DataFrame."""
-        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
         from unittest.mock import patch
+
+        from goldenmatch.pprl.autoconfig import auto_configure_pprl_llm
 
         mock_response = (
             '{"fields": ["nonexistent_field_1", "nonexistent_field_2"], '

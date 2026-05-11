@@ -14,17 +14,20 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       Section: Testing tier 3.
 """
 from __future__ import annotations
+
 from pathlib import Path
-import pytest
-import polars as pl
+
 import goldenmatch
+import polars as pl
+import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
 from goldenmatch.core.autoconfig_controller import (
-    AutoConfigController, ControllerBudget, ConfigValidationError,
+    AutoConfigController,
+    ConfigValidationError,
+    ControllerBudget,
 )
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
-from goldenmatch.core.complexity_profile import HealthVerdict
-from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
 
 FIXTURES = Path(__file__).parent / "fixtures" / "autoconfig"
 
@@ -125,7 +128,7 @@ def test_finalize_drift_real_data_path_exercised():
     code is never executed on non-mocked profiles."""
     df = _read_fixture("clean_dedupe.csv")
     # Direct call to auto_configure_df runs _finalize (not the _api skip path)
-    cfg = goldenmatch.auto_configure_df(df)
+    _cfg = goldenmatch.auto_configure_df(df)
     state = _LAST_CONTROLLER_RUN.get()
     assert state is not None
     profile, history = state

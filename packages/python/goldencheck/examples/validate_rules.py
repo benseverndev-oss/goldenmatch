@@ -3,10 +3,10 @@
 Usage:
     python validate_rules.py data.csv goldencheck.yml
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from goldencheck import validate_file, load_config, Severity
+from goldencheck import Severity, load_config, validate_file
 
 
 def main():

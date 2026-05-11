@@ -7,6 +7,7 @@ has a wall-clock budget; on exhaustion, returns None or a sentinel.
 Spec: docs/superpowers/specs/2026-05-08-autoconfig-indicators-design.md
 """
 from __future__ import annotations
+
 import logging
 import re
 import time
@@ -14,7 +15,9 @@ import time
 import polars as pl
 
 from goldenmatch.core.complexity_profile import (
-    CollisionSignal, ColumnPrior, IndicatorsProfile, SparsityVerdict,
+    CollisionSignal,
+    ColumnPrior,
+    SparsityVerdict,
 )
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.engine.profiler_bridge import ColumnProfile, DatasetProfile, profile_dataframe
 
 

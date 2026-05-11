@@ -120,9 +120,9 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
-      # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
-      - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
+      # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
+      # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
+      - run: uv run ruff check packages/python/${{ matrix.pkg }}
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore

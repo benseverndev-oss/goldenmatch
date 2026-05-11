@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from itertools import combinations
 
 import jellyfish
 import numpy as np
@@ -14,20 +13,25 @@ from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core._profile_helpers import (
+    hartigan_dip,
+    histogram_20,
+    mass_above,
+    mass_borderline,
+)
 from goldenmatch.core.complexity_profile import ScoringProfile
-from goldenmatch.core._profile_helpers import histogram_20, hartigan_dip, mass_above, mass_borderline
+from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
 
 def _emit_scoring_profile(
-    pairs: "list[tuple[int, int, float]]",
+    pairs: list[tuple[int, int, float]],
     threshold: float,
     *,
     candidates_compared: int = 0,
-    per_field_variance: "dict[str, float] | None" = None,
+    per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
 
@@ -255,7 +259,7 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     callers that bypass the pipeline (DataFrame entry points, tests calling
     find_fuzzy_matches directly).
     """
-    from goldenmatch.core.matchkey import _xform_sig, _try_native_chain
+    from goldenmatch.core.matchkey import _try_native_chain, _xform_sig
 
     sig = _xform_sig(field)
     if sig in block_df.columns:

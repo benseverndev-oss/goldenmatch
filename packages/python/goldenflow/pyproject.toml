@@ -58,8 +58,5 @@ Documentation = "https://benzsevern.github.io/goldenflow/"
 Changelog = "https://github.com/benzsevern/goldenflow/blob/main/CHANGELOG.md"
 Author = "https://bensevern.dev"
 
-[tool.ruff]
-line-length = 100
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]

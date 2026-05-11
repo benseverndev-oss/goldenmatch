@@ -1,8 +1,11 @@
 """Type inference profiler — detects mixed types and type mismatches."""
 from __future__ import annotations
+
 import polars as pl
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
 
 class TypeInferenceProfiler(BaseProfiler):
     def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:

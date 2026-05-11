@@ -21,11 +21,11 @@ _mock_mps.start()
 
 from goldenmatch.core.gpu import (
     GPUMode,
+    RemoteEmbedder,
     detect_gpu_mode,
     get_device_string,
     get_gpu_status,
     is_embedding_available,
-    RemoteEmbedder,
 )
 
 

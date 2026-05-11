@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

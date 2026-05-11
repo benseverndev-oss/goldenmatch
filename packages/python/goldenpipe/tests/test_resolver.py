@@ -1,10 +1,10 @@
 """Tests for pipeline resolver and wiring validation."""
 import pytest
-from goldenpipe.engine.resolver import Resolver, ExecutionPlan, WiringError
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.engine.resolver import ExecutionPlan, Resolver, WiringError
 from goldenpipe.models.config import PipelineConfig, StageSpec
-from goldenpipe.models.stage import stage
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
+from goldenpipe.models.stage import stage
 
 
 @stage(name="load", produces=["df"], consumes=[])

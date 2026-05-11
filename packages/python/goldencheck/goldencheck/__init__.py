@@ -4,32 +4,38 @@ from __future__ import annotations
 __version__ = "1.2.0"
 
 # Core: scanner + models
-from goldencheck.engine.scanner import scan_file, scan_file_with_llm
-from goldencheck.models.finding import Finding, Severity
-from goldencheck.models.profile import DatasetProfile, ColumnProfile
-from goldencheck.notebook import ScanResult
+from goldencheck.config.loader import load_config
 
-# Engine: validator, confidence, triage, fixer, differ, reader
-from goldencheck.engine.validator import validate_file
+# Config: schema, loader, writer
+from goldencheck.config.schema import (
+    ColumnRule,
+    GoldenCheckConfig,
+    IgnoreEntry,
+    RelationRule,
+    Settings,
+)
+from goldencheck.config.writer import save_config
 from goldencheck.engine.confidence import (
     apply_confidence_downgrade,
     apply_corroboration_boost,
 )
-from goldencheck.engine.triage import auto_triage, TriageResult
-from goldencheck.engine.fixer import apply_fixes, FixReport, FixEntry
-from goldencheck.engine.differ import diff_files, DiffReport, SchemaChange, FindingChange, StatChange
-from goldencheck.engine.reader import read_file
-
-# Config: schema, loader, writer
-from goldencheck.config.schema import (
-    GoldenCheckConfig,
-    ColumnRule,
-    Settings,
-    RelationRule,
-    IgnoreEntry,
+from goldencheck.engine.differ import (
+    DiffReport,
+    FindingChange,
+    SchemaChange,
+    StatChange,
+    diff_files,
 )
-from goldencheck.config.loader import load_config
-from goldencheck.config.writer import save_config
+from goldencheck.engine.fixer import FixEntry, FixReport, apply_fixes
+from goldencheck.engine.reader import read_file
+from goldencheck.engine.scanner import scan_file, scan_file_with_llm
+from goldencheck.engine.triage import TriageResult, auto_triage
+
+# Engine: validator, confidence, triage, fixer, differ, reader
+from goldencheck.engine.validator import validate_file
+from goldencheck.models.finding import Finding, Severity
+from goldencheck.models.profile import ColumnProfile, DatasetProfile
+from goldencheck.notebook import ScanResult
 
 # Semantic: classifier
 from goldencheck.semantic.classifier import classify_columns, list_available_domains

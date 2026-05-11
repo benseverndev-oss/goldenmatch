@@ -1,8 +1,8 @@
 """Tests for stage instrumentation: build_blocks emits BlockingProfile."""
 import polars as pl
 import pytest
-from goldenmatch.core.profile_emitter import profile_capture
 from goldenmatch.core.complexity_profile import BlockingProfile
+from goldenmatch.core.profile_emitter import profile_capture
 
 
 def _make_test_lf():
@@ -22,7 +22,7 @@ def test_build_blocks_emits_blocking_profile():
         max_block_size=5000, skip_oversized=False,
     )
     with profile_capture() as e:
-        blocks = build_blocks(_make_test_lf(), cfg)
+        _blocks = build_blocks(_make_test_lf(), cfg)
     assert e.blocking is not None
     assert isinstance(e.blocking, BlockingProfile)
     assert e.blocking.n_blocks == 4
@@ -69,14 +69,17 @@ def test_build_blocks_emits_singleton_count():
 
 def test_scorer_emits_scoring_profile_via_dedupe_df():
     """After fuzzy scoring runs, the emitter holds a ScoringProfile."""
+    import goldenmatch as gm
     import polars as pl
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
-    from goldenmatch.core.profile_emitter import profile_capture
     from goldenmatch.core.complexity_profile import ScoringProfile
-    import goldenmatch as gm
+    from goldenmatch.core.profile_emitter import profile_capture
 
     df = pl.DataFrame({
         "name": ["alice", "alyce", "bob", "bobby", "carol", "carrol"] * 3,
@@ -108,15 +111,15 @@ def test_scorer_emits_scoring_profile_via_dedupe_df():
 def test_build_clusters_emits_cluster_profile():
     """ClusterProfile populated after build_clusters with cluster sizes + transitivity."""
     from goldenmatch.core.cluster import build_clusters
-    from goldenmatch.core.profile_emitter import profile_capture
     from goldenmatch.core.complexity_profile import ClusterProfile
+    from goldenmatch.core.profile_emitter import profile_capture
     # Three pairs forming a triangle (transitive cluster) + one isolated pair
     pairs = [
         (1, 2, 0.95), (2, 3, 0.92), (1, 3, 0.90),  # cluster {1,2,3}
         (10, 11, 0.85),                              # cluster {10,11}
     ]
     with profile_capture() as e:
-        clusters = build_clusters(pairs)
+        _clusters = build_clusters(pairs)
     assert e.cluster is not None
     assert isinstance(e.cluster, ClusterProfile)
     assert e.cluster.n_clusters == 2
@@ -136,9 +139,9 @@ def test_compute_matchkeys_emits_matchkey_profile():
     """After compute_matchkeys runs, MatchkeyProfile.per_field is populated."""
     import polars as pl
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.complexity_profile import MatchkeyProfile
     from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.profile_emitter import profile_capture
-    from goldenmatch.core.complexity_profile import MatchkeyProfile
 
     df = pl.DataFrame({
         "name": ["alice", "bob", "carol", "alice"],
@@ -179,10 +182,10 @@ def test_compute_matchkeys_no_emit_when_no_capture():
 
 def test_auto_configure_df_emits_data_profile():
     """DataProfile populated when auto_configure_df runs under capture."""
-    import polars as pl
     import goldenmatch
-    from goldenmatch.core.profile_emitter import profile_capture
+    import polars as pl
     from goldenmatch.core.complexity_profile import DataProfile
+    from goldenmatch.core.profile_emitter import profile_capture
 
     df = pl.DataFrame({
         "name": ["alice", "bob", "carol"] * 3,
@@ -200,9 +203,10 @@ def test_auto_configure_df_emits_data_profile():
 def test_extract_features_emits_domain_profile():
     """DomainProfile populated when domain.extract_features runs under capture."""
     import polars as pl
-    from goldenmatch.core.domain import extract_features, DomainProfile as InternalProfile
-    from goldenmatch.core.profile_emitter import profile_capture
     from goldenmatch.core.complexity_profile import DomainProfile
+    from goldenmatch.core.domain import DomainProfile as InternalProfile
+    from goldenmatch.core.domain import extract_features
+    from goldenmatch.core.profile_emitter import profile_capture
 
     # Use a profile with confidence > 0.3 so extract_features actually does work
     profile = InternalProfile(

@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.domains.people_hr import PACK, ssn_mask, ssn_validate
 
 

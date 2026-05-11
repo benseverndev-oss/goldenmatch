@@ -10,7 +10,7 @@ import json
 import time
 from pathlib import Path
 
-from goldencheck import scan_file, apply_confidence_downgrade
+from goldencheck import apply_confidence_downgrade, scan_file
 from goldencheck.models.finding import Finding, Severity
 
 

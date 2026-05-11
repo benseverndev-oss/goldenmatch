@@ -1,6 +1,7 @@
-from goldencheck.semantic.suppression import apply_suppression
-from goldencheck.semantic.classifier import ColumnClassification, TypeDef
 from goldencheck.models.finding import Finding, Severity
+from goldencheck.semantic.classifier import ColumnClassification, TypeDef
+from goldencheck.semantic.suppression import apply_suppression
+
 
 def _type_defs():
     return {

@@ -23,7 +23,6 @@ from __future__ import annotations
 import time
 
 import polars as pl
-
 from goldenmatch import dedupe_df
 from goldenmatch._api import _extract_stats
 from goldenmatch.core.autoconfig import (
@@ -31,7 +30,6 @@ from goldenmatch.core.autoconfig import (
     auto_configure_df,
     build_matchkeys,
 )
-
 
 # Realistic surname pool that distributes across soundex codes. Using a
 # pattern like f"Last{i:05d}" is a trap: every synthetic name starting with

@@ -12,12 +12,11 @@ language a fixture diff will trip the test.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.memory.corrections import apply_corrections
 from goldenmatch.core.memory.store import Correction, MemoryStore
 
@@ -39,7 +38,7 @@ def _entry_to_correction(entry: dict) -> Correction:
         original_score=entry["original_score"],
         matchkey_name=entry["matchkey_name"],
         reason=entry["reason"], dataset=entry["dataset"],
-        created_at=datetime.fromisoformat(ts).astimezone(timezone.utc),
+        created_at=datetime.fromisoformat(ts).astimezone(UTC),
     )
 
 

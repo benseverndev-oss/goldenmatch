@@ -1,8 +1,11 @@
 """Load goldencheck.yml configuration."""
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 import yaml
+
 from goldencheck.config.schema import GoldenCheckConfig
 
 logger = logging.getLogger(__name__)

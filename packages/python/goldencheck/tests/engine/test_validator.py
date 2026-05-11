@@ -1,6 +1,7 @@
 from pathlib import Path
+
+from goldencheck.config.schema import ColumnRule, GoldenCheckConfig, IgnoreEntry
 from goldencheck.engine.validator import validate_file
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, IgnoreEntry
 from goldencheck.models.finding import Severity
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"

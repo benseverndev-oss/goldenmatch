@@ -8,6 +8,7 @@ exact in v1.11). v1.12's deserializer must handle this cleanly.
 """
 import json
 from pathlib import Path
+
 import pytest
 
 
@@ -48,12 +49,12 @@ def test_v1_10_chain_compat_through_v112():
 def test_v1_12_cache_entry_with_ne_on_exact_round_trips():
     """v1.12 cache entry with NE on exact serializes + deserializes losslessly."""
     from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
         GoldenMatchConfig,
         MatchkeyConfig,
         MatchkeyField,
         NegativeEvidenceField,
-        BlockingConfig,
-        BlockingKeyConfig,
     )
     cfg = GoldenMatchConfig(
         matchkeys=[

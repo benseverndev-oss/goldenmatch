@@ -12,12 +12,11 @@ use system cron, Task Scheduler, or a process manager.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -161,14 +160,14 @@ def _print_schedule_header(job: ScheduledJob) -> None:
     interval_str = f"{hrs:.0f}h" if hrs >= 1 else f"{job.interval_seconds / 60:.0f}m"
 
     print()
-    print(f"  \033[33mGoldenMatch Scheduled Job\033[0m")
+    print("  \033[33mGoldenMatch Scheduled Job\033[0m")
     print(f"  {'=' * 40}")
     print(f"  Job ID:   \033[1m{job.job_id}\033[0m")
     print(f"  Files:    {', '.join(Path(f).name for f in job.file_paths)}")
     print(f"  Interval: every {interval_str}")
     print(f"  Started:  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  {'=' * 40}")
-    print(f"  Press Ctrl+C to stop.")
+    print("  Press Ctrl+C to stop.")
     print()
 
 
@@ -192,8 +191,8 @@ def _print_waiting(interval: int, next_ts: float) -> None:
 
 
 def _print_schedule_summary(job: ScheduledJob) -> None:
-    print(f"\n")
-    print(f"  \033[33mSchedule Summary\033[0m")
+    print("\n")
+    print("  \033[33mSchedule Summary\033[0m")
     print(f"  {'=' * 40}")
     print(f"  Total runs: {job.run_count}")
     if job.last_result:

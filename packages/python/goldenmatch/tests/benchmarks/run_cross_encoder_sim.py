@@ -13,21 +13,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import polars as pl
-
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
 from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_fuzzy_matches
 from goldenmatch.core.boost import _sample_initial_pairs
 from goldenmatch.core.cross_encoder import (
-    serialize_record, train_cross_encoder, score_pairs,
-    augment_training_data, merge_scores,
+    augment_training_data,
+    score_pairs,
+    serialize_record,
+    train_cross_encoder,
 )
-from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
-)
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -130,7 +133,7 @@ def run_cross_encoder_sim(name, df_a, df_b, gt, text_col, extra_cols, standardiz
     print(f"{name} — Level 3 Cross-Encoder Simulation")
     print(f"{'='*70}")
 
-    all_cols = [text_col] + extra_cols
+    _all_cols = [text_col] + extra_cols
     fields = [MatchkeyField(column=text_col, transforms=["lowercase", "strip"], scorer="token_sort", weight=1.0)]
 
     pairs, combined = run_pipeline_get_pairs(df_a, df_b,
@@ -184,7 +187,7 @@ def run_cross_encoder_sim(name, df_a, df_b, gt, text_col, extra_cols, standardiz
     matchable = [c for c in combined.columns if not c.startswith("__")]
 
     # Cross-encoder at different label counts
-    print(f"\n  --- Cross-Encoder (Ditto-style) ---")
+    print("\n  --- Cross-Encoder (Ditto-style) ---")
     print(f"  {'Labels':<8} {'Noise':<8} {'Aug':<8} {'Prec':<8} {'Rec':<8} {'F1':<8} {'Thresh':<8} {'Time'}")
     print(f"  {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
 

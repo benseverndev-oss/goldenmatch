@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     import polars as pl
@@ -28,10 +28,10 @@ class ReviewItem:
     score: float
     explanation: str
     status: Literal["pending", "approved", "rejected"] = "pending"
-    decided_by: Optional[str] = None
-    decided_at: Optional[str] = None
-    reason: Optional[str] = None
-    why: Optional[str] = None
+    decided_by: str | None = None
+    decided_at: str | None = None
+    reason: str | None = None
+    why: str | None = None
 
     def __post_init__(self) -> None:
         # Normalize empty `why` to None so callers don't have to special-case
@@ -43,19 +43,19 @@ class ReviewItem:
     def approve(self, decided_by: str) -> None:
         self.status = "approved"
         self.decided_by = decided_by
-        self.decided_at = datetime.now(timezone.utc).isoformat()
+        self.decided_at = datetime.now(UTC).isoformat()
 
     def reject(self, decided_by: str, reason: str = "") -> None:
         self.status = "rejected"
         self.decided_by = decided_by
-        self.decided_at = datetime.now(timezone.utc).isoformat()
+        self.decided_at = datetime.now(UTC).isoformat()
         self.reason = reason
 
 
 _MAX_WHY_CHARS = 240
 
 
-def _row_to_dict(df: "pl.DataFrame", row_id: int, fields: List[str]) -> dict:
+def _row_to_dict(df: pl.DataFrame, row_id: int, fields: list[str]) -> dict:
     """Pluck a row's matchkey-field values into a dict; empty if not found."""
     try:
         cols = [f for f in fields if f in df.columns]
@@ -78,8 +78,8 @@ def _llm_enabled() -> bool:
 def why_for_correction(
     id_a: int,
     id_b: int,
-    df: "pl.DataFrame | None",
-    matchkey_fields: Optional[List[str]],
+    df: pl.DataFrame | None,
+    matchkey_fields: list[str] | None,
     *,
     score: float = 0.0,
     use_llm: bool = False,
@@ -143,10 +143,10 @@ def why_for_correction(
 
 
 def gate_pairs(
-    pairs: List[Tuple[int, int, float]],
+    pairs: list[tuple[int, int, float]],
     merge_threshold: float = 0.95,
     review_threshold: float = 0.75,
-) -> Tuple[List[Tuple[int, int, float]], List[Tuple[int, int, float]], List[Tuple[int, int, float]]]:
+) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]], list[tuple[int, int, float]]]:
     """Split scored pairs into auto-merged, review, and auto-rejected buckets.
 
     Parameters
@@ -186,7 +186,7 @@ class _MemoryBackend:
     def list_pending(self, job_name: str) -> list[ReviewItem]:
         return [it for it in self._jobs.get(job_name, []) if it.status == "pending"]
 
-    def _find(self, job_name: str, id_a: int, id_b: int) -> Optional[ReviewItem]:
+    def _find(self, job_name: str, id_a: int, id_b: int) -> ReviewItem | None:
         for it in self._jobs.get(job_name, []):
             if it.id_a == id_a and it.id_b == id_b and it.status == "pending":
                 return it
@@ -214,7 +214,7 @@ class _MemoryBackend:
 class _SQLiteBackend:
     """SQLite-backed persistent storage for review items."""
 
-    def __init__(self, path: Optional[str] = None) -> None:
+    def __init__(self, path: str | None = None) -> None:
         if path is None:
             db_dir = Path(".goldenmatch")
             db_dir.mkdir(exist_ok=True)
@@ -280,7 +280,7 @@ class _SQLiteBackend:
             con.close()
 
     def approve(self, job_name: str, id_a: int, id_b: int, decided_by: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         con = self._connect()
         try:
             con.execute(
@@ -292,7 +292,7 @@ class _SQLiteBackend:
             con.close()
 
     def reject(self, job_name: str, id_a: int, id_b: int, decided_by: str, reason: str = "") -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         con = self._connect()
         try:
             con.execute(
@@ -331,12 +331,12 @@ class ReviewQueue:
     def __init__(
         self,
         backend: str = "memory",
-        path: Optional[str] = None,
+        path: str | None = None,
         *,
-        memory_store: "MemoryStore | None" = None,
-        df: "pl.DataFrame | None" = None,
-        matchkey_fields: Optional[List[str]] = None,
-        dataset: Optional[str] = None,
+        memory_store: MemoryStore | None = None,
+        df: pl.DataFrame | None = None,
+        matchkey_fields: list[str] | None = None,
+        dataset: str | None = None,
         use_llm_explainer: bool = False,
     ) -> None:
         if backend == "memory":
@@ -392,20 +392,18 @@ class ReviewQueue:
         id_a: int,
         id_b: int,
         decision: str,
-        reason: Optional[str],
+        reason: str | None,
     ) -> None:
         """Write a Correction to the optional memory store; never raises."""
         if self._memory_store is None:
             return
         try:
-            from goldenmatch.core.memory.store import Correction
             from goldenmatch.core.memory.corrections import (
                 build_row_lookup,
                 compute_field_hash,
                 compute_record_hash,
             )
-
-            from goldenmatch.core.memory.store import _canon_pair
+            from goldenmatch.core.memory.store import Correction, _canon_pair
 
             ca, cb = _canon_pair(id_a, id_b)
             field_hash = ""

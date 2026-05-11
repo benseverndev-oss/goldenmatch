@@ -13,7 +13,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from goldenmatch.core.memory.store import MemoryStore
 from tests.parity.memory.gen_memory_fixtures import correction_to_dict
 

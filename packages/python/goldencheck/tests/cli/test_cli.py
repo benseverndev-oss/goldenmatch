@@ -1,9 +1,7 @@
 from pathlib import Path
 
-import pytest
-from typer.testing import CliRunner
-
 from goldencheck.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent.parent / "fixtures"

@@ -7,7 +7,7 @@ from typing import Any
 try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent, Resource, Prompt
+    from mcp.types import Prompt, Resource, TextContent, Tool
     HAS_MCP = True
 except ImportError:
     HAS_MCP = False
@@ -106,7 +106,7 @@ HANDLERS = {
 }
 
 
-def create_server() -> "Server":
+def create_server() -> Server:
     """Create and configure the MCP server instance."""
     if not HAS_MCP:
         raise ImportError("MCP not installed. Run: pip install goldenpipe[mcp]")
@@ -159,10 +159,10 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
     from collections.abc import AsyncIterator
 
     import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server()
     session_manager = StreamableHTTPSessionManager(

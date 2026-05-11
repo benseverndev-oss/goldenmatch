@@ -128,8 +128,8 @@ class TransformTab(TabPane):
             log.write("Column not found in data.")
             return
 
-        from goldenflow.transforms import get_transform
         from goldenflow.engine.manifest import Manifest
+        from goldenflow.transforms import get_transform
         info = get_transform(self._selected_transform)
         if info is None:
             log.write(f"Transform '{self._selected_transform}' not found.")
@@ -145,6 +145,7 @@ class TransformTab(TabPane):
         # Apply transform to get after sample
         try:
             import polars as pl
+
             from goldenflow.engine.transformer import TransformEngine
             engine = TransformEngine()
             manifest = Manifest(source="preview")
@@ -180,9 +181,9 @@ class TransformTab(TabPane):
             log.write("No data loaded.")
             return
 
-        from goldenflow.transforms import get_transform
         from goldenflow.engine.manifest import Manifest
         from goldenflow.engine.transformer import TransformEngine
+        from goldenflow.transforms import get_transform
 
         engine = TransformEngine()
         manifest = Manifest(source="tui-apply")
@@ -299,8 +300,8 @@ class MapTab(TabPane):
             return
 
         try:
-            from goldenflow.mapping.schema_mapper import SchemaMapper
             from goldenflow.config.loader import save_config
+            from goldenflow.mapping.schema_mapper import SchemaMapper
 
             mapper = SchemaMapper()
             cfg = mapper.to_config(self._mappings)

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.ingest import load_file, load_files, validate_columns
 
 

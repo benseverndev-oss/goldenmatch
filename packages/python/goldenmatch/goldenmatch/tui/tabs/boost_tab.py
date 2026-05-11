@@ -5,12 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import polars as pl
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, DataTable, Static
-
-import polars as pl
 
 from goldenmatch.tui.engine import EngineResult
 
@@ -321,12 +320,12 @@ def record_boost_label(
         import uuid
         from datetime import datetime
 
-        from goldenmatch.core.memory.store import Correction, _canon_pair
         from goldenmatch.core.memory.corrections import (
             build_row_lookup,
             compute_field_hash,
             compute_record_hash,
         )
+        from goldenmatch.core.memory.store import Correction, _canon_pair
 
         ca, cb = _canon_pair(id_a, id_b)
         fields = matchkey_fields or [
@@ -417,6 +416,7 @@ def record_boost_label(
         try:
             import numpy as np
             from sklearn.linear_model import LogisticRegression
+
             from goldenmatch.core.boost import extract_feature_matrix
 
             pairs = self._result.scored_pairs

@@ -175,7 +175,7 @@ async def autoconfigure(request: Request, domain: str | None = None) -> dict:
             loop.run_in_executor(_executor, lambda: _autoconfigure(state.project_root, domain=domain)),
             timeout=AUTOCONFIG_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408,
             detail=f"autoconfigure exceeded {AUTOCONFIG_TIMEOUT_S}s on this dataset",

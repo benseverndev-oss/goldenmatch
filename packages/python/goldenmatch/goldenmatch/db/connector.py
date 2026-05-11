@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Iterator
+from collections.abc import Iterator
 
 import polars as pl
 
@@ -119,8 +119,6 @@ class PostgresConnector(DatabaseConnector):
 
     def write_dataframe(self, df: pl.DataFrame, table: str, mode: str = "append") -> int:
         """Write DataFrame to table using COPY for performance."""
-        import io
-        import csv
 
         if df.height == 0:
             return 0

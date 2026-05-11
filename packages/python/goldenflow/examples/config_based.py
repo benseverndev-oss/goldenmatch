@@ -6,10 +6,10 @@ plus renames, drops, and dedup settings.
 Usage:
     python config_based.py data.csv goldenflow.yaml
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from goldenflow import transform_file, load_config
+from goldenflow import load_config, transform_file
 
 
 def main():

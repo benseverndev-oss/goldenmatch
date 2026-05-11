@@ -11,7 +11,6 @@ from infermap.scorers.initialism import (
 )
 from infermap.types import FieldInfo, SchemaInfo
 
-
 # --- _common_affix_tokens ---------------------------------------------------
 
 def test_common_prefix_with_delimiter_boundary():

@@ -16,8 +16,9 @@ def agent_serve_cmd(
     Agent card: http://{host}:{port}/.well-known/agent.json
     """
     try:
-        from goldenmatch.a2a.server import create_app
         import aiohttp.web
+
+        from goldenmatch.a2a.server import create_app
     except ImportError:
         typer.echo("A2A server requires aiohttp. Install with: pip install goldenmatch[agent]")
         raise typer.Exit(1)

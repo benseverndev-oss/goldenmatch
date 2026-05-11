@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import typer
 
@@ -56,11 +55,11 @@ def _print_table(result) -> None:
 def map(
     source: str = typer.Argument(..., help="Source data (CSV path, DataFrame, DB URI, schema YAML)"),
     target: str = typer.Argument(..., help="Target data (same variety of inputs)"),
-    table: Optional[str] = typer.Option(None, "--table", help="Optional table name for DB sources"),
-    required: Optional[str] = typer.Option(None, "--required", help="Comma-separated required target field names"),
-    schema_file: Optional[str] = typer.Option(None, "--schema-file", help="Path to schema YAML file"),
+    table: str | None = typer.Option(None, "--table", help="Optional table name for DB sources"),
+    required: str | None = typer.Option(None, "--required", help="Comma-separated required target field names"),
+    schema_file: str | None = typer.Option(None, "--schema-file", help="Path to schema YAML file"),
     format: str = typer.Option("table", "--format", help="Output format: table, json, or yaml"),
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Save mapping config to this YAML file"),
+    output: str | None = typer.Option(None, "-o", "--output", help="Save mapping config to this YAML file"),
     min_confidence: float = typer.Option(0.2, "--min-confidence", help="Minimum confidence threshold (default 0.2, was 0.3 before v0.3)"),
     verbose: bool = typer.Option(False, "--verbose/--no-verbose", help="Enable verbose logging"),
     debug: bool = typer.Option(False, "--debug/--no-debug", help="Enable debug logging"),
@@ -121,7 +120,7 @@ def apply(
     _setup_logging(verbose, False)
 
     from infermap.config import from_config
-    from infermap.errors import ConfigError, ApplyError
+    from infermap.errors import ApplyError, ConfigError
 
     # Load config
     try:
@@ -158,7 +157,7 @@ def apply(
 @app.command()
 def inspect(
     source: str = typer.Argument(..., help="Source data to inspect (CSV path, schema YAML, etc.)"),
-    table: Optional[str] = typer.Option(None, "--table", help="Table name for DB sources"),
+    table: str | None = typer.Option(None, "--table", help="Table name for DB sources"),
     verbose: bool = typer.Option(False, "--verbose/--no-verbose", help="Enable verbose logging"),
 ) -> None:
     """Inspect a data source: show fields, types, samples, and stats."""
@@ -192,7 +191,7 @@ def inspect(
 def validate(
     source: str = typer.Argument(..., help="Source data to validate (CSV path, etc.)"),
     config: str = typer.Option(..., "--config", help="Path to mapping config YAML (required)"),
-    required: Optional[str] = typer.Option(None, "--required", help="Comma-separated required field names"),
+    required: str | None = typer.Option(None, "--required", help="Comma-separated required field names"),
     strict: bool = typer.Option(False, "--strict/--no-strict", help="Exit code 1 if required fields unmapped"),
     verbose: bool = typer.Option(False, "--verbose/--no-verbose", help="Enable verbose logging"),
 ) -> None:

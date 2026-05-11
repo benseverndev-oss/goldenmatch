@@ -8,11 +8,11 @@ Usage:
     python examples/custom_pipeline.py
 """
 from __future__ import annotations
+
 import csv
 import tempfile
 from pathlib import Path
 
-import polars as pl
 from goldenpipe import Pipeline, PipelineConfig, StageSpec
 
 

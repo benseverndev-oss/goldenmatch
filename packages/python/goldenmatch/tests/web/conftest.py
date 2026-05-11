@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from goldenmatch.web.app import create_app
 from goldenmatch.web.state import AppState
 

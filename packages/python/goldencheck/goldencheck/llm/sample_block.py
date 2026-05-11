@@ -1,9 +1,12 @@
 """Build representative sample blocks from DataFrame + findings."""
 from __future__ import annotations
+
 import logging
 import random
 from collections import defaultdict
+
 import polars as pl
+
 from goldencheck.models.finding import Finding
 
 logger = logging.getLogger(__name__)

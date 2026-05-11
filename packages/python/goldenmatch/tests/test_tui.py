@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
-from textual.widgets import TabbedContent
-
-from textual.widgets import Button
-
 from goldenmatch.tui.app import GoldenMatchApp
 from goldenmatch.tui.tabs.config_tab import ConfigTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
+from textual.widgets import Button, TabbedContent
 
 
 class TestTUIApp:
@@ -20,7 +16,7 @@ class TestTUIApp:
     async def test_app_launches(self, sample_csv):
         """App should render without crashing when given a valid file."""
         app = GoldenMatchApp(files=[str(sample_csv)])
-        async with app.run_test() as pilot:
+        async with app.run_test():
             assert app.is_running
 
     @pytest.mark.asyncio
@@ -45,7 +41,7 @@ class TestTUIApp:
     async def test_app_launches_without_files(self):
         """App should launch even with no files provided."""
         app = GoldenMatchApp(files=[])
-        async with app.run_test() as pilot:
+        async with app.run_test():
             assert app.is_running
 
     @pytest.mark.asyncio

@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, TabbedContent, TabPane
-from textual import work
 
 from goldenmatch.tui.sidebar import Sidebar
+from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.config_tab import ConfigTab
 from goldenmatch.tui.tabs.data_tab import DataTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
-from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
 
 

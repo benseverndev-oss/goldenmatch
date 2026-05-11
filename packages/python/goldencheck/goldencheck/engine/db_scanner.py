@@ -7,8 +7,8 @@ from pathlib import Path
 
 import polars as pl
 
-from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Finding
 from goldencheck.models.profile import DatasetProfile
 
@@ -78,8 +78,8 @@ def _read_sql(connection_string: str, sql: str) -> pl.DataFrame:
 
     # Try SQLAlchemy + pandas fallback
     try:
-        import sqlalchemy
         import pandas as pd
+        import sqlalchemy
         engine = sqlalchemy.create_engine(connection_string)
         with engine.connect() as conn:
             pdf = pd.read_sql(sql, conn)

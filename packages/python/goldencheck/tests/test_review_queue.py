@@ -1,8 +1,6 @@
 """Tests for goldencheck.agent.review_queue."""
 from __future__ import annotations
 
-
-
 from goldencheck.agent.review_queue import ReviewItem, ReviewQueue
 from goldencheck.models.finding import Finding, Severity
 

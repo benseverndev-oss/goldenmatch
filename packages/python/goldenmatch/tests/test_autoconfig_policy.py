@@ -1,17 +1,27 @@
 import pytest
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
-)
-from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-    ClusterProfile, MatchkeyProfile, DomainProfile, FieldStats, HealthVerdict,
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
 from goldenmatch.core.autoconfig_history import (
-    RunHistory, HistoryEntry, PolicyDecision,
+    HistoryEntry,
+    PolicyDecision,
+    RunHistory,
 )
 from goldenmatch.core.autoconfig_policy import (
-    RefitPolicy, HeuristicRefitPolicy, Rule,
+    HeuristicRefitPolicy,
+)
+from goldenmatch.core.complexity_profile import (
+    BlockingProfile,
+    ClusterProfile,
+    ComplexityProfile,
+    DataProfile,
+    FieldStats,
+    MatchkeyProfile,
+    ScoringProfile,
 )
 
 
@@ -183,10 +193,13 @@ def test_decision_not_attached_when_no_history_entries():
 # Task 3.2 — five rules
 # ============================================================
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig_rules import (
-    rule_blocking_too_coarse, rule_unimodal_scoring, rule_low_reduction_ratio,
-    rule_low_transitivity, rule_no_matches, DEFAULT_RULES,
+    DEFAULT_RULES,
+    rule_blocking_too_coarse,
+    rule_low_reduction_ratio,
+    rule_low_transitivity,
+    rule_no_matches,
+    rule_unimodal_scoring,
 )
 
 
@@ -613,7 +626,9 @@ def test_singleton_trap_runs_before_blocking_too_coarse():
     """Order matters: singleton-trap is more specific than blocking-too-coarse
     on the singleton pathology, so it must run first."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_blocking_singleton_trap, rule_blocking_too_coarse,
+        DEFAULT_RULES,
+        rule_blocking_singleton_trap,
+        rule_blocking_too_coarse,
     )
     idx_trap = DEFAULT_RULES.index(rule_blocking_singleton_trap)
     idx_coarse = DEFAULT_RULES.index(rule_blocking_too_coarse)
@@ -830,7 +845,9 @@ def test_rule_key_swap_is_before_rule_no_matches():
     The old behavior was iter-1+ fallback AFTER no_matches; now it fires earlier as a
     structural check, with history.decisions guard ensuring iter-0 safety."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_no_matches, rule_blocking_key_swap,
+        DEFAULT_RULES,
+        rule_blocking_key_swap,
+        rule_no_matches,
     )
     idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
     idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
@@ -950,7 +967,8 @@ def test_rule_key_swap_keeps_exact_matchkey_with_mixed_derived_and_regular_field
 # ============================================================
 
 from goldenmatch.core.autoconfig_rules import (
-    rule_recall_gap_suspected, rule_blocking_field_null_heavy,
+    rule_blocking_field_null_heavy,
+    rule_recall_gap_suspected,
 )
 
 
@@ -1150,8 +1168,10 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
     v1.11: rule_demote_clustered_identity moved to position 7 (before generic refit rules);
     rule_sparse_match_expand is now last (position 14), recall_gap is second-to-last."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_blocking_field_null_heavy,
-        rule_recall_gap_suspected, rule_no_matches,
+        DEFAULT_RULES,
+        rule_blocking_field_null_heavy,
+        rule_no_matches,
+        rule_recall_gap_suspected,
     )
     idx_null_heavy = DEFAULT_RULES.index(rule_blocking_field_null_heavy)
     idx_no_matches = DEFAULT_RULES.index(rule_no_matches)
@@ -1167,7 +1187,8 @@ def test_null_heavy_runs_before_no_matches_and_recall_gap_runs_last():
 # ============================================================
 
 from goldenmatch.core.autoconfig_rules import (
-    rule_enable_llm_scorer, _llm_api_key_available,
+    _llm_api_key_available,
+    rule_enable_llm_scorer,
 )
 
 
@@ -1288,7 +1309,8 @@ def test_rule_enable_llm_scorer_not_in_default_rules():
     the iteration loop. On DQbench, structural rules dominate the budget and
     the rule would never get a turn."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_enable_llm_scorer,
+        DEFAULT_RULES,
+        rule_enable_llm_scorer,
     )
     assert rule_enable_llm_scorer not in DEFAULT_RULES
 
@@ -1498,7 +1520,9 @@ def test_default_rules_order_blocking_key_swap_before_low_transitivity():
     the key BEFORE tuning the threshold. Otherwise low_transitivity fires
     iteration after iteration, lowering threshold uselessly."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_blocking_key_swap, rule_low_transitivity,
+        DEFAULT_RULES,
+        rule_blocking_key_swap,
+        rule_low_transitivity,
     )
     idx_swap = DEFAULT_RULES.index(rule_blocking_key_swap)
     idx_lt = DEFAULT_RULES.index(rule_low_transitivity)
@@ -1511,7 +1535,9 @@ def test_default_rules_uniform_heavy_after_blocking_too_coarse():
     structural blocking issues; uniform-heavy comes after the more
     specific p99-outlier check."""
     from goldenmatch.core.autoconfig_rules import (
-        DEFAULT_RULES, rule_blocking_too_coarse, rule_uniform_heavy_blocking,
+        DEFAULT_RULES,
+        rule_blocking_too_coarse,
+        rule_uniform_heavy_blocking,
     )
     idx_too_coarse = DEFAULT_RULES.index(rule_blocking_too_coarse)
     idx_uniform = DEFAULT_RULES.index(rule_uniform_heavy_blocking)
@@ -1532,6 +1558,7 @@ def test_default_rules_now_has_ten_entries_final():
 def test_heuristic_propose_accepts_ctx_kwarg():
     """HeuristicRefitPolicy.propose accepts an optional ctx kwarg."""
     import inspect
+
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
     pol = HeuristicRefitPolicy()
     sig = inspect.signature(pol.propose)
@@ -1541,7 +1568,8 @@ def test_heuristic_propose_accepts_ctx_kwarg():
 def test_llm_propose_accepts_and_forwards_ctx():
     """LLMRefitPolicy.propose accepts ctx and forwards to base."""
     import inspect
-    from goldenmatch.core.autoconfig_policy import LLMRefitPolicy, HeuristicRefitPolicy
+
+    from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
     pol = LLMRefitPolicy(base=HeuristicRefitPolicy())
     sig = inspect.signature(pol.propose)
     assert "ctx" in sig.parameters
@@ -1553,10 +1581,11 @@ def test_llm_propose_accepts_and_forwards_ctx():
 
 def test_controller_supports_old_shape_3arg_custom_policy():
     """A custom policy with 3-arg propose (no ctx) still works."""
-    from goldenmatch.core.autoconfig_controller import (
-        AutoConfigController, ControllerBudget,
-    )
     import polars as pl
+    from goldenmatch.core.autoconfig_controller import (
+        AutoConfigController,
+        ControllerBudget,
+    )
 
     class _OldShapePolicy:
         def propose(self, profile, current, history):

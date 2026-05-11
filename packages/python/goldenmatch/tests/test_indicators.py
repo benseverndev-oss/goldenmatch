@@ -1,6 +1,5 @@
 """Unit tests for goldenmatch.core.indicators (v1.10)."""
 import polars as pl
-import pytest
 
 
 def test_compute_column_priors_email_high_identity():
@@ -168,8 +167,9 @@ def test_cross_blocking_overlap_identical_keys_returns_one():
 
 def test_cross_blocking_overlap_orthogonal_keys_low():
     """Two unrelated keys with no record-level correlation -> low overlap."""
-    from goldenmatch.core.indicators import compute_cross_blocking_overlap
     import random
+
+    from goldenmatch.core.indicators import compute_cross_blocking_overlap
     random.seed(42)
     n = 100
     df = pl.DataFrame({

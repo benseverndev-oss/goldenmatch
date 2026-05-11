@@ -1,7 +1,7 @@
 """Tests for Golden Suite adapters (mocked)."""
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from goldenpipe.models.context import PipeContext, StageStatus
 
 

@@ -1,7 +1,8 @@
 import sys
+
 import pytest
-from goldenflow.connectors.s3 import _parse_s3_uri
 from goldenflow.connectors.gcs import _parse_gcs_uri
+from goldenflow.connectors.s3 import _parse_s3_uri
 
 
 def test_parse_s3_uri():

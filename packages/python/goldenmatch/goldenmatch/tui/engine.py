@@ -6,7 +6,7 @@ No Textual dependency — pure Python + Polars.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
@@ -114,15 +114,19 @@ class MatchEngine:
 
     def _run_pipeline(self, df: pl.DataFrame, config) -> EngineResult:
         """Core pipeline logic — mirrors run_dedupe but returns EngineResult."""
+        from goldenmatch.config.schemas import GoldenRulesConfig
         from goldenmatch.core.autofix import auto_fix_dataframe
         from goldenmatch.core.blocker import build_blocks
         from goldenmatch.core.cluster import build_clusters
         from goldenmatch.core.golden import build_golden_record
         from goldenmatch.core.matchkey import compute_matchkeys
-        from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel, rerank_top_pairs
+        from goldenmatch.core.scorer import (
+            find_exact_matches,
+            rerank_top_pairs,
+            score_blocks_parallel,
+        )
         from goldenmatch.core.standardize import apply_standardization
         from goldenmatch.core.validate import ValidationRule, validate_dataframe
-        from goldenmatch.config.schemas import GoldenRulesConfig
 
         combined_lf = df.lazy()
         quarantine_df = None
@@ -188,7 +192,7 @@ class MatchEngine:
             if mk.type == "probabilistic":
                 if config.blocking is None:
                     continue
-                from goldenmatch.core.probabilistic import train_em, score_probabilistic
+                from goldenmatch.core.probabilistic import score_probabilistic, train_em
                 blocks = build_blocks(combined_lf, config.blocking)
                 blocking_fields = []
                 if config.blocking and config.blocking.keys:

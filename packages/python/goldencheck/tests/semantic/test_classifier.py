@@ -1,6 +1,7 @@
 import polars as pl
 from goldencheck.semantic.classifier import classify_columns
 
+
 def test_name_heuristic_email():
     df = pl.DataFrame({"customer_email": ["a@b.com", "c@d.com"]})
     result = classify_columns(df)

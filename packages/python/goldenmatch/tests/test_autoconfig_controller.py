@@ -1,15 +1,20 @@
-import pytest
 import polars as pl
+import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
-from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, DataProfile
 from goldenmatch.core.autoconfig_controller import (
-    AutoConfigController, ControllerBudget, _RED_PROFILE,
-    ConfigValidationError, _LAST_CONTROLLER_RUN,
+    _LAST_CONTROLLER_RUN,
+    _RED_PROFILE,
+    AutoConfigController,
+    ConfigValidationError,
+    ControllerBudget,
 )
-from goldenmatch.core.complexity_profile import StopReason
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
-from goldenmatch.core.autoconfig_history import RunHistory
-
+from goldenmatch.core.complexity_profile import (
+    ComplexityProfile,
+    DataProfile,
+    HealthVerdict,
+    StopReason,
+)
 
 # ============================================================
 # ControllerBudget
@@ -164,13 +169,15 @@ def test_take_sample_is_deterministic():
 # Task 4.2 — iteration loop
 # ============================================================
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
+
 from goldenmatch.core.complexity_profile import (
-    BlockingProfile, ScoringProfile, ClusterProfile, MatchkeyProfile, FieldStats,
+    BlockingProfile,
+    ClusterProfile,
+    FieldStats,
+    MatchkeyProfile,
+    ScoringProfile,
 )
-from goldenmatch.core.autoconfig_history import HistoryEntry, PolicyDecision, ErrorRecord
-from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
-from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
 
 
 def _green_subprofiles():
@@ -569,8 +576,11 @@ def test_recall_probe_runs_on_real_sample():
 def test_recall_probe_returns_none_when_no_weighted_matchkey():
     """If config has only exact matchkeys, probe returns None."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     cfg = GoldenMatchConfig(
         matchkeys=[MatchkeyConfig(
@@ -592,14 +602,22 @@ def test_recall_probe_returns_none_when_no_weighted_matchkey():
 # Tier 4 — cross-run memory integration
 # ============================================================
 
-from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig as _GoldenMatchConfig,
-    MatchkeyConfig as _MatchkeyConfig,
-    MatchkeyField as _MatchkeyField,
     BlockingConfig as _BlockingConfig,
+)
+from goldenmatch.config.schemas import (
     BlockingKeyConfig as _BlockingKeyConfig,
 )
+from goldenmatch.config.schemas import (
+    GoldenMatchConfig as _GoldenMatchConfig,
+)
+from goldenmatch.config.schemas import (
+    MatchkeyConfig as _MatchkeyConfig,
+)
+from goldenmatch.config.schemas import (
+    MatchkeyField as _MatchkeyField,
+)
+from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
 
 
 def _cached_cfg():
@@ -701,7 +719,9 @@ def test_env_var_disables_default_memory(monkeypatch):
 def _borderline_profile_for_llm():
     """A ComplexityProfile with meaningful borderline mass (triggers LLM decoration)."""
     from goldenmatch.core.complexity_profile import (
-        BlockingProfile, ScoringProfile, ClusterProfile,
+        BlockingProfile,
+        ClusterProfile,
+        ScoringProfile,
     )
     return ComplexityProfile(
         data=DataProfile(n_rows=100, n_cols=2),
@@ -718,7 +738,10 @@ def _borderline_profile_for_llm():
 
 def _cfg_with_threshold(threshold: float) -> _GoldenMatchConfig:
     from goldenmatch.config.schemas import (
-        MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     return _GoldenMatchConfig(
         matchkeys=[MatchkeyConfig(
@@ -796,7 +819,9 @@ def test_decorate_uses_wide_mode_when_borderline_dominant(monkeypatch):
     pathology where mass_above=1.0 AND mass_borderline=0.95)."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from goldenmatch.core.complexity_profile import (
-        BlockingProfile, ScoringProfile, ClusterProfile,
+        BlockingProfile,
+        ClusterProfile,
+        ScoringProfile,
     )
     cfg = _cfg_with_threshold(0.7)
     profile = ComplexityProfile(
@@ -827,7 +852,9 @@ def test_decorate_uses_standard_mode_when_borderline_modest(monkeypatch):
     centered on threshold remain (existing behavior)."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from goldenmatch.core.complexity_profile import (
-        BlockingProfile, ScoringProfile, ClusterProfile,
+        BlockingProfile,
+        ClusterProfile,
+        ScoringProfile,
     )
     cfg = _cfg_with_threshold(0.7)
     profile = ComplexityProfile(
@@ -910,8 +937,11 @@ def test_stop_reason_budget_iterations_when_max_iter_reached(small_df):
     letting the loop run to completion and triggering the natural stop.
     """
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     # Two RED profiles with distinct signal vectors (different reduction_ratios)
@@ -984,8 +1014,11 @@ def test_stop_reason_oscillating_when_policy_loops(small_df):
     the controller must see the same config object at least twice in the last 4.
     """
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     # Two configs that are not equal so POLICY_NO_PROGRESS won't fire
@@ -1066,7 +1099,6 @@ def test_stop_reason_policy_satisfied_on_yellow_with_no_proposal(small_df):
 def test_stop_reason_cancelled_on_keyboard_interrupt(small_df):
     """KeyboardInterrupt mid-iteration → stop_reason=CANCELLED set BEFORE
     the re-raise. Captured via the _LAST_CONTROLLER_RUN ContextVar."""
-    from goldenmatch.core.autoconfig_controller import _LAST_CONTROLLER_RUN
 
     controller = AutoConfigController(
         policy=HeuristicRefitPolicy(),
@@ -1172,9 +1204,9 @@ def test_controller_appends_v0_virtual_entry_before_pick_committed(small_df):
 
 def test_indicator_context_memoizes_calls():
     """ctx.full_pop_matchkey_hits memoizes by (col)."""
+    import polars as pl
     from goldenmatch.core.autoconfig_controller import IndicatorContext
     from goldenmatch.core.complexity_profile import SparsityVerdict
-    import polars as pl
     df = pl.DataFrame({"email": ["a@x.com", "a@x.com", "b@x.com"]})
     ctx = IndicatorContext(
         df=df, column_priors={},
@@ -1187,9 +1219,9 @@ def test_indicator_context_memoizes_calls():
 
 
 def test_indicator_context_has_fired_one_shot_guard():
+    import polars as pl
     from goldenmatch.core.autoconfig_controller import IndicatorContext
     from goldenmatch.core.complexity_profile import SparsityVerdict
-    import polars as pl
     ctx = IndicatorContext(
         df=pl.DataFrame(), column_priors={},
         sparsity_verdict=SparsityVerdict(is_sparse=True, estimated_n_true_pairs=0),
@@ -1201,9 +1233,9 @@ def test_indicator_context_has_fired_one_shot_guard():
 
 def test_indicator_context_cross_blocking_overlap_canonicalizes_keys():
     """Same key pair in different orders gets same memoized result."""
+    import polars as pl
     from goldenmatch.core.autoconfig_controller import IndicatorContext
     from goldenmatch.core.complexity_profile import SparsityVerdict
-    import polars as pl
     df = pl.DataFrame({"city": ["nyc"] * 10, "state": ["NY"] * 10})
     ctx = IndicatorContext(
         df=df, column_priors={},
@@ -1223,9 +1255,11 @@ def test_indicator_context_cross_blocking_overlap_canonicalizes_keys():
 def test_controller_attaches_indicators_profile_after_run():
     """After run(), committed profile has column_priors + indicators populated."""
     import os
+
     import polars as pl
     from goldenmatch.core.autoconfig_controller import (
-        AutoConfigController, ControllerBudget,
+        AutoConfigController,
+        ControllerBudget,
     )
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
@@ -1253,9 +1287,9 @@ def test_indicator_context_fast_mode_skips_expensive(monkeypatch):
     """When GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, expensive lazy
     indicators return None instead of computing."""
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "fast")
+    import polars as pl
     from goldenmatch.core.autoconfig_controller import IndicatorContext
     from goldenmatch.core.complexity_profile import SparsityVerdict
-    import polars as pl
     df = pl.DataFrame({"email": ["a@x.com"] * 100, "name": ["x"] * 100})
     ctx = IndicatorContext(
         df=df, column_priors={},

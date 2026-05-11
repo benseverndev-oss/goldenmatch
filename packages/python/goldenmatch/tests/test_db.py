@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import polars as pl
+import pytest
 
 from ._pg_helpers import HAS_POSTGRES, pg_url_fixture
 
@@ -145,8 +145,8 @@ class TestMetadata:
 
 class TestSQLBlocking:
     def test_exact_blocking_query(self):
-        from goldenmatch.db.blocking import build_blocking_query
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.db.blocking import build_blocking_query
 
         config = BlockingConfig(
             keys=[BlockingKeyConfig(fields=["zip"], transforms=["strip"])],
@@ -159,8 +159,8 @@ class TestSQLBlocking:
         assert "!= 1" in query
 
     def test_soundex_blocking_query(self):
-        from goldenmatch.db.blocking import build_blocking_query
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.db.blocking import build_blocking_query
 
         config = BlockingConfig(
             keys=[BlockingKeyConfig(fields=["name"], transforms=["soundex"])],
@@ -171,8 +171,8 @@ class TestSQLBlocking:
         assert "soundex" in query
 
     def test_substring_transform(self):
-        from goldenmatch.db.blocking import build_blocking_query
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.db.blocking import build_blocking_query
 
         config = BlockingConfig(
             keys=[BlockingKeyConfig(fields=["name"], transforms=["lowercase", "substring:0:5"])],
@@ -184,8 +184,8 @@ class TestSQLBlocking:
         assert "substring" in query
 
     def test_null_value_skipped(self):
-        from goldenmatch.db.blocking import build_blocking_query
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.db.blocking import build_blocking_query
 
         config = BlockingConfig(
             keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
@@ -201,12 +201,16 @@ class TestSQLBlocking:
 @pytest.mark.skipif(not HAS_POSTGRES, reason="PostgreSQL not available")
 class TestSyncIntegration:
     def test_full_scan_sync(self, connector, sample_table):
-        from goldenmatch.db.sync import run_sync
-        from goldenmatch.db.metadata import ensure_metadata_tables
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            BlockingConfig, BlockingKeyConfig, OutputConfig, GoldenRulesConfig,
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            GoldenRulesConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
         )
+        from goldenmatch.db.sync import run_sync
 
         config = GoldenMatchConfig(
             matchkeys=[

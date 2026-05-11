@@ -3,9 +3,8 @@
 import logging
 
 import polars as pl
-
-from goldenmatch.core.blocker import build_blocks, BlockResult
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, SortKeyField
+from goldenmatch.core.blocker import BlockResult, build_blocks
 
 
 class TestBlockResultMetadata:

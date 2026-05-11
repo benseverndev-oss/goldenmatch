@@ -9,8 +9,8 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 console = Console()
 
@@ -44,11 +44,16 @@ def demo_cmd(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress animated output"),
 ) -> None:
     """Run a built-in demo with sample data — no files needed."""
-    from goldenmatch.tui.engine import MatchEngine
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig, GoldenRulesConfig, OutputConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        GoldenRulesConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        OutputConfig,
     )
+    from goldenmatch.tui.engine import MatchEngine
 
     # Write demo data to temp file
     tmp = Path(tempfile.mkdtemp()) / "demo_patients.csv"
