@@ -401,8 +401,9 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, 'scripts')
           import dqbench_adapters
-          from dqbench_adapters import febrl3, ncvr, leipzig_eval, goldenmatch_zeroconfig
-          print('dqbench_adapters package + 4 helpers imported OK')
+          from dqbench_adapters import febrl3, ncvr, leipzig_eval
+          # goldenmatch_zeroconfig requires dqbench (optional, not installed in CI) — skip import smoke
+          print('dqbench_adapters package + 3 standalone helpers imported OK')
           "
       - name: Run benchmarks --help
         shell: bash
