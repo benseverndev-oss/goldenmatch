@@ -4,20 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-try:
-    import testing.postgresql
-    import psycopg2
-    HAS_POSTGRES = True
-except (ImportError, Exception):
-    HAS_POSTGRES = False
+from ._pg_helpers import HAS_POSTGRES, pg_url_fixture
 
 
 @pytest.fixture
 def pg():
-    if not HAS_POSTGRES:
-        pytest.skip("PostgreSQL not available")
-    with testing.postgresql.Postgresql() as postgresql:
-        yield postgresql
+    yield from pg_url_fixture()
 
 
 @pytest.fixture
