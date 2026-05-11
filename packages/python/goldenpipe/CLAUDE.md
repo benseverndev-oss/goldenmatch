@@ -6,19 +6,6 @@ Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenflow,goldenmatch,infermap}/`. Pre-fold standalone repos lived at `D:\show_case\<name>`; their history is in `_archive/goldenmatch-pre-fold/`.
 - **GitHub:** `benzsevern/goldenmatch` (single monorepo since 2026-05-02)
 
-## Branch & Merge SOP (all Golden Suite repos)
-- Feature work goes on `feature/<name>` branches, never directly to main
-- Merge via **squash merge PR** (watchers see PR activity, history stays clean)
-- PR title format: `feat: <description>` or `fix: <description>`
-- Merge when: tests pass, docs updated. Days not weeks.
-- After merge: delete remote branch
-
-## Environment
-- Windows 11, bash shell (Git Bash)
-- Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`
-- Two GitHub accounts: `benzsevern` (personal) and `benzsevern-mjh` (work)
-- MUST `gh auth switch --user benzsevern` before push, switch back to `benzsevern-mjh` after
-
 ## Architecture
 - `goldenpipe/pipeline.py` -- Pipeline class, run() function. ONLY file that imports from tools.
 - `goldenpipe/decisions.py` -- Adaptive logic (decide_flow, decide_match). NO tool imports. Testable independently.

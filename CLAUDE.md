@@ -70,3 +70,15 @@ A push of a tag that points at a commit predating a workflow file's introduction
 ## pnpm vs npm flag drift
 - `pnpm pack` has no `--dry-run` flag (npm-only). pnpm always writes a `.tgz`; running plain `pnpm pack` on a CI dry-run path validates packing without publishing.
 - `pnpm publish` from CI needs `--no-git-checks` because the runner checkout state confuses pnpm's "is this the latest commit on the branch?" guard.
+
+## Stacked PR auto-closure on squash-merge
+Squash-merging PR A with `--delete-branch` auto-closes any stacked PRs targeting A's branch — `gh pr reopen` rejects with "Could not open." Recovery: rebase locally onto main (or cherry-pick only the wave's own commits if a full rebase cascades add-add conflicts), force-push, open a fresh PR. Bit the TS parity wave twice (#139→#141, #140→#142).
+
+## `gh pr merge --delete-branch` + local worktree
+Cosmetic failure: `cannot delete branch 'X' used by worktree at ...`. The remote merge succeeded; only local cleanup failed. Safe to ignore unless you're scripting on the exit code.
+
+## CI `UNSTABLE` vs failing
+A `continue-on-error: true` step that exits non-zero still flips the parent job's conclusion to FAILURE → PR `mergeStateStatus: UNSTABLE`. The PR is still mergeable; the merge button just looks scary. Don't waste time chasing UNSTABLE if you know the failing lane is opt-in.
+
+## pypistats.org throttling
+pypistats `/api/packages/<pkg>/recent` 429s aggressively on unauthenticated bursts. Any script hitting it needs retry+backoff plus inter-request sleep (~1.5s). `scripts/suite_download_badges.py` is the reference implementation — preserves the prior badge value when throttled so the workflow exits 0.
