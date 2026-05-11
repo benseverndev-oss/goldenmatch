@@ -19,6 +19,7 @@
 <!-- Quality / proof -->
 [![CI](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenmatch)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benzsevern/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benzsevern/goldenmatch)
 [![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017)](https://github.com/benzsevern/dqbench)
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-97.2%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
@@ -32,10 +33,8 @@
 [![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benzsevern/goldenmatch/wiki)
 [![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/scripts/gpu_colab_notebook.ipynb)
 
 <!-- Activity -->
-[![GitHub Discussions](https://img.shields.io/github/discussions/benzsevern/goldenmatch?color=d4a017&logo=github&label=discussions)](https://github.com/benzsevern/goldenmatch/discussions)
 [![Last commit](https://img.shields.io/github/last-commit/benzsevern/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benzsevern/goldenmatch/commits/main)
 
 </div>

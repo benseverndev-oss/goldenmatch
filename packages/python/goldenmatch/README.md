@@ -19,6 +19,7 @@
 <!-- Quality -->
 [![CI](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenmatch)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benzsevern/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benzsevern/goldenmatch)
 [![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjZmZmIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4Ii8+PC9zdmc+)](https://github.com/benzsevern/dqbench)
 [![F1: 96.4%](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25%20zero--config-d4a017)](#benchmarks)
 
@@ -30,8 +31,7 @@
 <!-- Ecosystem -->
 [![Docs](https://img.shields.io/badge/docs-github.io-d4a017)](https://benzsevern.github.io/goldenmatch/)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
-[![MCP Marketplace](https://img.shields.io/badge/MCP-marketplace-0ea5e9)](https://mcp-marketplace.io/)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/scripts/gpu_colab_notebook.ipynb)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.benzsevern%2Fgoldenmatch-0ea5e9)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/goldenmatch)
 
 </div>
 
