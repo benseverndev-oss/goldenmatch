@@ -125,7 +125,15 @@ function mkAfterShape(mk: MatchkeyConfig): {
   ne: PyNeShape[];
 } {
   const ne = (
-    (mk as { negativeEvidence?: readonly PyNeShape[] }).negativeEvidence ?? []
+    (mk as unknown as {
+      negativeEvidence?: ReadonlyArray<{
+        field: string;
+        transforms: readonly string[];
+        scorer: string;
+        threshold: number;
+        penalty: number;
+      }>;
+    }).negativeEvidence ?? []
   ).map((n) =>
     neFieldShape({
       field: n.field,
