@@ -24,6 +24,8 @@ jobs:
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
       python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
+      rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
+      duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -75,6 +77,22 @@ jobs:
               - 'docs/reproducing-benchmarks.md'
             rust:
               - 'packages/rust/**'
+            rust_pgrx:
+              # The Postgres extension lives in `packages/rust/extensions/postgres/`
+              # and is excluded from the cargo workspace (pgrx + workspace mode
+              # is broken — see root CLAUDE.md). It needs its own lane that
+              # builds via `cargo pgrx install`, so trigger only on changes to
+              # that subtree, the shared bridge it links against, or workspace
+              # configuration.
+              - 'packages/rust/extensions/postgres/**'
+              - 'packages/rust/extensions/bridge/**'
+              - 'packages/rust/extensions/Cargo.toml'
+            duckdb_extensions:
+              # The DuckDB UDF package is pure Python but lives under
+              # packages/rust/extensions/duckdb/ alongside the Rust crates.
+              # Gate strictly on its own subtree so editing Rust code doesn't
+              # spin up a Python lane for it.
+              - 'packages/rust/extensions/duckdb/**'
             dbt:
               - 'packages/dbt/**'
             action:
@@ -557,6 +575,160 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"
+
+  # Postgres extension build + smoke test across PG 15 / 16 / 17. The pgrx
+  # crate is excluded from the cargo workspace (pgrx workspace-mode is
+  # broken), so the main `rust` job's `cargo test --workspace` never
+  # touches it — this lane covers the gap.
+  #
+  # Mirrors the matrix the standalone goldenmatch-extensions repo ran
+  # before it was archived. Installs the relevant PG dev headers, builds
+  # the extension via `cargo pgrx install`, then exercises the SQL
+  # surface end-to-end via psql (scalar scorer, table dedupe, autoconfig).
+  #
+  # If this lane breaks on a Python-only change, the trigger filter is
+  # wrong — Postgres extension build failures should only surface when
+  # postgres/, bridge/, or workspace files actually change.
+  rust_pgrx:
+    needs: changes
+    if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+    env:
+      PG_VERSION: ${{ matrix.pg }}
+    defaults:
+      run:
+        working-directory: packages/rust/extensions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/rust/extensions
+
+      - name: Install PG ${{ matrix.pg }} dev headers
+        # The PostgreSQL apt repo carries every PG major in parallel. Required
+        # because pgrx needs `pg_config` for the specific PG version it's
+        # building against, and Ubuntu ships only one PG by default.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
+          sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
+
+      - name: Install goldenmatch (Python bridge target)
+        # The pgrx extension embeds Python via pyo3 and imports goldenmatch
+        # at runtime. The package install here is what `init()` in the
+        # bridge will find when Postgres starts.
+        run: pip install --break-system-packages goldenmatch>=1.1.0 pyarrow
+
+      - name: Install cargo-pgrx
+        # 0.12.9 pin matches the pgrx version in
+        # packages/rust/extensions/postgres/Cargo.toml. Upgrading pgrx is
+        # a coordinated change — bump both pins together.
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init "--pg${PG_VERSION}=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config"
+
+      - name: Build + install extension
+        working-directory: packages/rust/extensions/postgres
+        run: |
+          cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
+          # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
+          # handwritten one into PG's extension dir so `CREATE EXTENSION`
+          # finds it. The schema file is the canonical declaration of
+          # public function signatures.
+          cp sql/goldenmatch_pg--0.1.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+
+      - name: Expose goldenmatch to Postgres' Python interpreter
+        # Postgres runs as user `postgres` under a different Python than the
+        # one this workflow's `pip install` modified. The `.pth` redirect
+        # makes the install discoverable when pgrx-loaded code calls
+        # `import goldenmatch`.
+        run: |
+          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
+          echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
+
+      - name: psql smoke (scalar scorer, dedupe, autoconfig)
+        run: |
+          # Multiple PG majors installed → port is non-default; resolve via
+          # pg_lsclusters so we always hit the right server.
+          sudo pg_createcluster "${PG_VERSION}" main 2>/dev/null || true
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main start 2>/dev/null || true
+          sleep 2
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          echo "Using PG ${PG_VERSION} on port ${PGPORT}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
+          # Confirm new v1.7-v1.12 functions registered alongside the originals.
+          sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE test_customers (name TEXT, email TEXT);
+            INSERT INTO test_customers VALUES
+              ('John Smith', 'john@x.com'),
+              ('JOHN SMITH', 'john@x.com'),
+              ('Jane Doe', 'jane@y.com'),
+              ('Bob Jones', 'bob@z.com');
+            SELECT goldenmatch.goldenmatch_dedupe_table('test_customers'::TEXT, '{"exact": ["email"]}'::TEXT);
+            -- v1.7-v1.12 surface (autoconfig / telemetry / dedupe_full) lands
+            -- with PR #159; assert it conditionally so this lane goes green on
+            -- main today and starts exercising the new surface once #159 merges.
+            DO $$
+            BEGIN
+              IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'goldenmatch_autoconfig') THEN
+                PERFORM goldenmatch.goldenmatch_autoconfig('test_customers'::TEXT);
+                PERFORM goldenmatch.goldenmatch_autoconfig_telemetry('test_customers'::TEXT);
+                RAISE NOTICE 'v1.7-v1.12 autoconfig surface present and callable';
+              ELSE
+                RAISE NOTICE 'v1.7-v1.12 autoconfig surface not yet on main (waiting on PR #159)';
+              END IF;
+            END$$;
+          EOSQL
+          echo "=== PG ${PG_VERSION} smoke passed ==="
+
+  # DuckDB UDF package tests. Pure Python; lives at
+  # packages/rust/extensions/duckdb/ alongside the Rust crates but the
+  # main `python` matrix job doesn't see it (its dynamic-matrix only
+  # enumerates packages/python/<pkg>). This lane fills that gap.
+  duckdb_extensions:
+    needs: changes
+    if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/duckdb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install goldenmatch + duckdb UDF package
+        run: |
+          # The local goldenmatch checkout supplies the controller + autoconfig
+          # internals the UDFs delegate to. Editable install means a goldenmatch
+          # source change here would surface — but the duckdb lane filter only
+          # fires on extensions/duckdb/** changes, so for cross-package
+          # regressions, rely on the regular `python` lane to catch them.
+          pip install -e "../../../python/goldenmatch[web]"
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          # pytest-timeout converts a hung worker (e.g. wedged auto-config)
+          # into an actionable failure with a traceback at the 120s mark
+          # instead of letting the job sit at the 6h GH Actions default.
+          pip install pytest pytest-timeout pyarrow
+      - name: Run DuckDB UDF tests
+        run: python -m pytest tests/ -v --timeout=120
 
   # Pyright strict-mode type check on the goldenmatch core slice. Scope
   # (include list) is pinned in pyrightconfig.json at repo root; CI mirrors
