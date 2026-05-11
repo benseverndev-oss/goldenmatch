@@ -122,7 +122,17 @@ def _ui_safe_field(f: MatchkeyField) -> dict[str, Any]:
     }
 
 
-def _autoconfigure(project_root: Path, domain: str | None = None) -> RulesPayload:
+def _autoconfigure(
+    project_root: Path,
+    domain: str | None = None,
+) -> tuple[RulesPayload, Any, Any, Any]:
+    """Run auto_configure_df and return (payload, committed_config, profile, history).
+
+    The profile / history come off the controller's ContextVar; they're None
+    when the controller didn't run (defensive — every modern path does run it,
+    but a future change to ``auto_configure_df`` might short-circuit and we
+    don't want this to crash if telemetry is missing).
+    """
     src = project_root / "data.csv"
     if not src.exists():
         raise FileNotFoundError("source CSV (data.csv) not found in project root")
@@ -140,6 +150,15 @@ def _autoconfigure(project_root: Path, domain: str | None = None) -> RulesPayloa
         # synthesized profile with no extractions, but doesn't error.
         domain_config = DomainConfig(enabled=True, mode=domain)
     cfg = auto_configure_df(df, allow_remote_assets=False, domain_config=domain_config)
+    # auto_configure_df stashes (profile, history) on a ContextVar the engine
+    # uses to wire PostflightReport.controller_*. Pull them here so the
+    # workbench can show the same telemetry without re-running the controller.
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+    _ctrl_state = _LAST_CONTROLLER_RUN.get()
+    if _ctrl_state is not None:
+        ctrl_profile, ctrl_history = _ctrl_state
+    else:
+        ctrl_profile, ctrl_history = None, None
     fields, threshold = _pick_matchkeys(cfg.get_matchkeys())
 
     # The workbench rejects matchkeys whose scorer is in {embedding, record_embedding}
@@ -160,10 +179,11 @@ def _autoconfigure(project_root: Path, domain: str | None = None) -> RulesPayloa
                 )
             ]
 
-    return RulesPayload(
+    payload = RulesPayload(
         threshold=max(0.0, min(1.0, threshold)),
         matchkeys=[MatchkeyField(**_ui_safe_field(f)) for f in safe_fields],
     )
+    return payload, cfg, ctrl_profile, ctrl_history
 
 
 @router.post("/autoconfig")
@@ -171,7 +191,7 @@ async def autoconfigure(request: Request, domain: str | None = None) -> dict:
     state = request.app.state.app_state
     loop = asyncio.get_running_loop()
     try:
-        payload = await asyncio.wait_for(
+        payload, cfg, ctrl_profile, ctrl_history = await asyncio.wait_for(
             loop.run_in_executor(_executor, lambda: _autoconfigure(state.project_root, domain=domain)),
             timeout=AUTOCONFIG_TIMEOUT_S,
         )
@@ -189,4 +209,14 @@ async def autoconfigure(request: Request, domain: str | None = None) -> dict:
 
     # Adopt the suggestion as in-memory rules so the user can preview / save.
     state.rules = payload
+    # Stash controller telemetry so /api/v1/controller/telemetry returns the
+    # latest. We overwrite even when telemetry is partially missing — better
+    # to clear stale state than show telemetry from a prior, unrelated run.
+    from datetime import UTC, datetime as _dt
+    state.last_controller_profile = ctrl_profile
+    state.last_controller_history = ctrl_history
+    state.last_controller_committed_config = cfg
+    state.last_controller_source = "autoconfig"
+    state.last_controller_run_name = None
+    state.last_controller_recorded_at = _dt.now(UTC).isoformat()
     return payload.model_dump()

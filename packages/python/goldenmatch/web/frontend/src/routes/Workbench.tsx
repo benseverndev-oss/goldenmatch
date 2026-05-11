@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import type { PydanticError, RulesPayload } from "../lib/types";
+import { ControllerPanel } from "../components/ControllerPanel";
 import { RuleEditor } from "../components/RuleEditor";
 import { RunInspector } from "../components/RunInspector";
 import { SplitPane } from "../components/SplitPane";
@@ -80,6 +81,8 @@ export function Workbench() {
       // Server adopted the suggestion as in-memory rules; sync our /rules query
       // so the user sees the canonical form on next refetch.
       qc.setQueryData(["rules"], resp);
+      // Controller telemetry was just refreshed server-side — pull the latest.
+      qc.invalidateQueries({ queryKey: ["controller-telemetry"] });
       setToast(
         `Auto-configured from data.csv — ${resp.matchkeys.length} matchkey${resp.matchkeys.length === 1 ? "" : "s"} suggested. Run preview to see results, or tweak.`,
       );
@@ -104,6 +107,11 @@ export function Workbench() {
       setErrors([]);
       setSavedRunName(resp.run_name);
       qc.invalidateQueries({ queryKey: ["project"] });
+      // Zero-config runs re-fire the controller; refresh telemetry. (User-rule
+      // runs leave AppState telemetry untouched, so this is a cheap no-op.)
+      if (resp.auto_config) {
+        qc.invalidateQueries({ queryKey: ["controller-telemetry"] });
+      }
       setToast(
         `Saved run ${resp.run_name} — ${resp.cluster_count} clusters · ${resp.total_pairs} pairs${resp.llm_boost ? " · LLM boost on" : ""}.`,
       );
@@ -184,6 +192,8 @@ export function Workbench() {
       </div>
 
       <RuleEditor rules={rules} onChange={setRules} errors={errors} />
+
+      <ControllerPanel />
 
       <section className="border-t border-ink-200 pt-5">
         <p className="eyebrow mb-3">preview</p>
