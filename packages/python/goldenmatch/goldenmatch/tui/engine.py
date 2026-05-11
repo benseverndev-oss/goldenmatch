@@ -333,10 +333,16 @@ class MatchEngine:
         ``web/routers/autoconfig.py``) so we surface the same stop_reason /
         decisions / NE the workbench shows.
         """
-        from datetime import UTC, datetime as _dt
+        # Lazy imports: ``auto_configure_df`` pulls in the policy + indicator
+        # graph (heavy). Keeping the import here means ``MatchEngine.__init__``
+        # stays cheap for TUI sessions that never trigger Ctrl+A.
+        from datetime import UTC, datetime
 
         from goldenmatch.config.schemas import DomainConfig
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
+        from goldenmatch.core.autoconfig import (
+            _LAST_CONTROLLER_RUN,
+            auto_configure_df,
+        )
 
         # Profile/extract priors before the controller wipes the ContextVar
         # state — these come from the eager indicator pass and aren't on
@@ -368,7 +374,7 @@ class MatchEngine:
             history=history,
             committed_config=config,
             source="auto_configure",
-            recorded_at=_dt.now(UTC).isoformat(),
+            recorded_at=datetime.now(UTC).isoformat(),
             column_priors=priors,
         )
         self._last_telemetry = telemetry

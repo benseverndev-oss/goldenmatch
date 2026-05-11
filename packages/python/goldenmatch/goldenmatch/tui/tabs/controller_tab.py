@@ -18,7 +18,6 @@ from textual.widgets import DataTable, Static
 
 from goldenmatch.tui.engine import ControllerTelemetry
 
-
 _HEALTH_COLOR = {
     "green": "#2ecc71",
     "yellow": "#d4a017",
