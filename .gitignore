@@ -42,3 +42,8 @@ labels.jsonl
 
 # Turborepo
 .turbo/
+
+# Local profiling artifacts (per CLAUDE.md convention — cProfile dumps,
+# scale-audit JSON outputs, synthetic fixtures). Documented as gitignored
+# in CLAUDE.md; this entry makes that real.
+.profile_tmp/
