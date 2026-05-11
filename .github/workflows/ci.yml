@@ -23,6 +23,7 @@ jobs:
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
       python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
+      benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -68,6 +69,10 @@ jobs:
               - 'packages/python/goldenmatch/scripts/build_web.py'
               - 'packages/python/goldenmatch/pyproject.toml'
               - 'pnpm-lock.yaml'
+            benchmark_runner:
+              - 'scripts/run_benchmarks.py'
+              - 'scripts/dqbench_adapters/**'
+              - 'docs/reproducing-benchmarks.md'
             rust:
               - 'packages/rust/**'
             dbt:
@@ -370,6 +375,80 @@ jobs:
             echo ""
             echo "These run against committed synthetic fixtures on every PR."
             echo "Real-benchmark runs (DBLP-ACM/Febrl3/NCVR/DQbench) require gitignored datasets and run via the separate \`benchmarks.yml\` workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Smoke lane for `scripts/run_benchmarks.py` and the committed
+  # `scripts/dqbench_adapters/` helpers. The real-dataset runs live in
+  # `benchmarks.yml` (Mondays + workflow_dispatch); this lane catches
+  # packaging regressions (broken imports, sys.path issues, helper
+  # renames) on every PR that touches the runner without needing the
+  # gitignored DBLP/NCVR/dqbench datasets.
+  #
+  # `continue-on-error: true` so a regression here surfaces as a visible
+  # red X without blocking merges — the runner is tooling, not a release
+  # gate. Real number reproducibility is gated by the benchmarks.yml
+  # workflow.
+  benchmark_runner_smoke:
+    needs: changes
+    if: needs.changes.outputs.benchmark_runner == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # `recordlinkage` ships the Febrl3 dataset bundled — installing it
+      # lets the smoke run actually exercise the febrl3 helper end-to-end
+      # without needing any gitignored dataset. The other three datasets
+      # (DBLP-ACM, NCVR, DQbench) are gracefully skipped by the runner
+      # when their files / CLIs aren't on disk.
+      - run: uv pip install recordlinkage pyarrow
+      - name: Import smoke
+        shell: bash
+        run: |
+          uv run python -c "
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import dqbench_adapters
+          from dqbench_adapters import febrl3, ncvr, leipzig_eval
+          # goldenmatch_zeroconfig requires dqbench (optional, not installed in CI) — skip import smoke
+          print('dqbench_adapters package + 3 standalone helpers imported OK')
+          "
+      - name: Run benchmarks --help
+        shell: bash
+        run: |
+          uv run python scripts/run_benchmarks.py --help
+      - name: Run febrl3 end-to-end
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          uv run python scripts/run_benchmarks.py \
+            --datasets febrl3 --output /tmp/febrl3_smoke.json
+          # F1 floor is well below the published 0.9443 number; the lane
+          # protects the runner's wiring, not its accuracy. Real floor
+          # lives in tests/test_autoconfig_benchmarks.py.
+          uv run python -c "
+          import json
+          r = json.load(open('/tmp/febrl3_smoke.json'))['results'][0]
+          assert r['f1'] >= 0.80, f'Febrl3 smoke regressed: {r}'
+          print('febrl3 smoke F1=', r['f1'])
+          "
+      - name: Smoke summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Benchmark runner smoke"
+            echo ""
+            echo "Imports + \`--help\` + a real Febrl3 run (the only published dataset that ships via pip)."
+            echo "DBLP-ACM / NCVR / DQbench composite reproduce against gitignored datasets in \`benchmarks.yml\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   typescript:
