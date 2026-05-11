@@ -12,6 +12,7 @@ from rich.table import Table
 
 from goldenmatch import __version__
 from goldenmatch.cli.agent_serve import agent_serve_cmd
+from goldenmatch.cli.autoconfig import autoconfig_cmd
 from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.demo import demo_cmd
@@ -93,6 +94,7 @@ app = typer.Typer(
     callback=_callback,
 )
 
+app.command("autoconfig", help="Run AutoConfigController on input files; print the committed config + telemetry without running the pipeline.")(autoconfig_cmd)
 app.command("dedupe", help="Run deduplication on one or more files.")(dedupe_cmd)
 app.command("match", help="Match a target file against reference files.")(match_cmd)
 app.command("sync", help="Sync database table, match new records against existing.")(sync_cmd)

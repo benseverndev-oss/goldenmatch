@@ -98,10 +98,20 @@ def dedupe_cmd(
     llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
     llm_max_labels: int = typer.Option(500, "--llm-max-labels", help="Max pairs to label with LLM"),
     backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    show_controller: bool = typer.Option(
+        True,
+        "--show-controller/--hide-controller",
+        help="Render AutoConfigController telemetry (stop_reason, decisions, Path Y) when auto-config ran. No-op for runs with an explicit --config.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
     """Run deduplication on one or more input files."""
+    # Telemetry captured if/when auto_configure runs in this command. Stays
+    # None on the explicit-config path; the panel is suppressed in that case.
+    _ctrl_profile: object = None
+    _ctrl_history: object = None
+    _ctrl_committed_config: object = None
     # Parse file:source pairs
     parsed_files = [_parse_file_source(f) for f in files]
 
@@ -129,10 +139,15 @@ def dedupe_cmd(
         if not project or "matchkeys" not in (project or {}):
             # Auto-configure from input files
             try:
+                from goldenmatch.cli._controller_render import capture_controller_state
                 from goldenmatch.core.autoconfig import auto_configure
                 if not quiet:
                     console.print("[yellow]No config file - auto-detecting column types...[/yellow]")
                 cfg = auto_configure(parsed_files)
+                # Pull controller telemetry off the ContextVar set by
+                # auto_configure_df. None on legacy paths that bypass it.
+                _ctrl_profile, _ctrl_history = capture_controller_state()
+                _ctrl_committed_config = cfg
                 if not quiet:
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
@@ -253,6 +268,23 @@ def dedupe_cmd(
         if not quiet:
             console.print(f"[red]Runtime error:[/red] {exc}")
         raise typer.Exit(code=3)
+
+    # Show AutoConfigController telemetry before the report. We only render
+    # when the controller actually ran in this command (i.e., auto-config
+    # path) — explicit --config skips this entirely.
+    if (
+        show_controller
+        and not quiet
+        and _ctrl_history is not None
+        and _ctrl_committed_config is not None
+    ):
+        from goldenmatch.cli._controller_render import render_controller_panel
+        err_console.print(render_controller_panel(
+            profile=_ctrl_profile,
+            history=_ctrl_history,
+            committed_config=_ctrl_committed_config,
+            verbose=verbose,
+        ))
 
     # Print report
     if not quiet and results.get("report"):
