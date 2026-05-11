@@ -98,15 +98,16 @@ def score_pair(row_a: dict, row_b: dict, fields: list[MatchkeyField]) -> float:
     weight_sum = 0.0
 
     for f in fields:
-        # score_pair expects fully-populated MatchkeyFields; upstream config
-        # validation guarantees field/scorer/weight are non-None at call time.
-        val_a = apply_transforms(row_a.get(f.field), f.transforms)  # pyright: ignore[reportArgumentType]
-        val_b = apply_transforms(row_b.get(f.field), f.transforms)  # pyright: ignore[reportArgumentType]
-        field_score = score_field(val_a, val_b, f.scorer)  # pyright: ignore[reportArgumentType]
+        # score_pair expects fully-populated MatchkeyFields; the MatchkeyConfig
+        # validator on weighted matchkeys guarantees field/scorer/weight are
+        # non-None at call time. Typed accessors narrow the Optional fields.
+        val_a = apply_transforms(row_a.get(f.resolved_field), f.transforms)
+        val_b = apply_transforms(row_b.get(f.resolved_field), f.transforms)
+        field_score = score_field(val_a, val_b, f.fuzzy_scorer)
 
         if field_score is not None:
-            weighted_sum += field_score * f.weight  # pyright: ignore[reportOperatorIssue]
-            weight_sum += f.weight  # pyright: ignore[reportOperatorIssue]
+            weighted_sum += field_score * f.fuzzy_weight
+            weight_sum += f.fuzzy_weight
 
     if weight_sum == 0.0:
         return 0.0
@@ -788,7 +789,7 @@ def score_blocks_parallel(
             all_pairs.extend(pairs)
             for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
-        _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)  # pyright: ignore[reportArgumentType]  # caller ensures threshold set for fuzzy matchkeys
+        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -845,7 +846,7 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
-    _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)  # pyright: ignore[reportArgumentType]  # caller ensures threshold set for fuzzy matchkeys
+    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
     return all_pairs
 
 
