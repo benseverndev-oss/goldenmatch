@@ -41,6 +41,8 @@ import type { RefitPolicy } from "./autoconfigPolicy.js";
 import { autoConfigureRows } from "./autoconfig.js";
 import { runDedupePipeline } from "./pipeline.js";
 import { IndicatorContext } from "./indicators.js";
+import { promoteNegativeEvidence } from "./autoconfigNegativeEvidence.js";
+import { computeColumnPriors } from "./indicators.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -145,7 +147,18 @@ export class AutoConfigController {
     }
 
     // ---- Iteration loop -------------------------------------------------
-    const configV0 = autoConfigureRows(rows);
+    let configV0 = autoConfigureRows(rows);
+    // v1.11/v1.12: eager NE promotion runs once on the FULL df (not the
+    // sample) before iteration, mirroring Python's
+    // ``auto_configure_df`` pre-iteration pass. Walks both weighted and
+    // exact matchkeys; threshold=None exact MKs get threshold=0.5 when NE
+    // is added so Path Y activates.
+    try {
+      const priorsFull = computeColumnPriors(rows);
+      configV0 = promoteNegativeEvidence(configV0, rows, priorsFull);
+    } catch {
+      // Defensive: if priors fail (e.g. degenerate data), continue with v0.
+    }
     const sample = this._takeSample(rows);
     const history = new RunHistory();
     let configN: GoldenMatchConfig = configV0;
