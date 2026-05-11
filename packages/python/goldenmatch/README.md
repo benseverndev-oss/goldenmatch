@@ -111,8 +111,9 @@ npm install goldenmatch
 - **PPRL auto-configuration** — profiles your data and picks optimal fields, bloom filter parameters, and threshold
 
 ### Integration
-- **REST API + MCP Server** — 30 tools for matching, explaining, reviewing, data quality, and transforms
-- **A2A Agent** — 10 skills for AI-to-AI autonomous entity resolution
+- **REST API + MCP Server** — 31 tools for matching, explaining, reviewing, data quality, transforms, and AutoConfigController telemetry
+- **A2A Agent** — 12 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
+- **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
 - **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
 - **DuckDB backend** — out-of-core processing for 10M+ records without Spark

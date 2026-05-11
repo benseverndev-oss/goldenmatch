@@ -2,6 +2,26 @@
 
 Practical examples for the most-used surface. Authoritative type signatures live in `goldenmatch/_api.py` and `goldenmatch/config/schemas.py`.
 
+## `AgentSession.autoconfigure()` — run controller; return config + telemetry (v1.7-v1.12)
+
+```python
+from goldenmatch import AgentSession
+
+session = AgentSession()
+result = session.autoconfigure("customers.csv")
+# result["config"]:    GoldenMatchConfig as JSON-safe dict
+# result["telemetry"]: stop_reason, health, decisions, NE fields, column_priors
+# session.last_telemetry is set; also persists after deduplicate / match_sources
+
+# Same JSON shape exposed by:
+# - web   GET /api/v1/controller/telemetry
+# - CLI   goldenmatch autoconfig (stderr panel)
+# - REST  POST /autoconfig  +  GET /controller/telemetry
+# - MCP   auto_configure tool result
+# - A2A   autoconfig skill result
+# - SQL   goldenmatch_autoconfig_telemetry() / gm_telemetry()
+```
+
 ## `dedupe_df()` — DataFrame deduplication
 
 ```python
