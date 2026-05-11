@@ -104,12 +104,20 @@ def _execute_run(
             ),
         )
 
+    ctrl_profile: Any = None
+    ctrl_history: Any = None
     if auto_config:
         # Zero-config: call auto_configure_df *before* the pipeline so the
         # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
         # when the Task 5.1 controller loop is in play (Task 5.2 fix).
-        from goldenmatch.core.autoconfig import auto_configure_df
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
         config = auto_configure_df(df)
+        # Capture controller telemetry from the ContextVar — same mechanism
+        # _api.dedupe_df uses to surface PostflightReport.controller_*. The
+        # /api/v1/controller/telemetry endpoint reads this off AppState.
+        _ctrl_state = _LAST_CONTROLLER_RUN.get()
+        if _ctrl_state is not None:
+            ctrl_profile, ctrl_history = _ctrl_state
         result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
     else:
         result = run_dedupe_df(df, config, output_clusters=True)
@@ -167,6 +175,13 @@ def _execute_run(
         "clusters_path": str(clusters_path),
         "auto_config": auto_config,
         "llm_boost": llm_boost,
+        # Internal channels — not part of the public response shape; the
+        # router pops these before returning JSON. Kept here so the worker
+        # thread can hand telemetry back to the request thread without a
+        # second contextvar dance.
+        "_ctrl_profile": ctrl_profile,
+        "_ctrl_history": ctrl_history,
+        "_ctrl_config": config,
     }
 
 
@@ -207,4 +222,20 @@ async def run_real(payload: RunRequest, request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
     except (pl.exceptions.ColumnNotFoundError, KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"run failed: {exc}")
+
+    # Pop the internal controller telemetry channels off the result dict and
+    # stash on AppState so /api/v1/controller/telemetry can serve them. These
+    # are unset for non-auto-config runs (the user supplied rules; the
+    # controller never ran), in which case we leave state untouched so a prior
+    # auto-config session's telemetry stays visible until the next one.
+    _profile = result.pop("_ctrl_profile", None)
+    _history = result.pop("_ctrl_history", None)
+    _cfg = result.pop("_ctrl_config", None)
+    if payload.auto_config:
+        state.last_controller_profile = _profile
+        state.last_controller_history = _history
+        state.last_controller_committed_config = _cfg
+        state.last_controller_source = "run"
+        state.last_controller_run_name = result.get("run_name")
+        state.last_controller_recorded_at = datetime.now(UTC).isoformat()
     return result

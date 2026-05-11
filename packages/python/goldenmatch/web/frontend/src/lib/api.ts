@@ -254,6 +254,106 @@ export type SettingsResponse = WebSettings & {
   _path: string;
 };
 
+/** AutoConfigController telemetry — mirrors web/controller_telemetry.py. */
+export type ControllerScoringSummary = {
+  n_pairs_scored: number;
+  candidates_compared: number;
+  mass_above_threshold: number;
+  mass_in_borderline: number;
+  dip_statistic: number;
+};
+
+export type ControllerBlockingSummary = {
+  n_blocks: number;
+  reduction_ratio: number;
+  block_sizes_p50: number;
+  block_sizes_p99: number;
+  block_sizes_max: number;
+  oversized_block_count: number;
+  keys_used: string[][];
+};
+
+export type ControllerClusterSummary = {
+  n_clusters: number;
+  cluster_size_p50: number;
+  cluster_size_p99: number;
+  cluster_size_max: number;
+  transitivity_rate: number;
+  oversized_cluster_count: number;
+};
+
+export type ControllerIndicators = {
+  full_pop_matchkey_hit_rate: number | null;
+  cross_blocking_overlap: number | null;
+};
+
+export type ControllerColumnPrior = {
+  column: string;
+  identity_score: number;
+  corruption_score: number;
+};
+
+export type ControllerDecision = {
+  iteration: number;
+  rule_name: string;
+  rationale: string;
+  config_diff: Record<string, string>;
+  wall_clock_ms: number;
+};
+
+export type ControllerError = {
+  iteration: number;
+  exception_type: string;
+  traceback_summary: string;
+};
+
+export type ControllerCommittedMatchkey = {
+  name: string;
+  type: string | null;
+  threshold: number | null;
+  fields: { column: string | null; scorer: string | null; weight: number | null }[];
+  has_negative_evidence: boolean;
+};
+
+export type ControllerNegativeEvidence = {
+  matchkey_name: string;
+  matchkey_type: string | null;
+  field: string;
+  scorer: string;
+  threshold: number;
+  penalty: number;
+  transforms: string[];
+};
+
+export type ControllerTelemetry = {
+  available: boolean;
+  source: "autoconfig" | "run" | null;
+  run_name: string | null;
+  recorded_at: string | null;
+  stop_reason:
+    | "green"
+    | "converged"
+    | "budget_iterations"
+    | "budget_time"
+    | "policy_satisfied"
+    | "policy_no_progress"
+    | "oscillating"
+    | "cancelled"
+    | null;
+  elapsed_ms: number | null;
+  full_vs_sample_drift: number | null;
+  health: "green" | "yellow" | "red" | null;
+  scoring: ControllerScoringSummary | null;
+  blocking: ControllerBlockingSummary | null;
+  cluster: ControllerClusterSummary | null;
+  indicators: ControllerIndicators | null;
+  column_priors: ControllerColumnPrior[];
+  decisions: ControllerDecision[];
+  errors: ControllerError[];
+  committed_matchkeys: ControllerCommittedMatchkey[];
+  negative_evidence: ControllerNegativeEvidence[];
+};
+
 const json = async <T>(resp: Response): Promise<T> => {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -386,6 +486,10 @@ export const api = {
     sample_n: number;
     rules?: RulesPayload;
   }): Promise<SensitivityResponse> => post<SensitivityResponse>("/api/v1/sensitivity", body),
+  controllerTelemetry: (): Promise<ControllerTelemetry> =>
+    fetch("/api/v1/controller/telemetry").then((r) =>
+      json<ControllerTelemetry>(r),
+    ),
   putSettings: (body: WebSettings): Promise<SettingsResponse> =>
     fetch("/api/v1/settings", {
       method: "PUT",
