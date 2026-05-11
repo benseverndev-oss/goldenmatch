@@ -13,10 +13,12 @@ import type {
   PairKey,
   ScoredPair,
   BlockResult,
+  WeightedMatchkey,
 } from "./types.js";
 import { makeScoredPair } from "./types.js";
 import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
+import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -752,11 +754,24 @@ export function findFuzzyMatches(
     }
   }
 
+  // v1.11: negative evidence on weighted matchkeys. Apply per-pair penalty
+  // AFTER the positive-score loop, BEFORE the threshold compare, so that
+  // pairs whose adjusted score falls below threshold drop out.
+  const ne =
+    mk.type === "weighted"
+      ? (mk as WeightedMatchkey).negativeEvidence
+      : undefined;
+  const neActive = ne !== undefined && ne.length > 0;
+
   // Extract upper triangle pairs above threshold
   const results: ScoredPair[] = [];
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const score = combined[i]![j]!;
+      let score = combined[i]![j]!;
+      if (neActive) {
+        const penalty = applyNegativeEvidence(mk, rows[i]!, rows[j]!);
+        score = Math.max(0, score - penalty);
+      }
       if (score < threshold) continue;
       const idA = Math.min(rowIds[i]!, rowIds[j]!);
       const idB = Math.max(rowIds[i]!, rowIds[j]!);
