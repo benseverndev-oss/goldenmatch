@@ -83,7 +83,13 @@ class HeuristicRefitPolicy:
         return None
 
     @staticmethod
-    def _call_rule(rule, profile, current, history, ctx):
+    def _call_rule(
+        rule: Any,
+        profile: Any,
+        current: Any,
+        history: Any,
+        ctx: Any,
+    ) -> Any:
         """Call a rule with ctx if its signature accepts it; else 3-arg."""
         import inspect
         params = inspect.signature(rule).parameters
@@ -177,7 +183,9 @@ class LLMRefitPolicy:
 
         # Lazy import to keep openai an optional dep
         try:
-            from openai import OpenAI
+            from openai import (  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+                OpenAI,
+            )
         except ImportError:
             return None
 

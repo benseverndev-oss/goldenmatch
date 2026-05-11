@@ -12,14 +12,12 @@ import traceback
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig_history import RunHistory
-from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
-from goldenmatch.core.autoconfig_policy import RefitPolicy
 from goldenmatch.core.complexity_profile import (
     CollisionSignal,
     ColumnPrior,
@@ -29,6 +27,11 @@ from goldenmatch.core.complexity_profile import (
     SparsityVerdict,
     StopReason,
 )
+
+if TYPE_CHECKING:
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
+from goldenmatch.core.autoconfig_policy import RefitPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,7 @@ class IndicatorContext:
         self._df = df
         self._column_priors = column_priors
         self._sparsity_verdict = sparsity_verdict
-        self._memo: dict[tuple[str, ...], Any] = {}
+        self._memo: dict[tuple[Any, ...], Any] = {}
         self._fired: set[str] = set()
 
     @property
@@ -124,7 +127,13 @@ class IndicatorContext:
         self._fired.add(rule_name)
 
 
-def _call_policy_propose(policy, profile, current, history, ctx):
+def _call_policy_propose(
+    policy: Any,
+    profile: Any,
+    current: Any,
+    history: Any,
+    ctx: Any,
+) -> Any:
     """Call policy.propose with ctx if its signature accepts it; else 3-arg.
     Preserves backward compat for custom policies that pre-date v1.10."""
     import inspect
@@ -144,7 +153,7 @@ def _assemble_v0_history_entry(
     config_v0: GoldenMatchConfig,
     history: RunHistory,
     controller: AutoConfigController,
-) -> HistoryEntry | None:  # noqa: F821  # forward ref, resolved lazily
+) -> HistoryEntry | None:
     """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
 
     Strategy:
@@ -313,7 +322,8 @@ class AutoConfigController:
         for mk in config_v0.get_matchkeys():
             if mk.type == "exact":
                 for f in mk.fields:
-                    exact_columns.append(f.field)
+                    if f.field is not None:
+                        exact_columns.append(f.field)
         sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
         ctx = IndicatorContext(
             df=df,
@@ -746,7 +756,7 @@ class AutoConfigController:
             weighted_sum = 0.0
             weight_sum = 0.0
             for f in (weighted_mk.fields or []):
-                if f.scorer is None:
+                if f.scorer is None or f.field is None:
                     continue
                 # Map composite/compound scorers to a single-pair-friendly fallback.
                 # 'ensemble' is a block-level scorer (not supported by score_field);
@@ -886,7 +896,8 @@ class AutoConfigController:
         return DataProfile(
             n_rows=n_rows,
             n_cols=len(user_cols),
-            column_types=column_types,
+            column_types=column_types,  # pyright: ignore[reportArgumentType]  # runtime values match ColumnType literal set
+
             cardinality_ratio=cardinality_ratio,
             null_rate=null_rate,
             value_length_p50=value_length_p50,

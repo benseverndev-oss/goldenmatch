@@ -24,6 +24,7 @@ dev = [
     "pytest-timeout>=2.3",  # surfaces hung tests in CI as failures w/ stack traces (vs job timeout)
     "pytest-cov>=5.0",  # required by ci.yml's "Coverage floors" step on the goldenmatch matrix entry
     "ruff>=0.6",
+    "pyright>=1.1.380",  # strict typing on goldenmatch core slice (see pyrightconfig.json)
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
