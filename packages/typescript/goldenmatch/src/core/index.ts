@@ -56,6 +56,16 @@ export {
   makeMatchkeyField,
   makeNegativeEvidenceField,
   makeMatchkeyConfig,
+} from "./types.js";
+
+export {
+  applyNegativeEvidence,
+  applyNegativeEvidenceToExactPairs,
+  promoteNegativeEvidence,
+  pickScorerForColumn,
+} from "./autoconfigNegativeEvidence.js";
+
+export {
   makeBlockingConfig,
   makeGoldenRulesConfig,
   makeConfig,
