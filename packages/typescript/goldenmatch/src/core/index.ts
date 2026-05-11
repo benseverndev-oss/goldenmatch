@@ -19,6 +19,7 @@ export type {
   ProbabilisticMatchkey,
   MakeMatchkeyConfigInput,
   MatchkeyField,
+  NegativeEvidenceField,
   BlockingConfig,
   BlockingKeyConfig,
   SortKeyField,
@@ -53,7 +54,18 @@ export {
   VALID_STRATEGIES,
   VALID_STANDARDIZERS,
   makeMatchkeyField,
+  makeNegativeEvidenceField,
   makeMatchkeyConfig,
+} from "./types.js";
+
+export {
+  applyNegativeEvidence,
+  applyNegativeEvidenceToExactPairs,
+  promoteNegativeEvidence,
+  pickScorerForColumn,
+} from "./autoconfigNegativeEvidence.js";
+
+export {
   makeBlockingConfig,
   makeGoldenRulesConfig,
   makeConfig,
