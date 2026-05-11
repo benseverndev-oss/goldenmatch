@@ -73,8 +73,5 @@ semantic = [
     "sentence-transformers>=2.2",
 ]
 
-[tool.ruff]
-line-length = 100
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
