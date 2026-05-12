@@ -382,7 +382,17 @@ def run_audit(
             with _StageTimer("auto_configure", result, process):
                 # The zero-config controller path — same one
                 # `goldenmatch dedupe customers.csv` exercises with no flags.
-                config = auto_configure_df(df)
+                #
+                # _skip_finalize=True matches the production dedupe_df()
+                # path (see goldenmatch/_api.py: dedupe_df calls
+                # auto_configure_df with _skip_finalize=True so the
+                # controller's _finalize step doesn't run a redundant
+                # full-data pipeline that the immediately-following
+                # run_dedupe_df call repeats. Without this flag the audit
+                # double-counts a full pipeline run in the auto_configure
+                # stage, inflating measured wall by ~2× and giving a
+                # numbers that don't match what real users see.
+                config = auto_configure_df(df, _skip_finalize=True)
             _write_snapshot(result, out_path)
 
             with _StageTimer("run_dedupe", result, process):
