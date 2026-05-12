@@ -317,6 +317,91 @@ class _RSSWatchdog:
                     os._exit(1)
 
 
+# ── Backend execution helpers ───────────────────────────────────────────
+
+
+def _run_polars_direct(
+    result: ScaleAuditResult,
+    process: psutil.Process,
+    out_path: Path | None,
+    fixture_path: Path,
+) -> None:
+    """In-Python zero-config dedupe path. Same as `dedupe_df(df)` exercises."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.pipeline import run_dedupe_df
+
+    with _StageTimer("read_csv", result, process):
+        df = pl.read_csv(fixture_path, encoding="utf8-lossy", ignore_errors=True)
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("auto_configure", result, process):
+        # _skip_finalize=True matches the production dedupe_df() path
+        # (see goldenmatch/_api.py). Without this flag the audit double-
+        # counts a full pipeline run in the auto_configure stage.
+        config = auto_configure_df(df, _skip_finalize=True)
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("run_dedupe", result, process):
+        pipeline_result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
+    _write_snapshot(result, out_path)
+
+    clusters = pipeline_result.get("clusters") or {}
+    result.cluster_count = len(clusters)
+
+
+def _run_duckdb_udf(
+    result: ScaleAuditResult,
+    process: psutil.Process,
+    out_path: Path | None,
+    fixture_path: Path,
+) -> None:
+    """Exercise the goldenmatch-duckdb UDF surface.
+
+    Loads the fixture into a DuckDB table, registers the goldenmatch_*
+    UDFs, calls `goldenmatch_dedupe_table('fixture', '{}')` via SQL.
+    Measures the storage-and-call overhead a SQL-first user would pay,
+    on top of the in-Python dedupe cost (the UDF reads the table back
+    via `con.cursor().sql(...).pl()` and calls `dedupe_df` in-process).
+    """
+    import duckdb
+    from goldenmatch_duckdb.functions import register as register_udfs
+
+    with _StageTimer("duckdb_load", result, process):
+        con = duckdb.connect()
+        con.sql(
+            f"CREATE TABLE fixture AS SELECT * FROM read_csv_auto('{fixture_path.as_posix()}')",
+        )
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("register_udfs", result, process):
+        register_udfs(con)
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("dedupe_via_udf", result, process):
+        # Empty config triggers the same zero-config controller path that
+        # _run_polars_direct's auto_configure_df + run_dedupe_df pair
+        # exercises. The UDF returns the golden records as JSON; we count
+        # via duckdb's own row counting on a follow-up to avoid Python
+        # round-trip of the JSON blob.
+        out = con.sql("SELECT goldenmatch_dedupe_table('fixture', '{}')").fetchone()
+        # The UDF response is a JSON string of golden records. Counting via
+        # json.loads is cheap relative to the dedupe work itself.
+        import json as _json
+        golden_records_json = out[0] if out else None
+        if golden_records_json:
+            try:
+                # Polars `write_json()` produces a JSON array of objects.
+                records = _json.loads(golden_records_json)
+                result.cluster_count = len(records) if isinstance(records, list) else 0
+            except Exception:
+                # Some configs return stats instead of records; cluster_count
+                # stays 0 in that branch but the rest of the measurement is
+                # still informative.
+                result.cluster_count = 0
+    _write_snapshot(result, out_path)
+
+
 def run_audit(
     rows: int,
     dupe_rate: float = 0.15,
@@ -325,6 +410,7 @@ def run_audit(
     rss_budget_mb: float | None = None,
     enable_tracemalloc: bool = True,
     cprofile_path: Path | None = None,
+    backend: str = "polars-direct",
 ) -> ScaleAuditResult:
     """Run one audit pass against a synthetic fixture of the given size.
 
@@ -334,6 +420,14 @@ def run_audit(
 
     `rss_budget_mb` (optional): start an RSS watchdog that aborts and
     flushes when the process's RSS exceeds `budget * 0.9`. None disables.
+
+    `backend`: which goldenmatch entry surface to time.
+      - "polars-direct" (default): the Python `dedupe_df(df)` zero-config
+        path, identical to what `goldenmatch dedupe customers.csv` runs.
+      - "duckdb-udf": exercise the `goldenmatch-duckdb` package — load
+        the fixture into a DuckDB table, register the UDFs, and call
+        `goldenmatch_dedupe_table('fixture', '{}')` via SQL. Measures
+        the storage-and-call overhead that SQL-first users would pay.
     """
     fixture_dir = fixture_dir or (Path(__file__).parent.parent / ".profile_tmp" / "scale_fixtures")
     fixture_path = ensure_fixture(rows, dupe_rate, fixture_dir)
@@ -371,36 +465,12 @@ def run_audit(
             enable_tracemalloc=enable_tracemalloc,
             cprofile_path=cprofile_path,
         ):
-            import polars as pl
-            from goldenmatch.core.autoconfig import auto_configure_df
-            from goldenmatch.core.pipeline import run_dedupe_df
-
-            with _StageTimer("read_csv", result, process):
-                df = pl.read_csv(fixture_path, encoding="utf8-lossy", ignore_errors=True)
-            _write_snapshot(result, out_path)
-
-            with _StageTimer("auto_configure", result, process):
-                # The zero-config controller path — same one
-                # `goldenmatch dedupe customers.csv` exercises with no flags.
-                #
-                # _skip_finalize=True matches the production dedupe_df()
-                # path (see goldenmatch/_api.py: dedupe_df calls
-                # auto_configure_df with _skip_finalize=True so the
-                # controller's _finalize step doesn't run a redundant
-                # full-data pipeline that the immediately-following
-                # run_dedupe_df call repeats. Without this flag the audit
-                # double-counts a full pipeline run in the auto_configure
-                # stage, inflating measured wall by ~2× and giving a
-                # numbers that don't match what real users see.
-                config = auto_configure_df(df, _skip_finalize=True)
-            _write_snapshot(result, out_path)
-
-            with _StageTimer("run_dedupe", result, process):
-                pipeline_result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
-            _write_snapshot(result, out_path)
-
-            clusters = pipeline_result.get("clusters") or {}
-            result.cluster_count = len(clusters)
+            if backend == "polars-direct":
+                _run_polars_direct(result, process, out_path, fixture_path)
+            elif backend == "duckdb-udf":
+                _run_duckdb_udf(result, process, out_path, fixture_path)
+            else:
+                raise ValueError(f"unknown backend: {backend!r}")
     except BaseException as exc:
         # Capturing the failure rather than re-raising — partial measurements
         # from earlier stages are still informative (often the OOM hits in a
@@ -514,6 +584,19 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--backend",
+        choices=("polars-direct", "duckdb-udf"),
+        default="polars-direct",
+        help=(
+            "which goldenmatch surface to time. polars-direct (default) "
+            "exercises the Python `dedupe_df(df)` zero-config path. "
+            "duckdb-udf loads the fixture into a DuckDB table, registers "
+            "the goldenmatch-duckdb UDFs, and calls goldenmatch_dedupe_table "
+            "via SQL — measures the storage-and-call overhead a SQL-first "
+            "user pays on top of the in-Python dedupe cost."
+        ),
+    )
+    ap.add_argument(
         "--summarize",
         nargs="+",
         help="aggregate previously-written JSON results into a Markdown summary on stdout",
@@ -559,6 +642,7 @@ def main() -> None:
         rss_budget_mb=args.rss_budget_mb,
         enable_tracemalloc=not args.no_tracemalloc,
         cprofile_path=args.cprofile,
+        backend=args.backend,
     )
     if args.out:
         print(f"wrote {args.out}")
