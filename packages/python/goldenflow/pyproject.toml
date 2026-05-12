@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenflow"
-version = "1.1.5"
+version = "1.1.6"
 description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
 readme = "README.md"
 license = "MIT"
