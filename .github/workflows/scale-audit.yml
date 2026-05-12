@@ -53,6 +53,14 @@ on:
         options:
           - "off"
           - "on"
+      backend:
+        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-udf = goldenmatch_dedupe_table via the goldenmatch-duckdb UDFs."
+        required: true
+        default: "polars-direct"
+        type: choice
+        options:
+          - "polars-direct"
+          - "duckdb-udf"
 
 # Read-only: this workflow generates synthetic data, runs an in-process
 # audit, and uploads artifacts via the actions/upload-artifact API. None
@@ -105,6 +113,16 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages
 
+      - name: Install goldenmatch-duckdb (duckdb-udf backend only)
+        # goldenmatch-duckdb lives at packages/rust/extensions/duckdb and is
+        # NOT a uv workspace member (workspace globs `packages/python/*`).
+        # Install it editable + its transitive deps only when the backend
+        # selection asks for it, so the polars-direct lane stays minimal.
+        if: inputs.backend == 'duckdb-udf'
+        run: |
+          uv pip install -e packages/rust/extensions/duckdb
+          uv pip install duckdb pyarrow
+
       - name: Run scale audit
         id: audit
         run: |
@@ -114,7 +132,7 @@ jobs:
           echo "out_path=$OUT" >> $GITHUB_OUTPUT
           echo "log_path=$LOG" >> $GITHUB_OUTPUT
 
-          ARGS="--rows ${{ inputs.rows }} --dupe-rate ${{ inputs.dupe_rate }} --out $OUT"
+          ARGS="--rows ${{ inputs.rows }} --dupe-rate ${{ inputs.dupe_rate }} --out $OUT --backend ${{ inputs.backend }}"
           if [ "${{ inputs.tracemalloc }}" = "off" ]; then
             ARGS="$ARGS --no-tracemalloc"
           fi
