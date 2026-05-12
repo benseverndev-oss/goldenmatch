@@ -163,8 +163,13 @@ def ensure_fixture(rows: int, dupe_rate: float, fixture_dir: Path) -> Path:
 
 
 @contextmanager
-def _tracking(result: ScaleAuditResult, process: psutil.Process, enable_tracemalloc: bool = True):
-    """Wrap the whole run with optional tracemalloc + a global wall timer.
+def _tracking(
+    result: ScaleAuditResult,
+    process: psutil.Process,
+    enable_tracemalloc: bool = True,
+    cprofile_path: Path | None = None,
+):
+    """Wrap the whole run with optional tracemalloc + cProfile + a wall timer.
 
     tracemalloc retains a traceback per allocation, which on large runs
     becomes a meaningful chunk of process memory itself — defeating the
@@ -172,15 +177,30 @@ def _tracking(result: ScaleAuditResult, process: psutil.Process, enable_tracemal
     for cloud runs where we care about true RSS without the tracker's
     overhead. Stage-level peaks are still captured via psutil RSS sampling
     regardless.
+
+    ``cprofile_path`` (optional): when set, wraps the audit in
+    ``cProfile.Profile`` and dumps stats to that path on exit. cProfile's
+    overhead is ~30% wall — fine for "where does time go?" attribution
+    runs, but turn it off for memory-only / clean-wall measurements.
     """
+    import cProfile  # stdlib; lazy import keeps the no-profile path light.
+
     if enable_tracemalloc:
         tracemalloc.start()
+    profiler: cProfile.Profile | None = None
+    if cprofile_path is not None:
+        profiler = cProfile.Profile()
+        profiler.enable()
     t0 = time.perf_counter()
     rss0 = process.memory_info().rss
     try:
         yield
     finally:
         result.total_wall_seconds = time.perf_counter() - t0
+        if profiler is not None and cprofile_path is not None:
+            profiler.disable()
+            cprofile_path.parent.mkdir(parents=True, exist_ok=True)
+            profiler.dump_stats(str(cprofile_path))
         if enable_tracemalloc:
             _, tm_peak = tracemalloc.get_traced_memory()
             result.peak_tracemalloc_mb = tm_peak / 1024 / 1024
@@ -304,6 +324,7 @@ def run_audit(
     out_path: Path | None = None,
     rss_budget_mb: float | None = None,
     enable_tracemalloc: bool = True,
+    cprofile_path: Path | None = None,
 ) -> ScaleAuditResult:
     """Run one audit pass against a synthetic fixture of the given size.
 
@@ -345,7 +366,11 @@ def run_audit(
         watchdog.start()
 
     try:
-        with _tracking(result, process, enable_tracemalloc=enable_tracemalloc):
+        with _tracking(
+            result, process,
+            enable_tracemalloc=enable_tracemalloc,
+            cprofile_path=cprofile_path,
+        ):
             import polars as pl
             from goldenmatch.core.autoconfig import auto_configure_df
             from goldenmatch.core.pipeline import run_dedupe_df
@@ -468,6 +493,17 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--cprofile",
+        type=Path,
+        help=(
+            "wrap the audit in cProfile and dump stats to this path. "
+            "Adds ~30%% wall overhead — use for `where does time go?` "
+            "attribution runs, not for clean-wall measurements. The .prof "
+            "file can be loaded with `python -m pstats <path>` or visualised "
+            "via snakeviz / gprof2dot."
+        ),
+    )
+    ap.add_argument(
         "--summarize",
         nargs="+",
         help="aggregate previously-written JSON results into a Markdown summary on stdout",
@@ -512,6 +548,7 @@ def main() -> None:
         out_path=args.out,
         rss_budget_mb=args.rss_budget_mb,
         enable_tracemalloc=not args.no_tracemalloc,
+        cprofile_path=args.cprofile,
     )
     if args.out:
         print(f"wrote {args.out}")
