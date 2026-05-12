@@ -1089,7 +1089,27 @@ def build_blocking(
         """Largest group size when blocking on this column."""
         return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
 
-    max_safe_block = 1000  # blocks larger than this cause OOM on ensemble scorers
+    # Auto-config's "is this blocking key safe?" threshold. Aligns with the
+    # pipeline's default `BlockingConfig.max_block_size = 5000` — keys
+    # producing blocks <= this size at autoconfig time will not be filtered
+    # by the pipeline's `skip_oversized` later. Was 1000 historically, a
+    # margin set against float64 ensemble scorers OOM-ing on big block
+    # matrices; PR #173's float32 scoring brings a 5K block matrix down to
+    # ~100 MB which fits comfortably on a 16 GB box.
+    #
+    # The old 1000 ceiling caused issue #199 at 2M+: at 2M, the
+    # (state, name) compound block is ~1.9K rows, "unsafe" under the old
+    # threshold, so autoconfig fell through to a single-column soundex
+    # fallback. Soundex collapses different surnames into one code, then
+    # produces ~50K-sized blocks at 2M, which the pipeline correctly
+    # filters at max_block_size=5000 — but with no candidate pairs left,
+    # downstream dedupe degenerates to ~99% singletons.
+    #
+    # Conservative bump to 5000 picks the right strategy through 2M and
+    # leaves headroom — at 5M the (state, name) compound block reaches
+    # ~5K rows and we'd need either another bump or row-count-aware
+    # scaling. Tracking that as a known ceiling.
+    max_safe_block = 5000
 
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
