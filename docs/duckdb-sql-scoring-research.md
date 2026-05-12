@@ -147,3 +147,54 @@ Three things explain the rough wall parity (and the small RSS win):
 
 - **5M and 10M on duckdb-udf**: does the UDF surface degrade gracefully, or does the `con.cursor().sql(...).pl()` materialization blow up at scale? If yes, that's the natural moment to bypass `dedupe_df` and try SQL-side scoring with spill-to-disk — the per-pair cost regression may be worth the OOM avoidance.
 - **The cluster-count semantic mismatch** (836K vs 145K above) — `goldenmatch_dedupe_table` returns golden records (one per multi-member cluster), `dedupe_df` returns the full clusters dict (multi-member + singletons). Not a bug; just a documentation gap. Worth a one-line note in the UDF's docstring.
+
+---
+
+## 2M scale-ceiling test — autoconfig degenerates, OOM-ceiling question unanswered (2026-05-12)
+
+User's question: does the duckdb-udf surface enable larger row counts than polars-direct, as the existing positioning implies? Hypothesis going in: it does NOT, because the UDF's `con.cursor().sql(...).pl()` materializes the whole DuckDB table into Polars memory — same OOM ceiling as polars-direct.
+
+Cloud measurement (`ubuntu-latest` 4-core 16 GB, tracemalloc off, both backends fired in parallel):
+
+| metric | 1M polars-direct | **2M polars-direct** | **2M duckdb-udf** |
+|---|---:|---:|---:|
+| total wall | 737 s (12.3 min) | **303 s (5.0 min)** | **293 s (4.9 min)** |
+| peak RSS | 8,439 MB | **7,898 MB** | **5,374 MB** |
+| `auto_configure` wall | 58 s | **7.3 s** | (inside `dedupe_via_udf`) |
+| `run_dedupe` / `dedupe_via_udf` wall | 676 s | 293 s | 291 s |
+| clusters output | 836,154 (full dict) | 1,971,064 (full dict) | **2,570 (golden only)** |
+
+### 2M is FASTER than 1M. That can't be honest scaling.
+
+The cluster counts tell the real story:
+
+- **1M polars-direct**: 836,154 clusters from 1M rows. With a 15% dupe rate, ~850K base records are expected after perfect dedupe. 836K is very close to perfect — the controller picked a config that actually merges duplicates.
+- **2M polars-direct**: **1,971,064 clusters from 2M rows.** Expected after perfect dedupe: ~1,700K. **97% of rows are still singletons** — the controller picked a config that barely merges anything.
+- **2M duckdb-udf**: 2,570 golden records (multi-member clusters only) at 2M, vs **145,352 at 1M**. **57× fewer multi-member clusters** at double the row count. Same finding from a different output semantic.
+
+The "fast" 2M wall is "fast" because the pipeline isn't doing the work. `auto_configure` dropped from 58 s at 1M to 7.3 s at 2M — an 8× speedup in the iteration loop strongly suggests the controller is bailing on the first iteration with a no-op or near-no-op config.
+
+### What this means for the OOM-ceiling question
+
+**Unanswered.** Both 2M runs completed because they did nearly no work, not because the pipeline scaled. A fair scaling test needs an *explicit* config that does the same scoring work at 2M as at 1M — bypassing the auto-config controller that's currently producing a degenerate config at this row count.
+
+The original hypothesis (UDF and polars-direct share the same OOM ceiling because both materialise the full table into Polars) is unfalsified. The 2M data doesn't prove or disprove it; it proves something else.
+
+### What this means for goldenmatch
+
+**Possibly the most important finding from the whole DuckDB exploration.** Independent of any DuckDB question, the auto-config controller has a scale-dependent failure mode that produces drastically worse output at 2M than at 1M. The CLAUDE.md note about controller gating ("Auto-config learned blocking: gated at `total_rows >= 50_000` in `autoconfig.py`. Sample size capped at `min(total_rows // 4, 5000)`") doesn't mention any 1M+ gate, but something is clearly changing.
+
+Possible mechanisms (all need verification):
+
+1. The sample size is capped at 5,000 — so at 2M the sample is 0.25% of the data, vs 0.5% at 1M. The learned-blocking predicate evaluator may be tripping a threshold that picks a less-aggressive blocking key at the smaller relative sample.
+2. The controller's `pick_committed()` policy may be selecting a "RED config that runs fast" at 2M because all candidate configs look bad on the sample.
+3. The synthetic fixture's seed produces a different distribution at 2M that fools the auto-config heuristics.
+4. There's an explicit row-count guard somewhere we haven't found.
+
+This belongs as a goldenmatch issue, not a DuckDB doc footnote. **Filed as follow-up.** DuckDB measurement is on hold until this is understood — measuring storage backends on a pipeline that isn't doing the work isn't a useful comparison.
+
+### Next concrete steps (not in this PR)
+
+1. **Reproduce with explicit config**: re-fire 2M polars-direct with an explicit `MatchkeyConfig` that mirrors what the controller committed at 1M. If wall + cluster_count look like proper-scaling extrapolations from 1M, the bug is in the controller's scale-dependent behaviour. If they don't, something else is going on.
+2. **Inspect the committed config**: `auto_configure_df` returns the config; dump it for both 1M and 2M runs and diff. The diff is the bug.
+3. **Decide whether to chase this in the DuckDB workstream or kick it out**: arguably this is a goldenmatch core controller issue and the DuckDB exploration should pause until it's resolved.
