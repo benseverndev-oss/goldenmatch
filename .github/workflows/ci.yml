@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Locked-down by default. Individual jobs escalate as needed.
+# OpenSSF Scorecard / Token-Permissions check requires this top-level scope.
+permissions:
+  contents: read
+
 jobs:
   # Path-filter: compute which areas of the monorepo changed so downstream
   # jobs only run when relevant. Doc-only PRs (README, wiki references,
@@ -27,8 +32,8 @@ jobs:
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
         id: filter
         with:
           # `filters` runs against the diff between the PR head and base
@@ -150,8 +155,8 @@ jobs:
       matrix:
         pkg: ${{ fromJSON(needs.changes.outputs.python_pkgs) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -241,8 +246,8 @@ jobs:
           - { name: embedder,     tests: "tests/test_embedder.py",                   needs: "Vertex AI credentials + torch" }
           - { name: benchmarks,   tests: "tests/test_autoconfig_benchmarks.py",      needs: "DBLP-ACM/Febrl3/NCVR datasets (gitignored)" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -335,8 +340,8 @@ jobs:
       # connection instead of spawning a local `testing.postgresql`.
       GOLDENMATCH_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -364,8 +369,8 @@ jobs:
     if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -412,8 +417,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -474,18 +479,18 @@ jobs:
     if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4
         # Reads version from root package.json `packageManager` field.
         # That field MUST be exact semver (pnpm@9.15.0) — ranges error.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: pnpm
         # cache: pnpm requires (a) pnpm on PATH (handled above) and
         # (b) pnpm-lock.yaml committed at repo root.
       - run: pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .turbo
           key: turbo-${{ github.sha }}
@@ -507,13 +512,13 @@ jobs:
     # turbo can't cover.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: pnpm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -523,7 +528,7 @@ jobs:
       - name: Build + stage frontend into wheel-include path
         run: python packages/python/goldenmatch/scripts/build_web.py
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -533,7 +538,7 @@ jobs:
         run: pnpm -C packages/python/goldenmatch/web/frontend exec playwright test
       - name: Upload Playwright trace on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: playwright-trace
           path: packages/python/goldenmatch/web/frontend/test-results
@@ -547,9 +552,9 @@ jobs:
       run:
         working-directory: packages/rust/extensions
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions
       - run: cargo test --workspace
@@ -560,8 +565,8 @@ jobs:
     if: needs.changes.outputs.dbt == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.11"
           cache: pip
@@ -573,7 +578,7 @@ jobs:
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"
 
   # Postgres extension build + smoke test across PG 15 / 16 / 17. The pgrx
@@ -603,12 +608,12 @@ jobs:
       run:
         working-directory: packages/rust/extensions
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions
 
@@ -709,8 +714,8 @@ jobs:
       run:
         working-directory: packages/rust/extensions/duckdb
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -740,8 +745,8 @@ jobs:
     if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |

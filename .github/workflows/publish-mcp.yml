@@ -100,7 +100,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       # Install mcp-publisher from the latest release tarball. The MCP
       # Registry team ships static binaries; no Go toolchain needed in CI.
