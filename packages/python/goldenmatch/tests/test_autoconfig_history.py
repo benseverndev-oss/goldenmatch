@@ -463,6 +463,39 @@ def test_pick_committed_precision_floor_demotes_collapsed_red():
     assert best.iteration == 1
 
 
+def test_pick_committed_collapsed_regime_prefers_earliest_iteration():
+    """Regression for issue #195: in the precision-collapsed regime (all
+    entries demoted to rank=3 by precision_collapse_floor), the lex
+    tiebreaker should be iteration order, NOT -mass_separation.
+
+    Lower thresholds mechanically narrow the borderline band; tiebreaking
+    on -sep in the collapsed regime mechanically picks the most
+    threshold-lowered iteration even when it doesn't actually separate
+    matches better on the real data. Picking the earliest iteration
+    (v0 = iteration -1) is the safest fallback.
+
+    This test pins all entries above the floor with rising mass_separation;
+    pre-fix, iter=3 would have won (largest sep, smallest -sep). Post-fix,
+    iter=-1 wins (earliest).
+    """
+    from goldenmatch.core.autoconfig_history import RunHistory
+    h = RunHistory()
+    # All collapsed (mass_above > 0.9) — all get rank=3 demotion.
+    # Mass-borderline decreases with iteration so sep increases — pre-fix
+    # this would have made iter=3 win.
+    h.entries.append(_make_red_entry_with_mass(-1, mass_above=1.0, mass_borderline=0.96))
+    h.entries.append(_make_red_entry_with_mass(0,  mass_above=1.0, mass_borderline=0.96))
+    h.entries.append(_make_red_entry_with_mass(1,  mass_above=1.0, mass_borderline=0.95))
+    h.entries.append(_make_red_entry_with_mass(2,  mass_above=1.0, mass_borderline=0.93))
+    h.entries.append(_make_red_entry_with_mass(3,  mass_above=1.0, mass_borderline=0.88))
+    best = h.pick_committed(precision_collapse_floor=0.9)
+    assert best is not None
+    assert best.iteration == -1, (
+        f"collapsed regime should fall back to earliest iteration (v0 = -1); "
+        f"got iteration={best.iteration}"
+    )
+
+
 def test_pick_committed_precision_floor_default_is_off():
     """Default behavior preserves v1.9 lex-key ranking (no demotion)."""
     from goldenmatch.core.autoconfig_history import RunHistory

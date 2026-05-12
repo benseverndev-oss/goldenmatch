@@ -92,6 +92,26 @@ def dump_config(label: str, rows: int) -> None:
         msg = f"  - {d}".encode("ascii", "replace").decode("ascii")
         print(msg)
     print()
+    print("per-entry ranking stats (the pick_committed() input):")
+    print("  iter | health  | mass_above | mass_borderline | sep   | -sep   | (rank, -sep, iter) lex_key")
+    if history:
+        from goldenmatch.core.autoconfig_history import HealthVerdict
+        for e in history.entries:
+            sp = e.profile.scoring
+            verdict = e.profile.health()
+            rank = {HealthVerdict.GREEN: 0, HealthVerdict.YELLOW: 1, HealthVerdict.RED: 2}[verdict]
+            sep = sp.mass_above_threshold - sp.mass_in_borderline
+            if verdict == HealthVerdict.RED and sp.mass_above_threshold > 0.9:
+                rank = 3
+            key_tuple = (rank, -sep, e.iteration)
+            print(
+                f"  {e.iteration:>4} | {verdict.value:7s} | {sp.mass_above_threshold:9.4f} "
+                f"| {sp.mass_in_borderline:14.4f} | {sep:5.3f} | {-sep:6.3f} | {key_tuple}",
+            )
+        committed = history.pick_committed(precision_collapse_floor=0.9)
+        if committed is not None:
+            print(f"  -> committed iteration={committed.iteration}")
+    print()
 
 
 def main() -> int:
