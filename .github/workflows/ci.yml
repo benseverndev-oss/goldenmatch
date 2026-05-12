@@ -749,3 +749,53 @@ jobs:
             **/pyproject.toml
       - run: uv sync --all-packages
       - run: uv run pyright
+
+  # Single required-status-check for branch protection. Branch ruleset
+  # references `ci-required` (stable name) instead of the matrix-instance
+  # check names (`python (goldenmatch)`, `rust_pgrx (15)`, ...) which
+  # change per-row and can't be matched by GitHub's exact-name required
+  # status check rule.
+  #
+  # `if: always()` lets the job fire even when upstream jobs are skipped
+  # by the `changes` path filter — a doc-only PR with all code jobs
+  # skipped should still merge.
+  #
+  # The check inside fails the summary when an upstream conclusion is
+  # `failure` or `cancelled`. `skipped` and `success` both pass. Avoids
+  # the trap where `needs:` default behaviour blocks the summary when
+  # any upstream was skipped.
+  ci-required:
+    needs:
+      - changes
+      - python
+      - python_skipped_lanes
+      - python_postgres
+      - synthetic_benchmarks
+      - benchmark_runner_smoke
+      - typescript
+      - web_ui_e2e
+      - rust
+      - dbt
+      - action
+      - rust_pgrx
+      - duckdb_extensions
+      - pyright
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify no upstream job failed or was cancelled
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$NEEDS_JSON"
+          # Use jq to inspect each upstream's `result`. `success` and
+          # `skipped` both pass; anything else (`failure`, `cancelled`)
+          # fails the summary.
+          BAD=$(echo "$NEEDS_JSON" | jq -r '[.[] | select(.result != "success" and .result != "skipped") | .result] | join(",")')
+          if [ -n "$BAD" ]; then
+            echo "::error::upstream job(s) failed or were cancelled: $BAD"
+            exit 1
+          fi
+          echo "all required upstream jobs passed or were skipped"
