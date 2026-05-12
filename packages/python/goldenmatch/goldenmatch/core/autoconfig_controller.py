@@ -495,6 +495,19 @@ class AutoConfigController:
         best_entry = dataclasses.replace(best_entry, profile=_stamped_profile)
         if best_entry.iteration >= 0 and best_entry.iteration < len(history.entries):
             history.entries[best_entry.iteration] = best_entry
+        elif best_entry.iteration < 0:
+            # v0 virtual entry (iteration=-1) lives at the END of
+            # history.entries (appended above after the iteration loop).
+            # Find it by attribute and replace in-place so downstream
+            # consumers of history.pick_committed() see the column_priors-
+            # stamped profile. Without this, a v0 commit (PR #197 fix for
+            # issue #195) leaves an unstamped profile in history and any
+            # caller that re-runs pick_committed() gets a profile with no
+            # column_priors / no indicators populated.
+            for _i, _e in enumerate(history.entries):
+                if _e.iteration == best_entry.iteration:
+                    history.entries[_i] = best_entry
+                    break
 
         committed_health = best_entry.profile.health()
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
