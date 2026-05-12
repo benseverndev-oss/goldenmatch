@@ -317,3 +317,51 @@ Step 3 of the original 4-step user directive ("attack wall time") is promoted to
 - **cProfile attribution on cloud** (PR #183): adds `--cprofile <path>` flag + `cprofile` workflow_dispatch input. First fire: `rows=100000, cprofile=on, tracemalloc=off` — hot functions don't change with row count, 100K cloud runs in ~3 min, so the attribution loop is fast.
 - Once the .prof shows the actual hot spots inside `auto_configure` (the controller's iterations + sample-run finalize) and `run_dedupe` (score_blocks_parallel + clustering), pick the #1 wall target and open a code PR.
 - Likely candidates worth a measurement before believing them: `find_fuzzy_matches` rapidfuzz cdist setup overhead, `learn_blocking_rules` predicate-combination evaluation, `score_blocks_parallel` ThreadPool dispatch, Polars `value_counts` / `group_by` calls in classification. Resist guessing.
+
+---
+
+## Round 3 correction (2026-05-12)
+
+**The Round 3 1M numbers above were ~2× too high.** Discovered while reading the Round 4 cProfile output. The harness was double-counting a full-data pipeline run; the goldenmatch core was already optimal w.r.t. that lever.
+
+### The bug
+
+`scripts/scale_audit.py` was calling `auto_configure_df(df)` without `_skip_finalize=True`. The controller's `_finalize` step then ran a full goldenmatch pipeline on the entire dataset *inside the auto_configure stage*. The harness then immediately called `run_dedupe_df(df, config=...)` which ran the same full pipeline AGAIN. Two full-data pipelines instead of one.
+
+The production user-facing entry point (`goldenmatch._api.dedupe_df`) was already threading `_skip_finalize=True` specifically to prevent this duplication. The audit harness was the only caller not matching the production pattern. Fix landed in PR #187.
+
+### Corrected 1M measurements (cloud run [25714358083](https://github.com/benzsevern/goldenmatch/actions/runs/25714358083))
+
+`ubuntu-latest` (4-core, 16 GB Linux), tracemalloc off, both PRs #186 + #187 on main.
+
+| stage | **corrected wall** | corrected peak RSS | Round 3 (buggy) wall | Round 3 (buggy) peak RSS |
+|---|---:|---:|---:|---:|
+| `read_csv` | 0.15 s | 437 MB | 0.15 s | 433 MB |
+| `auto_configure` | **61 s** | 1,366 MB | 1,327 s (22 min) | 6,935 MB |
+| `run_dedupe` | **1,237 s** (20.6 min) | 7,518 MB | 1,251 s | 7,648 MB |
+| **total** | **1,300 s (21.7 min)** | **9,846 MB** | 2,579 s (43 min) | 9,977 MB |
+
+836,154 clusters (same as Round 3's 836,155 to within one-row noise). No OOM, no watchdog trip. ~6 GB headroom on the 16 GB cloud box.
+
+### What this changes
+
+1. **The "1M takes 43 min" headline was wrong by 2×.** Real production wall is 21.7 min. The auto_configure stage was almost entirely the redundant _finalize run, not real controller work — the actual controller iteration loop is **61 s** at 1M.
+2. **`auto_configure` is NOT a wall-time optimization target.** It's 5% of total wall (61 s of 1,300 s). The "structural lever" of consolidating controller iterations was a non-target — sample iterations are cheap (5K-row cap regardless of dataset size).
+3. **The only target left is `run_dedupe`** (1,237 s = 95% of wall). That's where any future wall-time work has to go.
+
+### What this confirms
+
+The Round 4 cProfile attribution (100K run) is still valid for direction, but the absolute self-times were inflated by the 2× double-pipeline run. The relative ranking of hot spots holds: `rapidfuzz.cdist` (the actual scoring) > `find_fuzzy_matches` orchestration > `_fuzzy_score_matrix` > `_generalize` (already landed in PR #186) > `_exact_score_matrix`. These all live inside `run_dedupe`, so they're still the right targets.
+
+### Next concrete step
+
+Re-cProfile a 1M run with the corrected harness. Now affordable: 21.7 min wall + 30% cprofile overhead ≈ 28 min. The 100K profile may not predict 1M hot spots accurately — at 1M, blocking-related operations scale super-linearly and may overtake per-block scoring in relative cost. Round 5 attribution will tell us which of `find_fuzzy_matches`, `score_blocks_parallel` threading overhead, or `learn_blocking_rules` predicate evaluation deserves the next code change.
+
+### Lesson
+
+This is the second time the audit's own measurement bug masked the real production behaviour:
+
+- Round 2: tracemalloc on inflated reported peak RSS, masking 1M-fits-in-16GB.
+- Round 3: missing `_skip_finalize=True` doubled reported wall, masking that auto_configure is already cheap.
+
+Both bugs landed in PRs alongside their discoveries (#173 hardened tracemalloc handling, #185 fixed artifact hidden-files, #187 fixed skip_finalize). The harness now matches the production path on both axes (RSS measurement + pipeline-call sequence). Future Rounds should trust the numbers more.
