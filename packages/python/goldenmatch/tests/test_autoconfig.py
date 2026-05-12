@@ -389,20 +389,11 @@ class TestCompoundBlocking:
 
     def test_compound_keys_when_single_columns_oversized(self):
         """When all single columns produce blocks > max_safe_block, build_blocking
-        should generate compound BlockingKeyConfig(fields=[col_a, col_b]).
-
-        Note: max_safe_block was 1000 historically; bumped to 5000 in PR #200
-        (issue #199, the 2M-degenerate fix). Test scaled up correspondingly so
-        single-column blocks still exceed the new threshold while the compound
-        (state, model) combination stays safely under it.
-        """
+        should generate compound BlockingKeyConfig(fields=[col_a, col_b])."""
         random.seed(42)
-        # Sized so single-col blocks > 5000 (forces compound path) but
-        # compound (state, model) blocks stay under (lets the compound win).
-        n = 100_000
-        models = [f"Model{i}" for i in range(10)]    # 10 unique -> ~10K/block (over)
-        states = [f"State{i}" for i in range(4)]     # 4 unique -> ~25K/block (over)
-        # Compound (state, model) = 40 combos -> ~2.5K/combo (safe under 5000).
+        n = 10000
+        models = [f"Model{i}" for i in range(5)]     # 5 unique -> avg 2000/block
+        states = [f"State{i}" for i in range(4)]      # 4 unique -> avg 2500/block
         df = pl.DataFrame({
             "model": [random.choice(models) for _ in range(n)],
             "state": [random.choice(states) for _ in range(n)],
@@ -420,7 +411,7 @@ class TestCompoundBlocking:
         # Should produce multi_pass with compound keys
         assert config.strategy == "multi_pass"
         assert config.skip_oversized is True
-        assert config.max_block_size == 5000
+        assert config.max_block_size == 1000
         # At least one pass should have 2 fields (compound key)
         compound_passes = [p for p in (config.passes or []) if len(p.fields) == 2]
         assert len(compound_passes) >= 1, f"Expected compound passes, got: {config.passes}"
@@ -473,15 +464,10 @@ class TestLLMBlockingKeySuggestion:
     """Tests for LLM-assisted blocking key selection."""
 
     def _make_df_and_profiles(self):
-        # Sized so single-col blocks > 5000 (post-PR-200 max_safe_block bump),
-        # forcing build_blocking to fall through to the LLM/greedy/compound
-        # paths where this class's tests assert behaviour. With smaller n
-        # (10K) the single-col fallback would short-circuit before any LLM
-        # call could happen.
         random.seed(42)
-        n = 100_000
-        models = [f"Model{i}" for i in range(10)]   # 10K/block (over 5000)
-        states = [f"State{i}" for i in range(4)]    # 25K/block (over 5000)
+        n = 10000
+        models = [f"Model{i}" for i in range(5)]
+        states = [f"State{i}" for i in range(4)]
         df = pl.DataFrame({
             "model": [random.choice(models) for _ in range(n)],
             "state": [random.choice(states) for _ in range(n)],
