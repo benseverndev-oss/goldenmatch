@@ -555,7 +555,6 @@ def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockRes
     pairs = blocker.query(embeddings)
 
     # Group nearby records into micro-blocks using Union-Find
-    row_ids = df["__row_id__"].to_list()
     uf = UnionFind()
     for a, b in pairs:
         uf.add(a)
@@ -568,7 +567,13 @@ def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockRes
         if len(members) < 2:
             continue
         member_list = sorted(members)
-        block_df = df.filter(pl.col("__row_id__").is_in([row_ids[m] for m in member_list]))
+        # `members` are positions in `df` (UnionFind operates on the same
+        # indices that drive the embeddings array, which is row-aligned with
+        # df). Direct positional indexing is O(K) vs filter(is_in(...))'s
+        # O(N) per block — at 1M rows with ~50K blocks this was the dominant
+        # wall cost (50% of total via PyLazyFrame.collect; cProfile Round 5).
+        # `row_ids` lookup was redundant indirection.
+        block_df = df[member_list]
         results.append(BlockResult(
             block_key=f"ann_{min(member_list)}",
             df=block_df.lazy(),
@@ -721,12 +726,16 @@ def _build_canopy_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
         max_canopy_size=canopy_cfg.max_canopy_size,
     )
 
-    row_ids = df["__row_id__"].to_list()
     results: list[BlockResult] = []
     for i, members in enumerate(canopies):
         if len(members) < 2:
             continue
-        block_df = df.filter(pl.col("__row_id__").is_in([row_ids[m] for m in members]))
+        # `members` are positions in `df` — `build_canopies` returns
+        # indices into the text_values list which was built by enumerating
+        # df.iter_rows in order. Direct positional indexing is O(K) vs
+        # filter(is_in(...))'s O(N) per canopy — see ann_blocking_strategy
+        # for the cProfile attribution that drove this change.
+        block_df = df[sorted(list(members))]
         results.append(BlockResult(
             block_key=f"canopy_{i}",
             df=block_df.lazy(),
