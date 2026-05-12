@@ -268,3 +268,52 @@ Round 1's 1M row in the summary table (1,811s, 5,038 MB, SystemError) is now obs
 These changes are kept regardless of what the 10M curve looks like — they're cheap diagnostics insurance.
 
 The discipline from PR #120 holds: **measure, don't speculate**. This doc is the measurement step before any code change. Round 1 closes with a real bug surfaced that wasn't on anyone's radar.
+
+---
+
+## Round 3 results — cloud measurement (2026-05-12)
+
+**Setup**: Both Round 2 fix PRs landed (#173 goldenmatch float32 + O(N) blocking, #175 goldenflow `value_counts`). 1M ran end-to-end clean locally on Windows 64 GB — BUT the local run pushed the host into OS-level OOM at peak (per-stage psutil RSS only saw 4.3 GB; the true working set was higher and the Windows file-cache plus tracemalloc traceback storage tipped the box over). To get an honest peak we offloaded to a GitHub-hosted runner (PR #177 / #179: `scale-audit.yml` workflow_dispatch lane). Runner: `ubuntu-latest` (4-core, 16 GB). tracemalloc disabled (`--no-tracemalloc`) so the tracker's own per-allocation traceback overhead wouldn't inflate the peak.
+
+**Result**: 1M completed end-to-end clean. No OOM. No watchdog trip. 836,155 clusters. `failed: null`. `stop_reason: POLICY_SATISFIED` (the controller was happy with the config it committed, not bailing on a time budget).
+
+| stage           | wall (s) | wall (mm:ss) | peak RSS (MB) | RSS Δ (MB) |
+|-----------------|---------:|-------------:|--------------:|-----------:|
+| `read_csv`      |     0.15 |        00:00 |         432.9 |     +324.5 |
+| `auto_configure`|  1,326.9 |        22:07 |       6,934.6 |   +6,598.6 |
+| `run_dedupe`    |  1,250.8 |        20:51 |       7,648.4 |     +737.7 |
+| **total**       |  **2,579.4** | **42:59** | **9,977.0**   | —           |
+
+### Comparison vs Round 2 local (1M, the run that pushed Windows into OOM)
+
+| metric                       | Round 2 local (Win11 64 GB, tracemalloc on) | Round 3 cloud (Linux 16 GB, tracemalloc off) |
+|------------------------------|---:|---:|
+| total wall                   | 3,716 s (62 min) | **2,579 s (43 min, 1.4× faster)** |
+| reported peak RSS (psutil)   | 4,338 MB         | 9,977 MB |
+| OS-level OOM at peak         | yes              | no |
+| ran to completion            | partial — goldenflow PanicException | full |
+| clusters produced            | 0 (died mid-pipeline) | 836,155 |
+
+The 9.98 GB cloud peak is the **honest** number; the 4.3 GB local "peak" was psutil's view from inside a process that was already paging hard. Once you strip tracemalloc's traceback storage and run on Linux (no Windows file cache competing for RAM), 1M dedupe with the default zero-config controller fits comfortably inside a 16 GB box with ~6 GB headroom.
+
+### What this resolves
+
+1. **The `1M records: OOM in-memory` line in `packages/python/goldenmatch/CLAUDE.md` is officially obsolete.** Trimmed in PR #182. 1M is fine on a default 16 GB Linux box.
+2. **Issue #176 (Round 3 memory attribution) is mostly answered.** The missing ~3-5 GB I couldn't account for via per-stage psutil sampling was tracemalloc traceback storage. Turn tracemalloc off and the working set fits the measured stage peaks.
+3. **`auto_configure`'s 2.94× RSS Δ growth at 1M (Round 2 partial) was an artefact** of the partial measurement — the broken run wasn't reaching its actual peak. Clean 1M shows `auto_configure` peak at 6.9 GB and `run_dedupe` peak at 7.6 GB — both in the same order of magnitude, no super-linear blow-up.
+
+### What this re-prioritises
+
+**Wall time is the unambiguous cliff now.**
+
+- 1M takes 43 min on the cloud's 4-core box. Locally that was 62 min on a Windows laptop.
+- Auto_configure (22 min) and run_dedupe (21 min) are roughly equal — both need attention.
+- A naive 10× extrapolation gives 7 hr at 10M. Realistically super-linear (blocking + scoring scale worse than O(N)) pushes that toward 10-15 hr.
+
+Step 3 of the original 4-step user directive ("attack wall time") is promoted to #1 priority. Step 4 (memory reduction) is downgraded to "only matters at 5M+ on small boxes".
+
+### Round 4 scope (separate PR, in progress)
+
+- **cProfile attribution on cloud** (PR #183): adds `--cprofile <path>` flag + `cprofile` workflow_dispatch input. First fire: `rows=100000, cprofile=on, tracemalloc=off` — hot functions don't change with row count, 100K cloud runs in ~3 min, so the attribution loop is fast.
+- Once the .prof shows the actual hot spots inside `auto_configure` (the controller's iterations + sample-run finalize) and `run_dedupe` (score_blocks_parallel + clustering), pick the #1 wall target and open a code PR.
+- Likely candidates worth a measurement before believing them: `find_fuzzy_matches` rapidfuzz cdist setup overhead, `learn_blocking_rules` predicate-combination evaluation, `score_blocks_parallel` ThreadPool dispatch, Polars `value_counts` / `group_by` calls in classification. Resist guessing.
