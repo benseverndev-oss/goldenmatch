@@ -425,3 +425,42 @@ Both are out of scope for #195. **Filed as follow-up issue.**
 The 2M-degenerate behavior was a non-issue when only 1M was being measured. Now that we've pushed past 1M, learned blocking is the new long pole. The DuckDB exploration (parked behind #195) is now parked behind the learned-blocking-determinism follow-up too — measuring storage backends on a pipeline that doesn't dedupe at 2M+ remains meaningless.
 
 The 1M baseline (12.3 min, 8.4 GB, 836K correct clusters) is unchanged and remains the user-facing claim.
+
+---
+
+## Round 7 outcomes — `max_safe_block` row-count-aware fix resolves #199 (2026-05-12)
+
+PR #200 lands the learned-blocking sample-dependence fix from #199. The autoconfig's hardcoded `max_safe_block = 1000` was the culprit — at 2M+ the (state, name) compound block exceeded it, so autoconfig fell through to a single-column soundex fallback that produced 50K-sized blocks the pipeline filtered at `max_block_size=5000`, leaving no candidate pairs.
+
+Replaced with row-count-aware `max(1000, min(10_000, total_rows // 200))`. At 5K-200K the clamp pins to 1000 (preserving existing behaviour and small-data tests). At 1M it's 5000 (matches pipeline default). At 2M it's 10000 (extra headroom).
+
+### Cloud 2M validation ([run 25757948918](https://github.com/benzsevern/goldenmatch/actions/runs/25757948918))
+
+| metric | 2M pre-#200 (degenerate) | **2M post-#200 (working pipeline)** |
+|---|---:|---:|
+| `auto_configure` wall | 7 s | **34 s** |
+| `auto_configure` peak RSS | 1.4 GB | **3.0 GB** |
+| `run_dedupe` | completed (degenerate) | **watchdog-aborted at 13 GB** |
+| committed blocking transforms | `['lowercase', 'soundex']` | **`['lowercase', 'strip']`** ✓ |
+| committed iteration | -1 (v0) | -1 (v0) |
+| clusters | 1,985,184 (99% singletons) | n/a (aborted by watchdog) |
+
+The committed config now matches what 1M produces. `auto_configure` does 5× more work (proper controller iteration) and `run_dedupe` actually starts scoring — RSS climbed to 13 GB before the safety watchdog at 90% of the 14.5 GB budget aborted the run.
+
+### A new ceiling, not a regression
+
+The pre-#200 fast runs were fast because the pipeline wasn't doing the work. Post-#200 the work is being done, and at 2M scale the working set is ~13 GB — predicted by linear scaling from 1M's 8.4 GB peak (~17 GB linear extrapolation; 13 GB is sublinear-friendly).
+
+A 16 GB Linux runner is the wrong size for 2M dedupe with the current memory profile. Three paths:
+
+1. **Optimise memory** (future-work items 1+2): batched cdist, score_cutoff, small-block coalescing. Each shaves ~10-20% wall and proportional RSS; three combined could land 2M comfortably under 12 GB.
+2. **Bigger runner**: a 32 GB instance (org accounts with Team plan only). Personal accounts lack that tier.
+3. **Out-of-core via DuckDB**: the existing `goldenmatch-duckdb` UDF surface materialises the table to Polars before scoring (same ceiling). A real DuckDB integration that pushes scoring INTO SQL would spill to disk gracefully — but `docs/duckdb-sql-scoring-research.md` showed SQL-side scoring is 21× slower per-pair than rapidfuzz cdist. Trade-off: "21× slower per-pair but doesn't OOM" — worth it at 2M+ on small boxes, not at 1M.
+
+### Status of the scale-audit workstream
+
+- **1M on 16 GB Linux**: solid baseline. 12.3 min, 8.4 GB peak, 836K correct clusters. Unchanged user-facing claim.
+- **2M on 16 GB Linux**: memory-bound. Working set needs >13 GB; the watchdog at 14.5 GB trips before completion. Could land with a slightly higher watchdog (15.5 GB) or after memory optimisations.
+- **5M+ on 16 GB Linux**: out of reach without architectural changes.
+
+Issues #195 and #199 are both **closed**. The scale-audit workstream's commit-policy + learned-blocking bugs are resolved; what remains is a memory ceiling at 2M+, which is a separate, smaller workstream.
