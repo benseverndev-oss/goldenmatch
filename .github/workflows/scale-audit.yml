@@ -46,13 +46,19 @@ on:
         required: false
         default: ""
 
+# Read-only: this workflow generates synthetic data, runs an in-process
+# audit, and uploads artifacts via the actions/upload-artifact API. None
+# of those need write access to the repo.
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: "scale_audit rows=${{ inputs.rows }} runner=${{ inputs.runner }}"
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Free disk space on runner
         # The synthetic fixture at 5M is ~500 MB and Polars build assets
@@ -68,12 +74,12 @@ jobs:
           df -h /
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
 
@@ -139,7 +145,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: scale-audit-${{ inputs.rows }}-${{ inputs.runner }}-${{ github.run_id }}
           path: |

@@ -1,0 +1,58 @@
+name: CodeQL
+
+# Static analysis (SAST) for OpenSSF Scorecard. Runs CodeQL across the
+# Python + TypeScript surfaces; Rust is skipped (CodeQL's Rust support
+# is still experimental as of this writing and the workspace already
+# uses cargo audit via the rust_pgrx CI lane).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly fresh sweep on Sunday early-morning UTC.
+    - cron: "23 7 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: "Analyze (${{ matrix.language }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # required for upload-sarif + private repos (no-op on public, kept
+      # so the workflow works identically if the repo ever flips).
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7fd177fa680c9881b53cdab4d346d32574c9f7f4  # v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use the security-extended query suite — the default is too
+          # conservative for what we want from SAST gating.
+          queries: security-extended
+
+      - name: Autobuild
+        # Python + JS are interpreted; autobuild is a no-op but the action
+        # still expects the step in the pipeline. Keeping it explicit so
+        # the same workflow scales if we add a compiled language later.
+        uses: github/codeql-action/autobuild@7fd177fa680c9881b53cdab4d346d32574c9f7f4  # v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@7fd177fa680c9881b53cdab4d346d32574c9f7f4  # v3
+        with:
+          category: "/language:${{ matrix.language }}"
