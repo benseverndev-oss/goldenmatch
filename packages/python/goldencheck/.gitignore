@@ -4,6 +4,14 @@ __pycache__/
 dist/
 build/
 .venv/
+
+# raha benchmark dataset (developer-managed local clone, see docs/benchmarks.md).
+# We deliberately do NOT vendor this — `git clone https://github.com/BigDaMa/raha.git`
+# into the path below to enable the detection benchmark. Tracked here so the
+# clone doesn't get auto-committed as a phantom submodule again (the prior
+# accidental gitlink without a .gitmodules entry was breaking OpenSSF Scorecard
+# checkout on every push).
+benchmarks/datasets/raha_repo/
 .env
 *.csv
 *.parquet
