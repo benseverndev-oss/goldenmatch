@@ -35,11 +35,35 @@ def test_no_correction_for_distinct_values():
 
 
 def test_build_canonical_map_basic():
-    values = ["active"] * 50 + ["Active"] * 3 + ["actve"] * 2 + ["inactive"] * 40
-    corrections = _build_canonical_map(values)
+    # value_counts-style input: (distinct_value, count) pairs.
+    pairs = [("active", 50), ("Active", 3), ("actve", 2), ("inactive", 40)]
+    corrections = _build_canonical_map(pairs)
     assert corrections.get("Active") == "active"
     assert corrections.get("actve") == "active"
     assert "inactive" not in corrections  # high-freq, no correction needed
+
+
+def test_large_series_does_not_materialize_to_list():
+    """Regression for goldenflow #174.
+
+    Earlier versions called ``series.to_list()`` which, at 1M+ rows under
+    memory pressure, could trip a pyo3 PanicException
+    ("PyObject pointer is null"). The rewritten path goes through
+    ``Series.value_counts()`` so work is O(n_unique). This test exercises
+    a 200K-row mixed-casing column shape similar to the synthetic person
+    fixture that surfaced the panic and asserts the transform completes
+    without raising.
+    """
+    import random
+    random.seed(0)
+    base = ["Active", "INACTIVE", "Pending", "Cancelled", "ACTIVE", "active", "inactive"]
+    values = [random.choice(base) for _ in range(200_000)]
+    s = pl.Series("status", values)
+    result = category_auto_correct(s)
+    assert len(result) == 200_000
+    # The transform should converge "ACTIVE" / "active" to one canonical casing.
+    distinct_lower = {v.lower() for v in result.to_list() if v}
+    assert distinct_lower.issubset({"active", "inactive", "pending", "cancelled"})
 
 
 def test_preserves_nulls():
