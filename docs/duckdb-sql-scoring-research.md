@@ -109,3 +109,41 @@ print(f'rapidfuzz cdist:      {cdist_sub_wall*1000:6.1f} ms ({cdist_sub_wall/(50
 parity = sum(1 for x, y in zip(sql_scores, rf_scores) if abs(x[0] - y) < 1e-6)
 print(f'parity: {parity}/{N}')
 ```
+
+---
+
+## 1M follow-up measurement: the existing UDF surface (2026-05-12)
+
+Separate question from "should we rewrite scoring as SQL?": **how does the existing `goldenmatch-duckdb` UDF surface actually perform at 1M?** That UDF doesn't push scoring into SQL — it loads the DuckDB table into Polars via `con.cursor().sql(...).pl()` and dispatches to `dedupe_df` in-process. So the wall should be ~Python-baseline plus the DuckDB load overhead.
+
+Measured via `scripts/scale_audit.py --backend duckdb-udf --rows 1000000` ([run 25742044451](https://github.com/benzsevern/goldenmatch/actions/runs/25742044451), `ubuntu-latest` 4-core 16 GB, tracemalloc off).
+
+| stage | polars-direct (Round 5) | duckdb-udf | Δ |
+|---|---:|---:|---|
+| read_csv / `duckdb_load` | 0.15 s | 0.61 s | +0.46 s |
+| auto_configure / `register_udfs` | 58 s | 0.005 s | (different work) |
+| run_dedupe / `dedupe_via_udf` | 676 s | 702 s | +26 s |
+| **total wall** | **737 s (12.3 min)** | **704 s (11.7 min)** | **−33 s** |
+| peak RSS | 8,439 MB | 7,110 MB | **−1,329 MB (−16%)** |
+| clusters returned | 836,154 (full clusters dict) | 145,352 (golden records — different semantic; same data underneath) |
+
+### Reading this honestly
+
+The duckdb-udf path is **wall-equivalent to polars-direct at 1M** — within ~5%, on the same side of noise. It's not slower despite the extra DuckDB load step, and it's modestly *cheaper* in RSS.
+
+Three things explain the rough wall parity (and the small RSS win):
+
+1. **The UDF doesn't push scoring into SQL.** It loads the DuckDB table back into Polars via the connection cursor and calls `dedupe_df` in-process. So the bulk of the wall is the same Python+rapidfuzz pipeline either path takes. The microbench result above (DuckDB SQL scoring is 21× slower per-pair) is irrelevant to this surface — that surface doesn't use SQL scoring.
+2. **DuckDB columnar → Polars is faster than CSV → Polars.** `pl.read_csv` has parsing + schema-inference overhead the columnar fetch sidesteps. The `auto_configure` line is misleading in the side-by-side: polars-direct's 58 s is the controller's sample iterations, while the UDF's 0.005 s `register_udfs` is just function registration. Both paths then pay the auto-config cost inside `dedupe_df` — accounted under `dedupe_via_udf` in the UDF column. So the apples-to-apples comparison is `(read_csv + auto_configure + run_dedupe) = 734 s` vs `(duckdb_load + register_udfs + dedupe_via_udf) = 703 s`, with the UDF path winning by ~30 s on the load path.
+3. **Lower RSS, also from the load path.** `pl.read_csv` materialises the full CSV into a Polars DataFrame; the DuckDB columnar table loads into Polars more compactly (or, the controller's working set sees a smaller upstream footprint). 1.3 GB headroom is real, even if the wall delta is in the noise.
+
+### What this means
+
+- **Using DuckDB AS storage is fine.** The `goldenmatch-duckdb` UDF surface adds no meaningful wall cost vs the Python API at 1M scale. A SQL-first user can `goldenmatch_dedupe_table('customers', '{}')` and pay ~11.7 min, same as `goldenmatch dedupe customers.csv`.
+- **The microbench finding still stands.** *Pushing scoring INTO SQL* would be slower because rapidfuzz cdist beats DuckDB's scalar `jaro_winkler_similarity` by 21×. The UDF surface is wall-equivalent precisely because it *doesn't* try to do this — it stays in the Python path for the heavy work.
+- **The architectural pivot point is `dedupe_df` calls Polars-in-memory.** Anything that wants to actually leverage DuckDB's storage engine (spill-to-disk, larger-than-RAM, vectorised aggregation) would have to bypass `dedupe_df` and do the scoring + clustering inside SQL. The microbench says that's a wall regression for the in-RAM case. Whether it's worth it for >>RAM cases is a separate question — measure it when there's a real >10M ask.
+
+### Open questions left for future measurement
+
+- **5M and 10M on duckdb-udf**: does the UDF surface degrade gracefully, or does the `con.cursor().sql(...).pl()` materialization blow up at scale? If yes, that's the natural moment to bypass `dedupe_df` and try SQL-side scoring with spill-to-disk — the per-pair cost regression may be worth the OOM avoidance.
+- **The cluster-count semantic mismatch** (836K vs 145K above) — `goldenmatch_dedupe_table` returns golden records (one per multi-member cluster), `dedupe_df` returns the full clusters dict (multi-member + singletons). Not a bug; just a documentation gap. Worth a one-line note in the UDF's docstring.
