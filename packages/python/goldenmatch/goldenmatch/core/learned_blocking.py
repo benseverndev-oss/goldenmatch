@@ -294,18 +294,22 @@ def apply_learned_blocks(
             ["__row_id__"] + list({p.field for p in rule.predicates})
         ).to_dicts()
 
+        # Build (block_key -> positions) instead of (block_key -> __row_id__ values).
+        # Direct positional indexing into `df` is O(K) per block; filter+is_in
+        # was O(N) per block, which dominated wall at 1M (cProfile Round 5).
+        # We enumerate `rows` so positions track df's current ordering.
         blocks: dict[str, list[int]] = {}
-        for row in rows:
+        for pos, row in enumerate(rows):
             key = _compute_block_key(row, rule.predicates)
             if key:
-                blocks.setdefault(key, []).append(row["__row_id__"])
+                blocks.setdefault(key, []).append(pos)
 
-        for block_key, member_ids in blocks.items():
-            if len(member_ids) < 2:
+        for block_key, member_positions in blocks.items():
+            if len(member_positions) < 2:
                 continue
-            if len(member_ids) > max_block_size:
+            if len(member_positions) > max_block_size:
                 continue
-            block_lf = df.filter(pl.col("__row_id__").is_in(member_ids)).lazy()
+            block_lf = df[sorted(member_positions)].lazy()
             all_blocks.append(BlockResult(
                 block_key=f"learned:{rule.key()}:{block_key}",
                 df=block_lf,
