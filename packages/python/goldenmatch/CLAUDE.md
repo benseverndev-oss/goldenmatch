@@ -86,7 +86,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - Blocking key choice dominates fuzzy performance — coarse keys create huge blocks
 - 1M exact dedupe: ~7.8s. 100K fuzzy (name+zip): ~12.8s via pipeline
 - Scale curve: 7,823 rec/s at 100K records on laptop (fuzzy + exact + golden)
-- 1M records: OOM in-memory — use DuckDB backend or chunked processing for >500K records
+- 1M records (scale-audit Round 3, 2026-05-11): ~43 min wall on a GitHub `ubuntu-latest` (4-core, 16 GB) runner, 9.98 GB peak RSS, 836K clusters, no OOM. Roughly split half auto_configure + half run_dedupe. The older "1M OOMs in-memory" note was driven by tracemalloc traceback storage + Windows file-cache pressure, not by goldenmatch's working set. Default (Linux, tracemalloc off) fits comfortably in 16 GB through 1M. Wall is now the cliff, not memory — use DuckDB backend or chunked processing for 5M+ if wall becomes unacceptable, not for memory reasons.
 
 ## Accuracy Strategy
 - Structured data (names, addresses, bibliographic): fuzzy matching alone → 97.2% F1. No embeddings or LLM needed.
