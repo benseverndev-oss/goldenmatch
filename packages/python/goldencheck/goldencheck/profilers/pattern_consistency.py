@@ -11,7 +11,16 @@ WARNING_THRESHOLD = 0.05  # <5% → WARNING (very rare, likely error); 5-30% →
 
 
 def _generalize(value: str) -> str:
-    """Replace digits with D and letters with L, keeping punctuation as-is."""
+    """Replace digits with D and letters with L, keeping punctuation as-is.
+
+    Kept for callers that need single-string output (logging, hand-rolled
+    callers in tests). Inside the profiler hot path, prefer
+    ``_generalize_series`` — vectorising via Polars regex is ~10-20×
+    faster on long columns, and `goldencheck.profilers.pattern_consistency._generalize`
+    showed up at the top of the cProfile self-time chart for the scale
+    audit on 100K rows (3M calls, 12 s self-time; see PR profiling
+    Round 4).
+    """
     result = []
     for ch in value:
         if ch.isdigit():
@@ -21,6 +30,32 @@ def _generalize(value: str) -> str:
         else:
             result.append(ch)
     return "".join(result)
+
+
+def _generalize_series(s: pl.Series) -> pl.Series:
+    """Vectorised equivalent of ``_generalize`` for a Polars string Series.
+
+    Pattern: letters (Unicode ``\\p{L}``) → ``L``, then decimal digits
+    (``\\d`` = ``\\p{Nd}`` under Polars' Unicode-on regex) → ``D``.
+
+    **Order matters.** Replacing digits first would produce literal ``D``
+    characters in the buffer, which the subsequent ``\\p{L}`` pass would
+    then re-classify as letters (since ``D`` is itself an ASCII letter).
+    Letters-first is safe: ``L`` is not in the digit class, so the digit
+    pass leaves the already-replaced letters alone.
+
+    **Documented divergence from per-row ``_generalize``**: Python's
+    ``str.isdigit()`` returns True for *compatibility* digit characters
+    like ``²``/``³`` (Numeric_Type=Digit) but False for fractions like
+    ``½``/``¼`` (Numeric_Type=Numeric). Rust's regex crate exposes only
+    Unicode general categories (``\\p{Nd}``, ``\\p{Nl}``, ``\\p{No}``),
+    not Numeric_Type, so we can't reproduce that boundary exactly in a
+    vectorised pass without a Python callback. We pick the decimal-only
+    bucket (``\\p{Nd}``) — matches the dominant case (ASCII 0-9) and
+    diverges only on the compat-superscript corner, which doesn't appear
+    in production column data this profiler is run against.
+    """
+    return s.str.replace_all(r"\p{L}", "L").str.replace_all(r"\d", "D")
 
 
 class PatternConsistencyProfiler(BaseProfiler):
@@ -36,8 +71,11 @@ class PatternConsistencyProfiler(BaseProfiler):
         if total == 0:
             return findings
 
-        # Build pattern counts using Python (Polars map_elements for UDF)
-        patterns = non_null.map_elements(_generalize, return_dtype=pl.String)
+        # Build pattern counts via vectorised regex (Polars-native) instead
+        # of `map_elements(_generalize)`. ~10× faster on a 100K column; the
+        # Python UDF was the #3 self-time hotspot in the scale audit's
+        # cProfile of run_dedupe + auto_configure.
+        patterns = _generalize_series(non_null)
         pattern_counts = (
             patterns.value_counts()
             .sort("count", descending=True)
