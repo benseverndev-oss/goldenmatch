@@ -54,6 +54,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space on runner
+        # The synthetic fixture at 5M is ~500 MB and Polars build assets
+        # eat a chunk too. dotnet + Android SDK are dead weight for this
+        # job; drop them up front. CRITICAL: do NOT touch /opt/hostedtoolcache
+        # here — actions/setup-python and astral-sh/setup-uv install into
+        # that tree, and wiping it after setup deletes the python interpreter
+        # + uv binary (which is exactly what happened on the first run,
+        # producing "uv: command not found" at the sync step).
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h /
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -63,16 +76,6 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-
-      - name: Free disk space on runner
-        # The synthetic fixture at 5M is ~500 MB and Polars build assets
-        # eat a chunk too. The hosted-toolcache + dotnet bundles are dead
-        # weight for this job; drop them up front so the audit doesn't
-        # run out of disk midway through fixture generation.
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android || true
-          df -h /
 
       - name: Show runner memory + CPU
         # Capture the actual runner shape so future readers of the audit
