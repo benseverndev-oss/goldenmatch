@@ -155,22 +155,32 @@ def ensure_fixture(rows: int, dupe_rate: float, fixture_dir: Path) -> Path:
 
 
 @contextmanager
-def _tracking(result: ScaleAuditResult, process: psutil.Process):
-    """Wrap the whole run with tracemalloc + a global wall timer."""
-    tracemalloc.start()
+def _tracking(result: ScaleAuditResult, process: psutil.Process, enable_tracemalloc: bool = True):
+    """Wrap the whole run with optional tracemalloc + a global wall timer.
+
+    tracemalloc retains a traceback per allocation, which on large runs
+    becomes a meaningful chunk of process memory itself — defeating the
+    "what's the real peak?" question. Pass ``enable_tracemalloc=False``
+    for cloud runs where we care about true RSS without the tracker's
+    overhead. Stage-level peaks are still captured via psutil RSS sampling
+    regardless.
+    """
+    if enable_tracemalloc:
+        tracemalloc.start()
     t0 = time.perf_counter()
     rss0 = process.memory_info().rss
     try:
         yield
     finally:
         result.total_wall_seconds = time.perf_counter() - t0
-        _, tm_peak = tracemalloc.get_traced_memory()
-        result.peak_tracemalloc_mb = tm_peak / 1024 / 1024
+        if enable_tracemalloc:
+            _, tm_peak = tracemalloc.get_traced_memory()
+            result.peak_tracemalloc_mb = tm_peak / 1024 / 1024
+            tracemalloc.stop()
         # Final RSS is approximate peak — RSS doesn't shrink immediately on
         # Linux; close enough for a "did this fit on a 64GB box" question.
         rss_now = process.memory_info().rss
         result.peak_rss_mb = max(rss_now, rss0) / 1024 / 1024
-        tracemalloc.stop()
 
 
 def _write_snapshot(result: ScaleAuditResult, out_path: Path | None) -> None:
@@ -285,6 +295,7 @@ def run_audit(
     fixture_dir: Path | None = None,
     out_path: Path | None = None,
     rss_budget_mb: float | None = None,
+    enable_tracemalloc: bool = True,
 ) -> ScaleAuditResult:
     """Run one audit pass against a synthetic fixture of the given size.
 
@@ -326,7 +337,7 @@ def run_audit(
         watchdog.start()
 
     try:
-        with _tracking(result, process):
+        with _tracking(result, process, enable_tracemalloc=enable_tracemalloc):
             import polars as pl
             from goldenmatch.core.autoconfig import auto_configure_df
             from goldenmatch.core.pipeline import run_dedupe_df
@@ -439,6 +450,16 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--no-tracemalloc",
+        action="store_true",
+        help=(
+            "disable tracemalloc tracking. tracemalloc retains a traceback per "
+            "allocation, which on large runs adds non-trivial memory overhead. "
+            "Recommended for cloud-runner peak-memory measurements where psutil "
+            "RSS is the metric of interest."
+        ),
+    )
+    ap.add_argument(
         "--summarize",
         nargs="+",
         help="aggregate previously-written JSON results into a Markdown summary on stdout",
@@ -482,6 +503,7 @@ def main() -> None:
         dupe_rate=args.dupe_rate,
         out_path=args.out,
         rss_budget_mb=args.rss_budget_mb,
+        enable_tracemalloc=not args.no_tracemalloc,
     )
     if args.out:
         print(f"wrote {args.out}")
