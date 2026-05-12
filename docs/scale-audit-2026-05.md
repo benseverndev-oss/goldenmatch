@@ -368,6 +368,70 @@ Both bugs landed in PRs alongside their discoveries (#173 hardened tracemalloc h
 
 ---
 
+## Round 5 outcomes (2026-05-12)
+
+**Wall reduction landed: 21.7 min → 12.3 min at 1M (−43%).** Memory dropped 1.4 GB as a bonus. Cluster output bit-for-bit identical.
+
+### What changed
+
+PR #189 — `perf(blocker): replace df.filter(is_in([...])) with direct row indexing`. Three hotpaths in `core/blocker.py` (ANN, canopy) and `core/learned_blocking.py` were doing `df.filter(pl.col("__row_id__").is_in([list_of_member_row_ids]))` per block — an O(N×blocks) scan that materialised a fresh LazyFrame each time. Swap to direct positional indexing `df[sorted(member_positions)]` — O(K) per block. 42.9× microbench speedup; 45% reduction in `run_dedupe` wall at 1M.
+
+### Measurement (cloud validation run [25738348722](https://github.com/benzsevern/goldenmatch/actions/runs/25738348722))
+
+`ubuntu-latest` (4-core, 16 GB Linux), tracemalloc off, post-#189.
+
+| stage | wall before (Round 3 corrected) | **wall after PR #189** | Δ |
+|---|---:|---:|---|
+| `read_csv` | 0.15 s | 0.15 s | — |
+| `auto_configure` | 61 s | 58 s | −5% (noise) |
+| **`run_dedupe`** | **1,237 s (20.6 min)** | **676 s (11.3 min)** | **−45%** |
+| **total** | **1,300 s (21.7 min)** | **737 s (12.3 min)** | **−43%** |
+| peak RSS | 9,846 MB | **8,439 MB** | −14% |
+| clusters | 836,154 | 836,154 | identical ✓ |
+
+Hypothesis predicted ~12 min total; measured 12.3 min — within 3%. The microbench-extrapolated 212 s savings was an underestimate (the actual delta is 561 s, ~2.6× more) because the cProfile cumtime measures included downstream work that also gets cheaper when LazyFrame materialization disappears (e.g. the subsequent block scoring no longer pays per-block setup against a 1M-row materialised frame).
+
+### What this means in absolute terms
+
+For a goldenmatch user calling `dedupe_df(df)` on 1M records on a 4-core, 16 GB Linux box (the typical free-tier CI / cheap-VPS shape):
+
+- **Before scale-audit workstream**: 1M was documented as "OOM in-memory — use DuckDB backend" (CLAUDE.md, six months old).
+- **End of Round 5**: 1M completes in **12.3 minutes** with 8.4 GB peak RSS and produces correct clusters. No special configuration. No DuckDB backend.
+
+The CLAUDE.md note was already trimmed in PR #182; this Round 5 result confirms the trim was directional — 1M is now genuinely *cheap*, not just "fits in memory".
+
+### What the workstream uncovered (recap, in chronological order)
+
+| PR | what it fixed | source of discovery |
+|---|---|---|
+| #172 | scale-audit harness measurement + Round 1 doc | initial measurement |
+| #173 | goldenmatch float32 scoring + O(N) learned-blocking pair count | Round 1 → 1M crash with SystemError |
+| #175 | goldenflow `category_auto_correct` → `value_counts` (pyo3 panic at scale) | Round 2 → 1M crash with PanicException |
+| #177 | scale-audit GitHub Actions workflow | Round 2 → needed cloud runner |
+| #182 | trim stale "1M OOM" line from CLAUDE.md | Round 3 → measurement showed 1M fits |
+| #183 | `--cprofile` flag + workflow input | Round 3 → wall is the cliff, need attribution |
+| #185 | upload-artifact `include-hidden-files: true` | Round 4 → all prior artifacts had silently been empty |
+| #186 | goldencheck `pattern_consistency._generalize` vectorise | Round 4 → cProfile #3 hot spot |
+| #187 | scale-audit `_skip_finalize=True` (harness was double-counting) | Round 4 → reading the cProfile output |
+| #188 | doc correction — Round 3's 43 min headline was 2× the real number | Round 4 → halved the wall ceiling |
+| **#189** | **`df.filter(is_in([...]))` → `df[positions]` in 3 blocker hotpaths** | **Round 5 → cProfile at 1M revealed completely different hot spots than at 100K** |
+
+11 PRs landed across six rounds of measurement. **Each round invalidated one of the prior round's "obvious" conclusions.** Two of those invalidations were harness bugs masquerading as goldenmatch performance properties. One was a 100K profile failing to predict 1M behaviour by an order of magnitude. The remaining were genuine optimizations.
+
+### What's next (as of Round 5)
+
+The workstream hits a natural pause point. 1M at 12.3 min on a 16 GB single-box is good enough that the next user-facing question is **what does the curve look like beyond 1M?** Concrete next experiments:
+
+1. **2M and 5M scale-audits** (separate workflow_dispatch fires; same `ubuntu-latest`). Does the curve stay sublinear past 1M? Or does some O(N²) corner not yet exercised at 1M start to dominate? Cheap to find out — ~15–30 min each.
+2. **A 1M Round 6 cProfile** with the new code path. The 1M Round 5 profile showed `DataFrame.filter` at 52% of wall; that's gone now. Whatever's #1 on the new profile is the next concrete optimization candidate. Avoid speculating — measure.
+3. **Issue #176 (Round 3 memory attribution)** can now be closed. The "missing 3-5 GB" was tracemalloc + the LazyFrame materialization storm fixed by PR #189. Both addressed.
+
+These three are independent — can run in any order or in parallel. None are urgent: the current 1M wall is in a good place, and further optimization should be data-driven, not pre-emptive.
+
+*(Rounds 6 and 7 below executed against the 2M+ extrapolation suggested here.)*
+
+---
+
 ## Round 6 outcomes — v0-floor fix lands the commit-policy half (2026-05-12)
 
 PR #197 fixed the commit-policy bug (issue #195): `pick_committed()`'s lex tiebreaker in the precision-collapsed regime was mechanically biased toward iterations that lowered threshold most. Post-fix, the controller correctly commits v0 in the collapsed regime instead of an over-corrected later iteration.
