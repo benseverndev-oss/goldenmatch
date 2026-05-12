@@ -164,6 +164,10 @@ jobs:
             .profile_tmp/scale_*.json
             .profile_tmp/scale_*.log
             .profile_tmp/scale_*.prof
+          # `.profile_tmp/` starts with a dot; without this flag, upload-artifact
+          # v4 silently skips everything under it as "hidden". Every prior
+          # scale-audit run uploaded an empty artifact because of this default.
+          include-hidden-files: true
           if-no-files-found: warn
 
       - name: Capture host memory pressure on exit
