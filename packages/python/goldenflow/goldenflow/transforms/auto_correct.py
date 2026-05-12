@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable
+from collections.abc import Iterable
 
 import polars as pl
 from rapidfuzz import fuzz
