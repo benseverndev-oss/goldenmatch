@@ -45,6 +45,14 @@ on:
         description: "abort + flush if RSS exceeds this (MB). leave blank to disable."
         required: false
         default: ""
+      cprofile:
+        description: "wrap the audit in cProfile. .prof file uploads as an artifact. ~30% wall overhead — use for time-attribution runs."
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - "on"
 
 # Read-only: this workflow generates synthetic data, runs an in-process
 # audit, and uploads artifacts via the actions/upload-artifact API. None
@@ -113,6 +121,10 @@ jobs:
           if [ -n "${{ inputs.rss_budget_mb }}" ]; then
             ARGS="$ARGS --rss-budget-mb ${{ inputs.rss_budget_mb }}"
           fi
+          if [ "${{ inputs.cprofile }}" = "on" ]; then
+            PROF=".profile_tmp/scale_${{ inputs.rows }}_${{ inputs.runner }}.prof"
+            ARGS="$ARGS --cprofile $PROF"
+          fi
 
           echo "running: scripts/scale_audit.py $ARGS"
           # tee so the live log streams to the workflow output AND lands
@@ -151,6 +163,7 @@ jobs:
           path: |
             .profile_tmp/scale_*.json
             .profile_tmp/scale_*.log
+            .profile_tmp/scale_*.prof
           if-no-files-found: warn
 
       - name: Capture host memory pressure on exit
