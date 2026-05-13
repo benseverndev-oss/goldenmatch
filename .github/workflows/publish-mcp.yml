@@ -70,6 +70,7 @@ jobs:
             elif [[ "$TAG" == goldenmatch-js-v* ]];     then : noop
             elif [[ "$TAG" == goldenmatch-duckdb-v* ]]; then : noop  # not on registry
             elif [[ "$TAG" == goldenmatch-pg-v* ]];     then : noop  # not on registry
+            elif [[ "$TAG" == goldensuite-mcp-v* ]];    then : noop  # aggregator -- transitively exposes sub-package tools
             elif [[ "$TAG" == v* ]];                    then PKGS+=(goldenmatch)
             fi
           else
