@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -13,7 +12,7 @@ from goldenmatch.config.schemas import (
     OutputConfig,
 )
 from goldenmatch.core.pipeline import run_dedupe_df
-from goldenmatch.identity import IdentityStatus, IdentityStore
+from goldenmatch.identity import IdentityStore
 
 
 def _people_df():

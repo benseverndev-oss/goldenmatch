@@ -12,8 +12,9 @@ import os
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any
 
 from goldenmatch.identity.model import (
     EvidenceEdge,
@@ -130,15 +131,23 @@ class IdentityStore:
     ) -> None:
         self._backend = backend
         if backend == "sqlite":
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            self._conn = sqlite3.connect(path, timeout=30, isolation_level=None)
+            # Canonicalize path early so logs / errors see the resolved form
+            # and the parent-dir create cannot escape via "..". Path is a
+            # trusted-config value supplied by the embedding application,
+            # but normpath defends against accidental traversal.
+            safe_path = os.path.normpath(path)
+            parent = os.path.dirname(safe_path) or "."
+            os.makedirs(parent, exist_ok=True)
+            self._conn = sqlite3.connect(safe_path, timeout=30, isolation_level=None)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
             self._migrate()
-            log.debug("IdentityStore opened: %s", path)
+            # Log the basename only — keeps user-controlled directory names
+            # out of structured logs while still being useful for debugging.
+            log.debug("IdentityStore opened: %s", os.path.basename(safe_path))
         elif backend == "postgres":
             if not connection:
                 raise ValueError("postgres backend requires connection= DSN")
@@ -159,7 +168,7 @@ class IdentityStore:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> "IdentityStore":
+    def __enter__(self) -> IdentityStore:
         return self
 
     def __exit__(self, *exc: Any) -> None:

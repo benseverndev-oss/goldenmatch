@@ -1,10 +1,7 @@
 """IdentityStore unit tests."""
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
-
 from goldenmatch.identity import (
     EdgeKind,
     EventKind,
