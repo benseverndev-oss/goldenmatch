@@ -25,14 +25,12 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from goldenmatch.identity import (
     IdentityNode,
     IdentityStore,
     SourceRecord,
     find_by_record,
     find_conflicts,
-    get_entity,
     history,
     list_entities,
     new_entity_id,
@@ -266,7 +264,9 @@ class TestHistoryContract:
         a2a = dispatch_skill("identity_history",
                              {"entity_id": ids["eid1"], "path": db_path})["items"]
 
-        import duckdb, json as _json
+        import json as _json
+
+        import duckdb
         from goldenmatch_duckdb.functions import register
         con = duckdb.connect(); register(con)
         duck = _json.loads(con.sql(
@@ -302,7 +302,9 @@ class TestConflictsContract:
         a2a = dispatch_skill("identity_conflicts",
                              {"dataset": "contract", "path": db_path})["items"]
 
-        import duckdb, json as _json
+        import json as _json
+
+        import duckdb
         from goldenmatch_duckdb.functions import register
         con = duckdb.connect(); register(con)
         duck = _json.loads(con.sql(
@@ -332,7 +334,9 @@ class TestListContract:
         a2a = dispatch_skill("identity_list",
                              {"dataset": "contract", "path": db_path})["items"]
 
-        import duckdb, json as _json
+        import json as _json
+
+        import duckdb
         from goldenmatch_duckdb.functions import register
         con = duckdb.connect(); register(con)
         duck = _json.loads(con.sql(
@@ -368,7 +372,9 @@ def test_missing_record_consistent(client_for, seeded_store):
                          {"record_id": "totally-missing", "path": db_path})
     assert a2a == {"found": False}
 
-    import duckdb, json as _json
+    import json as _json
+
+    import duckdb
     from goldenmatch_duckdb.functions import register
     con = duckdb.connect(); register(con)
     duck = _json.loads(con.sql(

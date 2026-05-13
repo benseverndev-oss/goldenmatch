@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.identity import (
     EdgeKind,
     IdentityNode,
@@ -159,8 +158,13 @@ def test_pipeline_e2e_emits_conflicts(tmp_path):
     """End-to-end via run_dedupe_df: low-threshold matchkey produces a weak
     cluster, the resolver flags it, the summary reports it."""
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, GoldenMatchConfig,
-        IdentityConfig, MatchkeyConfig, MatchkeyField, OutputConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        IdentityConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        OutputConfig,
     )
     from goldenmatch.core.pipeline import run_dedupe_df
 
