@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- NAICS industry-code normalization (strategy direction #8, seventh slice)
+
+Extends the `reference-business` pack with US Census 2022 NAICS industry classification. Canonicalizes both numeric codes ("511210", "511 210", "511210 (Software Publishing)") AND known industry titles ("Software Publishers" → "513210") to the same string before matching, so two records describing the same business industry land on the same value.
+
+- **Bundled NAICS 2022 hierarchy** at `goldenmatch/refdata/data/naics_2022.json` -- 2,125 entries across all five hierarchy levels (17 sectors, 96 subsectors, 308 industry groups, 692 5-digit industries, 1,012 6-digit US industries). Sourced from the U.S. Census Bureau's "2-6 digit 2022 Codes" file (https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx). Public-domain US federal data, no license restrictions. The "31-33" range-encoded sector for Manufacturing is expanded across each constituent 2-digit code.
+- **Lookup API**: `title_for_code(code)`, `code_for_title(title)`, `naics_normalize(value)`, `industries_available()`, `known_codes()`, `known_titles()`. Title lookup is case- and punctuation-tolerant; code lookup tolerates separators and trailing text.
+- **`naics_normalize` transform** auto-registered via `PluginRegistry` on `import goldenmatch.refdata`. Three input shapes:
+  - Numeric input: scans EVERY 2+-digit run in the string; for each, walks back through prefixes looking for the longest known code. Returns the first run that resolves. If no run resolves, returns the 6-digit-truncated form of the first run (so two records sharing an unknown code still match). Multi-run scanning lets inputs like `"NAICS 2022 code 511210"` skip the vintage-year prefix and pick up the real code (review-driven; was a first-run short-circuit before).
+  - Known industry titles → the canonical code at the narrowest matching hierarchy level.
+  - Anything else → lowercase + whitespace-collapse pass-through.
+  Never raises. Falls back to lowercase+strip if the bundled data is missing.
+- **Autoconfig hook extended**: column-name patterns `naics`, `sic`, `industry`, `industry_code`, `industry_classification`, `business_type` → `naics_normalize` is prepended to the transforms list (mirrors the existing legal_form_strip / address_normalize handling). `_COMPANY_NAME_RE` was tightened to exclude `business[_ ]?type` so that classification column doesn't accidentally also pick up `legal_form_strip` (review-driven).
+- **Thread-safety**: `_reload()` now relies on `_load()`'s lock + new-dict-assignment for atomic state swap, instead of wiping dicts before re-parse — readers see either the old dict or the new dict, never an empty in-between state (review-driven).
+- **Tests**: `tests/test_refdata_industries.py` (~40 tests) -- title↔code round-trips, case/punctuation tolerance, separator-tolerant code parsing, overlong-code truncation, longest-known-prefix fallback (covers the review-flagged uncovered branch), title-precedence narrowest-wins (regression for the iteration-order rule), multi-digit-run scanning, `business_type` non-overlap with `_COMPANY_NAME_RE`, transform plugin registration, transform-chain composition, `FieldTransform` validator acceptance, `MatchkeyField` accepts in `transforms:`, autoconfig column-name variants including `business[_ ]?type` regex branches.
+- **In-session validation blocked** by the same Polars DLL hang documented in PRs #220 and #221 (`goldenmatch/__init__.py` eagerly imports polars-heavy modules, which poisons every `goldenmatch.*` import including refdata submodules; openpyxl-only extraction of the source xlsx worked fine). The transform is a pure synchronous regex+dict function with no hot loops; rerun `pytest tests/test_refdata_industries.py -v` on a fresh Python boot to materialize the test result.
+- **What's still deferred**: OpenCorporates company-name variants (the last documented `reference-business` extension), libpostal binding for `reference-address-postal`, per-scorer threshold tuning in `LearningMemory`, and the controller-level A/B rule that would A/B-test refdata refinements in the iteration loop instead of applying them unconditionally.
+
 ### Added -- Auto-config integration for refdata packs (strategy direction #8, sixth slice)
 
 Wires all four refdata packs into the zero-config controller. Auto-config no longer needs an explicit YAML to pick up surname-IDF weighting, given-name aliasing, legal-form stripping, or USPS address normalization — it picks them automatically when column names signal the relevant shape.

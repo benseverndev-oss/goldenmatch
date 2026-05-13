@@ -14,12 +14,19 @@ The **reference-people** pack ships two lookups and two scorers:
   known-alias pairs to 1.0 regardless of edit distance). Built for
   ``first_name`` fields.
 
-The **reference-business** pack ships one transform:
+The **reference-business** pack ships two transforms:
 
 - **Legal-form normalization** — strips trailing corporate suffixes
   (Inc, LLC, GmbH, Pty Ltd, …) so "Acme Inc." and "Acme Incorporated"
   collapse to "Acme" before scoring. Use the ``legal_form_strip``
   transform name in a matchkey's ``transforms:`` list.
+- **NAICS industry-code normalization** — canonicalizes numeric NAICS
+  codes (with optional separators or trailing text) AND maps known
+  industry titles back to their canonical 6-digit code, so "511210",
+  "511 210", "511210 (Software publishing)" and "Software Publishers"
+  all reduce to "513210" (the 2022 6-digit US code). Use
+  ``naics_normalize`` in a matchkey's ``transforms:`` list, typically
+  on a column named ``naics`` / ``industry_code`` / ``sic``.
 
 The **reference-address** pack ships one transform:
 
@@ -67,6 +74,9 @@ from goldenmatch.refdata.given_names import (
     canonical_form,
 )
 from goldenmatch.refdata.given_names import is_available as given_names_available
+from goldenmatch.refdata.industries import code_for_title, naics_normalize, title_for_code
+from goldenmatch.refdata.industries import is_available as industries_available
+from goldenmatch.refdata.industries import register_transforms as _register_industry_transforms
 from goldenmatch.refdata.scorer import register_scorers
 from goldenmatch.refdata.surnames import (
     is_available,
@@ -80,6 +90,7 @@ from goldenmatch.refdata.surnames import (
 register_scorers()
 _register_business_transforms()
 _register_address_transforms()
+_register_industry_transforms()
 
 __all__ = [
     "address_tokens",
@@ -88,13 +99,17 @@ __all__ = [
     "are_equivalent",
     "business_available",
     "canonical_form",
+    "code_for_title",
     "given_names_available",
+    "industries_available",
     "is_available",
     "legal_form_variants",
+    "naics_normalize",
     "normalize_address",
     "strip_legal_form",
     "surname_count",
     "surname_frequency",
     "surname_idf",
     "surname_rank",
+    "title_for_code",
 ]

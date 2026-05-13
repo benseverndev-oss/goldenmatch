@@ -23,10 +23,12 @@ Refinement rules (all gated on the relevant pack's ``is_available()``):
    transform list (before any existing transforms like lowercase/strip).
 4. Column matches ``address|street|addr|line.?1`` AND address data is
    available → ``address_normalize`` is prepended to the transform list.
+5. Column matches ``naics|sic|industry|business.?type`` AND industries
+   data is available → ``naics_normalize`` is prepended.
 
 A column that matches *both* (1) and (3) (e.g. "company_last_name", odd
 but possible) takes the scorer swap from (1) and the transform from (3).
-Refinements 3 and 4 prepend rather than replace, so the original
+Refinements 3-5 prepend rather than replace, so the original
 ``lowercase``/``strip`` chain still runs after the refdata transform
 collapses the trailing tokens — preserves backwards compat for
 downstream blocking-key derivation.
@@ -50,13 +52,22 @@ _FIRST_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPANY_NAME_RE = re.compile(
-    r"(company|business|org\b|organization|firm\b|employer|"
+    # ``business`` excludes the ``business[_ ]?type`` suffix so it doesn't
+    # claim ``business_type`` (an industry-classification column owned by
+    # ``_INDUSTRY_RE``). Without that exclusion, business_type ends up with
+    # both legal_form_strip and naics_normalize prepended.
+    r"(company|business(?!.?type)|org\b|organization|firm\b|employer|"
     r"corp.?name|company.?name|legal.?name|entity.?name)",
     re.IGNORECASE,
 )
 _ADDRESS_RE = re.compile(
     r"(address|street|^addr$|addr.?line|line.?1|line.?2|"
     r"street.?address|mailing.?addr)",
+    re.IGNORECASE,
+)
+_INDUSTRY_RE = re.compile(
+    r"(^naics$|^sic$|naics.?code|sic.?code|industry.?code|"
+    r"industry.?class|industry$|^industry_|business.?type)",
     re.IGNORECASE,
 )
 
@@ -88,6 +99,14 @@ def _business_available() -> bool:
 def _addresses_available() -> bool:
     try:
         from goldenmatch.refdata.addresses import is_available
+        return is_available()
+    except Exception:
+        return False
+
+
+def _industries_available() -> bool:
+    try:
+        from goldenmatch.refdata.industries import is_available
         return is_available()
     except Exception:
         return False
@@ -131,5 +150,9 @@ def refine_matchkey_field(
     if _ADDRESS_RE.search(column_name) and _addresses_available():
         if "address_normalize" not in refined_transforms:
             refined_transforms.insert(0, "address_normalize")
+
+    if _INDUSTRY_RE.search(column_name) and _industries_available():
+        if "naics_normalize" not in refined_transforms:
+            refined_transforms.insert(0, "naics_normalize")
 
     return refined_scorer, refined_transforms
