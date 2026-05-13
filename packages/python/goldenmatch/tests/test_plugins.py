@@ -7,10 +7,22 @@ from goldenmatch.plugins.registry import PluginRegistry
 
 @pytest.fixture(autouse=True)
 def reset_registry():
-    """Reset plugin registry before each test."""
-    PluginRegistry.reset()
-    yield
-    PluginRegistry.reset()
+    """Save and restore the registry around each test.
+
+    Gives each test a fresh singleton but restores the prior state at
+    teardown — refdata plugin registrations (which conftest re-registers
+    autouse) survive a test_plugins.py run instead of being wiped for
+    every subsequent xdist worker test.
+    """
+    saved_instance = PluginRegistry._instance
+    saved_discovered = PluginRegistry._discovered
+    PluginRegistry._instance = None
+    PluginRegistry._discovered = False
+    try:
+        yield
+    finally:
+        PluginRegistry._instance = saved_instance
+        PluginRegistry._discovered = saved_discovered
 
 
 class TestPluginRegistry:
@@ -122,3 +134,95 @@ class TestPluginDiscovery:
         r.discover()
         plugins_2 = r.list_plugins()
         assert plugins_1 == plugins_2
+
+
+class TestProtocolEnforcement:
+    """The registry rejects manual registrations that don't satisfy the
+    ScorerPlugin / TransformPlugin Protocols at bind time, so duck-typed
+    implementations missing a method fail at registration instead of
+    deep inside a scoring loop."""
+
+    def test_register_scorer_rejects_missing_score_pair(self):
+        class BadScorer:
+            name = "bad"
+
+        r = PluginRegistry.instance()
+        with pytest.raises(TypeError, match="ScorerPlugin"):
+            r.register_scorer("bad", BadScorer())
+
+    def test_register_scorer_rejects_missing_name(self):
+        class BadScorer:
+            def score_pair(self, a, b):
+                return 0.0
+
+        r = PluginRegistry.instance()
+        with pytest.raises(TypeError, match="ScorerPlugin"):
+            r.register_scorer("bad", BadScorer())
+
+    def test_register_scorer_accepts_protocol_conformer(self):
+        class GoodScorer:
+            name = "good"
+
+            def score_pair(self, a, b):
+                return 1.0 if a == b else 0.0
+
+        r = PluginRegistry.instance()
+        r.register_scorer("good", GoodScorer())  # should not raise
+        assert r.has_scorer("good")
+
+    def test_register_transform_rejects_missing_transform(self):
+        class BadTransform:
+            name = "bad"
+
+        r = PluginRegistry.instance()
+        with pytest.raises(TypeError, match="TransformPlugin"):
+            r.register_transform("bad", BadTransform())
+
+    def test_register_transform_accepts_protocol_conformer(self):
+        class GoodTransform:
+            name = "good"
+
+            def transform(self, value):
+                return value.upper() if value else value
+
+        r = PluginRegistry.instance()
+        r.register_transform("good", GoodTransform())
+        assert r.has_transform("good")
+
+    def test_refdata_scorers_satisfy_protocol(self):
+        """Built-in refdata scorers must satisfy the Protocol — sanity
+        check that the cross-pack inheritance declarations didn't break.
+
+        The reset_registry fixture above gives us a fresh singleton, so we
+        re-register the refdata plugins explicitly inside the test rather
+        than relying on the import side-effect (which fires only once per
+        worker and is wiped by the fixture)."""
+        from goldenmatch.plugins.base import ScorerPlugin
+        from goldenmatch.refdata.scorer import register_scorers
+
+        register_scorers()
+        r = PluginRegistry.instance()
+        for name in ("name_freq_weighted_jw", "given_name_aliased_jw"):
+            plugin = r.get_scorer(name)
+            assert plugin is not None
+            assert isinstance(plugin, ScorerPlugin), (
+                f"{name} should be a ScorerPlugin"
+            )
+
+    def test_refdata_transforms_satisfy_protocol(self):
+        """Built-in refdata transforms must satisfy the Protocol."""
+        from goldenmatch.plugins.base import TransformPlugin
+        from goldenmatch.refdata.addresses import register_transforms as register_a
+        from goldenmatch.refdata.business import register_transforms as register_b
+        from goldenmatch.refdata.industries import register_transforms as register_i
+
+        register_b()
+        register_a()
+        register_i()
+        r = PluginRegistry.instance()
+        for name in ("legal_form_strip", "address_normalize", "naics_normalize"):
+            plugin = r.get_transform(name)
+            assert plugin is not None
+            assert isinstance(plugin, TransformPlugin), (
+                f"{name} should be a TransformPlugin"
+            )

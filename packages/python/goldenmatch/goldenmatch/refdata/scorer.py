@@ -45,7 +45,10 @@ _BORDERLINE_HIGH = 0.95
 _COMMON_NAME_FLOOR = 0.6
 
 
-class NameFreqWeightedJW:
+from goldenmatch.plugins.base import ScorerPlugin  # noqa: E402
+
+
+class NameFreqWeightedJW(ScorerPlugin):
     """Frequency-weighted Jaro–Winkler scorer.
 
     Algorithm::
@@ -116,7 +119,7 @@ class NameFreqWeightedJW:
         return np.where(apply_mask, jw * weight, jw).astype(np.float32)
 
 
-class GivenNameAliasedJW:
+class GivenNameAliasedJW(ScorerPlugin):
     """Jaro–Winkler with alias-aware exact bonus.
 
     Algorithm::
