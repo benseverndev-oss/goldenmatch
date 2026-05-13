@@ -21,11 +21,11 @@ See issue #206 for the design discussion.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
-from infermap.types import FieldMapping, MapResult
+from infermap.types import MapResult
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,6 @@ from goldenmatch.identity import (  # noqa: E402
     SourceRecord,
     new_entity_id,
 )
-
 from infermap.identity import write_aliases_from_mapping  # noqa: E402
 from infermap.types import FieldMapping, MapResult, ScorerResult  # noqa: E402
 
