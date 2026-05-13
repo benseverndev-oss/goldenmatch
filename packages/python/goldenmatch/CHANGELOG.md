@@ -20,6 +20,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **NCVR A/B benchmark** at `tests/benchmarks/run_ncvr_refdata.py`. 7500-record corrupted-duplicates GT, last_name scorer swapped: F1 0.9721 (baseline, zero-config) -> 0.9721 (refdata). No regression. Lift is zero on this dataset because NCVR's heavy-corruption distribution puts few pairs in the borderline JW zone where the weighting acts -- needs an enterprise-shape benchmark per direction #5 to demonstrate positive lift.
 - **What's deferred** (future work): auto-config integration (the controller doesn't yet pick `name_freq_weighted_jw` automatically); `reference-business` and `reference-address` packs; threshold tuning per-scorer in `LearningMemory`.
 
+### Added -- Given-name alias pack (strategy direction #8, second slice)
+
+Second slice of the `reference-people` pack. Adds nickname-equivalence to first-name matching: William ↔ Bill, Robert ↔ Bob, Margaret ↔ Peggy, etc.
+
+- **Curated alias table** at `goldenmatch/refdata/data/given_name_aliases.json` (~140 canonical English given names, public-knowledge naming conventions; no license restrictions).
+- **Lookup API**: `canonical_form`, `aliases_of`, `are_equivalent`, `given_names_available`. Case-insensitive; strips non-alpha. Symmetric and transitive within an equivalence class. OOV pass-through.
+- **`given_name_aliased_jw` scorer** registered via the plugin system on `import goldenmatch.refdata`. Alias-equivalent pairs return 1.0 regardless of edit distance; unrelated pairs return plain Jaro-Winkler. The scorer never *lowers* a JW score -- it only promotes known aliases. Degrades cleanly when the alias table is missing.
+- **Tests**: `tests/test_refdata_given_names.py` (23 tests) -- lookup symmetry, transitive equivalence, multi-canonical name handling (e.g. "Jack" canonical AND alias-to-John), case/punct insensitivity, OOV pass-through, scorer correctness, plugin registration, validator acceptance.
+- **Synthetic nickname benchmark** at `tests/benchmarks/run_nickname_synth.py`. 1000-record fixture with 200 nickname-shape duplicate pairs + 600 distractors with isolated random first/last names. Plain JW baseline catches **0/200** pairs at threshold 0.95 (JW(William, Bill) ~= 0.55, far below threshold); `given_name_aliased_jw` catches **200/200**, P=1.0, R=1.0, **F1 0.00 -> 1.00**.
+- **Asymmetry-on-ambiguous-short-form bugfix**: short forms that belong to multiple canonicals (e.g. "kate" appears in Catherine, Kathleen, Kaitlyn; "chris" in Christopher, Christine, Christina) were silently asymmetric — `are_equivalent("Kate", "Catherine")` returned False while `("Catherine", "Kate")` returned True, because the old lookup stored a single canonical per form (last-writer-wins). The matcher's NxN score matrix only consults the upper triangle, so the False direction was the one being read and every ambiguous-short-form pair was being dropped. Each form now stores the full set of canonicals it belongs to; equivalence holds iff the two forms share a canonical. Regression test in `test_are_equivalent_symmetric_for_ambiguous_short_forms`.
+- **What's still deferred**: same list as the first slice (auto-config integration, business / address packs, per-scorer threshold tuning).
+
 ## [1.15.0] - 2026-05-12
 
 ### Added -- Identity Graph (v2.0 headline feature)
