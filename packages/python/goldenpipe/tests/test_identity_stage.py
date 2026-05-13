@@ -14,7 +14,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldenpipe.adapters.identity import (
     HAS_IDENTITY,
     IdentityResolveStage,
