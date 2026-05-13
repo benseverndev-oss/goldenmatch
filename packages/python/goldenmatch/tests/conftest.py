@@ -30,6 +30,37 @@ def _disable_autoconfig_memory(monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _ensure_refdata_plugins_registered():
+    """Re-register refdata plugins before every test.
+
+    Per the xdist gotcha in CLAUDE.md: workers don't share state, and
+    ``test_plugins.py``'s ``reset_registry`` fixture wipes the singleton
+    within a worker. The ``import goldenmatch.refdata`` side-effect
+    registration only fires once per worker process, so refdata tests
+    scheduled after a plugin-test reset would see an empty registry.
+
+    Each ``register_*`` function is idempotent. Skips silently if a
+    refdata submodule isn't importable (slim installs).
+    """
+    try:
+        import goldenmatch.refdata  # noqa: F401  triggers registration
+        from goldenmatch.refdata.scorer import register_scorers
+        register_scorers()
+    except ImportError:
+        return
+    for module_path in (
+        "goldenmatch.refdata.business",
+        "goldenmatch.refdata.addresses",
+        "goldenmatch.refdata.industries",
+    ):
+        try:
+            mod = __import__(module_path, fromlist=["register_transforms"])
+            mod.register_transforms()
+        except (ImportError, AttributeError):
+            continue
+
+
 @pytest.fixture
 def tmp_dir(tmp_path):
     return tmp_path
