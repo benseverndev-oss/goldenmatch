@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- Reference-address pack: USPS-style address normalization (strategy direction #8, fourth slice)
+
+Fourth refdata slice. Opens the `reference-address` pack with the `address_normalize` transform: collapses USPS Publication 28 street-suffix, directional, and secondary-unit variants to their canonical short forms so "123 Main Street North Apartment 5" and "123 Main St N Apt 5" both reduce to "123 main st n apt 5" before scoring.
+
+- **Bundled USPS abbreviation table** at `goldenmatch/refdata/data/address_abbreviations.json` — ~500 surface variants covering street suffixes (150+ canonical forms), 8 directionals, 9 secondary-unit designators. Sourced from USPS Publication 28 Appendix C; public-domain US federal data, no license restrictions.
+- **`address_normalize` transform** auto-registered via `PluginRegistry` on `import goldenmatch.refdata`. Tokenizes on whitespace + commas, lowercases each token, strips punctuation, then maps any recognised variant to its USPS canonical short form. Unknown tokens pass through unchanged. Idempotent.
+- **Position-agnostic by design**: every USPS-known token is normalized, not just trailing ones. Trade-off: words that are both name parts and suffix variants ("Lake", "Court", "Park") collapse along with true suffixes. Match invariance is preserved as long as both sides reduce equally — pinned by `test_aggressive_normalization_preserves_match_invariance`. For display purposes use a different normalization; this transform is matching-only.
+- **Tests**: `tests/test_refdata_addresses.py` (48 tests) — per-suffix parametrized across 17 variants, directionals across 8, secondary units across 7, multi-token compound case, punctuation stripping, idempotency, unknown-token pass-through, position-agnostic invariance, plugin transform dispatch, transform-chain composition, validator acceptance.
+- **Synthetic address benchmark** at `tests/benchmarks/run_address_synth.py`. 1000-record fixture, 200 same-street pairs differing in suffix abbreviation (some also in directional/unit) + 600 distractors, threshold 0.95:
+
+  | | TP | FP | FN | P | R | F1 |
+  | - | - | - | - | - | - | - |
+  | baseline (no transform) | 116 | 0 | 84 | 1.0000 | 0.5800 | **0.7342** |
+  | baseline (lowercase only) | 114 | 0 | 86 | 1.0000 | 0.5700 | **0.7261** |
+  | refdata (`address_normalize`) | 200 | 0 | 0 | 1.0000 | 1.0000 | **1.0000** |
+
+  F1 delta +0.2658. Recall +0.4200. Plain JW catches the small suffix deltas (Ave/Avenue, St/Street) but misses larger ones (Boulevard/Blvd, Northeast/NE, Apartment/Apt). The transform catches everything.
+
+- **What's still deferred**: libpostal binding (heavy C deps + ~2 GB model; opt-in extra rather than bundled), street-name canonicalization (USPS CASS proper), ZIP+4 lookups, international postal-code formats.
+
 ### Added -- Reference-business pack: legal-form normalization (strategy direction #8, third slice)
 
 Third refdata slice. Opens the `reference-business` pack with the `legal_form_strip` transform: strips trailing corporate suffixes ("Inc", "LLC", "GmbH", "Pty Ltd", …) so "Acme Inc." and "Acme Incorporated" collapse to "Acme" before scoring.
