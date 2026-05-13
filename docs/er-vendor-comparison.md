@@ -30,10 +30,10 @@ Before comparing, the column we're comparing *against*. Numbers are as of `golde
 | **Languages** | Python (headline) + TypeScript (parity) + Rust (Postgres/DuckDB extension) |
 | **Runtimes** | Polars (≤500K), DuckDB (500K–50M), Ray (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS (Vercel Edge / Cloudflare Workers / Deno) |
 | **Throughput** | 1M dedupe in 12.3 min on 4-core / 16 GB Linux (Round 5, 2026-05-12); 100K fuzzy ~39 s; 7,823 rec/s pipeline at 100K |
-| **Accuracy, PII (Febrl)** | F1 0.971 (zero-config 0.944 on Febrl3) |
-| **Accuracy, bibliographic (DBLP-ACM)** | F1 0.972 (zero-config 0.964; hand-tuned ceiling 0.918) |
-| **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini |
-| **Accuracy, voter records (NCVR)** | F1 0.972 zero-config |
+| **Accuracy, PII (Febrl)** | F1 0.971 (zero-config 0.944 on Febrl3) [^bench] |
+| **Accuracy, bibliographic (DBLP-ACM)** | F1 0.964 zero-config (hand-tuned ceiling 0.918) [^bench] |
+| **Accuracy, product (Abt-Buy)** | F1 0.722 +$0.04 LLM; 0.817 with Vertex AI + GPT-4o-mini [^bench] |
+| **Accuracy, voter records (NCVR)** | F1 0.972 zero-config [^bench] |
 | **Zero-config** | Introspective auto-config controller (v1.8+) with cross-run memory and LLM fallback. **Only OSS engine with a published zero-config benchmark suite.** |
 | **PPRL** | Bloom-filter PPRL with auto-configuration; F1 0.924 on FEBRL4 |
 | **Active learning** | `core/active_sampling.py` + boost tab; Learning Memory persistence; threshold learner triggers at 10+ corrections |
@@ -54,10 +54,10 @@ Legend: **GM** = GoldenMatch is materially ahead. **V** = vendor is materially a
 
 |  | Splink | dedupe | RecLink Toolkit | Zingg | JedAI | Magellan | fuzzymatcher | Senzing CE | Senzing Ent | Quantexa | Tilores | LexisNexis | AWS ER | GCP Ent. Recon. | Snowflake | Databricks ARC | Tamr | Reltio | Informatica | Ataccama | Stibo | Profisee | Ditto |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **OSS license** | GM | GM | GM | GM | GM | GM | GM | GM | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
+| **OSS license** | GM | GM | GM | GM* | GM | GM | GM | GM† | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
 | **Zero-config** | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM |
 | **Polyglot (≥2 lang)** | V | GM | GM | GM | V | GM | GM | V | V | V | V | V | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM | GM |
-| **PII F1 (Febrl)** | V | GM | GM | | | | GM | | | | | | | | | | | | | | | | V |
+| **PII F1 (Febrl)** | V | | | | | | | | | | | | | | | | | | | | | | V |
 | **Bib F1 (DBLP-ACM)** | GM | GM | | GM | | GM | GM | | | | | | | | | | | | | | | | V |
 | **Product F1 (Abt-Buy)** | GM | GM | GM | GM | GM | GM | GM | GM | | | | | | | | | | | | | | | V |
 | **Throughput ≥10M single node** | V | GM | GM | V | GM | GM | GM | V | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
@@ -72,11 +72,12 @@ Legend: **GM** = GoldenMatch is materially ahead. **V** = vendor is materially a
 | **Free for production use** | GM | GM | GM | GM* | GM | GM | GM | GM | V | V | V | V | V | V | V | V | V | V | V | V | V | V | GM |
 
 *\* Zingg core is AGPL — viral copyleft, restrictive for commercial embedding. ZinggAI is closed.*
+*† Senzing CE is Apache 2.0 wrappers around a closed core engine. OSS surface, closed brain — treat the GM tag as "OSS-license surface" not "fully OSS engine".*
 
 Three observations from the matrix:
 
 1. **Nobody else publishes zero-config benchmark numbers.** Every "GM" in that row reflects that this is currently uncontested ground.
-2. **Throughput at ≥10M on a single node is the universal "V" against us.** Almost every paid vendor and several OSS engines (Splink/DuckDB, Zingg/Spark, Senzing) win here. PR #189 just halved our 1M wall; closing this column is direction #1 of the strategy review.
+2. **Throughput at ≥10M on a single node is the universal "V" against us.** Almost every paid vendor and several OSS engines (Splink/DuckDB, Zingg/Spark, Senzing) win here. The 2026-05-12 Round 5 audit halved the 1M wall to 12.3 min; closing this column is direction #1 of the strategy review.
 3. **MCP/A2A surface is unique to us.** This is the AI-native wedge — nobody else has it because nobody else built an engine for AI agents to drive end-to-end.
 
 ---
@@ -107,7 +108,7 @@ Three observations from the matrix:
 - DuckDB-native by default; we treat it as a backend option.
 
 **Where GoldenMatch beats Splink:**
-- Non-PII (DBLP-ACM 0.972 vs Splink 0.728). Splink's F-S model assumes the comparison-level distributions hold; on bibliographic data they don't.
+- Non-PII (DBLP-ACM zero-config 0.964 vs Splink 0.728 [^splink]). Splink's F-S model assumes the comparison-level distributions hold; on bibliographic data they don't.
 - Zero-config: Splink requires a comparison specification per field; we ship a controller.
 - Polyglot: Python-only vs our Py + TS + Rust + SQL.
 - AI-native: no MCP, no A2A.
@@ -669,3 +670,15 @@ Splink (MIT) and dedupe (BSD) have outgrown Zingg (AGPL) and Senzing (closed cor
 - **Engine roadmap (in this repo):** the cross-cutting observations are the strategic input to the directions in `docs/superpowers/specs/2026-05-08-competitive-strategy-review.md`. Patterns 3 (zero-config), 4 (identity graph), and 5 (AI-native) are the three moats; patterns 1 (reference data) and 2 (warehouse-native) are the gaps.
 - **Customer conversations:** if a customer says "we're evaluating GoldenMatch vs X", look up X and lead with the "where they beat us" section. Honesty up front; lead with where you lose, then explain why the engine still wins overall.
 - **PR review:** when a new feature changes a capability cell in the matrix at the top, update the matrix in the same PR. This doc should stay accurate, not aspirational.
+
+---
+
+## Footnotes
+
+[^bench]: GoldenMatch numbers come from `docs/reproducing-benchmarks.md` (per-dataset runner + expected output) and the entries in `packages/python/goldenmatch/CHANGELOG.md` for v1.8 through v1.15. Verified-stamp dates accompany each row in the reproducing-benchmarks doc.
+
+[^splink]: Splink F1 numbers (0.998 Febrl, 0.728 DBLP-ACM) come from this repo's `D:\show_case\golden-showcase\comparison_bench\` head-to-head runner — see `packages/python/goldenmatch/CLAUDE.md` reference to that directory. Numbers reflect the Splink 4.x release line; rerun if comparing against a newer Splink.
+
+[^reclink]: RecordLinkage Toolkit F1 0.923 on DBLP-ACM from the head-to-head runner above (RecLink ~0.18.x). Author publishes example notebooks at https://recordlinkage.readthedocs.io/ with DBLP-ACM in the standard examples corpus.
+
+[^ditto]: Ditto F1 numbers (Abt-Buy 0.893, Amazon-Google 0.92+ with 1000+ labels) come from Megagon Labs's published papers; Ditto is research code so reproduction requires fine-tuning a transformer on the published splits.
