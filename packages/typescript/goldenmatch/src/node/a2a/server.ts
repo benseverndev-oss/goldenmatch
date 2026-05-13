@@ -349,10 +349,26 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
+/** See `src/node/api/server.ts::sanitiseForWire` for rationale. */
+function sanitiseForWire(data: unknown): unknown {
+  if (data instanceof Error) {
+    return { error: data.message };
+  }
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k === "stack" || k === "errno" || k === "syscall") continue;
+      out[k] = v;
+    }
+    return out;
+  }
+  return data;
+}
+
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(data));
+  res.end(JSON.stringify(sanitiseForWire(data)));
 }
 
 // ---------------------------------------------------------------------------

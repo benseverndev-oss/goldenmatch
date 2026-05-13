@@ -10,14 +10,20 @@ logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".csv", ".parquet", ".xlsx", ".xls"}
 
 def read_file(path: Path) -> pl.DataFrame:
-    path = Path(path)
+    # Normalise the path early so symlink-and-`..` traversal can't smuggle
+    # access to unexpected locations through downstream Polars / openpyxl
+    # readers. `path` is a trusted-config / CLI value, but the normalisation
+    # is cheap insurance against accidental traversal in API callers.
+    path = Path(path).resolve()
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported file format: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
     if not path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+        raise FileNotFoundError(f"File not found: {path.name}")
 
-    logger.info("Reading %s (%s)", path, ext)
+    # Log basename only — full paths can carry control characters /
+    # newlines that pollute structured logs (CodeQL py/log-injection).
+    logger.info("Reading %s (%s)", path.name, ext)
 
     if path.stat().st_size == 0:
         raise ValueError("File has no data rows. Nothing to profile.")
