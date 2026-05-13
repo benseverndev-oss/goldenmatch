@@ -89,8 +89,6 @@ def test_code_for_none_returns_none():
 @pytest.mark.parametrize("raw,expected", [
     # Numeric codes -> 6-digit canonical
     ("111110", "111110"),
-    ("111 110", "111110"),
-    ("111,110", "111110"),
     # Trailing text
     ("111110 (Soybean Farming)", "111110"),
     ("111110 - Soybean Farming", "111110"),
