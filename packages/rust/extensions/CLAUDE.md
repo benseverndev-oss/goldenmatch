@@ -64,6 +64,34 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 - System Python for Postgres: `sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py` then `sudo pip install --break-system-packages goldenmatch`
 - Release workflow: builds .tar.gz + .deb + .rpm for PG 15/16/17, pushes Docker to ghcr.io + Docker Hub
 
+## Identity Graph (v2.0, 2026-05-13)
+
+DuckDB UDFs + Postgres pg_extern functions implementing the contract at
+`docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md`
+(monorepo root). Five read-only functions per backend:
+
+| Function | Args |
+|---|---|
+| `goldenmatch_identity_resolve` | `(record_id TEXT, db_path TEXT)` |
+| `goldenmatch_identity_view`    | `(entity_id TEXT, db_path TEXT)` |
+| `goldenmatch_identity_history` | `(entity_id TEXT, db_path TEXT)` |
+| `goldenmatch_identity_conflicts` | `(dataset TEXT, db_path TEXT)` |
+| `goldenmatch_identity_list`    | `(dataset TEXT, status TEXT, db_path TEXT)` |
+
+- **Deviation from contract**: takes explicit `db_path` per call rather than
+  reading a session-level `SET goldenmatch_identity_path` setting. DuckDB
+  Python UDFs cannot easily read session settings; pgrx + pyo3 settings
+  round-trips add complexity for no real benefit. Explicit-arg also reads
+  better at the SQL call site.
+- **Read-only**: writes must go through the Python `goldenmatch identity
+  merge/split` CLI, REST `/api/v1/identities/{id}/{merge,split}`, or MCP
+  `identity_merge` / `identity_split` tools in the main goldenmatch package.
+- **Python dep**: requires `goldenmatch>=1.15.0` (ships `goldenmatch.identity.*`).
+- **Tests**: `duckdb/tests/test_identity.py` -- 9 cases against a
+  tmp_path-seeded SQLite identity DB. Postgres-side is CI-only.
+- **Version bumps**: `goldenmatch-duckdb` 0.2.0 -> 0.3.0; pgrx
+  `goldenmatch_pg` 0.3.0 -> 0.4.0.
+
 ## Gotchas
 - pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.1.0.sql` manually
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts

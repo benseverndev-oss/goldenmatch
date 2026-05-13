@@ -620,6 +620,159 @@ pub fn dedupe_clusters(
     })
 }
 
+// ── Identity Graph (v2.0) ────────────────────────────────────────────────
+//
+// Thin wrappers over ``goldenmatch.identity.query.*`` so the Postgres and
+// DuckDB extensions can serve the same JSON shape the Python/REST/MCP/A2A
+// surfaces serve. Every function takes the path to the identity SQLite/PG
+// store as an explicit argument; session-level settings are awkward to
+// thread through pgrx + pyo3, and explicit args make the SQL contract
+// obvious at the call site.
+
+/// Resolve a `{source}:{source_pk}` style ``record_id`` to its identity
+/// view JSON. Returns ``{"found": false}`` when no identity owns the record.
+pub fn identity_resolve(record_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let find_by_record = identity.getattr("find_by_record")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let view = find_by_record.call1((store.clone(), record_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        if view.is_none() {
+            return Ok("{\"found\": false}".to_string());
+        }
+        let dict = view.call_method0("to_dict")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (dict,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// Return the full identity view JSON keyed by ``entity_id``.
+pub fn identity_view(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let get_entity = identity.getattr("get_entity")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let view = get_entity.call1((store.clone(), entity_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        if view.is_none() {
+            return Ok("{\"found\": false}".to_string());
+        }
+        let dict = view.call_method0("to_dict")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (dict,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// Return the temporal event log for an identity as a JSON array.
+pub fn identity_history(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let history_fn = identity.getattr("history")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let events = history_fn.call1((store.clone(), entity_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (events,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// List `conflicts_with` evidence edges as a JSON array. Empty ``dataset``
+/// means "all datasets".
+pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let find_conflicts = identity.getattr("find_conflicts")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let conflicts_kwargs = PyDict::new(py);
+        if dataset.is_empty() {
+            conflicts_kwargs.set_item("dataset", py.None())?;
+        } else {
+            conflicts_kwargs.set_item("dataset", dataset)?;
+        }
+        let edges =
+            find_conflicts.call((store.clone(),), Some(&conflicts_kwargs))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (edges,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// List identities filtered by dataset/status as a JSON array.
+/// Empty strings = no filter on that dimension.
+pub fn identity_list(
+    dataset: &str,
+    status: &str,
+    db_path: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let list_entities = identity.getattr("list_entities")?;
+        let open_kwargs = PyDict::new(py);
+        open_kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&open_kwargs))?;
+        let list_kwargs = PyDict::new(py);
+        if dataset.is_empty() {
+            list_kwargs.set_item("dataset", py.None())?;
+        } else {
+            list_kwargs.set_item("dataset", dataset)?;
+        }
+        if status.is_empty() {
+            list_kwargs.set_item("status", py.None())?;
+        } else {
+            list_kwargs.set_item("status", status)?;
+        }
+        list_kwargs.set_item("limit", 500)?;
+        let items = list_entities.call((store.clone(),), Some(&list_kwargs))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (items,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

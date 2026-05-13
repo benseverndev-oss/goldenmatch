@@ -245,3 +245,62 @@ pub fn goldenmatch_dedupe_full_telemetry(table_name: String, config_json: String
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
+
+// ── Identity Graph (v2.0) ────────────────────────────────────────────────
+//
+// Contract: docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md
+// All identity functions accept the path to the identity SQLite/Postgres
+// store as an explicit second arg. To target a Postgres backend, pass the
+// libpq DSN; for SQLite pass the filesystem path. Empty-string filters
+// (``dataset``, ``status``) mean "no filter on that dimension".
+
+/// Resolve a record_id (form: ``{source}:{source_pk}``) to its identity view.
+/// Returns ``{"found": false}`` when the record has no identity.
+#[pg_extern]
+pub fn goldenmatch_identity_resolve(record_id: String, db_path: String) -> String {
+    match goldenmatch_bridge::api::identity_resolve(&record_id, &db_path) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Return the full identity view JSON for ``entity_id``.
+#[pg_extern]
+pub fn goldenmatch_identity_view(entity_id: String, db_path: String) -> String {
+    match goldenmatch_bridge::api::identity_view(&entity_id, &db_path) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Return the temporal event log for an identity as a JSON array.
+#[pg_extern]
+pub fn goldenmatch_identity_history(entity_id: String, db_path: String) -> String {
+    match goldenmatch_bridge::api::identity_history(&entity_id, &db_path) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// List ``conflicts_with`` evidence edges as a JSON array. Empty ``dataset``
+/// returns conflicts across all datasets.
+#[pg_extern]
+pub fn goldenmatch_identity_conflicts(dataset: String, db_path: String) -> String {
+    match goldenmatch_bridge::api::identity_conflicts(&dataset, &db_path) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// List identities filtered by ``dataset`` / ``status`` (empty = no filter).
+#[pg_extern]
+pub fn goldenmatch_identity_list(
+    dataset: String,
+    status: String,
+    db_path: String,
+) -> String {
+    match goldenmatch_bridge::api::identity_list(&dataset, &status, &db_path) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
