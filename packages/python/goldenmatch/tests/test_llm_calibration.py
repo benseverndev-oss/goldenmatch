@@ -1,8 +1,6 @@
 """Tests for iterative LLM calibration."""
 from __future__ import annotations
 
-import pytest
-
 
 class TestComputeThreshold:
     """Test the grid-search threshold computation."""
@@ -74,7 +72,6 @@ class TestComputeThreshold:
         assert 0.83 <= threshold <= 0.88
 
 
-import random
 
 
 class TestStratifiedSample:
@@ -145,7 +142,7 @@ class TestFocusedSample:
         assert not (set(sample) & already_scored)
 
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestIterativeCalibrate:
@@ -213,9 +210,9 @@ class TestIterativeCalibrate:
             assert len(llm_results) >= 80  # accumulated from both rounds
 
     def test_budget_exhaustion_mid_calibration(self):
-        from goldenmatch.core.llm_scorer import _iterative_calibrate
-        from goldenmatch.core.llm_budget import BudgetTracker
         from goldenmatch.config.schemas import BudgetConfig
+        from goldenmatch.core.llm_budget import BudgetTracker
+        from goldenmatch.core.llm_scorer import _iterative_calibrate
 
         pairs, row_lookup, candidates = self._make_pairs_and_lookup(500)
         budget = BudgetTracker(BudgetConfig(max_calls=1))
@@ -276,8 +273,8 @@ class TestLLMScorePairsCalibration:
 
     def test_large_candidate_set_uses_calibration(self):
         """When candidates > sample_size, calibration is used."""
-        from goldenmatch.core.llm_scorer import llm_score_pairs
         from goldenmatch.config.schemas import LLMScorerConfig
+        from goldenmatch.core.llm_scorer import llm_score_pairs
 
         n = 500
         pairs = [(i * 2, i * 2 + 1, 0.80 + 0.15 * (i / (n - 1))) for i in range(n)]
@@ -324,8 +321,8 @@ class TestLLMScorePairsCalibration:
 
     def test_small_candidate_set_uses_direct_scoring(self):
         """When candidates <= sample_size, all are scored directly."""
-        from goldenmatch.core.llm_scorer import llm_score_pairs
         from goldenmatch.config.schemas import LLMScorerConfig
+        from goldenmatch.core.llm_scorer import llm_score_pairs
 
         n = 50
         pairs = [(i * 2, i * 2 + 1, 0.85) for i in range(n)]
@@ -360,7 +357,6 @@ class TestLLMScorePairsCalibration:
 
 
 import threading
-from unittest.mock import patch, MagicMock
 
 
 class TestConcurrentBatchScoring:
@@ -427,8 +423,8 @@ class TestBudgetTrackerThreadSafety:
 
     def test_concurrent_record_usage(self):
         """Multiple threads calling record_usage should produce correct totals."""
-        from goldenmatch.core.llm_budget import BudgetTracker
         from goldenmatch.config.schemas import BudgetConfig
+        from goldenmatch.core.llm_budget import BudgetTracker
 
         budget = BudgetTracker(BudgetConfig(max_cost_usd=100.0))
         n_threads = 10
@@ -448,8 +444,8 @@ class TestBudgetTrackerThreadSafety:
 
     def test_budget_exhaustion_under_concurrency(self):
         """Budget should eventually stop allowing sends under concurrent load."""
-        from goldenmatch.core.llm_budget import BudgetTracker
         from goldenmatch.config.schemas import BudgetConfig
+        from goldenmatch.core.llm_budget import BudgetTracker
 
         budget = BudgetTracker(BudgetConfig(max_calls=10))
 
@@ -480,7 +476,7 @@ class TestGetEmbedderRouting:
 
     def test_vertex_mode_returns_vertex_embedder(self):
         """When GPU mode is VERTEX, get_embedder should return VertexEmbedder."""
-        from goldenmatch.core.embedder import get_embedder, _embedders
+        from goldenmatch.core.embedder import _embedders, get_embedder
         from goldenmatch.core.gpu import GPUMode
 
         # Clear cache
@@ -500,7 +496,7 @@ class TestGetEmbedderRouting:
 
     def test_cpu_mode_returns_local_embedder(self):
         """When GPU mode is CPU_SAFE, get_embedder should return local Embedder."""
-        from goldenmatch.core.embedder import get_embedder, _embedders, Embedder
+        from goldenmatch.core.embedder import Embedder, _embedders, get_embedder
         from goldenmatch.core.gpu import GPUMode
 
         _embedders.clear()
@@ -514,7 +510,7 @@ class TestGetEmbedderRouting:
 
     def test_gpu_detection_failure_falls_back_to_local(self):
         """If detect_gpu_mode raises, should fall back to local Embedder."""
-        from goldenmatch.core.embedder import get_embedder, _embedders, Embedder
+        from goldenmatch.core.embedder import Embedder, _embedders, get_embedder
 
         _embedders.clear()
 
@@ -526,7 +522,7 @@ class TestGetEmbedderRouting:
 
     def test_vertex_import_failure_falls_back_to_local(self):
         """If VertexEmbedder can't be imported, should fall back to local."""
-        from goldenmatch.core.embedder import get_embedder, _embedders, Embedder
+        from goldenmatch.core.embedder import Embedder, _embedders, get_embedder
         from goldenmatch.core.gpu import GPUMode
 
         _embedders.clear()

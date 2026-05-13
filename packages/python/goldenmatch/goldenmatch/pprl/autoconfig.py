@@ -8,7 +8,7 @@ LLM opt-in: sends data profile to LLM for more nuanced recommendations.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
@@ -317,7 +317,7 @@ def auto_configure_pprl_llm(
     # Build profile summary for LLM
     profile_text = "Dataset profile for PPRL configuration:\n"
     profile_text += f"Records: {df.height}\n"
-    profile_text += f"Columns:\n"
+    profile_text += "Columns:\n"
     for p in baseline.field_profiles:
         profile_text += f"  - {p.column}: type={p.field_type}, avg_len={p.avg_length:.1f}, cardinality={p.cardinality}, nulls={p.null_pct:.0%}\n"
 

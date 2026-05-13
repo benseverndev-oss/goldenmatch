@@ -2,9 +2,8 @@
 from pathlib import Path
 
 import pytest
-
-from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Severity
 
 REAL_WORLD_DIR = Path(__file__).parent

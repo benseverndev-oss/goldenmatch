@@ -1,7 +1,9 @@
 """Post-scan confidence processing."""
 from __future__ import annotations
+
 from collections import defaultdict
 from dataclasses import replace
+
 from goldencheck.models.finding import Finding, Severity
 
 __all__ = ["apply_confidence_downgrade", "apply_corroboration_boost"]

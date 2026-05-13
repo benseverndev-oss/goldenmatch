@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from unittest.mock import patch
+
 import polars as pl
 from goldencheck.engine.scanner import scan_file_with_llm
 from goldencheck.models.finding import Finding, Severity

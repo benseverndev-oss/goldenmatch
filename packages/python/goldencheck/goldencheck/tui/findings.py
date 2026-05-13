@@ -1,7 +1,9 @@
 """Findings tab — DataTable with pin toggle."""
 from __future__ import annotations
-from textual.widgets import DataTable
+
 from textual.containers import Vertical
+from textual.widgets import DataTable
+
 from goldencheck.models.finding import Finding
 
 

@@ -8,10 +8,10 @@ ISO-8601 UTC timestamp shape, and the trust=1.0/0.5 numeric encoding.
 from __future__ import annotations
 
 import json
+from datetime import UTC
 from pathlib import Path
 
 import pytest
-
 from goldenmatch.core.memory.store import Correction
 from tests.parity.memory.gen_memory_fixtures import correction_to_dict
 
@@ -48,7 +48,7 @@ def test_trust_values_stay_numeric(fixture_entries):
 
 
 def _entry_to_correction(entry: dict) -> Correction:
-    from datetime import datetime, timezone
+    from datetime import datetime
     ts = entry["created_at"]
     if ts.endswith("Z"):
         ts = ts[:-1] + "+00:00"
@@ -61,7 +61,7 @@ def _entry_to_correction(entry: dict) -> Correction:
         original_score=entry["original_score"],
         matchkey_name=entry["matchkey_name"],
         reason=entry["reason"], dataset=entry["dataset"],
-        created_at=datetime.fromisoformat(ts).astimezone(timezone.utc),
+        created_at=datetime.fromisoformat(ts).astimezone(UTC),
     )
 
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from goldenmatch.config.loader import load_config
 from goldenmatch.cli.dedupe import _parse_file_source, _resolve_column_maps
+from goldenmatch.config.loader import load_config
 
 console = Console()
 err_console = Console(stderr=True)
@@ -34,9 +32,9 @@ def match_cmd(
     output_all: bool = typer.Option(False, "--output-all", help="Output all result types"),
     output_report: bool = typer.Option(False, "--output-report", help="Generate summary report"),
     match_mode: str = typer.Option("best", "--match-mode", help="Match mode: best or all"),
-    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
-    format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
-    run_name: Optional[str] = typer.Option(None, "--run-name", help="Run name for output files"),
+    output_dir: str | None = typer.Option(None, "--output-dir", help="Output directory"),
+    format: str | None = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
+    run_name: str | None = typer.Option(None, "--run-name", help="Run name for output files"),
     auto_fix: bool = typer.Option(False, "--auto-fix", help="Run auto-fix before matching"),
     auto_block: bool = typer.Option(False, "--auto-block", help="Auto-suggest blocking keys"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
@@ -57,13 +55,13 @@ def match_cmd(
 
     # ── Preview mode ──
     if preview:
-        from goldenmatch.tui.engine import MatchEngine
         from goldenmatch.core.preview import (
-            format_preview_stats,
             format_preview_clusters,
             format_preview_golden,
+            format_preview_stats,
             format_score_histogram,
         )
+        from goldenmatch.tui.engine import MatchEngine
 
         # Load all files into engine for a dedupe-style preview
         all_file_paths = [target_parsed[0]] + [fp for fp, _name in refs_parsed]

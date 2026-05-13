@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from infermap_bench.metrics import (
     MetricInput,
     expected_calibration_error,

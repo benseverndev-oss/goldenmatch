@@ -4,15 +4,18 @@
 Shows the workflow: run dedupe -> evaluate against ground truth ->
 adjust threshold -> re-evaluate. No LLM needed.
 """
-import sys, os
+import os
+import sys
+
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-import goldenmatch as gm
-import polars as pl
 import tempfile
 from pathlib import Path
+
+import goldenmatch as gm
+import polars as pl
 
 # Sample data
 data = pl.DataFrame({

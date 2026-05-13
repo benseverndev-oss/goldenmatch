@@ -7,8 +7,7 @@ import pytest
 # pandas is an optional/test-only dep across this workspace — skip cleanly
 # when it's not installed (per packages/python/CLAUDE.md guidance).
 pd = pytest.importorskip("pandas")
-from goldencheck_types import InferredSchema, FieldMapping
-
+from goldencheck_types import FieldMapping, InferredSchema
 from goldenpipe.models.context import PipeContext, StageStatus
 from goldenpipe.stages.infer_schema import infer_schema_stage
 

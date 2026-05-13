@@ -1,16 +1,19 @@
 """Main TUI application for GoldenCheck."""
 from __future__ import annotations
+
 from pathlib import Path
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Header, Footer, TabbedContent, TabPane
+from textual.widgets import Footer, Header, TabbedContent, TabPane
+
+from goldencheck.config.schema import ColumnRule, GoldenCheckConfig
+from goldencheck.config.writer import save_config
 from goldencheck.models.finding import Finding
 from goldencheck.models.profile import DatasetProfile
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule
-from goldencheck.config.writer import save_config
-from goldencheck.tui.overview import OverviewPane
-from goldencheck.tui.findings import FindingsPane
 from goldencheck.tui.column_detail import ColumnDetailPane
+from goldencheck.tui.findings import FindingsPane
+from goldencheck.tui.overview import OverviewPane
 from goldencheck.tui.rules import RulesPane
 
 

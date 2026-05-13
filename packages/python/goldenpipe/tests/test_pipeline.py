@@ -1,9 +1,9 @@
 """Tests for Pipeline class."""
-from goldenpipe.pipeline import Pipeline
-from goldenpipe.models.config import PipelineConfig, StageSpec
-from goldenpipe.models.context import PipeStatus, StageStatus, PipeContext, StageResult
-from goldenpipe.models.stage import stage
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.models.config import PipelineConfig, StageSpec
+from goldenpipe.models.context import PipeContext, PipeStatus, StageResult, StageStatus
+from goldenpipe.models.stage import stage
+from goldenpipe.pipeline import Pipeline
 
 
 @stage(name="noop", produces=["df"], consumes=["df"])
@@ -56,4 +56,4 @@ class TestImports:
         assert hasattr(gp, "PipeResult")
         assert hasattr(gp, "stage")
         assert hasattr(gp, "__version__")
-        assert gp.__version__ == "1.1.0"
+        assert gp.__version__ == "1.2.0"

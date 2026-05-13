@@ -39,6 +39,10 @@ export interface AutoconfigOptions {
    *  instead of demoting them. Use when callers have opted into remote
    *  model downloads. */
   readonly allowRemoteAssets?: boolean;
+  /** v0.5.0 (Python v1.7 parity): when ``true``, route the result through the
+   *  iterative ``AutoConfigController`` instead of returning the single-pass
+   *  heuristic config. Default ``false`` to preserve pre-0.5.0 behavior. */
+  readonly iterate?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,43 +182,57 @@ function classifyColumn(profile: ColumnProfile): ClassifiedKind {
 // Heuristic builders
 // ---------------------------------------------------------------------------
 
+/** Python `_SCORER_MAP` parity — col_type → (scorer, weight, transforms). */
+const SCORER_MAP: Readonly<
+  Record<string, readonly [string, number, readonly string[]]>
+> = {
+  email: ["exact", 1.0, ["lowercase", "strip"]],
+  phone: ["exact", 0.8, ["digits_only"]],
+  zip: ["exact", 0.5, ["strip"]],
+  name: ["ensemble", 1.0, ["lowercase", "strip"]],
+  address: ["token_sort", 0.8, ["lowercase", "strip"]],
+  identifier: ["exact", 1.0, ["strip"]],
+  geo: ["exact", 0.3, ["lowercase", "strip"]],
+  string: ["token_sort", 0.5, ["lowercase", "strip"]],
+};
+
+/** Map TS ClassifiedKind → Python-equivalent col_type key into SCORER_MAP. */
+function colTypeFor(kind: ClassifiedKind): string {
+  if (kind === "email") return "email";
+  if (kind === "phone") return "phone";
+  if (kind === "zip") return "zip";
+  if (kind === "name") return "name";
+  if (kind === "multi_name") return "multi_name"; // handled outside map
+  if (kind === "geo") return "geo";
+  if (kind === "id") return "identifier";
+  if (kind === "text") return "string";
+  return "skip"; // numeric, date, year, etc.
+}
+
 function buildExactMatchkeys(
   profiles: readonly ColumnProfile[],
 ): MatchkeyConfig[] {
   const out: MatchkeyConfig[] = [];
   for (const p of profiles) {
     const kind = classifyColumn(p);
-    // zip/geo/year are blocking signals, NOT identity claims.
-    // id/numeric/date are skipped from scoring (Python parity: id is a
-    // primary-key column, not a match signal).
-    if (
-      kind === "zip" ||
-      kind === "geo" ||
-      kind === "date" ||
-      kind === "year" ||
-      kind === "text" ||
-      kind === "id" ||
-      kind === "numeric"
-    ) {
-      continue;
-    }
-
-    // Skip sparse & near-constant columns
+    const colType = colTypeFor(kind);
+    // Skip non-matchable columns (Python parity).
+    if (colType === "skip" || kind === "multi_name") continue;
+    const info = SCORER_MAP[colType];
+    if (info === undefined) continue;
+    const [scorer, , transforms] = info;
+    if (scorer !== "exact") continue;
+    // zip/geo are blocking signals, not identity claims.
+    if (colType === "zip" || colType === "geo") continue;
+    // Exact matchkeys need plausibly-unique values.
+    if (p.cardinalityRatio > 0 && p.cardinalityRatio < 0.5) continue;
     if (p.nullRate > 0.4) continue;
     if (p.cardinalityRatio < 0.01) continue;
 
-    // Only identifier-like columns (email, phone) get exact matchkeys with >=0.5 cardinality.
-    const isIdentifier = kind === "email" || kind === "phone";
-    if (!isIdentifier) continue;
-    if (p.cardinalityRatio < 0.5) continue;
-
-    const transforms: string[] =
-      kind === "email"
-        ? ["lowercase", "strip"]
-        : kind === "phone"
-          ? ["digits_only"]
-          : ["strip"];
-
+    // Python emits exact MatchkeyField with field+transforms only (scorer
+    // and weight default to None on the Pydantic side). TS `MatchkeyField`
+    // requires non-optional scorer/weight; we stamp "exact"/1.0 here and
+    // normalize them away in the byte-equal parity test.
     out.push(
       makeMatchkeyConfig({
         name: `exact_${p.name}`,
@@ -222,106 +240,83 @@ function buildExactMatchkeys(
         fields: [
           makeMatchkeyField({
             field: p.name,
-            transforms,
+            transforms: [...transforms],
             scorer: "exact",
             weight: 1.0,
           }),
         ],
-        threshold: 1.0,
       }),
     );
   }
   return out;
 }
 
+/** Python ``_adaptive_threshold`` parity. */
+function adaptiveThreshold(fields: readonly MatchkeyField[]): number {
+  const exactScorers = new Set(["exact"]);
+  const embeddingScorers = new Set(["embedding", "record_embedding"]);
+  const scorers = new Set<string>();
+  for (const f of fields) if (f.scorer) scorers.add(f.scorer);
+  let allExact = scorers.size > 0;
+  for (const s of scorers) if (!exactScorers.has(s)) allExact = false;
+  if (allExact) return 0.95;
+  for (const s of scorers) if (embeddingScorers.has(s)) return 0.7;
+  if (fields.length === 1) return 0.85;
+  return 0.8;
+}
+
 function buildWeightedMatchkey(
   profiles: readonly ColumnProfile[],
 ): MatchkeyConfig | null {
-  const fields: MatchkeyField[] = [];
+  // Python's `build_matchkeys` splits columns into exact vs fuzzy via
+  // SCORER_MAP. Exact-mapped columns become their own `exact_<col>`
+  // matchkeys (handled by buildExactMatchkeys); fuzzy-mapped columns are
+  // all combined into one weighted matchkey named "fuzzy_match".
+  const fuzzy: MatchkeyField[] = [];
 
   for (const p of profiles) {
     const kind = classifyColumn(p);
     if (p.nullRate > 0.5) continue;
+    const colType = colTypeFor(kind);
 
     if (kind === "multi_name") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["lowercase", "strip", "normalize_whitespace"],
-          scorer: "token_sort",
-          weight: 1.0,
-        }),
-      );
-    } else if (kind === "name") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["lowercase", "strip", "normalize_whitespace"],
-          scorer: "jaro_winkler",
-          weight: 0.6,
-        }),
-      );
-    } else if (kind === "email") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["lowercase", "strip"],
-          scorer: "jaro_winkler",
-          weight: 0.3,
-        }),
-      );
-    } else if (kind === "phone") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["digits_only"],
-          scorer: "exact",
-          weight: 0.25,
-        }),
-      );
-    } else if (kind === "zip") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["digits_only"],
-          scorer: "exact",
-          weight: 0.15,
-        }),
-      );
-    } else if (kind === "geo") {
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["lowercase", "strip"],
-          scorer: "exact",
-          weight: 0.1,
-        }),
-      );
-    } else if (kind === "text" && p.avgLength >= 10) {
-      // Long free-text columns: token_sort to catch reordering
-      fields.push(
-        makeMatchkeyField({
-          field: p.name,
-          transforms: ["lowercase", "strip", "token_sort"],
-          scorer: "token_sort",
-          weight: 0.2,
-        }),
-      );
+      fuzzy.push({
+        field: p.name,
+        scorer: "token_sort",
+        weight: 1.0,
+        transforms: ["lowercase", "strip"],
+      });
+      continue;
     }
+
+    if (colType === "skip") continue;
+    const info = SCORER_MAP[colType];
+    if (info === undefined) continue;
+    const [scorer, weight, transforms] = info;
+
+    // Exact-scorer columns: handled by buildExactMatchkeys when cardinality
+    // permits. Skip in the weighted branch.
+    if (scorer === "exact") continue;
+
+    fuzzy.push({
+      field: p.name,
+      scorer,
+      weight,
+      transforms: [...transforms],
+    });
   }
 
-  if (fields.length === 0) return null;
+  if (fuzzy.length === 0) return null;
 
-  // Confidence-gated weight cap (spec §5.5). Only cap when existing weight
-  // would exceed 0.3 — don't lift lower weights. Look up each field's
-  // profile by name to check classifier confidence.
+  // Confidence-gated weight cap (Python parity §5.5). Only cap when
+  // existing weight > 0.3.
   const profileByName: Record<string, ColumnProfile> = {};
   for (const p of profiles) profileByName[p.name] = p;
-  const cappedFields: MatchkeyField[] = fields.map((f) => {
-    const profile = profileByName[f.field];
+  const capped: MatchkeyField[] = fuzzy.map((f) => {
+    const prof = profileByName[f.field];
     if (
-      profile !== undefined &&
-      profile.confidence < 0.5 &&
+      prof !== undefined &&
+      prof.confidence < 0.5 &&
       (f.weight ?? 0) > 0.3
     ) {
       return { ...f, weight: 0.3 };
@@ -330,89 +325,85 @@ function buildWeightedMatchkey(
   });
 
   return makeMatchkeyConfig({
-    name: "weighted_identity",
+    name: "fuzzy_match",
     type: "weighted",
-    fields: cappedFields,
-    threshold: 0.85,
+    fields: capped,
+    threshold: adaptiveThreshold(capped),
     rerank: false,
   });
 }
 
 function buildBlocking(profiles: readonly ColumnProfile[]): BlockingConfig {
-  const keys: BlockingKeyConfig[] = [];
+  // Python parity: prefer exact-eligible high-cardinality columns
+  // (email/phone/zip/identifier/year) with null_rate<=0.20, cardinality<0.95.
+  // Otherwise fall back to a name-based multi-pass blocking config.
+  const MAX_NULL = 0.2;
+  const exactEligible: ColumnProfile[] = [];
+  const nameCols: ColumnProfile[] = [];
 
-  // Prefer zip > geo > first-letter of name
   for (const p of profiles) {
-    const kind = classifyColumn(p);
-    if (kind !== "zip") continue;
-    if (p.nullRate > 0.2) continue;
+    if (p.nullRate > MAX_NULL) continue;
     if (p.cardinalityRatio >= 0.95) continue;
-    keys.push({
-      fields: [p.name],
-      transforms: ["digits_only", "substring:0:5"],
+    const kind = classifyColumn(p);
+    if (kind === "email" || kind === "phone" || kind === "zip" || kind === "id" || kind === "year") {
+      exactEligible.push(p);
+    } else if (kind === "name") {
+      nameCols.push(p);
+    }
+  }
+
+  if (exactEligible.length > 0) {
+    // Pick highest-cardinality.
+    const sorted = exactEligible
+      .slice()
+      .sort((a, b) => b.cardinalityRatio - a.cardinalityRatio);
+    const best = sorted[0]!;
+    const kind = classifyColumn(best);
+    const transforms: string[] =
+      kind === "email" ? ["lowercase", "strip"] : ["strip"];
+    return makeBlockingConfig({
+      strategy: "static",
+      keys: [{ fields: [best.name], transforms }],
+      maxBlockSize: 1000,
+      skipOversized: true,
     });
-    break;
   }
 
-  if (keys.length === 0) {
-    for (const p of profiles) {
-      const kind = classifyColumn(p);
-      if (kind !== "year") continue;
-      if (p.nullRate > 0.2) continue;
-      if (p.cardinalityRatio >= 0.95) continue;
-      keys.push({
-        fields: [p.name],
-        transforms: ["strip"],
-      });
-      break;
-    }
+  if (nameCols.length > 0) {
+    const best = nameCols[0]!.name;
+    // Multi-pass mirroring Python's name-cols branch:
+    //   keys=[soundex], passes=[substring:0:5, soundex, token_sort+substring:0:8]
+    return makeBlockingConfig({
+      strategy: "multi_pass",
+      keys: [{ fields: [best], transforms: ["lowercase", "soundex"] }],
+      passes: [
+        { fields: [best], transforms: ["lowercase", "substring:0:5"] },
+        { fields: [best], transforms: ["lowercase", "soundex"] },
+        { fields: [best], transforms: ["lowercase", "token_sort", "substring:0:8"] },
+      ],
+      maxBlockSize: 1000,
+      skipOversized: true,
+    });
   }
 
-  if (keys.length === 0) {
-    for (const p of profiles) {
-      const kind = classifyColumn(p);
-      if (kind !== "geo") continue;
-      if (p.nullRate > 0.2) continue;
-      if (p.cardinalityRatio >= 0.95) continue;
-      keys.push({
-        fields: [p.name],
-        transforms: ["lowercase", "strip"],
-      });
-      break;
-    }
-  }
-
-  if (keys.length === 0) {
-    for (const p of profiles) {
-      const kind = classifyColumn(p);
-      if (kind !== "name") continue;
-      if (p.nullRate > 0.2) continue;
-      if (p.cardinalityRatio >= 0.95) continue;
-      keys.push({
-        fields: [p.name],
-        transforms: ["lowercase", "strip", "substring:0:1"],
-      });
-      break;
-    }
-  }
-
-  // Last resort: first non-null column that isn't near-unique or sparse
-  if (keys.length === 0) {
-    for (const p of profiles) {
-      if (p.nullRate > 0.2) continue;
-      if (p.cardinalityRatio >= 0.95) continue;
-      if (p.cardinalityRatio < 0.01) continue;
-      keys.push({
-        fields: [p.name],
-        transforms: ["lowercase", "strip"],
-      });
-      break;
-    }
+  // Last-resort fallback: first usable column.
+  for (const p of profiles) {
+    if (p.nullRate > MAX_NULL) continue;
+    if (p.cardinalityRatio >= 0.95) continue;
+    if (p.cardinalityRatio < 0.01) continue;
+    return makeBlockingConfig({
+      strategy: "static",
+      keys: [{ fields: [p.name], transforms: ["lowercase", "substring:0:5"] }],
+      maxBlockSize: 1000,
+      skipOversized: true,
+    });
   }
 
   return makeBlockingConfig({
     strategy: "static",
-    keys,
+    keys: profiles.length > 0
+      ? [{ fields: [profiles[0]!.name], transforms: [] }]
+      : [],
     maxBlockSize: 1000,
     skipOversized: true,
   });
@@ -436,7 +427,39 @@ export function autoConfigureRows(
   const profiles = profile.columns;
 
   const exactKeys = buildExactMatchkeys(profiles);
-  const weighted = buildWeightedMatchkey(profiles);
+  let weighted = buildWeightedMatchkey(profiles);
+
+  // Python parity: post-build adaptive threshold adjustment based on data
+  // quality of the fuzzy fields.  avg_null > 0.15 → drop by 0.05 (floor 0.5);
+  // else avg_len < 5 → raise by 0.05 (cap 0.95).
+  if (weighted && weighted.type === "weighted") {
+    const profileByName: Record<string, ColumnProfile> = {};
+    for (const p of profiles) profileByName[p.name] = p;
+    const fuzzyProfiles: ColumnProfile[] = [];
+    for (const f of weighted.fields) {
+      const pp = profileByName[f.field];
+      if (pp !== undefined) fuzzyProfiles.push(pp);
+    }
+    if (fuzzyProfiles.length > 0) {
+      const avgNull =
+        fuzzyProfiles.reduce((acc, p) => acc + p.nullRate, 0) /
+        fuzzyProfiles.length;
+      const avgLen =
+        fuzzyProfiles.reduce((acc, p) => acc + p.avgLength, 0) /
+        fuzzyProfiles.length;
+      const current = weighted.threshold;
+      let next = current;
+      if (avgNull > 0.15) {
+        next = Math.max(current - 0.05, 0.5);
+      } else if (avgLen < 5) {
+        next = Math.min(current + 0.05, 0.95);
+      }
+      if (next !== current) {
+        weighted = { ...weighted, threshold: +next.toFixed(2) };
+      }
+    }
+  }
+
   const matchkeys: MatchkeyConfig[] = [...exactKeys];
   if (weighted) matchkeys.push(weighted);
 
@@ -483,4 +506,30 @@ export function autoConfigure(
   options?: AutoconfigOptions,
 ): GoldenMatchConfig {
   return autoConfigureRows(rows, options);
+}
+
+/**
+ * Iterative auto-config (Python v1.7 parity). Runs the
+ * ``AutoConfigController`` and returns its committed config, complexity
+ * profile, and full run history. Use this when ``options.iterate`` would
+ * have been ``true`` but you also want access to the controller telemetry.
+ *
+ * Returns a Promise — the underlying TS dedupe pipeline is async.
+ */
+export async function autoConfigureRowsIterate(
+  rows: readonly Row[],
+  _options?: AutoconfigOptions,
+): Promise<{
+  config: GoldenMatchConfig;
+  profile: import("./complexityProfile.js").ComplexityProfile;
+  history: import("./autoconfigHistory.js").RunHistory;
+}> {
+  const { AutoConfigController } = await import("./autoconfigController.js");
+  const { HeuristicRefitPolicy } = await import("./autoconfigPolicy.js");
+  const { DEFAULT_RULES_V1_7_V1_8 } = await import("./autoconfigRules.js");
+  const controller = new AutoConfigController({
+    policy: new HeuristicRefitPolicy(DEFAULT_RULES_V1_7_V1_8),
+  });
+  const out = await controller.run(rows);
+  return { config: out.committedConfig, profile: out.profile, history: out.history };
 }

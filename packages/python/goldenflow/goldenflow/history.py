@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 HISTORY_DIR = Path.home() / ".goldenflow" / "history"
@@ -54,4 +54,4 @@ def get_run(run_id: str) -> RunRecord | None:
 
 def generate_run_id() -> str:
     """Generate a unique run ID."""
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + f"{int(time.time() * 1000) % 10000:04d}"
+    return datetime.now(UTC).strftime("%Y%m%d_%H%M%S_") + f"{int(time.time() * 1000) % 10000:04d}"

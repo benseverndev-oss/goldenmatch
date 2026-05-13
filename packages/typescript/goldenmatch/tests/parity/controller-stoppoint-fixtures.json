@@ -1,0 +1,1103 @@
+{
+  "clean_people": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          }
+        ],
+        "passes": [
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "token_sort",
+              "substring:0:8"
+            ]
+          }
+        ],
+        "strategy": "multi_pass"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "first",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "email": "text",
+          "first": "text",
+          "last": "text",
+          "zip": "text"
+        },
+        "n_cols": 4,
+        "n_rows": 6
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "first": 0.0,
+        "last": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 1.0,
+        "first|email": 1.0,
+        "first|last": 1.0,
+        "first|zip": 1.0,
+        "last|email": 1.0,
+        "last|zip": 1.0
+      },
+      "full_pop_hits": {
+        "email": 0,
+        "first": 0,
+        "last": 0,
+        "zip": 0
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "sparse_match_expand",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 3,
+      "stop_reason": "policy_satisfied"
+    },
+    "expected_stop_reason": "policy_satisfied",
+    "input_rows": [
+      {
+        "email": "alice@example.com",
+        "first": "Alice",
+        "last": "Smith",
+        "zip": "10001"
+      },
+      {
+        "email": "bob@example.com",
+        "first": "Bob",
+        "last": "Jones",
+        "zip": "10002"
+      },
+      {
+        "email": "carol@example.com",
+        "first": "Carol",
+        "last": "Davis",
+        "zip": "10003"
+      },
+      {
+        "email": "david@example.com",
+        "first": "David",
+        "last": "Wilson",
+        "zip": "10004"
+      },
+      {
+        "email": "eve@example.com",
+        "first": "Eve",
+        "last": "Brown",
+        "zip": "10005"
+      },
+      {
+        "email": "frank@example.com",
+        "first": "Frank",
+        "last": "Miller",
+        "zip": "10006"
+      }
+    ],
+    "name": "clean_people"
+  },
+  "dirty_people": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "email"
+            ],
+            "transforms": [
+              "lowercase",
+              "strip"
+            ]
+          }
+        ],
+        "strategy": "static"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": null
+            }
+          ],
+          "name": "exact_email",
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "first",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "email": "text",
+          "first": "text",
+          "last": "text",
+          "zip": "text"
+        },
+        "n_cols": 4,
+        "n_rows": 8
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.1429,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.125,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.2,
+          "identity_score": 0.7
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.1429,
+        "first": 0.125,
+        "last": 0.2,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 0.1429,
+        "first|email": 0.0,
+        "first|last": 0.0,
+        "first|zip": 0.0,
+        "last|email": 0.25,
+        "last|zip": 0.5714
+      },
+      "full_pop_hits": {
+        "email": 1,
+        "first": 0,
+        "last": 4,
+        "zip": 7
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 1,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "error": "ModuleNotFoundError",
+          "health": "red",
+          "iteration": 2
+        },
+        {
+          "error": "ModuleNotFoundError",
+          "health": "red",
+          "iteration": 3
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 5,
+      "stop_reason": "budget_iterations"
+    },
+    "expected_stop_reason": "budget_iterations",
+    "input_rows": [
+      {
+        "email": "alice@example.com",
+        "first": "Alice",
+        "last": "Smith",
+        "zip": "10001"
+      },
+      {
+        "email": "ALICE@example.com",
+        "first": "alice",
+        "last": "smith",
+        "zip": "10001"
+      },
+      {
+        "email": "alise@example.com",
+        "first": "Alise",
+        "last": "Smyth",
+        "zip": "10001"
+      },
+      {
+        "email": "bob@example.com",
+        "first": "Bob",
+        "last": "Jones",
+        "zip": "10002"
+      },
+      {
+        "email": "bob@example.com",
+        "first": "Bobby",
+        "last": "Jones",
+        "zip": "10002"
+      },
+      {
+        "email": "rob@example.com",
+        "first": "Robert",
+        "last": "Jones",
+        "zip": "10002"
+      },
+      {
+        "email": "carol@example.com",
+        "first": "Carol",
+        "last": "Davis",
+        "zip": "10003"
+      },
+      {
+        "email": "karol@example.com",
+        "first": "Karol",
+        "last": "Davis",
+        "zip": "10003"
+      }
+    ],
+    "name": "dirty_people"
+  },
+  "exact_id": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "email"
+            ],
+            "transforms": [
+              "lowercase",
+              "strip"
+            ]
+          }
+        ],
+        "strategy": "static"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": null
+            }
+          ],
+          "name": "exact_email",
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.9,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "city": "text",
+          "email": "text",
+          "name": "text"
+        },
+        "n_cols": 3,
+        "n_rows": 6
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "name": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.0,
+        "email": 0.0,
+        "name": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|city": 1.0,
+        "name|city": 0.5,
+        "name|email": 0.5
+      },
+      "full_pop_hits": {
+        "city": 2,
+        "email": 2,
+        "name": 1
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 2,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": 2
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 4,
+      "stop_reason": "policy_satisfied"
+    },
+    "expected_stop_reason": "policy_satisfied",
+    "input_rows": [
+      {
+        "city": "NY",
+        "email": "alice@example.com",
+        "name": "Alice"
+      },
+      {
+        "city": "NY",
+        "email": "alice@example.com",
+        "name": "Alice S"
+      },
+      {
+        "city": "LA",
+        "email": "bob@example.com",
+        "name": "Bob"
+      },
+      {
+        "city": "SF",
+        "email": "carol@example.com",
+        "name": "Carol"
+      },
+      {
+        "city": "SF",
+        "email": "carol@example.com",
+        "name": "Carol"
+      },
+      {
+        "city": "TX",
+        "email": "dan@example.com",
+        "name": "Dan"
+      }
+    ],
+    "name": "exact_id"
+  },
+  "mixed_blocking": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "phone"
+            ],
+            "transforms": [
+              "strip"
+            ]
+          }
+        ],
+        "strategy": "static"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": null,
+              "transforms": [
+                "digits_only"
+              ],
+              "weight": null
+            }
+          ],
+          "name": "exact_phone",
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "first",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "first": "text",
+          "last": "text",
+          "phone": "text",
+          "zip": "text"
+        },
+        "n_cols": 4,
+        "n_rows": 7
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        },
+        "phone": {
+          "corruption_score": 0.0,
+          "identity_score": 0.85
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.7
+        }
+      },
+      "corruption_per_column": {
+        "first": 0.0,
+        "last": 0.0,
+        "phone": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "first|last": 0.0,
+        "first|phone": 0.6667,
+        "first|zip": 0.6667,
+        "last|phone": 0.3333,
+        "last|zip": 0.3333,
+        "phone|zip": 1.0
+      },
+      "full_pop_hits": {
+        "first": 2,
+        "last": 1,
+        "phone": 3,
+        "zip": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "decision_rule": "no_matches",
+          "error": null,
+          "health": "red",
+          "iteration": 2
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": 3
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 5,
+      "stop_reason": "policy_satisfied"
+    },
+    "expected_stop_reason": "policy_satisfied",
+    "input_rows": [
+      {
+        "first": "Alice",
+        "last": "Smith",
+        "phone": "5551234",
+        "zip": "10001"
+      },
+      {
+        "first": "Alice",
+        "last": "Smyth",
+        "phone": "5551234",
+        "zip": "10001"
+      },
+      {
+        "first": "Bob",
+        "last": "Jones",
+        "phone": "5552222",
+        "zip": "10002"
+      },
+      {
+        "first": "Bob",
+        "last": "Jonss",
+        "phone": "5552222",
+        "zip": "10002"
+      },
+      {
+        "first": "Carol",
+        "last": "Davis",
+        "phone": "5553333",
+        "zip": "10003"
+      },
+      {
+        "first": "Carolyn",
+        "last": "Davis",
+        "phone": "5553333",
+        "zip": "10003"
+      },
+      {
+        "first": "Dan",
+        "last": "White",
+        "phone": "5554444",
+        "zip": "10004"
+      }
+    ],
+    "name": "mixed_blocking"
+  },
+  "sparse_people": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          }
+        ],
+        "passes": [
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "substring:0:5"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "soundex"
+            ]
+          },
+          {
+            "fields": [
+              "first"
+            ],
+            "transforms": [
+              "lowercase",
+              "token_sort",
+              "substring:0:8"
+            ]
+          }
+        ],
+        "strategy": "multi_pass"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "first",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.75,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "email": "text",
+          "first": "text",
+          "last": "text",
+          "zip": "text"
+        },
+        "n_cols": 4,
+        "n_rows": 4
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "email": {
+          "corruption_score": 0.0,
+          "identity_score": 0.95
+        },
+        "first": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        },
+        "last": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        },
+        "zip": {
+          "corruption_score": 0.0,
+          "identity_score": 0.3
+        }
+      },
+      "corruption_per_column": {
+        "email": 0.0,
+        "first": 0.0,
+        "last": 0.0,
+        "zip": 0.0
+      },
+      "cross_blocking_overlap": {
+        "email|zip": 0.2,
+        "first|email": 0.2,
+        "first|last": 0.2,
+        "first|zip": 0.2,
+        "last|email": 0.2,
+        "last|zip": 0.2
+      },
+      "full_pop_hits": {
+        "email": 3,
+        "first": 3,
+        "last": 3,
+        "zip": 3
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 3,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "decision_rule": "cross_blocking_disagreement",
+          "error": null,
+          "health": "red",
+          "iteration": 2
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": 3
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 5,
+      "stop_reason": "policy_satisfied"
+    },
+    "expected_stop_reason": "policy_satisfied",
+    "input_rows": [
+      {
+        "email": null,
+        "first": "Alice",
+        "last": null,
+        "zip": null
+      },
+      {
+        "email": null,
+        "first": null,
+        "last": "Jones",
+        "zip": null
+      },
+      {
+        "email": "carol@example.com",
+        "first": null,
+        "last": null,
+        "zip": null
+      },
+      {
+        "email": null,
+        "first": null,
+        "last": null,
+        "zip": "10004"
+      }
+    ],
+    "name": "sparse_people"
+  },
+  "two_cluster": {
+    "expected_committed_config": {
+      "blocking": {
+        "keys": [
+          {
+            "fields": [
+              "phone"
+            ],
+            "transforms": [
+              "strip"
+            ]
+          }
+        ],
+        "strategy": "static"
+      },
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": null,
+              "transforms": [
+                "digits_only"
+              ],
+              "weight": null
+            }
+          ],
+          "name": "exact_phone",
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "fuzzy_match",
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_complexity_profile": {
+      "data": {
+        "column_types": {
+          "city": "text",
+          "name": "text",
+          "phone": "text"
+        },
+        "n_cols": 3,
+        "n_rows": 6
+      }
+    },
+    "expected_indicators_profile": {
+      "column_priors": {
+        "city": {
+          "corruption_score": 0.2,
+          "identity_score": 0.7
+        },
+        "name": {
+          "corruption_score": 0.3333,
+          "identity_score": 0.7
+        },
+        "phone": {
+          "corruption_score": 0.0,
+          "identity_score": 0.85
+        }
+      },
+      "corruption_per_column": {
+        "city": 0.2,
+        "name": 0.3333,
+        "phone": 0.0
+      },
+      "cross_blocking_overlap": {
+        "city|phone": 0.0,
+        "name|city": 0.0,
+        "name|phone": 0.0
+      },
+      "full_pop_hits": {
+        "city": 1,
+        "name": 0,
+        "phone": 1
+      },
+      "sparsity": {
+        "estimated_n_true_pairs": 0,
+        "is_sparse": true
+      }
+    },
+    "expected_run_history": {
+      "entries": [
+        {
+          "decision_rule": "demote_clustered_identity",
+          "error": null,
+          "health": "red",
+          "iteration": 0
+        },
+        {
+          "error": "ModuleNotFoundError",
+          "health": "red",
+          "iteration": 1
+        },
+        {
+          "error": "ModuleNotFoundError",
+          "health": "red",
+          "iteration": 2
+        },
+        {
+          "error": "ModuleNotFoundError",
+          "health": "red",
+          "iteration": 3
+        },
+        {
+          "error": null,
+          "health": "red",
+          "iteration": -1
+        }
+      ],
+      "n_entries": 5,
+      "stop_reason": "budget_iterations"
+    },
+    "expected_stop_reason": "budget_iterations",
+    "input_rows": [
+      {
+        "city": "New York",
+        "name": "Alice Smith",
+        "phone": "555-1234"
+      },
+      {
+        "city": "new york",
+        "name": "alice smith",
+        "phone": "5551234"
+      },
+      {
+        "city": "NY",
+        "name": "Alice E Smith",
+        "phone": "(555) 123-4"
+      },
+      {
+        "city": "Los Angeles",
+        "name": "Bob Jones",
+        "phone": "555-9999"
+      },
+      {
+        "city": "LA",
+        "name": "BOB JONES",
+        "phone": "5559999"
+      },
+      {
+        "city": "LA",
+        "name": "Robert Jones",
+        "phone": "555-9999"
+      }
+    ],
+    "name": "two_cluster"
+  }
+}

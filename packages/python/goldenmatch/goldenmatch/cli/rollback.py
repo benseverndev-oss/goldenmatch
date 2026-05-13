@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -74,7 +72,6 @@ def unmerge_cmd(
     The record becomes a singleton. Remaining cluster members are re-clustered
     using their stored pair scores. Use --shatter to break the entire cluster.
     """
-    from goldenmatch.core.cluster import build_clusters, unmerge_record, unmerge_cluster
 
     # For now, demonstrate with inline cluster building
     # Full integration would load from run snapshot

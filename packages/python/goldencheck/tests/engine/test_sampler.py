@@ -1,6 +1,7 @@
 import polars as pl
 from goldencheck.engine.sampler import maybe_sample
 
+
 def test_no_sample_small_df():
     df = pl.DataFrame({"a": range(100)})
     result = maybe_sample(df, max_rows=1000)

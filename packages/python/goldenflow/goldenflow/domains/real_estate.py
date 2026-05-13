@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import polars as pl
+
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.domains.base import DomainPack
 from goldenflow.transforms import register_transform
+
 
 @register_transform(name="mls_normalize", input_types=["string"], auto_apply=False, priority=50, mode="series")
 def mls_normalize(series: pl.Series) -> pl.Series:

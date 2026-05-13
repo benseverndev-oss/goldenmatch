@@ -106,6 +106,41 @@ SELECT goldenmatch.goldenmatch_match_tables(
 );
 ```
 
+### AutoConfig and controller telemetry (v1.7-v1.12)
+
+```sql
+-- Run AutoConfigController; get the committed config as JSON.
+SELECT goldenmatch.goldenmatch_autoconfig('customers');
+
+-- Same call, but return the telemetry blob (stop_reason, health,
+-- decisions, indicator priors, committed NE) instead of the config.
+SELECT goldenmatch.goldenmatch_autoconfig_telemetry('customers');
+
+-- Run dedupe with a *full* GoldenMatchConfig JSON. This is the only
+-- code path that supports `negative_evidence` (Path Y) from SQL —
+-- the slim kwargs accepted by `goldenmatch_dedupe_table` can't express it.
+SELECT goldenmatch.goldenmatch_dedupe_full('customers', '{
+    "matchkeys": [
+        {
+            "name": "exact_email",
+            "type": "exact",
+            "fields": [{"field": "email", "transforms": ["lowercase"]}],
+            "negative_evidence": [
+                {"field": "phone", "scorer": "exact",
+                 "transforms": ["digits_only"], "threshold": 0.5, "penalty": 0.5}
+            ]
+        }
+    ]
+}');
+
+-- Job pipeline: telemetry from the most-recent `gm_run` persists on the job row.
+SELECT goldenmatch.gm_configure('cust_job', '{"exact": ["email"]}');
+SELECT goldenmatch.gm_run('cust_job', 'customers');
+SELECT goldenmatch.gm_telemetry('cust_job');   -- last run's telemetry JSON
+```
+
+The telemetry JSON shape is identical to the web `/api/v1/controller/telemetry`, CLI `goldenmatch autoconfig`, and DuckDB `goldenmatch_autoconfig_telemetry` outputs — write one parser, reuse everywhere.
+
 ### Pair scoring and explanation
 
 ```sql

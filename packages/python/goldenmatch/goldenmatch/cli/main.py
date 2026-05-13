@@ -4,34 +4,34 @@ from __future__ import annotations
 
 import platform
 import sys
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
 
 from goldenmatch import __version__
+from goldenmatch.cli.agent_serve import agent_serve_cmd
+from goldenmatch.cli.autoconfig import autoconfig_cmd
+from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
-from goldenmatch.cli.match import match_cmd
-from goldenmatch.cli.sync import sync_cmd
-from goldenmatch.cli.serve import serve_cmd
-from goldenmatch.cli.serve_ui import serve_ui_cmd
-from goldenmatch.cli.mcp_serve import mcp_serve_cmd
-from goldenmatch.cli.watch import watch_cmd
-from goldenmatch.cli.setup import setup_cmd
 from goldenmatch.cli.demo import demo_cmd
+from goldenmatch.cli.evaluate import evaluate_cmd
+from goldenmatch.cli.identity import identity_app
+from goldenmatch.cli.incremental import incremental_cmd
+from goldenmatch.cli.label import label_cmd
+from goldenmatch.cli.match import match_cmd
+from goldenmatch.cli.mcp_serve import mcp_serve_cmd
+from goldenmatch.cli.memory import memory_app
+from goldenmatch.cli.pprl import pprl_app
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
 from goldenmatch.cli.schedule import schedule_cmd
-from goldenmatch.cli.evaluate import evaluate_cmd
-from goldenmatch.cli.incremental import incremental_cmd
-from goldenmatch.cli.pprl import pprl_app
-from goldenmatch.cli.memory import memory_app
-from goldenmatch.cli.label import label_cmd
-from goldenmatch.cli.agent_serve import agent_serve_cmd
-from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.sensitivity import sensitivity_cmd
+from goldenmatch.cli.serve import serve_cmd
+from goldenmatch.cli.serve_ui import serve_ui_cmd
+from goldenmatch.cli.setup import setup_cmd
+from goldenmatch.cli.sync import sync_cmd
+from goldenmatch.cli.watch import watch_cmd
 from goldenmatch.prefs.store import PresetStore
 
 LOGO = r"""[bold bright_yellow]
@@ -95,6 +95,7 @@ app = typer.Typer(
     callback=_callback,
 )
 
+app.command("autoconfig", help="Run AutoConfigController on input files; print the committed config + telemetry without running the pipeline.")(autoconfig_cmd)
 app.command("dedupe", help="Run deduplication on one or more files.")(dedupe_cmd)
 app.command("match", help="Match a target file against reference files.")(match_cmd)
 app.command("sync", help="Sync database table, match new records against existing.")(sync_cmd)
@@ -111,6 +112,7 @@ app.command("schedule", help="Run deduplication on a schedule.")(schedule_cmd)
 app.command("evaluate", help="Evaluate matching quality against ground truth pairs.")(evaluate_cmd)
 app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
+app.add_typer(identity_app, name="identity")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
 app.command("agent-serve", help="Start the A2A agent server for AI-to-AI discovery.")(agent_serve_cmd)
 app.command("incremental", help="Match new records against an existing base dataset.")(incremental_cmd)
@@ -288,7 +290,7 @@ def config_show(
 
 @app.command("init")
 def init_cmd(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path for generated config"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output path for generated config"),
 ) -> None:
     """Launch the interactive config wizard."""
     from goldenmatch.config.wizard import run_wizard

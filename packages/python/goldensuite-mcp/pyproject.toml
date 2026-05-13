@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldensuite-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "One MCP server exposing every Golden Suite tool — goldenmatch, goldencheck, goldenflow, goldenpipe, infermap"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -43,6 +43,7 @@ goldensuite-mcp = "goldensuite_mcp.cli:main"
 [project.urls]
 Homepage = "https://github.com/benzsevern/goldenmatch"
 Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldensuite-mcp#readme"
 Issues = "https://github.com/benzsevern/goldenmatch/issues"
 
 [tool.uv.sources]
@@ -55,6 +56,3 @@ infermap = { workspace = true }
 [tool.hatch.build.targets.wheel]
 packages = ["goldensuite_mcp"]
 
-[tool.ruff]
-target-version = "py311"
-line-length = 100

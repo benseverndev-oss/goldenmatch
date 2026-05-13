@@ -1,32 +1,34 @@
 """Scanner — orchestrates all profilers and collects findings."""
 from __future__ import annotations
+
 import dataclasses
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 import polars as pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
+from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_file
 from goldencheck.engine.sampler import maybe_sample
-from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
-from goldencheck.profilers.type_inference import TypeInferenceProfiler
-from goldencheck.profilers.nullability import NullabilityProfiler
-from goldencheck.profilers.uniqueness import UniquenessProfiler
-from goldencheck.profilers.format_detection import FormatDetectionProfiler
-from goldencheck.profilers.range_distribution import RangeDistributionProfiler
 from goldencheck.profilers.cardinality import CardinalityProfiler
-from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
-from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
-from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 from goldencheck.profilers.drift_detection import DriftDetectionProfiler
-from goldencheck.relations.temporal import TemporalOrderProfiler
+from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
+from goldencheck.profilers.format_detection import FormatDetectionProfiler
+from goldencheck.profilers.nullability import NullabilityProfiler
+from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
+from goldencheck.profilers.range_distribution import RangeDistributionProfiler
+from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
+from goldencheck.profilers.type_inference import TypeInferenceProfiler
+from goldencheck.profilers.uniqueness import UniquenessProfiler
+from goldencheck.relations.age_validation import AgeValidationProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
-from goldencheck.relations.age_validation import AgeValidationProfiler
+from goldencheck.relations.temporal import TemporalOrderProfiler
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,7 @@ def _post_classification_checks(
 
     # --- Code-like format inconsistency (e.g. 5-digit vs 9-digit zip) ---
     # Only add if no pattern_consistency finding already exists at WARNING+ for this column
-    from goldencheck.profilers.pattern_consistency import _generalize
+    from goldencheck.profilers.pattern_consistency import _generalize_series
     existing_pc_cols = {
         f.column for f in new_findings
         if f.check == "pattern_consistency" and f.severity in (Severity.WARNING, Severity.ERROR)
@@ -116,8 +118,11 @@ def _post_classification_checks(
         total = len(non_null)
         if total == 0:
             continue
-        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD)
-        patterns = non_null.map_elements(_generalize, return_dtype=pl.String)
+        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD).
+        # Vectorised via Polars regex — see _generalize_series docstring;
+        # the previous map_elements(_generalize) was a top-3 self-time
+        # hot spot in the scale-audit cProfile.
+        patterns = _generalize_series(non_null)
         pattern_counts = patterns.value_counts().sort("count", descending=True)
         if len(pattern_counts) < 2:
             continue
@@ -216,8 +221,8 @@ def scan_file(
     sample_size: int = 100_000,
     return_sample: bool = False,
     domain: str | None = None,
-    baseline: "BaselineProfile | Path | None" = None,
-    schema: "object | None" = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
+    baseline: BaselineProfile | Path | None = None,
+    schema: object | None = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     row_count = len(df)
@@ -316,7 +321,7 @@ def scan_file(
     rules_path = Path("goldencheck_rules.json")
     if rules_path.exists():
         try:
-            from goldencheck.llm.rule_generator import load_rules, apply_rules
+            from goldencheck.llm.rule_generator import apply_rules, load_rules
             rules = load_rules(rules_path)
             if rules:
                 rule_findings = apply_rules(sample, rules)
@@ -347,8 +352,10 @@ def scan_file(
     if baseline is not None:
         from goldencheck.drift import run_drift_checks
         if baseline.source_filename and baseline.source_filename != path.name:
+            # %r quotes both values so YAML-supplied filename can't smuggle
+            # newlines / control chars into structured logs.
             logger.warning(
-                "Baseline source '%s' doesn't match scan file '%s'",
+                "Baseline source %r doesn't match scan file %r",
                 baseline.source_filename, path.name,
             )
         drift_findings = run_drift_checks(sample, baseline)
@@ -377,12 +384,12 @@ def scan_file_with_llm(
 ) -> tuple[list[Finding], DatasetProfile]:
     """Scan a file with profilers, then enhance with LLM boost."""
     import json
-    from goldencheck.llm.sample_block import build_sample_blocks
-    from goldencheck.llm.providers import call_llm, check_llm_available
-    from goldencheck.llm.parser import parse_llm_response
+
+    from goldencheck.llm.budget import CostReport, check_budget, estimate_cost
     from goldencheck.llm.merger import merge_llm_findings
-    from goldencheck.llm.budget import CostReport, estimate_cost, check_budget
-    from goldencheck.llm.providers import DEFAULT_MODELS
+    from goldencheck.llm.parser import parse_llm_response
+    from goldencheck.llm.providers import DEFAULT_MODELS, call_llm, check_llm_available
+    from goldencheck.llm.sample_block import build_sample_blocks
 
     # Check LLM is available BEFORE doing any work
     check_llm_available(provider)

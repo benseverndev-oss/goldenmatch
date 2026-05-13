@@ -1,5 +1,6 @@
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
 
+
 def test_column_profile_creation():
     cp = ColumnProfile(name="email", inferred_type="string", null_count=50, null_pct=0.1,
                        unique_count=4500, unique_pct=0.9, row_count=5000)

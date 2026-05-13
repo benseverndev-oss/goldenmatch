@@ -8,8 +8,8 @@ DQBench Detect Score: 88.40
 """
 if __name__ == "__main__":
     from dqbench.adapters.goldencheck import GoldenCheckAdapter
-    from dqbench.runner import run_benchmark
     from dqbench.report import report_rich
+    from dqbench.runner import run_benchmark
 
     sc = run_benchmark(GoldenCheckAdapter())
     report_rich(sc)

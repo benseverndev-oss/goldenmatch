@@ -12,18 +12,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import polars as pl
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.boost import extract_feature_matrix, finetune_and_rescore
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.boost import finetune_and_rescore
 from goldenmatch.core.cross_encoder import (
-    serialize_record, train_cross_encoder, score_pairs as ce_score_pairs,
-    augment_training_data, merge_scores,
+    augment_training_data,
+    merge_scores,
+    serialize_record,
+    train_cross_encoder,
+)
+from goldenmatch.core.cross_encoder import (
+    score_pairs as ce_score_pairs,
 )
 from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.scorer import find_fuzzy_matches
-from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
-)
 
 DATASETS = Path(__file__).parent / "datasets"
 
@@ -57,8 +65,8 @@ def run_abt_buy():
     combined = combined.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     combined, _ = auto_fix_dataframe(combined)
 
-    ids = combined["id"].to_list()
-    srcs = combined["__source__"].to_list()
+    _ids = combined["id"].to_list()
+    _srcs = combined["__source__"].to_list()
     rows = combined.to_dicts()
     row_ids = combined["__row_id__"].to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}

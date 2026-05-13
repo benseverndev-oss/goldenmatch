@@ -1,10 +1,8 @@
 """Edge-case tests for profilers — empty, minimal, unicode, wide DataFrames."""
 from __future__ import annotations
 
-
 from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.scanner import scan_file
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -11,10 +11,9 @@ Uses column name similarity + value overlap analysis to find mappings.
 from __future__ import annotations
 
 import logging
-from collections import Counter
 
 import polars as pl
-from rapidfuzz.fuzz import ratio, partial_ratio
+from rapidfuzz.fuzz import partial_ratio, ratio
 
 logger = logging.getLogger(__name__)
 

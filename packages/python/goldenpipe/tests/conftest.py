@@ -1,7 +1,8 @@
 """Shared test fixtures for GoldenPipe."""
-import pytest
-import polars as pl
 from pathlib import Path
+
+import polars as pl
+import pytest
 
 
 @pytest.fixture

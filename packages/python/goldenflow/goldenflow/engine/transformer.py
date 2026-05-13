@@ -45,7 +45,7 @@ class TransformEngine:
 
         # Record run in history
         try:
-            from goldenflow.history import save_run, generate_run_id, RunRecord
+            from goldenflow.history import RunRecord, generate_run_id, save_run
             record = RunRecord(
                 run_id=generate_run_id(),
                 source=str(path),
@@ -158,6 +158,7 @@ class TransformEngine:
     ) -> pl.DataFrame:
         """Auto-detect and apply transforms based on column profiling."""
         import os
+
         from rich.progress import Progress, SpinnerColumn, TextColumn
 
         file_path = source if source and source != "<dataframe>" else ""

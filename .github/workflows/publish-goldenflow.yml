@@ -1,0 +1,47 @@
+name: Publish goldenflow to PyPI
+
+# Brings goldenflow into the same release pipeline as the rest of the suite.
+# Before this workflow goldenflow was published manually via twine, which is
+# why the MCP Registry listing drifted ahead of PyPI (someone bumped the
+# registry to 1.1.4 in advance of a release that didn't ship). Once this
+# lands and goldenflow-v1.1.5 is tagged + released, the pattern matches
+# every other package in the suite.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    # Only run for goldenflow-v* tags. The leading `-v` distinguishes from
+    # the npm-side `goldenflow-js-v*` tag pattern used by the TypeScript port.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenflow-v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    defaults:
+      run:
+        working-directory: packages/python/goldenflow
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        with:
+          packages-dir: packages/python/goldenflow/dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import polars as pl
 
@@ -52,10 +52,10 @@ class StrategyDecision:
 
     strategy: str
     why: str
-    domain: Optional[str] = None
+    domain: str | None = None
     strong_ids: list[str] = field(default_factory=list)
     fuzzy_fields: list[str] = field(default_factory=list)
-    backend: Optional[str] = None
+    backend: str | None = None
     auto_execute: bool = True
 
 
@@ -252,8 +252,11 @@ def build_alternatives(
 def _decision_to_config(decision: StrategyDecision) -> Any:
     """Translate a StrategyDecision into a GoldenMatchConfig."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
 
     matchkeys: list[MatchkeyConfig] = []
@@ -324,6 +327,83 @@ class AgentSession:
         self.result: Any = None
         self.review_queue = ReviewQueue(backend="memory")
         self.reasoning: dict[str, Any] = {}
+        # v1.7-v1.12: last controller run's serialised telemetry blob. Set by
+        # ``autoconfigure()`` and by ``deduplicate()`` / ``match_sources()`` on
+        # paths where the controller actually fired. Same JSON shape the web
+        # /api/v1/controller/telemetry endpoint and the SQL surfaces return.
+        self.last_telemetry: dict[str, Any] | None = None
+
+    # ── controller telemetry helpers ─────────────────────────────────────
+
+    def _capture_telemetry(self, committed_config: Any, source: str) -> dict[str, Any] | None:
+        """Serialize the most recent ``_LAST_CONTROLLER_RUN`` ContextVar.
+
+        Returns ``None`` when the controller didn't run on the current thread
+        (the typical signal that the caller passed an explicit ``config=``).
+        The shape mirrors what the web ``/api/v1/controller/telemetry``
+        endpoint returns so MCP / A2A / REST consumers can reuse the same
+        schema across surfaces.
+        """
+        try:
+            from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+            state = _LAST_CONTROLLER_RUN.get()
+        except Exception:
+            return None
+        if state is None:
+            return None
+        profile, history = state
+        try:
+            from goldenmatch.web.controller_telemetry import serialize_telemetry
+            return serialize_telemetry(
+                profile=profile,
+                history=history,
+                committed_config=committed_config,
+                source=source,
+                run_name=None,
+                recorded_at=None,
+            )
+        except Exception:
+            # web extra not installed — minimal fallback so the contract
+            # still resolves (just stop_reason + health). Same fallback
+            # pattern the SQL bridge + DuckDB UDFs use.
+            out: dict[str, Any] = {
+                "available": profile is not None or history is not None,
+                "source": source,
+            }
+            try:
+                if history is not None and getattr(history, "stop_reason", None) is not None:
+                    out["stop_reason"] = history.stop_reason.value
+            except Exception:
+                pass
+            try:
+                if profile is not None:
+                    out["health"] = profile.health().value
+            except Exception:
+                pass
+            return out
+
+    # ── autoconfigure ────────────────────────────────────────────────────
+
+    def autoconfigure(self, file_path: str) -> dict[str, Any]:
+        """Run AutoConfigController on the input file; return committed config + telemetry.
+
+        Programmatic equivalent of the CLI ``goldenmatch autoconfig <file>``.
+        Caller can adopt ``config`` for a follow-up ``deduplicate(file, config=...)``
+        call; ``telemetry`` is also stashed on ``self.last_telemetry``.
+        """
+        from goldenmatch.core.autoconfig import auto_configure_df
+
+        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        self.data = df
+        cfg = auto_configure_df(df)
+        self.config = cfg
+        telemetry = self._capture_telemetry(cfg, source="autoconfigure")
+        self.last_telemetry = telemetry
+        return {
+            "config": cfg.model_dump(mode="json", exclude_none=True)
+            if hasattr(cfg, "model_dump") else {},
+            "telemetry": telemetry or {"available": False, "source": "autoconfigure"},
+        }
 
     # ── analyze ──────────────────────────────────────────────────────────
 
@@ -370,22 +450,47 @@ class AgentSession:
         file_path: str,
         config: Any = None,
     ) -> dict[str, Any]:
-        """Full deduplication with profiling, strategy, gating, and review queue."""
+        """Full deduplication with profiling, strategy, gating, and review queue.
+
+        When ``config`` is None, delegates to ``dedupe_df(df)`` with no config
+        so the AutoConfigController fires and produces telemetry. When
+        ``config`` is supplied, runs the explicit config and zeros
+        ``last_telemetry`` so a prior auto-config's blob can't leak into the
+        result. ``select_strategy()`` still runs for the ``reasoning`` payload
+        — that's a separate legacy heuristic-driven explanation, not the
+        controller's authoritative output.
+        """
         from goldenmatch._api import dedupe_df
 
         df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
         self.data = df
 
+        # Profile + decision are kept ONLY for the `reasoning` field; they do
+        # not back the actual dedupe config when the caller didn't pass one.
+        # See PR #169: routing the default path through dedupe_df()'s
+        # AutoConfigController gives us the v1.7-v1.12 telemetry that the
+        # legacy `_decision_to_config(decision)` heuristic does not.
         profile = profile_for_agent(df)
         decision = select_strategy(profile)
 
         if config is not None:
             cfg = config
+            # Explicit config means the controller doesn't fire; clear any
+            # cached telemetry so callers can't read a stale blob from a
+            # prior auto-config call.
+            self.last_telemetry = None
+            result = dedupe_df(df, config=cfg)
         else:
-            cfg = _decision_to_config(decision)
+            # No config -> let dedupe_df run its zero-config AutoConfigController
+            # path. The committed config comes back on result.config.
+            cfg = None
+            result = dedupe_df(df)
+            committed_cfg = getattr(result, "config", None)
+            self.last_telemetry = self._capture_telemetry(
+                committed_cfg, source="deduplicate"
+            )
+            cfg = committed_cfg
         self.config = cfg
-
-        result = dedupe_df(df, config=cfg)
         self.result = result
 
         # Gate scored pairs through review queue
@@ -404,7 +509,7 @@ class AgentSession:
             )
 
         # Confidence distribution
-        scores = [s for _, _, s in scored_pairs]
+        _scores = [s for _, _, s in scored_pairs]
         confidence_distribution = {
             "auto_merged": len(auto_merged),
             "review": len(review),
@@ -435,23 +540,36 @@ class AgentSession:
         file_b: str,
         config: Any = None,
     ) -> dict[str, Any]:
-        """Match two CSV sources with profiling, strategy, and gating."""
+        """Match two CSV sources with profiling, strategy, and gating.
+
+        ``config=None`` delegates to ``match_df(df_a, df_b)`` (no config) so
+        the AutoConfigController fires; explicit config clears cached
+        telemetry to prevent stale-blob leaks. Mirror of ``deduplicate``.
+        """
         from goldenmatch._api import match_df
 
         df_a = pl.read_csv(file_a, encoding="utf8-lossy", ignore_errors=True)
         df_b = pl.read_csv(file_b, encoding="utf8-lossy", ignore_errors=True)
 
-        # Profile the target (first file)
+        # Profile the target (first file) — used only for the `reasoning`
+        # payload, NOT to build the actual matching config when config is None
+        # (see deduplicate() for the rationale).
         profile = profile_for_agent(df_a)
         decision = select_strategy(profile)
 
         if config is not None:
             cfg = config
+            self.last_telemetry = None
+            result = match_df(df_a, df_b, config=cfg)
         else:
-            cfg = _decision_to_config(decision)
+            cfg = None
+            result = match_df(df_a, df_b)
+            committed_cfg = getattr(result, "config", None)
+            self.last_telemetry = self._capture_telemetry(
+                committed_cfg, source="match_sources"
+            )
+            cfg = committed_cfg
         self.config = cfg
-
-        result = match_df(df_a, df_b, config=cfg)
         self.result = result
 
         self.reasoning = {
@@ -528,7 +646,10 @@ class AgentSession:
                 # Evaluate against ground truth if provided
                 if ground_truth is not None:
                     try:
-                        from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
+                        from goldenmatch.core.evaluate import (
+                            evaluate_clusters,
+                            load_ground_truth_csv,
+                        )
                         gt = load_ground_truth_csv(ground_truth)
                         eval_result = evaluate_clusters(clusters, gt)
                         metrics["precision"] = round(eval_result.precision, 4)

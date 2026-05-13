@@ -12,8 +12,8 @@ Usage:
 from __future__ import annotations
 
 import csv
-import sys
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         golden_rules=gm.GoldenRulesConfig(default_strategy="most_complete"),
     )
 
-    print(f"\nConfig:")
+    print("\nConfig:")
     print(f"  Matchkeys: {[mk.name for mk in config.get_matchkeys()]}")
     print(f"  Blocking: multi_pass ({len(config.blocking.passes)} passes)")
     print(f"  Standardization: {list(config.standardization.rules.keys())}")
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     # Run pipeline
     result = gm.dedupe_df(df, config=config)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Clusters: {result.total_clusters}")
     print(f"  Match rate: {result.match_rate:.1%}")
 

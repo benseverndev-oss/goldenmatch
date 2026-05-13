@@ -7,7 +7,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "simple.csv"
 
 
 def test_scan_standalone():
-    from goldencheck import scan_file, apply_confidence_downgrade
+    from goldencheck import apply_confidence_downgrade, scan_file
     findings, profile = scan_file(FIXTURE)
     findings = apply_confidence_downgrade(findings, llm_boost=False)
     assert isinstance(findings, list)
@@ -15,8 +15,8 @@ def test_scan_standalone():
 
 
 def test_handoff_standalone():
+    from goldencheck import apply_confidence_downgrade, scan_file
     from goldencheck.agent.handoff import generate_handoff
-    from goldencheck import scan_file, apply_confidence_downgrade
 
     findings, profile = scan_file(FIXTURE)
     findings = apply_confidence_downgrade(findings, llm_boost=False)
@@ -40,7 +40,7 @@ def test_evaluate_standalone():
 
 
 def test_settings_standalone():
-    from goldencheck.config.settings import load_settings, DEFAULT_SETTINGS
+    from goldencheck.config.settings import DEFAULT_SETTINGS, load_settings
     s = load_settings(Path("/nonexistent/path.yaml"))
     assert s == DEFAULT_SETTINGS
 
@@ -53,7 +53,7 @@ def test_config_standalone():
 
 
 def test_triage_standalone():
-    from goldencheck import auto_triage, Finding, Severity
+    from goldencheck import Finding, Severity, auto_triage
     f = Finding(severity=Severity.WARNING, column="x", check="test", message="m", confidence=0.9)
     result = auto_triage([f])
     assert len(result.pin) == 1

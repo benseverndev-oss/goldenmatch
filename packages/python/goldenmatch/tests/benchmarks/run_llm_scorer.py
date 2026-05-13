@@ -9,10 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import numpy as np
 import polars as pl
-from goldenmatch.core.vertex_embedder import VertexEmbedder
 from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.vertex_embedder import VertexEmbedder
 
 DATASETS = Path(__file__).parent / "datasets"
 API_KEY = os.environ.get("OPENAI_API_KEY", "")
@@ -169,7 +168,7 @@ def run():
     rec = len(tp) / len(gt) if gt else 0
     f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0
 
-    print(f"\n    Vertex baseline (name+desc, t=0.88):  F1=62.8%")
+    print("\n    Vertex baseline (name+desc, t=0.88):  F1=62.8%")
     print(f"    GPT-4o-mini scorer:                   P={prec:.1%} R={rec:.1%} F1={f1:.1%}")
     print(f"    Pairs: {len(combined_found)} ({len(high_conf)} auto + {len(llm_found)} LLM-approved)")
     print(f"    True positives: {len(tp)}")

@@ -1,12 +1,15 @@
 
 # Ensure transforms are imported so they register
-import goldenflow.transforms.text  # noqa: F401
-import goldenflow.transforms.phone  # noqa: F401
-import goldenflow.transforms.dates  # noqa: F401
 import goldenflow.transforms.categorical  # noqa: F401
-
+import goldenflow.transforms.dates  # noqa: F401
+import goldenflow.transforms.phone  # noqa: F401
+import goldenflow.transforms.text  # noqa: F401
 from goldenflow.engine.profiler_bridge import ColumnProfile
-from goldenflow.engine.selector import FINDING_TRANSFORM_MAP, select_from_findings, select_transforms
+from goldenflow.engine.selector import (
+    FINDING_TRANSFORM_MAP,
+    select_from_findings,
+    select_transforms,
+)
 from goldenflow.transforms import get_transform
 
 

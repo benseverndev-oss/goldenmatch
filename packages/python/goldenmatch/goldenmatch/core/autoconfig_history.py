@@ -4,10 +4,12 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §Types & contracts § "RunHistory".
 """
 from __future__ import annotations
+
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
+
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, StopReason
 
 
@@ -152,7 +154,31 @@ class RunHistory:
             if (precision_collapse_floor is not None
                     and verdict == HealthVerdict.RED
                     and sp.mass_above_threshold > precision_collapse_floor):
+                # Precision-collapsed regime ("everything matches"). Within
+                # this regime, `-sep` is mechanically biased toward lower
+                # thresholds: a lower threshold narrows the borderline band,
+                # which mechanically increases sep without the model actually
+                # separating anything better. Tiebreaking on -sep then makes
+                # the controller commit whichever iteration lowered the
+                # threshold most, even when nothing's being merged on the
+                # real data.
+                #
+                # Fix: in the collapsed regime, neutralise sep (set tiebreaker
+                # to 0.0) so the lex order falls through to iteration. v0
+                # (iteration=-1) wins among collapsed candidates, which is
+                # the right "safest fallback" behaviour — at worst we commit
+                # the user's input config and emit a warning, instead of a
+                # threshold-lowered variant that produces a degenerate
+                # dedupe on the real data.
+                #
+                # See issue #195 / scale-audit 2M-degeneration for the bug
+                # this addresses: at 2M, low_transitivity fired 3x lowering
+                # threshold 0.80 -> 0.65; precision_collapse_floor demoted
+                # all entries to rank=3; the pre-fix tiebreaker picked the
+                # most-lowered iteration; downstream pipeline produced 2,570
+                # clusters vs the ~145K v0 would have produced.
                 rank = 3
+                return (rank, 0.0, e.iteration)
             return (rank, -sep, e.iteration)
 
         return min(survivors, key=key)

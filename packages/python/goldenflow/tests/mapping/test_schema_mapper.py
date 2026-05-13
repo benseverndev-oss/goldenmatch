@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.mapping.schema_mapper import SchemaMapper
 
 

@@ -100,8 +100,9 @@ def _download_gcs(parsed, local_path: str) -> None:
 def _download_azure(parsed, local_path: str) -> None:
     """Download from Azure Blob Storage."""
     try:
-        from azure.storage.blob import BlobServiceClient
         import os
+
+        from azure.storage.blob import BlobServiceClient
     except ImportError:
         raise ImportError(
             "Azure Blob support requires azure-storage-blob. "

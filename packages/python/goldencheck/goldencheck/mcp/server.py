@@ -8,12 +8,12 @@ from pathlib import Path
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent, Resource, Prompt
+from mcp.types import Prompt, Resource, TextContent, Tool
 
-from goldencheck.engine.scanner import scan_file, scan_file_with_llm
-from goldencheck.engine.confidence import apply_confidence_downgrade
-from goldencheck.engine.validator import validate_file
 from goldencheck.config.loader import load_config
+from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file, scan_file_with_llm
+from goldencheck.engine.validator import validate_file
 from goldencheck.models.finding import Finding, Severity
 
 logger = logging.getLogger("goldencheck.mcp")
@@ -453,8 +453,9 @@ def _findings_by_column(findings: list[Finding]) -> dict[str, dict[str, int]]:
 
 
 def _tool_list_domains(_arguments: dict) -> dict:
-    from goldencheck.semantic.classifier import list_available_domains
     import yaml
+
+    from goldencheck.semantic.classifier import list_available_domains
 
     domains = []
     for name in list_available_domains():
@@ -552,7 +553,7 @@ _TOOL_HANDLERS = {
 # ---------------------------------------------------------------------------
 
 try:
-    from goldencheck.mcp.agent_tools import AGENT_TOOLS, _AGENT_TOOL_HANDLERS
+    from goldencheck.mcp.agent_tools import _AGENT_TOOL_HANDLERS, AGENT_TOOLS
 
     TOOLS.extend(AGENT_TOOLS)
     _TOOL_HANDLERS.update(_AGENT_TOOL_HANDLERS)
@@ -609,10 +610,10 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
     from collections.abc import AsyncIterator
 
     import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server()
     session_manager = StreamableHTTPSessionManager(

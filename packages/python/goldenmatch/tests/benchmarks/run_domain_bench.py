@@ -9,8 +9,8 @@ Tests the impact of domain-aware feature extraction on product matching:
 5. + LLM scorer on remaining pairs
 """
 
-import sys
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -29,19 +29,24 @@ if env_file.exists():
             os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
 import polars as pl
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
-from goldenmatch.core.domain import (
-    detect_domain, extract_features, normalize_model, model_contains,
-)
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
-    LLMScorerConfig, BudgetConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    BudgetConfig,
+    LLMScorerConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.domain import (
+    detect_domain,
+    extract_features,
+    normalize_model,
+)
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 

@@ -8,13 +8,20 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §HeuristicRefitPolicy rule table (v1).
 """
 from __future__ import annotations
-from typing import Any
+
+from typing import TYPE_CHECKING, Any
+
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
     BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
 from goldenmatch.core.complexity_profile import ComplexityProfile
-from goldenmatch.core.autoconfig_history import RunHistory, PolicyDecision
+
+if TYPE_CHECKING:
+    from goldenmatch.core.autoconfig_controller import IndicatorContext
 
 
 def _first_weighted_mk(cfg: GoldenMatchConfig) -> MatchkeyConfig | None:
@@ -56,7 +63,7 @@ _DEFAULT_NORMALIZE_RULES = {
 }
 
 
-def _with_lower_threshold(cfg, delta: float = 0.05):
+def _with_lower_threshold(cfg: GoldenMatchConfig, delta: float = 0.05) -> tuple[GoldenMatchConfig, str]:
     """Return (new_config, rationale) lowering matchkey threshold by delta.
     Returns (cfg, "") if floor reached or no threshold set."""
     matchkeys = cfg.get_matchkeys()
@@ -74,7 +81,7 @@ def _with_lower_threshold(cfg, delta: float = 0.05):
     return new_cfg, f"lowered threshold to {new_threshold}"
 
 
-def _with_normalize_standardization(cfg, col: str):
+def _with_normalize_standardization(cfg: GoldenMatchConfig, col: str) -> tuple[GoldenMatchConfig, str]:
     """Return (new_config, rationale) adding normalize-standardization on col.
     Returns (cfg, "") if rule already exists for that column."""
     from goldenmatch.config.schemas import StandardizationConfig
@@ -90,9 +97,10 @@ def _with_normalize_standardization(cfg, col: str):
     return new_cfg, f"added normalize_standardization({col}={new_rule})"
 
 
-def _with_multi_pass(cfg, additional_key):
+def _with_multi_pass(cfg: GoldenMatchConfig, additional_key: BlockingKeyConfig) -> tuple[GoldenMatchConfig, str]:
     """Return (new_config, rationale) adding a multi-pass blocking key."""
     blocking = cfg.blocking
+    assert blocking is not None, "callers gate on cfg.blocking before invoking"
     existing_keys = list(blocking.keys)
     if any(k.fields == additional_key.fields for k in existing_keys):
         return cfg, ""
@@ -106,10 +114,11 @@ def _with_multi_pass(cfg, additional_key):
     return new_cfg, f"added multi_pass({additional_key.fields})"
 
 
-def _orthogonal_key(cfg, df_columns):
+def _orthogonal_key(cfg: GoldenMatchConfig, df_columns: list[str]) -> BlockingKeyConfig | None:
     """Pick an orthogonal blocking key from remaining columns.
     Returns None if no candidate exists."""
     used_cols: set[str] = set()
+    assert cfg.blocking is not None, "callers gate on cfg.blocking before invoking"
     for k in cfg.blocking.keys:
         used_cols.update(k.fields)
     candidates = [
@@ -121,7 +130,9 @@ def _orthogonal_key(cfg, df_columns):
     return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
 
 
-def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
+def _demote_exact_to_weighted_fuzzy(
+    cfg: GoldenMatchConfig, identity_col: str, witness_col: str,
+) -> tuple[GoldenMatchConfig, str]:
     """Demote an exact matchkey on identity_col to a fuzzy participant
     in the existing weighted matchkey. Add identity_col to blocking.
 
@@ -129,21 +140,22 @@ def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
     matchkey exists to add to (defensive — we can't demote without
     a target).
     """
+    matchkeys = cfg.matchkeys or []
     weighted_indices = [
-        i for i, mk in enumerate(cfg.matchkeys) if mk.type == "weighted"
+        i for i, mk in enumerate(matchkeys) if mk.type == "weighted"
     ]
     if not weighted_indices:
         return cfg, ""
 
     exact_indices = [
-        i for i, mk in enumerate(cfg.matchkeys)
+        i for i, mk in enumerate(matchkeys)
         if mk.type == "exact" and any(f.field == identity_col for f in mk.fields)
     ]
     if not exact_indices:
         return cfg, ""    # nothing to demote
 
     target_idx = weighted_indices[0]
-    target_mk = cfg.matchkeys[target_idx]
+    target_mk = matchkeys[target_idx]
 
     # Add identity_col as a fuzzy field with low weight (0.3)
     new_field = MatchkeyField(
@@ -159,8 +171,8 @@ def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
         new_target_mk = target_mk.model_copy(update={"fields": new_target_fields})
 
     # Build new matchkeys list: drop the exact matchkey(s); replace target
-    new_matchkeys = []
-    for i, mk in enumerate(cfg.matchkeys):
+    new_matchkeys: list[MatchkeyConfig] = []
+    for i, mk in enumerate(matchkeys):
         if i in exact_indices:
             continue
         if i == target_idx:
@@ -170,6 +182,7 @@ def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
 
     # Add to blocking if not present
     blocking = cfg.blocking
+    assert blocking is not None, "callers gate on cfg.blocking before invoking"
     blocking_cols: set[str] = set()
     for k in blocking.keys:
         blocking_cols.update(k.fields)
@@ -203,7 +216,7 @@ def _demote_exact_to_weighted_fuzzy(cfg, identity_col: str, witness_col: str):
 
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking produced blocks but the scorer saw zero candidate
     pairs to compare.  This covers two related pathologies:
 
@@ -236,8 +249,10 @@ def rule_blocking_singleton_trap(
     mk = _first_weighted_mk(current)
     if mk is None:
         return None
-    target_field = None
+    target_field: str | None = None
     for f in mk.fields or []:
+        if f.field is None:
+            continue
         col_type = profile.data.column_types.get(f.field, "unknown")
         if col_type in ("text", "name"):
             target_field = f.field
@@ -272,7 +287,7 @@ def rule_blocking_singleton_trap(
 
 def rule_blocking_too_coarse(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     bp = profile.blocking
     n_rows = profile.data.n_rows
     if bp.n_blocks == 0 or n_rows == 0:
@@ -306,7 +321,7 @@ def rule_blocking_too_coarse(
 
 def rule_unimodal_scoring(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     sp = profile.scoring
     if sp.dip_statistic >= 0.01 or sp.n_pairs_scored == 0:
         return None
@@ -335,7 +350,7 @@ def rule_unimodal_scoring(
     if not changed:
         return None
     new_mk = mk.model_copy(update={"fields": new_fields})
-    new_matchkeys = [new_mk if m is mk else m for m in current.matchkeys]
+    new_matchkeys = [new_mk if m is mk else m for m in (current.matchkeys or [])]
     new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
     decision = PolicyDecision(
         rule_name="unimodal_scoring",
@@ -348,7 +363,7 @@ def rule_unimodal_scoring(
 
 def rule_low_reduction_ratio(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     bp = profile.blocking
     if bp.reduction_ratio >= 0.5:
         return None
@@ -380,7 +395,7 @@ def rule_low_reduction_ratio(
 
 def rule_low_transitivity(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     cp = profile.cluster
     if cp.transitivity_rate >= 0.85 or cp.n_clusters == 0:
         return None
@@ -391,7 +406,7 @@ def rule_low_transitivity(
     if new_threshold == mk.threshold:
         return None
     new_mk = mk.model_copy(update={"threshold": new_threshold})
-    new_matchkeys = [new_mk if m is mk else m for m in current.matchkeys]
+    new_matchkeys = [new_mk if m is mk else m for m in (current.matchkeys or [])]
     new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
     decision = PolicyDecision(
         rule_name="low_transitivity",
@@ -404,8 +419,8 @@ def rule_low_transitivity(
 
 def rule_no_matches(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
-    ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when scoring.mass_above_threshold == 0.
 
     v1.10 (with ctx): tries alternatives in priority order based on
@@ -420,6 +435,8 @@ def rule_no_matches(
     if sp.mass_above_threshold > 0:
         return None
 
+    if current.blocking is None or not current.blocking.keys:
+        return None
     blocking_col = current.blocking.keys[0].fields[0]
     candidates = []
 
@@ -455,8 +472,8 @@ def rule_no_matches(
 
 def rule_blocking_key_swap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
-    ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when a prior iteration already loosened the threshold/block cap
     but candidates still aren't matching. The blocking *key* is wrong —
     swap to ``first_token`` on the dominant text field of the first weighted
@@ -496,8 +513,10 @@ def rule_blocking_key_swap(
     mk = _first_weighted_mk(current)
     if mk is None:
         return None
-    target_field = None
+    target_field: str | None = None
     for f in mk.fields or []:
+        if f.field is None:
+            continue
         col_type = profile.data.column_types.get(f.field, "unknown")
         if col_type in ("text", "name"):
             target_field = f.field
@@ -527,8 +546,8 @@ def rule_blocking_key_swap(
     dropped_names = []
     for mk in (current.matchkeys or []):
         if mk.type == "exact" and mk.fields:
-            field_names = [f.field for f in mk.fields]
-            if all(_is_derived(n) for n in field_names):
+            field_names = [f.field for f in mk.fields if f.field is not None]
+            if field_names and all(_is_derived(n) for n in field_names):
                 dropped_names.append(mk.name)
                 continue
         surviving_matchkeys.append(mk)
@@ -564,7 +583,7 @@ def rule_blocking_key_swap(
 
 def rule_uniform_heavy_blocking(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking creates many candidates but scoring can't separate
     matches from non-matches — signature of over-coarse blocking on a
     low-discriminating key.
@@ -655,7 +674,7 @@ def rule_uniform_heavy_blocking(
 
 def rule_blocking_field_null_heavy(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when blocking on a single field whose null_rate > 0.10.
     Records with null/missing blocking values can't appear in any block,
     capping recall structurally.
@@ -718,7 +737,7 @@ def rule_blocking_field_null_heavy(
 
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Fires when the random-pair probe finds a non-trivial fraction of
     non-blocked pairs that score above threshold — signal that blocking is
     excluding real matches.
@@ -843,7 +862,7 @@ def _llm_api_key_available() -> bool:
 
 def rule_enable_llm_scorer(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Enable per-pair LLM scoring (LLMScorerConfig) when there's a meaningful
     borderline mass and an API key is available.
 
@@ -868,7 +887,7 @@ def rule_enable_llm_scorer(
     if current.llm_scorer is not None and current.llm_scorer.enabled:
         return None
 
-    from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+    from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
 
     new_cfg = current.model_copy(update={
         "llm_scorer": LLMScorerConfig(
@@ -899,8 +918,8 @@ def rule_enable_llm_scorer(
 
 def rule_corruption_normalize(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
-    ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10: when blocking column has high corruption + identity prior,
     add normalize-standardization. One-shot via standardization-already-exists
     check (so it doesn't fire repeatedly on the same column).
@@ -933,8 +952,8 @@ def rule_corruption_normalize(
 
 def rule_cross_blocking_disagreement(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
-    ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10: when iter ≥ 1, profile RED, mass_above < 0.1, and cross-blocking
     overlap with an orthogonal key is low (< 0.3), propose adding a multi-pass.
 
@@ -972,8 +991,8 @@ def rule_cross_blocking_disagreement(
 
 def rule_sparse_match_expand(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
-    ctx=None,
-) -> "tuple[GoldenMatchConfig, PolicyDecision] | None":
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.10 DEVIATION: spec wanted ExpandSample(2.0) which requires
     controller-level sample expansion (queued for v1.11). v1.10 substitute:
     fire mark_fired("rule_sparse_match_expand") side-channel + lower
@@ -1002,7 +1021,12 @@ def rule_sparse_match_expand(
     return new_cfg, decision
 
 
-def rule_demote_clustered_identity(profile, current, history, ctx=None):
+def rule_demote_clustered_identity(
+    profile: ComplexityProfile,
+    current: GoldenMatchConfig,
+    history: RunHistory,
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """v1.11: when an exact matchkey's identity column is collision-prone,
     demote it to a fuzzy participant + add to blocking.
 
@@ -1031,7 +1055,7 @@ def rule_demote_clustered_identity(profile, current, history, ctx=None):
 
     # Find candidate columns: exact matchkey + identity-shaped + clustered cardinality
     candidates = []
-    for mk in current.matchkeys:
+    for mk in (current.matchkeys or []):
         if mk.type != "exact":
             continue
         for f in mk.fields:

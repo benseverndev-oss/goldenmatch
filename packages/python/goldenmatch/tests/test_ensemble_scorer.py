@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 
 

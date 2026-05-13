@@ -3,23 +3,7 @@
 Data transformation toolkit -- standardize, reshape, and normalize messy data. DQBench Transform Score: 100/100.
 
 ## Related Projects
-- **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
-- **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenflow`, `benzsevern/goldencheck`, `benzsevern/goldenmatch`
-
-## Branch & Merge SOP (all Golden Suite repos)
-- Feature work goes on `feature/<name>` branches, never directly to main
-- Merge via **squash merge PR** (watchers see PR activity, history stays clean)
-- PR title format: `feat: <description>` or `fix: <description>`
-- PR body: summary bullets + test plan
-- Merge when: tests pass, docs updated. Days not weeks.
-- After merge: delete remote branch
-
-## Environment
-- Windows 11, bash shell (Git Bash)
-- Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`
-- Two GitHub accounts: `benzsevern` (personal) and `benzsevern-mjh` (work)
-- MUST `gh auth switch --user benzsevern` before push, switch back to `benzsevern-mjh` after
+Sibling packages in this monorepo at `packages/python/{goldencheck,goldenmatch,goldenpipe,infermap}/`. Pre-fold history in `_archive/goldenmatch-pre-fold/`. Branch/merge SOP, GitHub auth dance, and env setup live in root CLAUDE.md.
 
 ## Commands
 
@@ -298,9 +282,13 @@ dqbench run all                                  # Compare against other tools
 
 ## Publishing
 
+CI auto-publishes via `.github/workflows/publish-goldenflow.yml` (PR #166) on `release: published` for `goldenflow-v*` tags. The MCP Registry listing auto-syncs off the same event via `publish-mcp.yml`. Manual fallback:
+
 ```bash
 python -m build && source .testing/.env && python -m twine upload dist/*
 ```
+
+- **Version source**: `pyproject.toml` `[project] version` is canonical. `goldenflow/__init__.py:__version__` MUST match. They drifted in v1.1.x (pyproject=1.1.2, `__init__`=1.1.1) and shipped that way — fixed in 1.1.5. Bumping a release means touching both atomically.
 
 ## Remote MCP Server
 

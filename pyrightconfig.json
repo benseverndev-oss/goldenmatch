@@ -1,0 +1,47 @@
+{
+  "include": [
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_history.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_policy.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_rules.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_negative_evidence.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_memory.py",
+    "packages/python/goldenmatch/goldenmatch/core/autoconfig_verify.py",
+    "packages/python/goldenmatch/goldenmatch/core/indicators.py",
+    "packages/python/goldenmatch/goldenmatch/core/complexity_profile.py",
+    "packages/python/goldenmatch/goldenmatch/core/scorer.py",
+    "packages/python/goldenmatch/goldenmatch/core/pipeline.py",
+    "packages/python/goldenmatch/goldenmatch/core/blocker.py",
+    "packages/python/goldenmatch/goldenmatch/core/cluster.py",
+    "packages/python/goldenmatch/goldenmatch/core/profiler.py",
+    "packages/python/goldenmatch/goldenmatch/core/learned_blocking.py",
+    "packages/python/goldenmatch/goldenmatch/core/profile_emitter.py",
+    "packages/python/goldenmatch/goldenmatch/core/_profile_helpers.py",
+    "packages/python/goldenmatch/goldenmatch/_api.py",
+    "packages/python/goldenmatch/goldenmatch/utils/transforms.py",
+    "packages/python/goldenmatch/goldenmatch/config"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "**/node_modules"
+  ],
+  "extraPaths": [
+    "packages/python/goldenmatch"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownLambdaType": false,
+  "reportUnknownParameterType": false,
+  "reportMissingTypeArgument": false,
+  "reportPrivateUsage": false,
+  "reportUnnecessaryComparison": false,
+  "reportUnnecessaryIsInstance": false,
+  "reportUnnecessaryContains": false,
+  "reportConstantRedefinition": false
+}

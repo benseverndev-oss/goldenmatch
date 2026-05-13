@@ -1,9 +1,12 @@
 import datetime
 
 import polars as pl
-
-from goldencheck.relations.age_validation import AgeValidationProfiler, _is_age_column, _is_dob_column
 from goldencheck.models.finding import Severity
+from goldencheck.relations.age_validation import (
+    AgeValidationProfiler,
+    _is_age_column,
+    _is_dob_column,
+)
 
 
 def test_is_age_column_basic():

@@ -88,7 +88,7 @@ def build_email(rng: random.Random) -> str:
     elif variant == 1:
         return f"  {fn}.{ln}@{domain}  "  # needs strip
     elif variant == 2:
-        return f"not-an-email"  # invalid
+        return "not-an-email"  # invalid
     else:
         return f"{fn}.{ln}@{domain}"  # already fine
 
@@ -107,7 +107,7 @@ def build_phone(rng: random.Random) -> str:
     elif variant == 3:
         return f"{area}{mid}{last}"
     else:
-        return f"555-CALL-NOW"  # invalid
+        return "555-CALL-NOW"  # invalid
 
 
 def build_address(rng: random.Random) -> str:

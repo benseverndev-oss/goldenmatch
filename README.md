@@ -19,6 +19,7 @@
 <!-- Quality / proof -->
 [![CI](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenmatch)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benzsevern/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benzsevern/goldenmatch)
 [![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017)](https://github.com/benzsevern/dqbench)
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-97.2%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
@@ -32,10 +33,8 @@
 [![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benzsevern/goldenmatch/wiki)
 [![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/scripts/gpu_colab_notebook.ipynb)
 
 <!-- Activity -->
-[![GitHub Discussions](https://img.shields.io/github/discussions/benzsevern/goldenmatch?color=d4a017&logo=github&label=discussions)](https://github.com/benzsevern/goldenmatch/discussions)
 [![Last commit](https://img.shields.io/github/last-commit/benzsevern/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benzsevern/goldenmatch/commits/main)
 
 </div>
@@ -94,7 +93,8 @@ flowchart LR
 - **97.2% F1 on DBLP-ACM out of the box** for entity resolution. [DQBench ER score: 95.30](https://github.com/benzsevern/dqbench).
 - **Learning Memory** — corrections persist across runs and re-anchor across row reorders, so the system stops needing the same correction twice (GoldenMatch v1.6.0; off by default).
 - **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
-- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 35+ MCP tools across the suite.
+- **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 36+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for v1.7-v1.12 introspection.
+- **AutoConfigController visible everywhere** (v1.7-v1.12 surface-parity arc) — web `ControllerPanel`, TUI `Ctrl+A`, CLI `goldenmatch autoconfig`, REST `/autoconfig` + `/controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDFs, MCP/A2A telemetry tools. One JSON shape across every interface.
 - **Polyglot parity** — Python and TypeScript implementations track the same scorer outputs to 4-decimal precision via a parity harness.
 - **Production paths** — Postgres sync, daemon mode, lineage tracking, review queues, dbt integration, GitHub Actions, and a Rust extension layer for Postgres / DuckDB.
 
@@ -341,6 +341,16 @@ just test      # all languages
 just lint
 just build
 ```
+
+---
+
+## Reproducing benchmarks
+
+Published GoldenMatch numbers (DQbench composite 91.04, DBLP-ACM 0.9641 F1, Febrl3 0.9443 F1, NCVR 0.9719 F1) map back to a single committed runner: `scripts/run_benchmarks.py`. See [`docs/reproducing-benchmarks.md`](docs/reproducing-benchmarks.md) for per-number commands, dataset URLs, expected output (with tolerance), variance notes (deterministic vs LLM-augmented), and a copy-pasteable one-click reproduction snippet for the DQbench composite. The same runner powers the weekly `benchmarks.yml` workflow.
+
+## Scale envelope
+
+"How big can this handle?" is answered in [`docs/scale-envelope.md`](docs/scale-envelope.md): per-backend ranges (Polars in-memory < 500K, DuckDB out-of-core 500K - 50M, Ray distributed >= 50M), block-size failure modes, candidate-pair math, and a single-page decision tree for picking a backend.
 
 ---
 

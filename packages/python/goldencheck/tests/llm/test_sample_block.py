@@ -2,6 +2,7 @@ import polars as pl
 from goldencheck.llm.sample_block import build_sample_blocks
 from goldencheck.models.finding import Finding, Severity
 
+
 def test_sample_block_contains_metadata():
     df = pl.DataFrame({"name": ["Alice", "Bob", None, "Charlie", "Diana"] * 20})
     findings = [Finding(severity=Severity.WARNING, column="name", check="nullability", message="has nulls")]

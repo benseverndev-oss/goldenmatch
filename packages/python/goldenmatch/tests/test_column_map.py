@@ -1,10 +1,9 @@
 """Tests for column mapping feature."""
 
+
 import polars as pl
 import pytest
-from pathlib import Path
-
-from goldenmatch.core.ingest import apply_column_map, suggest_column_mapping, load_file
+from goldenmatch.core.ingest import apply_column_map, load_file, suggest_column_mapping
 
 
 class TestApplyColumnMap:
@@ -88,8 +87,12 @@ class TestColumnMapInPipeline:
         }).write_csv(path)
 
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            OutputConfig, GoldenRulesConfig, GoldenFieldRule,
+            GoldenFieldRule,
+            GoldenMatchConfig,
+            GoldenRulesConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
         )
         from goldenmatch.core.pipeline import run_dedupe
 
@@ -132,7 +135,10 @@ class TestColumnMapInPipeline:
         }).write_csv(ref)
 
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField, OutputConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
         )
         from goldenmatch.core.pipeline import run_match
 

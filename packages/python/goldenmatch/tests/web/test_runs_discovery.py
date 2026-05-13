@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from goldenmatch.web.runs import discover_runs, load_run_manifest, load_lineage
+from goldenmatch.web.runs import discover_runs, load_lineage, load_run_manifest
 
 
 def test_discover_runs(sample_project: Path) -> None:

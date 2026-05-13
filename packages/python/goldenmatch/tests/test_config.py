@@ -4,8 +4,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from goldenmatch.config.loader import load_config
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -21,7 +19,7 @@ from goldenmatch.config.schemas import (
     MatchSettingsConfig,
     OutputConfig,
 )
-
+from pydantic import ValidationError
 
 # ── FieldTransform ──────────────────────────────────────────────────────────
 
@@ -156,7 +154,7 @@ class TestBlockingConfigAdaptive:
         assert len(cfg.sub_block_keys) == 1
 
     def test_sorted_neighborhood_strategy(self):
-        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, SortKeyField
+        from goldenmatch.config.schemas import BlockingConfig, SortKeyField
         cfg = BlockingConfig(
             keys=[],
             strategy="sorted_neighborhood",
@@ -170,7 +168,7 @@ class TestBlockingConfigAdaptive:
         assert len(cfg.sort_key) == 2
 
     def test_invalid_strategy_rejected(self):
-        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.config.schemas import BlockingConfig
         with pytest.raises(ValueError):
             BlockingConfig(keys=[], strategy="invalid")
 

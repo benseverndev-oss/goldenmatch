@@ -38,5 +38,6 @@ else:
 # Show the full JSON report
 print("\n=== JSON Report (first mapping) ===\n")
 import json
+
 report = result.report()
 print(json.dumps(report["mappings"][0], indent=2))

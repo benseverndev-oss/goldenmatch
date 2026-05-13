@@ -20,11 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
-from urllib.parse import urlparse, parse_qs
-
-import polars as pl
+from urllib.parse import parse_qs, urlparse
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 
@@ -46,6 +44,9 @@ class MatchServer:
         # Correction with empty hashes (REST receives raw decisions, no df).
         self._memory_store: Any = None
         self._memory_dataset: str | None = None
+        # v1.7-v1.12: last AutoConfigController telemetry blob, populated by
+        # POST /autoconfig. None before the first call.
+        self._last_telemetry: dict | None = None
 
     def initialize(self) -> None:
         """Run initial matching and cache results."""
@@ -266,6 +267,61 @@ class MatchServer:
         except Exception as e:
             logger.warning("REST /reviews/decide memory write failed: %s", e)
 
+    # ── v1.7-v1.12 controller telemetry ──────────────────────────────────
+
+    def autoconfigure(self, records: list[dict] | None = None) -> dict:
+        """Run AutoConfigController; return committed config + telemetry.
+
+        ``records`` overrides the server's currently-loaded data. ``None``
+        re-runs auto-config against the data the server was booted with —
+        useful for "show me what auto-config would do on this dataset" without
+        re-uploading rows.
+
+        Caches the telemetry on ``self._last_telemetry`` so a follow-up
+        ``GET /controller/telemetry`` request returns the same blob without
+        re-running the controller.
+        """
+        import polars as pl
+
+        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
+
+        df = pl.DataFrame(records) if records else self.engine.data
+        cfg = auto_configure_df(df)
+        state = _LAST_CONTROLLER_RUN.get()
+        profile, history = state if state is not None else (None, None)
+
+        # Reuse the same serializer the web / SQL surfaces use so callers
+        # parsing telemetry across REST + MCP + A2A see one schema.
+        try:
+            from goldenmatch.web.controller_telemetry import serialize_telemetry
+            telemetry = serialize_telemetry(
+                profile=profile,
+                history=history,
+                committed_config=cfg,
+                source="rest_autoconfig",
+                run_name=None,
+                recorded_at=None,
+            )
+        except Exception:
+            telemetry = {"available": state is not None, "source": "rest_autoconfig"}
+
+        self._last_telemetry = telemetry
+
+        return {
+            "config": cfg.model_dump(mode="json", exclude_none=True)
+            if hasattr(cfg, "model_dump") else {},
+            "telemetry": telemetry,
+        }
+
+    def get_controller_telemetry(self) -> dict:
+        """Return the most recent ``autoconfigure`` call's telemetry blob.
+
+        Returns the unavailable sentinel before any ``POST /autoconfig`` call.
+        """
+        if self._last_telemetry is None:
+            return {"available": False, "source": None}
+        return self._last_telemetry
+
 
 # Global server instance
 _server_instance: MatchServer | None = None
@@ -308,6 +364,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 "decisions": _server_instance._review_decisions,
                 "count": len(_server_instance._review_decisions),
             })
+        elif path == "/controller/telemetry":
+            self._json_response(_server_instance.get_controller_telemetry())
         else:
             self._json_response({"error": "Not found"}, 404)
 
@@ -328,6 +386,15 @@ class APIHandler(BaseHTTPRequestHandler):
             top_k = data.get("top_k", 5)
             matches = _server_instance.match_record(record, top_k)
             self._json_response({"matches": matches, "count": len(matches)})
+        elif path == "/autoconfig":
+            # Optional `records` body to autoconfig against a different dataset.
+            # Omit it to reprofile the server's loaded data.
+            records = data.get("records")
+            try:
+                result = _server_instance.autoconfigure(records=records)
+                self._json_response(result)
+            except Exception as exc:
+                self._json_response({"error": f"autoconfig failed: {exc}"}, 400)
         elif path == "/match/batch":
             records = data.get("records", [])
             results = []
@@ -373,7 +440,7 @@ def start_server(
     global _server_instance
     _server_instance = MatchServer(engine, config)
 
-    print(f"Initializing GoldenMatch API...")
+    print("Initializing GoldenMatch API...")
     _server_instance.initialize()
 
     server = HTTPServer((host, port), APIHandler)
@@ -382,17 +449,19 @@ def start_server(
     print(f"\n⚡ GoldenMatch API running at http://{host}:{port}")
     print(f"   Records: {stats.get('total_records', 0):,}")
     print(f"   Clusters: {stats.get('total_clusters', 0):,}")
-    print(f"\n   Endpoints:")
-    print(f"   GET  /health              Health check")
-    print(f"   GET  /stats               Dataset statistics")
-    print(f"   POST /match               Match a record")
-    print(f"   POST /match/batch         Match multiple records")
-    print(f"   POST /explain             Explain a match")
-    print(f"   GET  /clusters            List clusters")
-    print(f"   GET  /clusters/<id>       Cluster detail")
-    print(f"   GET  /reviews             Review queue (steward)")
-    print(f"   POST /reviews/decide      Approve/reject a pair")
-    print(f"\n   Press Ctrl+C to stop.\n")
+    print("\n   Endpoints:")
+    print("   GET  /health              Health check")
+    print("   GET  /stats               Dataset statistics")
+    print("   POST /match               Match a record")
+    print("   POST /match/batch         Match multiple records")
+    print("   POST /explain             Explain a match")
+    print("   GET  /clusters            List clusters")
+    print("   GET  /clusters/<id>       Cluster detail")
+    print("   POST /autoconfig          Run AutoConfigController (returns config + telemetry)")
+    print("   GET  /controller/telemetry Last autoconfig's stop_reason / decisions / NE / priors")
+    print("   GET  /reviews             Review queue (steward)")
+    print("   POST /reviews/decide      Approve/reject a pair")
+    print("\n   Press Ctrl+C to stop.\n")
 
     try:
         server.serve_forever()

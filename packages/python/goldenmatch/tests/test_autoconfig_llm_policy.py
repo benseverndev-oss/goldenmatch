@@ -1,19 +1,28 @@
 """LLMRefitPolicy unit tests. The policy is tested with a mocked LLM call
 to avoid real API spend. End-to-end LLM behavior (with real API key) is
 covered by an opt-in benchmark rerun, not in this file."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autoconfig_history import HistoryEntry, RunHistory
 from goldenmatch.core.autoconfig_policy import (
-    LLMRefitPolicy, HeuristicRefitPolicy, RefitPolicy,
+    LLMRefitPolicy,
+    RefitPolicy,
 )
-from goldenmatch.core.autoconfig_history import RunHistory, HistoryEntry, PolicyDecision
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, BlockingProfile, ScoringProfile,
-    ClusterProfile, MatchkeyProfile, FieldStats, HealthVerdict,
+    BlockingProfile,
+    ClusterProfile,
+    ComplexityProfile,
+    DataProfile,
+    FieldStats,
+    MatchkeyProfile,
+    ScoringProfile,
 )
 
 
@@ -180,8 +189,6 @@ def test_apply_diff_returns_none_when_no_change():
 
 def test_llm_policy_attaches_decision_to_history_on_success():
     """A successful LLM proposal attaches a PolicyDecision to the history entry."""
-    from goldenmatch.core.autoconfig_history import HistoryEntry
-    import datetime
 
     base = MagicMock(spec=RefitPolicy)
     base.propose.return_value = None

@@ -10,7 +10,12 @@ from typing import Any
 
 import yaml
 
-from goldenmatch.core.agent import AgentSession, _decision_to_config, profile_for_agent, select_strategy
+from goldenmatch.core.agent import (
+    AgentSession,
+    _decision_to_config,
+    profile_for_agent,
+    select_strategy,
+)
 
 
 def dispatch_skill(skill_id: str, params: dict) -> dict:
@@ -39,13 +44,35 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id == "analyze_data":
         return session.analyze(params["file_path"])
 
+    if skill_id == "autoconfig":
+        # v1.7-v1.12: AutoConfigController via AgentSession. Returns committed
+        # config + telemetry blob (stop_reason, health, decisions, NE fields).
+        return session.autoconfigure(params["file_path"])
+
+    if skill_id == "controller_telemetry":
+        # Stateless A2A dispatch (one AgentSession per request) means we
+        # can't recall telemetry from a prior request. Mirrors MCP's note —
+        # callers should use the inline telemetry returned by autoconfig /
+        # deduplicate / match instead.
+        return {
+            "available": False,
+            "note": (
+                "controller_telemetry is per-session and A2A dispatch is "
+                "stateless. Telemetry is returned inline by autoconfig, "
+                "deduplicate, and match skills."
+            ),
+        }
+
     if skill_id == "deduplicate":
         result = session.deduplicate(
             params["file_path"],
             config=params.get("config"),
         )
-        # Serialise -- strip non-JSON-friendly objects
-        return _serialise_result(result)
+        serialised = _serialise_result(result)
+        # Plumb telemetry onto the wire result so callers see stop_reason /
+        # decisions / NE alongside the dedupe output, not as a separate call.
+        serialised["telemetry"] = session.last_telemetry or {"available": False, "source": None}
+        return serialised
 
     if skill_id == "match":
         result = session.match_sources(
@@ -53,7 +80,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             params["file_b"],
             config=params.get("config"),
         )
-        return _serialise_result(result)
+        serialised = _serialise_result(result)
+        serialised["telemetry"] = session.last_telemetry or {"available": False, "source": None}
+        return serialised
 
     if skill_id == "compare_strategies":
         return session.compare_strategies(
@@ -63,6 +92,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "explain":
         import polars as pl
+
         from goldenmatch import explain_pair_df
 
         record_a = pl.DataFrame([params["record_a"]])
@@ -80,7 +110,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id == "configure":
         import polars as pl
 
-        analysis = session.analyze(params["file_path"])
+        _analysis = session.analyze(params["file_path"])
         decision = select_strategy(
             profile_for_agent(
                 pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)
@@ -101,8 +131,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "quality":
         import polars as pl
-        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
+
         from goldenmatch.config.schemas import QualityConfig
+        from goldenmatch.core.quality import _goldencheck_available, run_quality_check
 
         if not _goldencheck_available():
             return {"error": "goldencheck not installed. pip install goldenmatch[quality]"}
@@ -144,8 +175,9 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
 
     if skill_id == "transform":
         import polars as pl
-        from goldenmatch.core.transform import _goldenflow_available, run_transform
+
         from goldenmatch.config.schemas import TransformConfig
+        from goldenmatch.core.transform import _goldenflow_available, run_transform
 
         if not _goldenflow_available():
             return {"error": "goldenflow not installed. pip install goldenmatch[transform]"}
@@ -182,6 +214,14 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         if write_error:
             result["write_error"] = write_error
         return result
+
+    if skill_id in {
+        "identity_resolve", "identity_list", "identity_history",
+        "identity_conflicts", "identity_merge", "identity_split",
+    }:
+        from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
+        # Reuse MCP dispatch since the contract is identical (JSON in/out).
+        return _identity_dispatch(skill_id, params)
 
     raise ValueError(f"Unknown skill: {skill_id}")
 

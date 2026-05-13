@@ -30,6 +30,10 @@ on:
         type: boolean
         default: false
 
+# Locked-down by default; benchmarks job stays read-only.
+permissions:
+  contents: read
+
 jobs:
   benchmarks:
     # Datasets are gated behind repo VARS so a fork without dataset access
@@ -46,8 +50,8 @@ jobs:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -119,7 +123,7 @@ jobs:
 
       - name: Upload benchmark artifacts
         if: always() && steps.prereqs.outputs.configured == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: benchmark-results-${{ github.run_id }}
           path: |

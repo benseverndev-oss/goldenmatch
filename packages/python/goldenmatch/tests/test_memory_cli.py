@@ -1,15 +1,11 @@
 """Tests for the Learning Memory Python API additions and CLI subgroup (Phase 6)."""
 from __future__ import annotations
 
-import csv
 from pathlib import Path
-
-import pytest
-from typer.testing import CliRunner
 
 import goldenmatch
 from goldenmatch.cli.main import app
-
+from typer.testing import CliRunner
 
 # ── Python API tests ──
 
@@ -37,9 +33,10 @@ def test_api_learn_returns_adjustments(tmp_path):
         )
     # Manually patch original_score by reopening — but our API leaves it 0.0.
     # Instead, rewrite via store with non-zero scores so threshold can compute.
-    from goldenmatch.core.memory.store import MemoryStore, Correction
-    from datetime import datetime
     import uuid
+    from datetime import datetime
+
+    from goldenmatch.core.memory.store import Correction, MemoryStore
     store = MemoryStore(backend="sqlite", path=p)
     try:
         # Replace existing rows with non-zero original_score

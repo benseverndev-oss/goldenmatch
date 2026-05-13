@@ -1,6 +1,5 @@
 """Tests for noisy-data blocking transforms: token_sort, qgram, first_token, last_token."""
 
-import pytest
 
 from goldenmatch.utils.transforms import apply_transform, apply_transforms
 

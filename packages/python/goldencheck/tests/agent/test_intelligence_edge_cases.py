@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldencheck.agent.intelligence import (
     StrategyDecision,
     explain_finding,
@@ -11,7 +10,6 @@ from goldencheck.agent.intelligence import (
 )
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
-
 
 # ---------------------------------------------------------------------------
 # test_select_strategy_empty_dataframe

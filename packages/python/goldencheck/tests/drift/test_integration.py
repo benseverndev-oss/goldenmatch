@@ -6,11 +6,9 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from goldencheck.baseline.models import BaselineProfile, PatternGrammar, StatProfile
 from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Severity
-
 
 # ---------------------------------------------------------------------------
 # Helpers

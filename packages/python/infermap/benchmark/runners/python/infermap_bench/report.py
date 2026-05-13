@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 import jsonschema
 
@@ -108,7 +109,7 @@ def build_report(
     slices, and emits one per_case entry per result. The return value conforms
     to the `Report` TypedDict and the committed report.schema.json.
     """
-    ran_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    ran_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     return {
         "version": REPORT_VERSION,
         "language": language,

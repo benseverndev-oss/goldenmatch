@@ -1,8 +1,10 @@
 """Merge LLM response into existing findings list."""
 from __future__ import annotations
+
 import logging
 import re
 from dataclasses import replace
+
 from goldencheck.llm.prompts import LLMResponse
 from goldencheck.models.finding import Finding, Severity
 

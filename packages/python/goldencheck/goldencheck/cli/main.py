@@ -1,24 +1,25 @@
 """CLI entry points for GoldenCheck."""
 from __future__ import annotations
+
 import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+
 import polars as pl
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
-from goldencheck.engine.scanner import scan_file, scan_file_with_llm
-from goldencheck.engine.confidence import apply_confidence_downgrade
-from goldencheck.engine.validator import validate_file
-from goldencheck.config.loader import load_config
-from goldencheck.config.writer import save_config
-from goldencheck.reporters.rich_console import report_rich
-from goldencheck.reporters.json_reporter import report_json
-from goldencheck.reporters.ci_reporter import report_ci
 
 from goldencheck import __version__
+from goldencheck.config.loader import load_config
+from goldencheck.config.writer import save_config
+from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file, scan_file_with_llm
+from goldencheck.engine.validator import validate_file
+from goldencheck.reporters.ci_reporter import report_ci
+from goldencheck.reporters.json_reporter import report_json
+from goldencheck.reporters.rich_console import report_rich
 
 
 @contextmanager
@@ -79,7 +80,7 @@ def _version_callback(value: bool) -> None:
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None, "--version", "-V", callback=_version_callback, is_eager=True,
         help="Show version and exit.",
     ),
@@ -185,14 +186,14 @@ def scan(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
     smart: bool = typer.Option(False, "--smart", help="Auto-triage: pin high-confidence, dismiss low."),
     guided: bool = typer.Option(False, "--guided", help="Walk through findings one at a time."),
     no_history: bool = typer.Option(False, "--no-history", help="Don't record this scan in history."),
-    webhook: Optional[str] = typer.Option(None, "--webhook", help="URL to POST findings to."),
+    webhook: str | None = typer.Option(None, "--webhook", help="URL to POST findings to."),
     notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
-    html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report at this path."),
-    baseline_path: Optional[Path] = typer.Option(None, "--baseline", help="Path to baseline YAML"),
+    html: Path | None = typer.Option(None, "--html", help="Generate HTML report at this path."),
+    baseline_path: Path | None = typer.Option(None, "--baseline", help="Path to baseline YAML"),
     no_baseline: bool = typer.Option(False, "--no-baseline", help="Ignore baseline files"),
 ) -> None:
     """Profile one or more data files and report findings."""
@@ -211,7 +212,7 @@ def scan(
 @app.command()
 def validate(
     file: Path = typer.Argument(..., help="Data file to validate."),
-    config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to goldencheck.yml."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to goldencheck.yml."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Disable TUI and print Rich output instead."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
 ) -> None:
@@ -257,12 +258,12 @@ def validate(
 @app.command()
 def review(
     file: Path = typer.Argument(..., help="Data file to profile and validate."),
-    config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to goldencheck.yml."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to goldencheck.yml."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Disable TUI and print Rich output instead."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Enable LLM enhancement pass."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack: healthcare, finance, ecommerce."),
 ) -> None:
     """Profile AND validate a file, launching TUI for interactive review."""
     with _cli_error_handler():
@@ -300,7 +301,7 @@ def review(
 @app.command()
 def learn(
     file: Path = typer.Argument(..., help="Data file to analyze."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path for rules (default: goldencheck_rules.json)."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Output path for rules (default: goldencheck_rules.json)."),
     llm_provider: str = typer.Option("anthropic", "--llm-provider", help="LLM provider: anthropic or openai."),
 ) -> None:
     """Generate validation rules using LLM analysis of your data.
@@ -310,9 +311,9 @@ def learn(
     Rules are saved and automatically applied on future scans.
     """
     with _cli_error_handler():
-        from goldencheck.llm.rule_generator import generate_rules, save_rules
         from goldencheck.engine.reader import read_file
         from goldencheck.engine.sampler import maybe_sample
+        from goldencheck.llm.rule_generator import generate_rules, save_rules
 
         df = read_file(file)
         sample = maybe_sample(df, max_rows=100_000)
@@ -338,7 +339,7 @@ def learn(
 def fix(
     file: Path = typer.Argument(..., help="Data file to fix."),
     mode: str = typer.Option("safe", "--mode", "-m", help="Fix mode: safe, moderate, or aggressive."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Output file path."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without writing."),
     force: bool = typer.Option(False, "--force", help="Required for aggressive mode."),
 ) -> None:
@@ -398,8 +399,8 @@ def fix(
 @app.command()
 def diff(
     file: Path = typer.Argument(..., help="Data file to compare."),
-    file2: Optional[Path] = typer.Argument(None, help="Second file (omit to compare against git)."),
-    ref: Optional[str] = typer.Option(None, "--ref", help="Git ref to compare against (default: HEAD)."),
+    file2: Path | None = typer.Argument(None, help="Second file (omit to compare against git)."),
+    ref: str | None = typer.Option(None, "--ref", help="Git ref to compare against (default: HEAD)."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Compare two versions of a data file.
@@ -412,6 +413,7 @@ def diff(
     import json
     import subprocess
     import tempfile
+
     from goldencheck.engine.differ import diff_files, format_diff_report
     from goldencheck.engine.reader import read_file
 
@@ -470,8 +472,8 @@ def diff(
 def watch(
     directory: Path = typer.Argument(..., help="Directory to watch."),
     interval: int = typer.Option(60, "--interval", "-i", help="Poll interval in seconds."),
-    pattern: Optional[str] = typer.Option(None, "--pattern", "-p", help="Glob pattern (e.g., '*.csv')."),
-    exit_on: Optional[str] = typer.Option(None, "--exit-on", help="Exit on severity: error or warning."),
+    pattern: str | None = typer.Option(None, "--pattern", "-p", help="Glob pattern (e.g., '*.csv')."),
+    exit_on: str | None = typer.Option(None, "--exit-on", help="Exit on severity: error or warning."),
     json_output: bool = typer.Option(False, "--json", help="JSON output per scan."),
 ) -> None:
     """Watch a directory for data file changes and re-scan.
@@ -510,12 +512,13 @@ def init(
 
 @app.command()
 def history(
-    file: Optional[Path] = typer.Argument(None, help="Filter history by file."),
-    last: Optional[int] = typer.Option(None, "--last", "-n", help="Show last N scans."),
+    file: Path | None = typer.Argument(None, help="Filter history by file."),
+    last: int | None = typer.Option(None, "--last", "-n", help="Show last N scans."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show scan history — scores, grades, and trends over time."""
     import json as json_mod
+
     from goldencheck.engine.history import load_history
 
     file_filter = file.name if file else None
@@ -559,11 +562,11 @@ def serve(
 @app.command(name="scan-db")
 def scan_db(
     connection: str = typer.Argument(..., help="Database connection string (postgres://, snowflake://, etc.)"),
-    table: Optional[str] = typer.Option(None, "--table", "-t", help="Table name to scan."),
-    query: Optional[str] = typer.Option(None, "--query", "-q", help="Custom SQL query."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack."),
+    table: str | None = typer.Option(None, "--table", "-t", help="Table name to scan."),
+    query: str | None = typer.Option(None, "--query", "-q", help="Custom SQL query."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
-    html: Optional[Path] = typer.Option(None, "--html", help="Generate HTML report."),
+    html: Path | None = typer.Option(None, "--html", help="Generate HTML report."),
     sample_size: int = typer.Option(100000, "--sample-size", help="Max rows to fetch."),
 ) -> None:
     """Scan a database table directly.
@@ -593,8 +596,8 @@ def scan_db(
 def schedule(
     files: list[Path] = typer.Argument(..., help="Data files to scan on schedule."),
     interval: str = typer.Option("daily", "--interval", "-i", help="Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack."),
-    webhook: Optional[str] = typer.Option(None, "--webhook", help="Webhook URL for notifications."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack."),
+    webhook: str | None = typer.Option(None, "--webhook", help="Webhook URL for notifications."),
     notify_on: str = typer.Option("grade-drop", "--notify-on", help="Trigger: grade-drop, any-error, any-warning."),
     json_output: bool = typer.Option(False, "--json", help="JSON output per scan."),
 ) -> None:
@@ -677,6 +680,7 @@ def evaluate(
     Prints precision, recall, F1, and detail breakdowns. Exits 1 if F1 < --min-f1.
     """
     import json as json_mod
+
     from goldencheck.engine.evaluate import evaluate_scan
 
     with _cli_error_handler():
@@ -725,7 +729,7 @@ def evaluate(
 @app.command()
 def demo(
     no_tui: bool = typer.Option(False, "--no-tui", help="Print results to stdout."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain pack to apply."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain pack to apply."),
 ) -> None:
     """Run GoldenCheck on built-in sample data to see it in action."""
     from goldencheck.cli.demo_data import generate_demo_csv
@@ -829,7 +833,7 @@ def _do_scan(
             typer.echo(f"  Review:    {len(triage.review)} (medium — use --guided)")
 
             if triage.pin:
-                from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+                from goldencheck.config.schema import ColumnRule, GoldenCheckConfig, Settings
                 config = GoldenCheckConfig(settings=Settings(fail_on="error"))
                 for f in triage.pin:
                     if f.column not in config.columns:
@@ -859,7 +863,7 @@ def _do_scan(
                     pinned.append(f)
 
             if pinned:
-                from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+                from goldencheck.config.schema import ColumnRule, GoldenCheckConfig, Settings
                 config = GoldenCheckConfig(settings=Settings(fail_on="error"))
                 for f in pinned:
                     if f.column not in config.columns:
@@ -889,8 +893,7 @@ def _do_scan(
         # Webhook notification
         if webhook:
             from goldencheck.engine.history import get_previous_scan
-            from goldencheck.engine.notifier import should_notify, send_webhook
-
+            from goldencheck.engine.notifier import send_webhook, should_notify
             from goldencheck.models.finding import Severity as _Sev
             by_col: dict[str, dict[str, int]] = {}
             for f in findings:

@@ -4,10 +4,101 @@
 //! and returns the result as Rust types.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAnyMethods, PyDict};
 
 use crate::convert;
 use crate::error::BridgeError;
+
+/// Best-effort serialisation of an AutoConfigController `(profile, history,
+/// committed_config)` triple into the JSON shape consumed by the SQL layer.
+///
+/// Reuses `goldenmatch.web.controller_telemetry.serialize_telemetry` so the
+/// shape is identical to what the FastAPI server returns at
+/// `/api/v1/controller/telemetry`. That module is part of the optional `web`
+/// extra; if it isn't importable we fall back to a hand-rolled minimal blob
+/// so the SQL surface never crashes on environments that didn't install
+/// `goldenmatch[web]`.
+fn serialize_controller_telemetry<'py>(
+    py: Python<'py>,
+    profile: Bound<'py, PyAny>,
+    history: Bound<'py, PyAny>,
+    committed_config: Bound<'py, PyAny>,
+    source: &str,
+) -> Result<String, BridgeError> {
+    let json_mod = py.import("json")?;
+
+    // Try the web helper first — it's the source of truth for telemetry shape.
+    if let Ok(helper_mod) = py.import("goldenmatch.web.controller_telemetry") {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("profile", profile)?;
+        kwargs.set_item("history", history)?;
+        kwargs.set_item("committed_config", committed_config)?;
+        kwargs.set_item("source", source)?;
+        kwargs.set_item("run_name", py.None())?;
+        kwargs.set_item("recorded_at", py.None())?;
+        let blob = helper_mod.call_method("serialize_telemetry", (), Some(&kwargs))?;
+        let json_str: String = json_mod.call_method1("dumps", (blob,))?.extract()?;
+        return Ok(json_str);
+    }
+
+    // Fallback: minimal hand-rolled telemetry surfacing stop_reason + health.
+    // Keeps the SQL contract usable when goldenmatch[web] isn't installed.
+    let minimal = PyDict::new(py);
+    minimal.set_item("available", !profile.is_none() || !history.is_none())?;
+    minimal.set_item("source", source)?;
+    if !history.is_none() {
+        if let Ok(sr) = history.getattr("stop_reason") {
+            if !sr.is_none() {
+                let value: String = sr.getattr("value")?.extract()?;
+                minimal.set_item("stop_reason", value)?;
+            }
+        }
+    }
+    if !profile.is_none() {
+        if let Ok(verdict) = profile.call_method0("health") {
+            let value: String = verdict.getattr("value")?.extract()?;
+            minimal.set_item("health", value)?;
+        }
+    }
+    let json_str: String = json_mod.call_method1("dumps", (minimal,))?.extract()?;
+    Ok(json_str)
+}
+
+/// Capture `_LAST_CONTROLLER_RUN` ContextVar and serialise it. Returns `None`
+/// when the controller didn't run in the current call (e.g. an explicit
+/// config was passed to `dedupe_df`).
+fn capture_controller_telemetry<'py>(
+    py: Python<'py>,
+    committed_config: Bound<'py, PyAny>,
+    source: &str,
+) -> Result<Option<String>, BridgeError> {
+    let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
+    let ctx_var = autoconfig_mod.getattr("_LAST_CONTROLLER_RUN")?;
+    let state = ctx_var.call_method0("get")?;
+    if state.is_none() {
+        return Ok(None);
+    }
+    let profile = state.get_item(0)?;
+    let history = state.get_item(1)?;
+    let json = serialize_controller_telemetry(py, profile, history, committed_config, source)?;
+    Ok(Some(json))
+}
+
+/// Convert a JSON-serialised `GoldenMatchConfig` into the corresponding
+/// Python object via `GoldenMatchConfig.model_validate_json(...)`.
+///
+/// Accepts the full Pydantic shape (multiple matchkeys, `negative_evidence`,
+/// `blocking`, `standardization`, `golden_rules`, ...) instead of the slim
+/// `exact/fuzzy/blocking/threshold` kwargs the older `dedupe()` accepts.
+fn build_full_config<'py>(
+    py: Python<'py>,
+    config_json: &str,
+) -> Result<Bound<'py, PyAny>, BridgeError> {
+    let schemas_mod = py.import("goldenmatch.config.schemas")?;
+    let gm_config_cls = schemas_mod.getattr("GoldenMatchConfig")?;
+    let cfg = gm_config_cls.call_method1("model_validate_json", (config_json,))?;
+    Ok(cfg)
+}
 
 /// Result of a dedupe operation, returned as JSON strings for the extension
 /// layer to parse and convert to SQL tuples.
@@ -18,6 +109,26 @@ pub struct DedupeResult {
     pub clusters_json: String,
     /// Stats as JSON object
     pub stats_json: String,
+    /// AutoConfigController telemetry (stop_reason, decisions, health verdict,
+    /// committed NE fields). ``None`` when an explicit config was supplied
+    /// and the controller never ran on this call. Shape mirrors the web
+    /// ``/api/v1/controller/telemetry`` endpoint so callers can reuse the
+    /// same parsers.
+    pub telemetry_json: Option<String>,
+}
+
+/// Result of `autoconfig()`: the committed config + controller telemetry.
+///
+/// Mirrors `goldenmatch autoconfig` CLI: stdout-equivalent is the YAML/JSON
+/// config; stderr-equivalent is the telemetry blob.
+pub struct AutoConfigResult {
+    /// Committed `GoldenMatchConfig` serialised as JSON (Pydantic model_dump).
+    /// Suitable to round-trip back into `dedupe_full()` or stored on a Postgres
+    /// `_jobs` row / DuckDB pipeline state.
+    pub config_json: String,
+    /// Controller telemetry — same shape as `DedupeResult.telemetry_json`.
+    /// Always populated (the controller always runs); never `None`.
+    pub telemetry_json: String,
 }
 
 /// A scored pair from deduplication.
@@ -120,10 +231,131 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
             }
         };
 
+        // If the slim-kwargs path ended up triggering auto-config (i.e. the
+        // caller didn't pass enough kwargs to bypass it), `_LAST_CONTROLLER_RUN`
+        // will be populated. Pull the committed config off `result.config`
+        // for the NE section of the telemetry blob.
+        let committed_cfg = result
+            .getattr("config")
+            .ok()
+            .filter(|c| !c.is_none())
+            .unwrap_or_else(|| py.None().into_bound(py));
+        let telemetry_json =
+            capture_controller_telemetry(py, committed_cfg, "dedupe").unwrap_or(None);
+
         Ok(DedupeResult {
             golden_json,
             clusters_json,
             stats_json,
+            telemetry_json,
+        })
+    })
+}
+
+/// Deduplicate a table's data with a *full* `GoldenMatchConfig` JSON.
+///
+/// Unlike `dedupe()`, which only forwards `exact`/`fuzzy`/`blocking`/`threshold`
+/// kwargs, this accepts the full Pydantic config shape — including
+/// `negative_evidence` (Path Y), per-matchkey `comparison`/`scorer`/`weight`,
+/// `standardization` rules, `golden_rules`, etc. Use this when the SQL caller
+/// wants to express anything that doesn't fit the slim shape.
+pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let df = convert::json_to_polars_df(py, rows_json)?;
+        let cfg = build_full_config(py, config_json)?;
+
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("config", cfg)?;
+        let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
+
+        let golden_json = if let Ok(golden) = result.getattr("golden") {
+            if !golden.is_none() {
+                Some(convert::polars_df_to_json(
+                    py,
+                    &golden.into_pyobject(py).unwrap().unbind(),
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let stats = result.getattr("stats")?;
+        let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
+
+        let clusters = result.getattr("clusters")?;
+        let clusters_json: String = {
+            let str_repr: String = clusters.call_method0("__str__")?.extract()?;
+            match json_mod.call_method1("dumps", (clusters,)) {
+                Ok(j) => j.extract()?,
+                Err(_) => str_repr,
+            }
+        };
+
+        // dedupe_full passes its own config in, so re-use it for NE display.
+        // Re-fetch from result.config in case the engine swapped in an
+        // augmented copy (e.g. policy refit applied at the controller layer).
+        let committed_cfg = result
+            .getattr("config")
+            .ok()
+            .filter(|c| !c.is_none())
+            .unwrap_or_else(|| py.None().into_bound(py));
+        let telemetry_json =
+            capture_controller_telemetry(py, committed_cfg, "dedupe_full").unwrap_or(None);
+
+        Ok(DedupeResult {
+            golden_json,
+            clusters_json,
+            stats_json,
+            telemetry_json,
+        })
+    })
+}
+
+/// Run AutoConfigController on the input rows and return the committed config
+/// plus telemetry. Does NOT run the dedupe pipeline.
+///
+/// SQL-surface equivalent of the CLI `goldenmatch autoconfig <files>`.
+/// Callers typically pipe the returned `config_json` into a follow-up
+/// `dedupe_full()` call, or store it on a Postgres `_jobs` row.
+pub fn autoconfig(rows_json: &str) -> Result<AutoConfigResult, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let df = convert::json_to_polars_df(py, rows_json)?;
+        let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
+        let cfg = autoconfig_mod.call_method1("auto_configure_df", (df,))?;
+
+        // Read controller telemetry off the ContextVar set by auto_configure_df.
+        let ctx_var = autoconfig_mod.getattr("_LAST_CONTROLLER_RUN")?;
+        let state = ctx_var.call_method0("get")?;
+        let telemetry_json = if state.is_none() {
+            // Defensive: every modern auto_configure_df path sets this.
+            "{\"available\": false, \"source\": \"autoconfig\"}".to_string()
+        } else {
+            let profile = state.get_item(0)?;
+            let history = state.get_item(1)?;
+            serialize_controller_telemetry(py, profile, history, cfg.clone(), "autoconfig")?
+        };
+
+        // Dump the committed config to JSON via Pydantic. `model_dump(mode="json",
+        // exclude_none=True)` matches what the CLI `autoconfig` writes to disk.
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("mode", "json")?;
+        kwargs.set_item("exclude_none", true)?;
+        let cfg_dict = cfg.call_method("model_dump", (), Some(&kwargs))?;
+        let json_mod = py.import("json")?;
+        let config_json: String = json_mod.call_method1("dumps", (cfg_dict,))?.extract()?;
+
+        Ok(AutoConfigResult {
+            config_json,
+            telemetry_json,
         })
     })
 }
@@ -385,6 +617,159 @@ pub fn dedupe_clusters(
             }
         }
         Ok(members)
+    })
+}
+
+// ── Identity Graph (v2.0) ────────────────────────────────────────────────
+//
+// Thin wrappers over ``goldenmatch.identity.query.*`` so the Postgres and
+// DuckDB extensions can serve the same JSON shape the Python/REST/MCP/A2A
+// surfaces serve. Every function takes the path to the identity SQLite/PG
+// store as an explicit argument; session-level settings are awkward to
+// thread through pgrx + pyo3, and explicit args make the SQL contract
+// obvious at the call site.
+
+/// Resolve a `{source}:{source_pk}` style ``record_id`` to its identity
+/// view JSON. Returns ``{"found": false}`` when no identity owns the record.
+pub fn identity_resolve(record_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let find_by_record = identity.getattr("find_by_record")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let view = find_by_record.call1((store.clone(), record_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        if view.is_none() {
+            return Ok("{\"found\": false}".to_string());
+        }
+        let dict = view.call_method0("to_dict")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (dict,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// Return the full identity view JSON keyed by ``entity_id``.
+pub fn identity_view(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let get_entity = identity.getattr("get_entity")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let view = get_entity.call1((store.clone(), entity_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        if view.is_none() {
+            return Ok("{\"found\": false}".to_string());
+        }
+        let dict = view.call_method0("to_dict")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (dict,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// Return the temporal event log for an identity as a JSON array.
+pub fn identity_history(entity_id: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let history_fn = identity.getattr("history")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let events = history_fn.call1((store.clone(), entity_id))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (events,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// List `conflicts_with` evidence edges as a JSON array. Empty ``dataset``
+/// means "all datasets".
+pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let find_conflicts = identity.getattr("find_conflicts")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&kwargs))?;
+        let conflicts_kwargs = PyDict::new(py);
+        if dataset.is_empty() {
+            conflicts_kwargs.set_item("dataset", py.None())?;
+        } else {
+            conflicts_kwargs.set_item("dataset", dataset)?;
+        }
+        let edges =
+            find_conflicts.call((store.clone(),), Some(&conflicts_kwargs))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (edges,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// List identities filtered by dataset/status as a JSON array.
+/// Empty strings = no filter on that dimension.
+pub fn identity_list(
+    dataset: &str,
+    status: &str,
+    db_path: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let store_cls = identity.getattr("IdentityStore")?;
+        let list_entities = identity.getattr("list_entities")?;
+        let open_kwargs = PyDict::new(py);
+        open_kwargs.set_item("path", db_path)?;
+        let store = store_cls.call((), Some(&open_kwargs))?;
+        let list_kwargs = PyDict::new(py);
+        if dataset.is_empty() {
+            list_kwargs.set_item("dataset", py.None())?;
+        } else {
+            list_kwargs.set_item("dataset", dataset)?;
+        }
+        if status.is_empty() {
+            list_kwargs.set_item("status", py.None())?;
+        } else {
+            list_kwargs.set_item("status", status)?;
+        }
+        list_kwargs.set_item("limit", 500)?;
+        let items = list_entities.call((store.clone(),), Some(&list_kwargs))?;
+        let _ = store.call_method0("close");
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (items,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
     })
 }
 

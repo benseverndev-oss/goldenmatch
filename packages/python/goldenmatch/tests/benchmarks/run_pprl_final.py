@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.stdout.reconfigure(line_buffering=True)
 
 import polars as pl
-from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 from goldenmatch.pprl.autoconfig import auto_configure_pprl
+from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
 
 def evaluate(result, gt):

@@ -111,6 +111,40 @@ SELECT goldenmatch_explain(
 );
 ```
 
+### AutoConfig and controller telemetry (v1.7-v1.12)
+
+```sql
+-- Run AutoConfigController on a table; get committed config JSON.
+SELECT goldenmatch_autoconfig('customers');
+
+-- Same call, but returns the controller telemetry blob (stop_reason,
+-- health, decisions, indicator priors, committed NE).
+SELECT goldenmatch_autoconfig_telemetry('customers');
+
+-- Run dedupe with a *full* GoldenMatchConfig JSON. Unlike the slim
+-- `goldenmatch_dedupe_table` kwargs, this accepts `negative_evidence`
+-- (Path Y) and every other Pydantic field.
+SELECT goldenmatch_dedupe_full('customers', '{
+    "matchkeys": [
+        {"name": "exact_email", "type": "exact",
+         "fields": [{"field": "email", "transforms": ["lowercase"]}],
+         "negative_evidence": [
+             {"field": "phone", "scorer": "exact",
+              "transforms": ["digits_only"], "threshold": 0.5, "penalty": 0.5}
+         ]}
+    ]
+}');
+
+-- Job pipeline: gm_run captures controller telemetry into in-memory state.
+SELECT gm_configure('cust_job', '{"exact": ["email"]}');
+SELECT gm_run('cust_job', 'customers');
+SELECT gm_telemetry('cust_job');   -- last run's telemetry JSON
+```
+
+The telemetry JSON shape is identical across the DuckDB UDFs, the Postgres extension, the CLI `goldenmatch autoconfig`, and the web `/api/v1/controller/telemetry` endpoint — parse once, reuse everywhere.
+
+---
+
 ### Pipeline management
 
 ```sql

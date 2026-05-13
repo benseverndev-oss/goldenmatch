@@ -206,7 +206,30 @@ Normalize phone numbers (E.164), dates (ISO), categorical spelling, and Unicode.
 "Normalize the phone and date formats in my data"
 ```
 
-In addition, 13 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms). See [ER Agent](agent) for details.
+In addition, 14 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms). See [ER Agent](agent) for details.
+
+### AutoConfigController telemetry (v1.7-v1.12)
+
+`auto_configure` was rewired in PR #161 to invoke the v1.7+ AutoConfigController instead of the legacy `select_strategy` heuristic. It now returns:
+
+```json
+{
+  "config": { "...": "full GoldenMatchConfig" },
+  "telemetry": {
+    "available": true,
+    "stop_reason": "green",
+    "health": "green",
+    "decisions": [...],
+    "column_priors": [...],
+    "committed_matchkeys": [...],
+    "negative_evidence": [...]
+  }
+}
+```
+
+`agent_deduplicate` and `agent_match_sources` both include a `telemetry` field in their result dict so the host LLM can see `stop_reason`, refit decisions, and Path Y negative-evidence without a second call.
+
+The standalone `controller_telemetry` tool surfaces a per-session limitation note (MCP dispatch is stateless, so it can't recall a prior call's telemetry — use the inline telemetry from `auto_configure` / `agent_deduplicate` instead).
 
 ### Learning Memory tools (v1.6.0)
 

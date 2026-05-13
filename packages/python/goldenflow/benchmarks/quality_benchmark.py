@@ -17,15 +17,14 @@ sys.path.insert(0, str(ROOT))
 
 # Ensure all transforms are registered
 import goldenflow  # noqa: F401 – side-effects register transforms
-from goldenflow.transforms import get_transform
 from goldenflow.engine.transformer import TransformEngine
-from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
 from goldenflow.mapping.schema_mapper import SchemaMapper
+from goldenflow.transforms import get_transform
 
 try:
+    from rich import box
     from rich.console import Console
     from rich.table import Table
-    from rich import box
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False

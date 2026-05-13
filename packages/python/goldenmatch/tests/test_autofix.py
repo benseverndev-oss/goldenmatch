@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import polars as pl
-import pytest
-
 from goldenmatch.core.autofix import auto_fix_dataframe
 
 

@@ -24,6 +24,10 @@ export function tokenize(name: string): string[] {
   const re = /[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+/g;
   for (const chunk of cleaned.split(/\s+/)) {
     if (!chunk) continue;
+    // Bound the regex input. Column/field names beyond 256 chars aren't
+    // realistic identifiers and the alternation here can backtrack
+    // polynomially on adversarially long all-caps runs.
+    if (chunk.length > 256) continue;
     const matches = chunk.match(re);
     if (!matches) continue;
     for (const m of matches) tokens.push(m.toLowerCase());

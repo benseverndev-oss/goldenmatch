@@ -18,9 +18,11 @@ def hartigan_dip(scores: list[float]) -> float:
     """
     if not scores:
         return 0.0
-    import numpy as np
     import diptest
-    return float(diptest.dipstat(np.asarray(scores)))
+    import numpy as np
+    # diptest.dipstat overload returns float | tuple[float, dict]; the no-extra
+    # path returns float at runtime, but the stub union confuses pyright.
+    return float(diptest.dipstat(np.asarray(scores)))  # pyright: ignore[reportArgumentType]  # diptest stub returns union; runtime is always float in the no-pval branch
 
 
 def mass_above(scores: list[float], threshold: float) -> float:

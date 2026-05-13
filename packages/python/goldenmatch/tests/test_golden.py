@@ -2,9 +2,13 @@
 
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
-from goldenmatch.core.golden import merge_field, build_golden_record, build_golden_record_with_provenance, GoldenRecordResult
+from goldenmatch.core.golden import (
+    GoldenRecordResult,
+    build_golden_record,
+    build_golden_record_with_provenance,
+    merge_field,
+)
 
 
 class TestMergeFieldMostComplete:

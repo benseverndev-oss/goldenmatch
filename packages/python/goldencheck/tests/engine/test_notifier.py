@@ -1,5 +1,5 @@
-from goldencheck.engine.notifier import should_notify
 from goldencheck.engine.history import ScanRecord
+from goldencheck.engine.notifier import should_notify
 from goldencheck.models.finding import Finding, Severity
 
 

@@ -5,10 +5,11 @@ transposed zip digits, dropped middle_name). Returns the combined DataFrame
 and the ground-truth set of (original_row_id, duplicate_row_id) pairs.
 """
 from __future__ import annotations
+
 import random
 from pathlib import Path
-import polars as pl
 
+import polars as pl
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 NCVR_SAMPLE = REPO_ROOT / "tests" / "benchmarks" / "datasets" / "NCVR" / "ncvoter_sample_10k.txt"

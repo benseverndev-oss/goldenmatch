@@ -1,10 +1,13 @@
 """Validator — checks data against pinned rules in goldencheck.yml."""
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 import polars as pl
+
+from goldencheck.config.schema import ColumnRule, GoldenCheckConfig
 from goldencheck.engine.reader import read_file
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule
 from goldencheck.models.finding import Finding, Severity
 
 logger = logging.getLogger(__name__)

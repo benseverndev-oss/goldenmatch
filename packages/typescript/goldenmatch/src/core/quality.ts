@@ -95,10 +95,18 @@ export function scanQuality(
       const s = asStr(raw);
       if (s !== null) {
         distinct.add(s);
-        // Email heuristics
-        if (s.includes("@")) {
+        // Email heuristics. Cap input length to RFC 5321 maximum (254)
+        // before regex matching to neutralise the polynomial-backtracking
+        // case where `[^@\s]+\.[^@\s]+` retries every `.` split on long
+        // dot-heavy inputs.
+        if (s.includes("@") && s.length <= 254) {
           emailLike++;
           if (!EMAIL_RE.test(s)) malformedEmail++;
+        } else if (s.includes("@")) {
+          // Over-length string with `@` -- count as malformed without
+          // running the regex; saves the worst-case match.
+          emailLike++;
+          malformedEmail++;
         }
         // Date format tracking
         for (let i = 0; i < DATE_PATTERNS.length; i++) {

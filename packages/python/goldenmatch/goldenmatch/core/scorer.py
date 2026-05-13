@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from itertools import combinations
+from typing import Any
 
 import jellyfish
 import numpy as np
@@ -14,20 +14,25 @@ from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.core._profile_helpers import (
+    hartigan_dip,
+    histogram_20,
+    mass_above,
+    mass_borderline,
+)
 from goldenmatch.core.complexity_profile import ScoringProfile
-from goldenmatch.core._profile_helpers import histogram_20, hartigan_dip, mass_above, mass_borderline
+from goldenmatch.core.profile_emitter import current_emitter
+from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
 
 def _emit_scoring_profile(
-    pairs: "list[tuple[int, int, float]]",
+    pairs: list[tuple[int, int, float]],
     threshold: float,
     *,
     candidates_compared: int = 0,
-    per_field_variance: "dict[str, float] | None" = None,
+    per_field_variance: dict[str, float] | None = None,
 ) -> None:
     """Emit ScoringProfile to current emitter. No-op when emitter is null.
 
@@ -79,7 +84,7 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         from goldenmatch.plugins.registry import PluginRegistry
         plugin = PluginRegistry.instance().get_scorer(scorer)
         if plugin is not None:
-            return plugin.score_pair(val_a, val_b)
+            return plugin.score_pair(val_a, val_b)  # pyright: ignore[reportAttributeAccessIssue]  # plugin protocol is runtime-duck-typed
         raise ValueError(f"Unknown scorer: {scorer!r}")
 
 
@@ -93,13 +98,16 @@ def score_pair(row_a: dict, row_b: dict, fields: list[MatchkeyField]) -> float:
     weight_sum = 0.0
 
     for f in fields:
-        val_a = apply_transforms(row_a.get(f.field), f.transforms)
-        val_b = apply_transforms(row_b.get(f.field), f.transforms)
-        field_score = score_field(val_a, val_b, f.scorer)
+        # score_pair expects fully-populated MatchkeyFields; the MatchkeyConfig
+        # validator on weighted matchkeys guarantees field/scorer/weight are
+        # non-None at call time. Typed accessors narrow the Optional fields.
+        val_a = apply_transforms(row_a.get(f.resolved_field), f.transforms)
+        val_b = apply_transforms(row_b.get(f.resolved_field), f.transforms)
+        field_score = score_field(val_a, val_b, f.fuzzy_scorer)
 
         if field_score is not None:
-            weighted_sum += field_score * f.weight
-            weight_sum += f.weight
+            weighted_sum += field_score * f.fuzzy_weight
+            weight_sum += f.fuzzy_weight
 
     if weight_sum == 0.0:
         return 0.0
@@ -155,7 +163,7 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
     return total_penalty
 
 
-def _apply_negative_evidence_to_exact_pairs(
+def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
     pairs: list[tuple[int, int, float]],
     matchkey: MatchkeyConfig,
     full_df: pl.DataFrame,
@@ -255,13 +263,14 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     callers that bypass the pipeline (DataFrame entry points, tests calling
     find_fuzzy_matches directly).
     """
-    from goldenmatch.core.matchkey import _xform_sig, _try_native_chain
+    from goldenmatch.core.matchkey import _try_native_chain, _xform_sig
 
     sig = _xform_sig(field)
     if sig in block_df.columns:
         return block_df[sig].to_list()
 
     col = field.field
+    assert col is not None, "field.field must be set; upstream validation enforces"
     native_expr = _try_native_chain(col, field.transforms)
     if native_expr is not None:
         result_df = block_df.select(native_expr.alias("__tmp__"))
@@ -307,18 +316,22 @@ def _fuzzy_score_matrix(
     # Replace None with empty string for cdist (we handle nulls separately)
     clean = [v if v is not None else "" for v in values]
 
+    # All NxN return matrices use float32 — see find_fuzzy_matches' Phase 1
+    # comment for the memory math. Ensemble's intermediate matrices in
+    # particular allocated 4× NxN float64 = 800 MB at N=5000, which was the
+    # largest single contributor to the 1M-row OOM cliff (PR #173).
     if scorer_name == "ensemble":
         # Combine multiple scorers, take element-wise max
-        jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float64)
-        ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float64) / 100.0
-        sx = _soundex_score_matrix(values) * 0.8
+        jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+        ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+        sx = _soundex_score_matrix(values).astype(np.float32) * 0.8
         matrix = np.maximum(np.maximum(jw, ts), sx)
     elif scorer_name == "jaro_winkler":
-        matrix = cdist(clean, clean, scorer=JaroWinkler.similarity)
+        matrix = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
     elif scorer_name == "levenshtein":
-        matrix = cdist(clean, clean, scorer=Levenshtein.normalized_similarity)
+        matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
     elif scorer_name == "token_sort":
-        matrix = cdist(clean, clean, scorer=token_sort_ratio) / 100.0
+        matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
     elif scorer_name == "dice":
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
@@ -479,7 +492,7 @@ def _build_null_mask(values: list) -> np.ndarray:
 def find_fuzzy_matches(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,
-    exclude_pairs: set[tuple[int, int]] | None = None,
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
     pre_scored_pairs: list[tuple[int, int, float]] | None = None,
 ) -> list[tuple[int, int, float]]:
     """Find fuzzy matches within a block DataFrame.
@@ -497,11 +510,16 @@ def find_fuzzy_matches(
     Returns:
         List of (row_id_a, row_id_b, score) tuples above threshold.
     """
+    # find_fuzzy_matches requires mk.threshold + field weights/scorers set;
+    # upstream config validation enforces this. Pyright sees the schema-level
+    # Optional, so we narrow once here for clarity.
+    assert mk.threshold is not None, "find_fuzzy_matches requires mk.threshold"
+    mk_threshold: float = mk.threshold
     # Fast path: pre-scored pairs from ANN (skip NxN scoring)
     if pre_scored_pairs is not None:
         results = []
         for a, b, score in pre_scored_pairs:
-            if score >= mk.threshold:
+            if score >= mk_threshold:
                 pair_key = (min(a, b), max(a, b))
                 if exclude_pairs and pair_key in exclude_pairs:
                     continue
@@ -519,13 +537,33 @@ def find_fuzzy_matches(
     record_emb_fields = [f for f in mk.fields if f.scorer == "record_embedding"]
     fuzzy_fields = [f for f in mk.fields if f.scorer not in ("exact", "soundex_match", "record_embedding")]
 
-    total_weight = sum(f.weight for f in mk.fields)
+    # All scoring-path MatchkeyFields are upstream-validated to have weight set;
+    # narrow with cast helper so the schema-level Optional doesn't poison every
+    # sum(). Runtime behavior unchanged: if weight is None, the subsequent
+    # arithmetic raises TypeError exactly as today.
+    from typing import cast as _cast
+
+    def _w(f: MatchkeyField) -> float:
+        return _cast(float, f.weight)
+
+    total_weight = sum(_w(f) for f in mk.fields)
     if total_weight == 0.0:
         return []
 
-    # Phase 1: Score cheap fields (exact + soundex) and build null masks
-    cheap_numerator = np.zeros((n, n))
-    cheap_denominator = np.zeros((n, n))
+    # Phase 1: Score cheap fields (exact + soundex) and build null masks.
+    #
+    # `dtype=np.float32` not the numpy default float64 — the find_fuzzy_matches
+    # function holds ~8-10 NxN arrays in scope at peak (cheap_num/den,
+    # max_poss_num/den/result, fuzzy_num/den, per-field scores, plus
+    # short-lived best_*/total_* in the early-termination loop). At a
+    # 5000-row block that's ~1.6 GB per call in float64; float32 halves it.
+    # With 4 parallel workers in `score_blocks_parallel`, 1M-row runs were
+    # hitting Windows's effective ~5 GB contiguous-allocation ceiling and
+    # dying via SystemError / MemoryError / silent crash (PR #173, scale
+    # audit). Scores are 0-1 similarities — float32's 7 digits of precision
+    # is well within tolerance.
+    cheap_numerator = np.zeros((n, n), dtype=np.float32)
+    cheap_denominator = np.zeros((n, n), dtype=np.float32)
 
     for f in exact_fields:
         values = _get_transformed_values(block_df, f)
@@ -537,14 +575,14 @@ def find_fuzzy_matches(
         else:  # soundex_match
             scores = _soundex_score_matrix(values)
 
-        cheap_numerator += scores * f.weight * valid
-        cheap_denominator += f.weight * valid
+        cheap_numerator += scores * _w(f) * valid
+        cheap_denominator += _w(f) * valid
 
     # Phase 2: Early termination check
     # For each pair, the maximum possible score is:
     #   (cheap_contribution + fuzzy_max_weight) / (cheap_denom + fuzzy_max_weight)
     # where fuzzy_max_weight assumes all fuzzy fields score 1.0
-    fuzzy_total_weight = sum(f.weight for f in fuzzy_fields) + sum(f.weight for f in record_emb_fields)
+    fuzzy_total_weight = sum(_w(f) for f in fuzzy_fields) + sum(_w(f) for f in record_emb_fields)
 
     # If no fuzzy or record_embedding fields, just use cheap scores
     if not fuzzy_fields and not record_emb_fields:
@@ -563,18 +601,19 @@ def find_fuzzy_matches(
             )
 
         # Pairs that can't possibly reach threshold — mark them
-        impossible = max_possible < mk.threshold
+        impossible = max_possible < mk_threshold
 
-        # Phase 3: Score fuzzy fields with intra-field early termination
-        fuzzy_numerator = np.zeros((n, n))
-        fuzzy_denominator = np.zeros((n, n))
+        # Phase 3: Score fuzzy fields with intra-field early termination.
+        # float32 — matches Phase 1's accumulators (see comment there).
+        fuzzy_numerator = np.zeros((n, n), dtype=np.float32)
+        fuzzy_denominator = np.zeros((n, n), dtype=np.float32)
 
         all_expensive_fields = list(fuzzy_fields) + list(record_emb_fields)
         for f_idx, f in enumerate(all_expensive_fields):
             if f.scorer == "record_embedding":
                 try:
                     scores = _record_embedding_score_matrix(
-                        block_df, f.columns, model_name=f.model or "all-MiniLM-L6-v2",
+                        block_df, f.columns or [], model_name=f.model or "all-MiniLM-L6-v2",
                         column_weights=f.column_weights,
                     )
                 except Exception:
@@ -587,22 +626,23 @@ def find_fuzzy_matches(
                         parts = [str(row.get(c, "") or "") for c in (f.columns or [])]
                         concat_values.append(" ".join(parts))
                     scores = _fuzzy_score_matrix(concat_values, "token_sort")
-                fuzzy_numerator += scores * f.weight
-                fuzzy_denominator += f.weight
+                fuzzy_numerator += scores * _w(f)
+                fuzzy_denominator += _w(f)
             else:
                 values = _get_transformed_values(block_df, f)
                 null_mask = _build_null_mask(values)
                 valid = ~null_mask
 
+                assert f.scorer is not None, "fuzzy field scorer must be set"
                 scores = _fuzzy_score_matrix(values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2")
 
-                fuzzy_numerator += scores * f.weight * valid
-                fuzzy_denominator += f.weight * valid
+                fuzzy_numerator += scores * _w(f) * valid
+                fuzzy_denominator += _w(f) * valid
 
             # Intra-field early termination: if no pair can reach threshold
             # even with perfect scores on all remaining fields, stop early
             remaining_weight = sum(
-                all_expensive_fields[i].weight
+                _w(all_expensive_fields[i])
                 for i in range(f_idx + 1, len(all_expensive_fields))
             )
             if remaining_weight > 0:
@@ -617,7 +657,7 @@ def find_fuzzy_matches(
                 best_possible[impossible] = 0.0
                 # Only check upper triangle
                 best_upper = np.triu(best_possible, k=1)
-                if np.max(best_upper) < mk.threshold:
+                if np.max(best_upper) < mk_threshold:
                     break  # No pair can reach threshold, skip remaining fields
 
         # Combine cheap + fuzzy
@@ -633,7 +673,7 @@ def find_fuzzy_matches(
     # Extract upper triangle pairs above threshold using numpy
     # Zero out lower triangle and diagonal
     upper = np.triu(combined, k=1)
-    rows_idx, cols_idx = np.where(upper >= mk.threshold)
+    rows_idx, cols_idx = np.where(upper >= mk_threshold)
 
     if len(rows_idx) == 0:
         return []
@@ -660,14 +700,14 @@ def find_fuzzy_matches(
         if exclude_pairs is not None and len(exclude_pairs) > 0:
             results = []
             for a, b, s in zip(ids_a, ids_b, scores):
-                if s < mk.threshold:
+                if s < mk_threshold:
                     continue
                 pair_key = (min(int(a), int(b)), max(int(a), int(b)))
                 if pair_key not in exclude_pairs:
                     results.append((int(a), int(b), float(s)))
             return results
         return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)
-                if s >= mk.threshold]
+                if s >= mk_threshold]
 
     if exclude_pairs is not None and len(exclude_pairs) > 0:
         results = []
@@ -685,9 +725,9 @@ def find_fuzzy_matches(
 # ---------------------------------------------------------------------------
 
 def _score_one_block(
-    block,
+    block: Any,
     mk: MatchkeyConfig,
-    exclude_pairs: set[tuple[int, int]],
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
 ) -> list[tuple[int, int, float]]:
@@ -763,9 +803,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, s in pairs:
+            for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
-        _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)
+        _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
         return all_pairs
 
     # Snapshot exclude_pairs so threads see a frozen copy
@@ -807,7 +847,7 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, s in pairs:
+            for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
             completed += 1
             if completed % log_interval == 0:
@@ -822,7 +862,7 @@ def score_blocks_parallel(
         "Parallel scoring: %d blocks, %d workers, %d pairs found",
         total_blocks, max_workers, len(all_pairs),
     )
-    _emit_scoring_profile(all_pairs, mk.threshold, candidates_compared=total_candidates)
+    _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
     return all_pairs
 
 
@@ -854,7 +894,9 @@ def rerank_top_pairs(
         return pairs
 
     try:
-        from sentence_transformers import CrossEncoder
+        from sentence_transformers import (  # pyright: ignore[reportMissingImports]  # optional dep, ImportError caught below
+            CrossEncoder,
+        )
     except ImportError:
         logger.warning("Cross-encoder reranking unavailable: sentence-transformers not installed")
         return pairs

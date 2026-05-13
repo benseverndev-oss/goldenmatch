@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import infermap
 import polars as pl
 import pytest
 import yaml
-
-import infermap
 from infermap.types import MapResult, ScorerResult
+
 from tests.conftest import FIXTURES_DIR as FIXTURES
 
 
@@ -273,8 +273,8 @@ class TestCLI:
     """Test CLI commands via CliRunner."""
 
     def test_map_command(self):
-        from typer.testing import CliRunner
         from infermap.cli import app
+        from typer.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(app, [
@@ -286,8 +286,8 @@ class TestCLI:
         assert "first_name" in result.stdout  # table format shows target columns
 
     def test_map_json(self):
-        from typer.testing import CliRunner
         from infermap.cli import app
+        from typer.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(app, [
@@ -301,8 +301,8 @@ class TestCLI:
         assert "mappings" in parsed
 
     def test_inspect_command(self):
-        from typer.testing import CliRunner
         from infermap.cli import app
+        from typer.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(app, ["inspect", str(FIXTURES / "crm_export.csv")])
@@ -310,8 +310,8 @@ class TestCLI:
         assert "fname" in result.stdout
 
     def test_validate_strict_fails(self, tmp_path):
-        from typer.testing import CliRunner
         from infermap.cli import app
+        from typer.testing import CliRunner
 
         config = tmp_path / "m.yaml"
         config.write_text('version: "1"\nmappings:\n  - source: fname\n    target: first_name\n    confidence: 0.95\n')

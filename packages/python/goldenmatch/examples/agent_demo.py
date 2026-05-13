@@ -17,8 +17,7 @@ import tempfile
 from pathlib import Path
 
 import polars as pl
-
-from goldenmatch import AgentSession, gate_pairs
+from goldenmatch import AgentSession
 
 
 def create_demo_data(path: Path) -> None:

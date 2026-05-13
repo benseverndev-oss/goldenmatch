@@ -100,4 +100,4 @@ No subprocess overhead, no IPC. All tool calls execute in-process.
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE) at repo root.
+MIT — see [LICENSE](../../../LICENSE) at repo root.

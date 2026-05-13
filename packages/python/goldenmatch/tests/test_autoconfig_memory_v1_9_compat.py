@@ -1,6 +1,7 @@
 """Verify v1.9-vintage memory cache entries load cleanly into v1.10."""
 import json
 from pathlib import Path
+
 import pytest
 
 

@@ -69,11 +69,19 @@ print("=" * 70)
 df, gt = load_dblp_acm()
 print(f"Loaded: {df.height} records, {len(gt)} ground truth pairs\n")
 
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig
-from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.probabilistic import (
+    score_probabilistic,
+    train_em,
+)
 from goldenmatch.core.scorer import score_blocks_parallel
-from goldenmatch.core.probabilistic import train_em, score_probabilistic, train_em_continuous, score_probabilistic_continuous
 
 # ── Benchmark 1: Weighted baseline ──
 print("=" * 70)
@@ -158,7 +166,7 @@ tp, fp, fn, prec, rec, f1_s = evaluate_pairs(pairs_static, df, gt)
 print(f"  STATIC:   P={prec:5.1%}  R={rec:5.1%}  F1={f1_s:5.1%}  {t_static:5.1f}s  blocks={n_static}, records_in_blocks={total_static}")
 
 print("  Running learned blocking...", flush=True)
-from goldenmatch.core.learned_blocking import learn_blocking_rules, apply_learned_blocks
+from goldenmatch.core.learned_blocking import apply_learned_blocks, learn_blocking_rules
 
 t0 = time.perf_counter()
 # Use a small sample for rule learning
@@ -270,7 +278,6 @@ def eval_abt(pairs_subset, df, gt):
 
 # ── Real LLM scoring with budget ──
 import os
-import subprocess
 
 # Source the .testing/.env file (bash format with export statements)
 env_file = Path(__file__).parent.parent.parent / ".testing" / ".env"
@@ -290,8 +297,8 @@ api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     print("  WARNING: No OPENAI_API_KEY found. Skipping real LLM benchmark.")
 else:
+    from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
     from goldenmatch.core.llm_scorer import llm_score_pairs
-    from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
 
     print(f"\n  {'Budget':<12s}  {'LLM Calls':>10s}  {'Cost':>10s}  {'Prec':>6s}  {'Rec':>6s}  {'F1':>6s}")
     print(f"  {'-'*12}  {'-'*10}  {'-'*10}  {'-'*6}  {'-'*6}  {'-'*6}")

@@ -12,12 +12,13 @@ import hashlib
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import polars as pl
+
     from goldenmatch.config.schemas import GoldenMatchConfig
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_autoconfig_sig ON autoconfig_runs (profile_signat
 """
 
 
-def profile_signature(df: "pl.DataFrame", *, mode: str = "dedupe") -> str:
+def profile_signature(df: pl.DataFrame, *, mode: str = "dedupe") -> str:
     """Compute a per-column-name signature for a DataFrame.
 
     Two frames hash to the same signature only when they have the same
@@ -78,7 +79,7 @@ class AutoConfigMemory:
     millisecond-scale operations.
     """
 
-    def __init__(self, db_path: "str | Path | None" = None) -> None:
+    def __init__(self, db_path: str | Path | None = None) -> None:
         if db_path is None:
             default_dir = Path.home() / ".goldenmatch"
             default_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +97,7 @@ class AutoConfigMemory:
     def remember(
         self,
         signature: str,
-        config: "GoldenMatchConfig",
+        config: GoldenMatchConfig,
         *,
         succeeded: bool,
         n_iterations: int,
@@ -112,7 +113,7 @@ class AutoConfigMemory:
             f1_proxy: Optional proxy metric (mass_above_threshold * (1 - mass_in_borderline)).
         """
         config_json = config.model_dump_json()
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at = datetime.now(UTC).isoformat()
         try:
             with self._lock:
                 self._conn.execute(
@@ -130,7 +131,7 @@ class AutoConfigMemory:
 
     # ------------------------------------------------------------------ read
 
-    def lookup_best(self, signature: str) -> "GoldenMatchConfig | None":
+    def lookup_best(self, signature: str) -> GoldenMatchConfig | None:
         """Return the most recent succeeded run's config for this signature.
 
         Returns None if no successful run exists for this signature.

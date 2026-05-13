@@ -4,7 +4,7 @@
   "title": "GoldenFlow",
   "description": "Standardize, reshape, and normalize messy data — CSV, Excel, Parquet, S3, databases.",
   "websiteUrl": "https://benzsevern.github.io/goldenflow/",
-  "version": "1.1.4",
+  "version": "1.1.2",
   "repository": {
     "url": "https://github.com/benzsevern/goldenflow",
     "source": "github"

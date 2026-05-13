@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import re
 
 import polars as pl
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.core.complexity_profile import FieldStats, MatchkeyProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
-from goldenmatch.core.complexity_profile import MatchkeyProfile, FieldStats
 
 
 def _try_native_chain(column: str, transforms: list[str]) -> pl.Expr | None:
@@ -118,7 +117,7 @@ def build_matchkey_expr(mk: MatchkeyConfig) -> pl.Expr:
     return pl.concat_str(field_exprs, separator="||").alias(alias)
 
 
-def _emit_matchkey_profile(lf_after: "pl.LazyFrame", matchkeys: list) -> None:
+def _emit_matchkey_profile(lf_after: pl.LazyFrame, matchkeys: list) -> None:
     """Emit MatchkeyProfile from post-transform columns. No-op when null emitter."""
     if not _emitter_stack.get():
         return

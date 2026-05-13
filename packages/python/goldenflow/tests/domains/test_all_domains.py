@@ -1,5 +1,6 @@
 from goldenflow.domains import load_domain
 
+
 def test_load_people_hr():
     pack = load_domain("people_hr")
     assert pack.name == "people_hr"

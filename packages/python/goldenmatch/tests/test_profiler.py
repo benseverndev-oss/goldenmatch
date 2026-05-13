@@ -2,7 +2,6 @@
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.profiler import profile_column, profile_dataframe
 
 

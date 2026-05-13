@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from infermap.engine import MapEngine
 from infermap.providers import extract_schema
+
 from tests.conftest import CANONICAL_CUSTOMERS_CSV, CRM_EXPORT_CSV
 
 

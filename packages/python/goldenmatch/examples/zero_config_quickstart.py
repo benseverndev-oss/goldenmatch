@@ -13,8 +13,9 @@ What you'll see:
 Run with: python examples/zero_config_quickstart.py
 """
 from __future__ import annotations
-import polars as pl
+
 import goldenmatch as gm
+import polars as pl
 
 
 def example_dedupe() -> None:

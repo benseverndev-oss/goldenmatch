@@ -66,14 +66,16 @@ Add to `claude_desktop_config.json`:
 
 ---
 
-## Agent Capabilities (10 Skills)
+## Agent Capabilities (12 Skills)
 
 | Skill | What It Does |
 |-------|-------------|
 | `analyze_data` | Profile columns, detect domain, recommend matching strategy |
-| `configure` | Generate optimal YAML config from data analysis |
-| `deduplicate` | Full pipeline with confidence-gated output and reasoning |
-| `match` | Cross-source matching with intelligent strategy selection |
+| `configure` | Generate optimal YAML config from data analysis (legacy heuristic path) |
+| `autoconfig` | **v1.7-v1.12**: run AutoConfigController; return committed config + telemetry (stop_reason, decisions, NE / Path Y) |
+| `controller_telemetry` | **v1.7-v1.12**: surface controller telemetry from the most recent call (stateless A2A dispatch → returns inline note pointing callers at `autoconfig` / `deduplicate` inline telemetry) |
+| `deduplicate` | Full pipeline with confidence-gated output, reasoning, and **telemetry** (v1.7+) |
+| `match` | Cross-source matching with intelligent strategy selection and **telemetry** (v1.7+) |
 | `explain` | Natural language explanation for any pair or cluster |
 | `review` | Present borderline matches for approval |
 | `compare_strategies` | Run multiple approaches, report metrics |
@@ -197,11 +199,22 @@ for strategy, metrics in comparison.items():
 
 # Match two sources
 matches = session.match_sources("new_customers.csv", "master.csv")
+
+# v1.7-v1.12: explicit AutoConfigController invocation
+autoconf = session.autoconfigure("customers.csv")
+print(autoconf["telemetry"]["stop_reason"])     # e.g. "green"
+print(autoconf["telemetry"]["health"])          # e.g. "green"
+for decision in autoconf["telemetry"]["decisions"]:
+    print(f"iter {decision['iteration']}: {decision['rule_name']}")
+
+# Telemetry is also cached on `deduplicate` / `match_sources` calls
+session.deduplicate("customers.csv")
+print(session.last_telemetry)                    # same shape as autoconfigure's telemetry
 ```
 
 ---
 
-## MCP Tools (13 Agent-Level)
+## MCP Tools (14 Agent-Level)
 
 | Tool | Description |
 |------|-------------|

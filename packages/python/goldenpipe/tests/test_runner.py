@@ -1,9 +1,9 @@
 """Tests for pipeline runner."""
-from goldenpipe.engine.runner import Runner
-from goldenpipe.engine.resolver import PlannedStage, ExecutionPlan
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.engine.resolver import ExecutionPlan, PlannedStage
+from goldenpipe.engine.runner import Runner
 from goldenpipe.models.config import StageSpec
-from goldenpipe.models.context import PipeContext, StageResult, StageStatus, Decision
+from goldenpipe.models.context import Decision, PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import stage
 
 

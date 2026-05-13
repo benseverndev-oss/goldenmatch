@@ -1,16 +1,20 @@
 """GoldenPipe -- pluggable pipeline framework for data quality."""
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from goldenpipe._api import run, run_df, run_stages
-from goldenpipe.pipeline import Pipeline
-from goldenpipe.models.context import (
-    PipeContext, PipeResult, StageResult, Decision,
-    StageStatus, PipeStatus,
-)
-from goldenpipe.models.stage import StageInfo, Stage, stage
-from goldenpipe.models.config import StageSpec, PipelineConfig
 from goldenpipe.config.loader import load_config
-from goldenpipe.decisions import severity_gate, pii_router, row_count_gate
+from goldenpipe.decisions import pii_router, row_count_gate, severity_gate
+from goldenpipe.models.config import PipelineConfig, StageSpec
+from goldenpipe.models.context import (
+    Decision,
+    PipeContext,
+    PipeResult,
+    PipeStatus,
+    StageResult,
+    StageStatus,
+)
+from goldenpipe.models.stage import Stage, StageInfo, stage
+from goldenpipe.pipeline import Pipeline
 
 __all__ = [
     "run", "run_df", "run_stages",

@@ -1,7 +1,7 @@
 """Tests for config models and YAML loader."""
 import pytest
-from goldenpipe.models.config import StageSpec, PipelineConfig
 from goldenpipe.config.loader import load_config  # noqa: E402
+from goldenpipe.models.config import PipelineConfig, StageSpec
 
 
 class TestStageSpec:

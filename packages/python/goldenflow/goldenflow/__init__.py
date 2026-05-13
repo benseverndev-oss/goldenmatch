@@ -1,5 +1,23 @@
-__version__ = "1.1.1"
+__version__ = "1.1.6"
 
+import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
+import goldenflow.transforms.address  # noqa: F401
+import goldenflow.transforms.auto_correct  # noqa: F401
+import goldenflow.transforms.categorical  # noqa: F401
+import goldenflow.transforms.dates  # noqa: F401
+import goldenflow.transforms.email  # noqa: F401
+import goldenflow.transforms.identifiers  # noqa: F401
+import goldenflow.transforms.names  # noqa: F401
+import goldenflow.transforms.numeric  # noqa: F401
+import goldenflow.transforms.phone  # noqa: F401
+
+# Import transform modules so they register with the registry
+import goldenflow.transforms.text  # noqa: F401
+import goldenflow.transforms.url  # noqa: F401
+from goldenflow.config.learner import learn_config
+
+# Config
+from goldenflow.config.loader import load_config, merge_configs, save_config
 from goldenflow.config.schema import (
     DedupSpec,
     FilterSpec,
@@ -8,50 +26,32 @@ from goldenflow.config.schema import (
     SplitSpec,
     TransformSpec,
 )
-from goldenflow.engine.transformer import TransformEngine, TransformResult
+
+# Connectors
+from goldenflow.connectors.file import read_file, write_file
+from goldenflow.domains import load_domain
+
+# Domains
+from goldenflow.domains.base import DomainPack
+from goldenflow.engine.differ import DiffResult, diff_dataframes
 
 # Engine
-from goldenflow.engine.manifest import Manifest, TransformRecord, TransformError
-from goldenflow.engine.profiler_bridge import DatasetProfile, ColumnProfile
+from goldenflow.engine.manifest import Manifest, TransformError, TransformRecord
+from goldenflow.engine.profiler_bridge import ColumnProfile, DatasetProfile
 from goldenflow.engine.selector import select_transforms
-from goldenflow.engine.differ import diff_dataframes, DiffResult
+from goldenflow.engine.transformer import TransformEngine, TransformResult
+
+# Mapping
+from goldenflow.mapping.schema_mapper import ColumnMapping, SchemaMapper
 
 # Transforms
 from goldenflow.transforms import (
     TransformInfo,
-    register_transform,
     get_transform,
     list_transforms,
     parse_transform_name,
+    register_transform,
 )
-
-# Mapping
-from goldenflow.mapping.schema_mapper import SchemaMapper, ColumnMapping
-
-# Config
-from goldenflow.config.loader import load_config, save_config, merge_configs
-from goldenflow.config.learner import learn_config
-
-# Domains
-from goldenflow.domains.base import DomainPack
-from goldenflow.domains import load_domain
-
-# Connectors
-from goldenflow.connectors.file import read_file, write_file
-
-# Import transform modules so they register with the registry
-import goldenflow.transforms.text  # noqa: F401
-import goldenflow.transforms.phone  # noqa: F401
-import goldenflow.transforms.names  # noqa: F401
-import goldenflow.transforms.address  # noqa: F401
-import goldenflow.transforms.dates  # noqa: F401
-import goldenflow.transforms.categorical  # noqa: F401
-import goldenflow.transforms.numeric  # noqa: F401
-import goldenflow.transforms.auto_correct  # noqa: F401
-import goldenflow.transforms.email  # noqa: F401
-import goldenflow.transforms.identifiers  # noqa: F401
-import goldenflow.transforms.url  # noqa: F401
-import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 
 
 def transform_file(path, config=None, output_dir=None):

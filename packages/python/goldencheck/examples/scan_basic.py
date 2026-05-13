@@ -3,10 +3,10 @@
 Usage:
     python scan_basic.py data.csv
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from goldencheck import scan_file, Severity
+from goldencheck import Severity, scan_file
 
 
 def main():

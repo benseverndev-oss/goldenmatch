@@ -1,6 +1,14 @@
 from goldencheck.llm.merger import merge_llm_findings
-from goldencheck.llm.prompts import LLMResponse, LLMColumnAssessment, LLMIssue, LLMUpgrade, LLMDowngrade, LLMRelation
+from goldencheck.llm.prompts import (
+    LLMColumnAssessment,
+    LLMDowngrade,
+    LLMIssue,
+    LLMRelation,
+    LLMResponse,
+    LLMUpgrade,
+)
 from goldencheck.models.finding import Finding, Severity
+
 
 def test_new_issue_added():
     findings = []

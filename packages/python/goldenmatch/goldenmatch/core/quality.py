@@ -59,8 +59,8 @@ def _scan_only(
     domain: str | None,
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Run GoldenCheck scan without fixes. Reports findings."""
-    from goldencheck.engine.scanner import scan_file
     from goldencheck.engine.confidence import apply_confidence_downgrade
+    from goldencheck.engine.scanner import scan_file
     from goldencheck.models.finding import Severity
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
@@ -107,9 +107,9 @@ def _scan_and_fix(
     domain: str | None,
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Run GoldenCheck scan + apply fixes."""
-    from goldencheck.engine.scanner import scan_file
     from goldencheck.engine.confidence import apply_confidence_downgrade
     from goldencheck.engine.fixer import apply_fixes
+    from goldencheck.engine.scanner import scan_file
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         df.write_csv(tmp.name)

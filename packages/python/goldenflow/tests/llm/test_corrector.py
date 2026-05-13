@@ -1,4 +1,5 @@
 from unittest.mock import patch
+
 import polars as pl
 from goldenflow.llm.corrector import _get_value_summary, category_llm_correct
 
@@ -47,8 +48,9 @@ def test_llm_mode_env_var():
 def test_llm_mode_env_var_in_engine():
     """Verify GOLDENFLOW_LLM=1 env var causes the LLM path to be entered in auto-transforms."""
     import os
-    import polars as pl
     from unittest.mock import patch
+
+    import polars as pl
     from goldenflow.engine.transformer import TransformEngine
 
     os.environ["GOLDENFLOW_LLM"] = "1"

@@ -34,6 +34,8 @@ The server loads data, runs initial matching, and exposes endpoints on the speci
 | `GET` | `/reviews` | Review queue (borderline pairs) |
 | `GET` | `/reviews/decisions` | List completed review decisions |
 | `POST` | `/reviews/decide` | Approve or reject a pair |
+| `POST` | `/autoconfig` | Run AutoConfigController; return committed config + telemetry |
+| `GET` | `/controller/telemetry` | Last autoconfig's telemetry (stop_reason, health, decisions, NE fields) |
 
 ---
 
@@ -226,6 +228,54 @@ explanation = client.explain(42, 108)
 
 # Get review queue
 reviews = client.reviews()
+```
+
+---
+
+## AutoConfigController telemetry (v1.7-v1.12)
+
+Two endpoints expose what the controller decides and why. Same JSON shape as the workbench `GET /api/v1/controller/telemetry`, the CLI `goldenmatch autoconfig` output, and the SQL `goldenmatch_autoconfig_telemetry()` function — write a parser once and reuse across surfaces.
+
+### POST /autoconfig
+
+Runs `auto_configure_df` and returns the committed config + telemetry.
+
+```bash
+# Re-profile the server's currently-loaded data
+curl -X POST http://localhost:8080/autoconfig
+
+# Or override with a different dataset
+curl -X POST http://localhost:8080/autoconfig \
+    -H "content-type: application/json" \
+    -d '{"records": [{"name": "Alice", "email": "a@x.com"}, ...]}'
+```
+
+```json
+{
+  "config": { "...": "full GoldenMatchConfig JSON" },
+  "telemetry": {
+    "available": true,
+    "source": "rest_autoconfig",
+    "stop_reason": "green",
+    "health": "green",
+    "elapsed_ms": 234.5,
+    "scoring": {"n_pairs_scored": 4421, "mass_above_threshold": 0.087},
+    "blocking": {"n_blocks": 312, "reduction_ratio": 0.94},
+    "cluster": {"n_clusters": 1820, "transitivity_rate": 0.99},
+    "column_priors": [{"column": "email", "identity_score": 0.95, "corruption_score": 0.0}],
+    "decisions": [{"iteration": 1, "rule_name": "...", "rationale": "..."}],
+    "committed_matchkeys": [{"name": "exact_email", "has_negative_evidence": true}],
+    "negative_evidence": [{"matchkey_name": "exact_email", "field": "phone", "penalty": 0.5}]
+  }
+}
+```
+
+### GET /controller/telemetry
+
+Returns the cached telemetry from the most recent `POST /autoconfig` call without re-running the controller. Before any autoconfig call:
+
+```json
+{"available": false, "source": null}
 ```
 
 ---

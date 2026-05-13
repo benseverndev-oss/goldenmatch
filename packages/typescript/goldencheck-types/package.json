@@ -29,5 +29,14 @@
     "vitest": "^4.1.0"
   },
   "license": "MIT",
-  "author": "Ben Severn (https://bensevern.dev)"
+  "author": "Ben Severn (https://bensevern.dev)",
+  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/goldencheck-types",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "directory": "packages/typescript/goldencheck-types"
+  },
+  "bugs": {
+    "url": "https://github.com/benzsevern/goldenmatch/issues"
+  }
 }

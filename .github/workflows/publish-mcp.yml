@@ -1,0 +1,208 @@
+name: Publish to MCP Registry
+
+# Syncs the suite's server.json files to the official MCP Registry
+# (registry.modelcontextprotocol.io) so the listings stay in lockstep with PyPI.
+#
+# Triggers:
+#   - release: published — fires automatically after a PyPI publish workflow
+#     lands. Tag pattern decides which package to sync. Mirror of the
+#     `publish-<pkg>.yml` workflows' tag patterns so we re-sync exactly once
+#     per release.
+#   - workflow_dispatch — manual fire with `package` input (single name or
+#     `all`) for the initial drift-close and any later one-off refreshes.
+#
+# Auth: GitHub OIDC. The registry trusts GitHub Actions tokens for
+# `io.github.<user>/*` namespaces — no PAT, no API token, no secrets to
+# manage. Requires `id-token: write` permission scoped to the publish step.
+#
+# CLI: mcp-publisher (Go binary, installed from the latest release tarball).
+# Pin the version once the registry stabilises out of preview; for now,
+# `latest` is fine — the CLI is conservative about breaking changes.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Which package to (re-)publish to the MCP Registry"
+        required: true
+        type: choice
+        options:
+          - all
+          - goldenmatch
+          - goldencheck
+          - goldenflow
+          - goldenpipe
+          - infermap
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolve which packages to sync on this run. Release events map a tag
+  # pattern → one package; workflow_dispatch can request all five.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.set.outputs.packages }}
+    steps:
+      - id: set
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_PKG: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          PKGS=()
+          if [ "$EVENT" = "release" ]; then
+            # Tag patterns mirror the PyPI publish-*.yml workflow `if:` guards.
+            # Order matters: goldencheck-types-v* is a prefix of goldencheck-v*
+            # so check the longer prefix first.
+            if   [[ "$TAG" == goldencheck-types-v* ]];  then : noop  # not on registry
+            elif [[ "$TAG" == goldencheck-v* ]];        then PKGS+=(goldencheck)
+            elif [[ "$TAG" == goldenflow-v* ]];         then PKGS+=(goldenflow)
+            elif [[ "$TAG" == goldenpipe-v* ]];         then PKGS+=(goldenpipe)
+            elif [[ "$TAG" == infermap-js-v* ]];        then : noop
+            elif [[ "$TAG" == infermap-v* ]];           then PKGS+=(infermap)
+            elif [[ "$TAG" == goldenmatch-js-v* ]];     then : noop
+            elif [[ "$TAG" == goldenmatch-duckdb-v* ]]; then : noop  # not on registry
+            elif [[ "$TAG" == goldenmatch-pg-v* ]];     then : noop  # not on registry
+            elif [[ "$TAG" == goldensuite-mcp-v* ]];    then : noop  # aggregator -- transitively exposes sub-package tools
+            elif [[ "$TAG" == v* ]];                    then PKGS+=(goldenmatch)
+            fi
+          else
+            if [ "$DISPATCH_PKG" = "all" ]; then
+              PKGS=(goldenmatch goldencheck goldenflow goldenpipe infermap)
+            else
+              PKGS=("$DISPATCH_PKG")
+            fi
+          fi
+          if [ ${#PKGS[@]} -eq 0 ]; then
+            echo "packages=[]" >> "$GITHUB_OUTPUT"
+          else
+            json="["
+            for p in "${PKGS[@]}"; do json+="\"$p\","; done
+            json="${json%,}]"
+            echo "packages=$json" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.resolve.outputs.packages) }}
+    permissions:
+      # Required for OIDC token retrieval (`mcp-publisher login github-oidc`).
+      # No `contents: write` — the workflow never modifies the repo.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # Install mcp-publisher from the latest release tarball. The MCP
+      # Registry team ships static binaries; no Go toolchain needed in CI.
+      # Pin a version here (e.g. `v1.0.0`) once the registry exits preview.
+      - name: Install mcp-publisher
+        run: |
+          ASSET="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
+          curl -fSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/${ASSET}" \
+            | tar xz mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher --help >/dev/null   # smoke
+
+      - name: Resolve target version
+        # Source of truth depends on the event:
+        #
+        # - release: read from the git tag. The tag (e.g. `goldenflow-v1.1.5`)
+        #   is the canonical declaration of what's being shipped. PyPI lookup
+        #   would race against the parallel `publish-<pkg>.yml` workflow that
+        #   triggered off the same release event — the prior 1.1.5 release
+        #   hit exactly that bug (workflow saw the prior PyPI version because
+        #   the PyPI publish hadn't completed yet).
+        #
+        # - workflow_dispatch: read from pyproject.toml in the package dir.
+        #   Race-free; also lets us force-refresh listings without going
+        #   through PyPI/release.
+        id: ver
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "release" ]; then
+            # Tag patterns:
+            #   v1.13.0                  -> goldenmatch
+            #   goldencheck-v1.2.0       -> goldencheck
+            #   goldenflow-v1.1.5        -> goldenflow
+            #   goldenpipe-v1.1.0        -> goldenpipe
+            #   infermap-v0.4.0          -> infermap
+            # In every case the version is whatever follows the last `-v`
+            # (or the leading `v` for the unprefixed goldenmatch case).
+            V="${TAG##*-v}"
+            V="${V#v}"
+          else
+            # pyproject.toml is the canonical version source per package.
+            # `awk` instead of `python` so we don't need a setup-python step.
+            FILE="packages/python/${PKG}/pyproject.toml"
+            V=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$FILE")
+          fi
+          if [ -z "$V" ] || ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::could not resolve version for ${PKG} (event=${EVENT}, raw=${V})"
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "::notice::publishing ${PKG} version ${V} (source: ${EVENT})"
+
+      - name: Inject version into server.json
+        # Keep the registry-level `version` and `packages[0].version` in
+        # lockstep with the resolved source. server.json's other fields
+        # (name, title, description, repository, remotes) stay whatever the
+        # file in the repo says — those are publisher-curated, not synced.
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          FILE="packages/python/${PKG}/server.json"
+          jq --arg v "$V" '
+            .version = $v
+            | .packages |= map(if .registryType == "pypi" then .version = $v else . end)
+          ' "$FILE" > "${FILE}.tmp"
+          mv "${FILE}.tmp" "$FILE"
+          echo "--- ${FILE} (post-injection) ---"
+          cat "$FILE"
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        working-directory: packages/python/${{ matrix.pkg }}
+        run: ../../../mcp-publisher login github-oidc
+
+      - name: Validate server.json
+        working-directory: packages/python/${{ matrix.pkg }}
+        run: ../../../mcp-publisher validate
+
+      - name: Publish to MCP Registry
+        working-directory: packages/python/${{ matrix.pkg }}
+        run: ../../../mcp-publisher publish
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          {
+            echo "## MCP Registry: ${PKG}"
+            echo ""
+            echo "- Synced version: \`${V}\`"
+            echo "- Listing: https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/${PKG}"
+          } >> "$GITHUB_STEP_SUMMARY"

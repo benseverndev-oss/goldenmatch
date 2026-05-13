@@ -6,8 +6,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-import polars as pl
-
 from goldenmatch.config.schemas import GoldenRulesConfig
 from goldenmatch.db.clusters import (
     add_to_cluster,

@@ -1,9 +1,7 @@
 """Tests for LLM budget tracking."""
 from __future__ import annotations
 
-import pytest
-
-from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
 
 
 class TestBudgetConfig:
@@ -112,8 +110,9 @@ class TestBudgetTrackerSummary:
         assert "models_used" in s
 
 
-import polars as pl
 from unittest.mock import patch
+
+import polars as pl
 
 
 def _make_test_df():

@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def _ensure_ray():
 
 def score_blocks_ray(
     blocks: list,
-    mk: "MatchkeyConfig",
+    mk: MatchkeyConfig,  # noqa: F821  # forward ref, resolved lazily via __future__ annotations
     matched_pairs: set[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
@@ -104,7 +103,6 @@ def score_blocks_ray(
     for block in blocks:
         # Collect the lazy DataFrame before sending to Ray
         if hasattr(block, 'df') and hasattr(block.df, 'collect'):
-            import polars as pl
             collected_block = type(block)(
                 block_key=block.block_key,
                 df=block.df.collect().lazy(),

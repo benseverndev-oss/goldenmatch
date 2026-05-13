@@ -1,8 +1,8 @@
 """Tests for stage registry."""
 import pytest
 from goldenpipe.engine.registry import StageRegistry
-from goldenpipe.models.stage import stage
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
+from goldenpipe.models.stage import stage
 
 
 @stage(name="dummy", produces=["df"], consumes=["df"])

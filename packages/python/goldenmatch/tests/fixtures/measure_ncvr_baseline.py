@@ -2,11 +2,14 @@
 Run once to populate tests/parity/autoconfig-f1-floors.json's ncvr_synth.
 """
 from __future__ import annotations
-from pathlib import Path
+
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from tests.fixtures.ncvr_synth_dupes import build_ncvr_synth_df
 from goldenmatch._api import dedupe_df
+
+from tests.fixtures.ncvr_synth_dupes import build_ncvr_synth_df
 
 
 def main():

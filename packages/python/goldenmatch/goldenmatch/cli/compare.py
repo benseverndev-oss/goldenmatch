@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -47,11 +46,11 @@ def compare_clusters_cmd(
     file_a: str = typer.Argument(..., help="First cluster JSON file (baseline / ER1)"),
     file_b: str = typer.Argument(..., help="Second cluster JSON file (comparison / ER2)"),
     details: bool = typer.Option(False, "--details", "-d", help="Show per-cluster transformation details"),
-    case_type: Optional[str] = typer.Option(
+    case_type: str | None = typer.Option(
         None, "--case-type",
         help="Filter details by case: unchanged, merged, partitioned, overlapping",
     ),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Save results to JSON"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Save results to JSON"),
 ) -> None:
     """Compare two ER clustering outcomes using the CCMS framework.
 

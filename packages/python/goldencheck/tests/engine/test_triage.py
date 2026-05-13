@@ -1,4 +1,4 @@
-from goldencheck.engine.triage import auto_triage, TriageResult
+from goldencheck.engine.triage import TriageResult, auto_triage
 from goldencheck.models.finding import Finding, Severity
 
 

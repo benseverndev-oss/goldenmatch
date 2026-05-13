@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
+import random
 
 from goldenmatch.core.cross_encoder import (
     _column_drop,
@@ -13,7 +13,6 @@ from goldenmatch.core.cross_encoder import (
     merge_scores,
     serialize_record,
 )
-import random
 
 
 class TestSerializeRecord:

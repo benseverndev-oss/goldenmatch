@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from infermap_bench.cases import (
     Case,
     ExpectedCoverageError,

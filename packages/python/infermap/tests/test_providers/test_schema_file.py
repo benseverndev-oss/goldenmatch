@@ -5,7 +5,6 @@ import json
 
 import pytest
 import yaml
-
 from infermap.errors import ConfigError
 from infermap.providers.schema_file import SchemaFileProvider
 

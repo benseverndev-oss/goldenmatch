@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 import polars as pl
 
@@ -17,7 +16,6 @@ from goldenmatch.db.metadata import (
     new_run_id,
     update_state,
 )
-from goldenmatch.db.blocking import build_blocking_query
 from goldenmatch.db.writer import write_golden_records
 
 logger = logging.getLogger(__name__)
@@ -49,11 +47,6 @@ def run_sync(
         Summary dict with match counts, actions taken
     """
     from goldenmatch.core.autofix import auto_fix_dataframe
-    from goldenmatch.core.blocker import build_blocks
-    from goldenmatch.core.cluster import build_clusters
-    from goldenmatch.core.golden import build_golden_record
-    from goldenmatch.core.matchkey import compute_matchkeys
-    from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 
     # Ensure metadata tables exist
     ensure_metadata_tables(connector)
@@ -388,7 +381,7 @@ def _incremental_pipeline(
 
 def _embed_next_chunk(
     connector: DatabaseConnector,
-    ann_index: PersistentANNIndex,
+    ann_index: PersistentANNIndex,  # noqa: F821  # forward ref, resolved lazily
     source_table: str,
     columns: list[str],
     chunk_size: int = 100000,
@@ -399,7 +392,7 @@ def _embed_next_chunk(
         from goldenmatch.db.connector import _quote_ident
 
         # Find records not yet embedded
-        already_embedded = ann_index.record_count
+        _already_embedded = ann_index.record_count
         query = (
             f"SELECT id FROM {_quote_ident(source_table)} "
             f"WHERE id NOT IN ("

@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 
 
 def watch_cmd(
     source_type: str = typer.Option("postgres", "--source-type", help="Database type"),
-    connection_string: Optional[str] = typer.Option(None, "--connection-string", help="Database URL"),
+    connection_string: str | None = typer.Option(None, "--connection-string", help="Database URL"),
     table: str = typer.Option(..., "--table", help="Table to watch"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML file"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config YAML file"),
     poll_interval: int = typer.Option(30, "--interval", help="Seconds between polls"),
     output_mode: str = typer.Option("separate", "--output-mode", help="separate or in_place"),
-    incremental_column: Optional[str] = typer.Option(None, "--incremental-column", help="Column for change detection"),
+    incremental_column: str | None = typer.Option(None, "--incremental-column", help="Column for change detection"),
 ) -> None:
     """Watch a database table and match new records continuously."""
     import logging

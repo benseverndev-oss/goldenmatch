@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.pprl.protocol import (
-    PPRLConfig,
     PartyData,
+    PPRLConfig,
     compute_bloom_filters,
-    link_trusted_third_party,
     link_smc,
+    link_trusted_third_party,
     run_pprl,
 )
 from goldenmatch.utils.transforms import apply_transform
@@ -195,8 +194,8 @@ class TestRunPPRL:
 
 class TestPPRLCLI:
     def test_pprl_link_help(self):
-        from typer.testing import CliRunner
         from goldenmatch.cli.main import app
+        from typer.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(app, ["pprl", "link", "--help"])
@@ -204,8 +203,8 @@ class TestPPRLCLI:
         assert "Privacy" in result.stdout or "party" in result.stdout.lower()
 
     def test_pprl_link_basic(self, tmp_path):
-        from typer.testing import CliRunner
         from goldenmatch.cli.main import app
+        from typer.testing import CliRunner
 
         # Create test files
         a_path = tmp_path / "a.csv"

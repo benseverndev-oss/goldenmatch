@@ -13,15 +13,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.stdout.reconfigure(line_buffering=True)
 
 import polars as pl
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel
-from goldenmatch.core.cluster import build_clusters
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, score_blocks_parallel
+from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
