@@ -236,3 +236,58 @@ CREATE FUNCTION "gm_telemetry"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'gm_telemetry_wrapper';
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Identity Graph (v2.0)
+-- ══════════════════════════════════════════════════════════════════════
+-- Contract: docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md
+-- All identity functions accept the path to the identity store as an explicit
+-- second arg. For SQLite pass the filesystem path; for Postgres pass the libpq
+-- DSN. Empty-string filters mean "no filter on that dimension".
+
+-- Resolve a `{source}:{source_pk}` record id to its identity view JSON.
+-- Returns {"found": false} when the record has no identity.
+CREATE FUNCTION "goldenmatch_identity_resolve"(
+    "record_id" TEXT,
+    "db_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_identity_resolve_wrapper';
+
+-- Return the full identity view JSON for a given entity_id.
+CREATE FUNCTION "goldenmatch_identity_view"(
+    "entity_id" TEXT,
+    "db_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_identity_view_wrapper';
+
+-- Return the temporal event log for an identity as a JSON array.
+CREATE FUNCTION "goldenmatch_identity_history"(
+    "entity_id" TEXT,
+    "db_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_identity_history_wrapper';
+
+-- List `conflicts_with` evidence edges as a JSON array.
+CREATE FUNCTION "goldenmatch_identity_conflicts"(
+    "dataset" TEXT,
+    "db_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_identity_conflicts_wrapper';
+
+-- List identities filtered by dataset and status (empty = no filter).
+CREATE FUNCTION "goldenmatch_identity_list"(
+    "dataset" TEXT,
+    "status" TEXT,
+    "db_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_identity_list_wrapper';

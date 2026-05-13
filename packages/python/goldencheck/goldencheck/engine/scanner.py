@@ -99,7 +99,7 @@ def _post_classification_checks(
 
     # --- Code-like format inconsistency (e.g. 5-digit vs 9-digit zip) ---
     # Only add if no pattern_consistency finding already exists at WARNING+ for this column
-    from goldencheck.profilers.pattern_consistency import _generalize
+    from goldencheck.profilers.pattern_consistency import _generalize_series
     existing_pc_cols = {
         f.column for f in new_findings
         if f.check == "pattern_consistency" and f.severity in (Severity.WARNING, Severity.ERROR)
@@ -118,8 +118,11 @@ def _post_classification_checks(
         total = len(non_null)
         if total == 0:
             continue
-        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD)
-        patterns = non_null.map_elements(_generalize, return_dtype=pl.String)
+        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD).
+        # Vectorised via Polars regex — see _generalize_series docstring;
+        # the previous map_elements(_generalize) was a top-3 self-time
+        # hot spot in the scale-audit cProfile.
+        patterns = _generalize_series(non_null)
         pattern_counts = patterns.value_counts().sort("count", descending=True)
         if len(pattern_counts) < 2:
             continue
@@ -349,8 +352,10 @@ def scan_file(
     if baseline is not None:
         from goldencheck.drift import run_drift_checks
         if baseline.source_filename and baseline.source_filename != path.name:
+            # %r quotes both values so YAML-supplied filename can't smuggle
+            # newlines / control chars into structured logs.
             logger.warning(
-                "Baseline source '%s' doesn't match scan file '%s'",
+                "Baseline source %r doesn't match scan file %r",
                 baseline.source_filename, path.name,
             )
         drift_findings = run_drift_checks(sample, baseline)

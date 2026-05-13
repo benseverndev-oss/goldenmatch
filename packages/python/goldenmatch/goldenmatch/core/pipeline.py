@@ -98,6 +98,60 @@ def _open_memory_store(config: GoldenMatchConfig):
         return None
 
 
+def _open_identity_store(config: GoldenMatchConfig):
+    """Open the IdentityStore configured on ``config``. Returns None when
+    identity graph is disabled or initialization fails (additive feature)."""
+    if not config.identity or not config.identity.enabled:
+        return None
+    try:
+        from goldenmatch.identity import IdentityStore
+        return IdentityStore(
+            backend=config.identity.backend,
+            path=config.identity.path,
+            connection=config.identity.connection,
+        )
+    except Exception as e:
+        logger.warning("Identity store init failed, continuing without: %s", e)
+        return None
+
+
+def _resolve_identities(
+    clusters: dict,
+    df: pl.DataFrame,
+    scored_pairs: list,
+    matchkeys: list,
+    config: GoldenMatchConfig,
+    run_name: str,
+) -> dict | None:
+    """Run identity resolution as a post-cluster step. Best-effort: failures
+    log a warning and return None without affecting dedupe output."""
+    if not config.identity or not config.identity.enabled:
+        return None
+    store = _open_identity_store(config)
+    if store is None:
+        return None
+    try:
+        from goldenmatch.identity import resolve_clusters
+        mk_name = matchkeys[0].name if matchkeys else None
+        summary = resolve_clusters(
+            clusters, df, scored_pairs, mk_name, store,
+            run_name=run_name,
+            dataset=config.identity.dataset,
+            source_pk_col=config.identity.source_pk_column,
+            emit_singletons=config.identity.emit_singletons,
+            weak_confidence_threshold=config.identity.weak_confidence_threshold,
+        )
+        return summary.as_dict()
+    except Exception as e:
+        logger.warning("Identity resolution failed: %s", e)
+        return None
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
+
+
 def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
     """Cast all non-internal columns to Utf8.
 
@@ -854,6 +908,11 @@ def _run_dedupe_pipeline(
         except Exception as e:
             logger.warning("Lineage generation failed: %s", e)
 
+    # ── Step 7.6: IDENTITY GRAPH (optional) ──
+    identity_summary = _resolve_identities(
+        clusters, collected_df, all_pairs, matchkeys, config, run_name
+    )
+
     results = {
         "clusters": clusters,
         "golden": golden_df,
@@ -863,6 +922,7 @@ def _run_dedupe_pipeline(
         "quarantine": quarantine_df,
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
+        "identity_summary": identity_summary,
     }
 
     try:

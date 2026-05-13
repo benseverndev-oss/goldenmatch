@@ -581,6 +581,35 @@ class MemoryConfig(BaseModel):
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
 
 
+class IdentityConfig(BaseModel):
+    """Identity Graph configuration.
+
+    Spec: ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``
+    """
+    enabled: bool = False
+    backend: str = "sqlite"
+    path: str = ".goldenmatch/identity.db"
+    connection: str | None = None
+    dataset: str | None = None
+    source_pk_column: str | None = None
+    emit_singletons: bool = True
+    # v2.1: when a cluster's confidence drops below this, the resolver flags the
+    # bottleneck pair as a ``conflicts_with`` edge so a steward sees it for
+    # review. 0.6 mirrors the existing ``weak_cluster_threshold`` family. Set
+    # to 0 to disable auto-detection.
+    weak_confidence_threshold: float = 0.6
+
+    @field_validator("dataset")
+    @classmethod
+    def _reject_empty_dataset(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("IdentityConfig.dataset must be non-empty (or None)")
+        return stripped
+
+
 class MatchSettingsConfig(BaseModel):
     matchkeys: list[MatchkeyConfig]
 
@@ -605,6 +634,7 @@ class GoldenMatchConfig(BaseModel):
     domain: DomainConfig | None = None
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     memory: MemoryConfig | None = None
+    identity: IdentityConfig | None = None
 
     # Auto-config verification hand-offs (see goldenmatch/core/autoconfig_verify.py).
     # These attrs are set by auto_configure_df and read by the pipeline;

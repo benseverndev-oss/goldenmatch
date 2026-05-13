@@ -28,7 +28,7 @@ Quick start:
 All features are accessible via `import goldenmatch as gm`.
 """
 
-__version__ = "1.13.0"
+__version__ = "1.15.0"
 
 # ── High-level API (convenience functions) ────────────────────────────────
 from goldenmatch._api import (
@@ -189,6 +189,34 @@ from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.streaming import StreamProcessor, run_stream
 from goldenmatch.core.threshold import suggest_threshold
 from goldenmatch.core.validate import validate_dataframe
+
+# ── Identity Graph ───────────────────────────────────────────────────────
+from goldenmatch.identity import (
+    EdgeKind,
+    EventKind,
+    EvidenceEdge,
+    IdentityAlias,
+    IdentityEvent,
+    IdentityNode,
+    IdentityStatus,
+    IdentityStore,
+    IdentityView,
+    ResolveSummary,
+    SourceRecord,
+    find_by_record,
+    find_conflicts,
+    get_entity,
+    manual_merge,
+    manual_split,
+    new_entity_id,
+    resolve_clusters,
+)
+from goldenmatch.identity import (
+    history as identity_history,
+)
+from goldenmatch.identity import (
+    list_entities as list_identities,
+)
 from goldenmatch.output.report import generate_dedupe_report
 
 # ── Output ───────────────────────────────────────────────────────────────
@@ -296,4 +324,12 @@ __all__ = [
     "MemoryLearner", "apply_corrections",
     # Learning Memory API
     "get_memory", "add_correction", "learn", "memory_stats",
+    # Identity Graph (v2.0)
+    "IdentityStore", "IdentityNode", "SourceRecord", "EvidenceEdge",
+    "IdentityEvent", "IdentityAlias", "IdentityStatus", "IdentityView",
+    "EdgeKind", "EventKind", "ResolveSummary",
+    "new_entity_id", "resolve_clusters",
+    "get_entity", "find_by_record", "find_conflicts",
+    "manual_merge", "manual_split",
+    "identity_history", "list_identities",
 ]

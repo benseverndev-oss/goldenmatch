@@ -3,12 +3,17 @@
 > Entity resolution toolkit — deduplicate records and match across datasets using fuzzy, probabilistic, and LLM-powered scoring.
 
 ## Interfaces
-- MCP Server: `goldenmatch mcp-serve` (13 agent tools + 17 data tools + 5 memory tools = 35 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (35 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
-- A2A Server: `goldenmatch agent-serve --port 8200` (10 skills)
-- CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch memory ...`, + more
-- Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
-- REST API: `goldenmatch serve` on port 8000
+- MCP Server: `goldenmatch mcp-serve` (14 agent tools + 17 data tools + 5 memory tools = 36 total)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (36 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- A2A Server: `goldenmatch agent-serve --port 8200` (12 skills)
+- CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, + more
+- Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
+- REST API: `goldenmatch serve` on port 8000 (incl. `POST /autoconfig`, `GET /controller/telemetry`)
+- SQL: Postgres extension + DuckDB UDFs at `packages/rust/extensions/` (`goldenmatch_autoconfig`, `goldenmatch_dedupe_full`, `gm_telemetry`)
+
+## AutoConfigController telemetry (v1.7-v1.12, cross-surface)
+
+Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
 
 ## Install
 - `pip install goldenmatch`

@@ -32,6 +32,11 @@ from mcp.types import (
 )
 
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.identity_tools import (
+    IDENTITY_TOOL_NAMES,
+    IDENTITY_TOOLS,
+    handle_identity_tool,
+)
 from goldenmatch.mcp.memory_tools import (
     _MEMORY_TOOL_NAMES,
     MEMORY_TOOLS,
@@ -415,7 +420,7 @@ _BASE_TOOLS = [
 ]
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
@@ -432,6 +437,9 @@ def dispatch(name: str, args: dict) -> dict:
     if name in _MEMORY_TOOL_NAMES:
         from goldenmatch.mcp.memory_tools import _dispatch as _memory_dispatch
         return _memory_dispatch(name, args)
+    if name in IDENTITY_TOOL_NAMES:
+        from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
+        return _identity_dispatch(name, args)
     return _handle_tool(name, args)
 
 
@@ -445,7 +453,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -693,6 +701,8 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             return handle_agent_tool(name, arguments)
         if name in _MEMORY_TOOL_NAMES:
             return handle_memory_tool(name, arguments)
+        if name in IDENTITY_TOOL_NAMES:
+            return await handle_identity_tool(name, arguments)
         try:
             result = _handle_tool(name, arguments)
             return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]

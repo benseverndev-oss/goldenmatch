@@ -19,6 +19,7 @@
 <!-- Quality -->
 [![CI](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/benzsevern/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenmatch)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benzsevern/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benzsevern/goldenmatch)
 [![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjZmZmIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4Ii8+PC9zdmc+)](https://github.com/benzsevern/dqbench)
 [![F1: 96.4%](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25%20zero--config-d4a017)](#benchmarks)
 
@@ -30,8 +31,7 @@
 <!-- Ecosystem -->
 [![Docs](https://img.shields.io/badge/docs-github.io-d4a017)](https://benzsevern.github.io/goldenmatch/)
 [![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
-[![MCP Marketplace](https://img.shields.io/badge/MCP-marketplace-0ea5e9)](https://mcp-marketplace.io/)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenmatch/blob/main/scripts/gpu_colab_notebook.ipynb)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.benzsevern%2Fgoldenmatch-0ea5e9)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/goldenmatch)
 
 </div>
 
@@ -111,8 +111,9 @@ npm install goldenmatch
 - **PPRL auto-configuration** — profiles your data and picks optimal fields, bloom filter parameters, and threshold
 
 ### Integration
-- **REST API + MCP Server** — 30 tools for matching, explaining, reviewing, data quality, and transforms
-- **A2A Agent** — 10 skills for AI-to-AI autonomous entity resolution
+- **REST API + MCP Server** — 31 tools for matching, explaining, reviewing, data quality, transforms, and AutoConfigController telemetry
+- **A2A Agent** — 12 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
+- **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
 - **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
 - **DuckDB backend** — out-of-core processing for 10M+ records without Spark

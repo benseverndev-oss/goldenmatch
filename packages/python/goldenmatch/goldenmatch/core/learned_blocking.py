@@ -111,34 +111,52 @@ def evaluate_rule(
     if not true_pairs:
         return 0.0, 1.0, 0
 
-    # Assign block keys
+    # Assign block keys + record each row's block for later recall lookup.
     rows = df.select(["__row_id__"] + [p.field for p in rule.predicates]).to_dicts()
     blocks: dict[str, list[int]] = {}
+    block_of: dict[int, str] = {}
     for row in rows:
         key = _compute_block_key(row, rule.predicates)
         if key:
-            blocks.setdefault(key, []).append(row["__row_id__"])
+            rid = row["__row_id__"]
+            blocks.setdefault(key, []).append(rid)
+            block_of[rid] = key
 
-    # Compute pairs within blocks
-    blocked_pairs: set[tuple[int, int]] = set()
-    for members in blocks.values():
-        if len(members) > 1:
-            for a, b in combinations(members, 2):
-                blocked_pairs.add((min(a, b), max(a, b)))
+    # Count blocked pairs WITHOUT materialising them. At 1M rows with a
+    # low-cardinality candidate key, the old code's `combinations(members, 2)`
+    # set blew up — a single 200K-member block enumerates 20 billion tuples
+    # (≈ 600 GB of Python set memory) and crashed `evaluate_rule` mid-eval
+    # during auto-config's learned-blocking sample run (PR #173, scale audit).
+    #
+    # We only need len() of the pair set and len(true_pairs & blocked_pairs).
+    # Both are derivable from block sizes + a row→block lookup; the explicit
+    # set is never used elsewhere.
+    n_blocked_pairs = sum(
+        len(members) * (len(members) - 1) // 2
+        for members in blocks.values()
+        if len(members) > 1
+    )
 
     # Total possible pairs
     n = df.height
     total_pairs = n * (n - 1) // 2
 
-    # Recall: fraction of true pairs that land in the same block
+    # Recall: fraction of true pairs that land in the same block. Constant
+    # work per true pair (one dict lookup + equality check), versus the old
+    # O(|true_pairs|) set-intersection cost AFTER an O(blocked_pairs)-sized
+    # set build.
     if true_pairs:
-        recall = len(true_pairs & blocked_pairs) / len(true_pairs)
+        hits = sum(
+            1 for a, b in true_pairs
+            if block_of.get(a) is not None and block_of.get(a) == block_of.get(b)
+        )
+        recall = hits / len(true_pairs)
     else:
         recall = 0.0
 
     # Reduction ratio: fraction of pairs eliminated
     if total_pairs > 0:
-        reduction = 1 - (len(blocked_pairs) / total_pairs)
+        reduction = 1 - (n_blocked_pairs / total_pairs)
     else:
         reduction = 1.0
 
@@ -276,18 +294,22 @@ def apply_learned_blocks(
             ["__row_id__"] + list({p.field for p in rule.predicates})
         ).to_dicts()
 
+        # Build (block_key -> positions) instead of (block_key -> __row_id__ values).
+        # Direct positional indexing into `df` is O(K) per block; filter+is_in
+        # was O(N) per block, which dominated wall at 1M (cProfile Round 5).
+        # We enumerate `rows` so positions track df's current ordering.
         blocks: dict[str, list[int]] = {}
-        for row in rows:
+        for pos, row in enumerate(rows):
             key = _compute_block_key(row, rule.predicates)
             if key:
-                blocks.setdefault(key, []).append(row["__row_id__"])
+                blocks.setdefault(key, []).append(pos)
 
-        for block_key, member_ids in blocks.items():
-            if len(member_ids) < 2:
+        for block_key, member_positions in blocks.items():
+            if len(member_positions) < 2:
                 continue
-            if len(member_ids) > max_block_size:
+            if len(member_positions) > max_block_size:
                 continue
-            block_lf = df.filter(pl.col("__row_id__").is_in(member_ids)).lazy()
+            block_lf = df[sorted(member_positions)].lazy()
             all_blocks.append(BlockResult(
                 block_key=f"learned:{rule.key()}:{block_key}",
                 df=block_lf,

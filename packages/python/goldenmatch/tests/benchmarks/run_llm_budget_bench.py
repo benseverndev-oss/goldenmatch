@@ -96,7 +96,9 @@ api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     print("ERROR: No OPENAI_API_KEY found.")
     sys.exit(1)
-print(f"API key loaded: {api_key[:10]}...{api_key[-4:]}")
+# Just confirm presence; don't echo any portion of the key. Even masked
+# prefixes can leak provider/account info in screenshots.
+print(f"API key loaded (length={len(api_key)})")
 
 df, gt = load_abt_buy()
 print(f"Loaded: {df.height} records, {len(gt)} ground truth pairs\n")

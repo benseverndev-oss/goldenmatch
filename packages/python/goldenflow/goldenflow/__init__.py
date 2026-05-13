@@ -1,4 +1,4 @@
-__version__ = "1.1.1"
+__version__ = "1.1.6"
 
 import goldenflow.notebook  # noqa: F401 — register Jupyter _repr_html_ methods
 import goldenflow.transforms.address  # noqa: F401

@@ -1,0 +1,200 @@
+name: scale-audit
+
+# Offload scale_audit.py to GitHub-hosted runners so we can measure
+# memory + wall on hardware sized for the row count, without taking
+# the developer machine offline for hours. workflow_dispatch only —
+# never auto-triggered. Tracks issue #176 (Round 3 memory attribution).
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "row count for the synthetic fixture"
+        required: true
+        default: "100000"
+        type: choice
+        options:
+          - "10000"
+          - "100000"
+          - "500000"
+          - "1000000"
+          - "2000000"
+          - "5000000"
+      runner:
+        description: "runner size. larger sizes must be enabled in repo settings before they can be selected."
+        required: true
+        default: "ubuntu-latest"
+        type: choice
+        options:
+          - "ubuntu-latest"          # 16 GB, 4-core
+          - "ubuntu-latest-8-cores"  # 32 GB
+          - "ubuntu-latest-16-cores" # 64 GB
+      dupe_rate:
+        description: "synthetic duplicate rate (0.0 - 1.0)"
+        required: false
+        default: "0.15"
+      tracemalloc:
+        description: "enable tracemalloc tracking. disable for clean RSS measurement on large runs."
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - "on"
+      rss_budget_mb:
+        description: "abort + flush if RSS exceeds this (MB). leave blank to disable."
+        required: false
+        default: ""
+      cprofile:
+        description: "wrap the audit in cProfile. .prof file uploads as an artifact. ~30% wall overhead — use for time-attribution runs."
+        required: true
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - "on"
+      backend:
+        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-udf = goldenmatch_dedupe_table via the goldenmatch-duckdb UDFs."
+        required: true
+        default: "polars-direct"
+        type: choice
+        options:
+          - "polars-direct"
+          - "duckdb-udf"
+
+# Read-only: this workflow generates synthetic data, runs an in-process
+# audit, and uploads artifacts via the actions/upload-artifact API. None
+# of those need write access to the repo.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: "scale_audit rows=${{ inputs.rows }} runner=${{ inputs.runner }}"
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Free disk space on runner
+        # The synthetic fixture at 5M is ~500 MB and Polars build assets
+        # eat a chunk too. dotnet + Android SDK are dead weight for this
+        # job; drop them up front. CRITICAL: do NOT touch /opt/hostedtoolcache
+        # here — actions/setup-python and astral-sh/setup-uv install into
+        # that tree, and wiping it after setup deletes the python interpreter
+        # + uv binary (which is exactly what happened on the first run,
+        # producing "uv: command not found" at the sync step).
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h /
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+
+      - name: Show runner memory + CPU
+        # Capture the actual runner shape so future readers of the audit
+        # log can correlate results with the hardware they ran on (the
+        # ubuntu-latest tier swaps periodically and 16 GB is not guaranteed).
+        run: |
+          echo "===memory==="
+          free -h || vm_stat || true
+          echo "===cpu==="
+          nproc || sysctl -n hw.ncpu || true
+          cat /proc/cpuinfo 2>/dev/null | head -25 || true
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Install goldenmatch-duckdb (duckdb-udf backend only)
+        # goldenmatch-duckdb lives at packages/rust/extensions/duckdb and is
+        # NOT a uv workspace member (workspace globs `packages/python/*`).
+        # Install it editable + its transitive deps only when the backend
+        # selection asks for it, so the polars-direct lane stays minimal.
+        if: inputs.backend == 'duckdb-udf'
+        run: |
+          uv pip install -e packages/rust/extensions/duckdb
+          uv pip install duckdb pyarrow
+
+      - name: Run scale audit
+        id: audit
+        run: |
+          mkdir -p .profile_tmp
+          OUT=".profile_tmp/scale_${{ inputs.rows }}_${{ inputs.runner }}.json"
+          LOG=".profile_tmp/scale_${{ inputs.rows }}_${{ inputs.runner }}.log"
+          echo "out_path=$OUT" >> $GITHUB_OUTPUT
+          echo "log_path=$LOG" >> $GITHUB_OUTPUT
+
+          ARGS="--rows ${{ inputs.rows }} --dupe-rate ${{ inputs.dupe_rate }} --out $OUT --backend ${{ inputs.backend }}"
+          if [ "${{ inputs.tracemalloc }}" = "off" ]; then
+            ARGS="$ARGS --no-tracemalloc"
+          fi
+          if [ -n "${{ inputs.rss_budget_mb }}" ]; then
+            ARGS="$ARGS --rss-budget-mb ${{ inputs.rss_budget_mb }}"
+          fi
+          if [ "${{ inputs.cprofile }}" = "on" ]; then
+            PROF=".profile_tmp/scale_${{ inputs.rows }}_${{ inputs.runner }}.prof"
+            ARGS="$ARGS --cprofile $PROF"
+          fi
+
+          echo "running: scripts/scale_audit.py $ARGS"
+          # tee so the live log streams to the workflow output AND lands
+          # in the artifact. set +e so we still upload artifacts on crash.
+          set +e
+          uv run python scripts/scale_audit.py $ARGS 2>&1 | tee "$LOG"
+          AUDIT_EXIT=${PIPESTATUS[0]}
+          echo "audit exited $AUDIT_EXIT"
+          # Always succeed this step — the next steps need to run so the
+          # JSON / log artifacts get uploaded even when the run OOM-kills
+          # or panics. The "did it work?" check happens in summary below.
+          exit 0
+
+      - name: Print result summary
+        if: always()
+        run: |
+          OUT="${{ steps.audit.outputs.out_path }}"
+          LOG="${{ steps.audit.outputs.log_path }}"
+          echo "===JSON ($OUT)==="
+          if [ -f "$OUT" ]; then
+            cat "$OUT"
+          else
+            echo "(no JSON written — process may have died before first flush)"
+          fi
+          echo ""
+          echo "===log tail (last 60 lines)==="
+          if [ -f "$LOG" ]; then
+            tail -60 "$LOG"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: scale-audit-${{ inputs.rows }}-${{ inputs.runner }}-${{ github.run_id }}
+          path: |
+            .profile_tmp/scale_*.json
+            .profile_tmp/scale_*.log
+            .profile_tmp/scale_*.prof
+          # `.profile_tmp/` starts with a dot; without this flag, upload-artifact
+          # v4 silently skips everything under it as "hidden". Every prior
+          # scale-audit run uploaded an empty artifact because of this default.
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      - name: Capture host memory pressure on exit
+        # If the audit OOM-killed, dmesg often has the OOM message and the
+        # MemFree number at kill-time. Surface it in the workflow log so
+        # we don't have to download the artifact to know what happened.
+        if: always()
+        run: |
+          echo "===dmesg tail (OOM diagnostics)==="
+          sudo dmesg | tail -40 || dmesg | tail -40 || echo "(dmesg unavailable)"
+          echo "===memory at exit==="
+          free -h || true

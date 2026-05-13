@@ -33,15 +33,20 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_12_skills():
-    """v1.7-v1.12 added `autoconfig` and `controller_telemetry` (10 → 12)."""
+def test_agent_card_has_18_skills():
+    """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
+    six identity_* skills (12->18)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 12
+    assert len(card["skills"]) == 18
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "controller_telemetry" in ids
+    assert {
+        "identity_resolve", "identity_list", "identity_history",
+        "identity_conflicts", "identity_merge", "identity_split",
+    } <= ids
 
 
 def test_agent_card_skills_have_modes():
