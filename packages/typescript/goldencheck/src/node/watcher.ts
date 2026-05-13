@@ -28,7 +28,10 @@ export async function watchDirectory(
   options: WatchOptions,
 ): Promise<void> {
   const interval = options.interval ?? 30_000;
-  const ext = options.pattern?.replace("*", "") ?? ".csv";
+  // `.replace("*", "")` only strips the FIRST wildcard, so `**.csv` becomes
+  // `*.csv` (still a wildcard, won't match anything via endsWith later).
+  // replaceAll strips every `*` so the trailing extension survives.
+  const ext = options.pattern?.replaceAll("*", "") ?? ".csv";
   const mtimes = new Map<string, number>();
 
   // Initial scan — record mtimes

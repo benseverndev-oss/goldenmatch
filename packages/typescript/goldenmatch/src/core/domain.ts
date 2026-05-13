@@ -45,8 +45,11 @@ const PRODUCT_SIGNATURES: readonly Signature[] = [
 ];
 
 const PERSON_SIGNATURES: readonly Signature[] = [
-  { pattern: /^first|first_name|fname/i, weight: 2 },
-  { pattern: /^last|last_name|lname|surname/i, weight: 2 },
+  // Anchor must apply to every branch in the alternation. Without the
+  // outer group, `/^first|first_name|fname/i` only anchors `first`;
+  // `first_name` and `fname` would match anywhere in the column name.
+  { pattern: /^(first|first_name|fname)/i, weight: 2 },
+  { pattern: /^(last|last_name|lname|surname)/i, weight: 2 },
   { pattern: /full_name|person_name/i, weight: 2 },
   { pattern: /email/i, weight: 2 },
   { pattern: /phone|mobile|cell/i, weight: 1 },
