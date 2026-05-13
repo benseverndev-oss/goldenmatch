@@ -139,6 +139,7 @@ def _resolve_identities(
             dataset=config.identity.dataset,
             source_pk_col=config.identity.source_pk_column,
             emit_singletons=config.identity.emit_singletons,
+            weak_confidence_threshold=config.identity.weak_confidence_threshold,
         )
         return summary.as_dict()
     except Exception as e:

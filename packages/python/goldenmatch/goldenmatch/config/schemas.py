@@ -593,6 +593,11 @@ class IdentityConfig(BaseModel):
     dataset: str | None = None
     source_pk_column: str | None = None
     emit_singletons: bool = True
+    # v2.1: when a cluster's confidence drops below this, the resolver flags the
+    # bottleneck pair as a ``conflicts_with`` edge so a steward sees it for
+    # review. 0.6 mirrors the existing ``weak_cluster_threshold`` family. Set
+    # to 0 to disable auto-detection.
+    weak_confidence_threshold: float = 0.6
 
     @field_validator("dataset")
     @classmethod

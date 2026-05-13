@@ -28,7 +28,7 @@ from goldenmatch.identity.model import (
 
 log = logging.getLogger("goldenmatch.identity")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS evidence_edges (
     run_name             TEXT,
     dataset              TEXT,
     recorded_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(entity_id, record_a_id, record_b_id, run_name)
+    -- v2 schema: ``kind`` is part of the unique key so a single run can record
+    -- both a ``same_as`` edge and a ``conflicts_with`` edge for the same
+    -- record pair (e.g. weak bottleneck on an otherwise-linked cluster).
+    UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
 );
 CREATE INDEX IF NOT EXISTS idx_edges_entity ON evidence_edges(entity_id);
 CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, record_b_id);
@@ -177,6 +180,46 @@ class IdentityStore:
     def _migrate(self) -> None:
         cur = self._conn.execute("PRAGMA user_version")
         version = cur.fetchone()[0]
+        if version < 2:
+            # v1 -> v2: widen the evidence_edges UNIQUE constraint to include
+            # ``kind`` so a single run can record both same_as and
+            # conflicts_with edges on the same record pair. SQLite has no
+            # ALTER CONSTRAINT, so we rebuild the table.
+            self._conn.executescript(
+                """
+                BEGIN;
+                CREATE TABLE evidence_edges_v2 (
+                    edge_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_id            TEXT NOT NULL,
+                    record_a_id          TEXT NOT NULL,
+                    record_b_id          TEXT NOT NULL,
+                    kind                 TEXT NOT NULL DEFAULT 'same_as',
+                    score                REAL,
+                    matchkey_name        TEXT,
+                    field_scores         TEXT,
+                    negative_evidence    TEXT,
+                    controller_snapshot  TEXT,
+                    run_name             TEXT,
+                    dataset              TEXT,
+                    recorded_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
+                );
+                INSERT INTO evidence_edges_v2
+                    (edge_id, entity_id, record_a_id, record_b_id, kind, score,
+                     matchkey_name, field_scores, negative_evidence,
+                     controller_snapshot, run_name, dataset, recorded_at)
+                SELECT edge_id, entity_id, record_a_id, record_b_id, kind, score,
+                       matchkey_name, field_scores, negative_evidence,
+                       controller_snapshot, run_name, dataset, recorded_at
+                FROM evidence_edges;
+                DROP TABLE evidence_edges;
+                ALTER TABLE evidence_edges_v2 RENAME TO evidence_edges;
+                CREATE INDEX IF NOT EXISTS idx_edges_entity ON evidence_edges(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, record_b_id);
+                CREATE INDEX IF NOT EXISTS idx_edges_run    ON evidence_edges(run_name);
+                COMMIT;
+                """
+            )
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -222,7 +265,7 @@ class IdentityStore:
             run_name TEXT,
             dataset TEXT,
             recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(entity_id, record_a_id, record_b_id, run_name)
+            UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
         );
         CREATE INDEX IF NOT EXISTS idx_edges_entity ON evidence_edges(entity_id);
         CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, record_b_id);
@@ -404,8 +447,8 @@ class IdentityStore:
         )
         row = self._fetchone(
             "SELECT edge_id FROM evidence_edges WHERE entity_id=? AND record_a_id=? "
-            "AND record_b_id=? AND COALESCE(run_name,'')=COALESCE(?,'')",
-            (edge.entity_id, a, b, edge.run_name),
+            "AND record_b_id=? AND kind=? AND COALESCE(run_name,'')=COALESCE(?,'')",
+            (edge.entity_id, a, b, edge.kind, edge.run_name),
         )
         return int(row["edge_id"]) if row else None
 
