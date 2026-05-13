@@ -365,3 +365,102 @@ This is the second time the audit's own measurement bug masked the real producti
 - Round 3: missing `_skip_finalize=True` doubled reported wall, masking that auto_configure is already cheap.
 
 Both bugs landed in PRs alongside their discoveries (#173 hardened tracemalloc handling, #185 fixed artifact hidden-files, #187 fixed skip_finalize). The harness now matches the production path on both axes (RSS measurement + pipeline-call sequence). Future Rounds should trust the numbers more.
+
+---
+
+## Round 6 outcomes — v0-floor fix lands the commit-policy half (2026-05-12)
+
+PR #197 fixed the commit-policy bug (issue #195): `pick_committed()`'s lex tiebreaker in the precision-collapsed regime was mechanically biased toward iterations that lowered threshold most. Post-fix, the controller correctly commits v0 in the collapsed regime instead of an over-corrected later iteration.
+
+**Cloud validation at 2M ([run 25749197084](https://github.com/benzsevern/goldenmatch/actions/runs/25749197084)) confirms the commit policy is fixed**: log shows `auto-config committed best-effort RED config (iter=v0, ...)`. Pre-fix, this would have been `iter=3`.
+
+**But the user-facing symptom is barely changed:**
+
+| metric | 2M pre-fix | 2M post-fix | 2M with perfect dedupe |
+|---|---:|---:|---:|
+| total wall | 303 s | **229 s** | (n/a) |
+| auto_configure | 7.3 s | 7.1 s | (n/a) |
+| run_dedupe | 293 s | 219 s | (n/a) |
+| peak RSS | 7,898 MB | 7,788 MB | (n/a) |
+| **clusters** | **1,971,064** | **1,985,184** | **~1,700,000** |
+
+Cluster count moved from 1.97M to 1.985M — both essentially "nothing got merged." The wall improved slightly (less iteration overhead committed) but the downstream pipeline still produced near-singleton output.
+
+### Second bug, exposed by the first fix
+
+The v0 config that gets committed isn't the same at 1M and 2M. Diagnostic via `scripts/investigate_autoconfig_2m.py`:
+
+| | 1M v0 (produces 836K clusters) | **2M v0 (produces 1.99M clusters)** |
+|---|---|---|
+| matchkey threshold | 0.8 | 0.8 |
+| address scorer | token_sort | token_sort |
+| blocking strategy | learned | learned |
+| **blocking transforms** | **`['lowercase', 'strip']`** | **`['lowercase', 'soundex']`** |
+
+**v0's learned blocking key is sample-dependent.** The learner runs on a 5K sample (`min(total_rows // 4, 5000)`). At 1M the sample comes from a smaller pool and the best-recall predicate evaluates to `strip`. At 2M the same 5K sample comes from a larger pool and the predicate evaluator picks `soundex`. Soundex at 2M produces oversized blocks that hit the `max_block_size = 5000` cap and get filtered before scoring — explaining why 99.3% of 2M rows end up as singletons.
+
+### Why this wasn't caught at 1M
+
+At 1M, learned blocking happens to pick `strip`. `strip` keeps surnames distinct so blocks are small enough to pass the max_block_size filter, scoring runs, and dedupe works. The transition between `strip`-good and `soundex`-degenerate is somewhere between 1M and 2M (or possibly even smaller — the learner is sample-state-dependent, not strictly row-count-dependent).
+
+### What this Round resolves and doesn't
+
+**Resolved:**
+- The commit-policy bug in `pick_committed()`. v0 is now correctly chosen in the collapsed regime.
+- Issue #195's commit-policy half. Test pinned (`test_pick_committed_collapsed_regime_prefers_earliest_iteration`).
+
+**Not resolved (separate bug, surfaced by the fix):**
+- Learned blocking's sample-dependence at scale. Even when v0 is the committed config, v0's learned blocking key is wrong at 2M.
+- The user-facing symptom (1.99M clusters at 2M). Until the learned-blocking layer is fixed, 2M+ still produces degenerate output.
+
+### Two paths forward
+
+1. **Fix learned-blocking determinism.** Make the learner's predicate choice less sample-state-dependent. Options: stratify the sample by likely-cluster, evaluate predicates against a larger sample, or score predicates by a more scale-invariant metric than current. Needs investigation; the right approach depends on what makes `soundex` look attractive to the learner at 2M-but-not-1M.
+2. **Add a guard for degenerate v0.** When the v0 config's blocking key produces all-large blocks (above `max_block_size`), fall back to a simpler blocking strategy (multi-pass on exact-match-eligible columns) before committing v0. Cheaper to land than (1) but doesn't fix the root cause.
+
+Both are out of scope for #195. **Filed as follow-up issue.**
+
+### Status of the scale-audit workstream
+
+The 2M-degenerate behavior was a non-issue when only 1M was being measured. Now that we've pushed past 1M, learned blocking is the new long pole. The DuckDB exploration (parked behind #195) is now parked behind the learned-blocking-determinism follow-up too — measuring storage backends on a pipeline that doesn't dedupe at 2M+ remains meaningless.
+
+The 1M baseline (12.3 min, 8.4 GB, 836K correct clusters) is unchanged and remains the user-facing claim.
+
+---
+
+## Round 7 outcomes — `max_safe_block` row-count-aware fix resolves #199 (2026-05-12)
+
+PR #200 lands the learned-blocking sample-dependence fix from #199. The autoconfig's hardcoded `max_safe_block = 1000` was the culprit — at 2M+ the (state, name) compound block exceeded it, so autoconfig fell through to a single-column soundex fallback that produced 50K-sized blocks the pipeline filtered at `max_block_size=5000`, leaving no candidate pairs.
+
+Replaced with row-count-aware `max(1000, min(10_000, total_rows // 200))`. At 5K-200K the clamp pins to 1000 (preserving existing behaviour and small-data tests). At 1M it's 5000 (matches pipeline default). At 2M it's 10000 (extra headroom).
+
+### Cloud 2M validation ([run 25757948918](https://github.com/benzsevern/goldenmatch/actions/runs/25757948918))
+
+| metric | 2M pre-#200 (degenerate) | **2M post-#200 (working pipeline)** |
+|---|---:|---:|
+| `auto_configure` wall | 7 s | **34 s** |
+| `auto_configure` peak RSS | 1.4 GB | **3.0 GB** |
+| `run_dedupe` | completed (degenerate) | **watchdog-aborted at 13 GB** |
+| committed blocking transforms | `['lowercase', 'soundex']` | **`['lowercase', 'strip']`** ✓ |
+| committed iteration | -1 (v0) | -1 (v0) |
+| clusters | 1,985,184 (99% singletons) | n/a (aborted by watchdog) |
+
+The committed config now matches what 1M produces. `auto_configure` does 5× more work (proper controller iteration) and `run_dedupe` actually starts scoring — RSS climbed to 13 GB before the safety watchdog at 90% of the 14.5 GB budget aborted the run.
+
+### A new ceiling, not a regression
+
+The pre-#200 fast runs were fast because the pipeline wasn't doing the work. Post-#200 the work is being done, and at 2M scale the working set is ~13 GB — predicted by linear scaling from 1M's 8.4 GB peak (~17 GB linear extrapolation; 13 GB is sublinear-friendly).
+
+A 16 GB Linux runner is the wrong size for 2M dedupe with the current memory profile. Three paths:
+
+1. **Optimise memory** (future-work items 1+2): batched cdist, score_cutoff, small-block coalescing. Each shaves ~10-20% wall and proportional RSS; three combined could land 2M comfortably under 12 GB.
+2. **Bigger runner**: a 32 GB instance (org accounts with Team plan only). Personal accounts lack that tier.
+3. **Out-of-core via DuckDB**: the existing `goldenmatch-duckdb` UDF surface materialises the table to Polars before scoring (same ceiling). A real DuckDB integration that pushes scoring INTO SQL would spill to disk gracefully — but `docs/duckdb-sql-scoring-research.md` showed SQL-side scoring is 21× slower per-pair than rapidfuzz cdist. Trade-off: "21× slower per-pair but doesn't OOM" — worth it at 2M+ on small boxes, not at 1M.
+
+### Status of the scale-audit workstream
+
+- **1M on 16 GB Linux**: solid baseline. 12.3 min, 8.4 GB peak, 836K correct clusters. Unchanged user-facing claim.
+- **2M on 16 GB Linux**: memory-bound (confirmed). Working set climbs past 13.5 GB and is still rising at trip time. Tested watchdog bump 14.5 → 15.0 GB ([run 25764924298](https://github.com/benzsevern/goldenmatch/actions/runs/25764924298)): RSS reached 13.6 GB before tripping, 12 min later in wall than the prior run — confirming RSS is genuinely growing, not plateauing. Linear extrapolation says ~15-16 GB at full pipeline completion, right at the OS-OOM ceiling on a 16 GB runner. Memory optimisations (future-work items 1+2) or a bigger runner are the only paths. Marginal watchdog bumps do not help.
+- **5M+ on 16 GB Linux**: out of reach without architectural changes.
+
+Issues #195 and #199 are both **closed**. The scale-audit workstream's commit-policy + learned-blocking bugs are resolved; what remains is a memory ceiling at 2M+, which is a separate, smaller workstream.

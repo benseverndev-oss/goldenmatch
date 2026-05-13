@@ -46,6 +46,25 @@ The 1M cumtime number is inflated because each block's I/O wait gets attributed 
 
 ---
 
+### 3. Land 2M dedupe under the 16 GB Linux runner ceiling
+
+**Where**: combination of items 1 + 2 above, plus possibly explicit Polars-frame drops between pipeline stages.
+
+**What the data shows**: Post PRs #197 and #200, the autoconfig + pipeline at 2M produces the correct config and does real scoring work — but peak RSS climbs past 13.5 GB and is still rising at the watchdog trip point. Tested watchdog bumps 14.5 → 15.0 GB; both tripped. Linear extrapolation says ~15-16 GB at full completion, right at OS-OOM on a 16 GB runner. Two cloud runs documented under Round 7 in `docs/scale-audit-2026-05.md`:
+
+- watchdog=14500: trip at 13,050 MB, 28 min wall
+- watchdog=15000: trip at 13,585 MB, 40 min wall
+
+**Hypothesis**: Items 1 + 2 combined save ~2 GB → 2M peaks at ~11 GB, comfortable under any reasonable watchdog. Worth doing only if there's a real user ask for 2M+.
+
+**How to validate**: re-fire 2M scale-audit with watchdog=14500 after the optimisations land. Cluster count should be ~1.7M (close to perfect 15% dedupe), peak RSS should be <12 GB.
+
+**Risk**: each optimisation has its own behavioural / regression risk; expect 1-2 days of testing per item.
+
+**Why this isn't urgent**: the 1M baseline (12.3 min, 8.4 GB, 836K correct clusters) is the user-facing claim. 2M is a "future user ask" not a current target.
+
+---
+
 ## How to add to this file
 
 - **Be specific**: include filepath:line for the code, a number from a measurement, and a hypothesis with an expected impact range.
