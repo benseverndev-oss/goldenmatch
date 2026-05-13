@@ -1,0 +1,126 @@
+{
+  "_meta": {
+    "description": "Common corporate legal-form tokens across major jurisdictions, used by the legal_form_strip transform to normalize business names before matching. Each entry: a canonical legal form plus the surface variants (abbreviated, spelled-out, punctuated) used to designate it. Curated from public-knowledge corporate-suffix conventions; no license restrictions.",
+    "source": "Hand-curated list of well-known corporate legal-form suffixes. Covers US, UK, EU, Asia-Pacific, Latin America. Not exhaustive — focused on the highest-frequency forms.",
+    "version": "1",
+    "last_updated": "2026-05-13",
+    "matching_rules": "Each variant is stripped as a trailing token (case-insensitive, with optional trailing periods and surrounding whitespace). Multi-word variants like 'Limited Liability Company' are matched first to prevent 'Limited' from being stripped as a separate token."
+  },
+  "legal_forms": {
+    "corporation_us": [
+      "Inc",
+      "Inc.",
+      "Incorporated",
+      "Corp",
+      "Corp.",
+      "Corporation"
+    ],
+    "llc_us": [
+      "LLC",
+      "L.L.C.",
+      "L L C",
+      "Limited Liability Company",
+      "Limited Liability Co"
+    ],
+    "company_generic": [
+      "Co",
+      "Co.",
+      "Company"
+    ],
+    "limited_uk": [
+      "Ltd",
+      "Ltd.",
+      "Limited",
+      "PLC",
+      "P.L.C.",
+      "Public Limited Company"
+    ],
+    "partnership_us": [
+      "LLP",
+      "L.L.P.",
+      "Limited Liability Partnership",
+      "LP",
+      "L.P.",
+      "Limited Partnership",
+      "Partners",
+      "Partnership"
+    ],
+    "germany": [
+      "GmbH",
+      "G.m.b.H.",
+      "Gesellschaft mit beschrankter Haftung",
+      "AG",
+      "A.G.",
+      "Aktiengesellschaft",
+      "KG",
+      "K.G.",
+      "Kommanditgesellschaft"
+    ],
+    "france": [
+      "SARL",
+      "S.A.R.L.",
+      "Societe a Responsabilite Limitee",
+      "SAS",
+      "S.A.S.",
+      "Societe par Actions Simplifiee"
+    ],
+    "iberia_latam": [
+      "SA",
+      "S.A.",
+      "Sociedad Anonima",
+      "Societe Anonyme",
+      "SL",
+      "S.L.",
+      "Sociedad Limitada",
+      "SRL",
+      "S.R.L."
+    ],
+    "italy": [
+      "SpA",
+      "S.p.A.",
+      "Societa per Azioni",
+      "Srl",
+      "S.r.l."
+    ],
+    "netherlands": [
+      "BV",
+      "B.V.",
+      "Besloten Vennootschap",
+      "NV",
+      "N.V.",
+      "Naamloze Vennootschap"
+    ],
+    "nordics": [
+      "AB",
+      "A.B.",
+      "Aktiebolag",
+      "AS",
+      "A.S.",
+      "Aksjeselskap",
+      "Oy",
+      "Oyj"
+    ],
+    "asia_pacific": [
+      "Pty Ltd",
+      "Pty. Ltd.",
+      "Proprietary Limited",
+      "Pty",
+      "Pte Ltd",
+      "Pte. Ltd.",
+      "Private Limited",
+      "Pvt Ltd",
+      "Pvt. Ltd."
+    ],
+    "trust_foundation": [
+      "Trust",
+      "Foundation",
+      "Charitable Trust"
+    ],
+    "holding_descriptors": [
+      "Holdings",
+      "Holding",
+      "Group",
+      "Industries"
+    ]
+  }
+}

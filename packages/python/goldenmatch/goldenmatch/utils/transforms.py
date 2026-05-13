@@ -64,7 +64,16 @@ def apply_transform(value: str | None, transform: str) -> str | None:
     elif transform == "bloom_filter" or transform.startswith("bloom_filter:"):
         return _bloom_filter_transform(value, transform)
     else:
-        raise ValueError(f"Unknown transform: {transform!r}")
+        # Plugin transform fallback: consult the registry so refdata-style
+        # extensions (legal_form_strip, address_token_normalize, …) work
+        # through the same code path as built-ins. Same fall-through model
+        # as core.scorer.score_field's plugin scorer path.
+        from goldenmatch.plugins.registry import PluginRegistry
+
+        plugin = PluginRegistry.instance().get_transform(transform)
+        if plugin is None:
+            raise ValueError(f"Unknown transform: {transform!r}")
+        return plugin.transform(value)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def _bloom_filter_transform(value: str, transform: str) -> str:
