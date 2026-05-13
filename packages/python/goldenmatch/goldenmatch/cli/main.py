@@ -17,11 +17,11 @@ from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.demo import demo_cmd
 from goldenmatch.cli.evaluate import evaluate_cmd
+from goldenmatch.cli.identity import identity_app
 from goldenmatch.cli.incremental import incremental_cmd
 from goldenmatch.cli.label import label_cmd
 from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
-from goldenmatch.cli.identity import identity_app
 from goldenmatch.cli.memory import memory_app
 from goldenmatch.cli.pprl import pprl_app
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd

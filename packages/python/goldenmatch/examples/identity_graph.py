@@ -6,10 +6,8 @@ Runs dedupe twice on overlapping inputs and inspects the durable
 """
 from __future__ import annotations
 
-import polars as pl
-
 import goldenmatch as gm
-from goldenmatch.core.pipeline import run_dedupe_df
+import polars as pl
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -19,6 +17,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
     OutputConfig,
 )
+from goldenmatch.core.pipeline import run_dedupe_df
 
 
 def _build_config(db_path: str, run_name: str) -> GoldenMatchConfig:
