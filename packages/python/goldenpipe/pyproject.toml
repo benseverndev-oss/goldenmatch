@@ -1,6 +1,6 @@
 [project]
 name = "goldenpipe"
-version = "1.1.0"
+version = "1.2.0"
 description = "Pluggable pipeline framework for data quality workflows"
 readme = "README.md"
 license = {text = "MIT"}

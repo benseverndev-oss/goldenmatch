@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
+
+import polars as pl
 
 from goldenpipe.models.context import (
     Decision,
@@ -82,6 +85,21 @@ class IdentityResolveStage:
         scored_pairs = ctx.artifacts.get("scored_pairs", [])
         matchkey_name = ctx.artifacts.get("matchkey_used")
 
+        # resolve_clusters keys on ``__row_id__`` + ``__source__`` on the
+        # DataFrame, but DedupeStage doesn't surface the post-dedupe view --
+        # those columns are set inside dedupe_df and not returned. Rebuild
+        # them by enumeration; cluster ``members`` are positional row
+        # indices in the same df, so 0..N-1 matches by construction.
+        df = ctx.df
+        if df is not None and "__row_id__" not in df.columns:
+            df = df.with_columns(
+                pl.int_range(0, df.height, dtype=pl.Int64).alias("__row_id__"),
+            )
+        if df is not None and "__source__" not in df.columns:
+            src = ctx.metadata.get("source", "dataframe")
+            stem = Path(str(src)).stem or "dataframe"
+            df = df.with_columns(pl.lit(stem).alias("__source__"))
+
         store_kwargs: dict[str, Any] = {"backend": backend, "path": db_path}
         if connection is not None:
             store_kwargs["connection"] = connection
@@ -90,7 +108,7 @@ class IdentityResolveStage:
             with IdentityStore(**store_kwargs) as store:
                 summary = resolve_clusters(
                     ctx.artifacts["clusters"],
-                    ctx.df,
+                    df,
                     scored_pairs,
                     matchkey_name,
                     store,

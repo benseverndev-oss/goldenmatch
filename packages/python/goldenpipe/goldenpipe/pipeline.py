@@ -18,11 +18,16 @@ class Pipeline:
         self,
         config: PipelineConfig | None = None,
         registry: StageRegistry | None = None,
+        identity_opts: dict | None = None,
     ) -> None:
         self._config = config
         self._registry = registry or StageRegistry()
         if registry is None:
             self._registry.discover()
+        # v1.2: identity_opts is only meaningful in the auto-config path.
+        # When the caller supplied an explicit PipelineConfig (YAML), the
+        # YAML is authoritative and identity_opts is ignored.
+        self._identity_opts = identity_opts
 
     def run(self, source: str | None = None, df: pl.DataFrame | None = None) -> PipeResult:
         ctx = PipeContext()
@@ -73,4 +78,12 @@ class Pipeline:
         for name in ["goldencheck.scan", "goldenflow.transform", "goldenmatch.dedupe"]:
             if name in available:
                 stage_specs.append(StageSpec(use=name))
+        # v1.2: when identity_opts is supplied and the stage is discoverable,
+        # auto-append `goldenmatch.identity_resolve` after dedupe with the
+        # opts as its stage_config. Otherwise stay backwards-compatible.
+        if self._identity_opts and "goldenmatch.identity_resolve" in available:
+            stage_specs.append(StageSpec(
+                use="goldenmatch.identity_resolve",
+                config={**self._identity_opts},
+            ))
         return PipelineConfig(pipeline="auto", stages=stage_specs)
