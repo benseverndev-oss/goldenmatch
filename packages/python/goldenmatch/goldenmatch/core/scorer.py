@@ -337,7 +337,24 @@ def _fuzzy_score_matrix(
     elif scorer_name == "jaccard":
         return _jaccard_score_matrix(values)
     else:
-        raise ValueError(f"Unknown fuzzy scorer: {scorer_name!r}")
+        # Plugin scorer fallback: build the NxN matrix via score_pair calls.
+        # Slower than rapidfuzz cdist but keeps the contract uniform — any
+        # registered plugin scorer works in fuzzy/weighted matchkeys without
+        # having to know about the cdist code path.
+        from goldenmatch.plugins.registry import PluginRegistry
+
+        plugin = PluginRegistry.instance().get_scorer(scorer_name)
+        if plugin is None:
+            raise ValueError(f"Unknown fuzzy scorer: {scorer_name!r}")
+        n = len(values)
+        out = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            vi = values[i]
+            for j in range(i + 1, n):
+                s = plugin.score_pair(vi, values[j])  # pyright: ignore[reportAttributeAccessIssue]
+                out[i, j] = out[j, i] = 0.0 if s is None else float(s)
+        np.fill_diagonal(out, 1.0)
+        matrix = out
 
     return np.asarray(matrix, dtype=np.float64)
 
