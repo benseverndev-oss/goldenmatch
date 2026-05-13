@@ -63,6 +63,19 @@ class DedupeStage:
             ctx.artifacts["dupes"] = result.dupes
         if hasattr(result, "stats"):
             ctx.artifacts["match_stats"] = result.stats
+        # Surface scored_pairs for downstream stages (v1.2 IdentityResolveStage).
+        # Memory cost ~80 B/pair; cheap relative to clusters/df already held.
+        # No-op for callers that don't consume it.
+        if hasattr(result, "scored_pairs"):
+            ctx.artifacts["scored_pairs"] = result.scored_pairs
+        # Surface the first matchkey name so IdentityResolveStage can attach it
+        # to evidence edges. The matchkey list is available on the config or
+        # the result -- prefer the result for accuracy after auto-config.
+        mks = getattr(result, "matchkeys", None) or (
+            config.get_matchkeys() if "config" in locals() else None
+        )
+        if mks:
+            ctx.artifacts["matchkey_used"] = mks[0].name
         return StageResult(status=StageStatus.SUCCESS)
 
 
