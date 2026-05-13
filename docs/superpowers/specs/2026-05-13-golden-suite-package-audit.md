@@ -86,10 +86,7 @@ GoldenPipe's `Pipeline.run()` already has the contract for adding a stage (entry
 
 These were noticed during the audit but are not the recommended bet:
 
-1. **`goldenflow` version drift.** `packages/python/goldenflow/pyproject.toml` says `1.1.6`, but `goldenflow/__init__.py` still says `1.1.5` and `CHANGELOG.md` stops at `1.1.5`. PyPI is at `1.1.5`. No `goldenflow-v1.1.6` git tag. Either:
-   - the pyproject bump was made anticipating a 1.1.6 cut that hasn't happened, **or**
-   - someone forgot to land the matching `__init__.py` bump + CHANGELOG + tag.
-   This is a 10-line fix (revert to 1.1.5, *or* add a CHANGELOG entry and cut the tag). Worth filing as an issue, not worth blocking on.
+1. **`goldenflow` 1.1.6 partly-shipped.** `pyproject.toml` and `goldenflow/__init__.py` both say `1.1.6`, but `CHANGELOG.md` stops at `1.1.5`, there is no `goldenflow-v1.1.6` git tag, and PyPI is at `1.1.5`. Real fix commit exists at `2c7b33f` (PR #174 / #175 -- "avoid Series.to_list() panic in category_auto_correct at 1M+ rows"). Action: add CHANGELOG entry, cut the `goldenflow-v1.1.6` tag, publish. Addressed in PR #208.
 
 2. **`goldensuite-mcp` is local-only.** Local version is `v0.1.0`. `pypi.org/pypi/goldensuite-mcp/json` returns `404 Not Found`. No `tests/` directory. No CHANGELOG. No publish workflow in `.github/workflows/`. The architecture is sound (and it transitively exposes the new identity tools), but the package isn't shipping. If we want the suite-MCP story to be real, this needs:
    - a publish workflow (mirror `publish-goldenmatch.yml`)
