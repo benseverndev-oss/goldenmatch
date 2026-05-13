@@ -337,7 +337,40 @@ def _fuzzy_score_matrix(
     elif scorer_name == "jaccard":
         return _jaccard_score_matrix(values)
     else:
-        raise ValueError(f"Unknown fuzzy scorer: {scorer_name!r}")
+        # Plugin scorer fallback. Two contracts:
+        # 1. Plugin exposes ``score_matrix(values) -> np.ndarray`` — vectorized
+        #    NxN scorer. Used for hot paths (find_fuzzy_matches scores up to
+        #    ~12M pairs per 5000-row block; a Python double-loop turns rapidfuzz
+        #    cdist's millisecond scan into seconds-to-minutes).
+        # 2. Plugin only exposes ``score_pair(a, b)`` — fall back to a Python
+        #    double-loop. Acceptable for plugin scorers used on small blocks or
+        #    in non-hot paths; refuse silently large N here so a future user
+        #    doesn't hit the wall-time landmine without a hint.
+        from goldenmatch.plugins.registry import PluginRegistry
+
+        plugin = PluginRegistry.instance().get_scorer(scorer_name)
+        if plugin is None:
+            raise ValueError(f"Unknown fuzzy scorer: {scorer_name!r}")
+        matrix_fn = getattr(plugin, "score_matrix", None)
+        if matrix_fn is not None:
+            matrix = np.asarray(matrix_fn(values), dtype=np.float32)
+        else:
+            n = len(values)
+            if n > 1000:
+                logger.warning(
+                    "plugin scorer %r has no score_matrix() method; "
+                    "falling back to O(N^2) score_pair loop over %d values "
+                    "(~%d calls). Expect wall-time impact on large blocks.",
+                    scorer_name, n, n * (n - 1) // 2,
+                )
+            out = np.zeros((n, n), dtype=np.float32)
+            for i in range(n):
+                vi = values[i]
+                for j in range(i + 1, n):
+                    s = plugin.score_pair(vi, values[j])  # pyright: ignore[reportAttributeAccessIssue]
+                    out[i, j] = out[j, i] = 0.0 if s is None else float(s)
+            np.fill_diagonal(out, 1.0)
+            matrix = out
 
     return np.asarray(matrix, dtype=np.float64)
 

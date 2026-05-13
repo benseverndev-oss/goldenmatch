@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- Reference data infrastructure (strategy direction #8, first slice)
+
+`goldenmatch.refdata` -- bundled, public-domain reference data the engine can consume to lift accuracy on people-shape matching. Spec: `docs/superpowers/specs/2026-05-08-competitive-strategy-review.md` direction #8.
+
+- **US Census 2010 top-10K surname frequency table** bundled at `goldenmatch/refdata/data/census_surnames_2010_top10k.csv` (~176 KB, public domain). Provenance, license, regenerate command documented in `PROVENANCE.md`.
+- **Lookup API**: `surname_count`, `surname_rank`, `surname_frequency`, `surname_idf`, `is_available`. Case-insensitive; strips non-alpha. OOV names return `None` (or `1.0` from `surname_idf`, treated as "rarer than known").
+- **`name_freq_weighted_jw` scorer** registered via the plugin system on `import goldenmatch.refdata`. Algorithm: Jaro-Winkler outside the borderline zone (`jw >= 0.95` or `jw < 0.70`) returns plain JW unchanged -- preserves recall on confident matches. Inside the borderline zone, both-sides-known pairs get re-weighted by mean surname IDF with a `_COMMON_NAME_FLOOR = 0.6`. OOV-on-either-side falls back to plain JW (refuses to up-credit typos of common names). OOV gate uses `surname_rank` directly (not the `surname_idf == 1.0` fallback) so a known-rare ↔ OOV pair isn't over-weighted.
+- **Vectorized hot-path**: the scorer exposes `score_matrix(values) -> np.ndarray` so `core/scorer.py::_fuzzy_score_matrix` runs one `rapidfuzz.cdist` + a handful of numpy ops instead of an O(N^2) Python double-loop. At N=5000 (typical fuzzy block size) that's ~12.5M Python calls collapsed to one C-vectorized scan + a few elementwise numpy operations — keeps `dedupe_df(df)` on the 1M-row scale envelope when refdata is auto-configured on a `last_name` column. Plugins without `score_matrix` still work via the score_pair loop but emit a WARNING above N=1000 so the perf landmine is visible.
+- **NxN plugin path**: `core/scorer.py::_fuzzy_score_matrix` now falls through to `PluginRegistry` for unknown scorer names. Two contracts: (1) plugin exposes `score_matrix` → vectorized; (2) plugin only exposes `score_pair` → Python loop with size warning. Keeps the contract uniform without paying the perf tax on plugins built for the hot path.
+- **Regenerate**: `python -m goldenmatch.refdata.scripts.fetch_census_surnames` pulls the upstream archive and rewrites the bundled CSV.
+- **Tests**: `tests/test_refdata_surnames.py` (21 tests) -- lookup correctness, IDF monotonicity, scorer borderline behavior, OOV pass-through, plugin registration, `MatchkeyField` validator accepts the new scorer.
+- **NCVR A/B benchmark** at `tests/benchmarks/run_ncvr_refdata.py`. 7500-record corrupted-duplicates GT, last_name scorer swapped: F1 0.9721 (baseline, zero-config) -> 0.9721 (refdata). No regression. Lift is zero on this dataset because NCVR's heavy-corruption distribution puts few pairs in the borderline JW zone where the weighting acts -- needs an enterprise-shape benchmark per direction #5 to demonstrate positive lift.
+- **What's deferred** (future work): auto-config integration (the controller doesn't yet pick `name_freq_weighted_jw` automatically); `reference-business` and `reference-address` packs; threshold tuning per-scorer in `LearningMemory`.
+
 ## [1.15.0] - 2026-05-12
 
 ### Added -- Identity Graph (v2.0 headline feature)
