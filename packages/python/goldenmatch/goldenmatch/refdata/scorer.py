@@ -10,13 +10,19 @@ Currently registers one scorer:
 The scorer is registered into ``goldenmatch.plugins.PluginRegistry`` so it
 plugs into ``score_field`` / ``MatchkeyField.scorer`` validation through the
 existing plugin path — no changes to ``VALID_SCORERS`` required.
+
+The scorer also exposes a vectorized ``score_matrix(values)`` method that
+``core.scorer._fuzzy_score_matrix`` picks up automatically — without it the
+plugin would fall back to an O(N^2) Python double-loop on the hot path.
 """
 from __future__ import annotations
 
+import numpy as np
 from rapidfuzz.distance import JaroWinkler
+from rapidfuzz.process import cdist
 
 from goldenmatch.plugins.registry import PluginRegistry
-from goldenmatch.refdata.surnames import is_available, surname_idf
+from goldenmatch.refdata.surnames import is_available, surname_idf, surname_rank
 
 # Borderline zone: only re-weight when the underlying JW falls in this band.
 # Above the upper bound we trust the edit-similarity directly (preserves
@@ -64,17 +70,67 @@ class NameFreqWeightedJW:
             return jw
         if not is_available():
             return jw
+        # OOV gate: surname_rank returns None for names absent from the
+        # bundled table. Both-sides-known is the precondition for IDF
+        # weighting; OOV-on-either-side falls back to plain JW so a typo
+        # of a common name doesn't get credit-by-rarity.
+        rank_a = surname_rank(val_a)
+        rank_b = surname_rank(val_b)
+        if rank_a is None or rank_b is None:
+            return jw
         idf_a = surname_idf(val_a)
         idf_b = surname_idf(val_b)
         if idf_a is None or idf_b is None:
             return jw
-        from goldenmatch.refdata.surnames import surname_rank
-
-        if surname_rank(val_a) is None or surname_rank(val_b) is None:
-            return jw
         idf = (idf_a + idf_b) / 2.0
         weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * idf
         return jw * weight
+
+    def score_matrix(self, values: list[str | None]) -> np.ndarray:
+        """Vectorized NxN scorer for hot paths.
+
+        Replaces an O(N^2) ``score_pair`` Python loop with one rapidfuzz
+        cdist + a handful of numpy ops. The semantics match ``score_pair``
+        exactly:
+        - JW outside the borderline band passes through.
+        - In-band pairs with both names in the bundled table get
+          ``jw * (floor + (1-floor) * mean_idf)``.
+        - In-band pairs with either side OOV get plain JW (no down-weighting).
+
+        ``None`` values are coerced to ``""`` (matches the wrapping code in
+        ``core.scorer._fuzzy_score_matrix`` which does the same before
+        calling other scorers).
+        """
+        n = len(values)
+        clean = [v if v is not None else "" for v in values]
+        jw = np.asarray(
+            cdist(clean, clean, scorer=JaroWinkler.similarity),
+            dtype=np.float32,
+        )
+        if n == 0 or not is_available():
+            return jw
+        # Per-value IDF + known-flag arrays. surname_rank=None marks OOV;
+        # surname_idf returns 1.0 for OOV which would over-credit (a
+        # known-rare ↔ OOV pair would weight to 1.0). Keep OOV separate via
+        # the known mask and pass through plain JW for those pairs.
+        idf_arr = np.zeros(n, dtype=np.float32)
+        is_known = np.zeros(n, dtype=bool)
+        for i, v in enumerate(clean):
+            if not v:
+                continue
+            r = surname_rank(v)
+            if r is None:
+                continue
+            is_known[i] = True
+            iv = surname_idf(v)
+            if iv is not None:
+                idf_arr[i] = iv
+        mean_idf = (idf_arr[:, None] + idf_arr[None, :]) / 2.0
+        weight = _COMMON_NAME_FLOOR + (1.0 - _COMMON_NAME_FLOOR) * mean_idf
+        in_zone = (jw >= _BORDERLINE_LOW) & (jw < _BORDERLINE_HIGH)
+        both_known = is_known[:, None] & is_known[None, :]
+        apply_mask = in_zone & both_known
+        return np.where(apply_mask, jw * weight, jw).astype(np.float32)
 
 
 def register_scorers() -> None:

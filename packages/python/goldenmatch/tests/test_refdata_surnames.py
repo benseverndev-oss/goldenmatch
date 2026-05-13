@@ -217,3 +217,67 @@ def test_unknown_scorer_still_rejected():
 
     with pytest.raises(ValueError, match="Invalid scorer"):
         MatchkeyField(field="last_name", scorer="this_is_not_a_real_scorer", weight=1.0)
+
+
+# ── vectorized score_matrix ────────────────────────────────────────────────
+
+
+def test_score_matrix_method_present():
+    """The vectorized hot-path hook must exist; without it, the autoconfig'd
+    `name_freq_weighted_jw` scorer falls back to an O(N^2) Python loop in
+    core.scorer._fuzzy_score_matrix on every fuzzy block."""
+    plugin = PluginRegistry.instance().get_scorer("name_freq_weighted_jw")
+    assert plugin is not None
+    assert callable(getattr(plugin, "score_matrix", None))
+
+
+def test_score_matrix_matches_score_pair():
+    """Vectorized output must match the pair-by-pair scorer for every pair."""
+    plugin = PluginRegistry.instance().get_scorer("name_freq_weighted_jw")
+    assert plugin is not None
+    values = ["Smith", "Smyth", "Johnson", "Doriott", "Doribtt", None, "Garcia"]
+    matrix = plugin.score_matrix(values)
+    n = len(values)
+    assert matrix.shape == (n, n)
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                # Diagonal: scoring "X" vs "X" should be 1.0 (or whatever
+                # score_pair returns for the value vs itself). None becomes
+                # "" via the documented coercion -> JW("","") == 1.0.
+                pair_val = plugin.score_pair(
+                    values[i] if values[i] is not None else "",
+                    values[i] if values[i] is not None else "",
+                )
+                assert abs(float(matrix[i, j]) - float(pair_val)) < 1e-5
+                continue
+            a = values[i] if values[i] is not None else ""
+            b = values[j] if values[j] is not None else ""
+            pair_val = plugin.score_pair(a, b)
+            assert abs(float(matrix[i, j]) - float(pair_val)) < 1e-5, (
+                f"({a!r}, {b!r}): matrix={matrix[i, j]} pair={pair_val}"
+            )
+
+
+def test_score_matrix_handles_empty_input():
+    plugin = PluginRegistry.instance().get_scorer("name_freq_weighted_jw")
+    assert plugin is not None
+    matrix = plugin.score_matrix([])
+    assert matrix.shape == (0, 0)
+
+
+def test_score_matrix_oov_pair_passes_plain_jw():
+    """OOV-on-either-side must pass through plain JW, NOT apply IDF
+    weighting using surname_idf's "1.0 for OOV" semantics."""
+    from rapidfuzz.distance import JaroWinkler
+
+    plugin = PluginRegistry.instance().get_scorer("name_freq_weighted_jw")
+    assert plugin is not None
+    # Smith is known, Zorkwhibblefnord is OOV. In-zone JW between them is
+    # low (~0.4-0.5) which is below _BORDERLINE_LOW so it falls into the
+    # out-of-zone fast path; pick a pair that IS in the borderline zone.
+    # Smith vs Smiht (typo, OOV) lives in the borderline band.
+    values = ["Smith", "Smiht"]
+    matrix = plugin.score_matrix(values)
+    expected = JaroWinkler.similarity("Smith", "Smiht")
+    assert abs(float(matrix[0, 1]) - expected) < 1e-5
