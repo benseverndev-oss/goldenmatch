@@ -151,7 +151,20 @@ registerTransform(
 // ---------------------------------------------------------------------------
 
 function removeHtmlTags(values: readonly ColumnValue[]): ColumnValue[] {
-  return mapStrings(values, (s) => s.replace(/<[^>]*>/g, ""));
+  return mapStrings(values, (s) => {
+    // Single-pass `<[^>]*>` removal lets nested-tag payloads like
+    // `<<script>script>` collapse to `<script>` after one rewrite.
+    // Loop until the output stabilises so the transform is idempotent
+    // against adversarial input. Bounded by string length -- each pass
+    // strictly shrinks the input (or matches zero, ending the loop).
+    let prev: string;
+    let out = s;
+    do {
+      prev = out;
+      out = out.replace(/<[^>]*>/g, "");
+    } while (out !== prev);
+    return out;
+  });
 }
 
 registerTransform(

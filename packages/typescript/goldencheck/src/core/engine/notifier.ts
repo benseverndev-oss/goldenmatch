@@ -102,6 +102,21 @@ export async function sendWebhook(
     top_findings: topFindings,
   };
 
+  // Webhook URL is operator-supplied config but can flow in from config
+  // files / env vars; validate that it's actually a remote http(s) URL so
+  // a misconfigured `file://` or `gopher://` URL can't be used to read
+  // local files or hit internal services.
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      console.warn(`Webhook URL must be http(s), got ${parsed.protocol}`);
+      return;
+    }
+  } catch {
+    console.warn(`Webhook URL is not a valid URL: skipping notify`);
+    return;
+  }
+
   try {
     await fetch(url, {
       method: "POST",

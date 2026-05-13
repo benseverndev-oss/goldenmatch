@@ -1,10 +1,13 @@
 """FastAPI REST API for GoldenPipe."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from goldenpipe.engine.registry import StageRegistry
 from goldenpipe.engine.resolver import Resolver, WiringError
@@ -45,7 +48,9 @@ def create_app() -> FastAPI:
             plan = Resolver.resolve(config, reg)
             return {"valid": True, "stages": [s.name for s in plan.stages]}
         except (WiringError, KeyError) as e:
-            return {"valid": False, "error": str(e)}
+            # Only the message line goes on the wire; never the traceback.
+            logger.exception("Pipeline wiring failed")
+            return {"valid": False, "error": str(e).splitlines()[0][:200]}
 
     @app.post("/run")
     def run_pipeline(req: RunRequest):

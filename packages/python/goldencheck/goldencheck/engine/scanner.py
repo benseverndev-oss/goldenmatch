@@ -352,8 +352,10 @@ def scan_file(
     if baseline is not None:
         from goldencheck.drift import run_drift_checks
         if baseline.source_filename and baseline.source_filename != path.name:
+            # %r quotes both values so YAML-supplied filename can't smuggle
+            # newlines / control chars into structured logs.
             logger.warning(
-                "Baseline source '%s' doesn't match scan file '%s'",
+                "Baseline source %r doesn't match scan file %r",
                 baseline.source_filename, path.name,
             )
         drift_findings = run_drift_checks(sample, baseline)
