@@ -11,6 +11,12 @@ from infermap.providers import extract_schema
 from infermap.scorers import default_scorers, scorer
 from infermap.types import FieldInfo, FieldMapping, MapResult, SchemaInfo, ScorerResult
 
+# Identity Graph bridge (optional; lazy-imports goldenmatch on use). Exposed
+# at the top level so callers write `infermap.write_aliases_from_mapping(...)`
+# without reaching into a submodule. The helper itself raises ImportError
+# with a clear remediation message if goldenmatch isn't installed.
+from infermap.identity import AliasWriteResult, write_aliases_from_mapping
+
 
 def map(source, target, **kwargs) -> MapResult:
     """Convenience function: create a MapEngine and map source to target.
