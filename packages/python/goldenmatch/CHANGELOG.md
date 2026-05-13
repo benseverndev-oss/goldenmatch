@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed -- Refdata autoconfig hook gates on ColumnProfile.col_type (strategy direction #8, ninth slice)
+
+Finishes the deferred slice from #8. Refdata refinements (surname scorer swap, given-name alias scorer swap, legal-form-strip, address-normalize, NAICS-normalize) now consult the profiled data shape, not just the column name. A column literally named `last_name` but holding numeric IDs, dates, or hashed identifiers no longer gets its scorer silently swapped — the swap was previously a quality regression on those shapes, hidden behind the column-name match.
+
+- **`refine_matchkey_field()`** gains an optional `col_type: str | None = None` parameter. Per-rule accept-lists: name swaps require `col_type in {"name", "multi_name"}`; company `legal_form_strip` accepts `{"name", "multi_name", "description", "string"}` (free-text company names sometimes profile as description/string); address `address_normalize` accepts `{"address", "string"}`; NAICS `naics_normalize` accepts `{"identifier", "numeric", "string", "description"}` (NAICS codes commonly land as identifier or numeric).
+- **`col_type=None` preserves the legacy name-only behavior** so callers without a profile (ad-hoc use, tests) don't change shape.
+- **Call sites in `core/autoconfig.py`** at both `build_matchkeys()` and `build_probabilistic_matchkeys()` now pass `p.col_type` from the `ColumnProfile`.
+- **Tests** in `tests/test_refdata_autoconfig.py` cover the gate firing and skipping for each refinement, the `None` backwards-compat path, and end-to-end via `build_matchkeys()` on a synthetic frame where `last_name` holds numeric data — the surname scorer should NOT fire.
+
 ### Changed -- Refdata cross-pack cleanup (strategy direction #8, eighth slice)
 
 Refactor-only PR — no behavior change to any user-facing surface. Addresses the systemic findings from the parallel review of slices #1–#7. Five refdata modules (surnames, given_names, business, addresses, industries) plus the plugin registry are touched in one coordinated change.
