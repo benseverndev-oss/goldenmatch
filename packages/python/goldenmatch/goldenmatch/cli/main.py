@@ -21,6 +21,7 @@ from goldenmatch.cli.incremental import incremental_cmd
 from goldenmatch.cli.label import label_cmd
 from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
+from goldenmatch.cli.identity import identity_app
 from goldenmatch.cli.memory import memory_app
 from goldenmatch.cli.pprl import pprl_app
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
@@ -111,6 +112,7 @@ app.command("schedule", help="Run deduplication on a schedule.")(schedule_cmd)
 app.command("evaluate", help="Evaluate matching quality against ground truth pairs.")(evaluate_cmd)
 app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
+app.add_typer(identity_app, name="identity")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
 app.command("agent-serve", help="Start the A2A agent server for AI-to-AI discovery.")(agent_serve_cmd)
 app.command("incremental", help="Match new records against an existing base dataset.")(incremental_cmd)

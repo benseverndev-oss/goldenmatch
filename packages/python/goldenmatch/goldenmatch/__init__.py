@@ -28,7 +28,7 @@ Quick start:
 All features are accessible via `import goldenmatch as gm`.
 """
 
-__version__ = "1.14.0"
+__version__ = "1.15.0"
 
 # ── High-level API (convenience functions) ────────────────────────────────
 from goldenmatch._api import (
@@ -160,6 +160,30 @@ from goldenmatch.core.memory import (
     MemoryLearner,
     MemoryStore,
     apply_corrections,
+)
+
+# ── Identity Graph ───────────────────────────────────────────────────────
+from goldenmatch.identity import (
+    EdgeKind,
+    EventKind,
+    EvidenceEdge,
+    IdentityAlias,
+    IdentityEvent,
+    IdentityNode,
+    IdentityStatus,
+    IdentityStore,
+    IdentityView,
+    ResolveSummary,
+    SourceRecord,
+    find_by_record,
+    find_conflicts,
+    get_entity,
+    history as identity_history,
+    list_entities as list_identities,
+    manual_merge,
+    manual_split,
+    new_entity_id,
+    resolve_clusters,
 )
 
 # ── Core pipeline functions ───────────────────────────────────────────────

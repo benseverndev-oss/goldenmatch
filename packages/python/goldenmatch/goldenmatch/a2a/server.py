@@ -98,6 +98,48 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "identity_resolve",
+        "name": "Identity Resolve",
+        "description": "Resolve a record_id to its durable identity (members, edges, recent events).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_list",
+        "name": "Identity List",
+        "description": "List identities, optionally filtered by dataset/status.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_history",
+        "name": "Identity History",
+        "description": "Return the temporal event log for an identity (merges, splits, absorbs).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_conflicts",
+        "name": "Identity Conflicts",
+        "description": "List evidence edges marked `conflicts_with` for steward review.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_merge",
+        "name": "Identity Merge",
+        "description": "Manually merge two identities; absorbed identity's records move to the kept identity.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_split",
+        "name": "Identity Split",
+        "description": "Split records off an identity into a brand-new identity.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "controller_telemetry",
         "name": "Controller Telemetry",
         "description": (

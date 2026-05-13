@@ -215,6 +215,14 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             result["write_error"] = write_error
         return result
 
+    if skill_id in {
+        "identity_resolve", "identity_list", "identity_history",
+        "identity_conflicts", "identity_merge", "identity_split",
+    }:
+        from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
+        # Reuse MCP dispatch since the contract is identical (JSON in/out).
+        return _identity_dispatch(skill_id, params)
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 

@@ -196,6 +196,75 @@ export type LearnResponse = {
   matchkey_filter: string | null;
 };
 
+// ── Identity Graph types ────────────────────────────────────────────────
+
+export type IdentitySummary = {
+  entity_id: string;
+  status: string;
+  confidence: number | null;
+  merged_into: string | null;
+  dataset: string | null;
+  updated_at: string;
+};
+
+export type IdentityListResponse = {
+  items: IdentitySummary[];
+  limit: number;
+  offset: number;
+};
+
+export type IdentityStatsResponse = {
+  total: number;
+  by_dataset: number | null;
+};
+
+export type IdentitySourceRecord = {
+  record_id: string;
+  source: string;
+  source_pk: string;
+  record_hash: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  payload: Record<string, unknown> | null;
+};
+
+export type IdentityEvidenceEdge = {
+  edge_id: number | null;
+  entity_id?: string;
+  record_a_id: string;
+  record_b_id: string;
+  kind: string;
+  score: number | null;
+  matchkey_name: string | null;
+  run_name: string | null;
+  recorded_at: string;
+  field_scores: Record<string, unknown> | null;
+  negative_evidence: Record<string, unknown> | null;
+  controller_snapshot: Record<string, unknown> | null;
+};
+
+export type IdentityEvent = {
+  event_id: number | null;
+  kind: string;
+  payload: Record<string, unknown> | null;
+  run_name: string | null;
+  recorded_at: string;
+};
+
+export type IdentityView = {
+  entity_id: string;
+  status: string;
+  merged_into: string | null;
+  golden_record: Record<string, unknown> | null;
+  confidence: number | null;
+  dataset: string | null;
+  created_at: string;
+  updated_at: string;
+  records: IdentitySourceRecord[];
+  edges: IdentityEvidenceEdge[];
+  events: IdentityEvent[];
+};
+
 export type QualityFinding = {
   rule?: string;
   severity?: string;
@@ -490,6 +559,54 @@ export const api = {
     fetch("/api/v1/controller/telemetry").then((r) =>
       json<ControllerTelemetry>(r),
     ),
+  // ── Identity Graph ────────────────────────────────────────────────────
+  identityList: (params: {
+    dataset?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<IdentityListResponse> => {
+    const qs = new URLSearchParams();
+    if (params.dataset) qs.set("dataset", params.dataset);
+    if (params.status) qs.set("status", params.status);
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    if (params.offset != null) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return fetch(`/api/v1/identities${q ? "?" + q : ""}`).then((r) =>
+      json<IdentityListResponse>(r),
+    );
+  },
+  identityStats: (dataset?: string): Promise<IdentityStatsResponse> => {
+    const qs = dataset ? `?dataset=${encodeURIComponent(dataset)}` : "";
+    return fetch(`/api/v1/identities/stats${qs}`).then((r) =>
+      json<IdentityStatsResponse>(r),
+    );
+  },
+  identityGet: (entityId: string): Promise<IdentityView> =>
+    fetch(`/api/v1/identities/${encodeURIComponent(entityId)}`).then((r) =>
+      json<IdentityView>(r),
+    ),
+  identityHistory: (entityId: string, limit = 100): Promise<{ items: IdentityEvent[] }> =>
+    fetch(`/api/v1/identities/${encodeURIComponent(entityId)}/history?limit=${limit}`).then((r) =>
+      json<{ items: IdentityEvent[] }>(r),
+    ),
+  identityConflicts: (dataset?: string): Promise<{ items: IdentityEvidenceEdge[] }> => {
+    const qs = dataset ? `?dataset=${encodeURIComponent(dataset)}` : "";
+    return fetch(`/api/v1/identities/conflicts${qs}`).then((r) =>
+      json<{ items: IdentityEvidenceEdge[] }>(r),
+    );
+  },
+  identityMerge: (
+    keep: string,
+    body: { absorb_entity_id: string; reason?: string },
+  ): Promise<unknown> =>
+    post(`/api/v1/identities/${encodeURIComponent(keep)}/merge`, body),
+  identitySplit: (
+    entityId: string,
+    body: { record_ids: string[]; reason?: string },
+  ): Promise<unknown> =>
+    post(`/api/v1/identities/${encodeURIComponent(entityId)}/split`, body),
+
   putSettings: (body: WebSettings): Promise<SettingsResponse> =>
     fetch("/api/v1/settings", {
       method: "PUT",

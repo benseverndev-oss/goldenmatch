@@ -174,6 +174,21 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - A2A server runs on separate port (8200) from REST API (8000) -- aiohttp for async/SSE, existing REST stays synchronous
 - `aiohttp` is optional dep: `pip install goldenmatch[agent]`
 
+## Identity Graph (v2.0, 2026-05-12)
+
+`goldenmatch/identity/` exposes a durable graph layer above run-local clusters: stable `entity_id` (UUIDv7) per identity, source-record nodes, evidence edges, append-only event log, and aliases. SQLite default at `.goldenmatch/identity.db`; Postgres optional. Spec: `docs/superpowers/specs/2026-05-12-identity-graph-design.md`. Roadmap: `docs/superpowers/plans/2026-05-12-identity-graph-roadmap.md`.
+
+- **Pipeline hook**: `pipeline.py::_resolve_identities()` runs after clustering, before output, gated on `config.identity.enabled`. Identity is additive — failure logs + skips, never blocks dedupe output.
+- **Stable IDs across runs**: derived via `resolve_clusters()` overlap detection, NOT content hash. New cluster -> new id; overlap with one existing identity -> absorb; overlap with multiple -> merge (winner = most members; tie-break oldest `created_at`).
+- **Record id**: `{source}:{source_pk}` when `identity.source_pk_column` is set; otherwise `{source}:hash:{12 hex}` from payload SHA-256. Document the no-PK case to users — near-duplicate raw rows can collide.
+- **Idempotency**: replaying the same `(run_name, entity_id, kind)` is a no-op via `has_run_event()`; `evidence_edges` has UNIQUE(entity_id, record_a_id, record_b_id, run_name).
+- **Surfaces**: Python (`goldenmatch.identity.*` + root re-exports), CLI (`goldenmatch identity list/show/resolve/history/conflicts/merge/split`), REST (`/api/v1/identities/...`), web "Identities" tab, MCP (`identity_*` × 6 tools), A2A (6 skills), TS edge-safe core (`InMemoryIdentityStore` + `query.ts` helpers). TS persistent SQLite backend + pipeline-driven population are v2 follow-ups.
+- **Postgres surface**: `goldenmatch/db/migrations/identity_v1.sql` is the canonical schema + analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`). `IdentityStore(backend="postgres", connection=...)` creates the same schema on first connect.
+- **DuckDB / extensions contract**: `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` — UDF signatures the `goldenmatch-extensions` repo must expose.
+- **Test count discipline**: Identity adds 47 Python tests (4 modules under `tests/identity/` + `tests/test_mcp_identity_tools.py` + `tests/web/test_router_identity.py`) and 13 TS tests (`tests/identity/`).
+- **A2A skill count went 12 -> 18**. Update `test_agent_card_has_18_skills` if you add a skill.
+- **`pipeline.run_dedupe_df` result** now has `identity_summary: dict | None` (None when identity disabled).
+
 ## Remote MCP Server
 
 Hosted on Railway, registered on Smithery:

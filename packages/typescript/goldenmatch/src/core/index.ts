@@ -382,6 +382,7 @@ export type { TableSchema, Relationship, GraphERResult } from "./graph-er.js";
 // ---------------------------------------------------------------------------
 
 export * from "./memory/index.js";
+export * from "./identity/index.js";
 
 // ---------------------------------------------------------------------------
 // PPRL (Privacy-Preserving Record Linkage)
