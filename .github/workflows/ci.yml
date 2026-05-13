@@ -490,7 +490,7 @@ jobs:
         # cache: pnpm requires (a) pnpm on PATH (handled above) and
         # (b) pnpm-lock.yaml committed at repo root.
       - run: pnpm install --frozen-lockfile
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
           key: turbo-${{ github.sha }}
@@ -528,7 +528,7 @@ jobs:
       - name: Build + stage frontend into wheel-include path
         run: python packages/python/goldenmatch/scripts/build_web.py
       - name: Cache Playwright browsers
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
