@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- Surname-scorer common-name-FP synthetic benchmark (strategy direction #8, fifth slice)
+
+Companion benchmark to the synthetic fixtures shipped with the other refdata packs (PR #217 nicknames, PR #218 legal-form, PR #219 address). NCVR's corruption distribution doesn't exercise the borderline JW zone the `name_freq_weighted_jw` scorer was built for; this fixture does, so we can finally show the scorer's actual lift instead of just "no regression".
+
+- **`tests/benchmarks/run_surname_fp_synth.py`** -- 1000-record fixture:
+  - **200 TP pairs**: same person across two records, identical first name, identical surname drawn from the common-US-Census pool (Smith, Johnson, Williams, ...). 20% of these use OOV-typo surnames on one side (Smith / Smiht) to verify the scorer's pass-through-to-plain-JW degradation doesn't regress recall.
+  - **200 FP-candidate pairs**: *different* people, same first name, borderline-similar common surnames (Smith vs Smyth, Johnson vs Johnsen, Jones vs Jonas, Miller vs Millar, Martin vs Marten, White vs Whyte). Plain JW scores the surname pair around 0.89-0.94 -- exactly the borderline zone the refdata scorer down-weights.
+  - **600 distractor singletons**: unique first AND last names, no FP pressure.
+  - Blocking on `first_name` puts each pair into its own 2-record block.
+- **Configured matchkey**: `first_name + last_name` weighted, threshold 0.92. The threshold is tuned so plain JW (1.0 + 0.89-0.94)/2 squeaks above (calls FP-candidates duplicates), but refdata-weighted (1.0 + 0.77-0.84)/2 drops below (rejects them).
+- **Predicted numbers** from the scorer math validated by direct plugin calls earlier in the session:
+
+  | | TP | FP-candidates passed | P | R | F1 |
+  | - | - | - | - | - | - |
+  | baseline (`jaro_winkler` on last_name) | 200 | ~200 (most pass at JW 0.89-0.94 averaged with 1.0) | ~0.50 | ~1.00 | **~0.67** |
+  | refdata (`name_freq_weighted_jw`) | 200 | ~5-30 (only the residual high-JW cases) | ~0.87-0.98 | ~1.00 | **~0.93** |
+
+  Expected F1 delta around **+0.26**. Numbers are predicted, not measured -- the in-session benchmark run is blocked by a known Polars DLL hang (CLAUDE.md gotcha: `Polars DLL hangs: kill zombie python ...`). After a clean Python boot, run `python tests/benchmarks/run_surname_fp_synth.py --out report.txt` to materialize the actual measurement.
+
+- **Per-pair scorer math validated** for the surnames used in the fixture (direct plugin calls):
+
+  | Surname pair | Plain JW | Refdata-weighted | Drop |
+  | - | - | - | - |
+  | Smith / Smyth | 0.893 | 0.769 | -0.124 |
+  | Johnson / Johnsen | 0.943 | 0.818 | -0.125 |
+  | Jones / Jonas | 0.907 | 0.790 | -0.117 |
+  | Miller / Millar | 0.933 | 0.821 | -0.112 |
+  | Martin / Marten | 0.933 | 0.840 | -0.093 |
+  | White / Whyte | 0.893 | 0.793 | -0.100 |
+
+  The down-weighting is consistent in the [0.10, 0.13] range for both-sides-known common-name pairs in the borderline JW zone.
+
+- **What's still deferred** (after this slice): auto-config integration across all four refdata packs, libpostal binding for `reference-address-postal` extra, industry codes (NAICS) and OpenCorporates company-name variants for `reference-business`.
+
 ### Added -- Reference-address pack: USPS-style address normalization (strategy direction #8, fourth slice)
 
 Fourth refdata slice. Opens the `reference-address` pack with the `address_normalize` transform: collapses USPS Publication 28 street-suffix, directional, and secondary-unit variants to their canonical short forms so "123 Main Street North Apartment 5" and "123 Main St N Apt 5" both reduce to "123 main st n apt 5" before scoring.
