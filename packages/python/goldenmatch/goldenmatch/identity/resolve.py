@@ -46,6 +46,9 @@ class ResolveSummary:
     edges_added: int = 0
     events_emitted: int = 0
     records_upserted: int = 0
+    # v2.1: count of ``conflicts_with`` edges emitted automatically by the
+    # resolver (weak bottlenecks + merges with prior conflicts).
+    conflicts_flagged: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -56,6 +59,7 @@ class ResolveSummary:
             "edges_added": self.edges_added,
             "events_emitted": self.events_emitted,
             "records_upserted": self.records_upserted,
+            "conflicts_flagged": self.conflicts_flagged,
         }
 
 
@@ -129,6 +133,7 @@ def resolve_clusters(
     source_pk_col: str | None = None,
     controller_snapshot: dict[str, Any] | None = None,
     emit_singletons: bool = True,
+    weak_confidence_threshold: float = 0.6,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
 
@@ -335,6 +340,79 @@ def resolve_clusters(
                 dataset=dataset,
             ))
             summary.edges_added += 1
+
+        # 3e. v2.1 conflict detection -- weak bottleneck.
+        # When the cluster confidence dropped low enough that the cluster
+        # quality engine flagged it weak, surface the bottleneck pair as a
+        # `conflicts_with` edge so a steward sees it in the conflicts feed.
+        # Same-source identical row pairs (score 1.0 exact dupes) are
+        # excluded so the conflicts feed stays signal-rich.
+        cluster_conf = _cluster_confidence(info)
+        bottleneck = info.get("bottleneck_pair")
+        if (
+            weak_confidence_threshold > 0
+            and cluster_conf is not None
+            and cluster_conf < weak_confidence_threshold
+            and bottleneck is not None
+            and isinstance(bottleneck, tuple)
+            and len(bottleneck) == 2
+        ):
+            ba, bb = bottleneck
+            ra = rowid_to_recid.get(int(ba))
+            rb = rowid_to_recid.get(int(bb))
+            bottleneck_score = (
+                info.get("pair_scores", {}).get((min(int(ba), int(bb)), max(int(ba), int(bb))))
+            )
+            if ra and rb:
+                store.add_edge(EvidenceEdge(
+                    entity_id=entity_id,
+                    record_a_id=ra,
+                    record_b_id=rb,
+                    kind=EdgeKind.CONFLICTS_WITH.value,
+                    score=float(bottleneck_score) if bottleneck_score is not None else None,
+                    matchkey_name=matchkey_name,
+                    negative_evidence={
+                        "reason": "weak_cluster_bottleneck",
+                        "cluster_confidence": cluster_conf,
+                        "threshold": weak_confidence_threshold,
+                    },
+                    controller_snapshot=controller_snapshot,
+                    run_name=run_name,
+                    dataset=dataset,
+                ))
+                summary.conflicts_flagged += 1
+
+        # 3f. v2.1 conflict detection -- carry forward prior conflicts on merge.
+        # If we just merged two identities and either side previously had a
+        # `conflicts_with` edge between *their* members, surface a fresh
+        # `conflicts_with` on the winner so a steward can re-verify post-merge.
+        if len(unique_entities) > 1:
+            prior_losers = [eid for eid in unique_entities if eid != entity_id]
+            for loser in prior_losers:
+                # Lightweight inspection: scan the loser's recent edges for
+                # any explicit conflicts_with. (For very high-volume graphs a
+                # dedicated query would be cheaper; this is fine for the
+                # cluster-counts we see in practice.)
+                for prior_edge in store.edges_for_entity(loser):
+                    if prior_edge.kind != EdgeKind.CONFLICTS_WITH.value:
+                        continue
+                    store.add_edge(EvidenceEdge(
+                        entity_id=entity_id,
+                        record_a_id=prior_edge.record_a_id,
+                        record_b_id=prior_edge.record_b_id,
+                        kind=EdgeKind.CONFLICTS_WITH.value,
+                        score=prior_edge.score,
+                        matchkey_name=prior_edge.matchkey_name,
+                        negative_evidence={
+                            "reason": "carried_forward_from_merge",
+                            "from_entity": loser,
+                            "original_run": prior_edge.run_name,
+                        },
+                        controller_snapshot=controller_snapshot,
+                        run_name=run_name,
+                        dataset=dataset,
+                    ))
+                    summary.conflicts_flagged += 1
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they

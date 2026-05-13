@@ -11,6 +11,7 @@ Cross-suite, runnable scripts. Each is standalone — pick the one closest to yo
 | `05_review_workflow.py` | Borderline-pair review queue + Learning Memory feedback loop in-process. | `goldenmatch[memory]` |
 | `06_mcp_client.py` | Connect to a `goldensuite-mcp` container from a Python MCP client. | `mcp` |
 | `07_web_ui_walkthrough.py` | Drive every web workbench endpoint from Python: rules, preview, compare runs (CCMS), sensitivity sweep, match, memory store, label round-trip, learn pass. Useful for scripting bulk ops or smoke-testing a deployment. | `goldenmatch[web]`, `requests` |
+| `08_identity_graph.py` | Six-act tour of the v1.15 Identity Graph: stable `entity_id` across runs, absorb on rerun, cross-source matching, conflict edge for review, manual merge, manual split, full event-log audit. | `goldenmatch` |
 
 ## Sample data
 
