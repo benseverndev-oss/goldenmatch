@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- Auto-config integration for refdata packs (strategy direction #8, sixth slice)
+
+Wires all four refdata packs into the zero-config controller. Auto-config no longer needs an explicit YAML to pick up surname-IDF weighting, given-name aliasing, legal-form stripping, or USPS address normalization — it picks them automatically when column names signal the relevant shape.
+
+- **New module** `goldenmatch/refdata/autoconfig_hooks.py` exposes `refine_matchkey_field(column_name, scorer, transforms) -> (scorer, transforms)`. Pure function; safe to call on every column unconditionally.
+- **Refinement rules** (each gated on the relevant pack's `is_available()` — non-refdata installs behave exactly as before):
+  - `last_name | surname | lname | family_name` → scorer becomes `name_freq_weighted_jw`.
+  - `first_name | given_name | fname | forename` → scorer becomes `given_name_aliased_jw`.
+  - `company | business | org | firm | employer | legal_name | entity_name` → `legal_form_strip` is prepended to the transforms list.
+  - `address | street | addr_line | mailing_address` → `address_normalize` is prepended.
+- **Wired into `core/autoconfig.py`** at both `build_matchkeys()` (vanilla weighted/exact path) and `build_probabilistic_matchkeys()` (Fellegi-Sunter path). The hook fires *after* `_SCORER_MAP[col_type]` resolves but *before* `MatchkeyField` is constructed — so the existing column-type classification, cardinality guards, and exact-matchkey skips still run unchanged.
+- **Scorer-swap protection**: only string-similarity scorers (`jaro_winkler`, `levenshtein`, `token_sort`, `ensemble`, `dice`, `jaccard`) get swapped. Exact and embedding scorers pass through — preserves identity-field semantics.
+- **Transform prepend, not replace**: `legal_form_strip` runs before any existing `lowercase`/`strip`, so the canonical short form still goes through downstream normalization. Idempotent — the function won't double-prepend if the transform is already in the list.
+- **Compound columns** (e.g. `company_last_name`) get both refinements: scorer swap from the last_name match + transform prepend from the company match.
+- **Tests**: `tests/test_refdata_autoconfig.py` (~50 tests) — parametrized across every column-name variant for each refinement rule, exact-scorer-not-swapped, idempotency, no-mutation-of-caller's-list, compound-column composition, and two end-to-end tests via `build_matchkeys()`.
+- **In-session validation blocked** by the same Polars DLL hang documented in PR #220 / CLAUDE.md — every Python invocation in the session that imports Polars (directly or via pytest's conftest chain) sits idle indefinitely. The refinement function is a pure synchronous function and its tests don't depend on Polars; rerun `pytest tests/test_refdata_autoconfig.py` on a fresh Python boot to materialize the test result. Three of the existing test cases (those calling `build_matchkeys()`) do touch Polars and need the same fresh-boot rerun.
+- **What's still deferred**: per-scorer threshold tuning in `LearningMemory`, regression check on NCVR / DBLP-ACM under the new auto-config (need a clean Python session), and the controller-level rule that A/B-tests refdata vs vanilla in its iteration loop for ground-truth-aware swap decisions.
+
 ### Added -- Surname-scorer common-name-FP synthetic benchmark (strategy direction #8, fifth slice)
 
 Companion benchmark to the synthetic fixtures shipped with the other refdata packs (PR #217 nicknames, PR #218 legal-form, PR #219 address). NCVR's corruption distribution doesn't exercise the borderline JW zone the `name_freq_weighted_jw` scorer was built for; this fixture does, so we can finally show the scorer's actual lift instead of just "no regression".

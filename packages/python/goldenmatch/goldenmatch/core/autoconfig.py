@@ -34,6 +34,28 @@ from goldenmatch.core.profiler import _guess_type
 
 logger = logging.getLogger(__name__)
 
+# Refdata-aware matchkey-field refinement. Hoisted to module-top so the
+# per-iteration loop in build_matchkeys / build_probabilistic_matchkeys
+# doesn't pay the `from X import Y` lookup cost or re-run the try/except
+# block per column. Falls back to a no-op identity when the refdata
+# package is unimportable OR its top-level import raises for any reason
+# (corrupt bundled data file, transitively-broken pack, etc.) — the
+# autoconfig path must never fail because a refdata pack is unhealthy.
+try:
+    from goldenmatch.refdata.autoconfig_hooks import (
+        refine_matchkey_field as _refdata_refine_matchkey_field,
+    )
+except Exception as _refdata_import_exc:  # noqa: BLE001 — see comment above
+    logger.debug(
+        "refdata.autoconfig_hooks unavailable (%s); refinements disabled.",
+        _refdata_import_exc,
+    )
+
+    def _refdata_refine_matchkey_field(
+        column_name: str, scorer: str, transforms: list[str],
+    ) -> tuple[str, list[str]]:
+        return scorer, transforms
+
 
 def _emit_data_profile(df: pl.DataFrame) -> None:
     """Emit DataProfile from the input DataFrame. No-op when null emitter."""
@@ -564,6 +586,15 @@ def build_matchkeys(
             continue
 
         scorer, weight, transforms = scorer_info
+
+        # Refdata hook: swap scorer / prepend transforms when the column
+        # name signals a refdata-handled shape (last_name, first_name,
+        # company name, address). No-op when goldenmatch.refdata isn't
+        # imported or the relevant pack's data file is missing — the
+        # module-top fallback at line ~38 wires a pass-through stub for
+        # that case. Lift numbers per refdata pack are in CHANGELOG
+        # entries for slices #2-#5.
+        scorer, transforms = _refdata_refine_matchkey_field(p.name, scorer, transforms)
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
@@ -1801,6 +1832,10 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
             continue
 
         scorer, _weight, transforms = scorer_info
+
+        # Refdata hook (mirrors build_matchkeys); see module-top fallback
+        # for the unavailable-refdata case.
+        scorer, transforms = _refdata_refine_matchkey_field(p.name, scorer, transforms)
 
         # Determine comparison levels based on scorer type
         if scorer == "exact":
