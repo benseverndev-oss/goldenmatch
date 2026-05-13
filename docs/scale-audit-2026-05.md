@@ -460,7 +460,7 @@ A 16 GB Linux runner is the wrong size for 2M dedupe with the current memory pro
 ### Status of the scale-audit workstream
 
 - **1M on 16 GB Linux**: solid baseline. 12.3 min, 8.4 GB peak, 836K correct clusters. Unchanged user-facing claim.
-- **2M on 16 GB Linux**: memory-bound. Working set needs >13 GB; the watchdog at 14.5 GB trips before completion. Could land with a slightly higher watchdog (15.5 GB) or after memory optimisations.
+- **2M on 16 GB Linux**: memory-bound (confirmed). Working set climbs past 13.5 GB and is still rising at trip time. Tested watchdog bump 14.5 → 15.0 GB ([run 25764924298](https://github.com/benzsevern/goldenmatch/actions/runs/25764924298)): RSS reached 13.6 GB before tripping, 12 min later in wall than the prior run — confirming RSS is genuinely growing, not plateauing. Linear extrapolation says ~15-16 GB at full pipeline completion, right at the OS-OOM ceiling on a 16 GB runner. Memory optimisations (future-work items 1+2) or a bigger runner are the only paths. Marginal watchdog bumps do not help.
 - **5M+ on 16 GB Linux**: out of reach without architectural changes.
 
 Issues #195 and #199 are both **closed**. The scale-audit workstream's commit-policy + learned-blocking bugs are resolved; what remains is a memory ceiling at 2M+, which is a separate, smaller workstream.
