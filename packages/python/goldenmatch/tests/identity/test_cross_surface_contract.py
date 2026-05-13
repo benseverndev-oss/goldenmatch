@@ -194,7 +194,9 @@ def _duckdb_query(db_path: str, sql: str, params: list) -> dict | list | None:
     """Generic DuckDB-UDF helper used by the history/conflicts/list tests."""
     if not _DUCKDB_AVAILABLE:
         return None
-    import duckdb, json as _json
+    import json as _json
+
+    import duckdb
     from goldenmatch_duckdb.functions import register
     con = duckdb.connect()
     register(con)
