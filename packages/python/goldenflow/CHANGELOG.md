@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.6 (2026-05-13)
+
+Bug-fix release. Resolves a panic on large datasets surfaced by the
+scale audit work.
+
+### Fixed
+
+- `category_auto_correct` panic at 1M+ rows under memory pressure (PR
+  #174 / #175). The old path called `series.to_list()` + Python
+  `Counter`, materialising one `PyString` per input row. At ~2 GB
+  measured peak RSS following a `goldenmatch.auto_configure` sample
+  run, the PyString allocations inside Polars' `to_list` path returned
+  NULL and pyo3 0.28.2 mapped that to `PanicException("PyObject pointer
+  is null")` rather than `MemoryError`. The function only ever needed
+  `n_unique` distinct values, so the rewrite uses
+  `series.value_counts()` instead -- stays in Rust, no per-row Python
+  allocation, fixes the crash on the goldenmatch scale-audit Round 2
+  1M synthetic fixture.
+
 ## 1.1.5 (2026-05-11)
 
 Maintenance release. No transform / API behaviour changes.
