@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+<!-- README-callout
+**Bundled OSS reference data** — Five reference packs ship inside the wheel: US Census 2010 surnames (top 10K), given-name aliases (~140 pairs: William↔Bill, Katherine↔Kate, ...), business legal forms (Inc, LLC, Ltd, GmbH, S.A., ...), USPS Pub. 28 address abbreviations, and NAICS 2022 industries (2,125 codes across all five hierarchy levels). Auto-config swaps in two new scorers (`name_freq_weighted_jw`, `given_name_aliased_jw`) and three transforms (`legal_form_strip`, `address_normalize`, `naics_normalize`) when a column name AND its profiled `col_type` agree — a `last_name` column holding numeric IDs keeps its caller-specified scorer instead of being silently swapped. Common-name surname-FP fixture: F1 0.667 → 0.915 (+0.248). No API keys, no external downloads. See [Reference Data docs](https://benzsevern.github.io/goldenmatch/reference-data).
+-->
+
 ### Changed -- Refdata autoconfig hook gates on ColumnProfile.col_type (strategy direction #8, ninth slice)
 
 Finishes the deferred slice from #8. Refdata refinements (surname scorer swap, given-name alias scorer swap, legal-form-strip, address-normalize, NAICS-normalize) now consult the profiled data shape, not just the column name. A column literally named `last_name` but holding numeric IDs, dates, or hashed identifiers no longer gets its scorer silently swapped — the swap was previously a quality regression on those shapes, hidden behind the column-name match.
@@ -288,6 +292,10 @@ Unchanged vs v1.12.0 — algorithm not touched this wave.
 
 ## [1.12.0] - 2026-05-10
 
+<!-- README-callout
+**Negative evidence on exact matchkeys (Path Y)** — NE penalties now filter adversarial collision pairs at the `exact_email` level, not just inside the weighted matchkey scoring loop. DQbench composite **91.04** (was 66.99 at v1.11). T2 F1 69.0% → 97.5%, T3 F1 53.8% → 85.5%.
+-->
+
 ### Added
 - **`_apply_negative_evidence_to_exact_pairs`** in `core/scorer.py`: post-filter helper that applies NE penalties to pairs produced by exact matchkeys. Called from `core/pipeline.py` after `find_exact_matches`. Score formula: `final = max(0, 1.0 - sum(penalties))`; pair emits only if `final >= matchkey.threshold`. Exact matchkeys without NE fields are unaffected (binary 1.0/0.0 emit preserved).
 - **Exact-matchkey NE threshold default**: when `promote_negative_evidence` adds NE fields to a threshold-None exact matchkey, the threshold is defaulted to 0.5 to activate the score-and-threshold path.
@@ -405,6 +413,10 @@ T2 F1: 58.7% → 69.0% (+10.3 pp). T1 and T3 unchanged. Primary target (>= 70) n
 The original v1.9 spec assumed best-effort RED commit would deliver a DQbench composite gain (target >= 65). In practice, the controller's complexity indicators can't distinguish "blocking key is wrong" from "blocking key is right but sample has no visible matches" -- both produce `mass_above_threshold=0.0`. v1.10 will add new indicators (identity-column priors, cross-blocking overlap probe, blocking-column corruption signal, sparse-match sensitivity) so the controller can tell these cases apart and deliver real gains on the tiers where it currently can't escape the impasse.
 
 ## [1.8.0] - 2026-05-08
+
+<!-- README-callout
+**Introspective auto-config controller** — Iterates on stage-emitted complexity signals (block-size dist, score histogram, transitivity, borderline mass) and refines its config via heuristic rules until convergence. Zero-config beats hand-tuned on DBLP-ACM (F1 **0.964** vs 0.918 ceiling), NCVR (**0.972**), Febrl3 (**0.944**). Cross-run memory at `~/.goldenmatch/autoconfig_memory.db`, LLM policy fallback (`GOLDENMATCH_AUTOCONFIG_LLM=1`), standardization auto-detection. Built by [Ben Severn](https://bensevern.dev).
+-->
 
 ### Added
 - **Introspective auto-config controller** that beats hand-tuned configs on multiple benchmarks without manual tuning. Zero-config now produces a defensible config the first time, even on shapes it hasn't been hand-tuned for. The controller iterates on stage-emitted complexity signals (block size distribution, score histogram, transitivity rate, candidates compared, mass above/in-borderline) and refines its config via a heuristic rule policy until convergence. (#103, #104, #109, #114)
