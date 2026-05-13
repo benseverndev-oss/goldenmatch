@@ -7,32 +7,22 @@ public-domain / permissively-licensed datasets.
 The **reference-people** pack ships two lookups and two scorers:
 
 - **Surnames** — US Census 2010 top-10K frequency table plus
-  ``name_freq_weighted_jw`` scorer (down-weights common-surname matches in
-  the borderline JW zone). Built for ``last_name`` fields.
-- **Given-name aliases** — curated canonical → nickname table (Robert ↔ Bob,
-  William ↔ Bill, …) plus ``given_name_aliased_jw`` scorer (promotes
-  known-alias pairs to 1.0 regardless of edit distance). Built for
-  ``first_name`` fields.
+  ``name_freq_weighted_jw`` scorer.
+- **Given-name aliases** — curated canonical → nickname table plus
+  ``given_name_aliased_jw`` scorer.
 
-Usage:
+The **reference-business** pack ships one transform:
 
-    import goldenmatch.refdata  # registers both scorers
-
-    # then in YAML or MatchkeyField config:
-    #   - field: last_name
-    #     scorer: name_freq_weighted_jw
-    #   - field: first_name
-    #     scorer: given_name_aliased_jw
-
-Both scorers are registered into ``PluginRegistry`` at import time. Data
-files are bundled in the wheel; lookups return ``None`` / empty / plain-JW
-fallback if a file is missing rather than raising.
-
-Provenance + license for every bundled dataset:
-``goldenmatch/refdata/data/PROVENANCE.md``.
+- **Legal-form normalization** — strips trailing corporate suffixes
+  (``legal_form_strip``).
 """
 from __future__ import annotations
 
+from goldenmatch.refdata.business import is_available as business_available
+from goldenmatch.refdata.business import (
+    known_variants as legal_form_variants,
+)
+from goldenmatch.refdata.business import register_transforms, strip_legal_form
 from goldenmatch.refdata.given_names import (
     aliases_of,
     are_equivalent,
@@ -48,16 +38,19 @@ from goldenmatch.refdata.surnames import (
     surname_rank,
 )
 
-# Register the bundled scorers on import. Idempotent — register_scorers checks
-# the registry before re-registering.
+# Register on import. Idempotent.
 register_scorers()
+register_transforms()
 
 __all__ = [
     "aliases_of",
     "are_equivalent",
+    "business_available",
     "canonical_form",
     "given_names_available",
     "is_available",
+    "legal_form_variants",
+    "strip_legal_form",
     "surname_count",
     "surname_frequency",
     "surname_idf",

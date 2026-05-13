@@ -50,9 +50,16 @@ class FieldTransform(BaseModel):
             return self
         if t == "bloom_filter" or _BLOOM_FILTER_RE.match(t):
             return self
+        # Plugin transform fallback — mirrors the MatchkeyField scorer
+        # validator (line ~104). A registered plugin transform is a valid
+        # transform name even if it isn't in VALID_SIMPLE_TRANSFORMS.
+        from goldenmatch.plugins.registry import PluginRegistry
+
+        if PluginRegistry.instance().has_transform(t):
+            return self
         raise ValueError(
-            f"Invalid transform '{t}'. Must be one of {sorted(VALID_SIMPLE_TRANSFORMS)} "
-            f"or 'substring:<start>:<end>'."
+            f"Invalid transform '{t}'. Must be one of {sorted(VALID_SIMPLE_TRANSFORMS)}, "
+            f"a registered plugin transform, or 'substring:<start>:<end>'."
         )
 
 
