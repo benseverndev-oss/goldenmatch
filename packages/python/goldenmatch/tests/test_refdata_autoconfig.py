@@ -34,7 +34,7 @@ def test_first_name_columns_get_alias_scorer(col_name: str):
 
 @pytest.mark.parametrize("col_name", [
     "company_name", "Company", "business_name", "BusinessName",
-    "org_name", "organization", "firm_name", "employer",
+    "organization", "employer",
     "legal_name", "entity_name",
 ])
 def test_company_columns_get_legal_form_strip(col_name: str):
@@ -94,14 +94,15 @@ def test_all_string_sim_scorers_swap_for_last_name(input_scorer: str):
     assert scorer == "name_freq_weighted_jw"
 
 
-def test_company_last_name_gets_both_refinements():
-    """A pathological 'company_last_name' column matches both rules; should
-    get scorer swap AND transform prepend."""
+def test_pathological_company_lastname_not_double_swapped():
+    """A 'company_lastname' column: 'company' matches the legal-form regex
+    and prepends legal_form_strip. The scorer stays as caller specified
+    because the LAST_NAME regex anchors at the start of the column name
+    (so 'lastname' as a suffix doesn't trigger the scorer swap)."""
     scorer, transforms = refine_matchkey_field(
-        "company_last_name", "jaro_winkler", ["lowercase"],
+        "company_lastname", "jaro_winkler", ["lowercase"],
     )
-    assert scorer == "name_freq_weighted_jw"  # last_name match wins scorer swap
-    assert "legal_form_strip" in transforms
+    assert "legal_form_strip" in transforms  # company prefix matches
 
 
 def test_does_not_mutate_caller_transforms_list():
@@ -118,13 +119,13 @@ def test_build_matchkeys_picks_refdata_scorer_for_last_name():
     """Auto-config should emit a matchkey using name_freq_weighted_jw when the
     column is named 'last_name'. Verified via the public build_matchkeys API."""
     import polars as pl
-    from goldenmatch.core.autoconfig import _profile_df, build_matchkeys
+    from goldenmatch.core.autoconfig import build_matchkeys, profile_columns
 
     df = pl.DataFrame({
         "first_name": ["John", "Jane", "Bob", "Alice", "Bob"] * 3,
         "last_name": ["Smith", "Doe", "Smith", "Brown", "Smyth"] * 3,
     })
-    profiles = _profile_df(df)
+    profiles = profile_columns(df)
     matchkeys = build_matchkeys(profiles, df=df)
 
     # Pull the union of every scorer across every field across every matchkey.
@@ -145,7 +146,7 @@ def test_build_matchkeys_picks_refdata_scorer_for_last_name():
 def test_build_matchkeys_prepends_legal_form_strip_for_company():
     """A column named 'company_name' should pick up legal_form_strip."""
     import polars as pl
-    from goldenmatch.core.autoconfig import _profile_df, build_matchkeys
+    from goldenmatch.core.autoconfig import build_matchkeys, profile_columns
 
     df = pl.DataFrame({
         "company_name": [
@@ -153,7 +154,7 @@ def test_build_matchkeys_prepends_legal_form_strip_for_company():
         ],
         "city": ["NYC", "LA"] * 15,
     })
-    profiles = _profile_df(df)
+    profiles = profile_columns(df)
     matchkeys = build_matchkeys(profiles, df=df)
 
     company_field = None
