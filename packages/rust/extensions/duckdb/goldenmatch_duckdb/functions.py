@@ -108,6 +108,32 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR"], "VARCHAR",
     )
 
+    # ── Identity Graph (v2.0) ────────────────────────────────────────────
+    # See `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md`
+    # in the main repo. Functions take an explicit ``db_path`` arg rather than
+    # reading a session-level setting — DuckDB Python UDFs cannot easily read
+    # ``SET`` settings, and an explicit arg is clearer at call sites anyway.
+    con.create_function(
+        "goldenmatch_identity_resolve", _identity_resolve,
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_identity_view", _identity_view,
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_identity_history", _identity_history,
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_identity_conflicts", _identity_conflicts,
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_identity_list", _identity_list,
+        ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
@@ -410,6 +436,68 @@ def _serialize_telemetry(profile, history, committed_config, *, source: str) -> 
         except Exception:
             pass
         return json.dumps(out)
+
+
+# ── Identity Graph UDFs ─────────────────────────────────────────────────
+
+
+def _identity_resolve(record_id: str, db_path: str) -> str:
+    """Resolve a record_id to its identity view JSON.
+
+    Returns ``{"found": false}`` when the record has no identity. Matches
+    the contract documented at
+    ``docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md``.
+    """
+    from goldenmatch.identity import IdentityStore, find_by_record
+    with IdentityStore(path=db_path) as s:
+        view = find_by_record(s, record_id)
+    if view is None:
+        return json.dumps({"found": False})
+    return json.dumps(view.to_dict(), default=str)
+
+
+def _identity_view(entity_id: str, db_path: str) -> str:
+    """Return the full identity view JSON for ``entity_id``."""
+    from goldenmatch.identity import IdentityStore, get_entity
+    with IdentityStore(path=db_path) as s:
+        view = get_entity(s, entity_id)
+    if view is None:
+        return json.dumps({"found": False})
+    return json.dumps(view.to_dict(), default=str)
+
+
+def _identity_history(entity_id: str, db_path: str) -> str:
+    """Return the temporal event log for an identity as a JSON array."""
+    from goldenmatch.identity import IdentityStore, history
+    with IdentityStore(path=db_path) as s:
+        events = history(s, entity_id)
+    return json.dumps(events, default=str)
+
+
+def _identity_conflicts(dataset: str, db_path: str) -> str:
+    """List evidence edges marked `conflicts_with` as a JSON array.
+
+    Empty ``dataset`` string means "all datasets".
+    """
+    from goldenmatch.identity import IdentityStore, find_conflicts
+    with IdentityStore(path=db_path) as s:
+        edges = find_conflicts(s, dataset=dataset or None)
+    return json.dumps(edges, default=str)
+
+
+def _identity_list(
+    dataset: str, status: str, db_path: str,
+) -> str:
+    """List identities filtered by dataset/status; empty strings = no filter."""
+    from goldenmatch.identity import IdentityStore, list_entities
+    with IdentityStore(path=db_path) as s:
+        items = list_entities(
+            s,
+            dataset=dataset or None,
+            status=status or None,
+            limit=500,
+        )
+    return json.dumps(items, default=str)
 
 
 # Global pipeline state (shared across all UDF calls)
