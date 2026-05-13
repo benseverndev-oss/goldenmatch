@@ -24,6 +24,10 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `record_embedding` | Multi-field concatenated embeddings | 0.0--1.0 | Cross-field semantic |
 | `dice` | Dice coefficient on bloom filters | 0.0--1.0 | PPRL |
 | `jaccard` | Jaccard similarity on bloom filters | 0.0--1.0 | PPRL |
+| `name_freq_weighted_jw` | Jaro-Winkler modulated by US Census surname IDF | 0.0--1.0 | `last_name` / `surname` |
+| `given_name_aliased_jw` | Jaro-Winkler with alias-aware exact bonus | 0.0--1.0 | `first_name` / `given_name` |
+
+The last two ship as part of the bundled reference-data packs and are picked automatically by auto-config when a column matches the relevant name pattern AND its profiled `col_type` agrees. See [Reference Data](reference-data) for the full pack overview, refinement rules, and the col_type gate.
 
 ---
 
