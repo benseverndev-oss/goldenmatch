@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from goldenmatch import refdata
 from goldenmatch.plugins.registry import PluginRegistry
 from goldenmatch.refdata import (
@@ -13,7 +12,6 @@ from goldenmatch.refdata import (
     surname_idf,
     surname_rank,
 )
-
 
 # ── lookup ──────────────────────────────────────────────────────────────────
 

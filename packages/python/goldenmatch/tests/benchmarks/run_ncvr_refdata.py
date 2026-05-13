@@ -18,17 +18,15 @@ Usage::
 """
 from __future__ import annotations
 
+import copy
 import random
 import sys
 from pathlib import Path
 from typing import Any
 
-import polars as pl
-
-import copy
-
 import goldenmatch
 import goldenmatch.refdata  # noqa: F401  registers name_freq_weighted_jw
+import polars as pl
 
 DATASETS = Path(__file__).parent / "datasets"
 NCVR_SAMPLE = DATASETS / "NCVR" / "ncvoter_sample_10k.txt"
