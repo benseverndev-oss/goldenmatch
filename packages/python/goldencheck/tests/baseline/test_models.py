@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import yaml
-
 from goldencheck.baseline.models import (
     BaselineProfile,
     ConfidencePrior,
@@ -17,7 +16,6 @@ from goldencheck.baseline.models import (
     StatProfile,
     TemporalOrder,
 )
-
 
 # ---------------------------------------------------------------------------
 # StatProfile
@@ -71,7 +69,7 @@ def test_functional_dependency():
 def _make_minimal_profile(source: str = "tests/data.csv") -> BaselineProfile:
     return BaselineProfile(
         version="1.0",
-        created=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created=datetime(2026, 1, 1, tzinfo=UTC),
         source=source,
         rows=100,
         columns=["id", "name", "age"],
@@ -277,7 +275,7 @@ def test_source_filename_windows_path():
 
 def _make_update_target() -> BaselineProfile:
     bp = _make_minimal_profile(source="old_data.csv")
-    bp.created = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    bp.created = datetime(2025, 6, 1, tzinfo=UTC)
     bp.priors = {
         "col_missing": ConfidencePrior(confidence=0.10, evidence_count=100),
         "col_outlier": ConfidencePrior(confidence=0.20, evidence_count=50),
@@ -295,7 +293,7 @@ def _make_update_target() -> BaselineProfile:
 def _make_update_source() -> BaselineProfile:
     bp = BaselineProfile(
         version="1.0",
-        created=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created=datetime(2026, 1, 1, tzinfo=UTC),
         source="new_data.csv",
         rows=200,
         columns=["id", "name", "age", "zip"],

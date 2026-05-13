@@ -58,12 +58,14 @@ class ChunkedMatcher:
             Summary dict with stats.
         """
         from goldenmatch.core.autofix import auto_fix_dataframe
-        from goldenmatch.core.standardize import apply_standardization
-        from goldenmatch.core.matchkey import compute_matchkeys
         from goldenmatch.core.blocker import build_blocks
-        from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel
         from goldenmatch.core.cluster import build_clusters
-        from goldenmatch.core.golden import build_golden_record
+        from goldenmatch.core.matchkey import compute_matchkeys
+        from goldenmatch.core.scorer import (
+            find_exact_matches,
+            score_blocks_parallel,
+        )
+        from goldenmatch.core.standardize import apply_standardization
 
         file_path = Path(file_path)
         matchkeys = self.config.get_matchkeys()

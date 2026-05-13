@@ -7,7 +7,6 @@ into the store.
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch.core.memory.store import MemoryStore
 
 
@@ -155,7 +154,7 @@ class TestUnmergeCollection:
             assert c.record_hash == ""
 
     def test_unmerge_no_store_unchanged(self):
-        from goldenmatch.core.cluster import unmerge_record, unmerge_cluster
+        from goldenmatch.core.cluster import unmerge_cluster, unmerge_record
 
         clusters = self._two_clusters()
         result = unmerge_record(0, clusters)
@@ -213,8 +212,8 @@ class TestLLMScorerCollection:
 
 class TestAgentApproveRejectCollection:
     def test_approve_writes_correction(self, tmp_path):
-        from goldenmatch.mcp.agent_tools import _dispatch
         from goldenmatch.core.agent import AgentSession
+        from goldenmatch.mcp.agent_tools import _dispatch
 
         store = _new_store(tmp_path)
         # Need to enqueue first via the session's queue.
@@ -254,7 +253,6 @@ class TestAgentApproveRejectCollection:
 
 class TestRestDecideCollection:
     def test_review_decision_writes_correction(self, tmp_path):
-        from goldenmatch.api.server import MatchServer
 
         store = _new_store(tmp_path)
         server = _make_match_server_for_test(store, "dsr")

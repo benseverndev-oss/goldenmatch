@@ -41,9 +41,10 @@ def run_schedule(
     """
     import signal
     import sys
-    from goldencheck.engine.scanner import scan_file
+
     from goldencheck.engine.confidence import apply_confidence_downgrade
     from goldencheck.engine.history import record_scan
+    from goldencheck.engine.scanner import scan_file
     from goldencheck.models.finding import Severity
     from goldencheck.reporters.json_reporter import report_json as report_json_fn
 
@@ -95,7 +96,7 @@ def run_schedule(
                 # Webhook
                 if webhook:
                     from goldencheck.engine.history import get_previous_scan
-                    from goldencheck.engine.notifier import should_notify, send_webhook
+                    from goldencheck.engine.notifier import send_webhook, should_notify
 
                     by_col: dict[str, dict[str, int]] = {}
                     for f in findings:

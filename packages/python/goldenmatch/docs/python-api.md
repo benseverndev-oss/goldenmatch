@@ -700,6 +700,54 @@ New v1.5.0 kwargs on `auto_configure_df`:
 
 The returned config carries `config._preflight_report: PreflightReport` (underscore — private-by-convention but stable across v1.5.x).
 
+### Controller telemetry (v1.7-v1.12)
+
+`auto_configure_df` runs the AutoConfigController, which writes `(profile, history)` to a ContextVar (`goldenmatch.core.autoconfig._LAST_CONTROLLER_RUN`). Callers can read it post-call:
+
+```python
+from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
+
+cfg = auto_configure_df(df)
+profile, history = _LAST_CONTROLLER_RUN.get()  # ComplexityProfile, RunHistory
+print(history.stop_reason)            # StopReason enum
+print(profile.health())                # HealthVerdict enum
+for entry in history.entries:
+    if entry.decision:
+        print(f"iter {entry.iteration}: {entry.decision.rule_name}")
+```
+
+Or via the cross-surface serializer (single JSON shape used by web / CLI / SQL / MCP / A2A):
+
+```python
+from goldenmatch.web.controller_telemetry import serialize_telemetry
+
+telemetry = serialize_telemetry(
+    profile=profile,
+    history=history,
+    committed_config=cfg,
+    source="my_app",
+    run_name=None,
+    recorded_at=None,
+)
+# telemetry["stop_reason"], telemetry["health"], telemetry["decisions"], ...
+```
+
+### AgentSession.autoconfigure (v1.7-v1.12)
+
+For agent-style sessions, `AgentSession` exposes the same surface as a single call:
+
+```python
+from goldenmatch import AgentSession
+
+session = AgentSession()
+result = session.autoconfigure("customers.csv")
+# {"config": {...}, "telemetry": {"stop_reason": "green", "health": "green", ...}}
+
+# `deduplicate` / `match_sources` also cache telemetry for follow-up reads.
+session.deduplicate("customers.csv")
+print(session.last_telemetry)  # same shape as result["telemetry"]
+```
+
 ---
 
 ## Verification (v1.5.0)

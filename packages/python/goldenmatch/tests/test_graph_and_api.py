@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
 import polars as pl
-import pytest
 
 
 class TestClusterGraph:
@@ -83,14 +80,20 @@ class TestClusterGraph:
 
 class TestRESTAPI:
     def test_match_server_init(self):
-        from goldenmatch.tui.engine import MatchEngine
+        import csv
+        import tempfile
+
         from goldenmatch.api.server import MatchServer
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            BlockingConfig, BlockingKeyConfig, GoldenRulesConfig, OutputConfig,
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            GoldenRulesConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
         )
-
-        import tempfile, csv
+        from goldenmatch.tui.engine import MatchEngine
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["name", "email", "zip"])
@@ -138,14 +141,19 @@ class TestRESTAPI:
         assert len(clusters) >= 1
 
     def test_match_no_results(self):
-        from goldenmatch.tui.engine import MatchEngine
+        import csv
+        import tempfile
+
         from goldenmatch.api.server import MatchServer
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-            BlockingConfig, BlockingKeyConfig, OutputConfig,
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+            OutputConfig,
         )
-
-        import tempfile, csv
+        from goldenmatch.tui.engine import MatchEngine
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["name", "zip"])

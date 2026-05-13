@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.console import Console
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 console = Console()
@@ -12,11 +12,11 @@ console = Console()
 
 def run_wizard(data_path: Path | None = None, output_path: Path = Path("goldenflow.yaml")) -> None:
     """Interactive config generation wizard."""
+    from goldenflow.config.loader import save_config
+    from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
     from goldenflow.connectors.file import read_file
     from goldenflow.engine.profiler_bridge import profile_dataframe
     from goldenflow.engine.selector import select_transforms
-    from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
-    from goldenflow.config.loader import save_config
 
     console.print("[bold]GoldenFlow Setup Wizard[/bold]\n")
 

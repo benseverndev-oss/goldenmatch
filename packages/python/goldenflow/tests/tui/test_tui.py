@@ -1,4 +1,4 @@
-from goldenflow.tui.app import GoldenFlowApp, ProfileTab, TransformTab, MapTab, ExportTab
+from goldenflow.tui.app import ExportTab, GoldenFlowApp, MapTab, ProfileTab, TransformTab
 
 
 def test_tui_app_instantiates():

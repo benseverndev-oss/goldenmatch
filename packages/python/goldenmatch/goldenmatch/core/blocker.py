@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 import polars as pl
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, CanopyConfig
-from goldenmatch.utils.transforms import apply_transforms
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.complexity_profile import BlockingProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
+from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def _percentile(xs: list[int], q: float) -> int:
 
 
 def _emit_blocking_profile(
-    blocks: list["BlockResult"],
+    blocks: list[BlockResult],
     config: BlockingConfig,
     lf: pl.LazyFrame,
 ) -> None:
@@ -255,7 +255,7 @@ def _ann_sub_block(
     pairs = blocker.query(record_embeddings)
 
     # Group into sub-blocks via Union-Find
-    row_ids = block_df["__row_id__"].to_list()
+    _row_ids = block_df["__row_id__"].to_list()
     uf = UnionFind()
     for a, b in pairs:
         real_a = valid_records[a]
@@ -555,7 +555,6 @@ def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockRes
     pairs = blocker.query(embeddings)
 
     # Group nearby records into micro-blocks using Union-Find
-    row_ids = df["__row_id__"].to_list()
     uf = UnionFind()
     for a, b in pairs:
         uf.add(a)
@@ -568,7 +567,13 @@ def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockRes
         if len(members) < 2:
             continue
         member_list = sorted(members)
-        block_df = df.filter(pl.col("__row_id__").is_in([row_ids[m] for m in member_list]))
+        # `members` are positions in `df` (UnionFind operates on the same
+        # indices that drive the embeddings array, which is row-aligned with
+        # df). Direct positional indexing is O(K) vs filter(is_in(...))'s
+        # O(N) per block — at 1M rows with ~50K blocks this was the dominant
+        # wall cost (50% of total via PyLazyFrame.collect; cProfile Round 5).
+        # `row_ids` lookup was redundant indirection.
+        block_df = df[member_list]
         results.append(BlockResult(
             block_key=f"ann_{min(member_list)}",
             df=block_df.lazy(),
@@ -650,8 +655,8 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
     sample_blocks = _build_static_blocks(sample_df.lazy(), sample_config)
 
     # Score sample blocks to get training pairs
-    from goldenmatch.core.scorer import find_fuzzy_matches
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.scorer import find_fuzzy_matches
 
     # Build a simple weighted matchkey for scoring
     cols = [c for c in df.columns if not c.startswith("__")]
@@ -667,7 +672,7 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
 
     scored_pairs = []
     for block in sample_blocks:
-        block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+        block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
         pairs = find_fuzzy_matches(block_df, score_mk)
         scored_pairs.extend(pairs)
 
@@ -721,12 +726,16 @@ def _build_canopy_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
         max_canopy_size=canopy_cfg.max_canopy_size,
     )
 
-    row_ids = df["__row_id__"].to_list()
     results: list[BlockResult] = []
     for i, members in enumerate(canopies):
         if len(members) < 2:
             continue
-        block_df = df.filter(pl.col("__row_id__").is_in([row_ids[m] for m in members]))
+        # `members` are positions in `df` — `build_canopies` returns
+        # indices into the text_values list which was built by enumerating
+        # df.iter_rows in order. Direct positional indexing is O(K) vs
+        # filter(is_in(...))'s O(N) per canopy — see ann_blocking_strategy
+        # for the cProfile attribution that drove this change.
+        block_df = df[sorted(list(members))]
         results.append(BlockResult(
             block_key=f"canopy_{i}",
             df=block_df.lazy(),
@@ -774,7 +783,8 @@ def select_best_blocking_key(
         groups = df_with_key.filter(pl.col("__block_key__").is_not_null()).group_by("__block_key__").agg(
             pl.len().alias("size")
         )
-        max_size = groups["size"].max()
+        # polars Series.max() returns PythonLiteral; "size" is i64 at runtime.
+        max_size = int(groups["size"].max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "size" is int64 at runtime
         group_count = groups.height
 
         logger.debug(

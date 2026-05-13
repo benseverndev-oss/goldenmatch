@@ -16,9 +16,9 @@ except ImportError:
 
 import polars as pl
 
+from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.models import BaselineProfile
 from goldencheck.baseline.patterns import _induce_column_grammars
-from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.semantic import infer_semantic_types
 from goldencheck.models.finding import Finding, Severity
 

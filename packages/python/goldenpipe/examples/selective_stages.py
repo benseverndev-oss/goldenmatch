@@ -9,8 +9,7 @@ Usage:
 import sys
 
 import polars as pl
-
-from goldenpipe import run_df, PipelineConfig, StageSpec, PipeStatus
+from goldenpipe import PipelineConfig, StageSpec, run_df
 
 
 def main():

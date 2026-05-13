@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenflow"
-version = "1.1.2"
+version = "1.1.6"
 description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
 readme = "README.md"
 license = "MIT"
@@ -51,15 +51,12 @@ all = ["goldenflow[check,excel,db,mcp,agent,s3,gcs]"]
 goldenflow = "goldenflow.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenflow"
-Repository = "https://github.com/benzsevern/goldenflow"
-Issues = "https://github.com/benzsevern/goldenflow/issues"
-Documentation = "https://benzsevern.github.io/goldenflow/"
-Changelog = "https://github.com/benzsevern/goldenflow/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenflow#readme"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenflow/CHANGELOG.md"
 Author = "https://bensevern.dev"
-
-[tool.ruff]
-line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

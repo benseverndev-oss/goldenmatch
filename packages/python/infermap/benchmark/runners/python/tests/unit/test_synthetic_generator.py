@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 from infermap_bench.synthetic import (
-    GeneratedCase,
     Field,
+    GeneratedCase,
     Schema,
     generate_all_synthetic,
     load_synthetic_config,

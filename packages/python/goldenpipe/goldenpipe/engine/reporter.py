@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from goldenpipe.models.context import (
-    PipeContext, PipeResult, PipeStatus, StageResult, StageStatus,
+    PipeContext,
+    PipeResult,
+    PipeStatus,
+    StageResult,
+    StageStatus,
 )
 
 

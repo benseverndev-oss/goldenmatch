@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -65,11 +64,11 @@ def dedupe_cmd(
     files: list[str] = typer.Argument(
         ..., help="Input files as path or path:source_name"
     ),
-    config: Optional[str] = typer.Option(
+    config: str | None = typer.Option(
         None, "--config", "-c", help="Path to YAML config file (optional - auto-detects if omitted)"
     ),
     no_tui: bool = typer.Option(False, "--no-tui", help="Skip TUI, run with auto-config directly"),
-    model: Optional[str] = typer.Option(None, "--model", help="Override embedding model selection"),
+    model: str | None = typer.Option(None, "--model", help="Override embedding model selection"),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
     preview_random: bool = typer.Option(False, "--preview-random", help="Random sample instead of first N"),
@@ -82,9 +81,9 @@ def dedupe_cmd(
     html_report: bool = typer.Option(False, "--html-report", help="Generate standalone HTML report"),
     dashboard: bool = typer.Option(False, "--dashboard", help="Generate before/after data quality dashboard"),
     across_files_only: bool = typer.Option(False, "--across-files-only", help="Only match across different sources"),
-    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
-    format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
-    run_name: Optional[str] = typer.Option(None, "--run-name", help="Run name for output files"),
+    output_dir: str | None = typer.Option(None, "--output-dir", help="Output directory"),
+    format: str | None = typer.Option(None, "--format", "-f", help="Output format (csv, parquet)"),
+    run_name: str | None = typer.Option(None, "--run-name", help="Run name for output files"),
     auto_fix: bool = typer.Option(False, "--auto-fix", help="Run auto-fix before matching"),
     auto_block: bool = typer.Option(False, "--auto-block", help="Auto-suggest blocking keys"),
     chunked: bool = typer.Option(False, "--chunked", help="Large dataset mode - process in chunks for files >1M records"),
@@ -96,13 +95,23 @@ def dedupe_cmd(
     anomaly_sensitivity: str = typer.Option("medium", "--anomaly-sensitivity", help="low, medium, or high"),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Boost accuracy with LLM-labeled training data"),
     llm_retrain: bool = typer.Option(False, "--llm-retrain", help="Force re-labeling (ignore saved model)"),
-    llm_provider: Optional[str] = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
+    llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
     llm_max_labels: int = typer.Option(500, "--llm-max-labels", help="Max pairs to label with LLM"),
-    backend: Optional[str] = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    show_controller: bool = typer.Option(
+        True,
+        "--show-controller/--hide-controller",
+        help="Render AutoConfigController telemetry (stop_reason, decisions, Path Y) when auto-config ran. No-op for runs with an explicit --config.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
     """Run deduplication on one or more input files."""
+    # Telemetry captured if/when auto_configure runs in this command. Stays
+    # None on the explicit-config path; the panel is suppressed in that case.
+    _ctrl_profile: object = None
+    _ctrl_history: object = None
+    _ctrl_committed_config: object = None
     # Parse file:source pairs
     parsed_files = [_parse_file_source(f) for f in files]
 
@@ -130,12 +139,16 @@ def dedupe_cmd(
         if not project or "matchkeys" not in (project or {}):
             # Auto-configure from input files
             try:
+                from goldenmatch.cli._controller_render import capture_controller_state
                 from goldenmatch.core.autoconfig import auto_configure
                 if not quiet:
                     console.print("[yellow]No config file - auto-detecting column types...[/yellow]")
                 cfg = auto_configure(parsed_files)
+                # Pull controller telemetry off the ContextVar set by
+                # auto_configure_df. None on legacy paths that bypass it.
+                _ctrl_profile, _ctrl_history = capture_controller_state()
+                _ctrl_committed_config = cfg
                 if not quiet:
-                    from goldenmatch.core.autoconfig import profile_columns
                     console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
             except Exception as exc:
                 if not quiet:
@@ -160,13 +173,13 @@ def dedupe_cmd(
 
     # ── Preview mode ──
     if preview:
-        from goldenmatch.tui.engine import MatchEngine
         from goldenmatch.core.preview import (
-            format_preview_stats,
             format_preview_clusters,
             format_preview_golden,
+            format_preview_stats,
             format_score_histogram,
         )
+        from goldenmatch.tui.engine import MatchEngine
 
         file_paths = [fp for fp, _name in parsed_files]
         engine = MatchEngine(file_paths)
@@ -255,6 +268,23 @@ def dedupe_cmd(
         if not quiet:
             console.print(f"[red]Runtime error:[/red] {exc}")
         raise typer.Exit(code=3)
+
+    # Show AutoConfigController telemetry before the report. We only render
+    # when the controller actually ran in this command (i.e., auto-config
+    # path) — explicit --config skips this entirely.
+    if (
+        show_controller
+        and not quiet
+        and _ctrl_history is not None
+        and _ctrl_committed_config is not None
+    ):
+        from goldenmatch.cli._controller_render import render_controller_panel
+        err_console.print(render_controller_panel(
+            profile=_ctrl_profile,
+            history=_ctrl_history,
+            committed_config=_ctrl_committed_config,
+            verbose=verbose,
+        ))
 
     # Print report
     if not quiet and results.get("report"):

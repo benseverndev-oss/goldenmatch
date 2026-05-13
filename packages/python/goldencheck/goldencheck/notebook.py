@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from goldencheck.models.finding import Finding, Severity
-from goldencheck.models.profile import DatasetProfile, ColumnProfile
+from goldencheck.models.profile import ColumnProfile, DatasetProfile
 
 __all__ = ["ScanResult", "findings_to_html", "profile_to_html"]
 

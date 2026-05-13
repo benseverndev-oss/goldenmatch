@@ -5,7 +5,6 @@ Use the @infermap.scorer decorator to register a function
 that receives two FieldInfo objects and returns a ScorerResult.
 """
 
-import polars as pl
 import infermap
 from infermap.types import FieldInfo, ScorerResult
 

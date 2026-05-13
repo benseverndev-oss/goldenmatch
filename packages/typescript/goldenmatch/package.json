@@ -1,6 +1,6 @@
 {
   "name": "goldenmatch",
-  "version": "0.4.0",
+  "version": "0.8.0",
   "description": "Entity resolution toolkit — deduplicate, match, and create golden records",
   "type": "module",
   "exports": {
@@ -63,8 +63,14 @@
     "golden-record", "data-quality", "jaro-winkler", "levenshtein"
   ],
   "license": "MIT",
+  "author": "Ben Severn (https://bensevern.dev)",
+  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/goldenmatch",
   "repository": {
     "type": "git",
-    "url": "https://github.com/benzsevern/goldenmatch"
+    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "directory": "packages/typescript/goldenmatch"
+  },
+  "bugs": {
+    "url": "https://github.com/benzsevern/goldenmatch/issues"
   }
 }

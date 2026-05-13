@@ -61,7 +61,6 @@ def test_post_label_surfaces_mirror_failure(client, monkeypatch):
     """When `add_correction` raises (e.g. unwritable backend), the response
     flips `mirrored: false` and includes the exception type+message in
     `mirror_error` so the UI can show a yellow warning."""
-    import goldenmatch.web.routers.labels as labels_router
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated memory backend failure")

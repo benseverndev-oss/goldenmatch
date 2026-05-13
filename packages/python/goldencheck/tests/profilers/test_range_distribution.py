@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.range_distribution import RangeDistributionProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.range_distribution import RangeDistributionProfiler
+
 
 def test_outlier_detected():
     values = list(range(100)) + [99999]

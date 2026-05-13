@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime
 
 import polars as pl
-
 from goldenmatch import dedupe_df
 from goldenmatch.config.schemas import (
     BlockingConfig,

@@ -6,12 +6,37 @@ nav_order: 5
 
 # CLI Reference
 
-GoldenMatch provides 23 CLI commands via `goldenmatch <command>`. All commands support `--help`.
+GoldenMatch provides 24 CLI commands via `goldenmatch <command>`. All commands support `--help`.
 
 ```bash
 pip install goldenmatch
 goldenmatch --version
 ```
+
+---
+
+## autoconfig
+
+Run AutoConfigController and print the committed config + telemetry. Does not run the pipeline — useful for piping into a YAML file or inspecting what auto-config would decide before committing to a full run.
+
+```bash
+# Print YAML config to stdout, telemetry panel to stderr
+goldenmatch autoconfig customers.csv
+
+# Save the config to disk; panel still goes to stderr
+goldenmatch autoconfig customers.csv --out goldenmatch.yml
+
+# Pin a domain rulebook
+goldenmatch autoconfig products.csv --domain electronics
+
+# Include indicator priors + decision trace in the panel
+goldenmatch autoconfig customers.csv --verbose
+
+# CI-friendly: swap the rich panel for a one-line status string
+goldenmatch autoconfig customers.csv --hide-controller
+```
+
+The panel surfaces the controller's `stop_reason`, health verdict, complexity profile cells, indicator column priors (with `--verbose`), refit decisions, and `Path Y · N NE` indicators on committed matchkeys. Same JSON shape the web UI's `/api/v1/controller/telemetry` endpoint returns.
 
 ---
 
@@ -34,6 +59,13 @@ goldenmatch dedupe products.csv --config config.yaml --llm-scorer
 
 # With anomaly detection
 goldenmatch dedupe customers.csv --anomalies
+
+# Zero-config path: render the controller telemetry panel before the report
+# (default ON when auto-config fires; suppressed automatically with --config)
+goldenmatch dedupe customers.csv  # panel surfaces stop_reason, health, decisions, Path Y NE
+
+# Hide the controller panel (useful in CI logs)
+goldenmatch dedupe customers.csv --hide-controller
 
 # Preview changes before writing
 goldenmatch dedupe customers.csv --preview

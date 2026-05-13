@@ -5,8 +5,8 @@ from typing import Any
 
 import polars as pl
 
-from infermap.types import FieldInfo, SchemaInfo
 from infermap.providers.file import _normalize_dtype, _profile_series
+from infermap.types import FieldInfo, SchemaInfo
 
 _DEFAULT_SAMPLE_SIZE = 500
 

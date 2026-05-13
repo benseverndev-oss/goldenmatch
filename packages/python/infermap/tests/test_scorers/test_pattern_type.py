@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import make_field
 from infermap.scorers.pattern_type import PatternTypeScorer, classify_field
 
+from tests.conftest import make_field
 
 # ── classify_field ──────────────────────────────────────────────────────────
 

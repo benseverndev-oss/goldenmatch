@@ -4,24 +4,34 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
       §New: AutoConfigController, §Sample selection, §Pipeline integration.
 """
 from __future__ import annotations
-from contextvars import ContextVar
-from dataclasses import dataclass, field
-from datetime import timedelta
-from typing import Any
+
 import hashlib
 import logging
 import time
 import traceback
+from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any
+
 import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
-from goldenmatch.core.complexity_profile import (
-    ComplexityProfile, DataProfile, HealthVerdict, StopReason,
-)
 from goldenmatch.core.autoconfig_history import RunHistory
-from goldenmatch.core.autoconfig_policy import RefitPolicy
-from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
+from goldenmatch.core.complexity_profile import (
+    CollisionSignal,
+    ColumnPrior,
+    ComplexityProfile,
+    DataProfile,
+    HealthVerdict,
+    SparsityVerdict,
+    StopReason,
+)
 
+if TYPE_CHECKING:
+    from goldenmatch.core.autoconfig_history import HistoryEntry
+from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
+from goldenmatch.core.autoconfig_policy import RefitPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +42,105 @@ _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 # (including KeyboardInterrupt) so callers can inspect RunHistory after
 # either normal return or exception.  Stores RunHistory directly
 # (unlike autoconfig._LAST_CONTROLLER_RUN which stores (profile, history)).
-_LAST_CONTROLLER_RUN: ContextVar["RunHistory | None"] = ContextVar(
+_LAST_CONTROLLER_RUN: ContextVar[RunHistory | None] = ContextVar(
     "_LAST_CONTROLLER_RUN", default=None
 )
+
+
+class IndicatorContext:
+    """v1.10: per-run object threading indicators through the policy/rule chain.
+
+    Memoizes lazy indicator calls by (function_name, args). Tracks
+    one-shot rule firings for guards like rule_sparse_match_expand.
+
+    Spec: docs/superpowers/specs/2026-05-08-autoconfig-indicators-design.md
+          §Architecture #2.
+
+    Fast-mode: when GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast, the two
+    expensive lazy methods (full_pop_matchkey_hits, cross_blocking_overlap)
+    return None unconditionally — preserves v1.9 wall-clock at the cost of
+    indicator-driven gains. (Wired in Task 6.1.5; current Phase 3 omits the
+    fast-mode guard — Task 6.1.5 adds it.)
+    """
+
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        column_priors: dict[str, ColumnPrior],
+        sparsity_verdict: SparsityVerdict,
+    ) -> None:
+        self._df = df
+        self._column_priors = column_priors
+        self._sparsity_verdict = sparsity_verdict
+        self._memo: dict[tuple[Any, ...], Any] = {}
+        self._fired: set[str] = set()
+
+    @property
+    def column_priors(self) -> dict[str, ColumnPrior]:
+        return self._column_priors
+
+    @property
+    def sparsity_verdict(self) -> SparsityVerdict:
+        return self._sparsity_verdict
+
+    def _is_fast_mode(self) -> bool:
+        import os
+        return os.environ.get("GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET", "").lower() == "fast"
+
+    def full_pop_matchkey_hits(self, blocking_col: str) -> int | None:
+        if self._is_fast_mode():
+            return None
+        from goldenmatch.core.indicators import estimate_full_pop_hits
+        key = ("full_pop_matchkey_hits", blocking_col)
+        if key not in self._memo:
+            self._memo[key] = estimate_full_pop_hits(self._df, blocking_col)
+        return self._memo[key]
+
+    def cross_blocking_overlap(self, key_a: str, key_b: str) -> float | None:
+        if self._is_fast_mode():
+            return None
+        from goldenmatch.core.indicators import compute_cross_blocking_overlap
+        a, b = sorted([key_a, key_b])
+        key = ("cross_blocking_overlap", a, b)
+        if key not in self._memo:
+            self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
+        return self._memo[key]
+
+    def identity_collision_signal(
+        self, identity_col: str, witness_cols: list[str],
+    ) -> CollisionSignal:
+        if self._is_fast_mode():
+            return CollisionSignal(rate=0.0, witness_used="")
+        from goldenmatch.core.indicators import compute_identity_collision_signal
+        canonical_witnesses = tuple(sorted(witness_cols))
+        key = ("identity_collision_signal", identity_col, canonical_witnesses)
+        if key not in self._memo:
+            self._memo[key] = compute_identity_collision_signal(
+                self._df, identity_col, list(canonical_witnesses),
+            )
+        return self._memo[key]
+
+    def has_fired(self, rule_name: str) -> bool:
+        return rule_name in self._fired
+
+    def mark_fired(self, rule_name: str) -> None:
+        self._fired.add(rule_name)
+
+
+def _call_policy_propose(
+    policy: Any,
+    profile: Any,
+    current: Any,
+    history: Any,
+    ctx: Any,
+) -> Any:
+    """Call policy.propose with ctx if its signature accepts it; else 3-arg.
+    Preserves backward compat for custom policies that pre-date v1.10."""
+    import inspect
+    params = inspect.signature(policy.propose).parameters
+    if "ctx" in params:
+        return policy.propose(profile, current, history, ctx=ctx)
+    return policy.propose(profile, current, history)
 
 
 class ConfigValidationError(Exception):
@@ -42,12 +148,12 @@ class ConfigValidationError(Exception):
 
 
 def _assemble_v0_history_entry(
-    sample: "pl.DataFrame",
-    reference: "pl.DataFrame | None",
-    config_v0: "GoldenMatchConfig",
-    history: "RunHistory",
-    controller: "AutoConfigController",
-) -> "HistoryEntry | None":
+    sample: pl.DataFrame,
+    reference: pl.DataFrame | None,
+    config_v0: GoldenMatchConfig,
+    history: RunHistory,
+    controller: AutoConfigController,
+) -> HistoryEntry | None:
     """Build a synthetic HistoryEntry (iteration=-1) for config_v0.
 
     Strategy:
@@ -76,6 +182,7 @@ def _assemble_v0_history_entry(
 
         # Slow path: run config_v0 through the sample pipeline.
         import time
+
         from goldenmatch.core.profile_emitter import profile_capture
         t0 = time.time()
         with profile_capture() as emitter:
@@ -102,7 +209,7 @@ def _assemble_v0_history_entry(
         return None
 
 
-def _first_red_subprofile(profile: "ComplexityProfile") -> str:
+def _first_red_subprofile(profile: ComplexityProfile) -> str:
     """Return the name of the first sub-profile in canonical declaration
     order whose health() is RED. Used by the WARNING log on commit-RED.
 
@@ -195,6 +302,35 @@ class AutoConfigController:
         config_n = config_v0
         start = time.time()
 
+        # Task 6.1: eager indicator compute — runs once, before the iteration loop,
+        # on the full df (not the sample) so blocking cardinality/overlap signals
+        # are representative.
+        from goldenmatch.core.indicators import (
+            compute_column_priors,
+            estimate_sparse_match_signal,
+        )
+        column_priors = compute_column_priors(df)
+
+        # v1.11: eager NE promotion — runs before the iteration loop so that
+        # identity-prior columns (phone, address, etc.) are added as negative
+        # evidence on weighted matchkeys before the first iteration profiles them.
+        from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
+        config_v0 = promote_negative_evidence(config_v0, df, column_priors)
+        config_n = config_v0
+
+        exact_columns: list[str] = []
+        for mk in config_v0.get_matchkeys():
+            if mk.type == "exact":
+                for f in mk.fields:
+                    if f.field is not None:
+                        exact_columns.append(f.field)
+        sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
+        ctx = IndicatorContext(
+            df=df,
+            column_priors=column_priors,
+            sparsity_verdict=sparsity_verdict,
+        )
+
         try:
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
@@ -222,7 +358,7 @@ class AutoConfigController:
                     _LAST_CONTROLLER_RUN.set(history)
                     raise
                 except Exception as exc:
-                    from goldenmatch.core.autoconfig_history import HistoryEntry, ErrorRecord
+                    from goldenmatch.core.autoconfig_history import ErrorRecord, HistoryEntry
                     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
                     tb_summary = "".join(tb_lines[:5] + tb_lines[-3:])[:2000]
                     history.entries.append(HistoryEntry(
@@ -274,8 +410,8 @@ class AutoConfigController:
                     history.stop_reason = StopReason.OSCILLATING
                     break
 
-                # Ask policy for next config
-                config_next = self.policy.propose(profile_n, config_n, history)
+                # Ask policy for next config (ctx built pre-loop in Task 6.1)
+                config_next = _call_policy_propose(self.policy, profile_n, config_n, history, ctx)
                 if config_next is None:
                     history.stop_reason = StopReason.POLICY_SATISFIED
                     break
@@ -320,6 +456,59 @@ class AutoConfigController:
             _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
 
+        # Task 6.1: stamp committed profile with eager column_priors + indicators.
+        import dataclasses
+
+        from goldenmatch.core.complexity_profile import IndicatorsProfile
+
+        blocking_col: str | None = None
+        if best_entry.config.blocking and best_entry.config.blocking.keys:
+            _bk = best_entry.config.blocking.keys[0]
+            if _bk.fields:
+                blocking_col = _bk.fields[0]
+
+        full_pop_hits = (
+            ctx._memo.get(("full_pop_matchkey_hits", blocking_col))
+            if blocking_col else None
+        )
+        cross_blocking_overlap_val: float | None = None
+        for _mk, _mv in ctx._memo.items():
+            if _mk[0] == "cross_blocking_overlap":
+                cross_blocking_overlap_val = _mv
+                break
+
+        _stamped_data = dataclasses.replace(
+            best_entry.profile.data,
+            column_priors=column_priors,
+        )
+        _stamped_indicators = IndicatorsProfile(
+            full_pop_matchkey_hit_rate=(
+                float(full_pop_hits) if full_pop_hits is not None else None
+            ),
+            cross_blocking_overlap=cross_blocking_overlap_val,
+        )
+        _stamped_profile = dataclasses.replace(
+            best_entry.profile,
+            data=_stamped_data,
+            indicators=_stamped_indicators,
+        )
+        best_entry = dataclasses.replace(best_entry, profile=_stamped_profile)
+        if best_entry.iteration >= 0 and best_entry.iteration < len(history.entries):
+            history.entries[best_entry.iteration] = best_entry
+        elif best_entry.iteration < 0:
+            # v0 virtual entry (iteration=-1) lives at the END of
+            # history.entries (appended above after the iteration loop).
+            # Find it by attribute and replace in-place so downstream
+            # consumers of history.pick_committed() see the column_priors-
+            # stamped profile. Without this, a v0 commit (PR #197 fix for
+            # issue #195) leaves an unstamped profile in history and any
+            # caller that re-runs pick_committed() gets a profile with no
+            # column_priors / no indicators populated.
+            for _i, _e in enumerate(history.entries):
+                if _e.iteration == best_entry.iteration:
+                    history.entries[_i] = best_entry
+                    break
+
         committed_health = best_entry.profile.health()
         iter_label = "v0" if best_entry.iteration == -1 else str(best_entry.iteration)
         if committed_health == HealthVerdict.RED:
@@ -362,6 +551,16 @@ class AutoConfigController:
 
         # Finalize on full data (Task 4.3)
         profile_full = self._finalize(committed_config, df, reference)
+        # Stamp full-data profile with eager column_priors + indicators too.
+        _full_stamped_data = dataclasses.replace(
+            profile_full.data,
+            column_priors=column_priors,
+        )
+        profile_full = dataclasses.replace(
+            profile_full,
+            data=_full_stamped_data,
+            indicators=_stamped_indicators,
+        )
         # Drift detection
         sample_vec = best_entry.profile.normalized_signal_vector()
         full_vec = profile_full.normalized_signal_vector()
@@ -456,7 +655,8 @@ class AutoConfigController:
         for n_cols==1 or uniform column types).
         """
         from goldenmatch.core.complexity_profile import (
-            BlockingProfile, ScoringProfile, ClusterProfile,
+            BlockingProfile,
+            ScoringProfile,
         )
         # BlockingProfile: avoid RED by faking one block with good reduction
         blocking = BlockingProfile(
@@ -500,7 +700,7 @@ class AutoConfigController:
 
     def _seed_for(self, df: pl.DataFrame) -> int:
         """Hash of data shape for reproducible sampling."""
-        key = f"{df.height}|{','.join(df.columns)}".encode("utf-8")
+        key = f"{df.height}|{','.join(df.columns)}".encode()
         digest = hashlib.sha256(key).hexdigest()
         return int(digest[:8], 16)
 
@@ -524,10 +724,10 @@ class AutoConfigController:
     def _compute_recall_probe(
         self,
         sample: pl.DataFrame,
-        config: "GoldenMatchConfig",
+        config: GoldenMatchConfig,
         *,
         n_samples: int = 100,
-    ) -> "float | None":
+    ) -> float | None:
         """Score N random pairs (i, j with i != j, uniform from the sample) using
         the first weighted matchkey's scoring logic. Returns the fraction whose
         weighted score is >= the matchkey's threshold.
@@ -538,8 +738,8 @@ class AutoConfigController:
         Returns None when no weighted matchkey is configured or the sample is
         too small to probe meaningfully.
         """
-        import dataclasses
         import random
+
         from goldenmatch.core.scorer import score_field
         from goldenmatch.utils.transforms import apply_transforms
 
@@ -569,7 +769,7 @@ class AutoConfigController:
             weighted_sum = 0.0
             weight_sum = 0.0
             for f in (weighted_mk.fields or []):
-                if f.scorer is None:
+                if f.scorer is None or f.field is None:
                     continue
                 # Map composite/compound scorers to a single-pair-friendly fallback.
                 # 'ensemble' is a block-level scorer (not supported by score_field);
@@ -603,7 +803,7 @@ class AutoConfigController:
         iteration: int,
         is_sample: bool = True,
         reference: pl.DataFrame | None = None,
-        config: "GoldenMatchConfig | None" = None,
+        config: GoldenMatchConfig | None = None,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
         fall back to defaults computed from ``df`` (plus ``reference`` in match
@@ -616,9 +816,14 @@ class AutoConfigController:
         size calculation use the wrong denominator (Bug A).
         """
         import dataclasses
+
         from goldenmatch.core.complexity_profile import (
-            DataProfile, BlockingProfile, ScoringProfile, ClusterProfile,
-            MatchkeyProfile, DomainProfile, ProfileMeta,
+            BlockingProfile,
+            ClusterProfile,
+            DomainProfile,
+            MatchkeyProfile,
+            ProfileMeta,
+            ScoringProfile,
         )
 
         data = emitter.data or self._compute_data_profile(df, reference=reference)
@@ -645,7 +850,7 @@ class AutoConfigController:
 
     def _compute_data_profile(
         self, df: pl.DataFrame, reference: pl.DataFrame | None = None
-    ) -> "DataProfile":
+    ) -> DataProfile:
         """Compute a real DataProfile from a DataFrame. Used as fallback when
         no pipeline stage emitted one (sample iterations don't go through
         the autoconfig column-profiling step).
@@ -704,7 +909,8 @@ class AutoConfigController:
         return DataProfile(
             n_rows=n_rows,
             n_cols=len(user_cols),
-            column_types=column_types,
+            column_types=column_types,  # pyright: ignore[reportArgumentType]  # runtime values match ColumnType literal set
+
             cardinality_ratio=cardinality_ratio,
             null_rate=null_rate,
             value_length_p50=value_length_p50,
@@ -788,7 +994,7 @@ class AutoConfigController:
             auto_threshold = candidate_hi
             mode = "standard"
 
-        from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
+        from goldenmatch.config.schemas import BudgetConfig, LLMScorerConfig
         new_cfg = config.model_copy(update={
             "llm_scorer": LLMScorerConfig(
                 enabled=True,
@@ -810,8 +1016,8 @@ class AutoConfigController:
     def _record_run(
         self,
         df: pl.DataFrame,
-        reference: "pl.DataFrame | None",
-        best_entry: "Any",
+        reference: pl.DataFrame | None,
+        best_entry: Any,
         history: RunHistory,
     ) -> None:
         """Persist the committed config to memory (if memory is configured).

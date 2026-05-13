@@ -5,12 +5,11 @@ from pathlib import Path
 
 import typer
 
-from goldencheck.engine.scanner import scan_file
-from goldencheck.engine.confidence import apply_confidence_downgrade
-from goldencheck.engine.triage import auto_triage
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+from goldencheck.config.schema import ColumnRule, GoldenCheckConfig, Settings
 from goldencheck.config.writer import save_config
-
+from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
+from goldencheck.engine.triage import auto_triage
 
 GITHUB_CI_TEMPLATE = """name: Data Quality
 on: [push, pull_request]

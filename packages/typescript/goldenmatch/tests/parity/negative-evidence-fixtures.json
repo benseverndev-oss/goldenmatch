@@ -1,0 +1,1034 @@
+{
+  "ne_blocking_field_skipped": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [
+            {
+              "field": "email",
+              "penalty": 0.3,
+              "scorer": "token_sort",
+              "threshold": 0.4,
+              "transforms": []
+            }
+          ],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [
+            {
+              "field": "email",
+              "penalty": 0.3,
+              "scorer": "token_sort",
+              "threshold": 0.4,
+              "transforms": []
+            }
+          ],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "email": "alice@x.com",
+        "last": "Smith",
+        "phone": "555-1111"
+      },
+      {
+        "email": "alice2@x.com",
+        "last": "Smith",
+        "phone": "555-1111"
+      },
+      {
+        "email": "bob@x.com",
+        "last": "Brown",
+        "phone": "555-2222"
+      },
+      {
+        "email": "carol@x.com",
+        "last": "Davis",
+        "phone": "555-3333"
+      }
+    ],
+    "name": "ne_blocking_field_skipped"
+  },
+  "ne_clustered_email_diff_surname": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "email": "share@x.com",
+        "first_name": "Alice",
+        "last_name": "Smith"
+      },
+      {
+        "email": "share@x.com",
+        "first_name": "Alice",
+        "last_name": "Smith"
+      },
+      {
+        "email": "share@x.com",
+        "first_name": "Zach",
+        "last_name": "Vanderbilt"
+      },
+      {
+        "email": "other@x.com",
+        "first_name": "Bob",
+        "last_name": "Brown"
+      },
+      {
+        "email": "other@x.com",
+        "first_name": "Bob",
+        "last_name": "Brown"
+      }
+    ],
+    "name": "ne_clustered_email_diff_surname"
+  },
+  "ne_clustered_phone_diff_name": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_phone",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_phone",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_phone",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "last_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "phone": "555-1111"
+      },
+      {
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "phone": "555-1111"
+      },
+      {
+        "first_name": "Zach",
+        "last_name": "Zykov",
+        "phone": "555-1111"
+      },
+      {
+        "first_name": "Bob",
+        "last_name": "Brown",
+        "phone": "555-2222"
+      },
+      {
+        "first_name": "Bob",
+        "last_name": "Browne",
+        "phone": "555-2222"
+      }
+    ],
+    "name": "ne_clustered_phone_diff_name"
+  },
+  "ne_dense_population": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [
+            {
+              "field": "phone",
+              "penalty": 0.3,
+              "scorer": "exact",
+              "threshold": 0.4,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ],
+          "threshold": 0.5,
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [
+            {
+              "field": "phone",
+              "penalty": 0.3,
+              "scorer": "exact",
+              "threshold": 0.4,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ],
+          "threshold": 0.5,
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "email": "u0@x.com",
+        "first_name": "N0",
+        "phone": "555-0000"
+      },
+      {
+        "email": "u1@x.com",
+        "first_name": "N1",
+        "phone": "555-0001"
+      },
+      {
+        "email": "u2@x.com",
+        "first_name": "N2",
+        "phone": "555-0002"
+      },
+      {
+        "email": "u3@x.com",
+        "first_name": "N3",
+        "phone": "555-0003"
+      },
+      {
+        "email": "u4@x.com",
+        "first_name": "N4",
+        "phone": "555-0004"
+      },
+      {
+        "email": "u5@x.com",
+        "first_name": "N5",
+        "phone": "555-0005"
+      },
+      {
+        "email": "u6@x.com",
+        "first_name": "N6",
+        "phone": "555-0006"
+      },
+      {
+        "email": "u7@x.com",
+        "first_name": "N7",
+        "phone": "555-0007"
+      },
+      {
+        "email": "u8@x.com",
+        "first_name": "N8",
+        "phone": "555-0008"
+      },
+      {
+        "email": "u9@x.com",
+        "first_name": "N9",
+        "phone": "555-0009"
+      },
+      {
+        "email": "u10@x.com",
+        "first_name": "N10",
+        "phone": "555-0010"
+      },
+      {
+        "email": "u11@x.com",
+        "first_name": "N11",
+        "phone": "555-0011"
+      }
+    ],
+    "name": "ne_dense_population"
+  },
+  "ne_idempotent": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [],
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [
+            {
+              "field": "phone",
+              "penalty": 0.3,
+              "scorer": "exact",
+              "threshold": 0.4,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ],
+          "threshold": 0.5,
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "email",
+              "scorer": "exact",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "exact_email",
+          "negative_evidence": [
+            {
+              "field": "phone",
+              "penalty": 0.3,
+              "scorer": "exact",
+              "threshold": 0.4,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ],
+          "threshold": 0.5,
+          "type": "exact"
+        },
+        {
+          "fields": [
+            {
+              "field": "phone",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            },
+            {
+              "field": "last",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "email": "u0@x.com",
+        "last": "L0",
+        "phone": "555-0000"
+      },
+      {
+        "email": "u1@x.com",
+        "last": "L1",
+        "phone": "555-0001"
+      },
+      {
+        "email": "u2@x.com",
+        "last": "L2",
+        "phone": "555-0002"
+      },
+      {
+        "email": "u3@x.com",
+        "last": "L3",
+        "phone": "555-0003"
+      },
+      {
+        "email": "u4@x.com",
+        "last": "L4",
+        "phone": "555-0004"
+      },
+      {
+        "email": "u5@x.com",
+        "last": "L5",
+        "phone": "555-0005"
+      },
+      {
+        "email": "u6@x.com",
+        "last": "L6",
+        "phone": "555-0006"
+      },
+      {
+        "email": "u7@x.com",
+        "last": "L7",
+        "phone": "555-0007"
+      },
+      {
+        "email": "u8@x.com",
+        "last": "L8",
+        "phone": "555-0008"
+      },
+      {
+        "email": "u9@x.com",
+        "last": "L9",
+        "phone": "555-0009"
+      }
+    ],
+    "name": "ne_idempotent"
+  },
+  "ne_sparse_no_promotion": {
+    "before": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "expected_after_idempotent": {
+      "matchkeys": [
+        {
+          "fields": [
+            {
+              "field": "first_name",
+              "scorer": "ensemble",
+              "transforms": [
+                "lowercase",
+                "strip"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "name": "weighted_fuzzy",
+          "negative_evidence": [],
+          "threshold": 0.85,
+          "type": "weighted"
+        }
+      ]
+    },
+    "input_rows": [
+      {
+        "first_name": "Alice"
+      },
+      {
+        "first_name": "Bob"
+      },
+      {
+        "first_name": "Carol"
+      }
+    ],
+    "name": "ne_sparse_no_promotion"
+  }
+}

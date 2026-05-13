@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from infermap.types import FieldInfo, SchemaInfo
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

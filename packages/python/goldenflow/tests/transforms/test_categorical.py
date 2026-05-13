@@ -1,5 +1,4 @@
 import polars as pl
-
 from goldenflow.transforms.categorical import (
     boolean_normalize,
     category_standardize,

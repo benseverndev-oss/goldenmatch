@@ -51,6 +51,7 @@ Local CWD = package dir (e.g. `packages/python/goldencheck`); CI CWD = repo root
 ## Post-fold GitHub Actions
 Only `.github/workflows/` at the repo root runs. Workflow files left under `packages/python/<pkg>/.github/workflows/` from pre-fold repos are orphaned (silently ignored). v1.6.0 release shipped no PyPI publish until `publish-goldenmatch.yml` was added at the root.
 - `publish-goldenmatch.yml` — fires on `release: published` for `v*` tags (skips `goldenmatch-js-v*`); `workflow_dispatch` with `ref` input for retro-publish. Uses `PYPI_TOKEN` (trusted publishing not configured).
+- `publish-mcp.yml` — auto-syncs `packages/python/<pkg>/server.json` to the official MCP Registry (`registry.modelcontextprotocol.io`) after every PyPI publish. Same tag patterns as the per-package PyPI workflows. Auth via GitHub OIDC (`id-token: write`); no secrets needed. `workflow_dispatch` with `package` input (`all` / one of five) lets you force-refresh listings without re-tagging. Updating the registry directly via the web UI also works, but the workflow keeps versions in lockstep with PyPI automatically.
 
 ## Pre-fold archive
 `_archive/goldenmatch-pre-fold/` retains the standalone repo's git history. Old specs/plans under `_archive/goldenmatch-pre-fold/docs/superpowers/` are sometimes the foundation for current work — search there before assuming a feature is undesigned.
@@ -70,3 +71,21 @@ A push of a tag that points at a commit predating a workflow file's introduction
 ## pnpm vs npm flag drift
 - `pnpm pack` has no `--dry-run` flag (npm-only). pnpm always writes a `.tgz`; running plain `pnpm pack` on a CI dry-run path validates packing without publishing.
 - `pnpm publish` from CI needs `--no-git-checks` because the runner checkout state confuses pnpm's "is this the latest commit on the branch?" guard.
+
+## Stacked PR auto-closure on squash-merge
+Squash-merging PR A with `--delete-branch` auto-closes any stacked PRs targeting A's branch — `gh pr reopen` rejects with "Could not open." Recovery: rebase locally onto main (or cherry-pick only the wave's own commits if a full rebase cascades add-add conflicts), force-push, open a fresh PR. Bit the TS parity wave twice (#139→#141, #140→#142).
+
+## `gh pr merge --delete-branch` + local worktree
+Cosmetic failure: `cannot delete branch 'X' used by worktree at ...`. The remote merge succeeded; only local cleanup failed. Safe to ignore unless you're scripting on the exit code.
+
+## CI `UNSTABLE` vs failing
+A `continue-on-error: true` step that exits non-zero still flips the parent job's conclusion to FAILURE → PR `mergeStateStatus: UNSTABLE`. The PR is still mergeable; the merge button just looks scary. Don't waste time chasing UNSTABLE if you know the failing lane is opt-in.
+
+## pypistats.org throttling
+pypistats `/api/packages/<pkg>/recent` 429s aggressively on unauthenticated bursts. Any script hitting it needs retry+backoff plus inter-request sleep (~1.5s). `scripts/suite_download_badges.py` is the reference implementation — preserves the prior badge value when throttled so the workflow exits 0.
+
+## MCP Registry vs mcp-marketplace.io
+Official registry is `registry.modelcontextprotocol.io` (suite is listed at `io.github.benzsevern/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`). `mcp-marketplace.io` is a third-party aggregator and does NOT list this suite. Maintainer dashboard for the official registry uses `io.github.X/Y` package identifiers + Approved/Remote/Edit buttons — that's the screenshot you'll see, not the marketplace site. `publish-mcp.yml` auto-syncs all five listings on `release: published`; `workflow_dispatch` with `package=all` force-refreshes without re-tagging.
+
+## Publish workflows: read version from git tag, not PyPI
+`publish-mcp.yml` and the per-package `publish-<pkg>.yml` workflows both fire off `release: published`. If the MCP sync queries PyPI for the version, it races against the parallel PyPI publish and reads the prior version → registry returns 400 "cannot publish duplicate version". Always derive version from the git tag (`${TAG##*-v}`, then `${V#v}`) for release events and from `pyproject.toml` for `workflow_dispatch`. PR #167 has the canonical pattern.

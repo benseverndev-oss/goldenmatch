@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-import re
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.config.schemas import BlockingConfig
 from goldenmatch.db.connector import _quote_ident
 
 logger = logging.getLogger(__name__)

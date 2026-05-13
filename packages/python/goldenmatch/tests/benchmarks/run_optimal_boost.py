@@ -6,7 +6,6 @@ Option A: Better base model (all-mpnet-base-v2)
 """
 
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -14,16 +13,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 import polars as pl
-
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_fuzzy_matches
-from goldenmatch.core.boost import _sample_initial_pairs, _build_training_texts, finetune_and_rescore
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField, BlockingConfig, BlockingKeyConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.boost import (
+    _sample_initial_pairs,
+)
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -176,7 +179,7 @@ def run_experiment(name, df_a, df_b, gt, text_col, standardization, base_model, 
     t0 = time.perf_counter()
     try:
         # Use finetune_and_rescore but apply to SCORING pairs
-        from sentence_transformers import SentenceTransformer, InputExample, losses
+        from sentence_transformers import InputExample, SentenceTransformer, losses
         from torch.utils.data import DataLoader
 
         rows = train_df.to_dicts()

@@ -1,8 +1,11 @@
 """Suppression engine — downgrades irrelevant findings based on column semantic type."""
 from __future__ import annotations
+
 from dataclasses import replace
+
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.semantic.classifier import ColumnClassification, TypeDef
+
 
 def apply_suppression(
     findings: list[Finding],

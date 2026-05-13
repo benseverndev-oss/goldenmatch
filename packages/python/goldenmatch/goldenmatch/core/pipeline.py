@@ -6,21 +6,41 @@ import logging
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.ingest import load_file, validate_columns, apply_column_map
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.validate import ValidationRule, validate_dataframe
-from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
 from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel, rerank_top_pairs
+from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
+from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
+from goldenmatch.core.scorer import (
+    find_exact_matches,
+    rerank_top_pairs,
+    score_blocks_parallel,
+)
+from goldenmatch.core.standardize import apply_standardization
+from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
 
-def _get_block_scorer(config):
+def _unwrap_llm_pairs(
+    result: list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], Any]
+) -> list[tuple[int, int, float]]:
+    """Narrow the LLM-scorer return type for the pipeline call site.
+
+    Both ``llm_score_pairs`` and ``llm_cluster_pairs`` return a (pairs, stats)
+    tuple when ``return_stats=True``; the pipeline never asks for that path,
+    so the runtime is always a bare list. This helper makes that explicit for
+    the type checker.
+    """
+    if isinstance(result, tuple):
+        return result[0]
+    return result
+
+
+def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
     backend = getattr(config, "backend", None)
     if backend == "ray":
@@ -29,8 +49,8 @@ def _get_block_scorer(config):
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.golden import build_golden_record
-from goldenmatch.output.writer import write_output
 from goldenmatch.output.report import generate_dedupe_report, generate_match_report
+from goldenmatch.output.writer import write_output
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +96,60 @@ def _open_memory_store(config: GoldenMatchConfig):
     except Exception as e:
         logger.warning("Memory store init failed, continuing without memory: %s", e)
         return None
+
+
+def _open_identity_store(config: GoldenMatchConfig):
+    """Open the IdentityStore configured on ``config``. Returns None when
+    identity graph is disabled or initialization fails (additive feature)."""
+    if not config.identity or not config.identity.enabled:
+        return None
+    try:
+        from goldenmatch.identity import IdentityStore
+        return IdentityStore(
+            backend=config.identity.backend,
+            path=config.identity.path,
+            connection=config.identity.connection,
+        )
+    except Exception as e:
+        logger.warning("Identity store init failed, continuing without: %s", e)
+        return None
+
+
+def _resolve_identities(
+    clusters: dict,
+    df: pl.DataFrame,
+    scored_pairs: list,
+    matchkeys: list,
+    config: GoldenMatchConfig,
+    run_name: str,
+) -> dict | None:
+    """Run identity resolution as a post-cluster step. Best-effort: failures
+    log a warning and return None without affecting dedupe output."""
+    if not config.identity or not config.identity.enabled:
+        return None
+    store = _open_identity_store(config)
+    if store is None:
+        return None
+    try:
+        from goldenmatch.identity import resolve_clusters
+        mk_name = matchkeys[0].name if matchkeys else None
+        summary = resolve_clusters(
+            clusters, df, scored_pairs, mk_name, store,
+            run_name=run_name,
+            dataset=config.identity.dataset,
+            source_pk_col=config.identity.source_pk_column,
+            emit_singletons=config.identity.emit_singletons,
+            weak_confidence_threshold=config.identity.weak_confidence_threshold,
+        )
+        return summary.as_dict()
+    except Exception as e:
+        logger.warning("Identity resolution failed: %s", e)
+        return None
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
@@ -162,13 +236,13 @@ def _apply_domain_extraction(
     return combined_df_tmp.lazy()
 
 
-def _apply_memory_pre(memory_store, config: GoldenMatchConfig, matchkeys: list) -> None:
+def _apply_memory_pre(memory_store: Any, config: GoldenMatchConfig, matchkeys: list) -> None:
     """Overlay learned threshold adjustments onto the matchkeys parameter.
 
     Mutates `matchkeys` in place — rebinding to a fresh list would shadow the
     parameter and the scoring loop would never see the overlay.
     """
-    if memory_store is None:
+    if memory_store is None or config.memory is None:
         return
     try:
         from goldenmatch.core.memory.learner import MemoryLearner
@@ -195,18 +269,21 @@ def _apply_memory_pre(memory_store, config: GoldenMatchConfig, matchkeys: list) 
 
 
 def _apply_memory_post(
-    memory_store,
+    memory_store: Any,
     config: GoldenMatchConfig,
     df: pl.DataFrame,
     all_pairs: list[tuple[int, int, float]],
 ):
     """Apply stored corrections to scored pairs. Returns (pairs, stats|None)."""
-    if memory_store is None:
+    if memory_store is None or config.memory is None:
         return all_pairs, None
     try:
         from goldenmatch.core.memory.corrections import apply_corrections
+        # f.field is Optional[str] at schema level but is non-None for every
+        # field that survives MatchkeyField validation; filter defensively.
         matchkey_field_names = sorted({
             f.field for mk in config.get_matchkeys() for f in mk.fields
+            if f.field is not None
         })
         return apply_corrections(
             all_pairs, memory_store, df, matchkey_field_names,
@@ -236,7 +313,7 @@ def _derive_review_queue_path(config: GoldenMatchConfig) -> str | None:
 
 
 def _enqueue_stale_pairs(
-    memory_stats,
+    memory_stats: Any,
     all_pairs: list[tuple[int, int, float]],
     config: GoldenMatchConfig,
 ) -> None:
@@ -290,6 +367,8 @@ def _apply_postflight(
     """
     from goldenmatch.core.autoconfig_verify import (
         PreflightReport as _PfR,
+    )
+    from goldenmatch.core.autoconfig_verify import (
         postflight as _postflight,
     )
 
@@ -543,7 +622,7 @@ def _run_dedupe_pipeline(
             for rc in config.validation.rules
         ]
         combined_df_tmp = combined_lf.collect()
-        valid_df, quarantine_df, val_report = validate_dataframe(combined_df_tmp, rules)
+        valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
         logger.info("Validation: %d quarantined rows", quarantine_df.height)
         combined_lf = valid_df.lazy()
     else:
@@ -585,13 +664,19 @@ def _run_dedupe_pipeline(
     for mk in matchkeys:
         if mk.type == "exact":
             pairs = find_exact_matches(combined_lf, mk)
+            if mk.negative_evidence:
+                # v1.12 Path Y: filter pairs by NE penalty
+                from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+                pairs = _apply_negative_evidence_to_exact_pairs(
+                    pairs, mk, collected_df
+                )
             if across_files_only:
                 pairs = [
                     (a, b, s) for a, b, s in pairs
                     if source_lookup.get(a) != source_lookup.get(b)
                 ]
             all_pairs.extend(pairs)
-            for a, b, s in pairs:
+            for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
 
     logger.info("Exact matching found %d pairs", len(all_pairs))
@@ -615,7 +700,7 @@ def _run_dedupe_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
+            from goldenmatch.core.probabilistic import score_probabilistic, train_em
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
@@ -634,7 +719,7 @@ def _run_dedupe_pipeline(
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
             )
             for block in blocks:
-                block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+                block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
                 pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
                 if across_files_only:
                     pairs = [
@@ -642,7 +727,7 @@ def _run_dedupe_pipeline(
                         if source_lookup.get(a) != source_lookup.get(b)
                     ]
                 all_pairs.extend(pairs)
-                for a, b, s in pairs:
+                for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
 
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
@@ -653,12 +738,20 @@ def _run_dedupe_pipeline(
 
     # ── Step 3.4: LLM SCORER (optional) ──
     if config.llm_scorer and config.llm_scorer.enabled and all_pairs:
+        # Both LLM scorers can return (pairs, stats) when return_stats=True; the
+        # pipeline never asks for that path, so the runtime value is always
+        # list[tuple[int, int, float]]. _unwrap_pairs narrows for the type
+        # checker without changing behavior.
         if config.llm_scorer.mode == "cluster":
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
-            all_pairs = llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
+            all_pairs = _unwrap_llm_pairs(
+                llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
+            )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
-            all_pairs = llm_score_pairs(all_pairs, collected_df, config=config.llm_scorer)
+            all_pairs = _unwrap_llm_pairs(
+                llm_score_pairs(all_pairs, collected_df, config=config.llm_scorer)
+            )
         # Filter to scored matches only
         all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
 
@@ -815,6 +908,11 @@ def _run_dedupe_pipeline(
         except Exception as e:
             logger.warning("Lineage generation failed: %s", e)
 
+    # ── Step 7.6: IDENTITY GRAPH (optional) ──
+    identity_summary = _resolve_identities(
+        clusters, collected_df, all_pairs, matchkeys, config, run_name
+    )
+
     results = {
         "clusters": clusters,
         "golden": golden_df,
@@ -824,6 +922,7 @@ def _run_dedupe_pipeline(
         "quarantine": quarantine_df,
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
+        "identity_summary": identity_summary,
     }
 
     try:
@@ -1007,7 +1106,7 @@ def _run_match_pipeline(
             for rc in config.validation.rules
         ]
         combined_df_tmp = combined_lf.collect()
-        valid_df, quarantine_df_match, val_report = validate_dataframe(combined_df_tmp, rules)
+        valid_df, quarantine_df_match, _val_report = validate_dataframe(combined_df_tmp, rules)
         logger.info("Validation: %d quarantined rows", quarantine_df_match.height)
         combined_lf = valid_df.lazy()
     else:
@@ -1051,13 +1150,19 @@ def _run_match_pipeline(
     for mk in matchkeys:
         if mk.type == "exact":
             pairs = find_exact_matches(combined_lf, mk)
+            if mk.negative_evidence:
+                # v1.12 Path Y: filter pairs by NE penalty
+                from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+                pairs = _apply_negative_evidence_to_exact_pairs(
+                    pairs, mk, combined_df
+                )
             # Filter to cross target/ref pairs only
             pairs = [
                 (a, b, s) for a, b, s in pairs
                 if (a in target_ids) != (b in target_ids)
             ]
             all_pairs.extend(pairs)
-            for a, b, s in pairs:
+            for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
 
     # Phase 2: Fuzzy matchkeys (parallel block scoring)
@@ -1078,13 +1183,12 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
+            from goldenmatch.core.probabilistic import score_probabilistic, train_em
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
             if config.blocking and config.blocking.keys:
                 for bk in config.blocking.keys:
                     blocking_fields.extend(bk.fields)
-            from goldenmatch.core.probabilistic import train_em, score_probabilistic
             em_result = train_em(
                 combined_df, mk,
                 max_iterations=mk.em_iterations,
@@ -1093,10 +1197,10 @@ def _run_match_pipeline(
                 blocking_fields=blocking_fields,
             )
             for block in blocks:
-                block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+                block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
                 pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
                 all_pairs.extend(pairs)
-                for a, b, s in pairs:
+                for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
 
     # ── Step 4.5: CROSS-ENCODER RERANKING (optional) ──
@@ -1109,10 +1213,14 @@ def _run_match_pipeline(
     if config.llm_scorer and config.llm_scorer.enabled and all_pairs:
         if config.llm_scorer.mode == "cluster":
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
-            all_pairs = llm_cluster_pairs(all_pairs, combined_df, config=config.llm_scorer)
+            all_pairs = _unwrap_llm_pairs(
+                llm_cluster_pairs(all_pairs, combined_df, config=config.llm_scorer)
+            )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
-            all_pairs = llm_score_pairs(all_pairs, combined_df, config=config.llm_scorer)
+            all_pairs = _unwrap_llm_pairs(
+                llm_score_pairs(all_pairs, combined_df, config=config.llm_scorer)
+            )
         all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
 
     # ── Learning Memory: post-scoring corrections overlay ──

@@ -1,5 +1,6 @@
 from goldencheck.models.finding import Finding, Severity
 
+
 def test_finding_creation():
     f = Finding(severity=Severity.ERROR, column="email", check="format",
                 message="6% not valid email", affected_rows=3000,

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -44,8 +43,8 @@ def sensitivity_cmd(
     files: list[str] = typer.Argument(..., help="Input files (path or path:source_name)"),
     config: Path = typer.Option(..., "--config", "-c", help="Config YAML path"),
     sweep: list[str] = typer.Option(..., "--sweep", "-s", help="Sweep spec: field:start:stop:step (repeatable)"),
-    sample: Optional[int] = typer.Option(None, "--sample", help="Random sample size for speed"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Save results to JSON"),
+    sample: int | None = typer.Option(None, "--sample", help="Random sample size for speed"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Save results to JSON"),
 ) -> None:
     """Analyze parameter sensitivity using CCMS cluster comparison.
 

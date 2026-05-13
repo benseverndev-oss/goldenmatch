@@ -7,8 +7,7 @@ from unittest.mock import patch
 import numpy as np
 import polars as pl
 import pytest
-
-from goldenmatch.config.schemas import MatchkeyField, MatchkeyConfig
+from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 
 
 class TestRecordEmbeddingSchema:

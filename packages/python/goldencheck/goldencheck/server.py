@@ -1,20 +1,58 @@
 """REST API server for GoldenCheck — scan files via HTTP."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
 import tempfile
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from goldencheck.engine.scanner import scan_file
 from goldencheck.engine.confidence import apply_confidence_downgrade
+from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Severity
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["run_server", "GoldenCheckHandler"]
+
+
+def _validate_remote_url(url: str) -> tuple[bool, str]:
+    """Validate that a URL is safe to fetch from a public-facing endpoint.
+
+    Returns ``(ok, reason)``. Rejects:
+
+    - schemes other than http/https (defangs ``file://``, ``gopher://``, etc.)
+    - hostnames that resolve to private / loopback / link-local / reserved
+      IPs (defangs SSRF into cloud metadata services, internal networks,
+      and localhost callbacks)
+    - hostnames that fail DNS resolution
+
+    Caller-controlled URLs go through this filter before any I/O happens.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False, f"unsupported URL scheme: {parsed.scheme!r}"
+    if not parsed.hostname:
+        return False, "URL has no hostname"
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except OSError as e:
+        return False, f"DNS resolution failed: {e}"
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False, f"refusing private/internal IP {ip}"
+    return True, ""
 
 
 class GoldenCheckHandler(BaseHTTPRequestHandler):
@@ -94,11 +132,22 @@ class GoldenCheckHandler(BaseHTTPRequestHandler):
             self._json_response({"error": "Missing 'url' field"}, status=400)
             return
 
+        # SSRF guard: reject non-HTTP(S) schemes, private/internal IPs, and
+        # unresolvable hostnames before issuing any network I/O. Otherwise an
+        # attacker JSON could reach `file:///etc/passwd`, the cloud metadata
+        # service at 169.254.169.254, or any host on the operator's intranet.
+        ok, reason = _validate_remote_url(url)
+        if not ok:
+            self._json_response({"error": f"URL rejected: {reason}"}, status=400)
+            return
+
         domain = data.get("domain")
 
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="wb") as tmp:
             try:
-                resp = urllib.request.urlopen(url, timeout=30)
+                # noqa S310 (audit_url): URL is filtered above by
+                # _validate_remote_url; scheme + IP-class are both whitelisted.
+                resp = urllib.request.urlopen(url, timeout=30)  # noqa: S310
                 tmp.write(resp.read())
             except Exception as e:
                 self._json_response({"error": f"Failed to download: {e}"}, status=400)

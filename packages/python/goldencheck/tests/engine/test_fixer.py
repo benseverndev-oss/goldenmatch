@@ -2,13 +2,13 @@
 import polars as pl
 import pytest
 from goldencheck.engine.fixer import (
-    FixReport,
     FixEntry,
-    apply_fixes,
-    _trim_whitespace,
-    _remove_invisible_chars,
-    _normalize_unicode,
+    FixReport,
     _fix_smart_quotes,
+    _normalize_unicode,
+    _remove_invisible_chars,
+    _trim_whitespace,
+    apply_fixes,
 )
 
 

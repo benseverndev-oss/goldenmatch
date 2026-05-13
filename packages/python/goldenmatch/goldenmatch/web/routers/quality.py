@@ -89,7 +89,7 @@ async def quality(
             ),
             timeout=QUALITY_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=408, detail=f"quality scan exceeded {QUALITY_TIMEOUT_S}s",
         )

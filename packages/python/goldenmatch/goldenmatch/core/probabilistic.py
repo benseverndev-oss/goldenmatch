@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
@@ -296,7 +296,7 @@ def train_em(
 
     comp_matrix = _build_comparison_matrix(pairs, row_lookup, mk)
     n_pairs = len(pairs)
-    n_fields = len(mk.fields)
+    _n_fields = len(mk.fields)
 
     # Initialize m with strong priors (matches mostly agree at highest level)
     p_match = 0.02  # conservative prior
@@ -451,7 +451,7 @@ def train_em_continuous(
     # Build continuous score matrix
     score_matrix = _build_continuous_matrix(pairs, row_lookup, mk)
     n_pairs = len(pairs)
-    n_fields = len(mk.fields)
+    _n_fields = len(mk.fields)
 
     # Initialize with strong priors — matches score high, non-matches score low.
     # Use the actual score distribution to set non-match priors at the median.

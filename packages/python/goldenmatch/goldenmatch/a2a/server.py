@@ -6,10 +6,8 @@ task lifecycle, and skill dispatch via aiohttp.
 
 from __future__ import annotations
 
-import json
 import os
 import uuid
-from typing import Any, Optional
 
 from aiohttp import web
 
@@ -88,6 +86,70 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    {
+        "id": "autoconfig",
+        "name": "AutoConfig",
+        "description": (
+            "Run AutoConfigController on a CSV; return committed config (incl. "
+            "negative_evidence / Path Y) and controller telemetry (stop_reason, "
+            "health, decisions, indicator column priors). v1.7-v1.12 surface."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_resolve",
+        "name": "Identity Resolve",
+        "description": "Resolve a record_id to its durable identity (members, edges, recent events).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_list",
+        "name": "Identity List",
+        "description": "List identities, optionally filtered by dataset/status.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_history",
+        "name": "Identity History",
+        "description": "Return the temporal event log for an identity (merges, splits, absorbs).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_conflicts",
+        "name": "Identity Conflicts",
+        "description": "List evidence edges marked `conflicts_with` for steward review.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_merge",
+        "name": "Identity Merge",
+        "description": "Manually merge two identities; absorbed identity's records move to the kept identity.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_split",
+        "name": "Identity Split",
+        "description": "Split records off an identity into a brand-new identity.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "controller_telemetry",
+        "name": "Controller Telemetry",
+        "description": (
+            "Return the AutoConfigController telemetry from the most recent "
+            "autoconfig / deduplicate call. Same JSON shape as the web "
+            "/api/v1/controller/telemetry endpoint."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
@@ -142,8 +204,8 @@ class TaskRegistry:
         self,
         task_id: str,
         state: str,
-        result: Optional[dict] = None,
-        progress: Optional[float] = None,
+        result: dict | None = None,
+        progress: float | None = None,
     ) -> None:
         """Update task state, optionally setting result and progress."""
         task = self._tasks[task_id]

@@ -7,19 +7,40 @@ import polars as pl
 
 from goldenpipe.config.loader import load_config
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.engine.reporter import Reporter
 from goldenpipe.engine.resolver import Resolver
 from goldenpipe.engine.runner import Runner
-from goldenpipe.engine.reporter import Reporter
 from goldenpipe.models.config import PipelineConfig, StageSpec
 from goldenpipe.models.context import PipeContext, PipeResult
 
 
-def run(source: str, config: str | None = None) -> PipeResult:
-    """Run a pipeline on a file. Zero-config or from YAML."""
+def run(
+    source: str,
+    config: str | None = None,
+    *,
+    identity_opts: dict[str, Any] | None = None,
+) -> PipeResult:
+    """Run a pipeline on a file. Zero-config or from YAML.
+
+    Parameters
+    ----------
+    source:
+        Input file path.
+    config:
+        Optional YAML pipeline config path. When set, ``identity_opts`` is
+        ignored -- the YAML's stage list wins.
+    identity_opts:
+        Optional dict matching ``IdentityConfig`` shape. When provided in
+        zero-config mode, the ``goldenmatch.identity_resolve`` stage is
+        auto-appended to the default check->flow->dedupe chain. Keys:
+        ``path``, ``dataset``, ``source_pk_column``,
+        ``weak_confidence_threshold``, ``emit_singletons``, ``backend``,
+        ``connection``.
+    """
     from goldenpipe.pipeline import Pipeline
 
     pipeline_config = load_config(config) if config else None
-    pipe = Pipeline(config=pipeline_config)
+    pipe = Pipeline(config=pipeline_config, identity_opts=identity_opts)
     return pipe.run(source=source)
 
 

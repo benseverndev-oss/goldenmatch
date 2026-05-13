@@ -19,7 +19,7 @@ class LabelIn(BaseModel):
     note: str | None = None
 
     @model_validator(mode="after")
-    def _reject_self_pair(self) -> "LabelIn":
+    def _reject_self_pair(self) -> LabelIn:
         if self.row_id_a == self.row_id_b:
             raise ValueError("row_id_a and row_id_b must differ (self-pair has no meaning)")
         return self

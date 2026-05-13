@@ -1,11 +1,16 @@
 """Tests for the pipeline orchestrator."""
 
-from goldenmatch.core.pipeline import run_dedupe, run_match
 from goldenmatch.config.schemas import (
-    BlockingConfig, BlockingKeyConfig,
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    OutputConfig, GoldenRulesConfig, GoldenFieldRule,
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenFieldRule,
+    GoldenMatchConfig,
+    GoldenRulesConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+    OutputConfig,
 )
+from goldenmatch.core.pipeline import run_dedupe, run_match
 
 
 class TestRunDedupe:

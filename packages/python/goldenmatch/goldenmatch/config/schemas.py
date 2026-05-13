@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_verify import PreflightReport
@@ -40,7 +40,7 @@ class FieldTransform(BaseModel):
     transform: str
 
     @model_validator(mode="after")
-    def _validate_transform(self) -> "FieldTransform":
+    def _validate_transform(self) -> FieldTransform:
         t = self.transform
         if t in VALID_SIMPLE_TRANSFORMS:
             return self
@@ -85,7 +85,7 @@ class MatchkeyField(BaseModel):
     em_iterations: int | None = None
 
     @model_validator(mode="after")
-    def _resolve_field_column(self) -> "MatchkeyField":
+    def _resolve_field_column(self) -> MatchkeyField:
         # record_embedding uses columns (plural), not field
         if self.scorer == "record_embedding":
             if not self.columns:
@@ -112,6 +112,71 @@ class MatchkeyField(BaseModel):
                 )
         return self
 
+    # ── Typed accessors ──
+    # ``field``, ``scorer``, ``weight`` are Optional at the schema level for
+    # serialization round-trip, but the MatchkeyConfig validator guarantees
+    # they're non-None for fuzzy/weighted matchkeys. These accessors narrow
+    # the type for code paths that have already gone through that validator.
+    @property
+    def resolved_field(self) -> str:
+        """``field`` narrowed to ``str`` after MatchkeyField validation."""
+        if self.field is None:
+            raise ValueError(
+                "MatchkeyField.resolved_field accessed before field/column resolved."
+            )
+        return self.field
+
+    @property
+    def fuzzy_scorer(self) -> str:
+        """``scorer`` narrowed to ``str`` for fields inside a weighted/probabilistic matchkey."""
+        if self.scorer is None:
+            raise ValueError(
+                f"MatchkeyField (field={self.field!r}): fuzzy_scorer accessed but scorer is None. "
+                "Only fields inside weighted/probabilistic matchkeys are guaranteed to have a scorer."
+            )
+        return self.scorer
+
+    @property
+    def fuzzy_weight(self) -> float:
+        """``weight`` narrowed to ``float`` for fields inside a weighted matchkey."""
+        if self.weight is None:
+            raise ValueError(
+                f"MatchkeyField (field={self.field!r}): fuzzy_weight accessed but weight is None. "
+                "Only fields inside weighted matchkeys are guaranteed to have a weight."
+            )
+        return self.weight
+
+
+class NegativeEvidenceField(BaseModel):
+    """v1.11: a field whose disagreement subtracts from a weighted matchkey's
+    score. Mirrors MatchkeyField's shape so transforms can normalize before
+    scoring (e.g., transforms=['digits_only'] + scorer='exact' for phone).
+
+    Spec: docs/superpowers/specs/2026-05-08-autoconfig-negative-evidence-and-clustered-identity-design.md
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    transforms: list[str] = Field(default_factory=list)
+    scorer: str
+    threshold: float = Field(ge=0.0, le=1.0)
+    penalty: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _validate_transforms_and_scorer(self) -> NegativeEvidenceField:
+        for t in self.transforms:
+            if t not in VALID_SIMPLE_TRANSFORMS:
+                raise ValueError(
+                    f"Invalid transform '{t}'. Must be one of "
+                    f"{sorted(VALID_SIMPLE_TRANSFORMS)}"
+                )
+        if self.scorer not in VALID_SCORERS:
+            raise ValueError(
+                f"Invalid scorer '{self.scorer}'. Must be one of "
+                f"{sorted(VALID_SCORERS)}"
+            )
+        return self
+
 
 class RulesPayload(BaseModel):
     """Web-UI-facing wrapper around the matchkey + threshold portions of config.
@@ -130,10 +195,10 @@ class RulesPayload(BaseModel):
     threshold: float = Field(ge=0.0, le=1.0)
     matchkeys: list[MatchkeyField]
     standardization: dict[str, list[str]] | None = None
-    blocking: "BlockingConfig | None" = None
+    blocking: BlockingConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_standardizers(self) -> "RulesPayload":
+    def _validate_standardizers(self) -> RulesPayload:
         if self.standardization:
             for column, std_names in self.standardization.items():
                 for name in std_names:
@@ -152,6 +217,27 @@ _VALID_MK_TYPES = ("exact", "weighted", "probabilistic")
 
 
 class MatchkeyConfig(BaseModel):
+    """A matchkey: rule for declaring two records 'the same' on a field/field-set.
+
+    Per-type field invariants (enforced by ``_validate_weighted`` after init):
+
+    - ``type == "exact"``: ``fields`` populated; ``threshold`` optional (binary
+      emit at 1.0 when no negative_evidence). No per-field scorer/weight.
+    - ``type == "weighted"``: ``threshold`` REQUIRED (non-None); every field
+      has ``scorer`` AND ``weight`` REQUIRED (non-None).
+    - ``type == "probabilistic"``: every field has ``scorer`` REQUIRED. EM
+      learns the weights at runtime.
+
+    The Pydantic fields stay ``Optional`` at the schema level (so YAML
+    round-trips and ``model_dump(exclude_none=True)`` continue to work) but
+    callers in fuzzy/weighted code paths can use the typed-accessor
+    properties (``fuzzy_threshold``, plus ``MatchkeyField.fuzzy_scorer`` /
+    ``fuzzy_weight``) to consume them as ``float`` / ``str`` without
+    re-asserting non-None at every call site. The accessors assert the
+    invariant — if it fires, a caller has bypassed the validator (e.g. by
+    mutating fields post-construction) and the crash points at the bug.
+    """
+
     name: str
     type: Literal["exact", "weighted", "probabilistic"] | None = None
     comparison: str | None = None
@@ -161,6 +247,8 @@ class MatchkeyConfig(BaseModel):
     rerank: bool = False
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_band: float = 0.1
+    # v1.11: negative evidence fields — default-None for v1.10 cache compat
+    negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
     em_iterations: int = 20
     convergence_threshold: float = 0.001
@@ -168,7 +256,7 @@ class MatchkeyConfig(BaseModel):
     review_threshold: float | None = None  # auto-computed if None
 
     @model_validator(mode="after")
-    def _validate_weighted(self) -> "MatchkeyConfig":
+    def _validate_weighted(self) -> MatchkeyConfig:
         # Allow 'comparison' as alias for 'type'
         if self.type is None and self.comparison is not None:
             if self.comparison in _VALID_MK_TYPES:
@@ -197,6 +285,30 @@ class MatchkeyConfig(BaseModel):
                     )
         return self
 
+    # ── Typed accessors ──
+    # The Pydantic field-level types stay Optional so YAML serialization keeps
+    # working unchanged, but downstream code paths that have already gone
+    # through the weighted/fuzzy branch can use these to drop the Optional
+    # without re-asserting at every call site. Each accessor enforces the
+    # invariant the validator promised — if a property raises, a caller has
+    # mutated the model after construction (or skipped validation) and the
+    # crash points at the bug.
+    @property
+    def fuzzy_threshold(self) -> float:
+        """``threshold`` narrowed to ``float`` for weighted matchkeys.
+
+        Raises ``ValueError`` if the matchkey is not weighted or threshold
+        is unset — the validator guarantees this never fires on a Pydantic-
+        validated weighted matchkey.
+        """
+        if self.threshold is None:
+            raise ValueError(
+                f"MatchkeyConfig '{self.name}' (type={self.type!r}): "
+                "fuzzy_threshold accessed but threshold is None. "
+                "Only weighted matchkeys are guaranteed to have a threshold."
+            )
+        return self.threshold
+
 
 # ── BlockingKeyConfig / BlockingConfig ──────────────────────────────────────
 
@@ -206,7 +318,7 @@ class BlockingKeyConfig(BaseModel):
     transforms: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_fields_nonempty(self) -> "BlockingKeyConfig":
+    def _validate_fields_nonempty(self) -> BlockingKeyConfig:
         if not self.fields:
             raise ValueError("Blocking key must have at least one field.")
         return self
@@ -248,7 +360,7 @@ class BlockingConfig(BaseModel):
     canopy: CanopyConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_keys_or_passes(self) -> "BlockingConfig":
+    def _validate_keys_or_passes(self) -> BlockingConfig:
         """Ensure at least keys or passes is provided for strategies that need them."""
         if self.auto_suggest:
             return self  # auto_suggest discovers keys at runtime
@@ -276,7 +388,7 @@ class GoldenFieldRule(BaseModel):
     source_priority: list[str] | None = None
 
     @model_validator(mode="after")
-    def _validate_strategy(self) -> "GoldenFieldRule":
+    def _validate_strategy(self) -> GoldenFieldRule:
         if self.strategy not in VALID_STRATEGIES:
             raise ValueError(
                 f"Invalid strategy '{self.strategy}'. Must be one of {sorted(VALID_STRATEGIES)}."
@@ -298,7 +410,7 @@ class GoldenRulesConfig(BaseModel):
     weak_cluster_threshold: float = 0.3
 
     @model_validator(mode="after")
-    def _validate_default(self) -> "GoldenRulesConfig":
+    def _validate_default(self) -> GoldenRulesConfig:
         # Resolve default_strategy from either field
         if self.default is not None and self.default_strategy is None:
             self.default_strategy = self.default.strategy
@@ -349,7 +461,7 @@ class StandardizationConfig(BaseModel):
     rules: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_standardizers(self) -> "StandardizationConfig":
+    def _validate_standardizers(self) -> StandardizationConfig:
         for column, std_names in self.rules.items():
             for name in std_names:
                 if name not in VALID_STANDARDIZERS:
@@ -469,6 +581,35 @@ class MemoryConfig(BaseModel):
 # ── MatchSettingsConfig ─────────────────────────────────────────────────────
 
 
+class IdentityConfig(BaseModel):
+    """Identity Graph configuration.
+
+    Spec: ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``
+    """
+    enabled: bool = False
+    backend: str = "sqlite"
+    path: str = ".goldenmatch/identity.db"
+    connection: str | None = None
+    dataset: str | None = None
+    source_pk_column: str | None = None
+    emit_singletons: bool = True
+    # v2.1: when a cluster's confidence drops below this, the resolver flags the
+    # bottleneck pair as a ``conflicts_with`` edge so a steward sees it for
+    # review. 0.6 mirrors the existing ``weak_cluster_threshold`` family. Set
+    # to 0 to disable auto-detection.
+    weak_confidence_threshold: float = 0.6
+
+    @field_validator("dataset")
+    @classmethod
+    def _reject_empty_dataset(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("IdentityConfig.dataset must be non-empty (or None)")
+        return stripped
+
+
 class MatchSettingsConfig(BaseModel):
     matchkeys: list[MatchkeyConfig]
 
@@ -493,17 +634,18 @@ class GoldenMatchConfig(BaseModel):
     domain: DomainConfig | None = None
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     memory: MemoryConfig | None = None
+    identity: IdentityConfig | None = None
 
     # Auto-config verification hand-offs (see goldenmatch/core/autoconfig_verify.py).
     # These attrs are set by auto_configure_df and read by the pipeline;
     # they are NOT persisted to YAML. Declaring them as PrivateAttr insulates
     # the hand-off contract from Pydantic v2 private-attr handling changes.
-    _preflight_report: "PreflightReport | None" = PrivateAttr(default=None)
+    _preflight_report: PreflightReport | None = PrivateAttr(default=None)
     _strict_autoconfig: bool = PrivateAttr(default=False)
     _domain_profile: Any = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _validate_fuzzy_needs_blocking(self) -> "GoldenMatchConfig":
+    def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:
         mks = self.get_matchkeys()
         has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in mks)
         if has_fuzzy and self.blocking is None:

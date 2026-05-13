@@ -1,8 +1,12 @@
 """Write goldencheck.yml configuration."""
 from __future__ import annotations
+
 from pathlib import Path
+
 import yaml
+
 from goldencheck.config.schema import GoldenCheckConfig
+
 
 def save_config(config: GoldenCheckConfig, path: Path) -> None:
     data = config.model_dump(exclude_none=True, exclude_defaults=False)

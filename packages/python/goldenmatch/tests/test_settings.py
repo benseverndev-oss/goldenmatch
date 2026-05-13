@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from goldenmatch.config.settings import (
     UserSettings,
     load_global_settings,

@@ -1,8 +1,10 @@
 from pathlib import Path
+
 import yaml
 from goldencheck.config.loader import load_config
+from goldencheck.config.schema import ColumnRule, GoldenCheckConfig, Settings
 from goldencheck.config.writer import save_config
-from goldencheck.config.schema import GoldenCheckConfig, ColumnRule, Settings
+
 
 def test_load_nonexistent_returns_none():
     result = load_config(Path("/nonexistent/goldencheck.yml"))

@@ -21,7 +21,7 @@ class PreviewRegistry:
 
     def __init__(self, max_entries: int = 8) -> None:
         self.max_entries = max_entries
-        self._entries: "OrderedDict[str, PreviewEntry]" = OrderedDict()
+        self._entries: OrderedDict[str, PreviewEntry] = OrderedDict()
 
     def put(self, run_name: str, lineage: dict, clusters_csv: str, source_csv: str) -> RunRef:
         td = Path(tempfile.mkdtemp(prefix="gm-preview-"))

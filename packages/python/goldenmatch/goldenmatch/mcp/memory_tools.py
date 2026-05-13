@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 logger = logging.getLogger(__name__)
 

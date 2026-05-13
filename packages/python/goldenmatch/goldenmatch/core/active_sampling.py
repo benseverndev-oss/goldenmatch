@@ -161,7 +161,7 @@ def _boundary_sampling(
         return rng.choice(in_range_indices, n, replace=False).tolist()
 
     result = list(in_range_indices)
-    remaining = n - len(result)
+    _remaining = n - len(result)
 
     sorted_by_distance = np.argsort(distance)
     for idx in sorted_by_distance:

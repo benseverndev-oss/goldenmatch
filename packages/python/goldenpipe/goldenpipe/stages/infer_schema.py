@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import logging
 
+import infermap
 from goldencheck_types import (
     UNMAPPED_TYPE,
     FieldMapping,
     InferredSchema,
     load_domain,
 )
-import infermap
 
 from goldenpipe.models.context import PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import stage

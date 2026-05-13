@@ -1,0 +1,136 @@
+name: Publish goldenmatch_pg release artifacts
+
+# Fires on GitHub releases tagged `goldenmatch-pg-v*` (e.g.
+# `goldenmatch-pg-v0.4.0`). Builds the pgrx extension against PostgreSQL
+# 15, 16, and 17 on Linux x86_64, packages each as a tar.gz, and uploads
+# the artifacts to the release.
+#
+# pgrx 0.12.9 (the pinned version) needs libclang + pg_config from the
+# PostgreSQL apt repo. The release tarball ships the .so, the .control
+# file, and the handwritten SQL definition; users install by `tar -xzf`
+# into PG's lib + extension dirs and `CREATE EXTENSION goldenmatch_pg;`.
+#
+# No Docker / .deb / .rpm in v1 -- tarballs are enough to unblock
+# downstream consumers. Promote to package formats once there's demand.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # needed to upload release assets
+
+jobs:
+  build:
+    # Only fire for goldenmatch-pg release tags.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-pg-v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+    env:
+      PG_VERSION: ${{ matrix.pg }}
+    defaults:
+      run:
+        working-directory: packages/rust/extensions
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions
+
+      - name: Verify Cargo.toml version matches tag
+        if: github.event_name == 'release'
+        working-directory: packages/rust/extensions/postgres
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_VERSION="${TAG#goldenmatch-pg-v}"
+          CRATE_VERSION=$(grep '^version' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
+          if [ "$TAG_VERSION" != "$CRATE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match Cargo.toml ($CRATE_VERSION)"
+            exit 1
+          fi
+          echo "Version OK: $CRATE_VERSION"
+
+      - name: Install PG ${{ matrix.pg }} dev headers
+        # Mirrors the rust_pgrx CI lane in ci.yml -- PG apt repo for parallel
+        # major-version dev headers, libclang for pgrx codegen.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
+
+      - name: Install cargo-pgrx
+        # 0.12.9 pin matches packages/rust/extensions/postgres/Cargo.toml.
+        # Bump both together.
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx for PG ${{ matrix.pg }}
+        run: cargo pgrx init "--pg${PG_VERSION}=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config"
+
+      - name: Package extension
+        # `cargo pgrx package` produces a self-contained directory tree at
+        # `target/<profile>/<crate>-pg<N>/` containing the .so/.dylib, the
+        # .control file, and the SQL files. We tar that for distribution.
+        working-directory: packages/rust/extensions/postgres
+        run: |
+          cargo pgrx package "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --features "pg${PG_VERSION}" --no-default-features
+          # pgrx doesn't auto-include the handwritten SQL file in `package`;
+          # copy it into the tree so consumers get everything they need.
+          PKG_DIR="$(find target -maxdepth 3 -type d -name "goldenmatch_pg-pg${PG_VERSION}" | head -1)"
+          if [ -z "$PKG_DIR" ]; then
+            # pgrx 0.12 uses a flatter layout under target/release/.
+            PKG_DIR="target/release/goldenmatch_pg-pg${PG_VERSION}"
+          fi
+          # Locate PG's extension dir inside the staged tree and drop the
+          # canonical SQL file there. Path layout: <PKG_DIR>/usr/share/postgresql/<N>/extension/
+          EXT_DIR="${PKG_DIR}/usr/share/postgresql/${PG_VERSION}/extension"
+          mkdir -p "${EXT_DIR}"
+          cp sql/goldenmatch_pg--0.1.0.sql "${EXT_DIR}/"
+          echo "PKG_DIR=${PKG_DIR}" >> "$GITHUB_ENV"
+
+      - name: Tar artifact
+        working-directory: packages/rust/extensions/postgres
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF#refs/tags/goldenmatch-pg-v}"
+          # If triggered by workflow_dispatch (no tag), fall back to Cargo.toml
+          # version so the asset name is still informative.
+          if [ "$TAG_VERSION" = "$GITHUB_REF" ]; then
+            TAG_VERSION=$(grep '^version' Cargo.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
+          fi
+          ASSET="goldenmatch_pg-${TAG_VERSION}-pg${PG_VERSION}-linux-x86_64.tar.gz"
+          tar -czf "${ASSET}" -C "$(dirname "${PKG_DIR}")" "$(basename "${PKG_DIR}")"
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+          ls -la "${ASSET}"
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8  # v2
+        with:
+          files: packages/rust/extensions/postgres/${{ env.ASSET }}
+          tag_name: ${{ github.event.release.tag_name }}
+
+      - name: Upload artifact (workflow_dispatch only)
+        # workflow_dispatch has no release to attach to; expose the tarball
+        # as a workflow artifact so the user can grab it from the run page.
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ${{ env.ASSET }}
+          path: packages/rust/extensions/postgres/${{ env.ASSET }}

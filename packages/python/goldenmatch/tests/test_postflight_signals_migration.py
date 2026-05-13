@@ -4,16 +4,16 @@ and renders identical key-shape regardless of which is set.
 Task #25 / Spec Task 6.1: migration of PostflightReport.signals consumers
 to ComplexityProfile via the _signals_view() helper.
 """
+import goldenmatch
 import polars as pl
 import pytest
-import goldenmatch
 from goldenmatch.core.autoconfig_verify import PostflightReport, _signals_view
 from goldenmatch.core.complexity_profile import (
-    ComplexityProfile,
-    ScoringProfile,
     BlockingProfile,
     ClusterProfile,
+    ComplexityProfile,
     DataProfile,
+    ScoringProfile,
 )
 
 

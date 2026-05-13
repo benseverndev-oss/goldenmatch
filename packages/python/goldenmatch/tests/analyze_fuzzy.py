@@ -6,24 +6,30 @@ This is the hard case — typos in names, different zips, threshold tuning.
 
 import sys
 import time
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import polars as pl
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig, OutputConfig,
-    GoldenRulesConfig, GoldenFieldRule, StandardizationConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenFieldRule,
+    GoldenMatchConfig,
+    GoldenRulesConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+    OutputConfig,
+    StandardizationConfig,
     ValidationConfig,
 )
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
 from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 from goldenmatch.core.cluster import build_clusters
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 
 def run_fuzzy_analysis(threshold: float, sample_size: int | None = None):
@@ -161,13 +167,13 @@ def run_fuzzy_analysis(threshold: float, sample_size: int | None = None):
     # Cluster size distribution
     sizes = [v["size"] for v in multi.values()]
     size_dist = Counter(sizes)
-    print(f"\n  Cluster size distribution:")
+    print("\n  Cluster size distribution:")
     for size in sorted(size_dist.keys()):
         print(f"    Size {size}: {size_dist[size]:,}")
 
     # Score distribution for fuzzy pairs
     if fuzzy_scores:
-        print(f"\n  Fuzzy score distribution:")
+        print("\n  Fuzzy score distribution:")
         buckets = [0] * 10
         for s in fuzzy_scores:
             idx = min(int((s - threshold) / ((1.0 - threshold) / 10)), 9)
@@ -229,7 +235,7 @@ def run_fuzzy_analysis(threshold: float, sample_size: int | None = None):
 
     # Sample false positives
     if false_positives:
-        print(f"\n  Sample FALSE POSITIVES (first 10):")
+        print("\n  Sample FALSE POSITIVES (first 10):")
         for a, b in list(false_positives)[:10]:
             row_a = df.filter(pl.col("__row_id__") == a).select(
                 ["id", "first_name", "last_name", "email", "zip"]
@@ -243,7 +249,7 @@ def run_fuzzy_analysis(threshold: float, sample_size: int | None = None):
 
     # Sample false negatives
     if false_negatives:
-        print(f"\n  Sample FALSE NEGATIVES (first 10):")
+        print("\n  Sample FALSE NEGATIVES (first 10):")
         for a, b in list(false_negatives)[:10]:
             row_a = df.filter(pl.col("__row_id__") == a).select(
                 ["id", "first_name", "last_name", "email", "zip"]

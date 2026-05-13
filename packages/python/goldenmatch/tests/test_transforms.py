@@ -1,7 +1,6 @@
 """Tests for goldenmatch field transforms."""
 
 import pytest
-
 from goldenmatch.utils.transforms import apply_transform, apply_transforms
 
 

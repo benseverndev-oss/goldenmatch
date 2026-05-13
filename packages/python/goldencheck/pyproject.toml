@@ -36,11 +36,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldencheck"
-Repository = "https://github.com/benzsevern/goldencheck"
-Issues = "https://github.com/benzsevern/goldencheck/issues"
-Documentation = "https://benzsevern.github.io/goldencheck/"
-Changelog = "https://github.com/benzsevern/goldencheck/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldencheck#readme"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldencheck/CHANGELOG.md"
 Author = "https://bensevern.dev"
 
 [project.scripts]
@@ -72,9 +72,6 @@ baseline = [
 semantic = [
     "sentence-transformers>=2.2",
 ]
-
-[tool.ruff]
-line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

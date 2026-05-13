@@ -2,13 +2,13 @@
 Skipped by default -- run with `pytest -m benchmark`.
 """
 from __future__ import annotations
+
 import random
 from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
 import pytest
-
 
 pytestmark = pytest.mark.benchmark
 
@@ -75,7 +75,7 @@ def test_abt_buy_autoconfig_offline():
         result = dedupe_df(df)
     assert result is not None
     # Verify no record_embedding/embedding scorers survived preflight
-    cfg_mks_str = str(result.config.get_matchkeys() if hasattr(result, "config") else "")
+    _cfg_mks_str = str(result.config.get_matchkeys() if hasattr(result, "config") else "")
     # If we can't introspect the config from result, just verify the run completed.
 
 

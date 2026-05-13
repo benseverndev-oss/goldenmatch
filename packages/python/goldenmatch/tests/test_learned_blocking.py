@@ -1,12 +1,7 @@
 """Tests for learned blocking -- data-driven predicate selection."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import polars as pl
-import pytest
-
 from goldenmatch.core.learned_blocking import (
     BlockingPredicate,
     BlockingRule,

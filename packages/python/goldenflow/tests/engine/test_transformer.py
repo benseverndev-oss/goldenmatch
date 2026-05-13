@@ -1,18 +1,17 @@
 from pathlib import Path
 
-import polars as pl
+import goldenflow.transforms.address  # noqa: F401
+import goldenflow.transforms.categorical  # noqa: F401
+import goldenflow.transforms.dates  # noqa: F401
+import goldenflow.transforms.names  # noqa: F401
+import goldenflow.transforms.numeric  # noqa: F401
+import goldenflow.transforms.phone  # noqa: F401
 
 # Import all transforms so they register
 import goldenflow.transforms.text  # noqa: F401
-import goldenflow.transforms.phone  # noqa: F401
-import goldenflow.transforms.dates  # noqa: F401
-import goldenflow.transforms.categorical  # noqa: F401
-import goldenflow.transforms.numeric  # noqa: F401
-import goldenflow.transforms.address  # noqa: F401
-import goldenflow.transforms.names  # noqa: F401
-
-from goldenflow.engine.transformer import TransformEngine, TransformResult
+import polars as pl
 from goldenflow.config.schema import GoldenFlowConfig, TransformSpec
+from goldenflow.engine.transformer import TransformEngine, TransformResult
 
 
 def test_transform_zero_config(sample_csv: Path):

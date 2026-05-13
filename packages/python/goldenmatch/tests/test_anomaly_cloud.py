@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import polars as pl
-import pytest
 
 
 class TestAnomalyDetection:
@@ -125,8 +124,8 @@ class TestCloudIngest:
         assert not is_cloud_path("C:\\Users\\file.csv")
 
     def test_download_missing_boto3(self):
+
         from goldenmatch.core.cloud_ingest import download_cloud_file
-        import sys
 
         # This will fail with ImportError since boto3 isn't installed
         # (or succeed if it is — both are valid)

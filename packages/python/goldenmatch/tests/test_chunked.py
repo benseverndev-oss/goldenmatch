@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import csv
-import tempfile
-from pathlib import Path
 
 import pytest
-
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig, GoldenRulesConfig, OutputConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    GoldenRulesConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+    OutputConfig,
 )
 
 

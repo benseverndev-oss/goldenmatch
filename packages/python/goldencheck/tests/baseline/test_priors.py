@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import pytest
-
 from goldencheck.baseline.models import ConfidencePrior
 from goldencheck.baseline.priors import apply_prior, build_priors
 from goldencheck.models.finding import Finding, Severity
-
 
 # ---------------------------------------------------------------------------
 # Helpers

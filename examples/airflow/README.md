@@ -14,6 +14,7 @@ These are **examples**, not a published DAG library. Read them, adapt them, and 
 | `golden_suite_incremental_match.py` | Poll `incoming/` S3 prefix every 15 min. For each new file, `match_one` against canonical. Auto-merge ≥0.95, queue 0.75–0.95, append <0.75. | Every 15 min | Scheduled |
 | `golden_suite_warehouse_native.py` | Snowflake-native variant of daily_dedupe. No S3 hop — read source query, dedupe, write back. Same shape works for BigQuery / Databricks via the goldenmatch connectors. | Daily 04:30 UTC | Scheduled |
 | `golden_suite_customer_360.py` | Multi-source unify: CRM + warehouse + support → one canonical customer table. InferMap aligns each source, multi-pass GoldenMatch dedupes the union, source provenance preserved. | Daily 05:00 UTC | Scheduled |
+| `golden_suite_identity_graph.py` | **v1.15+ Identity Graph.** Check → Flow → Match → Identity Graph chain. Maintains a durable identity store on S3-synced shared storage; subsequent runs see stable `entity_id`s. Surfaces `conflicts_flagged` as XCom for the review-worker DAG. | Daily 05:00 UTC | Scheduled |
 
 ### Privacy
 

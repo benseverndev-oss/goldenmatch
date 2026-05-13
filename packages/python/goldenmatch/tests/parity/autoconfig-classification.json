@@ -55,7 +55,7 @@
       {
         "name": "domain_exact_title_key",
         "type": "exact",
-        "threshold": null,
+        "threshold": 0.5,
         "fields": [
           {
             "field": "__title_key__",

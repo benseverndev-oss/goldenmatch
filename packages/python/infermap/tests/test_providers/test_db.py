@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from infermap.errors import InferMapError
 from infermap.providers.db import DBProvider, _parse_connection
 

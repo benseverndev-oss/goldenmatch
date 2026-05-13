@@ -18,7 +18,7 @@ def test_unmerge_record_pulls_one_member_into_a_singleton(client):
 
     # Cluster 1 should no longer contain row 1; row 1 lives in its own cluster.
     page = client.get("/api/v1/runs/20260101_000000/clusters?limit=20").json()
-    by_id = {c["cluster_id"]: c for c in page["items"]}
+    _by_id = {c["cluster_id"]: c for c in page["items"]}
     # The only multi-member cluster (1) should have been replaced; both
     # rows are now singletons.
     sizes = sorted(c["size"] for c in page["items"])

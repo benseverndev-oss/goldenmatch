@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from infermap.types import FieldInfo, SchemaInfo
 from infermap_bench.cases import Case, Expected
 from infermap_bench.runner import (

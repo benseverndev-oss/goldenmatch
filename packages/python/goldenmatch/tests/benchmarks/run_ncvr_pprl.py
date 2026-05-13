@@ -181,7 +181,7 @@ for level, thresh in [("standard", 0.80), ("high", 0.80), ("paranoid", 0.80)]:
     print(f"{label:<40s}  {pr:5.1%}  {rc:5.1%}  {f1:5.1%}  {result.match_count:>7d}  {elapsed:>7.1f}s")
 
 # Threshold sweep at high
-print(f"\n  Threshold sweep (high security, NCVR):")
+print("\n  Threshold sweep (high security, NCVR):")
 for thresh in [0.75, 0.80, 0.85, 0.90, 0.95]:
     config = PPRLConfig(
         fields=fields, threshold=thresh, security_level="high",

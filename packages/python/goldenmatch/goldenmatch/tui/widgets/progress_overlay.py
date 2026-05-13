@@ -6,7 +6,6 @@ from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.widgets import ProgressBar, Static
 
-
 PIPELINE_STAGES = [
     "Ingest",
     "Auto-fix",

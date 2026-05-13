@@ -63,7 +63,7 @@ _FORMAT_CHECKERS = {
 
 def _evaluate_rule(series: pl.Series, rule: ValidationRule) -> pl.Series:
     """Evaluate a rule against a series, returning a boolean Series (True=passed)."""
-    n = len(series)
+    _n = len(series)
 
     if rule.rule_type == "not_null":
         return series.is_not_null()

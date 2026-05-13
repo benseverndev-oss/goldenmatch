@@ -1,7 +1,10 @@
 """Tests for PipeResult construction."""
 from goldenpipe.engine.reporter import Reporter
 from goldenpipe.models.context import (
-    PipeContext, StageResult, StageStatus, PipeStatus,
+    PipeContext,
+    PipeStatus,
+    StageResult,
+    StageStatus,
 )
 
 

@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
-
 from goldenmatch._api import DedupeResult, MatchResult
-from goldenmatch.client import Client
 from goldenmatch.cli.main import app
+from goldenmatch.client import Client
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

@@ -4,9 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from typer.testing import CliRunner
-
 from infermap.cli import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

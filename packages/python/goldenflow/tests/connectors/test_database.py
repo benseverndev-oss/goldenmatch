@@ -1,5 +1,4 @@
 import pytest
-
 from goldenflow.connectors.database import read_table, write_table
 
 

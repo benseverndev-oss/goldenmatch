@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -15,13 +14,45 @@ console = Console()
 @app.command()
 def run(
     source: str = typer.Argument(..., help="Input file path"),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Pipeline YAML config"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Pipeline YAML config"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output file path"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show reasoning and timing"),
+    # Identity Graph (v1.2) -- when --identity-path is set on a zero-config
+    # run, the identity_resolve stage is auto-appended to the default
+    # check->flow->dedupe chain with these knobs as its stage_config. When
+    # the user supplies an explicit YAML config the flags are ignored and
+    # the YAML wins.
+    identity_path: str | None = typer.Option(
+        None, "--identity-path",
+        help="Enable Identity Graph; persist to this SQLite path",
+    ),
+    identity_dataset: str | None = typer.Option(
+        None, "--identity-dataset", help="Identity Graph dataset namespace",
+    ),
+    identity_source_pk: str | None = typer.Option(
+        None, "--identity-source-pk",
+        help="Column to derive `{source}:{source_pk}` record_id from",
+    ),
+    identity_weak_threshold: float | None = typer.Option(
+        None, "--identity-weak-threshold",
+        help="Auto-flag bottleneck pair as conflicts_with when cluster "
+             "confidence < this. Defaults to 0.6 (per IdentityConfig).",
+    ),
 ) -> None:
     """Run a pipeline on a data file."""
     from goldenpipe._api import run as gp_run
-    result = gp_run(source, config=config)
+
+    identity_opts = None
+    if identity_path is not None:
+        identity_opts = {"path": identity_path}
+        if identity_dataset is not None:
+            identity_opts["dataset"] = identity_dataset
+        if identity_source_pk is not None:
+            identity_opts["source_pk_column"] = identity_source_pk
+        if identity_weak_threshold is not None:
+            identity_opts["weak_confidence_threshold"] = identity_weak_threshold
+
+    result = gp_run(source, config=config, identity_opts=identity_opts)
 
     table = Table(title=f"GoldenPipe: {result.source}")
     table.add_column("Stage", style="bold")
@@ -138,6 +169,7 @@ def serve(
     """Start the REST API server."""
     try:
         import uvicorn
+
         from goldenpipe.api.server import create_app
         uvicorn.run(create_app(), host="0.0.0.0", port=port)
     except ImportError:

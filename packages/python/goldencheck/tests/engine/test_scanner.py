@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Finding
 

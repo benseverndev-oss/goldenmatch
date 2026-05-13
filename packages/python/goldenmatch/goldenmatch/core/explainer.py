@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+import jellyfish
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
-import jellyfish
 
 from goldenmatch.config.schemas import MatchkeyField
 from goldenmatch.utils.transforms import apply_transforms

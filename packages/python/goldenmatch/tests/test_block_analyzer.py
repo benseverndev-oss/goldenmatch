@@ -1,8 +1,6 @@
 """Tests for goldenmatch block analyzer."""
 
 import polars as pl
-import pytest
-
 from goldenmatch.core.block_analyzer import (
     BlockingSuggestion,
     analyze_blocking,
@@ -11,7 +9,6 @@ from goldenmatch.core.block_analyzer import (
     generate_candidates,
     score_candidate,
 )
-
 
 # ── detect_column_type ──────────────────────────────────────────────────────
 

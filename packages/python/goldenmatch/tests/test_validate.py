@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
 

@@ -1,7 +1,7 @@
 """Tests for decision routing."""
-from goldenpipe.engine.router import Router
-from goldenpipe.engine.resolver import PlannedStage
 from goldenpipe.engine.registry import StageRegistry
+from goldenpipe.engine.resolver import PlannedStage
+from goldenpipe.engine.router import Router
 from goldenpipe.models.config import StageSpec
 from goldenpipe.models.context import Decision, PipeContext, StageResult, StageStatus
 from goldenpipe.models.stage import stage

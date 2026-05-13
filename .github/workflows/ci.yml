@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Locked-down by default. Individual jobs escalate as needed.
+# OpenSSF Scorecard / Token-Permissions check requires this top-level scope.
+permissions:
+  contents: read
+
 jobs:
   # Path-filter: compute which areas of the monorepo changed so downstream
   # jobs only run when relevant. Doc-only PRs (README, wiki references,
@@ -21,9 +26,14 @@ jobs:
       dbt: ${{ steps.filter.outputs.dbt }}
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
+      pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
+      python_goldenmatch_postgres: ${{ steps.filter.outputs.python_goldenmatch_postgres }}
+      benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
+      rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
+      duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
         id: filter
         with:
           # `filters` runs against the diff between the PR head and base
@@ -37,6 +47,11 @@ jobs:
               - 'uv.lock'
             python_goldenmatch:
               - 'packages/python/goldenmatch/**'
+            python_goldenmatch_postgres:
+              - 'packages/python/goldenmatch/tests/test_db.py'
+              - 'packages/python/goldenmatch/tests/test_reconcile.py'
+              - 'packages/python/goldenmatch/tests/_pg_helpers.py'
+              - 'packages/python/goldenmatch/goldenmatch/db/**'
             python_goldencheck:
               - 'packages/python/goldencheck/**'
             python_goldenflow:
@@ -61,12 +76,46 @@ jobs:
               - 'packages/python/goldenmatch/scripts/build_web.py'
               - 'packages/python/goldenmatch/pyproject.toml'
               - 'pnpm-lock.yaml'
+            benchmark_runner:
+              - 'scripts/run_benchmarks.py'
+              - 'scripts/dqbench_adapters/**'
+              - 'docs/reproducing-benchmarks.md'
             rust:
               - 'packages/rust/**'
+            rust_pgrx:
+              # The Postgres extension lives in `packages/rust/extensions/postgres/`
+              # and is excluded from the cargo workspace (pgrx + workspace mode
+              # is broken — see root CLAUDE.md). It needs its own lane that
+              # builds via `cargo pgrx install`, so trigger only on changes to
+              # that subtree, the shared bridge it links against, or workspace
+              # configuration.
+              - 'packages/rust/extensions/postgres/**'
+              - 'packages/rust/extensions/bridge/**'
+              - 'packages/rust/extensions/Cargo.toml'
+            duckdb_extensions:
+              # The DuckDB UDF package is pure Python but lives under
+              # packages/rust/extensions/duckdb/ alongside the Rust crates.
+              # Gate strictly on its own subtree so editing Rust code doesn't
+              # spin up a Python lane for it.
+              - 'packages/rust/extensions/duckdb/**'
             dbt:
               - 'packages/dbt/**'
             action:
               - 'packages/actions/**'
+            pyright_slice:
+              - 'pyrightconfig.json'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_controller.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_history.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_policy.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_rules.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_negative_evidence.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_memory.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_verify.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/indicators.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
+              - 'packages/python/goldenmatch/goldenmatch/config/**'
       # Build the python matrix dynamically: only include packages whose code
       # actually changed. A workflow-file or root-pyproject change expands to
       # all packages so dependency-resolution changes can't slip through.
@@ -106,17 +155,17 @@ jobs:
       matrix:
         pkg: ${{ fromJSON(needs.changes.outputs.python_pkgs) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
           cache-dependency-glob: |
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      # Match the pre-fold ruff ruleset documented in CLAUDE.md: critical errors only.
-      # Each package can tighten this in its own pyproject.toml as cleanup PRs land.
-      - run: uv run ruff check --select E9,F63,F7 packages/python/${{ matrix.pkg }}
+      # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
+      # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
+      - run: uv run ruff check packages/python/${{ matrix.pkg }}
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
@@ -153,24 +202,295 @@ jobs:
           # PR #66 hit a goldencheck pytest hang on Linux that didn't
           # reproduce locally — this converts that into actionable signal.
           uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread $IGNORE
+      # Per-module coverage gate (goldenmatch only — other packages don't yet
+      # have floors defined). Fails CI if any tracked module regresses below
+      # its floor in scripts/check_coverage_floors.py. Ratchet floors upward
+      # over time; never silently drop a module from the dict.
+      - name: Coverage floors (goldenmatch only)
+        if: matrix.pkg == 'goldenmatch'
+        shell: bash
+        run: |
+          uv run pytest packages/python/goldenmatch --cov=goldenmatch \
+            --cov-report=xml:packages/python/goldenmatch/coverage.xml \
+            --cov-report=term \
+            --timeout=120 --timeout-method=thread \
+            --ignore=packages/python/goldenmatch/tests/test_db.py \
+            --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
+            --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
+            --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
+            --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
+            -q -x || true
+          uv run python scripts/check_coverage_floors.py packages/python/goldenmatch/coverage.xml
+
+  # Visibility lanes for tests that the main `python` job currently --ignores.
+  # Each lane runs the gated tests with explicit prerequisites; when prereqs
+  # aren't met (no DB credential, no API key), the lane reports "not-configured"
+  # with a ::notice:: annotation rather than silently passing or failing.
+  # This converts "we have tests but skip them in CI" into auditable signal.
+  python_skipped_lanes:
+    needs: changes
+    # Run when goldenmatch python changed OR the workflow itself changed.
+    # Matrix runs all lanes regardless of which prereqs are configured;
+    # each lane self-reports its prereq state.
+    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          # `db` lane removed 2026-05-10: now runs for real in the
+          # `python_postgres` job below, against a services Postgres container.
+          - { name: mcp_watch,    tests: "tests/test_mcp_and_watch.py",              needs: "MCP runtime + watch fixtures" }
+          - { name: llm_boost,    tests: "tests/test_llm_boost.py",                  needs: "OPENAI_API_KEY secret + torch (segfaults locally)" }
+          - { name: embedder,     tests: "tests/test_embedder.py",                   needs: "Vertex AI credentials + torch" }
+          - { name: benchmarks,   tests: "tests/test_autoconfig_benchmarks.py",      needs: "DBLP-ACM/Febrl3/NCVR datasets (gitignored)" }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run ${{ matrix.lane.name }} lane
+        shell: bash
+        env:
+          LANE_NAME: ${{ matrix.lane.name }}
+          LANE_TESTS: ${{ matrix.lane.tests }}
+          LANE_NEEDS: ${{ matrix.lane.needs }}
+        run: |
+          set -euo pipefail
+          # Each lane decides whether its prereqs are met. Today none are
+          # configured in CI; lanes report "not-configured" with a clear
+          # message so the gap is visible. As prereqs land (Postgres
+          # service, API-key secret, etc.) the corresponding lane flips to
+          # "configured" and runs its tests.
+          case "$LANE_NAME" in
+            mcp_watch)
+              CONFIGURED="false"  # No MCP runtime fixtures in CI
+              ;;
+            llm_boost)
+              # OPENAI_API_KEY is set as a repo secret only for nightly benchmark runs
+              if [ -n "${OPENAI_API_KEY:-}" ]; then CONFIGURED="true"; else CONFIGURED="false"; fi
+              ;;
+            embedder)
+              CONFIGURED="false"  # No Vertex AI service account in CI
+              ;;
+            benchmarks)
+              # benchmarks data lives in tests/benchmarks/datasets (gitignored).
+              # Synthetic-fixture benchmarks run separately in the synthetic_benchmarks job.
+              if [ -d packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM ]; then
+                CONFIGURED="true"
+              else
+                CONFIGURED="false"
+              fi
+              ;;
+            *)
+              CONFIGURED="false"
+              ;;
+          esac
+
+          if [ "$CONFIGURED" = "true" ]; then
+            echo "::notice title=lane $LANE_NAME::prereqs met — running"
+            cd packages/python/goldenmatch
+            uv run pytest $LANE_TESTS -n auto --timeout=180 --timeout-method=thread
+          else
+            # Use ::notice:: (not ::warning:: or ::error::) so the lane
+            # passes but is auditable. The lane name + needs string surface
+            # in the GitHub Checks UI so reviewers can see what's gated.
+            echo "::notice title=lane $LANE_NAME (not-configured)::tests skipped — needs: $LANE_NEEDS"
+            echo "::notice::To enable this lane, see docs/ci-lanes.md"
+            # Exit zero — "not-configured" is informational, not a failure.
+            exit 0
+          fi
+
+  # Real Postgres lane for goldenmatch.db tests. Boots a Postgres 16 services
+  # container (matches the pinned PG version in packages/rust/extensions) and
+  # runs `tests/test_db.py` + `tests/test_reconcile.py` against it. The shared
+  # fixture in `tests/_pg_helpers.py` provisions a unique database per test
+  # off the admin URL and drops it on teardown — no cross-test pollution.
+  # Gated by path filter so the lane only fires when DB code or DB tests
+  # change (plus workflow self-edits).
+  python_postgres:
+    needs: changes
+    if: |
+      needs.changes.outputs.python_goldenmatch_postgres == 'true' ||
+      needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # `pg_isready` health-check so GH Actions only marks the job started
+        # after Postgres is actually accepting connections.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # _pg_helpers reads this to provision per-test databases off the admin
+      # connection instead of spawning a local `testing.postgresql`.
+      GOLDENMATCH_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run Postgres-backed tests
+        shell: bash
+        run: |
+          cd packages/python/goldenmatch
+          # -n 0 (serial): per-test DB provisioning + the shared admin
+          # connection make xdist worker contention plausible; serial avoids
+          # the headache for a small (~30-test) lane.
+          uv run pytest tests/test_db.py tests/test_reconcile.py \
+            -n 0 --timeout=180 --timeout-method=thread -v
+
+  # Synthetic-fixture benchmark smoke. Runs on every PR against committed
+  # synthetic fixtures (t3_synthetic.csv, t3_clean_compat.csv, red_provoking.csv,
+  # t1_synthetic.csv) so a regression in the auto-config controller is caught
+  # at PR time without needing the gitignored real benchmark datasets.
+  # Real-benchmark runs (DBLP-ACM/Febrl3/NCVR/DQbench) live in the separate
+  # benchmarks.yml workflow (schedule + workflow_dispatch).
+  synthetic_benchmarks:
+    needs: changes
+    if: contains(needs.changes.outputs.python_pkgs, 'goldenmatch') || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Run synthetic benchmarks
+        shell: bash
+        run: |
+          # Each synthetic test asserts an end-to-end behavioral contract
+          # (T3 collision pairs filtered, T1 corruption pairs deduplicated,
+          # red_provoving fixture commits a config, etc.). Failure here means
+          # a PR broke something the unit tests didn't catch.
+          cd packages/python/goldenmatch
+          uv run pytest \
+            tests/test_dqbench_t1_recovery.py \
+            tests/test_dqbench_t3_recovery.py \
+            -n auto --timeout=180 --timeout-method=thread -v
+      - name: Synthetic benchmark summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Synthetic benchmark results"
+            echo ""
+            echo "These run against committed synthetic fixtures on every PR."
+            echo "Real-benchmark runs (DBLP-ACM/Febrl3/NCVR/DQbench) require gitignored datasets and run via the separate \`benchmarks.yml\` workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Smoke lane for `scripts/run_benchmarks.py` and the committed
+  # `scripts/dqbench_adapters/` helpers. The real-dataset runs live in
+  # `benchmarks.yml` (Mondays + workflow_dispatch); this lane catches
+  # packaging regressions (broken imports, sys.path issues, helper
+  # renames) on every PR that touches the runner without needing the
+  # gitignored DBLP/NCVR/dqbench datasets.
+  #
+  # `continue-on-error: true` so a regression here surfaces as a visible
+  # red X without blocking merges — the runner is tooling, not a release
+  # gate. Real number reproducibility is gated by the benchmarks.yml
+  # workflow.
+  benchmark_runner_smoke:
+    needs: changes
+    if: needs.changes.outputs.benchmark_runner == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # `recordlinkage` ships the Febrl3 dataset bundled — installing it
+      # lets the smoke run actually exercise the febrl3 helper end-to-end
+      # without needing any gitignored dataset. The other three datasets
+      # (DBLP-ACM, NCVR, DQbench) are gracefully skipped by the runner
+      # when their files / CLIs aren't on disk.
+      - run: uv pip install recordlinkage pyarrow
+      - name: Import smoke
+        shell: bash
+        run: |
+          uv run python -c "
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import dqbench_adapters
+          from dqbench_adapters import febrl3, ncvr, leipzig_eval
+          # goldenmatch_zeroconfig requires dqbench (optional, not installed in CI) — skip import smoke
+          print('dqbench_adapters package + 3 standalone helpers imported OK')
+          "
+      - name: Run benchmarks --help
+        shell: bash
+        run: |
+          uv run python scripts/run_benchmarks.py --help
+      - name: Run febrl3 end-to-end
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          uv run python scripts/run_benchmarks.py \
+            --datasets febrl3 --output /tmp/febrl3_smoke.json
+          # F1 floor is well below the published 0.9443 number; the lane
+          # protects the runner's wiring, not its accuracy. Real floor
+          # lives in tests/test_autoconfig_benchmarks.py.
+          uv run python -c "
+          import json
+          r = json.load(open('/tmp/febrl3_smoke.json'))['results'][0]
+          assert r['f1'] >= 0.80, f'Febrl3 smoke regressed: {r}'
+          print('febrl3 smoke F1=', r['f1'])
+          "
+      - name: Smoke summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Benchmark runner smoke"
+            echo ""
+            echo "Imports + \`--help\` + a real Febrl3 run (the only published dataset that ships via pip)."
+            echo "DBLP-ACM / NCVR / DQbench composite reproduce against gitignored datasets in \`benchmarks.yml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   typescript:
     needs: changes
     if: needs.changes.outputs.typescript == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
         # Reads version from root package.json `packageManager` field.
         # That field MUST be exact semver (pnpm@9.15.0) — ranges error.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: pnpm
         # cache: pnpm requires (a) pnpm on PATH (handled above) and
         # (b) pnpm-lock.yaml committed at repo root.
       - run: pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .turbo
           key: turbo-${{ github.sha }}
@@ -192,13 +512,13 @@ jobs:
     # turbo can't cover.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: pnpm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -208,7 +528,7 @@ jobs:
       - name: Build + stage frontend into wheel-include path
         run: python packages/python/goldenmatch/scripts/build_web.py
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -218,7 +538,7 @@ jobs:
         run: pnpm -C packages/python/goldenmatch/web/frontend exec playwright test
       - name: Upload Playwright trace on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: playwright-trace
           path: packages/python/goldenmatch/web/frontend/test-results
@@ -232,9 +552,9 @@ jobs:
       run:
         working-directory: packages/rust/extensions
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: packages/rust/extensions
       - run: cargo test --workspace
@@ -245,8 +565,8 @@ jobs:
     if: needs.changes.outputs.dbt == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.11"
           cache: pip
@@ -258,5 +578,229 @@ jobs:
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - run: test -f packages/actions/goldencheck/action.yml && echo "action.yml present"
+
+  # Postgres extension build + smoke test across PG 15 / 16 / 17. The pgrx
+  # crate is excluded from the cargo workspace (pgrx workspace-mode is
+  # broken), so the main `rust` job's `cargo test --workspace` never
+  # touches it — this lane covers the gap.
+  #
+  # Mirrors the matrix the standalone goldenmatch-extensions repo ran
+  # before it was archived. Installs the relevant PG dev headers, builds
+  # the extension via `cargo pgrx install`, then exercises the SQL
+  # surface end-to-end via psql (scalar scorer, table dedupe, autoconfig).
+  #
+  # If this lane breaks on a Python-only change, the trigger filter is
+  # wrong — Postgres extension build failures should only surface when
+  # postgres/, bridge/, or workspace files actually change.
+  rust_pgrx:
+    needs: changes
+    if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+    env:
+      PG_VERSION: ${{ matrix.pg }}
+    defaults:
+      run:
+        working-directory: packages/rust/extensions
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions
+
+      - name: Install PG ${{ matrix.pg }} dev headers
+        # The PostgreSQL apt repo carries every PG major in parallel. Required
+        # because pgrx needs `pg_config` for the specific PG version it's
+        # building against, and Ubuntu ships only one PG by default.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" libclang-dev
+          sudo chmod a+rwx "/usr/share/postgresql/${PG_VERSION}/extension" "/usr/lib/postgresql/${PG_VERSION}/lib"
+
+      - name: Install goldenmatch (Python bridge target)
+        # The pgrx extension embeds Python via pyo3 and imports goldenmatch
+        # at runtime. The package install here is what `init()` in the
+        # bridge will find when Postgres starts.
+        run: pip install --break-system-packages goldenmatch>=1.1.0 pyarrow
+
+      - name: Install cargo-pgrx
+        # 0.12.9 pin matches the pgrx version in
+        # packages/rust/extensions/postgres/Cargo.toml. Upgrading pgrx is
+        # a coordinated change — bump both pins together.
+        run: cargo install cargo-pgrx --version "0.12.9" --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init "--pg${PG_VERSION}=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config"
+
+      - name: Build + install extension
+        working-directory: packages/rust/extensions/postgres
+        run: |
+          cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
+          # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
+          # handwritten one into PG's extension dir so `CREATE EXTENSION`
+          # finds it. The schema file is the canonical declaration of
+          # public function signatures.
+          cp sql/goldenmatch_pg--0.1.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+
+      - name: Expose goldenmatch to Postgres' Python interpreter
+        # Postgres runs as user `postgres` under a different Python than the
+        # one this workflow's `pip install` modified. The `.pth` redirect
+        # makes the install discoverable when pgrx-loaded code calls
+        # `import goldenmatch`.
+        run: |
+          PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
+          echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
+
+      - name: psql smoke (scalar scorer, dedupe, autoconfig)
+        run: |
+          # Multiple PG majors installed → port is non-default; resolve via
+          # pg_lsclusters so we always hit the right server.
+          sudo pg_createcluster "${PG_VERSION}" main 2>/dev/null || true
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main start 2>/dev/null || true
+          sleep 2
+          PG_PORT=$(pg_lsclusters -h | grep "^${PG_VERSION}" | awk '{print $3}')
+          export PGPORT="${PG_PORT:-5432}"
+          echo "Using PG ${PG_VERSION} on port ${PGPORT}"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION goldenmatch_pg;"
+          # Confirm new v1.7-v1.12 functions registered alongside the originals.
+          sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE test_customers (name TEXT, email TEXT);
+            INSERT INTO test_customers VALUES
+              ('John Smith', 'john@x.com'),
+              ('JOHN SMITH', 'john@x.com'),
+              ('Jane Doe', 'jane@y.com'),
+              ('Bob Jones', 'bob@z.com');
+            SELECT goldenmatch.goldenmatch_dedupe_table('test_customers'::TEXT, '{"exact": ["email"]}'::TEXT);
+            -- v1.7-v1.12 surface (autoconfig / telemetry / dedupe_full) lands
+            -- with PR #159; assert it conditionally so this lane goes green on
+            -- main today and starts exercising the new surface once #159 merges.
+            DO $$
+            BEGIN
+              IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'goldenmatch_autoconfig') THEN
+                PERFORM goldenmatch.goldenmatch_autoconfig('test_customers'::TEXT);
+                PERFORM goldenmatch.goldenmatch_autoconfig_telemetry('test_customers'::TEXT);
+                RAISE NOTICE 'v1.7-v1.12 autoconfig surface present and callable';
+              ELSE
+                RAISE NOTICE 'v1.7-v1.12 autoconfig surface not yet on main (waiting on PR #159)';
+              END IF;
+            END$$;
+          EOSQL
+          echo "=== PG ${PG_VERSION} smoke passed ==="
+
+  # DuckDB UDF package tests. Pure Python; lives at
+  # packages/rust/extensions/duckdb/ alongside the Rust crates but the
+  # main `python` matrix job doesn't see it (its dynamic-matrix only
+  # enumerates packages/python/<pkg>). This lane fills that gap.
+  duckdb_extensions:
+    needs: changes
+    if: needs.changes.outputs.duckdb_extensions == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/duckdb
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install goldenmatch + duckdb UDF package
+        run: |
+          # The local goldenmatch checkout supplies the controller + autoconfig
+          # internals the UDFs delegate to. Editable install means a goldenmatch
+          # source change here would surface — but the duckdb lane filter only
+          # fires on extensions/duckdb/** changes, so for cross-package
+          # regressions, rely on the regular `python` lane to catch them.
+          pip install -e "../../../python/goldenmatch[web]"
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          # pytest-timeout converts a hung worker (e.g. wedged auto-config)
+          # into an actionable failure with a traceback at the 120s mark
+          # instead of letting the job sit at the 6h GH Actions default.
+          pip install pytest pytest-timeout pyarrow
+      - name: Run DuckDB UDF tests
+        run: python -m pytest tests/ -v --timeout=120
+
+  # Pyright strict-mode type check on the goldenmatch core slice. Scope
+  # (include list) is pinned in pyrightconfig.json at repo root; CI mirrors
+  # that scope via the path filter above. Blocking — any new error in the
+  # slice fails CI. To extend the slice, update both pyrightconfig.json's
+  # `include` and the `pyright_slice` filter above.
+  pyright:
+    needs: changes
+    if: needs.changes.outputs.pyright_slice == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - run: uv run pyright
+
+  # Single required-status-check for branch protection. Branch ruleset
+  # references `ci-required` (stable name) instead of the matrix-instance
+  # check names (`python (goldenmatch)`, `rust_pgrx (15)`, ...) which
+  # change per-row and can't be matched by GitHub's exact-name required
+  # status check rule.
+  #
+  # `if: always()` lets the job fire even when upstream jobs are skipped
+  # by the `changes` path filter — a doc-only PR with all code jobs
+  # skipped should still merge.
+  #
+  # The check inside fails the summary when an upstream conclusion is
+  # `failure` or `cancelled`. `skipped` and `success` both pass. Avoids
+  # the trap where `needs:` default behaviour blocks the summary when
+  # any upstream was skipped.
+  ci-required:
+    needs:
+      - changes
+      - python
+      - python_skipped_lanes
+      - python_postgres
+      - synthetic_benchmarks
+      - benchmark_runner_smoke
+      - typescript
+      - web_ui_e2e
+      - rust
+      - dbt
+      - action
+      - rust_pgrx
+      - duckdb_extensions
+      - pyright
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify no upstream job failed or was cancelled
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$NEEDS_JSON"
+          # Use jq to inspect each upstream's `result`. `success` and
+          # `skipped` both pass; anything else (`failure`, `cancelled`)
+          # fails the summary.
+          BAD=$(echo "$NEEDS_JSON" | jq -r '[.[] | select(.result != "success" and .result != "skipped") | .result] | join(",")')
+          if [ -n "$BAD" ]; then
+            echo "::error::upstream job(s) failed or were cancelled: $BAD"
+            exit 1
+          fi
+          echo "all required upstream jobs passed or were skipped"

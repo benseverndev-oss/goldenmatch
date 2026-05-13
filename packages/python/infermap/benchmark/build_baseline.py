@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -16,7 +16,7 @@ def main_impl(
     py = json.loads(Path(python_path).read_text(encoding="utf-8"))
     ts = json.loads(Path(ts_path).read_text(encoding="utf-8"))
 
-    updated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    updated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     baseline = {
         "version": 1,

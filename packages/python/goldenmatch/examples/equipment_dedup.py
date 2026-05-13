@@ -35,9 +35,8 @@ import sys
 import time
 from collections import Counter
 
-import polars as pl
-
 import goldenmatch
+import polars as pl
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,

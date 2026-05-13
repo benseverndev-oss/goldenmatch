@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 
 import polars as pl
 from rapidfuzz import fuzz
@@ -9,7 +10,7 @@ from goldenflow.transforms import register_transform
 
 
 def _build_canonical_map(
-    values: list[str | None],
+    value_counts: Iterable[tuple[str | None, int]],
     frequency_threshold: float = 0.05,
     match_threshold: float = 85.0,
 ) -> dict[str, str]:
@@ -18,22 +19,28 @@ def _build_canonical_map(
     1. Count case-insensitive frequencies
     2. Values above frequency_threshold are canonical candidates
     3. Low-frequency values fuzzy-matched against candidates
+
+    Takes (value, count) pairs (typically from a Polars ``value_counts``)
+    so the caller can avoid materializing N row-level Python strings on
+    large inputs — at 1M+ rows the row-level ``Series.to_list()`` can
+    trip a pyo3 panic when PyString allocation fails under memory
+    pressure (see goldenflow issue #174 / goldenmatch PR #173).
     """
     # Count case-insensitive frequencies
     lower_counts: Counter[str] = Counter()
     case_map: dict[str, Counter[str]] = {}  # lowercase -> Counter of original casings
 
-    for v in values:
+    for v, count in value_counts:
         if v is None:
             continue
         v_stripped = v.strip()
         if not v_stripped:
             continue
         low = v_stripped.lower()
-        lower_counts[low] += 1
+        lower_counts[low] += count
         if low not in case_map:
             case_map[low] = Counter()
-        case_map[low][v_stripped] += 1
+        case_map[low][v_stripped] += count
 
     total = sum(lower_counts.values())
     if total == 0:
@@ -94,9 +101,19 @@ def category_auto_correct(
 
     Identifies low-frequency values that fuzzy-match high-frequency canonical
     values and corrects them. No LLM required.
+
+    Builds the canonical map from a Polars ``value_counts`` aggregation
+    rather than ``series.to_list()`` so the work stays O(n_unique) instead
+    of O(n_rows). On large inputs this also dodges a pyo3 PanicException
+    that can fire when materializing millions of Python strings under
+    memory pressure (goldenflow issue #174).
     """
-    values = series.to_list()
-    corrections = _build_canonical_map(values, frequency_threshold, match_threshold)
+    vc = series.value_counts(sort=True)
+    # value_counts returns a 2-column DataFrame: [<series.name>, "count"].
+    # iter_rows() yields plain Python tuples; only n_unique tuples are
+    # ever produced (no per-row materialization of the source Series).
+    pairs: list[tuple[str | None, int]] = list(vc.iter_rows())
+    corrections = _build_canonical_map(pairs, frequency_threshold, match_threshold)
 
     if not corrections:
         return series

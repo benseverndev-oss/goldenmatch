@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "1.9.0"
+version = "1.15.0"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,11 +41,11 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://benzsevern.github.io/goldenmatch/"
-Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/CHANGELOG.md"
-Author = "https://bensevern.dev"
 Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenmatch#readme"
 Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenmatch/CHANGELOG.md"
+Author = "https://bensevern.dev"
 
 [project.optional-dependencies]
 dev = [
@@ -123,10 +123,6 @@ packages = ["goldenmatch"]
 [project.scripts]
 goldenmatch = "goldenmatch.cli.main:app"
 
-[tool.ruff]
-target-version = "py311"
-line-length = 100
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -157,4 +153,8 @@ exclude_lines = [
     "if __name__ == .__main__.",
     "if TYPE_CHECKING:",
 ]
+# Floor for the *overall* package. Per-module floors live in CI's coverage-gate
+# step (see .github/workflows/ci.yml — "coverage_gate") so per-module
+# regressions don't hide inside the global average.
+fail_under = 70
 show_missing = true

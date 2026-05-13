@@ -1,0 +1,134 @@
+name: benchmarks
+
+# Real-benchmark runs (DBLP-ACM, Febrl3, NCVR, DQbench).
+# Datasets are gitignored — they're large and (DQbench) license-restricted.
+# This workflow runs:
+#   - On schedule (Mondays 06:00 UTC) so trend data accrues over time.
+#   - On workflow_dispatch so a release PR can trigger a fresh measurement.
+# The synthetic-fixture smoke (committed fixtures) lives in ci.yml's
+# synthetic_benchmarks job and runs on every PR.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — early enough that results are ready when the
+    # week starts; weekly cadence avoids burning CI minutes on noise.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: "Which dataset(s) to run"
+        type: choice
+        default: "all"
+        options:
+          - all
+          - dblp-acm
+          - febrl3
+          - ncvr
+          - dqbench
+      with_llm:
+        description: "Run DQbench with LLM scorer (requires OPENAI_API_KEY)"
+        type: boolean
+        default: false
+
+# Locked-down by default; benchmarks job stays read-only.
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    # Datasets are gated behind repo VARS so a fork without dataset access
+    # doesn't try to run and fail. Set vars.RUN_BENCHMARKS=true and provide
+    # the dataset secrets/vars to enable; otherwise the workflow exits 0
+    # with a "not-configured" notice.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Allows the job to comment on the workflow summary + upload artifacts.
+      actions: write
+    env:
+      DATASETS: ${{ inputs.datasets || 'all' }}
+      WITH_LLM: ${{ inputs.with_llm || false }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Check prereqs
+        id: prereqs
+        shell: bash
+        run: |
+          # Fast-fail with a clear notice if benchmarks aren't configured for
+          # this repo. Forks lack the dataset secrets/vars; this workflow
+          # should still succeed (informational) on those forks.
+          if [ "${{ vars.RUN_BENCHMARKS }}" != "true" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Benchmarks not configured::Set repo var RUN_BENCHMARKS=true and provide dataset access to enable. See docs/ci-lanes.md"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install
+        if: steps.prereqs.outputs.configured == 'true'
+        run: uv sync --all-packages
+
+      - name: Run real benchmarks (DBLP-ACM/Febrl3/NCVR)
+        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS != 'dqbench')
+        shell: bash
+        env:
+          # Memory disabled so cross-run state doesn't leak between scheduled runs.
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          set -euo pipefail
+          # The runner script (committed in this PR — see scripts/run_benchmarks.py)
+          # measures each requested dataset and writes a JSON artifact + a
+          # markdown summary to $GITHUB_STEP_SUMMARY.
+          uv run python scripts/run_benchmarks.py \
+            --datasets "$DATASETS" \
+            --output benchmark_results.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Run DQbench (no LLM)
+        if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS == 'dqbench')
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          set -euo pipefail
+          uv run python scripts/run_benchmarks.py \
+            --datasets dqbench \
+            --output dqbench_results.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Run DQbench (with LLM)
+        if: steps.prereqs.outputs.configured == 'true' && env.WITH_LLM == 'true'
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret not set; cannot run with-LLM benchmarks"
+            exit 1
+          fi
+          uv run python scripts/run_benchmarks.py \
+            --datasets dqbench \
+            --with-llm \
+            --output dqbench_with_llm_results.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        if: always() && steps.prereqs.outputs.configured == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: |
+            benchmark_results.json
+            dqbench_results.json
+            dqbench_with_llm_results.json
+          if-no-files-found: ignore
+          retention-days: 90

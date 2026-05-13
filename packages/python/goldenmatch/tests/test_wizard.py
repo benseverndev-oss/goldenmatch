@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-
-from goldenmatch.config.wizard import suggest_transforms, suggest_scorer
+from goldenmatch.config.wizard import suggest_scorer, suggest_transforms
 
 
 class TestSuggestTransforms:

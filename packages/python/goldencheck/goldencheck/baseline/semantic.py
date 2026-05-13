@@ -140,8 +140,8 @@ def _infer_with_embeddings(df: pl.DataFrame) -> dict[str, list[str]]:  # noqa: P
 
     Raises ``ImportError`` if *sentence_transformers* is not installed.
     """
-    from sentence_transformers import SentenceTransformer  # type: ignore[import]
     import numpy as np  # type: ignore[import]
+    from sentence_transformers import SentenceTransformer  # type: ignore[import]
 
     model = SentenceTransformer("all-MiniLM-L6-v2")
     threshold = 0.3

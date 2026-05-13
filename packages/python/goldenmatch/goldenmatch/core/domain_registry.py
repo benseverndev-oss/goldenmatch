@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import logging
 import re
-import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import yaml
 
 logger = logging.getLogger(__name__)
 

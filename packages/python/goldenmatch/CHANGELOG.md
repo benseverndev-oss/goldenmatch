@@ -6,7 +6,216 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [Unreleased] / TypeScript port
+## [1.15.0] - 2026-05-12
+
+### Added -- Identity Graph (v2.0 headline feature)
+
+`goldenmatch.identity` -- a first-class durable graph layer above run-local clusters. Spec: `docs/superpowers/specs/2026-05-12-identity-graph-design.md`. Roadmap: `docs/superpowers/plans/2026-05-12-identity-graph-roadmap.md`.
+
+- **`IdentityStore`** (SQLite default, Postgres optional): identity nodes, source records, evidence edges, append-only event log, aliases. WAL + busy_timeout for multi-process safety. Schema versioned via `PRAGMA user_version`.
+- **Stable `entity_id` across runs**. `resolve_clusters()` runs after dedupe clustering and decides `create` / `absorb` / `merge` based on which existing identities cover the cluster's records. Idempotent on `(run_name, kind, entity_id)`.
+- **`IdentityConfig`** -- new optional section in `goldenmatch.yml`. When `identity.enabled: true`, the pipeline writes graph state at `.goldenmatch/identity.db` (or the configured backend) on every `run_dedupe()`. Disabled by default; failure logs + skips, never blocks dedupe output.
+- **Surfaces**: Python (`goldenmatch.identity.*` + root re-exports), CLI (`goldenmatch identity list/show/resolve/history/conflicts/merge/split`), REST (`/api/v1/identities/...`), web "Identities" tab, MCP (6 `identity_*` tools), A2A (6 skills, agent card now declares 18 total skills). TS edge-safe core (`InMemoryIdentityStore` + `findByRecord` / `getEntity` / `manualMerge` / `manualSplit`) ships in the same release; persistent SQLite backend + pipeline-driven population are TS-port v2 follow-ups.
+- **Postgres analytical views**: `v_identities`, `v_identity_pairs`, `v_identity_timeline` in `goldenmatch/db/migrations/identity_v1.sql`. `IdentityStore(backend="postgres")` creates the same schema on first connect.
+- **DuckDB / extensions contract** documented at `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` for the `goldenmatch-extensions` repo to implement.
+- **47 new Python tests**, **13 new TS tests**. Full sweep: 1984 passed, 0 regressions.
+- Example: `examples/identity_graph.py`.
+
+## [1.14.0] - 2026-05-11
+
+This release ships the full v1.7-v1.12 AutoConfigController surface to every user-facing entry point in the suite. No algorithm changes vs 1.13.0 — same DQbench / DBLP-ACM / Febrl3 / NCVR numbers — but you can now read what the controller decided from every interface (web, TUI, CLI, REST, MCP, A2A, Postgres, DuckDB) and round-trip the committed config (including Path Y negative-evidence) through SQL.
+
+### Fixed
+
+- **AgentSession default path now actually runs the AutoConfigController** (PR #169). `deduplicate(config=None)` / `match_sources(config=None)` were building a config from the legacy `select_strategy()` heuristic and passing it explicitly to `dedupe_df`/`match_df`, which suppressed the zero-config controller path. `last_telemetry` ended up `None` for the case it was meant to capture. Default path now calls `dedupe_df(df)` / `match_df(df_a, df_b)` with no config so the controller fires. Explicit-config calls explicitly clear `last_telemetry` to prevent stale-blob leaks across calls on the same session. `select_strategy()` still runs but only for the `reasoning` payload, not to back the actual matching config. Hard-asserting tests landed alongside the fix.
+
+### Added — AutoConfigController surface-parity arc
+
+Six PRs (#156-#159 + #161; #160 added CI lanes) bring every user-facing entry point up to speed with the v1.7-v1.12 AutoConfigController / IndicatorContext / NegativeEvidence work. Before this arc, controller decisions were observable only by reading `result.postflight_report.controller_history` in Python. Now every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, committed `negative_evidence`) via `goldenmatch.web.controller_telemetry.serialize_telemetry`.
+
+**Web UI** (PR #156)
+- New `ControllerPanel` in Workbench surfaces stop_reason badge, health verdict, complexity profile cells, indicator column priors, refit decision trace, and `Path Y · N NE` indicator on committed matchkeys.
+- New `GET /api/v1/controller/telemetry` endpoint populated by `/autoconfig` and `/run?auto_config=true`.
+- Home gains a `ProvenanceCallout` linking `docs/reproducing-benchmarks.md` + `docs/scale-envelope.md` with the four reproducible numbers.
+
+**TUI** (PR #157)
+- New `Controller` tab (7th tab) showing the same telemetry the web panel shows.
+- New `Ctrl+A` binding triggers async auto-configure; result adopted into ConfigTab + ExportTab; switches to Controller tab on completion.
+- `MatchEngine.auto_configure(domain=None)` captures `_LAST_CONTROLLER_RUN` and exposes telemetry on `engine.last_telemetry`.
+
+**CLI** (PR #158)
+- New `goldenmatch autoconfig <files>` subcommand. Prints committed config to stdout (pipe to `> goldenmatch.yml`); telemetry panel to stderr. Flags: `--out PATH`, `--domain`, `--verbose`, `--hide-controller`.
+- `goldenmatch dedupe` zero-config path captures `_LAST_CONTROLLER_RUN` and renders the same panel before the cluster report (`--show-controller` / `--hide-controller`).
+- New shared `goldenmatch.cli._controller_render` module with Rich Panel + one-line `render_short_status` for log scraping.
+
+**SQL extensions** (PR #159)
+- Bridge (Rust/pyo3) gains `DedupeResult.telemetry_json`, `autoconfig()` returning `(committed_config_json, telemetry_json)`, and `dedupe_full()` accepting the full Pydantic `GoldenMatchConfig` JSON (unlocks `negative_evidence` from SQL).
+- Postgres: new `goldenmatch_autoconfig`, `goldenmatch_autoconfig_telemetry`, `goldenmatch_dedupe_full`, `goldenmatch_dedupe_full_telemetry`, `gm_telemetry`. New JSONB column `goldenmatch._jobs.last_telemetry_json` (added via `ALTER TABLE ... IF NOT EXISTS` for in-place upgrade).
+- DuckDB: parallel UDFs registered on every `register(con)`.
+
+**CI** (PR #160)
+- New `rust_pgrx` lane (matrix: PG 15/16/17) — cargo pgrx install + psql smoke covering the new v1.7-v1.12 surface.
+- New `duckdb_extensions` lane — runs the DuckDB UDF Python tests that the main `python` matrix doesn't pick up.
+
+**Agent / programmatic surfaces** (PR #161)
+- `AgentSession.autoconfigure(file_path)` returns `{config, telemetry}`; `deduplicate` / `match_sources` cache `last_telemetry`.
+- REST API (`goldenmatch serve`): new `POST /autoconfig` (with optional `records` body override) + `GET /controller/telemetry`.
+- MCP: `auto_configure` tool rewired off the legacy `select_strategy` heuristic onto the controller. New `controller_telemetry` tool. `agent_deduplicate` / `agent_match_sources` embed telemetry inline.
+- A2A: 10 → 12 skills (added `autoconfig` + `controller_telemetry`). `deduplicate` / `match` skills embed telemetry in their wire result.
+
+**Cross-surface telemetry shape** (single source of truth at `goldenmatch.web.controller_telemetry.serialize_telemetry`)
+
+```json
+{
+  "available": true,
+  "source": "autoconfig",
+  "stop_reason": "green",
+  "health": "green",
+  "elapsed_ms": 1234.5,
+  "full_vs_sample_drift": 0.12,
+  "scoring": {"n_pairs_scored": 4421, "mass_above_threshold": 0.087},
+  "blocking": {"n_blocks": 312, "reduction_ratio": 0.94},
+  "cluster": {"n_clusters": 1820, "transitivity_rate": 0.99},
+  "column_priors": [{"column": "email", "identity_score": 0.95, "corruption_score": 0.0}],
+  "decisions": [{"iteration": 1, "rule_name": "...", "rationale": "...", "wall_clock_ms": 234}],
+  "committed_matchkeys": [{"name": "exact_email", "has_negative_evidence": true}],
+  "negative_evidence": [{"matchkey_name": "exact_email", "field": "phone", "penalty": 0.5}]
+}
+```
+
+## [1.13.0] - 2026-05-11
+
+This is a release-plumbing wave: typed-accessor API additions, PyPI metadata refresh, and contributor-facing quality improvements. **No DQbench / Febrl3 / NCVR / DBLP-ACM number changes** — algorithm is unchanged this wave.
+
+### Added
+- **Typed accessor API on `MatchkeyConfig` / `MatchkeyField`** (PR #151). New properties: `MatchkeyConfig.fuzzy_threshold`, `MatchkeyField.fuzzy_scorer`, `MatchkeyField.fuzzy_weight`, `MatchkeyField.resolved_field`. Each raises `ValueError` when the underlying matchkey isn't a fuzzy/weighted type, so the invariant is now enforceable in pyright strict mode rather than asserted in callers.
+
+  ```python
+  from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+  mk = MatchkeyConfig(
+      name="identity",
+      type="weighted",
+      threshold=0.85,
+      fields=[MatchkeyField(field="name", transforms=["lowercase"], scorer="jaro_winkler", weight=1.0)],
+  )
+  assert mk.fuzzy_threshold == 0.85  # safe access on weighted matchkey
+  # mk.fuzzy_threshold on an exact matchkey raises ValueError
+  ```
+
+- **`docs/scale-envelope.md`** (PR #149): documents the Polars / DuckDB / Ray operating ranges plus block-size failure modes so callers can pick a backend before hitting an OOM.
+- **Postgres CI lane** (PR #144): flipped from skipped to live so DB integration tests now run on every PR.
+
+### Changed
+- **PyPI metadata corrected** (PR #148): `[project.urls]` Homepage / Repository / Documentation entries now point at the monorepo at `benzsevern/goldenmatch`. The pre-fold standalone-repo URLs are gone. Metadata only refreshes on a wheel build, so this release is what makes the corrected URLs visible on PyPI.
+
+### Fixed
+- **Reproducibility of all four published benchmark numbers** (PR #152, replaces #150): DQbench composite 91.04, DBLP-ACM 0.9641, Febrl3 0.9443, NCVR 0.9719 now all reproduce from a fresh clone. See `docs/reproducing-benchmarks.md` for the exact commands and dataset prep steps.
+
+### Internal (contributors only)
+- Ruff lint expanded to F / I / B-narrowed / UP rule sets across `packages/python/` (PR #146).
+- Pyright strict mode now enforced on the 21-file core slice of `goldenmatch` (PR #147). The new typed accessors in PR #151 eliminated 7 type-suppression workarounds in callers.
+
+### Benchmarks (zero-config, no LLM)
+
+Unchanged vs v1.12.0 — algorithm not touched this wave.
+
+| Dataset | v1.12.0 | v1.13.0 | Delta |
+|---|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 | +0.0000 |
+| Febrl3 | 0.9443 | 0.9443 | +0.0000 |
+| NCVR | 0.9719 | 0.9719 | +0.0000 |
+| DQbench composite | 91.04 | 91.04 | +0.00 |
+
+## [1.12.0] - 2026-05-10
+
+### Added
+- **`_apply_negative_evidence_to_exact_pairs`** in `core/scorer.py`: post-filter helper that applies NE penalties to pairs produced by exact matchkeys. Called from `core/pipeline.py` after `find_exact_matches`. Score formula: `final = max(0, 1.0 - sum(penalties))`; pair emits only if `final >= matchkey.threshold`. Exact matchkeys without NE fields are unaffected (binary 1.0/0.0 emit preserved).
+- **Exact-matchkey NE threshold default**: when `promote_negative_evidence` adds NE fields to a threshold-None exact matchkey, the threshold is defaulted to 0.5 to activate the score-and-threshold path.
+- **`promote_negative_evidence` extended** to walk all matchkey types (was weighted-only in v1.11). The `_is_exact_matchkey_field` gate is selectively skipped when iterating an exact matchkey for itself — its v1.11 rationale (prevent recall regression on fuzzy data) doesn't apply to exact-matchkey self-iteration.
+
+### Changed
+- **`core/pipeline.py`**: calls `_apply_negative_evidence_to_exact_pairs` after `find_exact_matches` when any exact matchkey carries NE fields. Zero overhead when no NE fields are present.
+- **`promote_negative_evidence`** now populates NE on exact matchkeys in addition to weighted matchkeys. Exact matchkeys for high-identity-prior columns (email) gain NE from disagreeing secondary fields, allowing adversarial collision pairs to be filtered at the exact matchkey level.
+
+### Benchmarks (zero-config, no LLM)
+
+| Dataset | v1.11.0 | v1.12.0 | Delta |
+|---|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 | +0.0000 |
+| Febrl3 | 0.9443 | 0.9443 | +0.0000 |
+| NCVR | 0.9719 | 0.9719 | +0.0000 |
+| DQbench composite | 66.99 | 91.04 | +24.05 pp |
+
+DQbench tier detail (v1.12.0):
+
+| Tier | Precision | Recall | F1 | vs v1.11 |
+|---|---|---|---|---|
+| T1 | 80.6% | 100.0% | 89.3% | flat |
+| T2 | 95.1% | 100.0% | 97.5% | +28.5 pp |
+| T3 | 74.7% | 100.0% | 85.5% | +31.7 pp |
+
+Primary target (>= 75) met. T3 F1 headline target (>= 70%) met. All floor constraints met. The T3 gain resolves the v1.11 root cause: Path Y NE filtering now operates at the `exact_email` matchkey level, directly shedding adversarial collision pairs that share an email but disagree on name/address NE fields.
+
+## [1.11.0] - 2026-05-10
+
+### Added
+- **`NegativeEvidenceField`** in `config/schemas.py`: new optional field on `MatchkeyConfig`. Each entry specifies a field, transforms, scorer, similarity threshold, and penalty. When a weighted matchkey scores a pair, any NE field whose similarity falls below its threshold subtracts the penalty from the weighted score.
+- **`_apply_negative_evidence`** in `core/scorer.py`: pure helper that computes the NE penalty for a scored pair and returns the adjusted score. Called inside the weighted-matchkey scoring loop.
+- **`promote_negative_evidence`** in `core/autoconfig_negative_evidence.py`: eager rule that adds NE fields to weighted matchkeys for columns with high identity priors (identity_score >= 0.75, cardinality_ratio >= 0.5) that also have an exact matchkey counterpart. Gated on the exact-matchkey counterpart requirement to prevent recall regression on noisy ER data where legitimate duplicates may have differing phone/address values.
+- **`_pick_scorer_for_column`** in `core/autoconfig_negative_evidence.py`: maps column name / type to (transforms, scorer) for NE fields. Phone -> (digits_only, exact). Email -> ([], token_sort). Address -> ([], token_sort). Default -> ([], ensemble).
+- **`rule_demote_clustered_identity`** at position 7 in `DEFAULT_RULES`: detects when an exact matchkey identity column is shared across distinct entities (adversarial reuse pattern). Demotes the exact matchkey to a fuzzy participant on the weighted matchkey and adds the column to blocking. Threshold of 0.75 (raised from 0.5 after Phase 7 analysis showed T2's collision rate of 0.62 was causing false demotion and 186 FNs).
+- **`compute_identity_collision_signal`** in `core/indicators.py`: for each multi-record group sharing an identity column value, computes max pairwise divergence on witness columns using token_sort_ratio. Returns fraction of groups with max divergence > 0.5.
+
+### Changed
+- **`AutoConfigController.run`**: calls `promote_negative_evidence` between v0 config build and the iteration loop, so NE fields are present on weighted matchkeys before the first iteration profiles them.
+- **`rule_demote_clustered_identity` collision threshold**: raised from 0.5 to 0.75. This prevents false-firing on legitimate fuzzy ER datasets (T2 collision rate 0.615) while still catching high-rate adversarial reuse (rates near 1.0).
+
+### Benchmarks (zero-config, no LLM)
+
+| Dataset | v1.10.0 | v1.11.0 |
+|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 |
+| Febrl3 | 0.9443 | 0.9443 |
+| NCVR | 0.9719 | 0.9719 |
+| DQbench composite | 66.91 | 66.99 |
+
+T2 recall regression (186 FNs from v1.11 early iteration) fixed by raising `rule_demote_clustered_identity` threshold from 0.5 to 0.75. T3 unchanged at 53.8%. Primary target (>= 75) not met; ships on best-effort basis above v1.10 baseline. T3 F1 target (>= 70%) remains an open v1.12 challenge: the exact-matchkey gate correctly protects T2 recall but also prevents phone NE from reducing T3 adversarial FPs.
+
+### Notes for v1.12
+
+- T3 adversarial FPs come from the `exact_email` matchkey capturing collision pairs directly. NE on the weighted matchkey does not affect these pairs. Real T3 improvement requires either a higher-precision collision signal or a different mechanism for adversarial reuse that does not require collision_rate to exceed T2's rate (0.615).
+- Removing the exact-matchkey gate would raise composite to ~68.9 but drops T2 by ~0.8 pp. Not shipped due to net regression on T2 at the pair level.
+
+## [1.10.0] - 2026-05-08
+
+### Added
+- **5 complexity indicators** (`core/indicators.py`): `compute_column_priors`, `estimate_sparse_match_signal`, `compute_corruption_score`, `estimate_full_pop_hits`, `compute_cross_blocking_overlap`. Each has a wall-clock budget; cheap two run eagerly, expensive three run lazily via `IndicatorContext` memoization.
+- **`IndicatorContext`** in `autoconfig_controller.py` threads indicators through the policy/rule chain. `RefitPolicy.propose` gains optional `ctx` kwarg; `HeuristicRefitPolicy` and `LLMRefitPolicy` both forward; controller introspects custom-policy signatures via `inspect.signature` for backward compat.
+- **3 new indicator-aware rules**: `rule_corruption_normalize`, `rule_cross_blocking_disagreement`, `rule_sparse_match_expand`. `DEFAULT_RULES` now has 13 rules (was 10).
+- **`GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast`** env var gates the two expensive indicators (full-pop scan, cross-blocking probe) for users who prefer v1.9 wall-clock.
+- **`ColumnPrior`, `SparsityVerdict`, `IndicatorsProfile`** dataclasses in `core/complexity_profile.py`. New default-None fields: `DataProfile.column_priors`, `ComplexityProfile.indicators`.
+
+### Changed
+- **`rule_no_matches`** (modified): when ctx provides high-identity-prior on the blocking column, tries `[lower_threshold, normalize, multi_pass]` alternatives in order before falling back to today's behavior. When `ctx.sparsity_verdict.is_sparse`, lowers threshold by 0.10 (proxy for ExpandSample, queued v1.11).
+- **`rule_blocking_key_swap`** (modified): vetoed when blocking column has `identity_score >= 0.8` AND `full_pop_matchkey_hits > 0` (protects v0's correct identity blocking from being abandoned on noisy samples).
+
+### Benchmarks (zero-config, no LLM)
+
+| Dataset | v1.9.0 | v1.10.0 |
+|---|---|---|
+| DBLP-ACM | 0.9641 | 0.9641 |
+| Febrl3 | 0.9443 | 0.9443 |
+| NCVR | 0.9719 | 0.9719 |
+| DQbench composite | 62.87 | 66.91 |
+
+T2 F1: 58.7% → 69.0% (+10.3 pp). T1 and T3 unchanged. Primary target (>= 70) not met; ships on fallback basis (>= 65).
+
+### Notes for v1.11
+
+- `rule_sparse_match_expand` substitutes `_with_lower_threshold(0.10)` for the spec's `ExpandSample(2.0)` action; real controller-level sample expansion queued for v1.11.
+- No rule forces a *positive* swap to an identity-prior column when v0 picked something else; v1.10 only protects identity columns from being abandoned. v1.11 may add `rule_promote_identity_blocking` if benchmark measurement shows the gap matters.
+- Attribution sweep (which of the 5 indicators drove the T2 gain) not run — composite fell in fallback range (65-70); sweep was deferred per plan.
 
 ## [1.9.0] - 2026-05-08
 

@@ -200,7 +200,9 @@ async def _handle_tasks_send(request: web.Request) -> web.Response:
         })
 
     except Exception as exc:
-        logger.exception("Task %s failed", task_id)
+        # %r quotes the value, which escapes any control chars in task_id
+        # that would otherwise corrupt structured log lines.
+        logger.exception("Task %r failed", task_id)
         _tasks[task_id]["state"] = "failed"
         _tasks[task_id]["error"] = str(exc)
         return web.json_response(
@@ -292,13 +294,19 @@ async def _handle_tasks_send_subscribe(request: web.Request) -> web.StreamRespon
             await response.write(completed_event.encode("utf-8"))
 
     except Exception as exc:
-        logger.exception("Task %s failed", task_id)
+        # %r quotes the value, which escapes any control chars in task_id
+        # that would otherwise corrupt structured log lines.
+        logger.exception("Task %r failed", task_id)
         _tasks[task_id]["state"] = "failed"
         _tasks[task_id]["error"] = str(exc)
+        # Send only a sanitised first-line message on the SSE wire; the
+        # full traceback already went to the logger above. Stack traces
+        # leaking to clients can expose internal paths / library versions.
+        wire_msg = (str(exc).splitlines()[0][:200]) if str(exc) else "internal error"
         error_event = _sse_encode("task-status", {
             "id": task_id,
             "state": "failed",
-            "error": str(exc),
+            "error": wire_msg,
         })
         await response.write(error_event.encode("utf-8"))
 

@@ -1,9 +1,8 @@
 """Tests for multi-pass blocking strategy."""
 
 import polars as pl
-
-from goldenmatch.core.blocker import build_blocks, BlockResult
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.core.blocker import build_blocks
 
 
 class TestMultiPassBlocking:

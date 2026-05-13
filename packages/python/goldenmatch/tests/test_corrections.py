@@ -1,12 +1,16 @@
 """Tests for apply_corrections and hash functions."""
-import pytest
 from datetime import datetime
+
 import polars as pl
+import pytest
 from goldenmatch.core.memory.corrections import (
-    apply_corrections, compute_field_hash, compute_record_hash,
-    build_row_lookup, CorrectionStats,
+    CorrectionStats,
+    apply_corrections,
+    build_row_lookup,
+    compute_field_hash,
+    compute_record_hash,
 )
-from goldenmatch.core.memory.store import MemoryStore, Correction
+from goldenmatch.core.memory.store import Correction, MemoryStore
 
 
 @pytest.fixture

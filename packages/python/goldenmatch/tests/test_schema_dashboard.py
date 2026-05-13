@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import polars as pl
-import pytest
 
 
 class TestSchemaMatch:
@@ -50,7 +49,7 @@ class TestSchemaMatch:
         assert len(mappings) <= 1
 
     def test_apply_column_mapping(self):
-        from goldenmatch.core.schema_match import auto_map_columns, apply_column_mapping
+        from goldenmatch.core.schema_match import apply_column_mapping, auto_map_columns
 
         df_a = pl.DataFrame({"email": ["j@t.com"]})
         df_b = pl.DataFrame({"contact_email": ["jane@t.com"]})
@@ -61,7 +60,7 @@ class TestSchemaMatch:
         assert "email" in df_b_renamed.columns
 
     def test_composite_apply(self):
-        from goldenmatch.core.schema_match import auto_map_columns, apply_column_mapping
+        from goldenmatch.core.schema_match import apply_column_mapping, auto_map_columns
 
         df_a = pl.DataFrame({"name": ["John Smith"]})
         df_b = pl.DataFrame({"first_name": ["Jane"], "last_name": ["Doe"]})

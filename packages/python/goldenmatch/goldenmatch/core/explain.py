@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 
 from goldenmatch.config.schemas import MatchkeyConfig
-from goldenmatch.core.explainer import FieldExplanation, explain_pair
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +158,7 @@ def explain_cluster_nl(
     pair_scores = cluster.get("pair_scores", {})
 
     if size <= 1:
-        return f"Singleton cluster with 1 record."
+        return "Singleton cluster with 1 record."
 
     # Score statistics
     scores = list(pair_scores.values()) if pair_scores else []

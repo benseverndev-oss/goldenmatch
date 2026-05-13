@@ -1,0 +1,61 @@
+name: Publish goldenmatch-duckdb to PyPI
+
+# Fires on GitHub releases tagged `goldenmatch-duckdb-v*` (e.g.
+# `goldenmatch-duckdb-v0.3.0`). The crate's Python package lives at
+# `packages/rust/extensions/duckdb/` and ships as `goldenmatch-duckdb` on
+# PyPI -- a pure-Python wrapper around DuckDB UDFs that import the main
+# `goldenmatch` package at runtime.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    # Only fire for goldenmatch-duckdb release tags. The other publish-*.yml
+    # workflows have similar guards so a single release tag triggers exactly
+    # one PyPI upload.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-duckdb-v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    defaults:
+      run:
+        working-directory: packages/rust/extensions/duckdb
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify version matches tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_VERSION="${TAG#goldenmatch-duckdb-v}"
+          PKG_VERSION=$(python -c "import tomllib,sys; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match pyproject.toml ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VERSION"
+
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        with:
+          packages-dir: packages/rust/extensions/duckdb/dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

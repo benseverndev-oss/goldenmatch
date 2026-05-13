@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import make_field
 from infermap.scorers.exact import ExactScorer
+
+from tests.conftest import make_field
 
 
 @pytest.fixture

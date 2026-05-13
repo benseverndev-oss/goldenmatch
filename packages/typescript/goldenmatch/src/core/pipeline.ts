@@ -26,6 +26,7 @@ import {
   findExactMatches,
   scoreBlocksSequential,
 } from "./scorer.js";
+import { applyNegativeEvidenceToExactPairs } from "./autoconfigNegativeEvidence.js";
 import { buildClusters, pairKey } from "./cluster.js";
 import { buildGoldenRecord } from "./golden.js";
 import { postflight } from "./autoconfigVerify.js";
@@ -335,6 +336,12 @@ export async function runDedupePipeline(
     if (mk.type === "exact") {
       // Phase 1: Exact matching via hash grouping
       let pairs = findExactMatches(processed, mk);
+
+      // v1.12 Path Y: post-filter exact pairs through negative evidence.
+      // No-op when mk.negativeEvidence is undefined/empty.
+      if (mk.negativeEvidence !== undefined && mk.negativeEvidence.length > 0) {
+        pairs = applyNegativeEvidenceToExactPairs(pairs, mk, processed);
+      }
 
       // Cross-file filter
       if (acrossFilesOnly) {

@@ -1,6 +1,6 @@
 [project]
 name = "goldenpipe"
-version = "1.1.0"
+version = "1.2.0"
 description = "Pluggable pipeline framework for data quality workflows"
 readme = "README.md"
 license = {text = "MIT"}
@@ -42,17 +42,18 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "httpx>=0.2
 goldenpipe = "goldenpipe.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenpipe"
-Repository = "https://github.com/benzsevern/goldenpipe"
-Issues = "https://github.com/benzsevern/goldenpipe/issues"
-Documentation = "https://benzsevern.github.io/goldenpipe/"
-Changelog = "https://github.com/benzsevern/goldenpipe/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/benzsevern/goldenmatch"
+Repository = "https://github.com/benzsevern/goldenmatch"
+Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenpipe#readme"
+Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenpipe/CHANGELOG.md"
 Author = "https://bensevern.dev"
 
 [project.entry-points."goldenpipe.stages"]
 "goldencheck.scan" = "goldenpipe.adapters.check:ScanStage"
 "goldenflow.transform" = "goldenpipe.adapters.flow:TransformStage"
 "goldenmatch.dedupe" = "goldenpipe.adapters.match:DedupeStage"
+"goldenmatch.identity_resolve" = "goldenpipe.adapters.identity:IdentityResolveStage"
 
 [build-system]
 requires = ["hatchling"]

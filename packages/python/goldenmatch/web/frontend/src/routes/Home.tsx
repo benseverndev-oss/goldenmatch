@@ -78,6 +78,8 @@ export function Home() {
 
       {qualityQ.data && <QualityBanner data={qualityQ.data} />}
 
+      <ProvenanceCallout />
+
       <section className="mb-10 card px-5 py-4">
         <div className="flex items-baseline gap-3 mb-2">
           <p className="eyebrow">auto-run</p>
@@ -180,6 +182,59 @@ export function Home() {
         )}
       </section>
     </div>
+  );
+}
+
+/** Surfaces the four reproducible benchmark numbers + a pointer to the
+ *  reproducibility doc (PR #152) and the scale envelope guide (PR #149). The
+ *  benchmarks are the ones the README claims; this is just the receipts. */
+function ProvenanceCallout() {
+  const REPO = "https://github.com/benzsevern/goldenmatch";
+  const benchmarks: { name: string; f1: string; note: string }[] = [
+    { name: "DQbench", f1: "91.04", note: "composite, no LLM" },
+    { name: "DBLP-ACM", f1: "0.9641", note: "auto-config beats hand-tuned" },
+    { name: "Febrl3", f1: "0.9443", note: "synthetic person records" },
+    { name: "NCVR", f1: "0.9719", note: "200k NC voters sample" },
+  ];
+  return (
+    <section className="mb-6 card px-5 py-4">
+      <div className="flex items-baseline gap-3 mb-3">
+        <p className="eyebrow">benchmarks</p>
+        <p className="text-xs text-ink-500">
+          All four numbers reproducible from a fresh clone — see{" "}
+          <a
+            className="underline text-gold-600 hover:text-gold-500"
+            href={`${REPO}/blob/main/docs/reproducing-benchmarks.md`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            reproducing-benchmarks.md
+          </a>
+          .
+        </p>
+      </div>
+      <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {benchmarks.map((b) => (
+          <div key={b.name}>
+            <p className="eyebrow mb-0.5">{b.name}</p>
+            <p className="num text-xl text-ink-800 tabular-nums">{b.f1}</p>
+            <p className="text-[11px] text-ink-500">{b.note}</p>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-[11px] text-ink-500">
+        Picking a backend?{" "}
+        <a
+          className="underline text-gold-600 hover:text-gold-500"
+          href={`${REPO}/blob/main/docs/scale-envelope.md`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          scale envelope guide
+        </a>
+        {" "}covers Polars (&lt;500K), DuckDB (500K-50M), Ray (≥50M).
+      </p>
+    </section>
   );
 }
 

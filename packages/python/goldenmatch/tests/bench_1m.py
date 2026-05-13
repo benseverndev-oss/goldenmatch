@@ -1,7 +1,7 @@
 """Benchmark: 1M record dedupe pipeline with timing per stage."""
 
-import time
 import sys
+import time
 from pathlib import Path
 
 # Add project to path
@@ -9,14 +9,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import polars as pl
 from goldenmatch.config.loader import load_config
-from goldenmatch.core.ingest import load_file
 from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.golden import build_golden_record
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_exact_matches
+from goldenmatch.core.standardize import apply_standardization
 
 
 def timed(label):
@@ -41,7 +39,7 @@ def main():
     cfg = load_config(config_path)
     matchkeys = cfg.get_matchkeys()
 
-    print(f"=== GoldenMatch 1M Benchmark ===\n")
+    print("=== GoldenMatch 1M Benchmark ===\n")
 
     # Stage 1: Ingest
     with timed("INGEST (load + row IDs)") as t_ingest:
@@ -99,14 +97,14 @@ def main():
         for cid, cinfo in sample_clusters.items():
             if not cinfo["oversized"]:
                 cluster_df = df.filter(pl.col("__row_id__").is_in(cinfo["members"]))
-                golden = build_golden_record(cluster_df, cfg.golden_rules)
+                _golden = build_golden_record(cluster_df, cfg.golden_rules)
                 golden_count += 1
     print(f"    Golden records built: {golden_count}")
 
     # Summary
     total = t_ingest.elapsed + t_fix.elapsed + t_std.elapsed + t_mk.elapsed + t_match.elapsed + t_cluster.elapsed + t_golden.elapsed
     print(f"\n=== TOTAL: {total:.2f}s ===")
-    print(f"\nBreakdown:")
+    print("\nBreakdown:")
     print(f"  Ingest:       {t_ingest.elapsed:.2f}s ({t_ingest.elapsed/total*100:.0f}%)")
     print(f"  Auto-fix:     {t_fix.elapsed:.2f}s ({t_fix.elapsed/total*100:.0f}%)")
     print(f"  Standardize:  {t_std.elapsed:.2f}s ({t_std.elapsed/total*100:.0f}%)")

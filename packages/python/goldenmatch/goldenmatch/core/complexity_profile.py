@@ -4,6 +4,7 @@ pipeline stages and consumed by AutoConfigController + RefitPolicy.
 Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-design.md §Types & contracts.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -34,6 +35,62 @@ class StopReason(Enum):
     CANCELLED = "cancelled"                   # KeyboardInterrupt
 
 
+@dataclass(frozen=True)
+class ColumnPrior:
+    """v1.10: per-column priors used by indicator-aware rules.
+
+    identity_score: 0.0-1.0; high for canonical identity columns
+    (email, ssn, phone, id-like high-cardinality strings).
+    corruption_score: 0.0-1.0; high when within-column edit-distance
+    variance suggests typo/case noise (Brian/BRIAN/B.).
+    """
+    identity_score: float
+    corruption_score: float
+
+
+@dataclass(frozen=True)
+class SparsityVerdict:
+    """v1.10: result of sparse-match estimation.
+
+    is_sparse: True when sample's exact-matchkey hit count is below
+    the heuristic floor (default 50) — sample is too small to surface
+    visible matches under v0's matchkey config.
+    estimated_n_true_pairs: rough estimate from exact-matchkey hits;
+    used as a tiebreak indicator for rule_sparse_match_expand.
+    """
+    is_sparse: bool
+    estimated_n_true_pairs: int
+
+
+@dataclass(frozen=True)
+class CollisionSignal:
+    """v1.11: result of identity-column collision detection.
+
+    rate: fraction of multi-record groups (size >= 2) where the witness
+    columns disagree by max divergence > 0.5. High rate (>0.2) indicates
+    the identity column is collision-prone — same value used for distinct
+    entities (T3's adversarial pattern).
+
+    witness_used: name of the witness column that drove the highest
+    divergences (used by the demote rule's logging). Empty string when
+    no signal could be computed (budget timeout, no witnesses).
+    """
+    rate: float
+    witness_used: str
+
+
+@dataclass(frozen=True)
+class IndicatorsProfile:
+    """v1.10: dynamic measurements computed lazily by indicators.
+
+    Default-None fields are populated by IndicatorContext on first
+    rule access; they remain None when the rule didn't need them
+    (cheap path on YELLOW-reaching benchmarks).
+    """
+    full_pop_matchkey_hit_rate: float | None = None
+    cross_blocking_overlap: float | None = None
+
+
 def _max_severity(*verdicts: HealthVerdict) -> HealthVerdict:
     if HealthVerdict.RED in verdicts:
         return HealthVerdict.RED
@@ -52,6 +109,7 @@ class DataProfile:
     null_rate: dict[str, float] = field(default_factory=dict)
     value_length_p50: dict[str, int] = field(default_factory=dict)
     value_length_p99: dict[str, int] = field(default_factory=dict)
+    column_priors: dict[str, ColumnPrior] | None = None
 
     def health(self) -> HealthVerdict:
         if self.n_rows == 0:
@@ -198,6 +256,7 @@ class ComplexityProfile:
     scoring: ScoringProfile = field(default_factory=ScoringProfile)
     cluster: ClusterProfile = field(default_factory=ClusterProfile)
     meta: ProfileMeta = field(default_factory=ProfileMeta)
+    indicators: IndicatorsProfile | None = None
 
     def health(self) -> HealthVerdict:
         return _max_severity(

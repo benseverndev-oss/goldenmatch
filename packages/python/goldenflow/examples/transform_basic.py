@@ -6,8 +6,8 @@ matching transforms (e.g., phone normalization, date parsing) automatically.
 Usage:
     python transform_basic.py data.csv
 """
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from goldenflow import transform_file
 
@@ -20,7 +20,7 @@ def main():
     for rec in result.manifest.records:
         print(f"  {rec.column}: {rec.transform} ({rec.rows_affected} rows changed)")
 
-    print(f"\nOutput written to output/")
+    print("\nOutput written to output/")
     print(f"Result DataFrame: {result.df.shape[0]} rows x {result.df.shape[1]} cols")
 
 

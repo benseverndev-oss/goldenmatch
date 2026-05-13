@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -22,11 +21,11 @@ def evaluate_cmd(
     ground_truth: Path = typer.Option(..., "--ground-truth", "--gt", help="Ground truth CSV path"),
     col_a: str = typer.Option("id_a", "--col-a", help="Ground truth column A"),
     col_b: str = typer.Option("id_b", "--col-b", help="Ground truth column B"),
-    threshold: Optional[float] = typer.Option(None, "--threshold", "-t", help="Override match threshold"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Save results to JSON"),
-    min_f1: Optional[float] = typer.Option(None, "--min-f1", help="Minimum F1 score (exit code 1 if below). For CI/CD quality gates."),
-    min_precision: Optional[float] = typer.Option(None, "--min-precision", help="Minimum precision (exit code 1 if below)"),
-    min_recall: Optional[float] = typer.Option(None, "--min-recall", help="Minimum recall (exit code 1 if below)"),
+    threshold: float | None = typer.Option(None, "--threshold", "-t", help="Override match threshold"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Save results to JSON"),
+    min_f1: float | None = typer.Option(None, "--min-f1", help="Minimum F1 score (exit code 1 if below). For CI/CD quality gates."),
+    min_precision: float | None = typer.Option(None, "--min-precision", help="Minimum precision (exit code 1 if below)"),
+    min_recall: float | None = typer.Option(None, "--min-recall", help="Minimum recall (exit code 1 if below)"),
 ) -> None:
     """Evaluate matching quality against ground truth pairs.
 

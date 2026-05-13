@@ -9,7 +9,6 @@ import csv
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -72,7 +71,7 @@ def stats_cmd(
 
 @memory_app.command("learn")
 def learn_cmd(
-    matchkey_name: Optional[str] = typer.Option(
+    matchkey_name: str | None = typer.Option(
         None, "--matchkey-name", help="Limit learning to this matchkey",
     ),
     path: str = typer.Option(DEFAULT_PATH, "--path", help="Memory DB path"),

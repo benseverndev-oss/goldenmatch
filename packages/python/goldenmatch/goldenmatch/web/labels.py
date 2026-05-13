@@ -18,7 +18,7 @@ right path. Both are deferred for v1 — see the spec's Deferred section.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -36,7 +36,7 @@ def _canonical_pair(row_id_a: int, row_id_b: int) -> tuple[int, int]:
 def append_label(path: Path, entry: dict) -> dict:
     a, b = _canonical_pair(entry["row_id_a"], entry["row_id_b"])
     # Rebind to a fresh dict so the caller's payload isn't aliased.
-    entry = {**entry, "row_id_a": a, "row_id_b": b, "ts": datetime.now(timezone.utc).isoformat()}
+    entry = {**entry, "row_id_a": a, "row_id_b": b, "ts": datetime.now(UTC).isoformat()}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     return entry

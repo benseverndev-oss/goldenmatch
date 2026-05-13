@@ -1,6 +1,7 @@
 import polars as pl
-from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.models.finding import Severity
+from goldencheck.profilers.type_inference import TypeInferenceProfiler
+
 
 def test_clean_integer_column():
     df = pl.DataFrame({"age": [25, 30, 45, 28, 33]})

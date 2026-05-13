@@ -23,14 +23,23 @@ from pathlib import Path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
-    Tool, TextContent, Resource, Prompt,
-    PromptArgument, PromptMessage,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    Resource,
+    TextContent,
+    Tool,
 )
 
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.identity_tools import (
+    IDENTITY_TOOL_NAMES,
+    IDENTITY_TOOLS,
+    handle_identity_tool,
+)
 from goldenmatch.mcp.memory_tools import (
-    MEMORY_TOOLS,
     _MEMORY_TOOL_NAMES,
+    MEMORY_TOOLS,
     handle_memory_tool,
 )
 
@@ -411,7 +420,7 @@ _BASE_TOOLS = [
 ]
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
@@ -428,6 +437,9 @@ def dispatch(name: str, args: dict) -> dict:
     if name in _MEMORY_TOOL_NAMES:
         from goldenmatch.mcp.memory_tools import _dispatch as _memory_dispatch
         return _memory_dispatch(name, args)
+    if name in IDENTITY_TOOL_NAMES:
+        from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
+        return _identity_dispatch(name, args)
     return _handle_tool(name, args)
 
 
@@ -441,7 +453,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + MEMORY_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + _BASE_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -689,6 +701,8 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             return handle_agent_tool(name, arguments)
         if name in _MEMORY_TOOL_NAMES:
             return handle_memory_tool(name, arguments)
+        if name in IDENTITY_TOOL_NAMES:
+            return await handle_identity_tool(name, arguments)
         try:
             result = _handle_tool(name, arguments)
             return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
@@ -1045,7 +1059,6 @@ def _tool_profile_data() -> dict:
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
-    import polars as pl
 
     path = Path(output_path)
     if fmt == "json":
@@ -1083,8 +1096,9 @@ def _tool_list_domains() -> dict:
 
 def _tool_create_domain(args: dict) -> dict:
     """Create a custom domain extraction rulebook."""
-    from goldenmatch.core.domain_registry import DomainRulebook, save_rulebook
     from pathlib import Path
+
+    from goldenmatch.core.domain_registry import DomainRulebook, save_rulebook
 
     name = args["name"]
     scope = args.get("scope", "local")
@@ -1158,6 +1172,7 @@ def _tool_pprl_auto_config(security_level: str = "high", use_llm: bool = False) 
         return {"error": "No data loaded. Start the MCP server with --file."}
 
     import polars as pl
+
     from goldenmatch.pprl.autoconfig import auto_configure_pprl, auto_configure_pprl_llm
 
     df = pl.DataFrame(_rows)
@@ -1190,8 +1205,10 @@ def _tool_pprl_auto_config(security_level: str = "high", use_llm: bool = False) 
 
 def _tool_pprl_link(args: dict) -> dict:
     """Run PPRL linkage between two files."""
-    import polars as pl
     from pathlib import Path
+
+    import polars as pl
+
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
     file_a = Path(args["file_a"])
@@ -1255,10 +1272,10 @@ async def run_server_http(
     from collections.abc import AsyncIterator
 
     import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     server = create_server(file_paths or [], config_path)
     session_manager = StreamableHTTPSessionManager(

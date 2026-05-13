@@ -11,8 +11,8 @@ Usage:
 from __future__ import annotations
 
 import csv
-import sys
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     # Deduplicate with exact email matching
     result = gm.dedupe(str(path), exact=["email"])
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Total records: {result.total_records}")
     print(f"  Clusters found: {result.total_clusters}")
     print(f"  Match rate: {result.match_rate:.1%}")

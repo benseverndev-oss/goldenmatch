@@ -6,23 +6,24 @@ on Leipzig benchmark datasets.
 
 import sys
 import time
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-from goldenmatch.core.ingest import load_file
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches, score_blocks_parallel
-from goldenmatch.core.probabilistic import train_em, score_probabilistic
-from goldenmatch.core.learned_blocking import learn_blocking_rules, apply_learned_blocks
-from goldenmatch.core.cluster import build_clusters
 from goldenmatch.config.schemas import (
-    GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig, OutputConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.ingest import load_file
+from goldenmatch.core.learned_blocking import apply_learned_blocks, learn_blocking_rules
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.probabilistic import score_probabilistic, train_em
+from goldenmatch.core.scorer import score_blocks_parallel
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 

@@ -8,8 +8,13 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from goldenmatch.config.schemas import StandardizationConfig
+    from goldenmatch.core.autoconfig_memory import AutoConfigMemory
 
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -23,14 +28,14 @@ from goldenmatch.config.schemas import (
     MemoryConfig,
     OutputConfig,
 )
-from goldenmatch.core.profiler import _guess_type
-from goldenmatch.core.profile_emitter import current_emitter, _emitter_stack
 from goldenmatch.core.complexity_profile import DataProfile
+from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
+from goldenmatch.core.profiler import _guess_type
 
 logger = logging.getLogger(__name__)
 
 
-def _emit_data_profile(df: "pl.DataFrame") -> None:
+def _emit_data_profile(df: pl.DataFrame) -> None:
     """Emit DataProfile from the input DataFrame. No-op when null emitter."""
     if not _emitter_stack.get():
         return
@@ -67,7 +72,8 @@ def _emit_data_profile(df: "pl.DataFrame") -> None:
     current_emitter().set_data(DataProfile(
         n_rows=n_rows,
         n_cols=len(user_cols),
-        column_types=column_types,
+        column_types=column_types,  # pyright: ignore[reportArgumentType]  # runtime values match ColumnType literal set
+
         cardinality_ratio=cardinality_ratio,
         null_rate=null_rate,
         value_length_p50=value_length_p50,
@@ -502,7 +508,6 @@ _DOMAIN_SCORER_MAP = {
 def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
     """Compute threshold based on field types in the matchkey."""
     exact_scorers = {"exact"}
-    fuzzy_scorers = {"jaro_winkler", "levenshtein", "token_sort", "ensemble", "soundex_match"}
     embedding_scorers = {"embedding", "record_embedding"}
 
     scorers = {f.scorer for f in fields if f.scorer}
@@ -784,7 +789,7 @@ def _build_compound_blocking(
     pair_results: list[tuple[ColumnProfile, int]] = []
     for other in candidates[1:6]:
         try:
-            max_block = df.group_by([best.name, other.name]).len().get_column("len").max()
+            max_block = int(df.group_by([best.name, other.name]).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
             pair_results.append((other, max_block))
             logger.debug(
                 "Compound pair [%s, %s]: max_block=%d",
@@ -963,7 +968,7 @@ def _llm_suggest_blocking_keys(
             continue
 
         try:
-            max_block = df.group_by(fields).len().get_column("len").max()
+            max_block = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
         except Exception:
             logger.info("LLM suggestion rejected — group_by failed for %s", fields)
             continue
@@ -1082,9 +1087,29 @@ def build_blocking(
 
     def _max_block_size(col_name: str) -> int:
         """Largest group size when blocking on this column."""
-        return df.group_by(col_name).len().get_column("len").max()
+        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
 
-    max_safe_block = 1000  # blocks larger than this cause OOM on ensemble scorers
+    # Auto-config's "is this blocking key safe?" threshold. Scales with
+    # total_rows so the autoconfig's tolerance for block size grows with
+    # the dataset.
+    #
+    # History: was 1000 historically, a margin set against float64
+    # ensemble scorers OOM-ing on big block matrices. PR #173's float32
+    # scoring brings a 5K block matrix down to ~100 MB. The fixed 1000
+    # caused issue #199 at 2M+: the (state, name) compound block at 2M is
+    # ~1.9K rows, "unsafe" under the old threshold, so autoconfig fell
+    # through to a single-column soundex fallback. Soundex collapses
+    # different surnames into one code, producing ~50K-sized blocks at
+    # full scale that the pipeline filtered at max_block_size=5000 —
+    # leaving no candidate pairs and ~99% singleton output.
+    #
+    # Row-count-aware scaling: total_rows // 200, clamped to [1000, 10000].
+    # Preserves existing behavior at 200K and below (where 1000 always
+    # wins the clamp), bumps to 5000 at 1M (matches the pipeline default),
+    # and headroom to 10K for 2M+. Cap at 10K because a 10K-row block
+    # under float32 ensemble is ~400 MB per scorer call which is the
+    # practical OOM ceiling on a 16 GB runner.
+    max_safe_block = max(1000, min(10_000, int(df.height) // 200))
 
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
@@ -1152,7 +1177,7 @@ def build_blocking(
                 try:
                     max_block = df.group_by([g.name, best_name]).len().get_column("len").max()
                     if max_block is not None:
-                        geo_results.append((g, max_block))
+                        geo_results.append((g, int(max_block)))  # pyright: ignore[reportArgumentType]  # polars max() returns PythonLiteral
                 except Exception:
                     continue
             if geo_results:
@@ -1251,10 +1276,10 @@ _AUTOCONFIG_LLM_ENABLED: bool = (
 
 # Module-level default memory singleton (uses ~/.goldenmatch/autoconfig_memory.db).
 # Lazily initialised on first use to avoid creating the directory at import time.
-_DEFAULT_MEMORY: "AutoConfigMemory | None" = None
+_DEFAULT_MEMORY: AutoConfigMemory | None = None
 
 
-def _get_default_memory() -> "AutoConfigMemory | None":
+def _get_default_memory() -> AutoConfigMemory | None:
     """Return the default AutoConfigMemory, or None when disabled via env var."""
     global _DEFAULT_MEMORY
     if _AUTOCONFIG_MEMORY_DISABLED:
@@ -1272,16 +1297,16 @@ def _get_default_memory() -> "AutoConfigMemory | None":
 
 
 def auto_configure_df(
-    df: "pl.DataFrame | pl.LazyFrame",
+    df: pl.DataFrame | pl.LazyFrame,
     llm_provider: str | None = None,
-    domain_config=None,
+    domain_config: Any = None,
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
     *,
-    reference: "pl.DataFrame | pl.LazyFrame | None" = None,
+    reference: pl.DataFrame | pl.LazyFrame | None = None,
     _skip_finalize: bool = False,
-) -> "GoldenMatchConfig":
+) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
     Runs an iterative refit loop:
@@ -1330,13 +1355,14 @@ def auto_configure_df(
 
     # Lazy import to avoid circular imports (controller imports back here)
     from goldenmatch.core.autoconfig_controller import (
-        AutoConfigController, ControllerBudget,
+        AutoConfigController,
+        ControllerBudget,
     )
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
 
     memory = _get_default_memory()
     if _AUTOCONFIG_LLM_ENABLED:
-        policy: "HeuristicRefitPolicy | LLMRefitPolicy" = LLMRefitPolicy(HeuristicRefitPolicy())
+        policy: HeuristicRefitPolicy | LLMRefitPolicy = LLMRefitPolicy(HeuristicRefitPolicy())
     else:
         policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
@@ -1361,12 +1387,12 @@ def auto_configure_df(
     return config
 
 
-def _legacy_auto_configure_v0(
+def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept for historical reference
     df: pl.DataFrame,
     *,
     reference: pl.DataFrame | None = None,  # ignored for v1; Task 5.1 plumbs it
     llm_provider: str | None = None,
-    domain_config=None,
+    domain_config: Any = None,
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
@@ -1692,7 +1718,7 @@ def _rebuild_from_decisions(
     transient_blocking: BlockingConfig | None,
     llm_scorer_config: LLMScorerConfig | None,
     memory_config: MemoryConfig | None,
-    standardization_config: "StandardizationConfig | None" = None,
+    standardization_config: StandardizationConfig | None = None,
 ) -> GoldenMatchConfig:
     """Assemble a GoldenMatchConfig from decisions (+ runtime hand-offs).
 
@@ -1710,7 +1736,6 @@ def _rebuild_from_decisions(
     iterative-tuning hooks that may re-examine column stats without rethreading
     them through the call chain.
     """
-    from goldenmatch.config.schemas import StandardizationConfig as _StdCfg  # noqa: F401
     # Rebuild final blocking from decisions, preserving runtime-only attrs
     # (learned_sample_size, learned_min_recall, skip_oversized, etc.) from
     # the transient blocking object produced above.
@@ -1746,7 +1771,7 @@ def auto_configure(files: list[tuple[str, str]]) -> GoldenMatchConfig:
     """
     # Load and combine files
     dfs = []
-    for path, source_name in files:
+    for path, _source_name in files:
         p = Path(path)
         if p.suffix.lower() in (".xlsx", ".xls"):
             df = pl.read_excel(p, engine="openpyxl")

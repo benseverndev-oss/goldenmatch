@@ -1,7 +1,9 @@
 """Column Detail tab — per-column profile information."""
 from __future__ import annotations
-from textual.widgets import Static, OptionList
+
 from textual.containers import Vertical
+from textual.widgets import OptionList, Static
+
 from goldencheck.models.profile import DatasetProfile
 
 

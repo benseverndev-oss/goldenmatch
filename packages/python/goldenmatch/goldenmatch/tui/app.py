@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, TabbedContent, TabPane
-from textual import work
 
 from goldenmatch.tui.sidebar import Sidebar
+from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.config_tab import ConfigTab
+from goldenmatch.tui.tabs.controller_tab import ControllerTab
 from goldenmatch.tui.tabs.data_tab import DataTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
-from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
 
 
@@ -233,6 +234,7 @@ class GoldenMatchApp(App):
         Binding("f1", "help", "Help"),
         Binding("f2", "save_config", "Save"),
         Binding("f5", "run_sample", "Run"),
+        Binding("ctrl+a", "auto_configure", "Auto"),
         Binding("ctrl+r", "rerun", "Re-run"),
         Binding("ctrl+s", "save_preset", "Preset"),
         Binding("ctrl+e", "quick_export", "Export"),
@@ -243,6 +245,7 @@ class GoldenMatchApp(App):
         Binding("4", "goto_tab_4", "Golden", show=False),
         Binding("5", "goto_tab_5", "Boost", show=False),
         Binding("6", "goto_tab_6", "Export", show=False),
+        Binding("7", "goto_tab_7", "Controller", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -271,6 +274,8 @@ class GoldenMatchApp(App):
                         yield BoostTab()
                     with TabPane("Export", id="tab-export"):
                         yield ExportTab()
+                    with TabPane("Controller", id="tab-controller"):
+                        yield ControllerTab()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -489,6 +494,71 @@ class GoldenMatchApp(App):
 
     def action_goto_tab_6(self) -> None:
         self._goto_tab("tab-export")
+
+    def action_goto_tab_7(self) -> None:
+        self._goto_tab("tab-controller")
+
+    # ── Auto-configure ────────────────────────────────────────────
+
+    def action_auto_configure(self) -> None:
+        """Run AutoConfigController on the loaded data and adopt the result.
+
+        Mirrors the web workbench's "Auto-configure" button: profiles data,
+        picks a config, captures stop_reason / decisions / indicators / NE,
+        renders them in the Controller tab. Switches focus to the Controller
+        tab so the user sees the telemetry immediately.
+        """
+        if self.engine is None:
+            self.notify("No files loaded.", severity="warning")
+            return
+        self.notify("Running auto-configure…", severity="information")
+        self._run_auto_configure_job()
+
+    @work(thread=True)
+    def _run_auto_configure_job(self) -> None:
+        if self.engine is None:
+            return
+        try:
+            config, telemetry = self.engine.auto_configure()
+            self.call_from_thread(self._on_auto_configure_complete, config, telemetry)
+        except Exception as e:
+            self.call_from_thread(
+                self.notify, f"Auto-configure error: {e}", severity="error"
+            )
+
+    def _on_auto_configure_complete(self, config, telemetry) -> None:
+        """Adopt the controller's committed config + render telemetry."""
+        self.current_config = config
+        # Refresh sidebar config summary.
+        sidebar = self.query_one(Sidebar)
+        sidebar.update_config(config)
+        # Push to the Config tab so the user can tweak from the suggestion.
+        try:
+            config_tab = self.query_one(ConfigTab)
+            if hasattr(config_tab, "set_config"):
+                config_tab.set_config(config)
+        except Exception:
+            # ConfigTab may not have a set_config; non-fatal.
+            pass
+        # Refresh export tab so save-config uses the auto-configured shape.
+        export_tab = self.query_one(ExportTab)
+        export_tab.set_config(config)
+        # Render telemetry and switch to the Controller tab.
+        controller_tab = self.query_one(ControllerTab)
+        controller_tab.update_telemetry(telemetry)
+        self._goto_tab("tab-controller")
+        # Build a one-line status surfacing what the user got.
+        n_decisions = len(getattr(telemetry.history, "entries", []) or [])
+        ne_count = sum(
+            len(getattr(mk, "negative_evidence", None) or [])
+            for mk in config.get_matchkeys()
+        )
+        suffix = f" · {ne_count} NE field{'s' if ne_count != 1 else ''}" if ne_count else ""
+        self.notify(
+            f"Auto-configured · {n_decisions} controller iteration"
+            f"{'s' if n_decisions != 1 else ''}{suffix}.",
+            severity="information",
+        )
 
     # ── Quick export ──────────────────────────────────────────────
 

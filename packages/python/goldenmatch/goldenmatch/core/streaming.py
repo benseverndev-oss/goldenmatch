@@ -23,17 +23,15 @@ from __future__ import annotations
 import logging
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from threading import Event
 
 import polars as pl
 
-from goldenmatch.config.schemas import GoldenMatchConfig, MatchkeyConfig
+from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.cluster import add_to_cluster
 from goldenmatch.core.match_one import match_one
-from goldenmatch.core.scorer import score_pair
 
 logger = logging.getLogger(__name__)
 

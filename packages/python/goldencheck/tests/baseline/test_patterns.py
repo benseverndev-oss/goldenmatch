@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldencheck.baseline.patterns import _induce_column_grammars, induce_patterns
-
 
 # ---------------------------------------------------------------------------
 # Helpers

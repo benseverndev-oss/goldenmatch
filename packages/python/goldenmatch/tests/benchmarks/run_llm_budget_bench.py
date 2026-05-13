@@ -5,8 +5,8 @@ Tests the LLM scorer on top of the best fuzzy baseline (rec_emb+ann_pairs)
 with budget controls. Requires OPENAI_API_KEY in .testing/.env.
 """
 
-import sys
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -25,17 +25,20 @@ if env_file.exists():
             os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
 import polars as pl
-from goldenmatch.core.autofix import auto_fix_dataframe
-from goldenmatch.core.standardize import apply_standardization
-from goldenmatch.core.matchkey import compute_matchkeys
-from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.scorer import find_fuzzy_matches
-from goldenmatch.core.llm_scorer import llm_score_pairs
 from goldenmatch.config.schemas import (
-    MatchkeyConfig, MatchkeyField,
-    BlockingConfig, BlockingKeyConfig,
-    LLMScorerConfig, BudgetConfig,
+    BlockingConfig,
+    BlockingKeyConfig,
+    BudgetConfig,
+    LLMScorerConfig,
+    MatchkeyConfig,
+    MatchkeyField,
 )
+from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.llm_scorer import llm_score_pairs
+from goldenmatch.core.matchkey import compute_matchkeys
+from goldenmatch.core.scorer import find_fuzzy_matches
+from goldenmatch.core.standardize import apply_standardization
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -93,7 +96,9 @@ api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     print("ERROR: No OPENAI_API_KEY found.")
     sys.exit(1)
-print(f"API key loaded: {api_key[:10]}...{api_key[-4:]}")
+# Just confirm presence; don't echo any portion of the key. Even masked
+# prefixes can leak provider/account info in screenshots.
+print(f"API key loaded (length={len(api_key)})")
 
 df, gt = load_abt_buy()
 print(f"Loaded: {df.height} records, {len(gt)} ground truth pairs\n")

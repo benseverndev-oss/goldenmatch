@@ -1,6 +1,12 @@
 """goldencheck-types — shared canonical field types for the Golden Suite."""
 from __future__ import annotations
 
+from goldencheck_types.loader import (
+    DomainPackError,
+    clear_cache,
+    list_domains,
+    load_domain,
+)
 from goldencheck_types.types import (
     SCHEMA_VERSION,
     UNMAPPED_TYPE,
@@ -11,12 +17,6 @@ from goldencheck_types.types import (
     InferredSchema,
     is_unknown,
     unmapped_cols,
-)
-from goldencheck_types.loader import (
-    DomainPackError,
-    clear_cache,
-    list_domains,
-    load_domain,
 )
 
 __version__ = "0.1.0"

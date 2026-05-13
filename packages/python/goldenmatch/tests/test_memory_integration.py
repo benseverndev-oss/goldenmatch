@@ -1,12 +1,16 @@
 """End-to-end integration tests for Learning Memory."""
-import pytest
 from datetime import datetime
+
 import polars as pl
-from goldenmatch.core.memory.store import MemoryStore, Correction
+import pytest
 from goldenmatch.core.memory.corrections import (
-    apply_corrections, build_row_lookup, compute_field_hash, compute_record_hash,
+    apply_corrections,
+    build_row_lookup,
+    compute_field_hash,
+    compute_record_hash,
 )
 from goldenmatch.core.memory.learner import MemoryLearner
+from goldenmatch.core.memory.store import Correction, MemoryStore
 
 
 @pytest.fixture

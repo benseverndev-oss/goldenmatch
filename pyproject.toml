@@ -22,7 +22,9 @@ dev = [
     "pytest-xdist>=3.6",
     "pytest-asyncio>=0.23",  # required by goldenmatch + goldenflow async tests
     "pytest-timeout>=2.3",  # surfaces hung tests in CI as failures w/ stack traces (vs job timeout)
+    "pytest-cov>=5.0",  # required by ci.yml's "Coverage floors" step on the goldenmatch matrix entry
     "ruff>=0.6",
+    "pyright>=1.1.380",  # strict typing on goldenmatch core slice (see pyrightconfig.json)
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
@@ -31,3 +33,24 @@ dev = [
 # addopts, because individual packages (e.g. goldensuite-mcp) define their own
 # optional [dev] extras that don't include xdist, and pytest invoked under
 # those package envs would fail with "unrecognized arguments: -n".
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F", "I", "B", "UP"]
+ignore = [
+    # B007: unused-loop-control-variable — 76 sites of mechanical _ rename noise
+    "B007",
+    # B008: function-call-in-default-argument — FastAPI/Pydantic Depends()/Field() are legitimate patterns
+    "B008",
+    # B017: assert-raises-exception — test patterns, not production bugs
+    "B017",
+    # B023: function-uses-loop-variable — single intentional closure binding
+    "B023",
+    # B904: raise-without-from-inside-except — 110 sites; revisit as a focused PR
+    "B904",
+    # B905: zip-without-explicit-strict — 54 sites need per-call strict=True/False decisions
+    "B905",
+]

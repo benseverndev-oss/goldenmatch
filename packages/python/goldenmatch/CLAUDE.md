@@ -6,48 +6,18 @@
 - **npm:** `goldenmatch` (TypeScript port at `packages/goldenmatch-js/`)
 - **GitHub:** `benzsevern/goldenmatch`, `benzsevern/goldenmatch-extensions`
 
-## TypeScript Port (`packages/goldenmatch-js/`)
-- **npm:** `goldenmatch` (same name, different registry from PyPI)
-- **Commands** (from `packages/goldenmatch-js/`): `npx tsc --noEmit`, `npx vitest run`, `npm run build` (tsup)
-- **Edge-safe rule:** files in `src/core/` MUST NOT import `node:*`. Node-only code lives in `src/node/`.
-- **Parity harness:** `tests/parity/scorer-ground-truth.test.ts` locks scorer output at 4-decimal tolerance against Python
-- **Strict TS:** `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` — use `!` on bounded-loop indices, conditional spread for optional props
-- **Optional peer deps:** load via `await import("pkg-name" as string)` — the `as string` cast prevents tsup from resolving at build time
-- **tsup has 5 entrypoints:** `index`, `core/index`, `node/index`, `cli`, `node/backends/score-worker` (piscina worker)
-- **PORTING_GUIDE.md** in repo root is the playbook for porting
-- **No `make*` factory functions** exist for config types — test fixtures use full literals. Required fields: `MatchkeyField` needs `field`+`transforms`+`scorer`+`weight`; `BlockingKeyConfig` needs `fields`+`transforms`; `BlockingConfig` needs `strategy`+`keys`+`maxBlockSize`+`skipOversized`
-- **Scorer names are snake_case** (same as Python): `token_sort`, `record_embedding`, `soundex_match`, `ensemble`, `exact`, `jaro_winkler`, `levenshtein`
-- **`DOMAIN_EXTRACTED_COLS`** (in `src/core/domain.ts`) has only 3 entries (`__brand__`, `__model__`, `__version__`) — Python's equivalent has 12; don't assume parity when porting domain features
-- **`import type` cycle rule:** `types.ts` imports types from `autoconfigVerify.ts`, so `autoconfigVerify.ts` must use `import type { ... }` (never runtime `import`) for any types.ts symbols
-- **`exactOptionalPropertyTypes`:** don't spread `undefined` into typed optional fields — use `...(x !== undefined ? { field: x } : {})`
-- **Vitest default timeout is 5s** — heavier integration tests (PPRL multi-level, postflight end-to-end) need `{ timeout: 15000 }`; CI concurrent load has bitten this (cost a release: goldenmatch-js v0.3.0 → v0.3.1)
+## TypeScript Port
+Lives at `packages/typescript/goldenmatch/`. See that package's CLAUDE.md for npm release flow, edge-safety rules, parity harness, and port-specific gotchas.
 
-## Branch & Merge SOP (all Golden Suite repos)
-- Feature work goes on `feature/<name>` branches, never directly to main
-- Merge via **squash merge PR** (watchers see PR activity, history stays clean)
-- PR title format: `feat: <description>` or `fix: <description>`
-- PR body: summary bullets + test plan
-- Merge when: tests pass, docs updated. Days not weeks.
-- After merge: delete remote branch
-- Commands: `gh pr create --title "..." --body "..."` then squash merge via GitHub UI or `gh pr merge --squash`
-- **Release tags:** Python = `v1.4.x` (triggers `publish.yml` → PyPI). TypeScript = `goldenmatch-js-v0.1.x` (triggers `publish-npm.yml` → npm). Never push an unprefixed version tag for TS.
-
-## Environment
-- Windows 11, bash shell (Git Bash) -- use Unix paths in scripts
+## Environment (goldenmatch-specific)
+Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQL 16 portable. Goldenmatch-only quirks:
 - GCP project: `gen-lang-client-0692108803` (Vertex AI embeddings)
-- Python 3.12 at `C:\Users\bsevern\AppData\Local\Programs\Python\Python312\python.exe`
-- Project lives on D: drive: `D:\show_case\goldenmatch`
-- Two GitHub accounts: `benzsevern` (personal, for this repo) and `benzsevern-mjh` (work)
-- MUST `gh auth switch --user benzsevern` before push, switch back to `benzsevern-mjh` after
-- `gh auth switch` sometimes doesn't apply to `gh api graphql` / `gh pr create` / git push — force the right token with `GH_TOKEN=$(gh auth token --user benzsevern) gh ...`. For wiki repo push, rewrite the remote URL: `git remote set-url origin "https://benzsevern:$(gh auth token --user benzsevern)@github.com/benzsevern/goldenmatch.wiki.git"`
 - Polars `scan_csv` uses `encoding="utf8"` not `"utf-8"`
 - Polars `read_excel` needs explicit `engine="openpyxl"`
-- Rust 1.94.0 installed at `C:\Users\bsevern\.cargo\bin` -- must set `RUSTUP_HOME="C:/Users/bsevern/.rustup"` and `CARGO_HOME="C:/Users/bsevern/.cargo"` in every bash command, plus add to PATH
-- No admin privileges -- cannot install system packages (LLVM, WSL2, Developer Mode). Workarounds: `RUSTUP_WINDOWS_PATH_TYPE=hardlink` for Rust, user-dir installs for everything else
-- pgrx (Postgres extension framework) cannot build locally -- needs libclang/LLVM. Use CI (Linux) for pgrx builds/tests
-- PostgreSQL 16 portable at `C:\Users\bsevern\tools\pg16portable\pgsql`
+- **Release tags:** Python = `v1.x.y` (triggers `publish-goldenmatch.yml` → PyPI). TypeScript = `goldenmatch-js-v0.x.y` (triggers `publish-goldenmatch-js.yml` → npm). Never push an unprefixed version tag for TS.
 
 ## Testing
+- `CliRunner(mix_stderr=False)` errors on click ≥8.3 (currently installed) with `TypeError: unexpected keyword argument 'mix_stderr'`. Drop the kwarg — default already routes stderr separately; `result.stderr` is still accessible.
 - **TypeScript:** `cd packages/goldenmatch-js && npx vitest run` — 478 tests currently. Full check: `npx tsc --noEmit && npx vitest run && npm run build`
 - TS parity check: `tests/parity/` — add new parity cases when porting any new scorer or algorithm
 - `pytest --tb=short` from project root — all tests must pass after every change
@@ -116,7 +86,7 @@
 - Blocking key choice dominates fuzzy performance — coarse keys create huge blocks
 - 1M exact dedupe: ~7.8s. 100K fuzzy (name+zip): ~12.8s via pipeline
 - Scale curve: 7,823 rec/s at 100K records on laptop (fuzzy + exact + golden)
-- 1M records: OOM in-memory — use DuckDB backend or chunked processing for >500K records
+- 1M records (scale-audit Round 3, 2026-05-11): ~43 min wall on a GitHub `ubuntu-latest` (4-core, 16 GB) runner, 9.98 GB peak RSS, 836K clusters, no OOM. Roughly split half auto_configure + half run_dedupe. The older "1M OOMs in-memory" note was driven by tracemalloc traceback storage + Windows file-cache pressure, not by goldenmatch's working set. Default (Linux, tracemalloc off) fits comfortably in 16 GB through 1M. Wall is now the cliff, not memory — use DuckDB backend or chunked processing for 5M+ if wall becomes unacceptable, not for memory reasons.
 
 ## Accuracy Strategy
 - Structured data (names, addresses, bibliographic): fuzzy matching alone → 97.2% F1. No embeddings or LLM needed.
@@ -136,6 +106,9 @@
 - LLM+embedding benchmark: `python tests/benchmarks/run_llm_budget_bench.py` (requires OPENAI_API_KEY)
 
 ## Code Patterns
+- **Cross-surface controller telemetry uses ONE serializer**: `goldenmatch.web.controller_telemetry.serialize_telemetry(profile, history, committed_config, source, run_name, recorded_at)`. Every v1.7-v1.12 surface (web `/api/v1/controller/telemetry`, TUI Controller tab, CLI `goldenmatch autoconfig`, REST `/autoconfig`, MCP `auto_configure` tool, A2A `autoconfig` skill, SQL `goldenmatch_autoconfig_telemetry()`, Rust bridge `autoconfig()`) delegates here. SQL bridge + DuckDB UDFs fall back to a minimal hand-rolled blob (`{available, source, stop_reason, health}`) when `goldenmatch[web]` extra isn't installed. Capture telemetry by reading `goldenmatch.core.autoconfig._LAST_CONTROLLER_RUN.get()` post-`auto_configure_df()` — returns `(profile, history)` or `None`.
+- **Pydantic typed-accessor pattern for Optional invariants.** `MatchkeyConfig.threshold` / `MatchkeyField.scorer`/`weight`/`field` are typed Optional at the Pydantic level (YAML round-trip) but guaranteed non-None for `weighted`/`fuzzy` matchkey types post-validation. Pattern (PR #151): keep the field Optional, add a `@property` accessor (`fuzzy_threshold`, `fuzzy_scorer`, `fuzzy_weight`, `resolved_field`) that raises `ValueError` if the invariant was broken via post-construction mutation, and use the accessor at call sites that need the narrowed type. Pyright stops seeing Optional — dropped 7 `# pyright: ignore` suppressions in `scorer.py`.
+- **Pyright suppressions on multi-line imports.** `# pyright: ignore[reportMissingImports]` must sit on the `from X import (` line itself, NOT on the imported-symbol continuation line. Pyright reports the error at the `from X` column; a comment on a later line doesn't satisfy it. Bit us on `autoconfig_policy.py` (openai) and `scorer.py` (sentence_transformers) in PR #147.
 - Auto-config exact matchkeys: `col_type in ("zip","geo")` NEVER backs an exact matchkey (blocking signal, not identity claim). Exact matchkeys require `cardinality_ratio >= 0.5`. Skipped columns still flow into `build_blocking()`.
 - Auto-config learned blocking: gated at `total_rows >= 50_000` in `autoconfig.py`. Sample size capped at `min(total_rows // 4, 5000)` so learner has held-out rows. Below 50K, static/multi_pass is default.
 - `DedupeResult.total_records` = `dupes.height + unique.height` (golden is a rollup, NOT a separate row population). Adding golden double-counts every multi-member cluster.
@@ -201,6 +174,21 @@
 - A2A server runs on separate port (8200) from REST API (8000) -- aiohttp for async/SSE, existing REST stays synchronous
 - `aiohttp` is optional dep: `pip install goldenmatch[agent]`
 
+## Identity Graph (v2.0, 2026-05-12)
+
+`goldenmatch/identity/` exposes a durable graph layer above run-local clusters: stable `entity_id` (UUIDv7) per identity, source-record nodes, evidence edges, append-only event log, and aliases. SQLite default at `.goldenmatch/identity.db`; Postgres optional. Spec: `docs/superpowers/specs/2026-05-12-identity-graph-design.md`. Roadmap: `docs/superpowers/plans/2026-05-12-identity-graph-roadmap.md`.
+
+- **Pipeline hook**: `pipeline.py::_resolve_identities()` runs after clustering, before output, gated on `config.identity.enabled`. Identity is additive — failure logs + skips, never blocks dedupe output.
+- **Stable IDs across runs**: derived via `resolve_clusters()` overlap detection, NOT content hash. New cluster -> new id; overlap with one existing identity -> absorb; overlap with multiple -> merge (winner = most members; tie-break oldest `created_at`).
+- **Record id**: `{source}:{source_pk}` when `identity.source_pk_column` is set; otherwise `{source}:hash:{12 hex}` from payload SHA-256. Document the no-PK case to users — near-duplicate raw rows can collide.
+- **Idempotency**: replaying the same `(run_name, entity_id, kind)` is a no-op via `has_run_event()`; `evidence_edges` has UNIQUE(entity_id, record_a_id, record_b_id, run_name).
+- **Surfaces**: Python (`goldenmatch.identity.*` + root re-exports), CLI (`goldenmatch identity list/show/resolve/history/conflicts/merge/split`), REST (`/api/v1/identities/...`), web "Identities" tab, MCP (`identity_*` × 6 tools), A2A (6 skills), TS edge-safe core (`InMemoryIdentityStore` + `query.ts` helpers). TS persistent SQLite backend + pipeline-driven population are v2 follow-ups.
+- **Postgres surface**: `goldenmatch/db/migrations/identity_v1.sql` is the canonical schema + analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`). `IdentityStore(backend="postgres", connection=...)` creates the same schema on first connect.
+- **DuckDB / extensions contract**: `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` — UDF signatures the `goldenmatch-extensions` repo must expose.
+- **Test count discipline**: Identity adds 47 Python tests (4 modules under `tests/identity/` + `tests/test_mcp_identity_tools.py` + `tests/web/test_router_identity.py`) and 13 TS tests (`tests/identity/`).
+- **A2A skill count went 12 -> 18**. Update `test_agent_card_has_18_skills` if you add a skill.
+- **`pipeline.run_dedupe_df` result** now has `identity_summary: dict | None` (None when identity disabled).
+
 ## Remote MCP Server
 
 Hosted on Railway, registered on Smithery:
@@ -236,7 +224,12 @@ Hosted on Railway, registered on Smithery:
 - **`RunHistory.stop_reason: StopReason | None`** set at every break point in the iteration loop. Observable via `result.postflight_report.controller_history.stop_reason`. `StopReason` lives in `core/complexity_profile.py`.
 - **Virtual v0 entry:** after the loop, `config_v0`'s profile is appended as `HistoryEntry(iteration=-1)` so `pick_committed()` can fall back to v0 when all real iterations are worse. WARNING/INFO commit log uses `iter=v0` to identify virtual-entry commits.
 - **Health-aware commit logging:** WARNING when committed health is RED (with failing sub-profile name + stop_reason); INFO when YELLOW; silent on GREEN. ERROR when every iteration errored (falls back to v0 + RED sentinel).
-- **v1.10 forward note:** controller complexity indicators can't yet distinguish "blocking key is wrong" from "blocking key is right but sample has no visible matches" (both produce `mass_above_threshold=0.0`). v1.10 will add identity-column priors, cross-blocking overlap probe, and blocking-column corruption signal.
+- **v1.10 indicators** (2026-05-08): added 5 complexity indicators in `core/indicators.py`. **Cheap eager** (always run): `compute_column_priors` (per-column identity_score + corruption_score), `estimate_sparse_match_signal` (n_exact_hits in sample). **Expensive lazy** (via `IndicatorContext` memoized methods, gated by `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast`): `compute_corruption_score`, `estimate_full_pop_hits`, `compute_cross_blocking_overlap`. Indicators feed into `rule_no_matches` and `rule_blocking_key_swap` (modified) plus 3 new rules: `rule_corruption_normalize` (adds normalize when blocking col is corrupted+identity), `rule_cross_blocking_disagreement` (multi-pass on orthogonal key when overlap is low), `rule_sparse_match_expand` (lower threshold + side-channel when sample is sparse). `RefitPolicy.propose` accepts optional `ctx: IndicatorContext | None` kwarg; controller introspects custom-policy signatures via `inspect.signature` for backward compat.
+- **v1.10 ship target**: fallback met (DQbench composite 66.91 >= 65; primary target >= 70 not reached). Real DQbench gains came from T2 recovery (+10.3 pp, 58.7% → 69.0%) — indicators allow the controller to correctly avoid abandoning identity blocking columns on T2 shapes. T1 and T3 unchanged vs v1.9.
+- **v1.11 negative evidence** (2026-05-10): adds `NegativeEvidenceField` to `MatchkeyConfig` + `_apply_negative_evidence` in the weighted-matchkey scoring loop (subtracts penalty when an NE field disagrees, i.e. scorer < threshold). `promote_negative_evidence` is the eager rule that populates NE at auto-config time: it selects columns with `identity_score >= _IDENTITY_SCORE_THRESHOLD (0.75)`, cardinality >= 0.5, not in blocking, not in weighted matchkey fields, AND with an exact matchkey counterpart (the **exact-matchkey gate**). The gate prevents NE from being added for columns that have no strong anchor — removing it gives composite 68.92 vs 66.99 on T3-heavy data but hurts T2 recall (68.18 vs 69.03). `rule_demote_clustered_identity` (new in v1.11) detects adversarial identity-column reuse: if a sample of exact-matchkey columns shows collision_rate >= 0.75, the exact matchkey is demoted to avoid false merges. Threshold 0.75 was raised from 0.5 after diagnosis showed T2's collision rate (0.615) was triggering false demotions and producing 186 FNs. `compute_identity_collision_signal` in `core/autoconfig_rules.py` does the sample-based collision measurement. `_pick_scorer_for_column` selects the per-column scorer for NE fields (email→token_sort, phone→exact+digits_only, address→token_sort, other→ensemble). See `core/autoconfig_negative_evidence.py` and `core/autoconfig_rules.py`.
+- **v1.11 ship target**: incremental improvement met (DQbench composite 66.99 > v1.10's 66.91; primary >= 75 and fallback >= 70 not reached). T3 FP root cause: the zeroconfig adapter's `exact_email` matchkey directly captures adversarial same-email pairs — NE on the `fuzzy_match` weighted matchkey cannot penalise pairs already matched by an exact rule. T3's collision rate (0.592) is also BELOW T2's (0.615), so no valid collision threshold can distinguish T3-adversarial from T2-normal. Fixing T3 requires either: (a) NE propagated into exact matchkey scoring (v1.12 candidate), or (b) cluster-level re-scoring after all matchkeys fire. Benchmark deltas vs v1.10: T1 88.9%→88.9% (flat), T2 69.0%→69.0% (flat), T3 53.8%→53.8% (flat at DQbench-adapter level; raw exact_email FPs unchanged). Composite improvement is noise-level; v1.11 value is the NE infrastructure and `rule_demote_clustered_identity` guard, not a measurable DQbench gain.
+- **v1.12 Path Y** (2026-05-09): extends `_apply_negative_evidence` to exact matchkeys via the new `_apply_negative_evidence_to_exact_pairs` post-filter helper in `core/scorer.py` (called from `core/pipeline.py` after `find_exact_matches`). Score formula: `final = max(0, 1.0 - sum(penalties))`; emit if `final >= matchkey.threshold` (default 0.5 when NE set + threshold None). Backward compat: exact matchkey without NE preserves today's binary 1.0/0.0 emit. `promote_negative_evidence` extended to walk all matchkey types; the `_is_exact_matchkey_field` gate is selectively applied (skipped on the exact-matchkey iteration branch — its v1.11 rationale doesn't apply when iterating an exact matchkey for itself). When NE is added to a threshold-None exact matchkey, threshold defaults to 0.5 to activate the score-and-threshold path. Targets DQbench T3 53.8% → 70%+ via NE penalty filtering collision pairs directly on the exact_email matchkey.
+- **v1.12 ship target**: PRIMARY target met (DQbench composite 91.04 >= 75). T3 F1 85.5% (target >= 70%). T1 89.3% (floor 88.9%), T2 97.5% (floor 69.0%). Benchmark deltas vs v1.11: T1 89.3%→89.3% (flat), T2 97.5% (was 69.0%; +28.5 pp), T3 85.5% (was 53.8%; +31.7 pp). Composite 66.99 → 91.04 (+24.05 pp). Path Y NE on exact matchkeys directly filters adversarial collision pairs at the `exact_email` matchkey level, resolving the v1.11 root cause.
 
 ## Gotchas
 - `docs/superpowers/` is gitignored — specs and plans are local-only; do NOT `git add` them
@@ -323,151 +316,9 @@ Hosted on Railway, registered on Smithery:
 - `apply_corrections` reanchor builds `record_hash → list[row_id]` via `pl.concat_str` + `map_elements` (vectorized O(N)). Ambiguous re-anchors counted as `stale_ambiguous`, never silently misapplied.
 - PyPI publish: `publish-goldenmatch.yml` lives at the **monorepo root**, not under this package. Trusted publishing NOT configured — uses `PYPI_TOKEN` secret. To enable trusted publishing later, claim PyPI publisher: owner `benzsevern`, repo `goldenmatch`, workflow `publish-goldenmatch.yml`, environment `pypi`.
 
-## TS port v0.4.0 — Learning Memory parity
-- npm `goldenmatch` v0.4.0 ships full cross-language parity with Python `goldenmatch` v1.6.0. A correction written by either runtime applies identically in the other.
-- **Hash bytes are the contract.** SHA-256 truncated to 16 hex chars via Web Crypto (`crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))`). UTF-8 encoding mandatory on both sides. Hash input = values only joined by `|` (NOT `<col>=<val>`). `__row_id__` excluded from `record_hash` so it survives row reordering.
-- **Edge-safety boundary.** `src/core/memory/` is edge-safe (no `node:*`); `src/node/memory/` has `SqliteMemoryStore` + the Python-API mirror (`getMemory`, `addCorrection`, `learn`, `memoryStats`) — they construct a Node-only SQLite store.
-- **`ScoredPair` shape divergence.** Memory module's `applyCorrections` takes a tuple `[a, b, score]` (matches Python). Pipeline passes the object shape. Translation isolated to `_applyMemoryPost` in `pipeline.ts` — touching it means handling both shapes.
-- **Pipeline is async post-v0.4.0.** `runDedupePipeline`, `runMatchPipeline`, `dedupe`, `match`, `dedupeFile`, `matchFile`, `runSensitivity`, `unmergeRecord`, `unmergeCluster` all return Promises. Every external caller awaits.
-- **MCP tool count is 24** (19 existing + 5 memory tools). Description literal at `src/node/mcp/server.ts:6` reads `Exposes 24 tools`. Update + assert via the existing regex test when adding more.
-- **`better-sqlite3` is an OPTIONAL peer dep.** `await import("better-sqlite3" as string)` with the `as string` cast (prevents tsup resolving at build time). Throws clear "install better-sqlite3" if missing.
-- **Cross-language parity fixtures** committed at `tests/parity/fixtures/{memory_corrections.json, memory.db, memory_apply_inputs.json}` on both Python and TS sides. Regen via `packages/python/goldenmatch/tests/parity/memory/gen_memory_fixtures.py --rebuild-db`. Determinism clamp: pinned UUIDs, pinned `created_at` (no `datetime.now()`).
-- **npm publish workflow:** `.github/workflows/publish-goldenmatch-js.yml` at MONOREPO ROOT. Trusted publishing NOT configured — uses `NPM_TOKEN` secret. Trigger pattern: `goldenmatch-js-v*` tag push OR `workflow_dispatch` with optional `ref` input. Tag MUST point at a commit that has the workflow file, otherwise the trigger doesn't fire.
+## API + Common Mistakes
 
-## API Quick Reference
-
-### dedupe_df() — DataFrame deduplication
-```python
-import goldenmatch
-
-result = goldenmatch.dedupe_df(
-    df,
-    config=None,              # GoldenMatchConfig or None
-    exact=["email"],          # exact match columns
-    fuzzy={"name": 0.85},     # fuzzy match with thresholds
-    blocking=["zip"],         # blocking keys
-    threshold=0.85,           # overall fuzzy threshold
-    llm_scorer=False,         # enable LLM for borderline pairs
-)
-```
-
-### DedupeResult fields
-```python
-result.golden          # pl.DataFrame | None — canonical records with __cluster_id__
-result.dupes           # pl.DataFrame | None — duplicate records with __row_id__
-result.unique          # pl.DataFrame | None — non-duplicate records
-result.clusters        # dict[int, dict] — {cluster_id: {"members": [row_ids], "pair_scores": {(a,b): score}}}
-result.scored_pairs    # list[tuple[int, int, float]] — all matched pairs
-result.stats           # dict — total_records, total_clusters, matched_records, match_rate
-result.total_records   # int
-result.total_clusters  # int
-result.match_rate      # float
-```
-
-### StandardizationConfig — use rules dict, NOT keyword args
-```python
-# WRONG:
-StandardizationConfig(email=["email"], phone=["phone"])
-
-# RIGHT:
-StandardizationConfig(rules={
-    "email": ["email"],
-    "phone": ["phone"],
-    "first_name": ["strip", "name_proper"],
-})
-```
-Verified: `StandardizationConfig` has a single `rules: dict[str, list[str]]` field with a model validator. Keyword args will raise a Pydantic validation error.
-
-### BlockingConfig requires `keys` field
-```python
-# keys is required even with multi_pass
-BlockingConfig(
-    strategy="multi_pass",
-    keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase"])],  # required!
-    passes=[
-        BlockingKeyConfig(fields=["email"], transforms=["lowercase"]),
-        BlockingKeyConfig(fields=["last_name"], transforms=["soundex"]),
-    ],
-)
-```
-
-### MatchkeyConfig requires `name` field
-```python
-MatchkeyConfig(
-    name="identity",       # required!
-    type="weighted",
-    threshold=0.75,
-    fields=[...],
-)
-```
-
-### Extracting pairs from clusters (correct way)
-```python
-pairs = []
-for cluster in result.clusters.values():
-    members = sorted(cluster["members"])
-    for i in range(len(members)):
-        for j in range(i + 1, len(members)):
-            pairs.append((members[i], members[j]))
-```
-
-### Multi-pass blocking for catching different dupe types
-```python
-# Pass 1: exact email (identical-email dupes)
-# Pass 2: soundex last_name (phonetic variants: Smith/Smyth)
-# Pass 3: first 3 chars of last_name (typo dupes: Johm/John)
-BlockingConfig(
-    strategy="multi_pass",
-    keys=[BlockingKeyConfig(fields=["email"], transforms=["lowercase", "strip"])],
-    passes=[
-        BlockingKeyConfig(fields=["email"], transforms=["lowercase", "strip"]),
-        BlockingKeyConfig(fields=["last_name"], transforms=["soundex"]),
-        BlockingKeyConfig(fields=["last_name"], transforms=["substring:0:3"]),
-    ],
-)
-```
-
-### Available scorers
-- `exact`: 1.0 if equal, 0.0 otherwise
-- `jaro_winkler`: best for short strings (names)
-- `levenshtein`: normalized edit distance
-- `token_sort`: handles word reordering
-- `ensemble`: weighted combination of jaro_winkler + levenshtein + token_sort + dice (best for names)
-- `dice`, `jaccard`: set-based similarity
-- `soundex_match`: phonetic matching
-- `embedding`: sentence-transformer cosine similarity
-
-### Available transforms (applied at matchkey time)
-`lowercase`, `uppercase`, `strip`, `strip_all`, `soundex`, `metaphone`, `digits_only`, `alpha_only`, `normalize_whitespace`, `token_sort`, `first_token`, `last_token`, `substring:start:end`, `qgram:n`
-
-### LLM Scorer for borderline pairs
-```python
-from goldenmatch.config.schemas import LLMScorerConfig, BudgetConfig
-
-config.llm_scorer = LLMScorerConfig(
-    enabled=True,
-    candidate_lo=0.60,    # send pairs scoring 0.60-0.90 to LLM
-    candidate_hi=0.90,
-    auto_threshold=0.90,  # auto-accept above 0.90
-    budget=BudgetConfig(max_calls=500, max_cost_usd=1.0),
-)
-# Requires OPENAI_API_KEY or ANTHROPIC_API_KEY in environment
-```
-
-## DQBench Integration
-
-GoldenMatch is benchmarked by DQBench ER category:
-- **DQBench ER Score: 95.30** (with LLM) / **77.21** (without LLM)
-- Key to high score: multi-pass blocking + ensemble scoring + standardization + LLM scorer
-- Adapter: `dqbench/adapters/goldenmatch_adapter.py`
-- Run: `pip install dqbench && dqbench run goldenmatch`
-
-## Common Mistakes
-- Using `exact=["email"]` as sole matchkey — creates oversized clusters with common emails
-- Using `auto_configure()` on synthetic data — it may produce poor configs
-- Not setting `name=` on MatchkeyConfig — it's required
-- Not providing `keys=` on BlockingConfig — it's required even with multi_pass
-- Extracting pairs from dupes DataFrame directly instead of using result.clusters
+Moved to `packages/python/goldenmatch/docs/api-quick-reference.md` (reference content, not session context). DQBench ER scores live in the package README + CHANGELOG.
 
 ## Web UI (`goldenmatch[web]`)
 

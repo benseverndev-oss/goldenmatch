@@ -4,21 +4,17 @@ from __future__ import annotations
 
 import os
 import tempfile
-from unittest.mock import patch, MagicMock
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.agent import (
     AgentSession,
     DataProfile,
     FieldProfile,
-    StrategyDecision,
     build_alternatives,
     profile_for_agent,
     select_strategy,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -310,7 +306,9 @@ class TestAgentSession:
 
     def test_deduplicate_with_custom_config(self, tmp_csv):
         from goldenmatch.config.schemas import (
-            GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
         )
         cfg = GoldenMatchConfig(matchkeys=[
             MatchkeyConfig(
@@ -339,3 +337,108 @@ class TestAgentSession:
         for name, metrics in result["strategies"].items():
             if "error" not in metrics:
                 assert "clusters" in metrics or "match_rate" in metrics
+
+
+# ── v1.7-v1.12 controller telemetry surface ─────────────────────────────────
+
+
+class TestAgentSessionTelemetry:
+    def test_autoconfigure_returns_config_and_telemetry(self, tmp_csv):
+        """autoconfigure() runs the controller and surfaces both halves."""
+        session = AgentSession()
+        result = session.autoconfigure(tmp_csv)
+        assert "config" in result
+        assert "telemetry" in result
+        # Controller always sets these — hard assertions (was conditional;
+        # tightened in PR #169 once the default-config bug was fixed).
+        telemetry = result["telemetry"]
+        assert telemetry["available"] is True
+        assert "stop_reason" in telemetry
+        assert "health" in telemetry
+
+    def test_autoconfigure_caches_telemetry_on_session(self, tmp_csv):
+        """last_telemetry is set after autoconfigure for follow-up reads."""
+        session = AgentSession()
+        assert session.last_telemetry is None
+        session.autoconfigure(tmp_csv)
+        assert session.last_telemetry is not None
+        assert session.last_telemetry["available"] is True
+
+    def test_deduplicate_default_path_captures_telemetry(self, tmp_csv):
+        """No explicit config -> dedupe_df runs the AutoConfigController ->
+        telemetry MUST land. Hard assertion (was conditional before #169).
+
+        Regression guard for the bug the v1.14 release fixes: prior to
+        #169, AgentSession.deduplicate built a config from select_strategy()
+        and passed it explicitly, which suppressed the controller path and
+        produced None telemetry. The fix passes no config so dedupe_df()
+        runs its zero-config controller-backed path.
+        """
+        session = AgentSession()
+        result = session.deduplicate(tmp_csv)
+        assert session.last_telemetry is not None, (
+            "default-path deduplicate() must produce telemetry — if this "
+            "fires, AgentSession is bypassing the AutoConfigController again"
+        )
+        assert session.last_telemetry["available"] is True
+        assert "stop_reason" in session.last_telemetry
+        assert "health" in session.last_telemetry
+        # The result dict shape is unchanged — fix is internal.
+        assert "results" in result
+        assert "reasoning" in result
+        assert "confidence_distribution" in result
+
+    def test_match_sources_default_path_captures_telemetry(
+        self, tmp_csv, tmp_csv_b,
+    ):
+        """Mirror of test_deduplicate_default_path for match_sources."""
+        session = AgentSession()
+        session.match_sources(tmp_csv, tmp_csv_b)
+        assert session.last_telemetry is not None
+        assert session.last_telemetry["available"] is True
+
+    def test_explicit_config_does_not_leak_prior_telemetry(self, tmp_csv):
+        """Regression: after a default-path call populates last_telemetry,
+        a follow-up explicit-config call must reset it — callers reading
+        last_telemetry on an explicit-config result should not see a stale
+        blob from the prior auto-config run.
+
+        Pre-#169 behavior: explicit-config calls inherited last_telemetry
+        from a prior auto-config call because the code always called
+        `_capture_telemetry(committed_cfg, ...)` regardless of whether the
+        controller actually fired. Now last_telemetry is explicitly cleared
+        on the explicit-config branch.
+        """
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+        )
+
+        session = AgentSession()
+
+        # Step 1: populate last_telemetry via the default path.
+        session.deduplicate(tmp_csv)
+        assert session.last_telemetry is not None
+        prior_telemetry = session.last_telemetry
+
+        # Step 2: explicit-config dedupe on the same session. Controller
+        # doesn't fire; last_telemetry must NOT still hold the prior blob.
+        explicit_cfg = GoldenMatchConfig(
+            matchkeys=[MatchkeyConfig(
+                name="mk", type="weighted", threshold=0.85,
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            )],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        )
+        session.deduplicate(tmp_csv, config=explicit_cfg)
+        assert session.last_telemetry is None, (
+            f"explicit-config dedupe leaked prior auto-config telemetry: "
+            f"{session.last_telemetry!r}"
+        )
+        # Sanity: the prior_telemetry variable is still the same object the
+        # earlier call produced (we didn't mutate it; we cleared the session
+        # attribute).
+        assert prior_telemetry["available"] is True

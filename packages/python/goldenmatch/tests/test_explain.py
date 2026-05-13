@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import polars as pl
-import pytest
-
 from goldenmatch.core.explain import explain_cluster_nl, explain_pair_nl
 
 

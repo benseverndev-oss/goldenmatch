@@ -70,7 +70,7 @@ pip install infermap[all]        # all extras
 npm install infermap
 ```
 
-Zero runtime dependencies in the core entrypoint. Compatible with Next.js Server Components, Route Handlers, Server Actions, and the Edge Runtime out of the box. See the [package README](./packages/infermap-js/README.md) for the full reference.
+Zero runtime dependencies in the core entrypoint. Compatible with Next.js Server Components, Route Handlers, Server Actions, and the Edge Runtime out of the box. See the [TypeScript package README](../../typescript/infermap/README.md) for the full reference.
 
 ## Quick start
 
