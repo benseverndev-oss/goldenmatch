@@ -104,10 +104,20 @@ golden_rules:
 - PPRL auto-config: 92.4% F1 on FEBRL4
 
 ## Scorers
-exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_match, embedding
+exact, jaro_winkler, levenshtein, token_sort, ensemble, dice, jaccard, soundex_match, embedding, record_embedding, name_freq_weighted_jw, given_name_aliased_jw
 
 ## Transforms
-lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normalize_whitespace, token_sort, first_token, last_token, substring:start:end
+lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normalize_whitespace, token_sort, first_token, last_token, substring:start:end, legal_form_strip, address_normalize, naics_normalize
+
+## Bundled Reference Data
+Five OSS packs ship with the wheel; auto-config swaps the matching scorer/transform in when the column name pattern matches AND the profiled `col_type` agrees:
+- Surnames (US Census 2010, top 10K) → `name_freq_weighted_jw` on last_name/surname columns. Lifts F1 0.667→0.915 on the common-name FP fixture.
+- Given-name aliases (~140 pairs: William↔Bill, Katherine↔Kate, ...) → `given_name_aliased_jw` on first_name/given_name columns.
+- Business legal forms (Inc, LLC, Ltd, GmbH, S.A., ...) → prepends `legal_form_strip` on company/business/org/firm/legal_name columns.
+- USPS Pub. 28 addresses → prepends `address_normalize` on address/street/addr_line/mailing_address columns. Handles `#5`→`apt 5`, `P.O. Box`→`PO Box`.
+- NAICS 2022 industries (2,125 codes, all 5 hierarchy levels) → prepends `naics_normalize` on naics/sic/industry_code/business_type columns.
+
+The `col_type` gate (PR #224) skips the refinement when column-name regex matches but profiled shape disagrees — a `last_name` column holding numeric IDs keeps its caller-specified scorer. See `docs/reference-data`.
 
 ## Learning Memory (v1.6.0)
 Persistent corrections + threshold learning. Off by default; enable with `memory.enabled = true`.

@@ -210,6 +210,11 @@ Applied to field values before scoring.
 | `substring:start:end` | Substring extraction |
 | `qgram:n` | Q-gram tokenization |
 | `bloom_filter` or `bloom_filter:ngram:k:size` | Bloom filter (for PPRL) |
+| `legal_form_strip` | Strip corporate legal-form suffixes (Inc, LLC, Ltd, GmbH, S.A., ...) — bundled refdata |
+| `address_normalize` | USPS Pub. 28 street-suffix + unit-abbrev canonicalization (Avenue→AVE, Apartment→APT) — bundled refdata |
+| `naics_normalize` | NAICS 2022 industry-code canonicalization (code-or-title input → canonical code) — bundled refdata |
+
+Refdata transforms are auto-prepended by the controller when a column name matches the relevant pattern AND its profiled `col_type` agrees. See [Reference Data](reference-data).
 
 ### Scorers
 
@@ -225,6 +230,8 @@ Applied to field values before scoring.
 | `record_embedding` | Concatenated multi-field embeddings | Cross-field semantic |
 | `dice` | Dice coefficient on bloom filters | PPRL |
 | `jaccard` | Jaccard similarity on bloom filters | PPRL |
+| `name_freq_weighted_jw` | Surname IDF-weighted Jaro-Winkler — bundled refdata | `last_name` / `surname` |
+| `given_name_aliased_jw` | Alias-aware Jaro-Winkler — bundled refdata | `first_name` / `given_name` |
 
 ### Cross-encoder reranking
 
