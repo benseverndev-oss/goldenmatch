@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import logging
 from importlib.metadata import entry_points
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from goldenmatch.plugins.base import ScorerPlugin, TransformPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +63,38 @@ class PluginRegistry:
 
         PluginRegistry._discovered = True
 
-    def register_scorer(self, name: str, plugin: object) -> None:
-        """Manually register a scorer plugin (for testing or built-in extensions)."""
+    def register_scorer(self, name: str, plugin: ScorerPlugin) -> None:
+        """Manually register a scorer plugin (for testing or built-in extensions).
+
+        The ``plugin`` must satisfy the ``ScorerPlugin`` Protocol — at minimum
+        a ``name`` attribute and a ``score_pair(a, b) -> float | None`` method.
+        Vectorized scorers should additionally expose ``score_matrix`` per
+        ``VectorizedScorerPlugin``; ``_fuzzy_score_matrix`` picks it up
+        automatically via ``getattr``.
+        """
+        from goldenmatch.plugins.base import ScorerPlugin
+
+        if not isinstance(plugin, ScorerPlugin):
+            raise TypeError(
+                f"{type(plugin).__name__} does not satisfy ScorerPlugin Protocol "
+                f"(needs 'name' attribute and 'score_pair' method)"
+            )
         self._register("scorer", name, plugin)
 
-    def register_transform(self, name: str, plugin: object) -> None:
-        """Manually register a transform plugin."""
+    def register_transform(self, name: str, plugin: TransformPlugin) -> None:
+        """Manually register a transform plugin.
+
+        The ``plugin`` must satisfy the ``TransformPlugin`` Protocol — at
+        minimum a ``name`` attribute and a ``transform(value) -> str | None``
+        method.
+        """
+        from goldenmatch.plugins.base import TransformPlugin
+
+        if not isinstance(plugin, TransformPlugin):
+            raise TypeError(
+                f"{type(plugin).__name__} does not satisfy TransformPlugin Protocol "
+                f"(needs 'name' attribute and 'transform' method)"
+            )
         self._register("transform", name, plugin)
 
     def register_connector(self, name: str, plugin: object) -> None:

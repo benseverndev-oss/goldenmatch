@@ -34,6 +34,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib import resources
 from threading import Lock
 
@@ -45,135 +47,132 @@ _DIGITS_RE = re.compile(r"\d+")
 _PUNCT_RE = re.compile(r"[^a-z0-9 ]")
 _WS_RE = re.compile(r"\s+")
 
+# narrow-to-broad — title_to_code keeps the narrowest match when the
+# same title appears at multiple hierarchy levels.
+_SECTIONS = (
+    "industries_6digit",
+    "industries_5digit",
+    "industry_groups_4digit",
+    "subsectors_3digit",
+    "sectors_2digit",
+)
+
+
+@dataclass(frozen=True)
+class _IndustriesState:
+    """Loaded NAICS state. Frozen for atomic-swap semantics on _reload."""
+
+    code_to_title: Mapping[str, str]
+    title_to_code: Mapping[str, str]
+    all_codes: frozenset[str]
+    all_titles: frozenset[str]
+
+
 _lock = Lock()
-_state: dict = {
-    "loaded": False,
-    "available": False,
-    "code_to_title": {},   # "511210" -> "Software Publishers"
-    "title_to_code": {},   # "softwarepublishers" -> "511210"  (normalized title)
-    "all_codes": frozenset(),
-    "all_titles": frozenset(),
-}
+_state: _IndustriesState | None = None
 
 
 def _norm_title(title: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace.
-
-    Used as the key for title->code lookup so callers can search with
-    minor formatting variation ('Software Publishers' vs 'software,
-    publishers' vs 'SOFTWARE PUBLISHERS')."""
     s = title.lower()
     s = _PUNCT_RE.sub(" ", s)
     s = _WS_RE.sub(" ", s).strip()
     return s
 
 
+def _build_state_from_file() -> _IndustriesState | None:
+    with resources.files("goldenmatch.refdata.data").joinpath(_DATA_FILE).open(
+        "r", encoding="utf-8"
+    ) as f:
+        payload = json.load(f)
+    code_to_title: dict[str, str] = {}
+    title_to_code: dict[str, str] = {}
+    for section in _SECTIONS:
+        for code, title in payload.get(section, {}).items():
+            code_to_title[code] = title
+    for section in _SECTIONS:
+        for code, title in payload.get(section, {}).items():
+            key = _norm_title(title)
+            if key and key not in title_to_code:
+                title_to_code[key] = code
+    if not code_to_title:
+        return None
+    return _IndustriesState(
+        code_to_title=code_to_title,
+        title_to_code=title_to_code,
+        all_codes=frozenset(code_to_title.keys()),
+        all_titles=frozenset(code_to_title.values()),
+    )
+
+
 def _load() -> None:
-    if _state["loaded"]:
+    global _state
+    if _state is not None:
         return
     with _lock:
-        if _state["loaded"]:
+        if _state is not None:
             return
         try:
-            with resources.files("goldenmatch.refdata.data").joinpath(_DATA_FILE).open(
-                "r", encoding="utf-8"
-            ) as f:
-                payload = json.load(f)
-            code_to_title: dict[str, str] = {}
-            title_to_code: dict[str, str] = {}
-            # Sections, ordered narrow-to-broad. When the same title
-            # appears at multiple levels (rare), the narrowest (longest
-            # code) wins for title->code because it's the most
-            # informative match.
-            sections = [
-                "industries_6digit",
-                "industries_5digit",
-                "industry_groups_4digit",
-                "subsectors_3digit",
-                "sectors_2digit",
-            ]
-            # Build code_to_title from every section so any input
-            # resolves (a 2-digit code stays a 2-digit code).
-            for section in sections:
-                for code, title in payload.get(section, {}).items():
-                    code_to_title[code] = title
-            # Build title_to_code from narrowest section first so a
-            # title that also exists at a broader level keeps the narrow
-            # code (more informative for matching).
-            for section in sections:
-                for code, title in payload.get(section, {}).items():
-                    key = _norm_title(title)
-                    if key and key not in title_to_code:
-                        title_to_code[key] = code
-            _state["code_to_title"] = code_to_title
-            _state["title_to_code"] = title_to_code
-            _state["all_codes"] = frozenset(code_to_title.keys())
-            _state["all_titles"] = frozenset(code_to_title.values())
-            _state["available"] = bool(code_to_title)
-        except (FileNotFoundError, ModuleNotFoundError, json.JSONDecodeError, KeyError) as exc:
+            _state = _build_state_from_file()
+        except (FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
             logger.warning(
                 "goldenmatch.refdata.industries: data file unavailable (%s); "
                 "naics_normalize will be a no-op.",
                 exc,
             )
-            _state["available"] = False
-        finally:
-            _state["loaded"] = True
+            _state = None
 
 
 def _reload() -> None:
-    """Test-only: force re-parse of the data file.
-
-    Atomic swap rather than empty-then-reload: readers consult
-    ``_state["code_to_title"]`` etc. without the lock (safe under the
-    GIL once ``loaded=True``). Wiping the dicts before the parse would
-    expose them to readers mid-call.
-    """
+    """Test-only: drop the cached state; next access re-parses."""
+    global _state
     with _lock:
-        _state["loaded"] = False  # forces _load() to re-run inside its own lock
-    _load()
+        _state = None
 
 
 def is_available() -> bool:
     _load()
-    return _state["available"]
+    return _state is not None
 
 
 def known_codes() -> frozenset[str]:
     _load()
-    return _state["all_codes"]
+    if _state is None:
+        return frozenset()
+    return _state.all_codes
 
 
 def known_titles() -> frozenset[str]:
     _load()
-    return _state["all_titles"]
+    if _state is None:
+        return frozenset()
+    return _state.all_titles
 
 
 def title_for_code(code: str | None) -> str | None:
     if code is None:
         return None
     _load()
+    if _state is None:
+        return None
     digits = "".join(_DIGITS_RE.findall(code))
     if not digits:
         return None
-    # Try exact length first, then truncate to 6.
-    if digits in _state["code_to_title"]:
-        return _state["code_to_title"][digits]
-    if len(digits) > 6:
-        truncated = digits[:6]
-        if truncated in _state["code_to_title"]:
-            return _state["code_to_title"][truncated]
-    return None
+    # Try the 6-digit truncation first so overlong inputs collapse;
+    # fall back to the exact-length form for shorter codes (2-5 digit
+    # sector lookups).
+    return _state.code_to_title.get(digits[:6]) or _state.code_to_title.get(digits)
 
 
 def code_for_title(title: str | None) -> str | None:
     if title is None:
         return None
     _load()
+    if _state is None:
+        return None
     key = _norm_title(title)
     if not key:
         return None
-    return _state["title_to_code"].get(key)
+    return _state.title_to_code.get(key)
 
 
 def naics_normalize(value: str | None) -> str | None:
@@ -205,33 +204,33 @@ def naics_normalize(value: str | None) -> str | None:
     _load()
     digit_runs = [m.group() for m in _DIGITS_RE.finditer(s) if len(m.group()) >= 2]
     if digit_runs:
-        if _state["available"]:
+        if _state is not None:
             for run in digit_runs:
                 canonical = run[:6]
                 for n in range(len(canonical), 1, -1):
                     prefix = canonical[:n]
-                    if prefix in _state["code_to_title"]:
+                    if prefix in _state.code_to_title:
                         return prefix
         # No run resolved (or refdata unavailable) -- fall back to the
         # truncated FIRST run so identical-but-unknown codes still
         # cluster across records.
         return digit_runs[0][:6]
     # Title-shape: try the title lookup.
-    if _state["available"]:
+    if _state is not None:
         canonical = code_for_title(s)
         if canonical is not None:
             return canonical
-    # Pass-through with whitespace normalize (matches the lowercase+strip
-    # behavior of legal_form_strip's fallback).
     return _WS_RE.sub(" ", s.lower())
 
 
-# ── Plugin protocol adapter ──────────────────────────────────────────────
+from goldenmatch.plugins.base import (
+    TransformPlugin,  # noqa: E402 — local import keeps the module-top section dataclass-only
+)
 
 
-class NaicsNormalizeTransform:
-    """Adapter exposing ``naics_normalize`` through the plugin transform
-    interface."""
+class NaicsNormalizeTransform(TransformPlugin):
+    """Adapter exposing ``naics_normalize`` through the
+    ``goldenmatch.plugins.base.TransformPlugin`` protocol."""
 
     name = "naics_normalize"
 

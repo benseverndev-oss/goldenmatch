@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed -- Refdata cross-pack cleanup (strategy direction #8, eighth slice)
+
+Refactor-only PR — no behavior change to any user-facing surface. Addresses the systemic findings from the parallel review of slices #1–#7. Five refdata modules (surnames, given_names, business, addresses, industries) plus the plugin registry are touched in one coordinated change.
+
+- **Frozen-dataclass state** replaces the `_state: dict[str, Any]` lazy-load pattern in all five refdata modules. Each module now has a small `_<Pack>State` `@dataclass(frozen=True)` with explicit fields and types. Module-level `_state: _<Pack>State | None`; `None` means "not loaded or data file missing". Reviewer's concern: the dict-pattern carried 4–6 implicit invariants per copy with no static type backing; a typo silently wrote a string to an int field with no detection.
+- **Atomic-swap `_reload()`** falls out for free: it just sets `_state = None` under the lock; the next reader drives `_load()` which assigns a freshly built dataclass. Compared to the previous `_state["loaded"] = False` + dict-wipe pattern, readers never see a half-built state mid-reload. This was flagged on industries.py in the PR #222 review-fix; the pattern is now consistent across all five packs.
+- **Plugin Protocols bound and enforced.** `goldenmatch/plugins/base.py` Protocols (`ScorerPlugin`, `VectorizedScorerPlugin`, `TransformPlugin`) now match the runtime contracts in `core/scorer.py` / `utils/transforms.py`. `PluginRegistry.register_scorer` / `register_transform` `isinstance`-check the plugin against the Protocol and raise `TypeError` at registration if the duck-typed implementation is missing a method or the `name` attribute — fails at bind time instead of deep inside a scoring loop. Refdata adapters (`NameFreqWeightedJW`, `GivenNameAliasedJW`, `LegalFormStripTransform`, `AddressNormalizeTransform`, `NaicsNormalizeTransform`) explicitly inherit the Protocol for documentation + isinstance support.
+- **Comment trim**: dropped the WHAT-not-WHY comments flagged by the comment analyzer in `industries.py` (the section-loop block comments, redundant whitespace-collapse note, etc.). Kept the WHY comments that document non-obvious invariants. Same pass applied to the other four refdata modules where applicable.
+- **6 new tests** in `tests/test_plugins.py` under a new `TestProtocolEnforcement` class — registry rejects bad scorers/transforms at bind time, accepts Protocol conformers, and verifies every built-in refdata adapter satisfies the Protocol at runtime.
+
+What's NOT in this slice (deferred to a separate PR):
+
+- Auto-config gating on `ColumnProfile.col_type` — the higher-impact behavior change flagged in the PR #221 review. Touches `core/autoconfig.py`'s call signature into the hook, so it deserves its own focused PR with regression numbers against NCVR/DBLP-ACM.
+
 ### Added -- NAICS industry-code normalization (strategy direction #8, seventh slice)
 
 Extends the `reference-business` pack with US Census 2022 NAICS industry classification. Canonicalizes both numeric codes ("511210", "511 210", "511210 (Software Publishing)") AND known industry titles ("Software Publishers" → "513210") to the same string before matching, so two records describing the same business industry land on the same value.
