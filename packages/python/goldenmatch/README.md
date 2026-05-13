@@ -47,9 +47,11 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 npm install goldenmatch
 ```
 
-> **🆕 v1.8.0 — Introspective auto-config controller** — Zero-config now beats hand-tuned on multiple benchmarks. The controller iterates on stage-emitted complexity signals and refines its config via heuristic rules until convergence. DBLP-ACM F1 0.51→**0.964** zero-config (hand-tuned ceiling 0.918). Febrl3 **0.944**. NCVR **0.972**. DQBench no-LLM **62.87** (was 46.24 hand-tuned). New: cross-run memory at `~/.goldenmatch/autoconfig_memory.db`, LLM policy fallback (`GOLDENMATCH_AUTOCONFIG_LLM=1`), per-pair LLM scoring auto-enable, standardization auto-detection. See [What's New in v1.8](#whats-new-in-v18).
+> **🆕 v1.15.0 — Bundled OSS reference data** — Five reference packs ship inside the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in two new scorers (`name_freq_weighted_jw`, `given_name_aliased_jw`) and three transforms (`legal_form_strip`, `address_normalize`, `naics_normalize`) when a column name AND its profiled `col_type` agree. Common-name surname-FP fixture: F1 0.667 → 0.915. No API keys, no external downloads. See [Reference Data](https://benzsevern.github.io/goldenmatch/reference-data).
 >
-> v1.6.0 — cross-language Learning Memory parity. See [Learning Memory](#learning-memory-v160). Built by [Ben Severn](https://bensevern.dev).
+> v1.12.0 — Negative evidence on exact matchkeys (Path Y). DQbench composite **91.04** (was 66.99 at v1.11); T2 F1 69.0%→97.5%, T3 F1 53.8%→85.5%.
+>
+> v1.8.0 — Introspective auto-config controller. Zero-config beats hand-tuned on DBLP-ACM (F1 **0.964** vs 0.918 ceiling), NCVR (**0.972**), Febrl3 (**0.944**). Built by [Ben Severn](https://bensevern.dev).
 
 ---
 
