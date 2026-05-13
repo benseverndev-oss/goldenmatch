@@ -60,13 +60,22 @@ def load_type_defs(
     # Layer 2: domain types (override/extend base)
     domain_defs: dict[str, TypeDef] = {}
     if domain:
-        domain_path = Path(__file__).parent / "domains" / f"{domain}.yaml"
-        if not domain_path.exists():
-            available = list_available_domains()
+        # Path-traversal defense: the `domain` arg is user-supplied; constructing
+        # `Path(...) / domain / f"{domain}.yaml"` would let `domain="../../etc/passwd"`
+        # escape the domains directory. Restrict to the allowlist of installed
+        # domain packs and resolve+verify the final path stays inside `domains/`.
+        available = list_available_domains()
+        if domain not in available:
             raise ValueError(
                 f"Unknown domain: '{domain}'. "
                 f"Available: {', '.join(available) if available else 'none'}"
             )
+        domains_root = (Path(__file__).parent / "domains").resolve()
+        domain_path = (domains_root / f"{domain}.yaml").resolve()
+        # Guard against symlink shenanigans and weird YAML names that
+        # somehow made it past the allowlist check.
+        if domains_root not in domain_path.parents:
+            raise ValueError(f"Unsafe domain path: '{domain}'")
         domain_defs = _load_yaml_types(domain_path)
 
     # Layer 3: user custom types
