@@ -68,6 +68,8 @@ jobs:
             elif [[ "$TAG" == infermap-js-v* ]];        then : noop
             elif [[ "$TAG" == infermap-v* ]];           then PKGS+=(infermap)
             elif [[ "$TAG" == goldenmatch-js-v* ]];     then : noop
+            elif [[ "$TAG" == goldenmatch-duckdb-v* ]]; then : noop  # not on registry
+            elif [[ "$TAG" == goldenmatch-pg-v* ]];     then : noop  # not on registry
             elif [[ "$TAG" == v* ]];                    then PKGS+=(goldenmatch)
             fi
           else
