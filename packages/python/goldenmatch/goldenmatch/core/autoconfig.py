@@ -52,7 +52,10 @@ except Exception as _refdata_import_exc:  # noqa: BLE001 — see comment above
     )
 
     def _refdata_refine_matchkey_field(
-        column_name: str, scorer: str, transforms: list[str],
+        column_name: str,
+        scorer: str,
+        transforms: list[str],
+        col_type: str | None = None,
     ) -> tuple[str, list[str]]:
         return scorer, transforms
 
@@ -593,8 +596,12 @@ def build_matchkeys(
         # imported or the relevant pack's data file is missing — the
         # module-top fallback at line ~38 wires a pass-through stub for
         # that case. Lift numbers per refdata pack are in CHANGELOG
-        # entries for slices #2-#5.
-        scorer, transforms = _refdata_refine_matchkey_field(p.name, scorer, transforms)
+        # entries for slices #2-#5. ``p.col_type`` gates each refinement
+        # on the profiled data shape so a column literally named
+        # ``last_name`` but holding non-name data isn't silently swapped.
+        scorer, transforms = _refdata_refine_matchkey_field(
+            p.name, scorer, transforms, p.col_type,
+        )
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
@@ -1835,7 +1842,9 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
         # Refdata hook (mirrors build_matchkeys); see module-top fallback
         # for the unavailable-refdata case.
-        scorer, transforms = _refdata_refine_matchkey_field(p.name, scorer, transforms)
+        scorer, transforms = _refdata_refine_matchkey_field(
+            p.name, scorer, transforms, p.col_type,
+        )
 
         # Determine comparison levels based on scorer type
         if scorer == "exact":

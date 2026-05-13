@@ -143,6 +143,131 @@ def test_build_matchkeys_picks_refdata_scorer_for_last_name():
     )
 
 
+# ── col_type gating ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("non_name_type", [
+    "numeric", "date", "identifier", "email", "phone", "zip", "geo",
+])
+def test_last_name_swap_skipped_when_coltype_disagrees(non_name_type: str):
+    """A column literally named ``last_name`` but holding non-name data
+    (numeric IDs, dates, hashed identifiers) keeps the caller-specified
+    scorer — without this guard the swap silently degrades quality."""
+    scorer, _ = refine_matchkey_field(
+        "last_name", "jaro_winkler", ["lowercase"], col_type=non_name_type,
+    )
+    assert scorer == "jaro_winkler"
+
+
+@pytest.mark.parametrize("non_name_type", [
+    "numeric", "date", "identifier", "email", "phone",
+])
+def test_first_name_swap_skipped_when_coltype_disagrees(non_name_type: str):
+    scorer, _ = refine_matchkey_field(
+        "first_name", "jaro_winkler", ["lowercase"], col_type=non_name_type,
+    )
+    assert scorer == "jaro_winkler"
+
+
+def test_last_name_swap_fires_when_coltype_agrees():
+    scorer, _ = refine_matchkey_field(
+        "last_name", "jaro_winkler", ["lowercase"], col_type="name",
+    )
+    assert scorer == "name_freq_weighted_jw"
+
+
+def test_first_name_swap_fires_when_coltype_agrees():
+    scorer, _ = refine_matchkey_field(
+        "first_name", "jaro_winkler", ["lowercase"], col_type="name",
+    )
+    assert scorer == "given_name_aliased_jw"
+
+
+def test_address_normalize_skipped_when_coltype_is_numeric():
+    """A column named ``address`` whose data profiles as numeric (e.g.
+    house-number-only) doesn't get the address tokenizer."""
+    _, transforms = refine_matchkey_field(
+        "address", "token_sort", ["strip"], col_type="numeric",
+    )
+    assert "address_normalize" not in transforms
+
+
+def test_address_normalize_fires_when_coltype_is_address():
+    _, transforms = refine_matchkey_field(
+        "address", "token_sort", ["strip"], col_type="address",
+    )
+    assert transforms[0] == "address_normalize"
+
+
+def test_legal_form_strip_skipped_when_coltype_is_numeric():
+    """``company_id`` columns sometimes profile as numeric; the legal-form
+    stripper would do nothing useful and may corrupt downstream blocking."""
+    _, transforms = refine_matchkey_field(
+        "company_name", "token_sort", ["strip"], col_type="numeric",
+    )
+    assert "legal_form_strip" not in transforms
+
+
+def test_legal_form_strip_fires_on_description_shaped_companies():
+    """Free-text company names sometimes profile as ``description`` rather
+    than ``name`` — keep the refinement firing on that shape."""
+    _, transforms = refine_matchkey_field(
+        "company_name", "token_sort", ["strip"], col_type="description",
+    )
+    assert "legal_form_strip" in transforms
+
+
+def test_naics_normalize_skipped_when_coltype_is_name():
+    """A column literally named ``industry`` but holding free-text people
+    names (col_type='name') shouldn't be coerced to a NAICS code."""
+    _, transforms = refine_matchkey_field(
+        "industry", "token_sort", ["strip"], col_type="name",
+    )
+    assert "naics_normalize" not in transforms
+
+
+def test_naics_normalize_fires_when_coltype_is_identifier():
+    _, transforms = refine_matchkey_field(
+        "naics_code", "exact", ["strip"], col_type="identifier",
+    )
+    assert "naics_normalize" in transforms
+
+
+def test_coltype_none_preserves_legacy_behavior():
+    """Backwards compat: callers without a profile (tests, ad-hoc use)
+    keep the original name-only matching when col_type is omitted."""
+    scorer, transforms = refine_matchkey_field("last_name", "jaro_winkler", [])
+    assert scorer == "name_freq_weighted_jw"
+
+
+def test_build_matchkeys_skips_refdata_swap_on_mistyped_last_name():
+    """End-to-end: a column named ``last_name`` whose data is numeric
+    should NOT get the surname scorer at auto-config time."""
+    import polars as pl
+    from goldenmatch.core.autoconfig import build_matchkeys, profile_columns
+
+    df = pl.DataFrame({
+        "last_name": [str(i) for i in range(1000, 1030)],  # numeric-looking IDs
+        "city": ["NYC", "LA"] * 15,
+    })
+    profiles = profile_columns(df)
+    last_name_profile = next(p for p in profiles if p.name == "last_name")
+    # Sanity check the premise: the classifier should NOT have called
+    # this a name. If it did, the test setup is wrong (not the gate).
+    assert last_name_profile.col_type != "name", (
+        f"profiler should not classify all-numeric data as a name; "
+        f"got col_type={last_name_profile.col_type!r}"
+    )
+    matchkeys = build_matchkeys(profiles, df=df)
+    all_scorers = {
+        f.scorer for mk in matchkeys for f in mk.fields if f.scorer
+    }
+    assert "name_freq_weighted_jw" not in all_scorers, (
+        f"refdata scorer should not fire when col_type disagrees; "
+        f"got {all_scorers}"
+    )
+
+
 def test_build_matchkeys_prepends_legal_form_strip_for_company():
     """A column named 'company_name' should pick up legal_form_strip."""
     import polars as pl
