@@ -4,10 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from goldenpipe.adapters.identity import HAS_IDENTITY
 from goldenpipe.cli.main import app
+from typer.testing import CliRunner
 
 pytestmark = pytest.mark.skipif(
     not HAS_IDENTITY,
