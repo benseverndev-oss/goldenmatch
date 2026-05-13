@@ -7,10 +7,22 @@ from goldenmatch.plugins.registry import PluginRegistry
 
 @pytest.fixture(autouse=True)
 def reset_registry():
-    """Reset plugin registry before each test."""
-    PluginRegistry.reset()
-    yield
-    PluginRegistry.reset()
+    """Save and restore the registry around each test.
+
+    Gives each test a fresh singleton but restores the prior state at
+    teardown — refdata plugin registrations (which conftest re-registers
+    autouse) survive a test_plugins.py run instead of being wiped for
+    every subsequent xdist worker test.
+    """
+    saved_instance = PluginRegistry._instance
+    saved_discovered = PluginRegistry._discovered
+    PluginRegistry._instance = None
+    PluginRegistry._discovered = False
+    try:
+        yield
+    finally:
+        PluginRegistry._instance = saved_instance
+        PluginRegistry._discovered = saved_discovered
 
 
 class TestPluginRegistry:
@@ -179,10 +191,16 @@ class TestProtocolEnforcement:
 
     def test_refdata_scorers_satisfy_protocol(self):
         """Built-in refdata scorers must satisfy the Protocol — sanity
-        check that the cross-pack inheritance declarations didn't break."""
-        import goldenmatch.refdata  # noqa: F401
-        from goldenmatch.plugins.base import ScorerPlugin
+        check that the cross-pack inheritance declarations didn't break.
 
+        The reset_registry fixture above gives us a fresh singleton, so we
+        re-register the refdata plugins explicitly inside the test rather
+        than relying on the import side-effect (which fires only once per
+        worker and is wiped by the fixture)."""
+        from goldenmatch.plugins.base import ScorerPlugin
+        from goldenmatch.refdata.scorer import register_scorers
+
+        register_scorers()
         r = PluginRegistry.instance()
         for name in ("name_freq_weighted_jw", "given_name_aliased_jw"):
             plugin = r.get_scorer(name)
@@ -193,9 +211,14 @@ class TestProtocolEnforcement:
 
     def test_refdata_transforms_satisfy_protocol(self):
         """Built-in refdata transforms must satisfy the Protocol."""
-        import goldenmatch.refdata  # noqa: F401
         from goldenmatch.plugins.base import TransformPlugin
+        from goldenmatch.refdata.addresses import register_transforms as register_a
+        from goldenmatch.refdata.business import register_transforms as register_b
+        from goldenmatch.refdata.industries import register_transforms as register_i
 
+        register_b()
+        register_a()
+        register_i()
         r = PluginRegistry.instance()
         for name in ("legal_form_strip", "address_normalize", "naics_normalize"):
             plugin = r.get_transform(name)
