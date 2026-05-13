@@ -1,6 +1,6 @@
 [project]
 name = "goldenpipe"
-version = "1.1.0"
+version = "1.2.0"
 description = "Pluggable pipeline framework for data quality workflows"
 readme = "README.md"
 license = {text = "MIT"}
@@ -53,6 +53,7 @@ Author = "https://bensevern.dev"
 "goldencheck.scan" = "goldenpipe.adapters.check:ScanStage"
 "goldenflow.transform" = "goldenpipe.adapters.flow:TransformStage"
 "goldenmatch.dedupe" = "goldenpipe.adapters.match:DedupeStage"
+"goldenmatch.identity_resolve" = "goldenpipe.adapters.identity:IdentityResolveStage"
 
 [build-system]
 requires = ["hatchling"]

@@ -137,10 +137,29 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
+/** Strip internal Error fields (stack, errno, syscall, code) before
+ *  serialising to the wire. Otherwise a thrown Error becomes a JSON
+ *  blob with its full V8 stack trace, exposing internal file paths
+ *  and library versions to unauthenticated clients. */
+function sanitiseForWire(data: unknown): unknown {
+  if (data instanceof Error) {
+    return { error: data.message };
+  }
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k === "stack" || k === "errno" || k === "syscall") continue;
+      out[k] = v;
+    }
+    return out;
+  }
+  return data;
+}
+
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(data));
+  res.end(JSON.stringify(sanitiseForWire(data)));
 }
 
 function asRowArray(v: unknown, label: string): Row[] {

@@ -427,10 +427,17 @@ _PHONE_RE = re.compile(
 _ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
 _NAME_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")
 _ADDR_RE = re.compile(
-    r"\b\d+\s+[A-Z][a-zA-Z]+(?:\s+[A-Z]?[a-zA-Z]+)*"
+    r"\b\d+\s+[A-Z][a-zA-Z]+(?:\s+[A-Z]?[a-zA-Z]+){0,8}"
     r"\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Ln|Lane|Way|Ct|Court|Pl|Place)\b",
     re.IGNORECASE,
 )
+# Per-line input length cap fed to _ADDR_RE / _NAME_RE / _PHONE_RE / _EMAIL_RE
+# below. The unbounded `(?:...)*` in earlier addr regex could backtrack
+# polynomially on adversarially long dot/space-heavy inputs; capping the
+# repeat to {0,8} bounds the work without losing real addresses (which
+# top out at ~5 segments in the US). Lines longer than the cap below
+# fall through unmatched -- accept slight recall loss for ReDoS safety.
+_MAX_INGEST_LINE_LEN = 4096
 
 
 def extract_entities(text: str) -> pl.DataFrame:
@@ -441,6 +448,12 @@ def extract_entities(text: str) -> pl.DataFrame:
     entity_lines: list[tuple[int, str, str]] = []  # (line_no, type, value)
 
     for i, line in enumerate(lines):
+        # Bound per-line regex work. Address / name regexes can backtrack
+        # polynomially on adversarially long inputs; lines beyond the cap
+        # are far past any realistic free-text record and skipping them
+        # preserves recall on real data while neutralising ReDoS.
+        if len(line) > _MAX_INGEST_LINE_LEN:
+            continue
         for m in _EMAIL_RE.finditer(line):
             entity_lines.append((i, "email", m.group()))
         for m in _PHONE_RE.finditer(line):
