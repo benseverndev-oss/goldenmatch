@@ -38,7 +38,7 @@ class ChunkedMatcher:
         # Persistent state across chunks
         self._all_pairs: list[tuple[int, int, float]] = []
         self._all_ids: list[int] = []
-        self._index_records: list[dict] = []  # representative records for cross-chunk matching
+        self._index_df: pl.DataFrame | None = None  # slim slice of prior chunks
         self._row_offset = 0
         self._total_processed = 0
         self._chunk_count = 0
@@ -120,7 +120,7 @@ class ChunkedMatcher:
                         chunk_pairs.extend(pairs)
 
             # Match against index (cross-chunk matching)
-            if self._index_records:
+            if self._index_df is not None and self._index_df.height > 0:
                 cross_pairs = self._match_against_index(chunk_df, matchkeys)
                 chunk_pairs.extend(cross_pairs)
 
@@ -214,72 +214,96 @@ class ChunkedMatcher:
                 break
             yield chunk
 
-    def _match_against_index(
-        self, chunk_df: pl.DataFrame, matchkeys: list,
-    ) -> list[tuple[int, int, float]]:
-        """Match chunk records against index of previous chunks."""
-        from goldenmatch.core.scorer import score_pair
-        from goldenmatch.utils.transforms import apply_transforms
+    def _slim_columns(self, matchkeys: list) -> set[str]:
+        """Columns to keep on the cross-chunk index slice.
 
-        pairs = []
-        chunk_rows = chunk_df.to_dicts()
-
-        for mk in matchkeys:
-            if mk.type == "exact":
-                # Build lookup of index values for exact matching
-                for field in mk.fields:
-                    col = field.field or ""
-                    transforms = field.transforms or []
-
-                    # Build index lookup: transformed_value -> [row_ids]
-                    idx_lookup: dict[str, list[int]] = {}
-                    for idx_rec in self._index_records:
-                        idx_id = idx_rec.get("__row_id__")
-                        raw = idx_rec.get(col)
-                        if raw is not None:
-                            val = apply_transforms(str(raw), transforms)
-                            idx_lookup.setdefault(val, []).append(idx_id)
-
-                    # Check chunk records against index
-                    for chunk_row in chunk_rows:
-                        chunk_id = chunk_row.get("__row_id__")
-                        raw = chunk_row.get(col)
-                        if raw is not None:
-                            val = apply_transforms(str(raw), transforms)
-                            for idx_id in idx_lookup.get(val, []):
-                                if idx_id != chunk_id:
-                                    pairs.append((chunk_id, idx_id, 1.0))
-
-            elif mk.type == "weighted":
-                for chunk_row in chunk_rows:
-                    chunk_id = chunk_row.get("__row_id__")
-
-                    for idx_record in self._index_records:
-                        idx_id = idx_record.get("__row_id__")
-                        if idx_id == chunk_id:
-                            continue
-
-                        score = score_pair(chunk_row, idx_record, mk.fields)
-                        if score >= (mk.threshold or 0.0):
-                            pairs.append((chunk_id, idx_id, score))
-
-        return pairs
-
-    def _add_to_index(self, chunk_df: pl.DataFrame) -> None:
-        """Add records from chunk to index for cross-chunk matching.
-
-        For exact matching: stores all unique key values (compact).
-        For fuzzy matching: samples representative records.
+        ``__row_id__`` plus every matchkey field plus every blocking-key
+        field. Everything else is dropped to keep the index small.
         """
-        # Store all records — for exact matching we need full coverage
-        # Keep only matchkey-relevant columns + __row_id__ to save memory
-        matchkeys = self.config.get_matchkeys()
-        keep_cols = {"__row_id__"}
+        keep: set[str] = {"__row_id__"}
         for mk in matchkeys:
             for f in mk.fields:
                 if f.field:
-                    keep_cols.add(f.field)
+                    keep.add(f.field)
+        if self.config.blocking:
+            for bk in self.config.blocking.keys or []:
+                for fname in bk.fields:
+                    keep.add(fname)
+        return keep
 
+    def _match_against_index(
+        self, chunk_df: pl.DataFrame, matchkeys: list,
+    ) -> list[tuple[int, int, float]]:
+        """Vectorized cross-chunk matching via Polars.
+
+        Concatenates the slim slice of the current chunk with the
+        persistent index, recomputes the matchkey-derived columns over
+        the joint frame, then runs the same ``find_exact_matches`` /
+        ``build_blocks`` + ``score_blocks_parallel`` machinery the
+        within-chunk path uses. Filters the result to **cross-pairs**
+        (one row in the current chunk, one in the index) — pairs that
+        are wholly within the index were already scored on the chunk
+        that introduced them; pairs wholly within the current chunk
+        were already scored by the within-chunk pass.
+
+        Replaces the prior Python double-loop, which was O(chunk_size
+        × index_size) with a per-row Python overhead that dominated
+        wall time at scale.
+        """
+        from goldenmatch.core.blocker import build_blocks
+        from goldenmatch.core.matchkey import compute_matchkeys
+        from goldenmatch.core.scorer import find_exact_matches, score_blocks_parallel
+
+        assert self._index_df is not None
+
+        # Project chunk down to the same slim shape as the index so the
+        # vertical concat has uniform columns.
+        keep_cols = self._slim_columns(matchkeys)
+        chunk_slim = chunk_df.select([c for c in keep_cols if c in chunk_df.columns])
+
+        joint = pl.concat([chunk_slim, self._index_df], how="vertical")
+        joint_df = compute_matchkeys(joint.lazy(), matchkeys).collect()
+
+        chunk_lo = self._row_offset
+        chunk_hi = self._row_offset + chunk_df.height
+
+        def _is_cross(a: int, b: int) -> bool:
+            return (chunk_lo <= a < chunk_hi) != (chunk_lo <= b < chunk_hi)
+
+        cross_pairs: list[tuple[int, int, float]] = []
+        matched_pairs: set[tuple[int, int]] = set()
+
+        for mk in matchkeys:
+            if mk.type == "exact":
+                for a, b, s in find_exact_matches(joint_df.lazy(), mk):
+                    if _is_cross(a, b):
+                        cross_pairs.append((min(a, b), max(a, b), s))
+                        matched_pairs.add((min(a, b), max(a, b)))
+
+        if self.config.blocking:
+            for mk in matchkeys:
+                if mk.type == "weighted":
+                    blocks = build_blocks(joint_df.lazy(), self.config.blocking)
+                    for a, b, s in score_blocks_parallel(blocks, mk, matched_pairs):
+                        if _is_cross(a, b):
+                            cross_pairs.append((min(a, b), max(a, b), s))
+
+        return cross_pairs
+
+    def _add_to_index(self, chunk_df: pl.DataFrame) -> None:
+        """Append the chunk's slim slice to the persistent index frame.
+
+        Slim = ``__row_id__`` + matchkey fields + blocking-key fields.
+        Stored as a Polars DataFrame (was ``list[dict]``) so the
+        cross-chunk match step can vectorize via ``pl.concat`` +
+        ``compute_matchkeys`` + ``find_exact_matches`` /
+        ``score_blocks_parallel`` instead of Python double-loops.
+        """
+        matchkeys = self.config.get_matchkeys()
+        keep_cols = self._slim_columns(matchkeys)
         available = [c for c in keep_cols if c in chunk_df.columns]
         slim_df = chunk_df.select(available)
-        self._index_records.extend(slim_df.to_dicts())
+        if self._index_df is None:
+            self._index_df = slim_df
+        else:
+            self._index_df = pl.concat([self._index_df, slim_df], how="vertical")
