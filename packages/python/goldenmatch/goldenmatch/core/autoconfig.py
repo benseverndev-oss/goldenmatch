@@ -1278,6 +1278,43 @@ def build_blocking(
     return BlockingConfig(keys=[BlockingKeyConfig(fields=[profiles[0].name])], skip_oversized=True)
 
 
+def _maybe_promote_blocking_to_adaptive(
+    blocking: BlockingConfig | None,
+    n_rows: int,
+    *,
+    threshold: int = 1_000_000,
+) -> BlockingConfig | None:
+    """Promote ``strategy="static"`` to ``"adaptive"`` for large datasets.
+
+    Adaptive blocking recursively sub-partitions oversized blocks via
+    ``core/blocker.py::_sub_block`` and falls back to
+    ``_auto_split_block`` when ``sub_block_keys`` aren't configured
+    (zero-config path). Without this promotion, ``build_blocking``
+    always emits ``strategy="static"`` (or ``"multi_pass"`` / ``"canopy"``
+    for specific shape paths). At full scale, oversized buckets — e.g.
+    the Smith surname block at 5M+ scaling to ~57K rows — are scored
+    as one giant block instead of being recursively sub-partitioned.
+
+    Triggers when:
+
+    - ``n_rows >= threshold`` (default 1M).
+    - Current strategy is ``"static"`` only. ``multi_pass``, ``canopy``,
+      ``ann``, ``learned``, ``sorted_neighborhood`` each have their own
+      escape hatches; don't second-guess them.
+
+    This is the eager half of the adaptive-blocking work. The
+    controller-rule counterpart (``rule_blocking_adaptive_on_p99_outlier``)
+    fires reactively when the measured block-size distribution
+    shows a heavy P99 tail — useful when the eager threshold isn't
+    reached but the data is pathologically skewed at smaller N.
+    """
+    if blocking is None or n_rows < threshold:
+        return blocking
+    if blocking.strategy != "static":
+        return blocking
+    return blocking.model_copy(update={"strategy": "adaptive"})
+
+
 # ── Model selection ────────────────────────────────────────────────────────
 
 def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 50000) -> str | None:
@@ -1580,6 +1617,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # Build blocking (required for weighted/probabilistic matchkeys)
     has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in matchkeys)
     blocking = build_blocking(profiles, df, llm_provider=llm_provider) if has_fuzzy else None
+    # At 1M+ rows, swap static blocking for adaptive so blocker.py's
+    # _sub_block / _auto_split_block paths bound oversized buckets at
+    # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
+    blocking = _maybe_promote_blocking_to_adaptive(blocking, df.height)
 
     # ── Data-driven strategy selection ──
 
