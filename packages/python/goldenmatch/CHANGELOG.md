@@ -7,8 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 <!-- README-callout
-**Bundled OSS reference data** — Five reference packs ship inside the wheel: US Census 2010 surnames (top 10K), given-name aliases (~140 pairs: William↔Bill, Katherine↔Kate, ...), business legal forms (Inc, LLC, Ltd, GmbH, S.A., ...), USPS Pub. 28 address abbreviations, and NAICS 2022 industries (2,125 codes across all five hierarchy levels). Auto-config swaps in two new scorers (`name_freq_weighted_jw`, `given_name_aliased_jw`) and three transforms (`legal_form_strip`, `address_normalize`, `naics_normalize`) when a column name AND its profiled `col_type` agree — a `last_name` column holding numeric IDs keeps its caller-specified scorer instead of being silently swapped. Common-name surname-FP fixture: F1 0.667 → 0.915 (+0.248). No API keys, no external downloads. See [Reference Data docs](https://benzsevern.github.io/goldenmatch/reference-data).
+**5M records in ~50 min on commodity hardware** — Chunked mode now actually delivers on its "1M to 100M+" promise. The streaming `scan_csv().slice()` reader + Polars-native cross-chunk join (B) + block-keyed bucketed index (C) + DuckDB pair-store backend (D) replace a broken eager-read + Python-double-loop path that OOM-killed at 3h+ on the pre-fix 5M dispatch. **Measured: 5M records, 50 min wall, 11.9 GB peak RSS, 618,817 multi-member clusters, no OOM** on a 4c/16GB GitHub runner. Pass `backend="chunked"` with an explicit blocking config. PRs #233/#234/#235.
 -->
+
+### Added -- Chunked-mode out-of-core delivery (PRs #233/#234/#235)
+
+The pre-fix `core/chunked.py` claimed "1M to 100M+ records" in its docstring but eagerly materialized the full CSV via `pl.read_csv` before slicing, and ran a Python double-loop in `_match_against_index` that was O(chunk_size × index_size) per chunk — making the chunked path strictly worse than `polars-direct` past 1M. A scale audit dispatched at 5M on 16 GB ran for 3h 36m without completing.
+
+Three landed PRs fixed it:
+
+- **B (#233) — `feat(chunked): vectorize cross-chunk match via Polars`** — `_match_against_index` no longer loops; it `pl.concat`s the chunk slim slice with the persistent index, recomputes matchkey-derived columns, and runs `find_exact_matches` + `build_blocks` + `score_blocks_parallel` over the joint frame, filtering to cross-pairs. Same machinery as the within-chunk path. `_index_df: pl.DataFrame` replaces `_index_records: list[dict]`. Expected constant-factor improvement 50–200× from rapidfuzz cdist replacing per-pair `score_pair` calls.
+- **C (#234) — `feat(chunked): block-keyed cross-chunk index lookup`** — adds `_index_by_block: list[dict[str, pl.DataFrame]]` for `strategy="static"` blocking. Cross-chunk weighted matching now groups the chunk by block key, looks up the matching bucket per block, synthesizes mixed `BlockResult`s, and scores with `target_ids=chunk_ids`. **Pure-index blocks are never instantiated.** Algorithmic shift from O(joint_size × avg_block) to O(Σ over chunk-blocks K of \|chunk[K]\| × \|index[K]\|).
+- **D (#235) — `feat(backend): score_blocks_duckdb out-of-core pair store`** — wires `config.backend="duckdb"` into `_get_block_scorer` so the in-package DuckDB backend is finally non-empty. Pair accumulator moves from Python `list` to a DuckDB table (`:memory:` by default; `db_path="auto"` or `GOLDENMATCH_DUCKDB_SCORE_DB` for spill-to-disk). Per-block rapidfuzz cdist work is unchanged — D's value is at 50M+ where pair counts hit 10⁸, not at 5M.
+
+Measured at 5M (scale-audit 2026-05-14):
+
+| Lane | Wall | Peak RSS | Result |
+|---|---|---|---|
+| `backend=chunked` (B+C) | 50 min | 11.9 GB | ✅ 618,817 multi-member clusters |
+| `backend=duckdb-backend` (D smoke) | OOM ~25 min | — | ❌ in-memory scoring matrices still hit 16 GB ceiling |
+
+The `chunked` lane is the new recommended path for 5M+ on commodity hardware. `duckdb-backend` is infrastructure for 50M+ once paired with future SQL-native scoring.
 
 ### Changed -- Refdata autoconfig hook gates on ColumnProfile.col_type (strategy direction #8, ninth slice)
 
