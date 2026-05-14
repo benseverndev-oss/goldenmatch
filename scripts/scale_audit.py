@@ -350,6 +350,54 @@ def _run_polars_direct(
     result.cluster_count = len(clusters)
 
 
+def _run_duckdb_backend(
+    result: ScaleAuditResult,
+    process: psutil.Process,
+    out_path: Path | None,
+    fixture_path: Path,
+) -> None:
+    """In-Python dedupe with ``config.backend = "duckdb"``.
+
+    Same Python entry point as ``polars-direct`` (Polars frame at the
+    boundary, dedupe_df-shaped call), but routes block scoring through
+    the in-package DuckDB backend (``goldenmatch.backends.duckdb_backend``).
+    Targets the "5M-on-32GB without OOM" question: Polars holds the
+    frame, DuckDB owns the score-pair tables out-of-core.
+
+    Distinct from ``duckdb-udf``, which is the external goldenmatch-duckdb
+    extension surface (UDFs registered on a DuckDB connection, called via
+    SQL). This lane is the in-process Python backend.
+    """
+    import polars as pl
+    from goldenmatch.config.schemas import QualityConfig
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.pipeline import run_dedupe_df
+
+    with _StageTimer("read_csv", result, process):
+        df = pl.read_csv(fixture_path, encoding="utf8-lossy", ignore_errors=True)
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("auto_configure", result, process):
+        config = auto_configure_df(df, _skip_finalize=True)
+        config.backend = "duckdb"
+        # GoldenCheck quality scan is not what we're measuring; disabling
+        # also avoids the messy-input → temp-CSV → re-read path that fails
+        # on whitespace-wrapped numerics in the synthetic fixture.
+        if config.quality is None:
+            config.quality = QualityConfig(mode="disabled", enabled=False)
+        else:
+            config.quality.mode = "disabled"
+            config.quality.enabled = False
+    _write_snapshot(result, out_path)
+
+    with _StageTimer("run_dedupe", result, process):
+        pipeline_result = run_dedupe_df(df, config, output_clusters=True, auto_config=False)
+    _write_snapshot(result, out_path)
+
+    clusters = pipeline_result.get("clusters") or {}
+    result.cluster_count = len(clusters)
+
+
 def _run_duckdb_udf(
     result: ScaleAuditResult,
     process: psutil.Process,
@@ -467,6 +515,8 @@ def run_audit(
         ):
             if backend == "polars-direct":
                 _run_polars_direct(result, process, out_path, fixture_path)
+            elif backend == "duckdb-backend":
+                _run_duckdb_backend(result, process, out_path, fixture_path)
             elif backend == "duckdb-udf":
                 _run_duckdb_udf(result, process, out_path, fixture_path)
             else:
@@ -585,15 +635,19 @@ def main() -> None:
     )
     ap.add_argument(
         "--backend",
-        choices=("polars-direct", "duckdb-udf"),
+        choices=("polars-direct", "duckdb-backend", "duckdb-udf"),
         default="polars-direct",
         help=(
             "which goldenmatch surface to time. polars-direct (default) "
             "exercises the Python `dedupe_df(df)` zero-config path. "
-            "duckdb-udf loads the fixture into a DuckDB table, registers "
-            "the goldenmatch-duckdb UDFs, and calls goldenmatch_dedupe_table "
-            "via SQL — measures the storage-and-call overhead a SQL-first "
-            "user pays on top of the in-Python dedupe cost."
+            "duckdb-backend uses the same Python entry point but sets "
+            "config.backend='duckdb' so block scoring runs out-of-core via "
+            "the in-package DuckDB backend (targets the 'fits in 32GB at "
+            "5M' question). duckdb-udf loads the fixture into a DuckDB "
+            "table, registers the goldenmatch-duckdb extension UDFs, and "
+            "calls goldenmatch_dedupe_table via SQL — measures the "
+            "storage-and-call overhead a SQL-first user pays on top of "
+            "the in-Python dedupe cost."
         ),
     )
     ap.add_argument(

@@ -54,12 +54,13 @@ on:
           - "off"
           - "on"
       backend:
-        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-udf = goldenmatch_dedupe_table via the goldenmatch-duckdb UDFs."
+        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-backend = same entry point with config.backend='duckdb' (out-of-core via in-package DuckDB backend). duckdb-udf = goldenmatch_dedupe_table via the external goldenmatch-duckdb UDFs."
         required: true
         default: "polars-direct"
         type: choice
         options:
           - "polars-direct"
+          - "duckdb-backend"
           - "duckdb-udf"
 
 # Read-only: this workflow generates synthetic data, runs an in-process
