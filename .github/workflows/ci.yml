@@ -585,7 +585,7 @@ jobs:
       # `ModelLanguage` enum during macro parsing. Pinned <1.24 until
       # upstream ships a fix; remove the bound once dbt-adapters has
       # a clean release that parses against dbt-core 1.11.x.
-      - run: pip install dbt-core 'dbt-adapters<1.24' dbt-duckdb
+      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11'
       - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
 
   action:
