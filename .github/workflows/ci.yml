@@ -31,6 +31,7 @@ jobs:
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
+      readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
@@ -102,6 +103,15 @@ jobs:
               - 'packages/dbt/**'
             action:
               - 'packages/actions/**'
+            readme_callouts:
+              # README "what's new" callouts are auto-synced from the
+              # goldenmatch CHANGELOG by scripts/sync_readme_callouts.py.
+              # Trigger the check whenever the source, either target, or
+              # the script itself changes.
+              - 'README.md'
+              - 'packages/python/goldenmatch/README.md'
+              - 'packages/python/goldenmatch/CHANGELOG.md'
+              - 'scripts/sync_readme_callouts.py'
             pyright_slice:
               - 'pyrightconfig.json'
               - 'packages/python/goldenmatch/goldenmatch/core/autoconfig.py'
@@ -570,7 +580,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install dbt-core dbt-duckdb
+      # `dbt-adapters` 1.24.0 (released 2026-05-13) introduced a
+      # `KeyError: 'javascript'` against `dbt-core` 1.11.9's
+      # `ModelLanguage` enum during macro parsing. Pinned <1.24 until
+      # upstream ships a fix; remove the bound once dbt-adapters has
+      # a clean release that parses against dbt-core 1.11.x.
+      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11'
       - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
 
   action:
@@ -755,6 +770,16 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run pyright
 
+  readme_callouts:
+    needs: changes
+    if: needs.changes.outputs.readme_callouts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Verify READMEs are in sync with CHANGELOG callouts
+        run: python scripts/sync_readme_callouts.py --check
+
   # Single required-status-check for branch protection. Branch ruleset
   # references `ci-required` (stable name) instead of the matrix-instance
   # check names (`python (goldenmatch)`, `rust_pgrx (15)`, ...) which
@@ -785,6 +810,7 @@ jobs:
       - rust_pgrx
       - duckdb_extensions
       - pyright
+      - readme_callouts
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
