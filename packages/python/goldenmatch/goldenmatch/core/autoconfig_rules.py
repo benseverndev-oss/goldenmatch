@@ -1099,21 +1099,80 @@ def rule_demote_clustered_identity(
     return None
 
 
+def rule_blocking_adaptive_on_p99_outlier(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Promote ``strategy=static`` to ``adaptive`` on a heavy-tailed block
+    distribution.
+
+    The cheapest fix for an oversized-bucket pathology (Smith surname
+    block, dominant zip code, etc.) is recursive sub-partitioning at
+    runtime — which ``adaptive`` strategy gives you via blocker.py's
+    ``_sub_block`` / ``_auto_split_block`` paths. Picking a different
+    blocking key entirely (``rule_blocking_too_coarse``) is the
+    fallback for when adaptive sub-partitioning isn't enough — but
+    static→adaptive is strictly less invasive and should be tried first.
+
+    Triggers when:
+
+    - ``block_sizes_p99 > 10 * block_sizes_p50`` (the same heavy-tail
+      signal ``rule_blocking_too_coarse`` watches).
+    - ``block_sizes_p99 >= 1000`` (absolute size gate — adaptive
+      sub-partitioning only buys something when the oversize tail
+      actually exceeds what the scorer can chew through. Sub-1000-row
+      blocks are fine in-memory; promoting strategy on those just
+      preempts the existing rule chain without measurable gain).
+    - ``current.blocking.strategy == "static"`` (no point promoting
+      multi_pass / canopy / etc. — those have their own logic).
+    - ``current.blocking.keys`` non-empty (don't fire on degenerate
+      configs).
+
+    Sits **before** ``rule_blocking_too_coarse`` in DEFAULT_RULES so the
+    cheap promotion lands first; the key-swap rule still fires on the
+    next iteration if adaptive alone doesn't bound the tail.
+    """
+    if current.blocking is None or current.blocking.strategy != "static":
+        return None
+    if not current.blocking.keys:
+        return None
+    bp = profile.blocking
+    if bp.block_sizes_p50 == 0:
+        return None
+    if bp.block_sizes_p99 < 1000:
+        return None
+    if bp.block_sizes_p99 <= 10 * bp.block_sizes_p50:
+        return None
+
+    new_blocking = current.blocking.model_copy(update={"strategy": "adaptive"})
+    new_cfg = current.model_copy(update={"blocking": new_blocking})
+    decision = PolicyDecision(
+        rule_name="blocking_adaptive_on_p99_outlier",
+        rationale=(
+            f"block_sizes p99={bp.block_sizes_p99} >> p50={bp.block_sizes_p50}; "
+            f"promoting strategy=static -> adaptive so oversized blocks are "
+            f"recursively sub-partitioned at runtime instead of swapping keys"
+        ),
+        config_diff={"blocking.strategy": "adaptive"},
+    )
+    return new_cfg, decision
+
+
 DEFAULT_RULES = [
     rule_blocking_field_null_heavy,        # 1  structural: high-null blocking field (runs first)
     rule_blocking_singleton_trap,          # 2  structural: candidates_compared == 0
     rule_blocking_key_swap,                # 3  structural: mass_above==0 with prior decision
-    rule_blocking_too_coarse,              # 4  structural: p99 outlier (skewed distribution)
-    rule_uniform_heavy_blocking,           # 5  structural: uniform-large blocks
-    rule_corruption_normalize,             # 6  NEW v1.10: normalize on high-corruption blocking col
-    rule_demote_clustered_identity,        # 7  NEW v1.11: demote collision-prone exact matchkeys (before generic refit rules)
-    rule_unimodal_scoring,                 # 8  tuning: dip statistic low
-    rule_low_reduction_ratio,              # 9  structural: too-tight blocking
-    rule_cross_blocking_disagreement,      # 10 NEW v1.10: multi-pass on low cross-blocking overlap
-    rule_low_transitivity,                 # 11 tuning: transitivity low
-    rule_no_matches,                       # 12 tuning: nothing matches
-    rule_recall_gap_suspected,             # 13 tuning: random pair probe high OR over-tight signature
-    rule_sparse_match_expand,              # 14 NEW v1.10: lower threshold proxy for sparse datasets
+    rule_blocking_adaptive_on_p99_outlier, # 4  NEW 2026-05-14: promote static->adaptive on heavy tail (cheaper than key swap)
+    rule_blocking_too_coarse,              # 5  structural: p99 outlier (skewed distribution)
+    rule_uniform_heavy_blocking,           # 6  structural: uniform-large blocks
+    rule_corruption_normalize,             # 7  NEW v1.10: normalize on high-corruption blocking col
+    rule_demote_clustered_identity,        # 8  NEW v1.11: demote collision-prone exact matchkeys (before generic refit rules)
+    rule_unimodal_scoring,                 # 9  tuning: dip statistic low
+    rule_low_reduction_ratio,              # 10 structural: too-tight blocking
+    rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
+    rule_low_transitivity,                 # 12 tuning: transitivity low
+    rule_no_matches,                       # 13 tuning: nothing matches
+    rule_recall_gap_suspected,             # 14 tuning: random pair probe high OR over-tight signature
+    rule_sparse_match_expand,              # 15 NEW v1.10: lower threshold proxy for sparse datasets
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
