@@ -447,6 +447,48 @@ def _run_duckdb_backend(
     result.cluster_count = len(clusters)
 
 
+def _run_chunked(
+    result: ScaleAuditResult,
+    process: psutil.Process,
+    out_path: Path | None,
+    fixture_path: Path,
+    config_mode: str = "auto",
+    chunk_size: int = 100_000,
+) -> None:
+    """Streaming chunked dedupe via ``ChunkedMatcher.process_file``.
+
+    Reads the fixture in fixed-size row chunks via ``scan_csv().slice()``
+    instead of materializing the full frame in memory. Targets the
+    "fits in N GB regardless of row count" claim — peak RSS should
+    be a function of ``chunk_size``, not file size.
+
+    Doesn't use auto_configure_df because the controller's small-sample
+    blocking discovery has been observed to fail at 5M (see PR audit).
+    ``config_mode="explicit-personlike"`` pins a hand-tuned config;
+    ``config_mode="auto"`` still calls auto-config but on the full
+    in-memory frame, which defeats the streaming claim — only use it
+    for small fixtures.
+    """
+    from goldenmatch.core.chunked import ChunkedMatcher
+
+    if config_mode == "explicit-personlike":
+        config = _build_explicit_personlike_config()
+    else:
+        # Match polars-direct's auto-config path so a smoke run at small
+        # sizes still works zero-config. At 5M+ pass explicit-personlike.
+        import polars as pl
+        from goldenmatch.core.autoconfig import auto_configure_df
+        df = pl.read_csv(fixture_path, encoding="utf8-lossy", ignore_errors=True)
+        config = auto_configure_df(df, _skip_finalize=True)
+
+    with _StageTimer("chunked_process", result, process):
+        matcher = ChunkedMatcher(config=config, chunk_size=chunk_size)
+        stats = matcher.process_file(fixture_path)
+    _write_snapshot(result, out_path)
+
+    result.cluster_count = int(stats.get("total_clusters", 0))
+
+
 def _run_duckdb_udf(
     result: ScaleAuditResult,
     process: psutil.Process,
@@ -567,6 +609,8 @@ def run_audit(
                 _run_polars_direct(result, process, out_path, fixture_path)
             elif backend == "duckdb-backend":
                 _run_duckdb_backend(result, process, out_path, fixture_path, config_mode=config_mode)
+            elif backend == "chunked":
+                _run_chunked(result, process, out_path, fixture_path, config_mode=config_mode)
             elif backend == "duckdb-udf":
                 _run_duckdb_udf(result, process, out_path, fixture_path)
             else:
@@ -701,19 +745,19 @@ def main() -> None:
     )
     ap.add_argument(
         "--backend",
-        choices=("polars-direct", "duckdb-backend", "duckdb-udf"),
+        choices=("polars-direct", "duckdb-backend", "chunked", "duckdb-udf"),
         default="polars-direct",
         help=(
             "which goldenmatch surface to time. polars-direct (default) "
             "exercises the Python `dedupe_df(df)` zero-config path. "
             "duckdb-backend uses the same Python entry point but sets "
-            "config.backend='duckdb' so block scoring runs out-of-core via "
-            "the in-package DuckDB backend (targets the 'fits in 32GB at "
-            "5M' question). duckdb-udf loads the fixture into a DuckDB "
-            "table, registers the goldenmatch-duckdb extension UDFs, and "
-            "calls goldenmatch_dedupe_table via SQL — measures the "
-            "storage-and-call overhead a SQL-first user pays on top of "
-            "the in-Python dedupe cost."
+            "config.backend='duckdb' (currently a no-op for processing — "
+            "documented in the 5M audit). chunked uses ChunkedMatcher to "
+            "stream the fixture via scan_csv().slice() in fixed-size row "
+            "chunks — the only path that actually fits 5M in commodity "
+            "memory. duckdb-udf loads the fixture into a DuckDB table, "
+            "registers the goldenmatch-duckdb extension UDFs, and calls "
+            "goldenmatch_dedupe_table via SQL."
         ),
     )
     ap.add_argument(

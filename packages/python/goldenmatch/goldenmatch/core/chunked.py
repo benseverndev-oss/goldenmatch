@@ -166,19 +166,32 @@ class ChunkedMatcher:
         }
 
     def _read_csv_chunks(self, path: Path):
-        """Read CSV in chunks."""
-        # Read full file lazily and collect in chunks
-        try:
-            full_df = pl.read_csv(path, encoding="utf8-lossy", ignore_errors=True)
-        except Exception:
-            full_df = pl.read_csv(str(path), ignore_errors=True)
+        """Stream a CSV file in fixed-size row chunks.
 
-        total = full_df.height
-        for offset in range(0, total, self.chunk_size):
-            chunk = full_df.slice(offset, self.chunk_size)
+        Uses ``pl.scan_csv(path).slice(offset, chunk_size).collect()`` so
+        each chunk materializes independently. The full file is never
+        held in memory — only the current chunk plus matchkey-relevant
+        slices accumulated in ``_index_records``. Necessary for true
+        out-of-core behavior at 5M+ rows on commodity hardware.
+
+        The kwargs match what ``pl.read_csv`` historically accepted in
+        this method (utf8-lossy + ignore_errors) with a plain fallback
+        for older Polars versions that reject ``encoding=`` on the lazy
+        path.
+        """
+        try:
+            lf = pl.scan_csv(path, encoding="utf8-lossy", ignore_errors=True)
+        except TypeError:
+            # Some Polars versions don't accept encoding= on scan_csv.
+            lf = pl.scan_csv(str(path), ignore_errors=True)
+
+        offset = 0
+        while True:
+            chunk = lf.slice(offset, self.chunk_size).collect()
             if chunk.height == 0:
                 break
             yield chunk
+            offset += self.chunk_size
 
     def _read_parquet_chunks(self, path: Path):
         """Read Parquet in chunks."""
