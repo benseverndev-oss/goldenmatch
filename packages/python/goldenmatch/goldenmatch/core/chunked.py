@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -39,6 +40,11 @@ class ChunkedMatcher:
         self._all_pairs: list[tuple[int, int, float]] = []
         self._all_ids: list[int] = []
         self._index_df: pl.DataFrame | None = None  # slim slice of prior chunks
+        # Per-blocking-key bucketed index: list[dict[block_key_str, slim_df]].
+        # Lazily populated on first `_add_to_index` when blocking is
+        # configured with `strategy="static"`. Lets cross-chunk matching
+        # skip pure-index blocks and avoid joint-frame block building.
+        self._index_by_block: list[dict[str, pl.DataFrame]] | None = None
         self._row_offset = 0
         self._total_processed = 0
         self._chunk_count = 0
@@ -214,6 +220,32 @@ class ChunkedMatcher:
                 break
             yield chunk
 
+    def _block_key_column(
+        self, df: pl.DataFrame, key_config: Any,
+    ) -> pl.DataFrame:
+        """Add a ``__block_key__`` column to a DataFrame.
+
+        Mirrors ``goldenmatch.core.blocker._build_block_key_expr`` but
+        kept inline so this module doesn't have to dance with the
+        underscore-prefixed helper. Concatenates the configured
+        blocking fields with ``||`` after applying ``transforms``.
+        """
+        from goldenmatch.utils.transforms import apply_transforms
+
+        if key_config.transforms:
+            field_exprs = [
+                pl.col(field).map_elements(
+                    lambda val, t=key_config.transforms: apply_transforms(val, t),
+                    return_dtype=pl.Utf8,
+                )
+                for field in key_config.fields
+            ]
+        else:
+            field_exprs = [pl.col(field).cast(pl.Utf8) for field in key_config.fields]
+
+        key_expr = pl.concat_str(field_exprs, separator="||").alias("__block_key__")
+        return df.with_columns(key_expr)
+
     def _slim_columns(self, matchkeys: list) -> set[str]:
         """Columns to keep on the cross-chunk index slice.
 
@@ -250,9 +282,8 @@ class ChunkedMatcher:
         × index_size) with a per-row Python overhead that dominated
         wall time at scale.
         """
-        from goldenmatch.core.blocker import build_blocks
         from goldenmatch.core.matchkey import compute_matchkeys
-        from goldenmatch.core.scorer import find_exact_matches, score_blocks_parallel
+        from goldenmatch.core.scorer import find_exact_matches
 
         assert self._index_df is not None
 
@@ -283,12 +314,103 @@ class ChunkedMatcher:
         if self.config.blocking:
             for mk in matchkeys:
                 if mk.type == "weighted":
-                    blocks = build_blocks(joint_df.lazy(), self.config.blocking)
-                    for a, b, s in score_blocks_parallel(blocks, mk, matched_pairs):
-                        if _is_cross(a, b):
-                            cross_pairs.append((min(a, b), max(a, b), s))
+                    weighted_pairs = self._match_weighted_cross_chunk(
+                        chunk_df, joint_df, mk, matched_pairs, chunk_lo, chunk_hi,
+                    )
+                    for a, b, s in weighted_pairs:
+                        cross_pairs.append((min(a, b), max(a, b), s))
 
         return cross_pairs
+
+    def _match_weighted_cross_chunk(
+        self,
+        chunk_df: pl.DataFrame,
+        joint_df: pl.DataFrame,
+        mk: Any,
+        matched_pairs: set[tuple[int, int]],
+        chunk_lo: int,
+        chunk_hi: int,
+    ) -> list[tuple[int, int, float]]:
+        """Cross-chunk weighted matching with block-keyed index lookup.
+
+        For ``strategy="static"`` blocking, takes the bucketed
+        ``_index_by_block`` path: per blocking-key config, group the
+        chunk by block key, look up each block in the index dict,
+        score only mixed (chunk × index) blocks via
+        ``score_blocks_parallel`` with ``target_ids=chunk_ids``. Pure-
+        index blocks are never instantiated.
+
+        For other strategies, falls back to B's behavior: ``build_blocks``
+        over the joint frame, score, post-filter to cross-pairs.
+
+        Algorithmically, the static path turns the cross-chunk work per
+        chunk from O(joint_size × avg_block) into O(sum over chunk
+        blocks K of |chunk[K]| × |index[K]|). Pure-index blocks
+        contribute zero work instead of full block² scoring.
+        """
+        from goldenmatch.core.blocker import BlockResult, build_blocks
+        from goldenmatch.core.scorer import score_blocks_parallel
+
+        blocking = self.config.blocking
+        assert blocking is not None
+
+        is_static = (
+            blocking.strategy == "static"
+            and bool(blocking.keys)
+            and self._index_by_block is not None
+        )
+        if not is_static:
+            # Fallback: B-style joint blocking + post-filter to cross-pairs.
+            blocks = build_blocks(joint_df.lazy(), blocking)
+            return [
+                (a, b, s)
+                for a, b, s in score_blocks_parallel(blocks, mk, matched_pairs)
+                if (chunk_lo <= a < chunk_hi) != (chunk_lo <= b < chunk_hi)
+            ]
+
+        # Static-blocking fast path: per-key bucket lookup.
+        chunk_ids: set[int] = set(range(chunk_lo, chunk_hi))
+        synthetic_blocks: list[BlockResult] = []
+        seen_block_keys: set[str] = set()
+        assert self._index_by_block is not None  # narrow for type-checker
+        for key_idx, key_config in enumerate(blocking.keys or []):
+            chunk_keyed = self._block_key_column(chunk_df, key_config)
+            index_dict = self._index_by_block[key_idx]
+            # partition_by(single col, as_dict=True) returns dict[key_value,
+            # df_without_partition_col]. Polars 1.x returns the value as a
+            # tuple when as_dict is used — handle both shapes defensively.
+            partitions = chunk_keyed.partition_by(
+                "__block_key__", as_dict=True, include_key=False,
+            )
+            for raw_key, chunk_subset in partitions.items():
+                bk = raw_key[0] if isinstance(raw_key, tuple) else raw_key
+                index_subset = index_dict.get(bk)
+                if index_subset is None or index_subset.height == 0:
+                    continue
+                # Don't re-emit the same block-key bucket twice if two
+                # blocking-key configs collide on the same string.
+                dedup_key = f"{key_idx}::{bk}"
+                if dedup_key in seen_block_keys:
+                    continue
+                seen_block_keys.add(dedup_key)
+                # Slim down chunk_subset to the same columns as index_subset,
+                # then stack. compute_matchkeys was already applied on the
+                # joint frame upstream; re-stacking slim frames is cheap.
+                cols = [c for c in index_subset.columns if c in chunk_subset.columns]
+                combined = pl.concat(
+                    [chunk_subset.select(cols), index_subset.select(cols)],
+                    how="vertical",
+                )
+                synthetic_blocks.append(
+                    BlockResult(block_key=bk, df=combined.lazy(), strategy="static"),
+                )
+
+        if not synthetic_blocks:
+            return []
+
+        return list(score_blocks_parallel(
+            synthetic_blocks, mk, matched_pairs, target_ids=chunk_ids,
+        ))
 
     def _add_to_index(self, chunk_df: pl.DataFrame) -> None:
         """Append the chunk's slim slice to the persistent index frame.
@@ -307,3 +429,30 @@ class ChunkedMatcher:
             self._index_df = slim_df
         else:
             self._index_df = pl.concat([self._index_df, slim_df], how="vertical")
+
+        # If blocking is static, also partition the slim slice by each
+        # blocking key and append into the bucketed index. The bucketed
+        # index lets cross-chunk matching look up only the relevant
+        # block per chunk-row instead of building blocks over the full
+        # joint frame each iteration.
+        blocking = self.config.blocking
+        if (
+            blocking is not None
+            and blocking.strategy == "static"
+            and blocking.keys
+        ):
+            if self._index_by_block is None:
+                self._index_by_block = [dict() for _ in blocking.keys]
+            for key_idx, key_config in enumerate(blocking.keys):
+                slim_keyed = self._block_key_column(slim_df, key_config)
+                partitions = slim_keyed.partition_by(
+                    "__block_key__", as_dict=True, include_key=False,
+                )
+                bucket = self._index_by_block[key_idx]
+                for raw_key, part_df in partitions.items():
+                    bk = raw_key[0] if isinstance(raw_key, tuple) else raw_key
+                    existing = bucket.get(bk)
+                    if existing is None:
+                        bucket[bk] = part_df
+                    else:
+                        bucket[bk] = pl.concat([existing, part_df], how="vertical")
