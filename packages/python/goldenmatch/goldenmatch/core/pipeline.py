@@ -46,6 +46,17 @@ def _get_block_scorer(config: GoldenMatchConfig):
     if backend == "ray":
         from goldenmatch.backends.ray_backend import score_blocks_ray
         return score_blocks_ray
+    if backend == "duckdb":
+        # Routes block scoring through goldenmatch.backends.score_duckdb,
+        # which accumulates pairs in a DuckDB table (in-memory by default;
+        # set GOLDENMATCH_DUCKDB_SCORE_DB to an on-disk path, or use
+        # "auto" for a tempfile, to spill to disk). Per-block rapidfuzz
+        # cdist work is unchanged; only the pair accumulator moves out
+        # of the Python list. Until this PR, config.backend="duckdb"
+        # was silently a no-op for processing — only the source
+        # connector branch existed.
+        from goldenmatch.backends.score_duckdb import score_blocks_duckdb
+        return score_blocks_duckdb
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.golden import build_golden_record
