@@ -1,0 +1,84 @@
+# 5M scale audit — workflow_dispatch only.
+#
+# Triggers on manual dispatch only (not push, not PR, not schedule). Uses
+# ubuntu-latest-large (8c/32GB) which is a paid runner (~$0.16/hr). Generates
+# the synthetic fixture in-job (~13 min for 5M), runs zero-config dedupe with
+# the DuckDB backend, uploads JSON + markdown artifacts. Step summary lands
+# in $GITHUB_STEP_SUMMARY for at-a-glance reading.
+#
+# Outputs:
+#   - JSON report (artifact: scale-audit-5m-result)
+#   - Markdown summary (rendered in the workflow run summary)
+#
+# To run: GitHub → Actions → "scale-audit-5m" → Run workflow.
+name: scale-audit-5m
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Total record count (default 5000000)"
+        required: false
+        default: "5000000"
+      dupe_rate:
+        description: "Fraction of records that are duplicates (0..1)"
+        required: false
+        default: "0.12"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest-large  # 8 vCPU / 32 GB; paid runner
+    timeout-minutes: 240  # 4 hours — fixture gen + audit fits easily
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Install audit-only deps
+        # psutil is used by scripts/scale_audit_5m.py for peak-RSS polling.
+        # Not a declared workspace dep; installed here so the audit script
+        # doesn't have to be patched into pyproject.toml just for one runner.
+        run: .venv/bin/python -m pip install psutil
+
+      - name: Generate ${{ inputs.n_records }}-row fixture
+        run: |
+          mkdir -p .profile_tmp
+          .venv/bin/python scripts/scale_audit_5m_generate.py \
+            --n-records ${{ inputs.n_records }} \
+            --dupe-rate ${{ inputs.dupe_rate }} \
+            --output .profile_tmp/synthetic_audit.csv
+
+      - name: Report fixture stats
+        run: |
+          ls -lh .profile_tmp/synthetic_audit.csv
+          ls -lh .profile_tmp/synthetic_audit.ground_truth.csv
+
+      - name: Run dedupe audit (DuckDB backend)
+        run: |
+          .venv/bin/python scripts/scale_audit_5m.py \
+            --fixture .profile_tmp/synthetic_audit.csv \
+            --ground-truth .profile_tmp/synthetic_audit.ground_truth.csv \
+            --output .profile_tmp/scale_audit_result.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: scale-audit-5m-result
+          path: |
+            .profile_tmp/scale_audit_result.json
+          retention-days: 90
