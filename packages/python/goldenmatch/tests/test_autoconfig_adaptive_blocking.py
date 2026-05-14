@@ -17,6 +17,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.autoconfig import _maybe_promote_blocking_to_adaptive
+from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.autoconfig_rules import (
     DEFAULT_RULES,
     rule_blocking_adaptive_on_p99_outlier,
@@ -28,7 +29,6 @@ from goldenmatch.core.complexity_profile import (
     DataProfile,
     ScoringProfile,
 )
-from goldenmatch.core.autoconfig_history import RunHistory
 
 
 def _profile(p50: int, p99: int) -> ComplexityProfile:
