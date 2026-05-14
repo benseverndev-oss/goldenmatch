@@ -54,13 +54,14 @@ on:
           - "off"
           - "on"
       backend:
-        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-backend = same entry point with config.backend='duckdb' (out-of-core via in-package DuckDB backend). duckdb-udf = goldenmatch_dedupe_table via the external goldenmatch-duckdb UDFs."
+        description: "which goldenmatch surface to time. polars-direct = Python dedupe_df(df). duckdb-backend = same entry point with config.backend='duckdb' (currently a no-op for processing — see 5M audit). chunked = ChunkedMatcher streaming via scan_csv().slice() — the only path that fits 5M in commodity memory. duckdb-udf = goldenmatch_dedupe_table via the external goldenmatch-duckdb UDFs."
         required: true
         default: "polars-direct"
         type: choice
         options:
           - "polars-direct"
           - "duckdb-backend"
+          - "chunked"
           - "duckdb-udf"
       config_mode:
         description: "config resolution. auto (default) calls auto_configure_df. explicit-personlike pins a hand-tuned name-fixture config to isolate backend perf from controller behavior. Only affects backend=duckdb-backend."

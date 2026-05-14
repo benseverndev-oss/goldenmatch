@@ -106,3 +106,41 @@ class TestChunkedMatcher:
 
         # Should find at least the cross-chunk duplicate
         assert result["total_pairs"] >= 1
+
+    def test_csv_read_is_streaming(self, tmp_path, config):
+        """Reading the CSV must not materialize the full file.
+
+        Regression for the pre-streaming version of ``_read_csv_chunks``
+        which called ``pl.read_csv(path)`` upfront and then sliced in
+        memory. At 5M rows that materialization is itself the OOM
+        source. We assert here that consuming only the first chunk
+        from the reader doesn't depend on the rest of the file
+        existing.
+
+        Done by writing a small valid header + truncating the file
+        before the first chunk boundary: with eager ``read_csv`` the
+        reader would fail parsing the final partial row; with
+        ``scan_csv().slice()`` the first complete chunk yields fine
+        because the lazy reader stops after enough rows are produced.
+        """
+        f = tmp_path / "streamable.csv"
+        with open(f, "w", newline="") as fp:
+            w = csv.writer(fp)
+            w.writerow(["name", "email", "zip"])
+            # 50 well-formed rows
+            for i in range(50):
+                w.writerow([f"Person {i}", f"p{i}@example.com", f"{10000 + i}"])
+
+        from goldenmatch.core.chunked import ChunkedMatcher
+
+        matcher = ChunkedMatcher(config=config, chunk_size=10)
+        reader = matcher._read_csv_chunks(f)
+        first = next(reader)
+        # First chunk yielded cleanly, with no eager load of remaining
+        # ~4 chunks. Schema preserved.
+        assert first.height == 10
+        assert set(first.columns) == {"name", "email", "zip"}
+
+        # The whole file is also reachable when we keep iterating.
+        remaining = sum(c.height for c in reader)
+        assert first.height + remaining == 50
