@@ -350,11 +350,56 @@ def _run_polars_direct(
     result.cluster_count = len(clusters)
 
 
+def _build_explicit_personlike_config():
+    """Hand-tuned config for the synthetic person fixture.
+
+    Used by ``config_mode="explicit-personlike"`` to bypass the controller
+    when its small-sample blocking-discovery heuristic fails (as it does
+    at 5M when 1K-sample dupes are too thin for matchkey learning).
+    Pins blocking on ``last_name + zip`` and a weighted matchkey across
+    ``first_name + last_name + address``. Suitable for any name-shaped
+    fixture; not portable to bibliographic / product / address shapes.
+    """
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        QualityConfig,
+    )
+    return GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="person_fuzzy",
+                type="weighted",
+                threshold=0.85,
+                fields=[
+                    MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.3,
+                                  transforms=["lowercase", "strip"]),
+                    MatchkeyField(field="last_name", scorer="jaro_winkler", weight=0.4,
+                                  transforms=["lowercase", "strip"]),
+                    MatchkeyField(field="address", scorer="token_sort", weight=0.3,
+                                  transforms=["lowercase", "strip"]),
+                ],
+            ),
+        ],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["last_name", "zip"],
+                                    transforms=["lowercase", "strip"])],
+            max_block_size=5000,
+        ),
+        quality=QualityConfig(mode="disabled", enabled=False),
+    )
+
+
 def _run_duckdb_backend(
     result: ScaleAuditResult,
     process: psutil.Process,
     out_path: Path | None,
     fixture_path: Path,
+    config_mode: str = "auto",
 ) -> None:
     """In-Python dedupe with ``config.backend = "duckdb"``.
 
@@ -378,16 +423,20 @@ def _run_duckdb_backend(
     _write_snapshot(result, out_path)
 
     with _StageTimer("auto_configure", result, process):
-        config = auto_configure_df(df, _skip_finalize=True)
-        config.backend = "duckdb"
-        # GoldenCheck quality scan is not what we're measuring; disabling
-        # also avoids the messy-input → temp-CSV → re-read path that fails
-        # on whitespace-wrapped numerics in the synthetic fixture.
-        if config.quality is None:
-            config.quality = QualityConfig(mode="disabled", enabled=False)
+        if config_mode == "explicit-personlike":
+            config = _build_explicit_personlike_config()
+            config.backend = "duckdb"
         else:
-            config.quality.mode = "disabled"
-            config.quality.enabled = False
+            config = auto_configure_df(df, _skip_finalize=True)
+            config.backend = "duckdb"
+            # GoldenCheck quality scan is not what we're measuring; disabling
+            # also avoids the messy-input → temp-CSV → re-read path that fails
+            # on whitespace-wrapped numerics in the synthetic fixture.
+            if config.quality is None:
+                config.quality = QualityConfig(mode="disabled", enabled=False)
+            else:
+                config.quality.mode = "disabled"
+                config.quality.enabled = False
     _write_snapshot(result, out_path)
 
     with _StageTimer("run_dedupe", result, process):
@@ -459,6 +508,7 @@ def run_audit(
     enable_tracemalloc: bool = True,
     cprofile_path: Path | None = None,
     backend: str = "polars-direct",
+    config_mode: str = "auto",
 ) -> ScaleAuditResult:
     """Run one audit pass against a synthetic fixture of the given size.
 
@@ -516,7 +566,7 @@ def run_audit(
             if backend == "polars-direct":
                 _run_polars_direct(result, process, out_path, fixture_path)
             elif backend == "duckdb-backend":
-                _run_duckdb_backend(result, process, out_path, fixture_path)
+                _run_duckdb_backend(result, process, out_path, fixture_path, config_mode=config_mode)
             elif backend == "duckdb-udf":
                 _run_duckdb_udf(result, process, out_path, fixture_path)
             else:
@@ -634,6 +684,22 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--config-mode",
+        choices=("auto", "explicit-personlike"),
+        default="auto",
+        help=(
+            "config-resolution strategy. auto (default) calls "
+            "auto_configure_df, which is the production zero-config path. "
+            "explicit-personlike pins a hand-tuned config for the synthetic "
+            "person fixture (last_name+zip blocking, weighted matchkey on "
+            "first/last/address). Use this to isolate backend perf from "
+            "controller behavior at scale — at 5M+ the controller's "
+            "1K-sample blocking discovery can fail with sparse duplicates "
+            "and fall back to near-quadratic scoring. Only affects "
+            "--backend duckdb-backend currently."
+        ),
+    )
+    ap.add_argument(
         "--backend",
         choices=("polars-direct", "duckdb-backend", "duckdb-udf"),
         default="polars-direct",
@@ -697,6 +763,7 @@ def main() -> None:
         enable_tracemalloc=not args.no_tracemalloc,
         cprofile_path=args.cprofile,
         backend=args.backend,
+        config_mode=args.config_mode,
     )
     if args.out:
         print(f"wrote {args.out}")
