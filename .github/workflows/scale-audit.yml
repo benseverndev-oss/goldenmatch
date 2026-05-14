@@ -62,6 +62,14 @@ on:
           - "polars-direct"
           - "duckdb-backend"
           - "duckdb-udf"
+      config_mode:
+        description: "config resolution. auto (default) calls auto_configure_df. explicit-personlike pins a hand-tuned name-fixture config to isolate backend perf from controller behavior. Only affects backend=duckdb-backend."
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - "auto"
+          - "explicit-personlike"
 
 # Read-only: this workflow generates synthetic data, runs an in-process
 # audit, and uploads artifacts via the actions/upload-artifact API. None
@@ -133,7 +141,7 @@ jobs:
           echo "out_path=$OUT" >> $GITHUB_OUTPUT
           echo "log_path=$LOG" >> $GITHUB_OUTPUT
 
-          ARGS="--rows ${{ inputs.rows }} --dupe-rate ${{ inputs.dupe_rate }} --out $OUT --backend ${{ inputs.backend }}"
+          ARGS="--rows ${{ inputs.rows }} --dupe-rate ${{ inputs.dupe_rate }} --out $OUT --backend ${{ inputs.backend }} --config-mode ${{ inputs.config_mode }}"
           if [ "${{ inputs.tracemalloc }}" = "off" ]; then
             ARGS="$ARGS --no-tracemalloc"
           fi
