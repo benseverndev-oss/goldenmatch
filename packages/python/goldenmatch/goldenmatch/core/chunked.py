@@ -179,11 +179,22 @@ class ChunkedMatcher:
         for older Polars versions that reject ``encoding=`` on the lazy
         path.
         """
+        # infer_schema_length=0 forces all columns to Utf8. Without this,
+        # scan_csv samples the first ~100 rows and may type a column as
+        # int64 (e.g. an all-numeric ZIP column whose later values are
+        # mixed-format strings). Downstream transforms like .lower() then
+        # fail on int values. The eager pl.read_csv() path didn't hit this
+        # because it scanned the whole file before inferring.
         try:
-            lf = pl.scan_csv(path, encoding="utf8-lossy", ignore_errors=True)
+            lf = pl.scan_csv(
+                path,
+                encoding="utf8-lossy",
+                ignore_errors=True,
+                infer_schema_length=0,
+            )
         except TypeError:
             # Some Polars versions don't accept encoding= on scan_csv.
-            lf = pl.scan_csv(str(path), ignore_errors=True)
+            lf = pl.scan_csv(str(path), ignore_errors=True, infer_schema_length=0)
 
         offset = 0
         while True:
