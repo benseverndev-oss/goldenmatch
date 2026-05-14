@@ -48,7 +48,7 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 Unreleased — Bundled OSS reference data** — Five reference packs ship inside the wheel: US Census 2010 surnames (top 10K), given-name aliases (~140 pairs: William↔Bill, Katherine↔Kate, ...), business legal forms (Inc, LLC, Ltd, GmbH, S.A., ...), USPS Pub. 28 address abbreviations, and NAICS 2022 industries (2,125 codes across all five hierarchy levels). Auto-config swaps in two new scorers (`name_freq_weighted_jw`, `given_name_aliased_jw`) and three transforms (`legal_form_strip`, `address_normalize`, `naics_normalize`) when a column name AND its profiled `col_type` agree — a `last_name` column holding numeric IDs keeps its caller-specified scorer instead of being silently swapped. Common-name surname-FP fixture: F1 0.667 → 0.915 (+0.248). No API keys, no external downloads. See [Reference Data docs](https://benzsevern.github.io/goldenmatch/reference-data).
+> **🆕 Unreleased — 5M records in ~50 min on commodity hardware** — Chunked mode now actually delivers on its "1M to 100M+" promise. The streaming `scan_csv().slice()` reader + Polars-native cross-chunk join (B) + block-keyed bucketed index (C) + DuckDB pair-store backend (D) replace a broken eager-read + Python-double-loop path that OOM-killed at 3h+ on the pre-fix 5M dispatch. **Measured: 5M records, 50 min wall, 11.9 GB peak RSS, 618,817 multi-member clusters, no OOM** on a 4c/16GB GitHub runner. Pass `backend="chunked"` with an explicit blocking config. PRs #233/#234/#235.
 >
 > **v1.12.0 — Negative evidence on exact matchkeys (Path Y)** — NE penalties now filter adversarial collision pairs at the `exact_email` level, not just inside the weighted matchkey scoring loop. DQbench composite **91.04** (was 66.99 at v1.11). T2 F1 69.0% → 97.5%, T3 F1 53.8% → 85.5%.
 >
@@ -121,8 +121,9 @@ npm install goldenmatch
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
 - **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
-- **DuckDB backend** — out-of-core processing for 10M+ records without Spark
-- **Ray distributed backend** — scale to 50M+ records with `pip install goldenmatch[ray]`
+- **Chunked mode** — streaming `scan_csv().slice()` reader + vectorized cross-chunk join + block-keyed index. **Measured: 5M records in ~50 min on a 4c/16GB GitHub runner, 11.9 GB peak, no OOM** (PRs #233/#234/#235, 2026-05-14). Pass `backend="chunked"`.
+- **DuckDB backend** — `config.backend="duckdb"` routes block scoring through a DuckDB-backed pair store that can spill to disk via `GOLDENMATCH_DUCKDB_SCORE_DB`. Doesn't replace in-memory scoring matrices yet; the value lands at 50M+ where pair counts hit 10⁸.
+- **Ray distributed backend** — scale to 50M+ records with `pip install goldenmatch[ray]`.
 - **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
 
 ### Learning Memory (v1.6.0)
