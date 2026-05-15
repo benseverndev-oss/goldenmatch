@@ -4,11 +4,19 @@
 
 **Goal:** Cut `gm.dedupe_df(df)` zero-config wall by ≥40% at 500K on the default polars-direct backend by killing the two cross-stage Python hotspots the bench identified (462K `LazyFrame.collect` calls and 55M `builtins.max` calls in the cluster split path).
 
-**Architecture:** Two sequential PRs. **Attack A** rewrites `BlockResult` to carry positional indices instead of a per-block `LazyFrame`, eliminating the `lazy() → collect()` round-trip in `apply_learned_blocks` and the per-block collect in `_score_one_block`. **Attack B** vectorizes `_build_mst` and `compute_cluster_confidence` in NumPy to remove the 55M Python `max()`/`min()` calls. Each PR has its own measurement gate. Net target: 500K median 488s → ≤150s.
+**Architecture:** Two sequential PRs. **Attack A** rewrites `BlockResult` to carry positional indices instead of a per-block `LazyFrame`, eliminating the `lazy() → collect()` round-trip in `apply_learned_blocks` and the per-block collect in `_score_one_block`. **Attack B** vectorizes `_build_mst` and `compute_cluster_confidence` in NumPy to remove the 55M Python `max()`/`min()` calls. Each PR has its own measurement gate. Net target: 500K median 488s → ≤150s (target re-baselined in Phase 0.2 against post-#239 main).
 
-**Tech Stack:** Python 3.12, Polars, NumPy, dataclasses, Hypothesis (property tests), cProfile + the `scripts/bench_1m_zero_config.py` harness for measurement gates.
+**Tech Stack:** Python 3.12, Polars, NumPy, dataclasses, Hypothesis (property tests). Measurement runs on GitHub Actions (`.github/workflows/bench-zero-config.yml`) via `ubuntu-latest-large` — local Polars OOMs cannot be measured reliably on this laptop without a restart, so cloud runs are the canonical bench surface.
 
 **Spec:** `docs/superpowers/specs/2026-05-15-post-controller-full-df-perf-design.md` — read this first; the plan refers to it by section.
+
+## Material context changes since the spec was written (read before Phase 0)
+
+1. **PR #239 landed on main** (`615d760`): "perf(zero-config): 6x at 100K — routing, bench, DuckDB+Arrow, golden vectorize." Touched `core/pipeline.py` (+218/-91), `core/blocker.py` (+61), `core/scorer.py` (+7), `backends/score_duckdb.py` (+133), `core/autoconfig.py` (+71), added `core/bench.py` (NEW), `refdata/scorer.py` (+72). **Did NOT touch `core/learned_blocking.py` or `core/cluster.py`** — Attack A and B's target files. The spec's hypotheses remain valid; the magnitudes need re-baselining.
+2. **`goldenmatch.core.bench` module added by #239** supersedes this plan's prior Phase 4.1 monkey-patch fix. The bench script now uses `bench_capture()` directly. Pipeline already wraps major stages internally.
+3. **`autoconfig.py` auto-selects `backend="duckdb"` at ≥1M rows.** Attack A/B target the polars-direct path. Workflow pins `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=10000000` to keep 500K/1M on polars-direct.
+4. **Local measurement is blocked.** Polars OOMs leave the laptop python state hung and require a system restart to recover. All bench runs in this plan happen via the `bench-zero-config` GHA workflow.
+5. **The pre-#239 baseline (`.profile_tmp/bench_500k_zero_config.json`, median 487.7s, 462K LazyFrame.collect, 55M builtins.max) was measured against site-packages**, not the worktree (CWD-based import resolution mistake). Treat it as directional, not load-bearing. Phase 0.2 captures the real post-#239 baseline.
 
 ---
 
@@ -16,11 +24,11 @@
 
 Before starting any task:
 
-- [ ] Working in a clean dedicated branch. From `main`: `git switch -c perf/post-controller-full-df`.
-- [ ] Editable install active: `C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -c "import goldenmatch._api; print(goldenmatch._api.__file__)"` shows `D:\show_case\goldenmatch\packages\python\goldenmatch\...`, not `site-packages`.
-- [ ] Baseline test suite green from package dir: `cd packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q --timeout=120 --ignore=tests/test_db.py --ignore=tests/test_reconcile.py --ignore=tests/test_mcp_and_watch.py --ignore=tests/test_embedder.py --ignore=tests/test_llm_boost.py --ignore=tests/benchmarks` returns the documented 1572+ passing.
-- [ ] 500K fixture present at `.profile_tmp/scale_fixtures/synthetic_500000_dupe15.csv` (it is, per the bench that produced this spec).
-- [ ] Baseline bench JSON present at `.profile_tmp/bench_500k_zero_config.json` (committed; do not regenerate as part of pre-flight).
+- [ ] Working on `perf/post-controller-full-df` off `main` (created in the brainstorm session). `git status -sb` confirms.
+- [ ] Local imports MUST run from the package dir to hit the worktree: `cd packages/python/goldenmatch && python -c "import goldenmatch; print(goldenmatch.__file__)"` shows the worktree path. Running from repo root falls back to site-packages — known gotcha; the CI workflow handles this explicitly via `pip install -e`.
+- [ ] Baseline test suite green from package dir: `cd packages/python/goldenmatch && C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q --timeout=120 --ignore=tests/test_db.py --ignore=tests/test_reconcile.py --ignore=tests/test_mcp_and_watch.py --ignore=tests/test_embedder.py --ignore=tests/test_llm_boost.py --ignore=tests/benchmarks` returns the documented 1572+ passing (post-#239 may have a different count; record actual).
+- [ ] Workflow file `.github/workflows/bench-zero-config.yml` present (committed in the brainstorm session).
+- [ ] `scripts/bench_1m_zero_config.py` uses `bench_capture()` (post-revision), not the monkey-patch approach.
 
 ---
 
@@ -49,6 +57,53 @@ grep -rn "build_blocks\|_build_learned_blocks\|_build_canopy_blocks\|_build_ann_
 
 **Findings (fill in during execution):**
 > _Implementer: write findings here, one paragraph._
+
+### Task 0.2: Capture post-#239 baseline via GHA
+
+The pre-#239 local baseline is stale (site-packages, not worktree). Re-baseline against current main on `ubuntu-latest-large` before any code changes.
+
+**Files:**
+- Run: `.github/workflows/bench-zero-config.yml` (workflow_dispatch)
+- Output (artifact): `bench_post-pr239-baseline.json` + `.prof`
+
+- [ ] **Step 1: Trigger the workflow.**
+
+GitHub UI → Actions → "bench-zero-config" → Run workflow. Inputs:
+- `n_records`: `500000`
+- `runs`: `5`
+- `dupe_rate`: `0.15`
+- `backend`: leave blank
+- `label`: `post-pr239-baseline`
+- Branch: `perf/post-controller-full-df`
+
+Or CLI: `gh workflow run bench-zero-config.yml --ref perf/post-controller-full-df -f n_records=500000 -f runs=5 -f dupe_rate=0.15 -f label=post-pr239-baseline`.
+
+ETA ~30 min. Watch with `gh run watch <run-id> --exit-status`.
+
+- [ ] **Step 2: Download artifact.**
+
+```
+gh run download <run-id> -n bench-zero-config-post-pr239-baseline -D .profile_tmp/
+```
+
+- [ ] **Step 3: Read the headline from the workflow summary** (or the JSON). Record three numbers below:
+
+**Post-#239 baseline:**
+> - 500K median wall: ____s
+> - LazyFrame.collect ncalls: ____ (from cprofile_top)
+> - builtins.max ncalls: ____ (from cprofile_top)
+> - Top 3 bench_capture stages (name, seconds): ____
+
+- [ ] **Step 4: Update Attack A and Attack B gates in this plan to be deltas off the post-#239 baseline.**
+
+Spec gates say "≤ 250s post-A" and "≤ 150s post-A+B" against the 488s pre-#239 baseline. If post-#239 is materially different (e.g. already 200s because golden vectorize helped here too), rescale gates: keep the *percentage* reduction targets (≥ 49% off baseline for A, ≥ another 40% off post-A median for B).
+
+- [ ] **Step 5: Commit baseline JSON to `.profile_tmp/`** (gitignored, so use `-f`):
+
+```
+git add -f .profile_tmp/bench_post-pr239-baseline.json
+git commit -m "bench(perf): post-#239 baseline at 500K"
+```
 
 ---
 
@@ -523,59 +578,64 @@ Spec Attack A step 4. Same positional contract as apply_learned_blocks;
 keeps the BlockResult interface consistent across strategies."
 ```
 
-### Task 1.5: Re-bench at 500K — Attack A exit gate
+### Task 1.5: Re-bench at 500K via GHA — Attack A exit gate
 
-Per spec §Attack A "Acceptance": median wall ≤ 250s AND `LazyFrame.collect` ncalls < 50,000 AND F1 within 0.005 of baseline.
+Per spec §Attack A "Acceptance": median wall hitting the rescaled gate from Phase 0.2 AND `LazyFrame.collect` ncalls < 50,000 AND F1 within 0.005 of baseline.
 
 **Files:**
-- Run: `scripts/bench_1m_zero_config.py`
-- Output: `.profile_tmp/bench_500k_zero_config_post_a.json`
+- Trigger: `.github/workflows/bench-zero-config.yml`
+- Artifact: `bench-zero-config-post-attack-a`
 
-- [ ] **Step 1: Run the bench.**
-
-```
-C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe scripts/bench_1m_zero_config.py \
-  --fixture .profile_tmp/scale_fixtures/synthetic_500000_dupe15.csv \
-  --runs 5 \
-  --output .profile_tmp/bench_500k_zero_config_post_a.json \
-  --cprofile-output .profile_tmp/bench_500k_zero_config_post_a.prof
-```
-
-Expected wall: ~17-25 min.
-
-- [ ] **Step 2: Compare against baseline.**
-
-Open `.profile_tmp/bench_500k_zero_config.json` (baseline) and `.profile_tmp/bench_500k_zero_config_post_a.json`. Check:
-
-- `wall_seconds_median` ≤ 250.0 (baseline 487.7). **GATE.**
-- In `cprofile_top`, the row for `<method 'collect' of 'builtins.PyLazyFrame' objects>` has ncalls < 50,000 (baseline 462,061). **GATE.**
-
-- [ ] **Step 3: Confirm F1 invariant.**
-
-The bench script does not compute F1. Run the audit script at 500K against ground truth to confirm F1 within 0.005 of the prior 500K F1:
+- [ ] **Step 1: Push the branch.**
 
 ```
-C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe scripts/scale_audit_5m.py \
-  --n-records 500000 \
-  --output .profile_tmp/audit_500k_post_a.json
+git push -u origin perf/post-controller-full-df
 ```
 
-Compare `f1` field against the pre-A measurement (re-run the same command before Phase 1 if no pre-A audit-500k output exists). Tolerance: ±0.005.
-
-- [ ] **Step 4: If gates pass, commit the bench artifacts.**
+- [ ] **Step 2: Trigger the bench workflow.**
 
 ```
-git add -f .profile_tmp/bench_500k_zero_config_post_a.json
+gh workflow run bench-zero-config.yml --ref perf/post-controller-full-df \
+  -f n_records=500000 -f runs=5 -f dupe_rate=0.15 -f label=post-attack-a
+```
+
+ETA ~30 min on `ubuntu-latest-large` ($0.07).
+
+- [ ] **Step 3: Watch the workflow.**
+
+```
+gh run watch <run-id> --exit-status
+```
+
+- [ ] **Step 4: Read the workflow summary for the headline numbers.** Compare against Phase 0.2 baseline:
+
+- `wall_seconds_median` ≤ the rescaled gate from Phase 0.2 Step 4. **GATE.**
+- In `cprofile_top`, the row for `<method 'collect' of 'builtins.PyLazyFrame' objects>` has ncalls < 50,000. **GATE.**
+
+- [ ] **Step 5: Confirm F1 invariant via the existing scale-audit workflow.**
+
+```
+gh workflow run scale-audit-5m.yml --ref perf/post-controller-full-df \
+  -f n_records=500000 -f dupe_rate=0.15
+```
+
+The audit workflow reports F1 in its run summary. Tolerance: ±0.005 of the pre-Attack-A audit F1 (re-run the audit on the post-#239 baseline branch if no prior 500K F1 exists).
+
+- [ ] **Step 6: Download and commit the bench artifact.**
+
+```
+gh run download <bench-run-id> -n bench-zero-config-post-attack-a -D .profile_tmp/
+git add -f .profile_tmp/bench_post-attack-a.json
 git commit -m "bench(perf): post-Attack-A 500K results
 
-Median wall: {actual}s (baseline 487.7s, gate <=250s).
-LazyFrame.collect ncalls: {actual} (baseline 462,061, gate <50,000).
-F1 delta vs baseline: {actual} (gate +/-0.005)."
+Median wall: {actual}s (post-#239 baseline {prev}s, gate ≤{gate}s).
+LazyFrame.collect ncalls: {actual} (gate <50,000).
+F1 delta vs baseline: {actual} (gate ±0.005)."
 ```
 
-- [ ] **Step 5: If gates fail, STOP.**
+- [ ] **Step 7: If gates fail, STOP.**
 
-Open the cProfile dump in snakeviz: `python -m snakeviz .profile_tmp/bench_500k_zero_config_post_a.prof`. Identify which call site is still emitting LazyFrames. Adjust and re-bench. Do not proceed to Attack B until A's gates clear.
+Download the .prof artifact and open in snakeviz locally: `python -m snakeviz .profile_tmp/bench_post-attack-a.prof`. Identify which call site is still emitting LazyFrames. Adjust and re-bench. Do not proceed to Attack B until A's gates clear.
 
 ### Task 1.6: Open the PR for Attack A
 
@@ -859,48 +919,40 @@ Spec Attack B finalization. Same algorithmic shape, NumPy reductions
 instead of Python min/mean loops over the pair_scores dict."
 ```
 
-### Task 2.3: Re-bench at 500K — Attack B exit gate
+### Task 2.3: Re-bench at 500K via GHA — Attack B exit gate
 
-Per spec §Attack B "Acceptance": median wall ≤ 150s AND `builtins.max` cumtime < 30s AND F1 within 0.005.
+Per spec §Attack B "Acceptance": median wall hitting the rescaled gate AND `builtins.max` cumtime < 30s AND F1 within 0.005.
 
-**Files:**
-- Run: `scripts/bench_1m_zero_config.py`
-- Output: `.profile_tmp/bench_500k_zero_config_post_b.json`
-
-- [ ] **Step 1: Run the bench.**
+- [ ] **Step 1: Push and trigger.**
 
 ```
-C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe scripts/bench_1m_zero_config.py \
-  --fixture .profile_tmp/scale_fixtures/synthetic_500000_dupe15.csv \
-  --runs 5 \
-  --output .profile_tmp/bench_500k_zero_config_post_b.json \
-  --cprofile-output .profile_tmp/bench_500k_zero_config_post_b.prof
+git push
+gh workflow run bench-zero-config.yml --ref perf/post-controller-full-df \
+  -f n_records=500000 -f runs=5 -f dupe_rate=0.15 -f label=post-attack-b
 ```
 
-- [ ] **Step 2: Check gates.**
+- [ ] **Step 2: Watch + read summary.**
 
-- `wall_seconds_median` ≤ 150.0 (post-A median + ≥60s reduction). **GATE.**
+```
+gh run watch <run-id> --exit-status
+```
+
+Gates against post-A baseline (from Task 1.5):
+- `wall_seconds_median` ≤ post-A median minus ≥60s OR rescaled per Phase 0.2. **GATE.**
 - In `cprofile_top`, no `builtins.max` entry above 30s cumtime. **GATE.**
 
-- [ ] **Step 3: F1 invariant.**
+- [ ] **Step 3: F1 invariant via scale-audit workflow** (same shape as Task 1.5 Step 5). F1 within 0.005 of post-A audit. **GATE.**
+
+- [ ] **Step 4: Download + commit bench artifact.**
 
 ```
-C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe scripts/scale_audit_5m.py \
-  --n-records 500000 \
-  --output .profile_tmp/audit_500k_post_b.json
-```
-
-F1 within 0.005 of post-A audit. **GATE.**
-
-- [ ] **Step 4: Commit bench artifacts.**
-
-```
-git add -f .profile_tmp/bench_500k_zero_config_post_b.json
+gh run download <bench-run-id> -n bench-zero-config-post-attack-b -D .profile_tmp/
+git add -f .profile_tmp/bench_post-attack-b.json
 git commit -m "bench(perf): post-Attack-B 500K results
 
-Median wall: {actual}s (post-A {prev}s, gate <=150s).
+Median wall: {actual}s (post-A {prev}s, gate ≤{gate}s).
 builtins.max cumtime: {actual}s (gate <30s).
-F1 delta vs post-A: {actual} (gate +/-0.005)."
+F1 delta vs post-A: {actual} (gate ±0.005)."
 ```
 
 ### Task 2.4: Open the PR for Attack B
@@ -917,46 +969,40 @@ Body: spec link, gate table, bench JSON link.
 
 ## Phase 3 — 1M headline measurement + docs
 
-### Task 3.1: 1M re-bench (the spec's actual exit criterion)
+### Task 3.1: 1M re-bench via GHA (the spec's actual exit criterion)
 
-Per spec §Acceptance criteria step 3. Single run, captured for the CHANGELOG.
+Per spec §Acceptance criteria step 3. Single workflow run, captured for the CHANGELOG.
 
-**Files:**
-- Run: `scripts/bench_1m_zero_config.py`
-- Output: `.profile_tmp/bench_1m_zero_config_after.json`
-
-- [ ] **Step 1: Generate the 1M fixture if absent.**
+- [ ] **Step 1: Trigger the bench workflow at 1M.**
 
 ```
-ls .profile_tmp/scale_fixtures/synthetic_1000000_dupe15.csv
+gh workflow run bench-zero-config.yml --ref perf/post-controller-full-df \
+  -f n_records=1000000 -f runs=5 -f dupe_rate=0.15 -f label=post-attack-ab-1m
 ```
 
-If missing, regenerate via `scripts/scale_audit_5m_generate.py` (already used for the prior 1M cloud audit).
+The workflow pins `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=10000000` so 1M still runs on polars-direct (not auto-promoted to DuckDB). Expected total wall: ~60-90 min depending on actual post-A+B speedup.
 
-- [ ] **Step 2: Run the bench.**
+- [ ] **Step 2: Watch.**
 
 ```
-C:/Users/bsevern/AppData/Local/Programs/Python/Python312/python.exe scripts/bench_1m_zero_config.py \
-  --fixture .profile_tmp/scale_fixtures/synthetic_1000000_dupe15.csv \
-  --runs 5 \
-  --output .profile_tmp/bench_1m_zero_config_after.json \
-  --cprofile-output .profile_tmp/bench_1m_zero_config_after.prof
+gh run watch <run-id> --exit-status
 ```
-
-Expected wall per run: ~5 min after both attacks. Total ~30 min.
 
 - [ ] **Step 3: Confirm headline gate.**
 
-`wall_seconds_median` ≤ 480 (8 min, per spec). If above, run cProfile analysis to identify the new top hotspot, but **do not** retro-fit the spec. Surface as a follow-up.
+`wall_seconds_median` ≤ 480 (8 min, per spec). If above, examine the cProfile artifact for the new top hotspot. Surface as a follow-up — **do not** retro-fit the spec.
 
-- [ ] **Step 4: Commit the JSON.**
+- [ ] **Step 4: Download + commit the JSON.**
 
 ```
-git add -f .profile_tmp/bench_1m_zero_config_after.json
+gh run download <run-id> -n bench-zero-config-post-attack-ab-1m -D .profile_tmp/
+git add -f .profile_tmp/bench_post-attack-ab-1m.json
 git commit -m "bench(perf): post-A+B 1M headline result
 
-Median wall: {actual}s (baseline 1M cloud ~1237s with double-run bug,
-laptop-equivalent baseline projected ~16 min). Spec acceptance criterion 3."
+Median wall: {actual}s on ubuntu-latest-large (post-#239 baseline at 1M
+TBD via Phase 0.2 follow-up if a 1M baseline run is wanted; the spec's
+acceptance target is absolute (8 min) so the comparison is to the gate,
+not a prior 1M measurement)."
 ```
 
 ### Task 3.2: CHANGELOG + README callout
@@ -1039,31 +1085,9 @@ Related: [[reference-bench-1m-zero-config-script]] if I write that memory later.
 
 ## Phase 4 — Cleanup + follow-ups (out of scope but tracked)
 
-### Task 4.1: Fix the bench script's stage-monkey-patch
+### Task 4.1: ~~Fix the bench script's stage-monkey-patch~~ — OBSOLETE
 
-Per spec §Caveats from the bench (1) and reviewer advisory #2. Source-module `setattr` doesn't catch `from X import Y` call-site bindings. Fix to patch at `pipeline.py` call sites or use `unittest.mock.patch.object` with `wraps=`.
-
-**Files:**
-- Modify: `scripts/bench_1m_zero_config.py:install_stage_patches`
-
-- [ ] **Step 1: Replace source-module patching with call-site patching.**
-
-For each target (`compute_matchkeys`, `precompute_matchkey_transforms`, etc.) patch on `goldenmatch.core.pipeline` (the import site) instead of the source module. Same for any other call-site module the function is invoked from.
-
-- [ ] **Step 2: Run the bench with `--runs 1 --skip-cprofile` to verify per-stage timings now populate.**
-
-- [ ] **Step 3: Commit.**
-
-```
-git add scripts/bench_1m_zero_config.py
-git commit -m "fix(bench): patch stage timers at call site, not source module
-
-Previous version patched the source module via setattr, which 'from X
-import Y' call sites never see. The bench JSON for the May 2026 audit
-shows only _apply_domain_extraction firing because that one is called
-via the module-qualified name. cProfile carried that audit; this fix
-makes future bench runs self-attribute correctly."
-```
+PR #239 added `goldenmatch.core.bench` with `bench_capture()` + in-pipeline stage wrapping. The bench script was already migrated to use it during the brainstorm session. This task is dropped.
 
 ### Task 4.2: Filed-as-followups (do NOT do as part of this plan)
 
