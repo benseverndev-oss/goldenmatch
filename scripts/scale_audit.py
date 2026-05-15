@@ -350,7 +350,7 @@ def _run_polars_direct(
     result.cluster_count = len(clusters)
 
 
-def _build_explicit_personlike_config():
+def _build_explicit_personlike_config(*, blocking_strategy: str = "adaptive"):
     """Hand-tuned config for the synthetic person fixture.
 
     Used by ``config_mode="explicit-personlike"`` to bypass the controller
@@ -359,6 +359,12 @@ def _build_explicit_personlike_config():
     Pins blocking on ``last_name + zip`` and a weighted matchkey across
     ``first_name + last_name + address``. Suitable for any name-shaped
     fixture; not portable to bibliographic / product / address shapes.
+
+    ``blocking_strategy`` defaults to ``"adaptive"`` so the run actually
+    exercises the post-#237 recursive sub-partitioning path (the prior
+    ``"static"`` default produced an apples-to-apples baseline before
+    adaptive promotion landed; keep it as a tunable so we can A/B if
+    we ever doubt the adaptive numbers).
     """
     from goldenmatch.config.schemas import (
         BlockingConfig,
@@ -385,7 +391,7 @@ def _build_explicit_personlike_config():
             ),
         ],
         blocking=BlockingConfig(
-            strategy="static",
+            strategy=blocking_strategy,  # pyright: ignore[reportArgumentType]  # arg is a Literal["static"|"adaptive"|...]; tunable for A/B
             keys=[BlockingKeyConfig(fields=["last_name", "zip"],
                                     transforms=["lowercase", "strip"])],
             max_block_size=5000,
