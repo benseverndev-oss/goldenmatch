@@ -47,7 +47,11 @@ permissions:
 
 jobs:
   bench:
-    runs-on: gm-bench-64c  # org-level GitHub-hosted larger runner: 64c/256GB/2040GB
+    # Per memory feedback_bench_default_runner.md: benchmark workflows use
+    # the org's large-new-64GB runner (16c/64GB Ubuntu 24.04). The earlier
+    # 64-core variant (gm-bench-64c) provisions but jobs never receive a VM,
+    # suspected quota cap on the very large size for newly-created orgs.
+    runs-on: large-new-64GB
     timeout-minutes: 180  # 3 hours; 500K typical ~30 min, 1M ~90 min
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
@@ -72,7 +76,8 @@ jobs:
         # uv sync should already install the workspace member editable, but
         # CLAUDE.md's "shadows worktree code" gotcha cost me an audit cycle —
         # belt and braces. Verify the import path in the bench output too.
-        run: .venv/bin/python -m pip install -e packages/python/goldenmatch
+        # NOTE: uv-created venvs don't ship pip; use `uv pip` not `.venv/bin/pip`.
+        run: uv pip install -e packages/python/goldenmatch
 
       - name: Verify worktree install
         run: |
