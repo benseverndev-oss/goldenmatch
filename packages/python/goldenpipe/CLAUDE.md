@@ -34,7 +34,7 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenpipe-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenpipe`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenpipe`
 - **Server card:** `https://goldenpipe-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

@@ -520,7 +520,7 @@ def _tool_install_domain(arguments: dict) -> dict:
     if not str(resolved).startswith(str(cwd)):
         return {"error": "Output path must be within the working directory."}
 
-    url = f"https://raw.githubusercontent.com/benzsevern/goldencheck-types/main/domains/{domain}.yaml"
+    url = f"https://raw.githubusercontent.com/benseverndev-oss/goldencheck-types/main/domains/{domain}.yaml"
 
     try:
         resp = urllib.request.urlopen(url, timeout=10)
@@ -631,7 +631,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
         return JSONResponse({
             "name": "GoldenCheck",
             "description": "Data validation that discovers rules from your data — no hand-written checks needed. Profiles columns, detects quality issues, scores confidence. 19 MCP tools for scanning, validating, profiling, auto-configuring, and explaining findings. DQBench Score: 88.40. Built on Polars, 482K rows/sec.",
-            "homepage": "https://github.com/benzsevern/goldencheck",
+            "homepage": "https://github.com/benseverndev-oss/goldencheck",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
 

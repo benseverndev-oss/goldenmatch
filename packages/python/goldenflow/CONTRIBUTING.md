@@ -5,7 +5,7 @@ Thanks for your interest in improving GoldenFlow!
 ## Getting Started
 
 ```bash
-git clone https://github.com/benzsevern/goldenflow.git
+git clone https://github.com/benseverndev-oss/goldenflow.git
 cd goldenflow
 pip install -e ".[dev]"
 pytest

@@ -10,7 +10,7 @@ nav_order: 1
 
 [![PyPI](https://img.shields.io/pypi/v/goldencheck?color=d4a017)](https://pypi.org/project/goldencheck/)
 [![Downloads](https://static.pepy.tech/badge/goldencheck/month)](https://pepy.tech/project/goldencheck)
-[![CI](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
+[![CI](https://github.com/benseverndev-oss/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benseverndev-oss/goldencheck/actions/workflows/test.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Tests](https://img.shields.io/badge/tests-296%20passing-brightgreen)
 
@@ -84,6 +84,6 @@ goldencheck data.csv
 
 **Part of the Golden Suite:**
 [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) ·
-[dbt-goldencheck](https://github.com/benzsevern/dbt-goldencheck) ·
-[goldencheck-types](https://github.com/benzsevern/goldencheck-types) ·
-[goldencheck-action](https://github.com/benzsevern/goldencheck-action)
+[dbt-goldencheck](https://github.com/benseverndev-oss/dbt-goldencheck) ·
+[goldencheck-types](https://github.com/benseverndev-oss/goldencheck-types) ·
+[goldencheck-action](https://github.com/benseverndev-oss/goldencheck-action)

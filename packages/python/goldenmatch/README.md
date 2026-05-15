@@ -20,7 +20,7 @@
 [![CI](https://github.com/benseverndev-oss/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benseverndev-oss/goldenmatch/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/benseverndev-oss/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benseverndev-oss/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benseverndev-oss/goldenmatch)
-[![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjZmZmIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4Ii8+PC9zdmc+)](https://github.com/benzsevern/dqbench)
+[![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjZmZmIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4Ii8+PC9zdmc+)](https://github.com/benseverndev-oss/dqbench)
 [![F1: 96.4%](https://img.shields.io/badge/DBLP--ACM%20F1-96.4%25%20zero--config-d4a017)](#benchmarks)
 
 <!-- Downloads -->
@@ -60,7 +60,7 @@ npm install goldenmatch
 ## Why GoldenMatch?
 
 - **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
-- **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benzsevern/dqbench)
+- **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
 - **35 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch))
@@ -803,7 +803,7 @@ goldenmatch_duckdb.register(con)
 con.sql("SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler')")
 ```
 
-See [goldenmatch-extensions](https://github.com/benzsevern/goldenmatch-extensions) for installation and full documentation.
+See [goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions) for installation and full documentation.
 
 ## LLM Boost (Optional)
 
@@ -1095,10 +1095,10 @@ goldenmatch/
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) | Transform & standardize data | `pip install goldenflow` |
 | [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
-| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
+| [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
 
 ## What's New in v1.4.0
 

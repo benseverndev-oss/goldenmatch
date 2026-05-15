@@ -71,7 +71,7 @@ sudo rpm -i goldenmatch-pg-0.1.0-pg16.x86_64.rpm
 sudo systemctl restart postgresql
 ```
 
-Download `.deb` and `.rpm` from the [goldenmatch-extensions releases](https://github.com/benzsevern/goldenmatch-extensions/releases) page.
+Download `.deb` and `.rpm` from the [goldenmatch-extensions releases](https://github.com/benseverndev-oss/goldenmatch-extensions/releases) page.
 
 ---
 

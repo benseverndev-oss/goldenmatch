@@ -5,7 +5,7 @@ Thanks for your interest in improving GoldenCheck!
 ## Getting Started
 
 ```bash
-git clone https://github.com/benzsevern/goldencheck.git
+git clone https://github.com/benseverndev-oss/goldencheck.git
 cd goldencheck
 pip install -e ".[dev]"
 pytest

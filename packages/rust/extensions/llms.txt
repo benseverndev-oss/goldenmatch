@@ -13,4 +13,4 @@
 
 ## Docs
 - [Architecture](CLAUDE.md): Rust/SQL bridge, pgrx patterns, DuckDB UDF system
-- [GitHub](https://github.com/benzsevern/goldenmatch-extensions): Source
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch-extensions): Source

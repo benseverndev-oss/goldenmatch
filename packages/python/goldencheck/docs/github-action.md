@@ -9,7 +9,7 @@ Add data quality checks to your CI pipeline with one line.
 ## Quick Start
 
 ```yaml
-- uses: benzsevern/goldencheck-action@v1
+- uses: benseverndev-oss/goldencheck-action@v1
   with:
     files: "data/*.csv"
 ```
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: benzsevern/goldencheck-action@v1
+      - uses: benseverndev-oss/goldencheck-action@v1
         with:
           files: "data/*.csv"
           fail-on: error
@@ -43,7 +43,7 @@ jobs:
 ## With LLM Boost
 
 ```yaml
-- uses: benzsevern/goldencheck-action@v1
+- uses: benseverndev-oss/goldencheck-action@v1
   with:
     files: "data/*.csv"
     llm-boost: true
@@ -74,4 +74,4 @@ jobs:
 
 ## Repository
 
-[benzsevern/goldencheck-action](https://github.com/benzsevern/goldencheck-action)
+[benseverndev-oss/goldencheck-action](https://github.com/benseverndev-oss/goldencheck-action)

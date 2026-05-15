@@ -5,7 +5,7 @@ Thanks for your interest in contributing! This repo has two components: a Postgr
 ## Quick Start -- DuckDB UDFs (Python)
 
 ```bash
-git clone https://github.com/benzsevern/goldenmatch-extensions.git
+git clone https://github.com/benseverndev-oss/goldenmatch-extensions.git
 cd goldenmatch-extensions/duckdb
 pip install -e ".[dev]"
 pytest --tb=short

@@ -6,7 +6,7 @@
     {
       "name": "GoldenCheck",
       "purpose": "Data quality validation",
-      "repo": "github.com/benzsevern/goldencheck",
+      "repo": "github.com/benseverndev-oss/goldencheck",
       "install": "pip install goldencheck",
       "mcp": {"command": "goldencheck mcp-serve", "tools": 19},
       "a2a": {"command": "goldencheck agent-serve --port 8100", "skills": 9},
@@ -16,7 +16,7 @@
     {
       "name": "GoldenFlow",
       "purpose": "Data transformation",
-      "repo": "github.com/benzsevern/goldenflow",
+      "repo": "github.com/benseverndev-oss/goldenflow",
       "install": "pip install goldenflow",
       "mcp": {"command": "goldenflow mcp-serve", "tools": 10},
       "a2a": {"command": "goldenflow agent-serve --port 8150", "skills": 6},
@@ -36,7 +36,7 @@
     {
       "name": "GoldenPipe",
       "purpose": "Pipeline orchestrator for the suite",
-      "repo": "github.com/benzsevern/goldenpipe",
+      "repo": "github.com/benseverndev-oss/goldenpipe",
       "install": "pip install goldenpipe[golden-suite]",
       "mcp": {"command": "goldenpipe mcp-serve", "tools": 4},
       "a2a": {"command": "goldenpipe agent-serve --port 8250", "skills": 4},
@@ -46,7 +46,7 @@
     {
       "name": "goldenmatch-extensions",
       "purpose": "SQL extensions for Postgres and DuckDB",
-      "repo": "github.com/benzsevern/goldenmatch-extensions",
+      "repo": "github.com/benseverndev-oss/goldenmatch-extensions",
       "install": "pip install goldenmatch-duckdb",
       "mcp": null,
       "a2a": null,

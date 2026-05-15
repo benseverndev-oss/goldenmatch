@@ -4,7 +4,7 @@
 - **SQL Extensions repo:** `D:\show_case\goldenmatch-extensions` -- Postgres extension + DuckDB UDFs. Has its own CLAUDE.md.
 - **PyPI:** `goldenmatch` (Python toolkit), `goldenmatch-duckdb` (DuckDB UDFs)
 - **npm:** `goldenmatch` (TypeScript port at `packages/goldenmatch-js/`)
-- **GitHub:** `benseverndev-oss/goldenmatch`, `benzsevern/goldenmatch-extensions`
+- **GitHub:** `benseverndev-oss/goldenmatch`, `benseverndev-oss/goldenmatch-extensions`
 
 ## TypeScript Port
 Lives at `packages/typescript/goldenmatch/`. See that package's CLAUDE.md for npm release flow, edge-safety rules, parity harness, and port-specific gotchas.

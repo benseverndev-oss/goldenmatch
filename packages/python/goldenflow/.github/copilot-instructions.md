@@ -5,7 +5,7 @@ Data transformation toolkit -- standardize, reshape, and normalize messy data. D
 ## Related Projects
 - **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
 - **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenflow`, `benzsevern/goldencheck`, `benseverndev-oss/goldenmatch`
+- **GitHub:** `benseverndev-oss/goldenflow`, `benseverndev-oss/goldencheck`, `benseverndev-oss/goldenmatch`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main
@@ -285,7 +285,7 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenflow-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenflow`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenflow`
 - **Server card:** `https://goldenflow-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

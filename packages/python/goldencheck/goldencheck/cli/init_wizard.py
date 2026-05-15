@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: benzsevern/goldencheck-action@v1
+      - uses: benseverndev-oss/goldencheck-action@v1
         with:
           files: "{pattern}"
           fail-on: error

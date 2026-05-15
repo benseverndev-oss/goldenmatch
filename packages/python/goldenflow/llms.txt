@@ -4,7 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldenflow mcp-serve` (10 tools: transform, map, profile, learn, diff, validate, stream, history, domain, demo)
-- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
+- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenflow)
 - A2A Server: `goldenflow agent-serve --port 8150` (6 skills)
 - CLI: `goldenflow transform`, `goldenflow map`, + 12 more commands
 - Python API: `from goldenflow import transform_file, transform_df`
@@ -98,13 +98,13 @@ dedup:
 - DQBench Transform Score: 100/100 (perfect across all tiers)
 
 ## Docs
-- [Full docs](https://benzsevern.github.io/goldenflow/)
+- [Full docs](https://benseverndev-oss.github.io/goldenflow/)
 - [Full API reference](docs/llms-full.txt)
 - [PyPI](https://pypi.org/project/goldenflow/)
-- [GitHub](https://github.com/benzsevern/goldenflow)
+- [GitHub](https://github.com/benseverndev-oss/goldenflow)
 
 ## Part of the Golden Suite
-- [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile
-- [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize
+- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize
 - [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match
-- [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline

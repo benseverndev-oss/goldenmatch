@@ -81,7 +81,7 @@ jobs:
           version: ${PKG_VER}
           maintainer: Ben Severn <benzsevern@gmail.com>
           description: GoldenMatch entity resolution extension for PostgreSQL ${PG_VERSION}
-          homepage: https://github.com/benzsevern/goldenmatch-extensions
+          homepage: https://github.com/benseverndev-oss/goldenmatch-extensions
           license: MIT
           depends:
             - postgresql-${PG_VERSION}

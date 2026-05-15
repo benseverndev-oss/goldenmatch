@@ -94,6 +94,6 @@ Edge cases that are particularly valued: ambiguous abbreviations, name collision
 
 ## See also
 
-- [`benchmark/README.md`](https://github.com/benzsevern/infermap/tree/main/benchmark) — runner architecture
-- [`docs/design/`](https://github.com/benzsevern/infermap/tree/main/docs/design) — design docs and trade-off notes
-- [Examples](https://github.com/benzsevern/infermap/tree/main/examples) — including `08_benchmark_introspection.py`
+- [`benchmark/README.md`](https://github.com/benseverndev-oss/infermap/tree/main/benchmark) — runner architecture
+- [`docs/design/`](https://github.com/benseverndev-oss/infermap/tree/main/docs/design) — design docs and trade-off notes
+- [Examples](https://github.com/benseverndev-oss/infermap/tree/main/examples) — including `08_benchmark_introspection.py`

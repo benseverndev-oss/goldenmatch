@@ -1,6 +1,6 @@
 # GoldenCheck Community Types
 
-Community-contributed semantic type definitions for [GoldenCheck](https://github.com/benzsevern/goldencheck).
+Community-contributed semantic type definitions for [GoldenCheck](https://github.com/benseverndev-oss/goldencheck).
 
 Domain packs teach GoldenCheck about industry-specific column types, improving detection accuracy and reducing false positives.
 
@@ -23,7 +23,7 @@ goldencheck scan data.csv --domain healthcare
 ### Community domains (download and use)
 
 ```bash
-curl -o goldencheck_domain.yaml https://raw.githubusercontent.com/benzsevern/goldencheck-types/main/domains/telecom.yaml
+curl -o goldencheck_domain.yaml https://raw.githubusercontent.com/benseverndev-oss/goldencheck-types/main/domains/telecom.yaml
 goldencheck scan data.csv
 ```
 

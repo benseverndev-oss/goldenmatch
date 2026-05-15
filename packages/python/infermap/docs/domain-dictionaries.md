@@ -82,7 +82,7 @@ These were chosen because they have **well-established field name conventions** 
 - **Biotech research**: terminology shifts by lab and instrument; a generic dictionary would be either shallow or wrong.
 - **Logistics / supply chain**: partially covered by `ecommerce`; dedicated version would duplicate significantly.
 
-Contributions welcome — see [`infermap/dictionaries/`](https://github.com/benzsevern/infermap/tree/main/infermap/dictionaries) for the format.
+Contributions welcome — see [`infermap/dictionaries/`](https://github.com/benseverndev-oss/infermap/tree/main/infermap/dictionaries) for the format.
 
 ## What domain dictionaries are NOT
 
@@ -96,7 +96,7 @@ Domain dictionaries are **curated synonym tables**, not learned models. They:
 
 If your organization has internal vocabulary (e.g. a legacy system's field names that your data warehouse maps to), the easiest path is:
 
-1. Copy [`infermap/dictionaries/generic.yaml`](https://github.com/benzsevern/infermap/blob/main/infermap/dictionaries/generic.yaml) as a template.
+1. Copy [`infermap/dictionaries/generic.yaml`](https://github.com/benseverndev-oss/infermap/blob/main/infermap/dictionaries/generic.yaml) as a template.
 2. Write your own file (e.g. `my_org.yaml`) with your canonical field names and aliases.
 3. Load it alongside the shipped dictionaries in `infermap.yaml`:
    ```yaml

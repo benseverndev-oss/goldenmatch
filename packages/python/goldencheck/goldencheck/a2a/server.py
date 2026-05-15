@@ -30,7 +30,7 @@ AGENT_CARD: dict = {
     "version": "1.0.0",
     "provider": {
         "organization": "GoldenCheck",
-        "url": "https://github.com/benzsevern/goldencheck",
+        "url": "https://github.com/benseverndev-oss/goldencheck",
     },
     "capabilities": {"streaming": True, "pushNotifications": False},
     "skills": [

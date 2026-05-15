@@ -64,8 +64,8 @@ All notable changes to GoldenCheck will be documented in this file.
 - **Webhook notifications** — `--webhook <url> --notify-on grade-drop|any-error|any-warning` on scan and watch commands
 - **LLM prompt improvements** — added cross-column ID prefix checks, age/DOB validation, weekend detection, state/zip consistency, mixed coding standards
 - **Merger keyword preservation** — ensures LLM findings include required keywords for benchmark scoring
-- **dbt-goldencheck** — separate dbt package for zero-config data validation as a dbt test (`benzsevern/dbt-goldencheck`)
-- **goldencheck-types** — community GitHub repo for domain-specific type definitions (`benzsevern/goldencheck-types`)
+- **dbt-goldencheck** — separate dbt package for zero-config data validation as a dbt test (`benseverndev-oss/dbt-goldencheck`)
+- **goldencheck-types** — community GitHub repo for domain-specific type definitions (`benseverndev-oss/goldencheck-types`)
 
 ### New Modules
 - `goldencheck/engine/triage.py` — auto-triage engine (pin/dismiss/review buckets)
@@ -87,7 +87,7 @@ All notable changes to GoldenCheck will be documented in this file.
 - **Public API surface** — `__all__` exports on all public modules, `py.typed` PEP 561 marker, top-level convenience imports (`from goldencheck import scan_file, Finding`)
 - **Friendly CLI error messages** — no more raw tracebacks for common errors
 - **CI coverage** — Codecov integration + smoke test job
-- **GitHub Action** — `benzsevern/goldencheck-action@v1` for CI with PR comments
+- **GitHub Action** — `benseverndev-oss/goldencheck-action@v1` for CI with PR comments
 
 ### Improved
 - **DQBench Score: 87.71 → 88.40** — geo suppression narrowing, classifier prefix-match bug fix

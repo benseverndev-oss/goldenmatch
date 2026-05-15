@@ -4,7 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldencheck mcp-serve` (19 tools: scan, validate, fix, profile, health score, explain, review, domain packs, agent orchestration)
-- Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
+- Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldencheck)
 - A2A Server: `goldencheck agent-serve --port 8100` (10 skills)
 - CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
 - Python API: `from goldencheck import scan_file, validate_file, health_score, create_baseline`
@@ -140,13 +140,13 @@ goldencheck scan-db "postgresql://..."  # database scanning
 ```
 
 ## Docs
-- [Full docs](https://benzsevern.github.io/goldencheck/): GitHub Pages
-- [Wiki](https://github.com/benzsevern/goldencheck/wiki): 40 pages
+- [Full docs](https://benseverndev-oss.github.io/goldencheck/): GitHub Pages
+- [Wiki](https://github.com/benseverndev-oss/goldencheck/wiki): 40 pages
 - [PyPI](https://pypi.org/project/goldencheck/)
-- [GitHub](https://github.com/benzsevern/goldencheck)
+- [GitHub](https://github.com/benseverndev-oss/goldencheck)
 
 ## Part of the Golden Suite
-- [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile
-- [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize
+- [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — Validate & profile
+- [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) — Transform & standardize
 - [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match
-- [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline
+- [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) — Orchestrate the pipeline

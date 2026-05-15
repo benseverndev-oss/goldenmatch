@@ -39,7 +39,7 @@ Data pipeline orchestration, End-to-end data quality, Automated data cleaning, M
 pipeline, orchestration, data-quality, etl, data-validation, data-transformation, deduplication, golden-suite, yaml, zero-config, mcp, ai-tools
 
 ## Documentation URL
-https://benzsevern.github.io/goldenpipe/
+https://benseverndev-oss.github.io/goldenpipe/
 
 ## Health Check URL
 https://goldenpipe-mcp-production.up.railway.app/mcp/

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GoldenMatch Postgres Extension Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/benzsevern/goldenmatch-extensions/main/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/benseverndev-oss/goldenmatch-extensions/main/install.sh | bash
 set -euo pipefail
 
 VERSION="${GOLDENMATCH_VERSION:-v0.1.0}"
@@ -42,7 +42,7 @@ fi
 
 # Download binary
 PKG_NAME="goldenmatch_pg-${VERSION}-pg${PG_VERSION}-py312-${OS}-${ARCH}"
-URL="https://github.com/benzsevern/goldenmatch-extensions/releases/download/${VERSION}/${PKG_NAME}.tar.gz"
+URL="https://github.com/benseverndev-oss/goldenmatch-extensions/releases/download/${VERSION}/${PKG_NAME}.tar.gz"
 
 echo ""
 echo "Downloading ${PKG_NAME}..."
@@ -52,7 +52,7 @@ trap "rm -rf ${TMPDIR}" EXIT
 if ! curl -sSL -o "${TMPDIR}/pkg.tar.gz" "${URL}"; then
     echo "ERROR: Download failed. Check version and platform:"
     echo "       URL: ${URL}"
-    echo "       Available at: https://github.com/benzsevern/goldenmatch-extensions/releases"
+    echo "       Available at: https://github.com/benseverndev-oss/goldenmatch-extensions/releases"
     exit 1
 fi
 

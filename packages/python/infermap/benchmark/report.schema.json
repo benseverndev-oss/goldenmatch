@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benzsevern/infermap/benchmark/report.schema.json",
+  "$id": "https://github.com/benseverndev-oss/infermap/benchmark/report.schema.json",
   "title": "infermap benchmark report",
   "type": "object",
   "required": ["version", "language", "infermap_version", "runner_version", "ran_at", "duration_seconds", "scorecard", "per_case", "failed_cases"],

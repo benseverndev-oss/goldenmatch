@@ -3,7 +3,7 @@
 ## Related Projects
 - **SQL Extensions repo:** `D:\show_case\goldenmatch-extensions` -- Postgres extension + DuckDB UDFs. Has its own CLAUDE.md.
 - **PyPI:** `goldenmatch` (Python toolkit), `goldenmatch-duckdb` (DuckDB UDFs)
-- **GitHub:** `benseverndev-oss/goldenmatch`, `benzsevern/goldenmatch-extensions`
+- **GitHub:** `benseverndev-oss/goldenmatch`, `benseverndev-oss/goldenmatch-extensions`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main

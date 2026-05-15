@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/goldencheck?color=d4a017)](https://pypi.org/project/goldencheck/)
 [![Downloads](https://img.shields.io/pypi/dm/goldencheck?color=blue&label=downloads)](https://pypi.org/project/goldencheck/)
-[![CI](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
+[![CI](https://github.com/benseverndev-oss/goldencheck/actions/workflows/test.yml/badge.svg)](https://github.com/benseverndev-oss/goldencheck/actions/workflows/test.yml)
 
 ## Quick Links
 

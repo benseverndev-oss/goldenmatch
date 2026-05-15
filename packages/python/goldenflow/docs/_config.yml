@@ -9,7 +9,7 @@ permalink: pretty
 
 aux_links:
   PyPI: https://pypi.org/project/goldenflow/
-  GitHub: https://github.com/benzsevern/goldenflow
+  GitHub: https://github.com/benseverndev-oss/goldenflow
 
 aux_links_new_tab: true
 nav_sort: case_insensitive

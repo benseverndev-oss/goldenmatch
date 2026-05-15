@@ -45,7 +45,7 @@ Schema mapping, Column matching, Data integration, ETL field mapping, Schema mig
 schema-mapping, column-matching, data-integration, etl, field-mapping, hungarian-algorithm, fuzzy-matching, data-onboarding, csv, parquet, zero-config, mcp, ai-tools, python, typescript
 
 ## Documentation URL
-https://benzsevern.github.io/infermap/
+https://benseverndev-oss.github.io/infermap/
 
 ## Health Check URL
 https://infermap-mcp-production.up.railway.app/.well-known/mcp/server-card.json

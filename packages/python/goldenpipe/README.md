@@ -1,18 +1,18 @@
-<!-- mcp-name: io.github.benzsevern/goldenpipe -->
+<!-- mcp-name: io.github.benseverndev-oss/goldenpipe -->
 # GoldenPipe
 
 **Golden Suite orchestrator** -- Check quality, fix issues, deduplicate records. One command.
 Built by [Ben Severn](https://bensevern.dev).
 
 [![PyPI](https://img.shields.io/pypi/v/goldenpipe?color=d4a017)](https://pypi.org/project/goldenpipe/)
-[![CI](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenpipe/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/benzsevern/goldenpipe/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenpipe)
+[![CI](https://github.com/benseverndev-oss/goldenpipe/actions/workflows/test.yml/badge.svg)](https://github.com/benseverndev-oss/goldenpipe/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/benseverndev-oss/goldenpipe/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenpipe)
 [![Downloads](https://static.pepy.tech/badge/goldenpipe/month)](https://pepy.tech/project/goldenpipe)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenpipe-d4a017)](https://benzsevern.github.io/goldenpipe/)
-[![DQBench Pipeline](https://img.shields.io/badge/DQBench%20Pipeline-88.07-gold)](https://github.com/benzsevern/dqbench)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenpipe/blob/main/scripts/goldenpipe_demo.ipynb)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenpipe-d4a017)](https://benseverndev-oss.github.io/goldenpipe/)
+[![DQBench Pipeline](https://img.shields.io/badge/DQBench%20Pipeline-88.07-gold)](https://github.com/benseverndev-oss/dqbench)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benseverndev-oss/goldenpipe/blob/main/scripts/goldenpipe_demo.ipynb)
 
 ## What It Does
 
@@ -62,7 +62,7 @@ goldenpipe run customers.csv -o golden.csv  # Save golden records
 
 ## Remote MCP Server
 
-GoldenPipe is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenpipe) — connect from any MCP client without installing anything.
+GoldenPipe is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenpipe) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
@@ -87,10 +87,10 @@ goldenpipe mcp-serve
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) | Validate & profile data quality | `pip install goldencheck` |
+| [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) | Transform & standardize data | `pip install goldenflow` |
 | [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
-| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
+| [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
 
 ## Author
 
