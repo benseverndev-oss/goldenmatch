@@ -242,9 +242,14 @@ def load_febrl3() -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
 def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, dict[str, Any]]:
     """Run gm.match_df on DBLP-ACM, return predictions/reference/wall.
 
-    Cross-source match: DBLP rows go into id space "a:{id}", ACM rows go
-    into "b:{id}". Matched pairs collapse into clusters; everything else is
-    a singleton.
+    Cross-source match. Both predictions and reference live in the
+    *combined* ``__row_id__`` space that gm.match_df builds internally:
+    target rows occupy ``__row_id__`` 0..n_a-1 and reference rows occupy
+    ``__row_id__`` n_a..n_a+n_b-1.
+
+    MatchResult.matched columns (per pipeline.py:1394):
+      ``__target_row_id__``, ``__ref_row_id__``, ``__match_score__``,
+      ``target_<col>...``, ``ref_<col>...``.
     """
     import polars as pl
     import goldenmatch as gm
@@ -258,74 +263,84 @@ def load_dblp_acm(datasets_dir: Path) -> tuple["pd.Series", "pd.Series", float, 
 
     df_a = pl.read_csv(a_path, encoding="utf8-lossy")
     df_b = pl.read_csv(b_path, encoding="utf8-lossy")
-    print(f"[dblp-acm] DBLP: {df_a.height:,} rows  ACM: {df_b.height:,} rows")
-
-    # Common columns for matching across both sources.
-    common = [c for c in df_a.columns if c in df_b.columns]
-    df_a = df_a.select(common)
-    df_b = df_b.select(common)
+    n_a, n_b = df_a.height, df_b.height
+    print(f"[dblp-acm] DBLP: {n_a:,} rows ({df_a.columns}), "
+          f"ACM: {n_b:,} rows ({df_b.columns})")
 
     t0 = time.perf_counter()
     result = gm.match_df(df_a, df_b)
     wall_s = time.perf_counter() - t0
 
-    # Build combined id space and predictions.
-    id_col = "id" if "id" in df_a.columns else df_a.columns[0]
-    a_ids = [f"a:{x}" for x in df_a[id_col].to_list()]
-    b_ids = [f"b:{x}" for x in df_b[id_col].to_list()]
-    all_ids = a_ids + b_ids
-
-    # Position-based: __row_id__ in target df = 0..n_a-1, in ref df = 0..n_b-1.
-    # MatchResult.matched contains (target_row_id, ref_row_id) pairs.
-    matched_pairs_pos: set[tuple[int, int]] = set()
     matched = getattr(result, "matched", None)
-    if matched is None:
-        matched = getattr(result, "matches", None)
-    if hasattr(matched, "iter_rows"):
-        # Polars DataFrame
+    if matched is None or (hasattr(matched, "height") and matched.height == 0):
+        print(f"[dblp-acm] MatchResult.matched is empty")
+        matched_pairs_combined: set[tuple[int, int]] = set()
+    else:
+        print(f"[dblp-acm] MatchResult.matched columns: {matched.columns}")
+        print(f"[dblp-acm] MatchResult.matched rows: {matched.height}")
+        # __target_row_id__ and __ref_row_id__ are already in the combined
+        # space gm.match_df builds. No translation needed.
+        matched_pairs_combined = set()
         for row in matched.iter_rows(named=True):
-            ta = row.get("target_id") if "target_id" in matched.columns else row.get("id_a")
-            rb = row.get("reference_id") if "reference_id" in matched.columns else row.get("id_b")
-            if ta is None or rb is None:
-                continue
-            matched_pairs_pos.add((int(ta), int(rb)))
-    elif isinstance(matched, list):
-        for item in matched:
-            ta = item.get("target_id") if isinstance(item, dict) else item[0]
-            rb = item.get("reference_id") if isinstance(item, dict) else item[1]
-            matched_pairs_pos.add((int(ta), int(rb)))
+            ta = row["__target_row_id__"]
+            rb = row["__ref_row_id__"]
+            matched_pairs_combined.add(
+                (int(min(ta, rb)), int(max(ta, rb)))
+            )
 
-    # Convert positional pairs to combined id space.
-    matched_pairs_combined: set[tuple[str, str]] = set()
-    for ta, rb in matched_pairs_pos:
-        if 0 <= ta < len(a_ids) and 0 <= rb < len(b_ids):
-            matched_pairs_combined.add((a_ids[ta], b_ids[rb]))
-
-    # Build predictions from matched pairs (union-find over combined id space).
-    predictions = _gt_pairs_to_series(matched_pairs_combined, all_ids)
+    # Combined id space for both predictions and reference.
+    all_combined_ids = list(range(n_a + n_b))
+    predictions = _gt_pairs_to_series(matched_pairs_combined, all_combined_ids)
     predictions = predictions.rename("prediction")
 
-    # Ground truth: idDBLP,idACM pairs.
-    import polars as pl
-    gt = pl.read_csv(gt_path)
-    gt_col_a = next((c for c in gt.columns if "DBLP" in c or "idA" in c), gt.columns[0])
-    gt_col_b = next((c for c in gt.columns if "ACM" in c or "idB" in c), gt.columns[1])
-    gt_pair_combined: set[tuple[str, str]] = set()
-    for r in gt.iter_rows(named=True):
-        a = f"a:{r[gt_col_a]}"
-        b = f"b:{r[gt_col_b]}"
-        gt_pair_combined.add((a, b))
+    # Ground truth: idDBLP,idACM are application ids (e.g. paper IDs in the
+    # CSVs' ``id`` column). Map each to its row position, with ACM rows
+    # offset by n_a to land in the combined id space.
+    id_col_a = "id" if "id" in df_a.columns else df_a.columns[0]
+    id_col_b = "id" if "id" in df_b.columns else df_b.columns[0]
+    a_id_to_pos: dict[str, int] = {
+        str(x): i for i, x in enumerate(df_a[id_col_a].to_list())
+    }
+    b_id_to_pos: dict[str, int] = {
+        str(x): n_a + i for i, x in enumerate(df_b[id_col_b].to_list())
+    }
 
-    reference = _gt_pairs_to_series(gt_pair_combined, all_ids)
+    gt = pl.read_csv(gt_path)
+    print(f"[dblp-acm] GT columns: {gt.columns}, rows: {gt.height}")
+    gt_col_a = next((c for c in gt.columns if "DBLP" in c.upper()), gt.columns[0])
+    gt_col_b = next(
+        (c for c in gt.columns if "ACM" in c.upper() and c != gt_col_a),
+        gt.columns[1],
+    )
+    print(f"[dblp-acm] GT pair columns: {gt_col_a} -> {gt_col_b}")
+
+    gt_pair_combined: set[tuple[int, int]] = set()
+    n_gt_missing = 0
+    for r in gt.iter_rows(named=True):
+        a_app_id = str(r[gt_col_a])
+        b_app_id = str(r[gt_col_b])
+        if a_app_id not in a_id_to_pos or b_app_id not in b_id_to_pos:
+            n_gt_missing += 1
+            continue
+        pa = a_id_to_pos[a_app_id]
+        pb = b_id_to_pos[b_app_id]
+        gt_pair_combined.add((min(pa, pb), max(pa, pb)))
+
+    if n_gt_missing:
+        print(f"[dblp-acm] WARN: {n_gt_missing} GT pairs had application "
+              f"ids not present in the CSVs (skipped)")
+
+    reference = _gt_pairs_to_series(gt_pair_combined, all_combined_ids)
 
     print(f"[dblp-acm] dedupe wall: {wall_s:.1f}s, "
           f"{len(matched_pairs_combined):,} predicted matches, "
           f"{len(gt_pair_combined):,} GT pairs")
 
     extras = {
-        "n_rows_a": df_a.height,
-        "n_rows_b": df_b.height,
+        "n_rows_a": n_a,
+        "n_rows_b": n_b,
         "n_gt_pairs": len(gt_pair_combined),
+        "n_gt_pairs_skipped_missing_id": n_gt_missing,
         "n_predicted_pairs": len(matched_pairs_combined),
     }
     return predictions, reference, wall_s, extras
