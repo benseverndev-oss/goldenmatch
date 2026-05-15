@@ -12,6 +12,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
+from goldenmatch.core.bench import record_metric, record_metrics, stage
 from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
@@ -602,11 +603,12 @@ def _run_dedupe_pipeline(
     if auto_config:
         from goldenmatch.core.autoconfig import auto_configure_df
         combined_df_tmp = combined_lf.collect()
-        auto_cfg = auto_configure_df(
-            combined_df_tmp,
-            llm_provider=auto_config_llm_provider,
-            llm_auto=config.llm_auto,
-        )
+        with stage("auto_configure"):
+            auto_cfg = auto_configure_df(
+                combined_df_tmp,
+                llm_provider=auto_config_llm_provider,
+                llm_auto=config.llm_auto,
+            )
         config.matchkeys = auto_cfg.matchkeys
         config.match_settings = auto_cfg.match_settings
         config.blocking = auto_cfg.blocking
@@ -665,6 +667,17 @@ def _run_dedupe_pipeline(
     all_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
+    # Top-line metric: every downstream pair-count ratio depends on N.
+    record_metric("record_count", collected_df.height)
+    record_metrics({
+        "matchkey_count": len(matchkeys),
+        "exact_matchkey_count": sum(1 for mk in matchkeys if mk.type == "exact"),
+        "fuzzy_matchkey_count": sum(1 for mk in matchkeys if mk.type == "weighted"),
+        "probabilistic_matchkey_count": sum(
+            1 for mk in matchkeys if mk.type == "probabilistic"
+        ),
+    })
+
     # Build source lookup for across_files_only filtering
     source_lookup = {}
     if across_files_only:
@@ -672,39 +685,80 @@ def _run_dedupe_pipeline(
             source_lookup[row["__row_id__"]] = row["__source__"]
 
     # Phase 1: Exact matchkeys (fast)
-    for mk in matchkeys:
-        if mk.type == "exact":
-            pairs = find_exact_matches(combined_lf, mk)
-            if mk.negative_evidence:
-                # v1.12 Path Y: filter pairs by NE penalty
-                from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
-                pairs = _apply_negative_evidence_to_exact_pairs(
-                    pairs, mk, collected_df
-                )
-            if across_files_only:
-                pairs = [
-                    (a, b, s) for a, b, s in pairs
-                    if source_lookup.get(a) != source_lookup.get(b)
-                ]
-            all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+    exact_pair_count = 0
+    with stage("exact_matching"):
+        for mk in matchkeys:
+            if mk.type == "exact":
+                pairs = find_exact_matches(combined_lf, mk)
+                if mk.negative_evidence:
+                    # v1.12 Path Y: filter pairs by NE penalty
+                    from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
+                    pairs = _apply_negative_evidence_to_exact_pairs(
+                        pairs, mk, collected_df
+                    )
+                if across_files_only:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if source_lookup.get(a) != source_lookup.get(b)
+                    ]
+                all_pairs.extend(pairs)
+                exact_pair_count += len(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
 
-    logger.info("Exact matching found %d pairs", len(all_pairs))
+    record_metric("exact_pair_count", exact_pair_count)
+    logger.info("Exact matching found %d pairs", exact_pair_count)
 
     # Phase 2: Fuzzy matchkeys (parallel block scoring)
-    for mk in matchkeys:
-        if mk.type == "weighted":
-            if config.blocking is None:
-                continue
-            blocks = build_blocks(combined_lf, config.blocking)
-            block_scorer = _get_block_scorer(config)
-            pairs = block_scorer(
-                blocks, mk, matched_pairs,
-                across_files_only=across_files_only,
-                source_lookup=source_lookup if across_files_only else None,
-            )
-            all_pairs.extend(pairs)
+    fuzzy_pair_count = 0
+    total_blocks = 0
+    block_size_samples: list[int] = []
+    with stage("fuzzy_scoring"):
+        for mk in matchkeys:
+            if mk.type == "weighted":
+                if config.blocking is None:
+                    continue
+                with stage("fuzzy_build_blocks"):
+                    blocks = build_blocks(combined_lf, config.blocking)
+                total_blocks += len(blocks)
+                # Cheap sampling: collect block sizes for the histogram metric.
+                # Defensive: blocks may carry lazy frames; height attr resolves
+                # to the materialized height once collected by the scorer.
+                for blk in blocks:
+                    try:
+                        df_blk = blk.df
+                        if isinstance(df_blk, pl.LazyFrame):
+                            # Avoid forcing a collect just for the size — fall
+                            # back to a no-op when only lazy. The scorer will
+                            # collect during its own pass; we revisit metrics
+                            # via `_block_size_stats` below if needed.
+                            continue
+                        block_size_samples.append(int(df_blk.height))
+                    except Exception:  # pragma: no cover — defensive
+                        continue
+                block_scorer = _get_block_scorer(config)
+                with stage("fuzzy_score_blocks"):
+                    pairs = block_scorer(
+                        blocks, mk, matched_pairs,
+                        across_files_only=across_files_only,
+                        source_lookup=source_lookup if across_files_only else None,
+                    )
+                all_pairs.extend(pairs)
+                fuzzy_pair_count += len(pairs)
+
+    record_metrics({
+        "fuzzy_pair_count": fuzzy_pair_count,
+        "block_count": total_blocks,
+    })
+    if block_size_samples:
+        block_size_samples.sort()
+        n = len(block_size_samples)
+        record_metrics({
+            "block_size_p50": block_size_samples[max(0, n // 2 - 1)],
+            "block_size_p95": block_size_samples[max(0, int(n * 0.95) - 1)],
+            "block_size_p99": block_size_samples[max(0, int(n * 0.99) - 1)],
+            "block_size_max": block_size_samples[-1],
+        })
 
     # Phase 2b: Probabilistic matchkeys (Fellegi-Sunter with EM)
     for mk in matchkeys:
@@ -812,24 +866,36 @@ def _run_dedupe_pipeline(
         if hasattr(config.golden_rules, "auto_split"):
             auto_split = config.golden_rules.auto_split
 
-    clusters = build_clusters(
-        all_pairs, all_ids,
-        max_cluster_size=max_cluster_size,
-        weak_cluster_threshold=weak_threshold,
-        auto_split=auto_split,
-    )
+    record_metric("scored_pair_count", len(all_pairs))
+    with stage("cluster"):
+        clusters = build_clusters(
+            all_pairs, all_ids,
+            max_cluster_size=max_cluster_size,
+            weak_cluster_threshold=weak_threshold,
+            auto_split=auto_split,
+        )
+    record_metrics({
+        "cluster_count": len(clusters),
+        "multi_member_cluster_count": sum(
+            1 for c in clusters.values() if c.get("size", 0) > 1
+        ),
+        "oversized_cluster_count": sum(
+            1 for c in clusters.values() if c.get("oversized")
+        ),
+    })
 
     # ── Step 5: GOLDEN ──
     golden_records = []
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
-    for cluster_id, cluster_info in clusters.items():
-        if cluster_info["size"] > 1 and not cluster_info["oversized"]:
-            member_ids = cluster_info["members"]
-            cluster_df = collected_df.filter(pl.col("__row_id__").is_in(member_ids))
-            golden = build_golden_record(cluster_df, golden_rules)
-            golden["__cluster_id__"] = cluster_id
-            golden_records.append(golden)
+    with stage("golden"):
+        for cluster_id, cluster_info in clusters.items():
+            if cluster_info["size"] > 1 and not cluster_info["oversized"]:
+                member_ids = cluster_info["members"]
+                cluster_df = collected_df.filter(pl.col("__row_id__").is_in(member_ids))
+                golden = build_golden_record(cluster_df, golden_rules)
+                golden["__cluster_id__"] = cluster_id
+                golden_records.append(golden)
 
     # Build golden DataFrame
     golden_df = None
@@ -920,9 +986,10 @@ def _run_dedupe_pipeline(
             logger.warning("Lineage generation failed: %s", e)
 
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
-    identity_summary = _resolve_identities(
-        clusters, collected_df, all_pairs, matchkeys, config, run_name
-    )
+    with stage("identity_resolve"):
+        identity_summary = _resolve_identities(
+            clusters, collected_df, all_pairs, matchkeys, config, run_name
+        )
 
     results = {
         "clusters": clusters,
