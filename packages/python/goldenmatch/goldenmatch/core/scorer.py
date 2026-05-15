@@ -642,35 +642,38 @@ def find_fuzzy_matches(
         fuzzy_denominator = np.zeros((n, n), dtype=np.float32)
 
         all_expensive_fields = list(fuzzy_fields) + list(record_emb_fields)
+        from goldenmatch.core.bench import stage as _bench_stage  # local: hot loop
         for f_idx, f in enumerate(all_expensive_fields):
-            if f.scorer == "record_embedding":
-                try:
-                    scores = _record_embedding_score_matrix(
-                        block_df, f.columns or [], model_name=f.model or "all-MiniLM-L6-v2",
-                        column_weights=f.column_weights,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Record embedding scorer failed for columns %s, falling back to token_sort",
-                        f.columns, exc_info=True,
-                    )
-                    concat_values = []
-                    for row in block_df.to_dicts():
-                        parts = [str(row.get(c, "") or "") for c in (f.columns or [])]
-                        concat_values.append(" ".join(parts))
-                    scores = _fuzzy_score_matrix(concat_values, "token_sort")
-                fuzzy_numerator += scores * _w(f)
-                fuzzy_denominator += _w(f)
-            else:
-                values = _get_transformed_values(block_df, f)
-                null_mask = _build_null_mask(values)
-                valid = ~null_mask
+            scorer_name = f.scorer or "unknown"
+            with _bench_stage(f"scorer::{scorer_name}"):
+                if f.scorer == "record_embedding":
+                    try:
+                        scores = _record_embedding_score_matrix(
+                            block_df, f.columns or [], model_name=f.model or "all-MiniLM-L6-v2",
+                            column_weights=f.column_weights,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Record embedding scorer failed for columns %s, falling back to token_sort",
+                            f.columns, exc_info=True,
+                        )
+                        concat_values = []
+                        for row in block_df.to_dicts():
+                            parts = [str(row.get(c, "") or "") for c in (f.columns or [])]
+                            concat_values.append(" ".join(parts))
+                        scores = _fuzzy_score_matrix(concat_values, "token_sort")
+                    fuzzy_numerator += scores * _w(f)
+                    fuzzy_denominator += _w(f)
+                else:
+                    values = _get_transformed_values(block_df, f)
+                    null_mask = _build_null_mask(values)
+                    valid = ~null_mask
 
-                assert f.scorer is not None, "fuzzy field scorer must be set"
-                scores = _fuzzy_score_matrix(values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2")
+                    assert f.scorer is not None, "fuzzy field scorer must be set"
+                    scores = _fuzzy_score_matrix(values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2")
 
-                fuzzy_numerator += scores * _w(f) * valid
-                fuzzy_denominator += _w(f) * valid
+                    fuzzy_numerator += scores * _w(f) * valid
+                    fuzzy_denominator += _w(f) * valid
 
             # Intra-field early termination: if no pair can reach threshold
             # even with perfect scores on all remaining fields, stop early

@@ -721,19 +721,20 @@ def _run_dedupe_pipeline(
                 with stage("fuzzy_build_blocks"):
                     blocks = build_blocks(combined_lf, config.blocking)
                 total_blocks += len(blocks)
-                # Cheap sampling: collect block sizes for the histogram metric.
-                # Defensive: blocks may carry lazy frames; height attr resolves
-                # to the materialized height once collected by the scorer.
+                # Cheap sampling: collect block sizes for the histogram
+                # metric. Most blocks arrive as LazyFrames; do a
+                # zero-row-materialization peek via `select(pl.len())`
+                # which is O(1) for already-collected frames and a cheap
+                # plan operation for lazy ones. We need the sizes to
+                # surface the P99/max that drives hot-block decisions.
                 for blk in blocks:
                     try:
                         df_blk = blk.df
                         if isinstance(df_blk, pl.LazyFrame):
-                            # Avoid forcing a collect just for the size — fall
-                            # back to a no-op when only lazy. The scorer will
-                            # collect during its own pass; we revisit metrics
-                            # via `_block_size_stats` below if needed.
-                            continue
-                        block_size_samples.append(int(df_blk.height))
+                            size = int(df_blk.select(pl.len()).collect().item())
+                        else:
+                            size = int(df_blk.height)
+                        block_size_samples.append(size)
                     except Exception:  # pragma: no cover — defensive
                         continue
                 block_scorer = _get_block_scorer(config)
