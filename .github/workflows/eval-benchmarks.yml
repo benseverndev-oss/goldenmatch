@@ -1,0 +1,145 @@
+# Run our canonical ER benchmarks through the er-evaluation scoring harness.
+#
+# Matrix over benchmarks (febrl3, dblp-acm, optionally ncvr). Each matrix entry:
+#   1. Loads the dataset (downloads if external; uses recordlinkage package
+#      for Febrl3; reads local files for Leipzig DBLP-ACM and NCVR sample).
+#   2. Runs gm.dedupe_df() or gm.match_df() depending on shape.
+#   3. Converts the result to predictions / reference pandas Series.
+#   4. Scores via er-evaluation: pairwise + B-cubed + cluster P/R/F1
+#      with bootstrapped std errors.
+#
+# Each benchmark uploads its own JSON artifact and writes a Markdown
+# summary to $GITHUB_STEP_SUMMARY.
+#
+# License note: er-evaluation is AGPL-3.0. We consume it strictly at
+# evaluation time in the workflow runner; never ships in any
+# goldenmatch artifact.
+#
+# To run: GitHub → Actions → "eval-benchmarks" → Run workflow.
+name: eval-benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmarks:
+        description: "Which benchmarks: 'all', 'febrl3', 'dblp-acm', 'ncvr' (comma-sep)"
+        required: false
+        default: "febrl3,dblp-acm"
+      er_evaluation_ref:
+        description: "Pin er-evaluation to a PyPI version (blank = latest)"
+        required: false
+        default: ""
+      label:
+        description: "Tag for the output filename"
+        required: false
+        default: "ad-hoc"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest  # planning only — no goldenmatch needed
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - id: build-matrix
+        run: |
+          input="${{ inputs.benchmarks }}"
+          if [ "$input" = "all" ] || [ -z "$input" ]; then
+            input="febrl3,dblp-acm,ncvr"
+          fi
+          # Build JSON array for matrix.benchmark
+          benchmarks=$(echo "$input" | tr ',' '\n' | grep -v '^$' \
+            | awk '{print "\""$0"\""}' | paste -sd, -)
+          matrix="{\"benchmark\":[${benchmarks}]}"
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "selected benchmarks: $matrix"
+
+  eval:
+    needs: plan
+    # Per memory feedback_bench_default_runner.md: benchmark workflows use
+    # the org's larger runner.
+    runs-on: large-new-64GB
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable-install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Install er-evaluation + pandas + recordlinkage
+        # recordlinkage is needed only for febrl3 (which uses
+        # recordlinkage.datasets.load_febrl3); installing it
+        # unconditionally keeps the matrix steps uniform.
+        run: |
+          if [ -n "${{ inputs.er_evaluation_ref }}" ]; then
+            uv pip install "er-evaluation==${{ inputs.er_evaluation_ref }}" pandas recordlinkage
+          else
+            uv pip install er-evaluation pandas recordlinkage
+          fi
+
+      - name: Verify install
+        run: |
+          .venv/bin/python -c "import goldenmatch, er_evaluation; \
+            print('goldenmatch:', goldenmatch.__file__); \
+            print('er_evaluation:', er_evaluation.__file__, '/', getattr(er_evaluation, '__version__', '?'))"
+
+      - name: Fetch DBLP-ACM dataset (if needed)
+        if: matrix.benchmark == 'dblp-acm'
+        run: |
+          mkdir -p packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          if [ ! -f "packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/DBLP2.csv" ]; then
+            curl -fSL -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip
+            unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm-extract
+            # The zip contains a top-level DBLP-ACM/ folder; copy contents
+            cp -r /tmp/dblp-acm-extract/DBLP-ACM/* \
+              packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/
+          fi
+          ls -lh packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/
+
+      - name: Fetch NCVR sample (if needed)
+        if: matrix.benchmark == 'ncvr'
+        run: |
+          mkdir -p packages/python/goldenmatch/tests/benchmarks/datasets/NCVR
+          if [ ! -f "packages/python/goldenmatch/tests/benchmarks/datasets/NCVR/ncvoter_sample_10k.txt" ]; then
+            # Stream the first 10K rows out of the NCSBE statewide file
+            # to avoid the full 4.3GB extract. The source URL changes over
+            # time; pin to a known mirror or fail clearly.
+            echo "ERROR: NCVR sample not present and no automated source"  >&2
+            echo "Populate packages/python/goldenmatch/tests/benchmarks/datasets/NCVR/ncvoter_sample_10k.txt" >&2
+            echo "manually or extend this step with a download URL."        >&2
+            exit 1
+          fi
+          ls -lh packages/python/goldenmatch/tests/benchmarks/datasets/NCVR/
+
+      - name: Score with er-evaluation
+        run: |
+          .venv/bin/python scripts/eval_benchmark.py \
+            --benchmark ${{ matrix.benchmark }} \
+            --datasets-dir packages/python/goldenmatch/tests/benchmarks/datasets \
+            --output .profile_tmp/eval_${{ matrix.benchmark }}_${{ inputs.label }}.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: eval-benchmark-${{ matrix.benchmark }}-${{ inputs.label }}
+          path: .profile_tmp/eval_${{ matrix.benchmark }}_${{ inputs.label }}.json
+          retention-days: 90
