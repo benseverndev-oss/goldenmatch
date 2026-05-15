@@ -888,13 +888,61 @@ def _run_dedupe_pipeline(
     golden_records = []
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
+    # Golden-record construction was the hidden N²-shaped stage that the
+    # bench harness surfaced at 11K rows (36% of wall before this rewrite):
+    # the prior loop called `collected_df.filter(__row_id__.is_in(member_ids))`
+    # once per cluster, scanning all N rows × K clusters = N·K work. The
+    # equivalent vectorized shape is:
+    #   1. collect all member_ids of every eligible cluster once,
+    #   2. filter collected_df to just those rows (single O(N) pass),
+    #   3. attach a `__cluster_id__` column via a tiny row_id → cluster_id
+    #      replace_strict (linear in the result frame),
+    #   4. partition by cluster_id → dict of small DataFrames,
+    #   5. call build_golden_record on each pre-filtered partition.
+    # Total: O(N + sum-of-cluster-sizes) which is O(N), independent of K.
     with stage("golden"):
-        for cluster_id, cluster_info in clusters.items():
-            if cluster_info["size"] > 1 and not cluster_info["oversized"]:
-                member_ids = cluster_info["members"]
-                cluster_df = collected_df.filter(pl.col("__row_id__").is_in(member_ids))
+        eligible: list[tuple[int, dict[str, Any]]] = [
+            (cid, info) for cid, info in clusters.items()
+            if info["size"] > 1 and not info["oversized"]
+        ]
+        if eligible:
+            # row_id → cluster_id mapping. Members are int row IDs; one row
+            # belongs to at most one cluster, so the map is unambiguous.
+            row_to_cluster: dict[int, int] = {}
+            for cid, info in eligible:
+                for mid in info["members"]:
+                    row_to_cluster[mid] = cid
+
+            member_ids_all = list(row_to_cluster.keys())
+            multi_df = collected_df.filter(
+                pl.col("__row_id__").is_in(member_ids_all)
+            )
+            # Attach __cluster_id__ via replace_strict. The old keys/new
+            # vals lists are tiny (1 entry per member); the join itself
+            # is linear in `multi_df.height`.
+            multi_df = multi_df.with_columns(
+                pl.col("__row_id__").replace_strict(
+                    list(row_to_cluster.keys()),
+                    list(row_to_cluster.values()),
+                    return_dtype=pl.Int64,
+                ).alias("__cluster_id__")
+            )
+            partitions = multi_df.partition_by(
+                "__cluster_id__", as_dict=True, include_key=False,
+            )
+            # `partition_by(as_dict=True)` keys by a tuple of group-by
+            # column values; for a single key column the tuple has one
+            # element. Normalise to a plain int → DataFrame mapping.
+            partitions_by_cid = {
+                (k[0] if isinstance(k, tuple) else k): df
+                for k, df in partitions.items()
+            }
+            for cid, _info in eligible:
+                cluster_df = partitions_by_cid.get(cid)
+                if cluster_df is None or cluster_df.height == 0:
+                    continue
                 golden = build_golden_record(cluster_df, golden_rules)
-                golden["__cluster_id__"] = cluster_id
+                golden["__cluster_id__"] = cid
                 golden_records.append(golden)
 
     # Build golden DataFrame
