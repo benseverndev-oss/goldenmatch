@@ -72,7 +72,8 @@ jobs:
         # uv sync should already install the workspace member editable, but
         # CLAUDE.md's "shadows worktree code" gotcha cost me an audit cycle —
         # belt and braces. Verify the import path in the bench output too.
-        run: .venv/bin/python -m pip install -e packages/python/goldenmatch
+        # NOTE: uv-created venvs don't ship pip; use `uv pip` not `.venv/bin/pip`.
+        run: uv pip install -e packages/python/goldenmatch
 
       - name: Verify worktree install
         run: |
