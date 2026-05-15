@@ -123,8 +123,21 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
 
     Groups records by each blocking key, skipping blocks with < 2 records
     and handling oversized blocks per config.skip_oversized.
+
+    Hot-block auto-split (2026-05-15): when a block exceeds
+    ``max_block_size`` and no ANN column is configured, attempt
+    ``_auto_split_block`` before silently skipping. The static-mode
+    path used to drop these blocks on the floor — measured at 94% of
+    wall on a 100K zero-config run because a single 1158-record
+    last-name block dominated the per-block ``cdist`` quadratic. Hot
+    splitting trades one quadratic block for multiple smaller blocks
+    whose summed quadratic work is dramatically lower.
     """
+    from goldenmatch.core.bench import record_metric
+
     results: list[BlockResult] = []
+    hot_blocks_split = 0
+    hot_blocks_skipped = 0
 
     for key_config in config.keys:
         block_key_expr = _build_block_key_expr(key_config)
@@ -162,10 +175,52 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
                         )
                     continue
                 elif config.skip_oversized:
+                    # Hot-block auto-split: try recovering via
+                    # highest-cardinality column before giving up.
+                    # `_auto_split_block` returns at least one
+                    # BlockResult per useful sub-group; if it can't
+                    # split meaningfully it returns the parent block,
+                    # which we then skip (preserves prior behavior).
+                    try:
+                        sub_blocks = _auto_split_block(
+                            group_df, config.max_block_size, key_str,
+                        )
+                    except Exception:
+                        logger.error(
+                            "Hot-block auto-split failed for %r (%d records). Skipping.",
+                            key_str, size, exc_info=True,
+                        )
+                        hot_blocks_skipped += 1
+                        continue
+                    # "Useful" sub-blocks are those genuinely smaller than
+                    # the parent. _auto_split_block can return a single
+                    # sub-block that's still the full parent size when no
+                    # column has cardinality > 1 within the block — that's
+                    # the "couldn't split" sentinel.
+                    useful_subs: list[BlockResult] = []
+                    for b in sub_blocks:
+                        try:
+                            sub_size = b.df.collect().height if isinstance(b.df, pl.LazyFrame) else len(b.df)
+                        except Exception:
+                            sub_size = size + 1  # treat unknown as not-useful
+                        if sub_size < size and sub_size >= 2:
+                            useful_subs.append(b)
+                    if useful_subs:
+                        results.extend(useful_subs)
+                        hot_blocks_split += 1
+                        logger.info(
+                            "Hot-block split %r (%d records) → %d sub-blocks",
+                            key_str, size, len(useful_subs),
+                        )
+                        continue
+                    # Fall through to the original skip behavior when
+                    # no useful sub-blocks could be produced.
                     logger.warning(
                         f"Block {key_str!r} has {size} records "
-                        f"(exceeds max_block_size={config.max_block_size}). Skipping."
+                        f"(exceeds max_block_size={config.max_block_size}) "
+                        "and auto-split produced no useful sub-blocks. Skipping."
                     )
+                    hot_blocks_skipped += 1
                     continue
                 else:
                     logger.warning(
@@ -177,6 +232,10 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
                 block_key=key_str,
                 df=group_df.lazy(),
             ))
+
+    if hot_blocks_split or hot_blocks_skipped:
+        record_metric("hot_blocks_split_count", hot_blocks_split)
+        record_metric("hot_blocks_skipped_count", hot_blocks_skipped)
 
     return results
 
