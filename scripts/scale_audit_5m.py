@@ -118,13 +118,31 @@ def run_audit(
     poller = threading.Thread(target=_poll_rss_mb, args=(stop, peak_rss), daemon=True)
     poller.start()
 
-    print("Auto-configuring (GoldenCheck quality scan disabled — not what we're benchmarking)...")
-    config = gm.auto_configure_df(df)
+    # Build a quality-disabled config WITHOUT running auto_configure_df
+    # explicitly — that would trigger the controller's _finalize full-df run,
+    # producing a 2× full-pipeline measurement (controller finalize + caller
+    # dedupe). Instead, let gm.dedupe_df() do zero-config internally: its
+    # zero-config branch passes _skip_finalize=True so the controller only
+    # runs on samples and the caller's run is the single full-df pass.
+    #
+    # Quality-scan disable still needs to happen — pre-bake a config carrying
+    # only the quality flag + duckdb backend; let dedupe_df fill the rest via
+    # its zero-config path. Cleanest way: hand dedupe_df the bare minimum and
+    # rely on its internal auto_configure_df(_skip_finalize=True) call.
+    from goldenmatch.config.schemas import QualityConfig
+    # NOTE: GoldenMatchConfig with no matchkeys still triggers zero-config in
+    # dedupe_df only when config is None. Passing a partial config bypasses
+    # auto-config entirely. So: run dedupe_df(df) zero-config, then apply
+    # backend + quality overrides post-controller via a thin wrapper.
+    print("Running dedupe zero-config (controller skips finalize; single full-df pass)...")
+    # Pre-config quality + backend via env-style override on the controller's
+    # committed config: easiest path is to call auto_configure_df ourselves
+    # with _skip_finalize=True (no double-run), tweak, then dedupe_df.
+    config = gm.auto_configure_df(df, _skip_finalize=True)
     config.backend = "duckdb"
     if config.quality is not None:
         config.quality.mode = "disabled"
     else:
-        from goldenmatch.config.schemas import QualityConfig
         config.quality = QualityConfig(mode="disabled")
 
     print("Running dedupe (backend=duckdb)...")
