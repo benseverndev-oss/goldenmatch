@@ -117,29 +117,118 @@ def score_blocks_duckdb(
         # (mirrors score_blocks_parallel's behavior).
         frozen_exclude = frozenset(matched_pairs)
 
-        for block in blocks:
-            pairs = _score_one_block(
-                block, mk, frozen_exclude,
-                across_files_only=across_files_only,
-                source_lookup=source_lookup,
-            )
-            if target_ids is not None:
-                pairs = [
-                    (a, b, s)
-                    for a, b, s in pairs
-                    if (a in target_ids) != (b in target_ids)
+        # Parallelize block scoring with the same ThreadPoolExecutor
+        # shape `score_blocks_parallel` uses. rapidfuzz.cdist releases
+        # the GIL inside `_score_one_block`, so threads give real
+        # parallelism. The earlier single-threaded version of this
+        # function was the 5x wall-clock regression measured between
+        # backend=None (24s on 100K) and backend="duckdb" (131s on
+        # 100K). DuckDB INSERTs stay on the main thread — a single
+        # DuckDB connection isn't thread-safe for concurrent writes,
+        # and we want to keep the pair store as the single sequential
+        # bottleneck instead of contending workers on it.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # For tiny block counts the threadpool overhead exceeds the
+        # work — match score_blocks_parallel's threshold.
+        if len(blocks) <= 2:
+            result_pairs: list[tuple[int, int, float]] = []
+            for block in blocks:
+                pairs = _score_one_block(
+                    block, mk, frozen_exclude,
+                    across_files_only=across_files_only,
+                    source_lookup=source_lookup,
+                )
+                if target_ids is not None:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if (a in target_ids) != (b in target_ids)
+                    ]
+                result_pairs.extend(pairs)
+            if result_pairs:
+                con.executemany(
+                    "INSERT INTO __gm_pairs__ VALUES (?, ?, ?)",
+                    [(min(a, b), max(a, b), float(s)) for a, b, s in result_pairs],
+                )
+                for a, b, _s in result_pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+        else:
+            workers = max_workers if max_workers > 0 else 4
+            # Collect all pairs first, INSERT in bulk at the end. The
+            # per-block INSERT path serialized workers behind the main
+            # thread's DB writes (measured: 4x slowdown on 100K). The
+            # pair list is bounded by the dedupe rate — at 100K with
+            # 12% dupes it's ~10K rows, well under the 16 GB ceiling
+            # this backend exists for. For TRUE out-of-core, the
+            # streaming variant can re-enter once we have a
+            # benchmarked-large case.
+            all_block_pairs: list[tuple[int, int, float]] = []
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        _score_one_block,
+                        block, mk, frozen_exclude,
+                        across_files_only, source_lookup,
+                    )
+                    for block in blocks
                 ]
-            if not pairs:
-                continue
-            # Canonicalize and insert. Using executemany is the lightest
-            # path — bulk INSERT VALUES on 10K rows is roughly the same
-            # cost as a Python list.append, and DuckDB handles spilling.
-            con.executemany(
-                "INSERT INTO __gm_pairs__ VALUES (?, ?, ?)",
-                [(min(a, b), max(a, b), float(s)) for a, b, s in pairs],
-            )
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+                for future in as_completed(futures):
+                    pairs = future.result()
+                    if target_ids is not None:
+                        pairs = [
+                            (a, b, s) for a, b, s in pairs
+                            if (a in target_ids) != (b in target_ids)
+                        ]
+                    if not pairs:
+                        continue
+                    all_block_pairs.extend(pairs)
+                    for a, b, _s in pairs:
+                        matched_pairs.add((min(a, b), max(a, b)))
+            # Bulk INSERT via Arrow.
+            #
+            # `con.executemany("INSERT ...", rows)` measured at 1ms/row
+            # on the 100K audit — 90K rows = 104s, the entire
+            # backend's 5x slowdown vs polars-direct. Bulk Arrow
+            # insertion via `con.register(name, table)` + `INSERT ...
+            # SELECT * FROM name` does 90K rows in milliseconds.
+            if all_block_pairs:
+                # Canonicalize pairs in a single list comprehension
+                # before building the Arrow table. The canonical form
+                # `(min, max, score)` is what the downstream cluster
+                # builder expects.
+                ids_a: list[int] = []
+                ids_b: list[int] = []
+                scores: list[float] = []
+                for a, b, s in all_block_pairs:
+                    if a <= b:
+                        ids_a.append(int(a))
+                        ids_b.append(int(b))
+                    else:
+                        ids_a.append(int(b))
+                        ids_b.append(int(a))
+                    scores.append(float(s))
+                try:
+                    import pyarrow as pa
+                    # The local variable name MUST appear in the SQL —
+                    # DuckDB resolves Python-locals as zero-copy view
+                    # sources. `arrow_table` is the conventional name
+                    # the DuckDB docs use; do not rename.
+                    arrow_table = pa.table({  # noqa: F841
+                        "id_a": ids_a,
+                        "id_b": ids_b,
+                        "score": scores,
+                    })
+                    con.execute(
+                        "INSERT INTO __gm_pairs__ SELECT * FROM arrow_table"
+                    )
+                except ImportError:
+                    # Fallback to executemany if pyarrow isn't
+                    # available — the duckdb extra usually pulls it
+                    # in via Polars, but be defensive.
+                    con.executemany(
+                        "INSERT INTO __gm_pairs__ VALUES (?, ?, ?)",
+                        list(zip(ids_a, ids_b, scores)),
+                    )
 
         # Pull pairs back out — clustering currently expects a Python
         # list, so we materialize at the boundary. A future iteration

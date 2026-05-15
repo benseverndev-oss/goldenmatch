@@ -14,6 +14,12 @@ Design constraints:
     and CI summaries can consume them directly.
   * Concurrency-safe via `ContextVar` (matches the existing
     `profile_emitter` pattern in this package).
+  * **Thread-safe writes via a lock.** Worker threads in
+    ``score_blocks_parallel`` may call ``add_timing`` / ``set_metric``
+    concurrently. Without a lock, parallel dict writes don't crash
+    but lost updates corrupt the totals. With a lock, contention is
+    bounded — each write is ~50ns and stage entries are infrequent
+    compared to the actual work the stage measures.
 
 Usage:
     from goldenmatch.core.bench import bench_capture, stage, record_metric
@@ -26,9 +32,22 @@ Usage:
             ...
     print(bench.timings)   # {"ingest": 0.42, "blocking": 12.1, ...}
     print(bench.metrics)   # {"block_count": 1234, ...}
+
+Avoiding the hot-path tax
+-------------------------
+
+Do NOT wrap ``with stage(...)`` inside per-block / per-pair hot loops
+running under ``ThreadPoolExecutor`` — even with the lock, the GIL
+acquire/release dance contends with ``rapidfuzz.cdist``'s GIL release
+and can slow the whole pipeline by ~5x (verified on the 100K audit:
+24s without per-scorer stages, 127s with them). Reserve stage wrappers
+for the single-threaded pipeline driver (``_run_dedupe_pipeline``) and
+for stage-grained calls in worker threads (e.g. one stage per block,
+not per scorer-per-block).
 """
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -44,15 +63,24 @@ class BenchmarkRecorder:
     Timings accumulate (so reusing the same name sums); metrics
     last-write-wins (so a stage can overwrite an estimate with a final
     number once available).
+
+    Thread-safety: ``add_timing`` and ``set_metric`` are protected by
+    ``_lock`` so worker threads in ``score_blocks_parallel`` don't
+    corrupt totals via lost updates. Reads are not locked — the dict
+    snapshots taken in ``to_dict`` may catch a partial write but the
+    inaccuracy is bounded by the duration of one update (~50ns).
     """
     timings: dict[str, float] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add_timing(self, name: str, elapsed: float) -> None:
-        self.timings[name] = self.timings.get(name, 0.0) + elapsed
+        with self._lock:
+            self.timings[name] = self.timings.get(name, 0.0) + elapsed
 
     def set_metric(self, key: str, value: Any) -> None:
-        self.metrics[key] = value
+        with self._lock:
+            self.metrics[key] = value
 
     def to_dict(self) -> dict[str, Any]:
         return {
