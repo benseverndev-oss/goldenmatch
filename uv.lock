@@ -876,7 +876,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "goldenflow"
-version = "1.1.2"
+version = "1.1.6"
 source = { editable = "packages/python/goldenflow" }
 dependencies = [
     { name = "fastapi" },
@@ -970,7 +970,7 @@ provides-extras = ["dev", "check", "excel", "db", "mcp", "llm", "s3", "gcs", "ag
 
 [[package]]
 name = "goldenmatch"
-version = "1.13.0"
+version = "1.15.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "diptest" },
@@ -1127,7 +1127,7 @@ dev = [
 
 [[package]]
 name = "goldenpipe"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "packages/python/goldenpipe" }
 dependencies = [
     { name = "goldencheck-types" },
@@ -1218,7 +1218,7 @@ provides-extras = ["check", "flow", "match", "golden-suite", "tui", "api", "mcp"
 
 [[package]]
 name = "goldensuite-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/python/goldensuite-mcp" }
 dependencies = [
     { name = "goldencheck", extra = ["mcp"] },
