@@ -1,0 +1,159 @@
+# Zero-config dedupe bench — workflow_dispatch only.
+#
+# Captures the post-controller full-df wall + per-stage breakdown + cProfile
+# top for gm.dedupe_df(df) on a synthetic fixture. Targets the polars-direct
+# backend by default (the path real users hit when not overriding `backend`).
+# Spec: docs/superpowers/specs/2026-05-15-post-controller-full-df-perf-design.md
+#
+# Triggers on manual dispatch only — paid runner (ubuntu-latest-large,
+# 8c/32GB, ~$0.16/hr). A typical 500K run is ~25 min ($0.07).
+#
+# Outputs:
+#   - bench JSON (artifact)
+#   - cProfile dump (artifact, snakeviz-friendly)
+#   - install_paths in JSON to surface the "site-packages shadowing worktree"
+#     gotcha if pip install -e ever silently fails
+#   - Headline numbers in $GITHUB_STEP_SUMMARY
+#
+# To run: GitHub → Actions → "bench-zero-config" → Run workflow.
+name: bench-zero-config
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Synthetic fixture record count"
+        required: false
+        default: "500000"
+      runs:
+        description: "Wall-only runs for the median"
+        required: false
+        default: "5"
+      dupe_rate:
+        description: "Fraction of records that are duplicates (0..1)"
+        required: false
+        default: "0.15"
+      backend:
+        description: "Override backend (blank = controller default)"
+        required: false
+        default: ""
+      label:
+        description: "Tag for the output filename (e.g. 'post-pr239', 'post-attack-a')"
+        required: false
+        default: "ad-hoc"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest-large  # 8 vCPU / 32 GB; paid runner
+    timeout-minutes: 180  # 3 hours; 500K typical ~30 min, 1M ~90 min
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # Pin the autoconfig backend threshold so 500K stays on polars-direct
+      # even if scale-aware routing thresholds shift in main. Override via the
+      # `backend` input below if measuring the duckdb path deliberately.
+      GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD: "10000000"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable-install goldenmatch (defensive)
+        # uv sync should already install the workspace member editable, but
+        # CLAUDE.md's "shadows worktree code" gotcha cost me an audit cycle —
+        # belt and braces. Verify the import path in the bench output too.
+        run: .venv/bin/python -m pip install -e packages/python/goldenmatch
+
+      - name: Verify worktree install
+        run: |
+          .venv/bin/python -c "import goldenmatch, goldenmatch.core.pipeline; \
+            assert 'packages/python/goldenmatch' in goldenmatch.__file__, \
+              f'goldenmatch resolves to {goldenmatch.__file__} — not the worktree'; \
+            print('worktree install OK:', goldenmatch.__file__)"
+
+      - name: Generate ${{ inputs.n_records }}-row fixture
+        run: |
+          mkdir -p .profile_tmp/scale_fixtures
+          .venv/bin/python scripts/scale_audit_5m_generate.py \
+            --n-records ${{ inputs.n_records }} \
+            --dupe-rate ${{ inputs.dupe_rate }} \
+            --output .profile_tmp/scale_fixtures/synthetic_bench.csv
+
+      - name: Report fixture stats
+        run: ls -lh .profile_tmp/scale_fixtures/synthetic_bench.csv
+
+      - name: Apply backend override (if set)
+        if: ${{ inputs.backend != '' }}
+        run: echo "GOLDENMATCH_AUTOCONFIG_BACKEND=${{ inputs.backend }}" >> $GITHUB_ENV
+
+      - name: Run bench
+        run: |
+          .venv/bin/python scripts/bench_1m_zero_config.py \
+            --fixture .profile_tmp/scale_fixtures/synthetic_bench.csv \
+            --runs ${{ inputs.runs }} \
+            --output .profile_tmp/bench_${{ inputs.label }}.json \
+            --cprofile-output .profile_tmp/bench_${{ inputs.label }}.prof \
+            --ref "${{ github.sha }}"
+
+      - name: Post headline to step summary
+        if: always()
+        run: |
+          if [ ! -f .profile_tmp/bench_${{ inputs.label }}.json ]; then
+            echo "no bench output — earlier step failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          .venv/bin/python - <<'PY' >> $GITHUB_STEP_SUMMARY
+          import json, os
+          label = os.environ["LABEL"]
+          p = f".profile_tmp/bench_{label}.json"
+          d = json.load(open(p))
+          print(f"# bench-zero-config ({label})")
+          print()
+          print(f"- fixture: `{d['fixture']}` ({d['n_rows']:,} rows)")
+          print(f"- ref: `{d['ref']}`")
+          print(f"- runs: {d['runs']}")
+          print()
+          print("## Wall (median over runs)")
+          print()
+          print(f"**{d['wall_seconds_median']:.1f}s** ({d['wall_seconds_min']:.1f}–{d['wall_seconds_max']:.1f}s)")
+          print()
+          timings = (d.get("stage_breakdown") or {}).get("timings", {})
+          if timings:
+              print("## bench_capture stage breakdown")
+              print()
+              print("| stage | seconds |")
+              print("|---|---|")
+              for name, secs in sorted(timings.items(), key=lambda kv: -kv[1]):
+                  print(f"| `{name}` | {secs:.2f} |")
+              print()
+          top = d.get("cprofile_top") or []
+          if top:
+              print("## cProfile top 10 (cumtime)")
+              print()
+              print("| cumtime | ncalls | func |")
+              print("|---|---|---|")
+              for row in top[:10]:
+                  print(f"| {row['cumtime_s']:.2f}s | {row['ncalls']:,} | `{row['func']}` |")
+          PY
+        env:
+          LABEL: ${{ inputs.label }}
+
+      - name: Upload bench artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: bench-zero-config-${{ inputs.label }}
+          path: |
+            .profile_tmp/bench_${{ inputs.label }}.json
+            .profile_tmp/bench_${{ inputs.label }}.prof
+          retention-days: 90
