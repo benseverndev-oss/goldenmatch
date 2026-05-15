@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from goldenmatch.refdata.given_names import (
     are_equivalent,
+)
+from goldenmatch.refdata.given_names import (
     is_available as given_names_available,
 )
 from goldenmatch.refdata.scorer import GivenNameAliasedJW
