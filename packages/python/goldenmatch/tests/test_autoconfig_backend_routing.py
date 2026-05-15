@@ -7,11 +7,7 @@ the default polars-direct path. See `_scale_aware_backend` in
 """
 from __future__ import annotations
 
-import os
-
 import polars as pl
-import pytest
-
 from goldenmatch.core.autoconfig import (
     _AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD,
     _scale_aware_backend,
