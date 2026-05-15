@@ -107,9 +107,13 @@ jobs:
           if [ ! -f "packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/DBLP2.csv" ]; then
             curl -fSL -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip
             unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm-extract
-            # The zip contains a top-level DBLP-ACM/ folder; copy contents
-            cp -r /tmp/dblp-acm-extract/DBLP-ACM/* \
-              packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/
+            # The Leipzig zip extracts files at the root, not into a
+            # DBLP-ACM/ subdir as the original copy expected. Move the
+            # CSVs directly into the target dir.
+            cp /tmp/dblp-acm-extract/DBLP2.csv \
+               /tmp/dblp-acm-extract/ACM.csv \
+               /tmp/dblp-acm-extract/DBLP-ACM_perfectMapping.csv \
+               packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/
           fi
           ls -lh packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM/
 
