@@ -1,0 +1,108 @@
+# Independent ER scoring via Olivier Binette's er-evaluation package.
+#
+# Runs gm.dedupe_df() on a synthetic fixture, then scores the output via
+# `er_evaluation` (https://github.com/OlivierBinette/er-evaluation). Pairwise
+# precision/recall/F1, B-cubed, and cluster-level metrics, with bootstrapped
+# uncertainty estimates where the package supports them.
+#
+# Why this lane exists: our existing scale-audit uses an internal scorer
+# (goldenmatch.core.evaluate). A third-party scorer is a useful cross-check
+# that quality numbers aren't artifacts of our own measurement code.
+#
+# License note: er-evaluation is AGPL-3.0. We consume it strictly at
+# evaluation time — it never ships in any GoldenMatch artifact.
+#
+# Triggers on manual dispatch only.
+# To run: GitHub → Actions → "eval-er-evaluation" → Run workflow.
+name: eval-er-evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Synthetic fixture record count"
+        required: false
+        default: "100000"
+      dupe_rate:
+        description: "Fraction of records that are duplicates (0..1)"
+        required: false
+        default: "0.15"
+      er_evaluation_ref:
+        description: "Pin er-evaluation to a PyPI version (blank = latest)"
+        required: false
+        default: ""
+      label:
+        description: "Tag for the output filename"
+        required: false
+        default: "ad-hoc"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    # Benchmarking workflows default to the org's large-new-64GB runner
+    # (16c/64GB/600GB Ubuntu 24.04). Consistent shape across all benchmark
+    # lanes makes the numbers directly comparable. The free ubuntu-latest
+    # (4c/16GB) was enough for er-evaluation scoring alone, but on synthetic
+    # fixtures >= 500K the gm.dedupe_df() step would dominate the cost
+    # there; staying on the larger runner gives headroom for scaling up
+    # without editing the workflow each time.
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable-install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Install er-evaluation + pandas
+        run: |
+          if [ -n "${{ inputs.er_evaluation_ref }}" ]; then
+            uv pip install "er-evaluation==${{ inputs.er_evaluation_ref }}" pandas
+          else
+            uv pip install er-evaluation pandas
+          fi
+
+      - name: Verify install
+        run: |
+          .venv/bin/python -c "import goldenmatch, er_evaluation; \
+            print('goldenmatch:', goldenmatch.__file__); \
+            print('er_evaluation:', er_evaluation.__file__); \
+            print('er_evaluation version:', getattr(er_evaluation, '__version__', 'unknown'))"
+
+      - name: Generate ${{ inputs.n_records }}-row fixture
+        run: |
+          mkdir -p .profile_tmp/scale_fixtures
+          .venv/bin/python scripts/scale_audit_5m_generate.py \
+            --n-records ${{ inputs.n_records }} \
+            --dupe-rate ${{ inputs.dupe_rate }} \
+            --output .profile_tmp/scale_fixtures/eval_fixture.csv
+
+      - name: Score with er-evaluation
+        run: |
+          .venv/bin/python scripts/eval_er_evaluation.py \
+            --fixture .profile_tmp/scale_fixtures/eval_fixture.csv \
+            --ground-truth .profile_tmp/scale_fixtures/eval_fixture.ground_truth.csv \
+            --output .profile_tmp/eval_er_evaluation_${{ inputs.label }}.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: eval-er-evaluation-${{ inputs.label }}
+          path: .profile_tmp/eval_er_evaluation_${{ inputs.label }}.json
+          retention-days: 90
