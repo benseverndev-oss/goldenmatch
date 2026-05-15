@@ -145,8 +145,26 @@ def main() -> None:
     ref = aligned["reference"]
     print(f"  aligned on {len(aligned):,} records")
 
-    # Try the canonical metric names first, falling back to alternates the
-    # package has used over its release history.
+    # er-evaluation 2.x estimators take (predictions, reference, weights)
+    # where weights is a pandas Series mapping reference cluster_id -> weight.
+    # For unweighted evaluation, every cluster gets equal weight 1.0.
+    # ee.weights() is the canonical builder but the signature has shifted
+    # across releases; fall back to manual uniform weights.
+    weights_fn, _ = _resolve_metric(ee, ["weights"])
+    weights = None
+    if weights_fn is not None:
+        try:
+            weights = weights_fn(reference, "uniform")
+        except Exception:
+            try:
+                weights = weights_fn(reference, weights="uniform")
+            except Exception:
+                weights = None
+    if weights is None:
+        weights = pd.Series(1.0, index=reference.unique(), name="weights")
+        weights.index.name = "cluster_id"
+    print(f"  built weights series of length {len(weights)}")
+
     metrics: dict[str, Any] = {}
 
     pairwise_p, name_p = _resolve_metric(ee, [
@@ -155,17 +173,11 @@ def main() -> None:
     pairwise_r, name_r = _resolve_metric(ee, [
         "pairwise_recall_estimator", "pairwise_recall",
     ])
-    pairwise_f, name_f = _resolve_metric(ee, [
-        "pairwise_f1_estimator", "pairwise_f1",
-    ])
     bcubed_p, name_bp = _resolve_metric(ee, [
         "b_cubed_precision_estimator", "b_cubed_precision",
     ])
     bcubed_r, name_br = _resolve_metric(ee, [
         "b_cubed_recall_estimator", "b_cubed_recall",
-    ])
-    bcubed_f, name_bf = _resolve_metric(ee, [
-        "b_cubed_f1_estimator", "b_cubed_f1",
     ])
     cluster_p, name_cp = _resolve_metric(ee, [
         "cluster_precision_estimator", "cluster_precision",
@@ -177,19 +189,20 @@ def main() -> None:
     for label, fn, fname in [
         ("pairwise_precision", pairwise_p, name_p),
         ("pairwise_recall",    pairwise_r, name_r),
-        ("pairwise_f1",        pairwise_f, name_f),
         ("b_cubed_precision",  bcubed_p,   name_bp),
         ("b_cubed_recall",     bcubed_r,   name_br),
-        ("b_cubed_f1",         bcubed_f,   name_bf),
         ("cluster_precision",  cluster_p,  name_cp),
         ("cluster_recall",     cluster_r,  name_cr),
     ]:
         if fn is None:
             metrics[label] = {"value": None, "error": "not available in er_evaluation"}
             continue
-        # Most er-evaluation estimators take (predictions, reference) and
-        # return either a scalar or a (point_estimate, std_error) tuple.
-        value, err = _safe_call(label, fn, pred, ref)
+        # Estimator form: (predictions, reference, weights) -> (point, std_err)
+        # Direct form: (predictions, reference) -> scalar.
+        # Try estimator form first, then fall back.
+        value, err = _safe_call(label, fn, pred, ref, weights)
+        if err is not None:
+            value, err = _safe_call(label, fn, pred, ref)
         if err is not None:
             metrics[label] = {"value": None, "error": err, "fn": fname}
             continue
@@ -201,6 +214,34 @@ def main() -> None:
             }
         else:
             metrics[label] = {"value": float(value), "fn": fname}
+
+    # Derive F1 from P + R where both succeeded (er-evaluation doesn't ship
+    # standalone F1 estimators; F1 = 2 P R / (P + R)).
+    for prefix in ("pairwise", "b_cubed", "cluster"):
+        p = metrics.get(f"{prefix}_precision", {}).get("value")
+        r = metrics.get(f"{prefix}_recall", {}).get("value")
+        if p is not None and r is not None and (p + r) > 0:
+            f1 = 2 * p * r / (p + r)
+            # If both have std errors, propagate via the delta method:
+            # Var(F1) ≈ (∂F1/∂P)² Var(P) + (∂F1/∂R)² Var(R)
+            # ∂F1/∂P = 2 R² / (P + R)²;  ∂F1/∂R = 2 P² / (P + R)²
+            se_p = metrics[f"{prefix}_precision"].get("std_error")
+            se_r = metrics[f"{prefix}_recall"].get("std_error")
+            f1_entry: dict[str, Any] = {
+                "value": f1, "fn": "derived from precision + recall",
+            }
+            if se_p is not None and se_r is not None:
+                dp = 2 * r * r / (p + r) ** 2
+                dr = 2 * p * p / (p + r) ** 2
+                f1_entry["std_error"] = (
+                    (dp * se_p) ** 2 + (dr * se_r) ** 2
+                ) ** 0.5
+            metrics[f"{prefix}_f1"] = f1_entry
+        else:
+            metrics[f"{prefix}_f1"] = {
+                "value": None,
+                "error": "precision or recall unavailable",
+            }
 
     # Summary statistics
     summary_fn, _ = _resolve_metric(ee, ["summary_statistics"])
