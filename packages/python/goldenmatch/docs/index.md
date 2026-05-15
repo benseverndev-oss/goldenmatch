@@ -8,14 +8,14 @@ nav_order: 1
 
 **Entity resolution that finds duplicates in your data so you don't have to define the rules yourself.**
 
-> 🟡 **Now part of the Golden Suite monorepo.** This site documents GoldenMatch (entity resolution). The same repository hosts GoldenCheck (data quality), GoldenFlow (transforms), GoldenPipe (orchestrator), InferMap (schema mapping), the Rust SQL extensions, the dbt package, and the GitHub Action — plus a master MCP server (`goldensuite-mcp`), seven `ghcr.io` container images, and 12 drop-in Airflow DAGs. See the [repository README](https://github.com/benzsevern/goldenmatch#readme) and [`examples/`](https://github.com/benzsevern/goldenmatch/tree/main/examples) for the suite-wide picture.
+> 🟡 **Now part of the Golden Suite monorepo.** This site documents GoldenMatch (entity resolution). The same repository hosts GoldenCheck (data quality), GoldenFlow (transforms), GoldenPipe (orchestrator), InferMap (schema mapping), the Rust SQL extensions, the dbt package, and the GitHub Action — plus a master MCP server (`goldensuite-mcp`), seven `ghcr.io` container images, and 12 drop-in Airflow DAGs. See the [repository README](https://github.com/benseverndev-oss/goldenmatch#readme) and [`examples/`](https://github.com/benseverndev-oss/goldenmatch/tree/main/examples) for the suite-wide picture.
 
 [![PyPI](https://img.shields.io/pypi/v/goldenmatch?color=d4a017)](https://pypi.org/project/goldenmatch/)
 [![Downloads](https://static.pepy.tech/badge/goldenmatch/month)](https://pepy.tech/projects/goldenmatch)
-[![Tests](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions)
+[![Tests](https://github.com/benseverndev-oss/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benseverndev-oss/goldenmatch/actions)
 [![Python](https://img.shields.io/pypi/pyversions/goldenmatch)](https://pypi.org/project/goldenmatch/)
-[![Coverage](https://img.shields.io/badge/coverage-72%25-yellow)](https://github.com/benzsevern/goldenmatch)
-[![Tests](https://img.shields.io/badge/tests-1300%2B%20passing-brightgreen)](https://github.com/benzsevern/goldenmatch)
+[![Coverage](https://img.shields.io/badge/coverage-72%25-yellow)](https://github.com/benseverndev-oss/goldenmatch)
+[![Tests](https://img.shields.io/badge/tests-1300%2B%20passing-brightgreen)](https://github.com/benseverndev-oss/goldenmatch)
 
 ---
 
@@ -76,7 +76,7 @@ Scale: 7,823 records/sec on a laptop (fuzzy + exact + golden).
 | [TypeScript / Node.js](typescript) | `npm install goldenmatch` | Edge runtimes, web apps, Node services |
 | [CLI](cli) | Same package, 21 commands | Terminal workflows |
 | [Interactive TUI](tui) | `goldenmatch tui` | Visual exploration |
-| [PostgreSQL](sql-postgres) | [Pre-built .deb/.rpm](https://github.com/benzsevern/goldenmatch-extensions/releases) | Production databases |
+| [PostgreSQL](sql-postgres) | [Pre-built .deb/.rpm](https://github.com/benseverndev-oss/goldenmatch-extensions/releases) | Production databases |
 | [DuckDB](sql-duckdb) | `pip install goldenmatch-duckdb` | Analytics |
 | [REST API / MCP](rest-api) | `goldenmatch serve` / `mcp-serve` | Microservices, AI assistants |
 | [ER Agent (A2A)](agent) | `goldenmatch agent-serve` | AI-to-AI discovery, autonomous ER |
@@ -117,7 +117,7 @@ Scale: 7,823 records/sec on a laptop (fuzzy + exact + golden).
 
 | Package | What It Does |
 |---------|-------------|
-| **[GoldenMatch](https://github.com/benzsevern/goldenmatch)** | Entity resolution (this project) |
-| **[GoldenCheck](https://github.com/benzsevern/goldencheck)** | Data validation that discovers rules |
-| **[goldenmatch-extensions](https://github.com/benzsevern/goldenmatch-extensions)** | SQL extensions for Postgres + DuckDB |
+| **[GoldenMatch](https://github.com/benseverndev-oss/goldenmatch)** | Entity resolution (this project) |
+| **[GoldenCheck](https://github.com/benseverndev-oss/goldencheck)** | Data validation that discovers rules |
+| **[goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions)** | SQL extensions for Postgres + DuckDB |
 | **[goldenmatch-duckdb](https://pypi.org/project/goldenmatch-duckdb/)** | DuckDB UDFs for entity resolution |

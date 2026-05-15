@@ -180,7 +180,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8250) -> None:
         return JSONResponse({
             "name": "GoldenPipe",
             "description": "Orchestrator for the Golden Suite — chains data validation, transformation, and entity resolution into one adaptive pipeline. 4 MCP tools for listing stages, validating wiring, running pipelines, and explaining configs. Skips unnecessary stages automatically.",
-            "homepage": "https://github.com/benzsevern/goldenpipe",
+            "homepage": "https://github.com/benseverndev-oss/goldenpipe",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })
 

@@ -4,7 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (14 agent tools + 17 data tools + 5 memory tools = 36 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (36 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (36 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (12 skills)
 - CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, + more
 - Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
@@ -130,8 +130,8 @@ Persistent corrections + threshold learning. Off by default; enable with `memory
 - Learner runs at `learning.threshold_min_corrections` (default 10) per matchkey via trust-weighted grid search.
 
 ## Docs
-- [Learning Memory](https://benzsevern.github.io/goldenmatch/learning-memory)
-- [Full docs](https://benzsevern.github.io/goldenmatch/): 23 guides
-- [Full API reference](https://benzsevern.github.io/goldenmatch/python-api): 101 exports
+- [Learning Memory](https://benseverndev-oss.github.io/goldenmatch/learning-memory)
+- [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 23 guides
+- [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 101 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
-- [GitHub](https://github.com/benzsevern/goldenmatch)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch)

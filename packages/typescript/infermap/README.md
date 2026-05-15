@@ -8,9 +8,9 @@
 [![install size](https://packagephobia.com/badge?p=infermap)](https://packagephobia.com/result?p=infermap)
 [![types: included](https://img.shields.io/npm/types/infermap?color=blue)](https://www.npmjs.com/package/infermap)
 
-[![CI](https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/benzsevern/infermap/actions/workflows/test.yml)
-[![tests](https://img.shields.io/badge/tests-135%20passing-brightgreen)](https://github.com/benzsevern/infermap/tree/main/packages/infermap-js/tests)
-[![parity with Python](https://img.shields.io/badge/parity-Python%20bit--for--bit-d4a017)](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript)
+[![CI](https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml)
+[![tests](https://img.shields.io/badge/tests-135%20passing-brightgreen)](https://github.com/benseverndev-oss/infermap/tree/main/packages/infermap-js/tests)
+[![parity with Python](https://img.shields.io/badge/parity-Python%20bit--for--bit-d4a017)](https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript)
 [![Node](https://img.shields.io/node/v/infermap?color=339933&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Edge runtime](https://img.shields.io/badge/edge%20runtime-compatible-000000)](https://nextjs.org/docs/app/api-reference/edge)
 [![License: MIT](https://img.shields.io/npm/l/infermap?color=green)](./LICENSE)
@@ -248,9 +248,9 @@ The CLI uses only `node:util/parseArgs` — no extra runtime deps.
 
 This package is a faithful port of [`infermap` on PyPI](https://pypi.org/project/infermap/). Mapping decisions, confidence scores, and unmapped lists are verified to agree with the Python engine to 4 decimal places via shared golden tests that run on every CI build.
 
-If a Python scorer changes, the golden generator must be re-run and the TS parity tests must pass before anything merges. **You can't accidentally ship drift.** If you find a parity bug, please [file an issue](https://github.com/benzsevern/infermap/issues/new) with both inputs and both outputs.
+If a Python scorer changes, the golden generator must be re-run and the TS parity tests must pass before anything merges. **You can't accidentally ship drift.** If you find a parity bug, please [file an issue](https://github.com/benseverndev-oss/infermap/issues/new) with both inputs and both outputs.
 
-See the [Python vs TypeScript wiki page](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript) for a feature parity matrix and migration guide.
+See the [Python vs TypeScript wiki page](https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript) for a feature parity matrix and migration guide.
 
 ## Exports
 
@@ -262,12 +262,12 @@ See the [Python vs TypeScript wiki page](https://github.com/benzsevern/infermap/
 ## Links
 
 - 📦 [npm package](https://www.npmjs.com/package/infermap)
-- 📘 [TypeScript API reference](https://github.com/benzsevern/infermap/wiki/TypeScript-API)
-- 🔄 [Python vs TypeScript migration guide](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript)
-- 🧪 [Runnable examples](https://github.com/benzsevern/infermap/tree/main/examples/typescript)
+- 📘 [TypeScript API reference](https://github.com/benseverndev-oss/infermap/wiki/TypeScript-API)
+- 🔄 [Python vs TypeScript migration guide](https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript)
+- 🧪 [Runnable examples](https://github.com/benseverndev-oss/infermap/tree/main/examples/typescript)
 - 🐍 [Python sister package](https://pypi.org/project/infermap/)
-- 🐛 [Issue tracker](https://github.com/benzsevern/infermap/issues)
-- 💬 [Discussions](https://github.com/benzsevern/infermap/discussions)
+- 🐛 [Issue tracker](https://github.com/benseverndev-oss/infermap/issues)
+- 💬 [Discussions](https://github.com/benseverndev-oss/infermap/discussions)
 
 ## License
 

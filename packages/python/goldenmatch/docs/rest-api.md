@@ -284,6 +284,6 @@ Returns the cached telemetry from the most recent `POST /autoconfig` call withou
 
 ```bash
 docker run --rm -p 8080:8080 -v $(pwd):/data \
-    ghcr.io/benzsevern/goldenmatch:latest \
+    ghcr.io/benseverndev-oss/goldenmatch:latest \
     serve --file /data/customers.csv --port 8080
 ```

@@ -37,7 +37,7 @@ Maintenance release. No transform / API behaviour changes.
   into the same release pipeline the rest of the suite uses.
 - Companion MCP Registry sync (`.github/workflows/publish-mcp.yml`,
   added in monorepo PR #165) flips
-  `registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/goldenflow`
+  `registry.modelcontextprotocol.io/v0/servers?search=io.github.benseverndev-oss/goldenflow`
   from 1.1.4 → 1.1.5 automatically after this release lands on PyPI.
 
 ## 1.1.0 (2026-04-03)

@@ -5,7 +5,7 @@
 If you discover a security vulnerability in GoldenFlow, please report it responsibly:
 
 1. **Do not** open a public GitHub issue
-2. Use [GitHub Security Advisories](https://github.com/benzsevern/goldenflow/security/advisories/new) to report privately
+2. Use [GitHub Security Advisories](https://github.com/benseverndev-oss/goldenflow/security/advisories/new) to report privately
 3. Include steps to reproduce and potential impact
 
 You should receive a response within 48 hours.

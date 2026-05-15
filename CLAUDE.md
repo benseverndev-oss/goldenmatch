@@ -25,7 +25,7 @@ Polyglot monorepo: `packages/{python,rust,typescript,dbt,actions}`. Per-package 
 - Status check: `cd packages/python/goldenmatch && railway deployment list | head -5`. Build logs: `railway logs --build <deployment-id>`.
 
 ## ghcr.io packages
-- `publish-containers.yml` builds 7 images. 6 are new (created by this monorepo's GITHUB_TOKEN, default permissions). `goldenmatch-extensions` pre-existed from the standalone repo — its "Manage Actions access" must explicitly grant `benzsevern/goldenmatch` write role, or pushes fail with `permission_denied: write_package`.
+- `publish-containers.yml` builds 7 images. 6 are new (created by this monorepo's GITHUB_TOKEN, default permissions). `goldenmatch-extensions` pre-existed from the standalone repo — its "Manage Actions access" must explicitly grant `benseverndev-oss/goldenmatch` write role, or pushes fail with `permission_denied: write_package`.
 
 ## Performance audit (docs/superpowers/specs/2026-05-02-performance-audit-checklist.md)
 - **Lesson:** the audit ranked items by static counts (boundary crossings, sequential ops). 3 of 3 measured items came in well under the framing. **Always measure wall-clock with the workload of interest before designing.** cProfile cumtime != wall (especially with threading); compare 5-run median wall on real shapes.
@@ -46,7 +46,7 @@ xdist runs each test in a worker process. Tests cannot share registry/global-sta
 Local CWD = package dir (e.g. `packages/python/goldencheck`); CI CWD = repo root. Bare relative paths like `Path("tests/fixtures/simple.csv")` pass locally and fail in CI. Anchor to `__file__`: `Path(__file__).parent.parent / "fixtures" / "simple.csv"`.
 
 ## GitHub auth
-- `benzsevern/*` repos use personal account `benzsevern`, not work `benzsevern-mjh`. Always `gh auth switch --user benzsevern` before push, switch back after.
+- `benzsevern/*` AND `benseverndev-oss/*` repos use personal account `benzsevern`, not work `benzsevern-mjh`. Always `gh auth switch --user benzsevern` before push, switch back after. (The `benseverndev-oss` org is owned by the personal `benzsevern` account; same auth dance applies.)
 
 ## Post-fold GitHub Actions
 Only `.github/workflows/` at the repo root runs. Workflow files left under `packages/python/<pkg>/.github/workflows/` from pre-fold repos are orphaned (silently ignored). v1.6.0 release shipped no PyPI publish until `publish-goldenmatch.yml` was added at the root.

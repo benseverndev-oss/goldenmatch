@@ -115,7 +115,7 @@ GoldenMatch is open source (MIT license) and available on PyPI:
 
     pip install goldenmatch
 
-GitHub: github.com/benzsevern/goldenmatch
+GitHub: github.com/benseverndev-oss/goldenmatch
 
 It includes the LLM scorer, Fellegi-Sunter probabilistic matching, learned blocking, plugin architecture, connectors to Snowflake/Databricks/BigQuery/HubSpot/Salesforce, streaming mode, and multi-table graph entity resolution. 792 tests passing.
 

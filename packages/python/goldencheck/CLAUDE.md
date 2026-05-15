@@ -98,7 +98,7 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldencheck-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldencheck`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldencheck`
 - **Server card:** `https://goldencheck-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
@@ -113,8 +113,8 @@ Hosted on Railway, registered on Smithery:
 - GitHub auth: `gh auth switch --user benzsevern` then `GIT_ASKPASS=$(which echo) git -c credential.helper="!gh auth git-credential" push origin main` — Windows Credential Manager ignores `gh auth switch`
 - Ruff line length: 100 chars
 - `__version__` is defined ONLY in `goldencheck/__init__.py` — `cli/main.py` imports it, don't add a second copy
-- Wiki repo: `git clone https://github.com/benzsevern/goldencheck.wiki.git /tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md /tmp/goldencheck.wiki/ && cd /tmp/goldencheck.wiki && git add -A && git commit -m "docs: sync" && git push`
-- GitHub Pages: Jekyll + just-the-docs (dark), source in `docs/`, workflow in `.github/workflows/pages.yml`, live at `benzsevern.github.io/goldencheck`
+- Wiki repo: `git clone https://github.com/benseverndev-oss/goldencheck.wiki.git /tmp/goldencheck.wiki` — sync with `cp docs/wiki/*.md /tmp/goldencheck.wiki/ && cd /tmp/goldencheck.wiki && git add -A && git commit -m "docs: sync" && git push`
+- GitHub Pages: Jekyll + just-the-docs (dark), source in `docs/`, workflow in `.github/workflows/pages.yml`, live at `benseverndev-oss.github.io/goldencheck`
 - Jekyll link anchors: `{% link file.md %}#anchor` NOT `{% link file.md#anchor %}`
 - Classifier hint matching: hints ending with `_` are prefix-only (NOT substring) — `is_` matches `is_active` but NOT `diagnosis_desc`
 - `Finding.metadata` dict is used by pattern_consistency for structured pattern data — suppression reads it

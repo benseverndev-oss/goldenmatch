@@ -10,7 +10,7 @@ goldensuite-mcp serve --transport http --port 8300
 Or via container:
 
 ```bash
-docker run -p 8300:8300 ghcr.io/benzsevern/goldensuite-mcp:latest
+docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
 ```
 
 ## What it does

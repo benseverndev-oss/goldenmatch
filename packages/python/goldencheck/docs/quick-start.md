@@ -93,7 +93,7 @@ result = ScanResult(findings=findings, profile=profile)
 result  # Rich HTML table in notebooks
 ```
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benseverndev-oss/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 ## Baseline & Drift Detection
 

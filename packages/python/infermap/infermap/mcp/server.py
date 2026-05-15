@@ -481,7 +481,7 @@ def run_server_http(host: str = "0.0.0.0", port: int = 8100) -> None:
         return JSONResponse({
             "name": "InferMap",
             "description": "Schema mapping engine — 7 scorers, domain dictionaries, confidence calibration. F1 0.84 on 162 real-world cases. Python + TypeScript.",
-            "homepage": "https://github.com/benzsevern/infermap",
+            "homepage": "https://github.com/benseverndev-oss/infermap",
             "iconUrl": "https://avatars.githubusercontent.com/u/198941534",
         })
 

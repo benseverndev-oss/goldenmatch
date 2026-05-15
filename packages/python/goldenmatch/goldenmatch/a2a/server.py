@@ -162,7 +162,7 @@ def build_agent_card(base_url: str) -> dict:
         "version": __version__,
         "provider": {
             "organization": "GoldenMatch",
-            "url": "https://github.com/benzsevern/goldenmatch",
+            "url": "https://github.com/benseverndev-oss/goldenmatch",
         },
         "capabilities": {
             "streaming": True,

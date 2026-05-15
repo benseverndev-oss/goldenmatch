@@ -16,12 +16,12 @@
   "author": "Ben Severn (https://bensevern.dev)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldenflow"
   },
-  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/goldenflow",
+  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldenflow",
   "bugs": {
-    "url": "https://github.com/benzsevern/goldenmatch/issues"
+    "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",

@@ -1,6 +1,6 @@
 # goldenmatch-extensions
 
-Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatch) -- run entity resolution directly from PostgreSQL and DuckDB.
+Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) -- run entity resolution directly from PostgreSQL and DuckDB.
 
 ```sql
 -- Deduplicate a table
@@ -46,24 +46,24 @@ The extension embeds a CPython interpreter via [pyo3](https://pyo3.rs/) and call
 
 ```bash
 pip install goldenmatch>=1.1.0
-curl -sSL https://raw.githubusercontent.com/benzsevern/goldenmatch-extensions/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/benseverndev-oss/goldenmatch-extensions/main/install.sh | bash
 ```
 
 ### Docker (zero config)
 
 ```bash
-docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benzsevern/goldenmatch-extensions:latest
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 # Extension is pre-installed. Connect and use:
 psql -h localhost -U postgres -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
 ```
 
 ### apt (Debian/Ubuntu)
 
-Download `.deb` from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+Download `.deb` from [GitHub Releases](https://github.com/benseverndev-oss/goldenmatch-extensions/releases):
 
 ```bash
 # PG 16 example -- packages available for PG 15, 16, 17
-curl -LO https://github.com/benzsevern/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch_0.2.0_amd64.deb
+curl -LO https://github.com/benseverndev-oss/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch_0.2.0_amd64.deb
 sudo dpkg -i postgresql-16-goldenmatch_0.2.0_amd64.deb
 pip install goldenmatch>=1.1.0
 ```
@@ -71,14 +71,14 @@ pip install goldenmatch>=1.1.0
 ### yum/dnf (RHEL/CentOS/Fedora)
 
 ```bash
-curl -LO https://github.com/benzsevern/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch-0.2.0.x86_64.rpm
+curl -LO https://github.com/benseverndev-oss/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch-0.2.0.x86_64.rpm
 sudo rpm -i postgresql-16-goldenmatch-0.2.0.x86_64.rpm
 pip install goldenmatch>=1.1.0
 ```
 
 ### Pre-built Binaries (manual)
 
-Download `.tar.gz` from [GitHub Releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+Download `.tar.gz` from [GitHub Releases](https://github.com/benseverndev-oss/goldenmatch-extensions/releases):
 
 ```bash
 tar xzf goldenmatch_pg-v0.2.0-pg16-py312-linux-x86_64.tar.gz

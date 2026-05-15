@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest-large  # 8 vCPU / 32 GB; paid runner
+    runs-on: gm-bench-64c  # org-level GitHub-hosted larger runner: 64c/256GB/2040GB
     timeout-minutes: 180  # 3 hours; 500K typical ~30 min, 1M ~90 min
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"

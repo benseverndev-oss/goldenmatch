@@ -47,7 +47,7 @@ def _fetch_json(url: str, *, retries: int = 4) -> dict | None:
     """Fetch JSON with backoff on 429 / 5xx. Returns None on 404."""
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "goldenmatch-badge-updater (+https://github.com/benzsevern/goldenmatch)"},
+        headers={"User-Agent": "goldenmatch-badge-updater (+https://github.com/benseverndev-oss/goldenmatch)"},
     )
     backoff_s = 2.0
     for attempt in range(retries):

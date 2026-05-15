@@ -1,6 +1,6 @@
 # dbt-goldencheck
 
-dbt package for the [Golden Suite](https://github.com/benzsevern/goldenmatch). Ships:
+dbt package for the [Golden Suite](https://github.com/benseverndev-oss/goldenmatch). Ships:
 
 - **`goldencheck_not_empty` test** — a SQL-native sanity check usable from `schema.yml`.
 - **`scripts/run_goldencheck.py`** — the canonical full GoldenCheck scan against a dbt model's output. Run it alongside `dbt test` in CI / Airflow.
@@ -17,7 +17,7 @@ Add to your `packages.yml`:
 
 ```yaml
 packages:
-  - git: "https://github.com/benzsevern/goldenmatch.git"
+  - git: "https://github.com/benseverndev-oss/goldenmatch.git"
     subdirectory: "packages/dbt/goldencheck"
     revision: main
 ```
@@ -53,7 +53,7 @@ Wire that into CI right after `dbt run` / `dbt test`. The script:
 4. Runs `goldencheck scan` with the full profiler pipeline.
 5. Exits non-zero if findings at or above `--fail-on` severity.
 
-For an Airflow-shaped wiring of this pattern, see [`examples/airflow/golden_suite_quality_gate.py`](https://github.com/benzsevern/goldenmatch/blob/main/examples/airflow/golden_suite_quality_gate.py) in the monorepo — same idea (GoldenCheck as gatekeeper, threshold-based) but operator-driven.
+For an Airflow-shaped wiring of this pattern, see [`examples/airflow/golden_suite_quality_gate.py`](https://github.com/benseverndev-oss/goldenmatch/blob/main/examples/airflow/golden_suite_quality_gate.py) in the monorepo — same idea (GoldenCheck as gatekeeper, threshold-based) but operator-driven.
 
 ## Migrating from 0.1.x
 
@@ -92,15 +92,15 @@ Built-in domains: `healthcare`, `finance`, `ecommerce`, `real_estate`, `people_h
 
 ## Part of the Golden Suite
 
-This package is part of the Golden Suite monorepo at [`benzsevern/goldenmatch`](https://github.com/benzsevern/goldenmatch).
+This package is part of the Golden Suite monorepo at [`benseverndev-oss/goldenmatch`](https://github.com/benseverndev-oss/goldenmatch).
 
 | Surface | Use it for |
 |---|---|
 | **dbt-goldencheck** (this package) | Data-quality test inside dbt projects |
-| [`golden_suite_quality_gate.py`](https://github.com/benzsevern/goldenmatch/blob/main/examples/airflow/golden_suite_quality_gate.py) | Airflow-shaped gatekeeper that fails downstream pipelines on regressions |
-| [`golden_suite_daily_dedupe.py`](https://github.com/benzsevern/goldenmatch/blob/main/examples/airflow/golden_suite_daily_dedupe.py) | Daily Check → Flow → Match → load pipeline |
-| [`ghcr.io/benzsevern/goldencheck-mcp`](https://github.com/benzsevern/goldenmatch/pkgs/container/goldencheck-mcp) | GoldenCheck as a stand-alone MCP server (Claude Desktop / agents) |
-| [`ghcr.io/benzsevern/goldensuite-mcp`](https://github.com/benzsevern/goldenmatch/pkgs/container/goldensuite-mcp) | All Suite tools (incl. GoldenCheck) under one MCP endpoint |
+| [`golden_suite_quality_gate.py`](https://github.com/benseverndev-oss/goldenmatch/blob/main/examples/airflow/golden_suite_quality_gate.py) | Airflow-shaped gatekeeper that fails downstream pipelines on regressions |
+| [`golden_suite_daily_dedupe.py`](https://github.com/benseverndev-oss/goldenmatch/blob/main/examples/airflow/golden_suite_daily_dedupe.py) | Daily Check → Flow → Match → load pipeline |
+| [`ghcr.io/benseverndev-oss/goldencheck-mcp`](https://github.com/benseverndev-oss/goldenmatch/pkgs/container/goldencheck-mcp) | GoldenCheck as a stand-alone MCP server (Claude Desktop / agents) |
+| [`ghcr.io/benseverndev-oss/goldensuite-mcp`](https://github.com/benseverndev-oss/goldenmatch/pkgs/container/goldensuite-mcp) | All Suite tools (incl. GoldenCheck) under one MCP endpoint |
 
 ## License
 

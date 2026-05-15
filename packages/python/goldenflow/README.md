@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.benzsevern/goldenflow -->
+<!-- mcp-name: io.github.benseverndev-oss/goldenflow -->
 # GoldenFlow
 
 **Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline.**
@@ -8,15 +8,15 @@ Works on files (CSV, Excel, Parquet), cloud storage (S3, GCS), or live databases
 
 [![PyPI](https://img.shields.io/pypi/v/goldenflow?color=d4a017)](https://pypi.org/project/goldenflow/)
 [![npm](https://img.shields.io/npm/v/goldenflow?color=d4a017)](https://www.npmjs.com/package/goldenflow)
-[![CI](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/goldenflow/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/benzsevern/goldenflow/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenflow)
+[![CI](https://github.com/benseverndev-oss/goldenflow/actions/workflows/test.yml/badge.svg)](https://github.com/benseverndev-oss/goldenflow/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/benseverndev-oss/goldenflow/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenflow)
 [![Downloads](https://static.pepy.tech/badge/goldenflow/month)](https://pepy.tech/project/goldenflow)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![Node 20+](https://img.shields.io/badge/node-20%2B-339933)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benzsevern.github.io/goldenflow/)
-[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benzsevern/dqbench)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldenflow/blob/main/scripts/goldenflow_demo.ipynb)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io%2Fgoldenflow-d4a017)](https://benseverndev-oss.github.io/goldenflow/)
+[![DQBench](https://img.shields.io/badge/DQBench-100%2F100-gold)](https://github.com/benseverndev-oss/dqbench)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benseverndev-oss/goldenflow/blob/main/scripts/goldenflow_demo.ipynb)
 
 ```bash
 # Python
@@ -740,7 +740,7 @@ Full-featured terminal UI built with Textual. Browse profiles, apply transforms,
 
 ## Remote MCP Server
 
-GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenflow) — connect from any MCP client without installing anything.
+GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenflow) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
@@ -767,10 +767,10 @@ goldenflow mcp-serve
 
 | Tool | Purpose | Python | TypeScript |
 |------|---------|--------|------------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` | `npm install goldencheck` |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` | `npm install goldenflow` |
-| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` | — |
-| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` | — |
+| [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) | Validate & profile data quality | `pip install goldencheck` | `npm install goldencheck` |
+| [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) | Transform & standardize data | `pip install goldenflow` | `npm install goldenflow` |
+| [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` | — |
+| [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` | — |
 
 ```
 Raw Data
@@ -817,7 +817,7 @@ Built on [Polars](https://pola.rs/) (Rust-backed DataFrames). Transforms use a h
 
 ## Benchmarks
 
-GoldenFlow scores **100/100** on the [DQBench](https://github.com/benzsevern/dqbench) transform benchmark across all three tiers (customer database, e-commerce, healthcare claims).
+GoldenFlow scores **100/100** on the [DQBench](https://github.com/benseverndev-oss/dqbench) transform benchmark across all three tiers (customer database, e-commerce, healthcare claims).
 
 ```bash
 pip install dqbench
@@ -856,7 +856,7 @@ Long-running operations (streaming, watch mode, scheduling) display a Rich progr
 
 ---
 
-**GitHub:** [github.com/benzsevern/goldenflow](https://github.com/benzsevern/goldenflow)
+**GitHub:** [github.com/benseverndev-oss/goldenflow](https://github.com/benseverndev-oss/goldenflow)
 **Author:** [Ben Severn](https://bensevern.dev)
 **License:** MIT
 **Python:** 3.11+ | **Node.js:** 20+ | **npm:** [goldenflow](https://www.npmjs.com/package/goldenflow) | **PyPI:** [goldenflow](https://pypi.org/project/goldenflow/)

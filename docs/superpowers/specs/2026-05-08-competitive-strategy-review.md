@@ -184,7 +184,7 @@ Acceptance: 10M rows on a 64GB box, no flags, no OOM, end-to-end (ingest → mat
 **Thesis.** Whoever runs the leaderboard owns the conversation. DQBench is referenced in our README but not promoted. A hosted, reproducible, submission-PR leaderboard with per-segment podiums (PII, bibliographic, product, business, healthcare, PPRL) anchors every future comparison on our turf. *The engine work is the benchmark harness, not the website* — that part lives in golden-showcase.
 
 **Evidence.**
-- DQBench is real (`benzsevern/dqbench`), referenced with score 95.30 in our README.
+- DQBench is real (`benseverndev-oss/dqbench`), referenced with score 95.30 in our README.
 - Comparison benchmark scripts already exist at `D:\show_case\golden-showcase\comparison_bench\` (Splink, Dedupe, RecordLinkage on Febrl/DBLP-ACM/NC Voter).
 - No OSS competitor hosts a leaderboard. Splink/Dedupe link to academic papers; nobody runs the comparison themselves.
 - The discipline of running competitors monthly catches our own regressions.

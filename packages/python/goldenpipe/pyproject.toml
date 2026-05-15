@@ -42,11 +42,11 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-aiohttp>=1.0", "httpx>=0.2
 goldenpipe = "goldenpipe.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenmatch"
-Repository = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenpipe#readme"
-Issues = "https://github.com/benzsevern/goldenmatch/issues"
-Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenpipe/CHANGELOG.md"
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenpipe#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenpipe/CHANGELOG.md"
 Author = "https://bensevern.dev"
 
 [project.entry-points."goldenpipe.stages"]

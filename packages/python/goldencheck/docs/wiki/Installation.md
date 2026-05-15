@@ -107,7 +107,7 @@ goldencheck --version
 Clone the repository and install in editable mode with dev dependencies:
 
 ```bash
-git clone https://github.com/benzsevern/goldencheck.git
+git clone https://github.com/benseverndev-oss/goldencheck.git
 cd goldencheck
 pip install -e ".[dev,llm,mcp]"
 ```

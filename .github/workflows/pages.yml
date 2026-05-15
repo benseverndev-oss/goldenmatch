@@ -1,7 +1,7 @@
 name: pages
 
 # Builds the Jekyll docs site living at packages/python/goldenmatch/docs/
-# and deploys to https://benzsevern.github.io/goldenmatch/.
+# and deploys to https://benseverndev-oss.github.io/goldenmatch/.
 #
 # The site existed pre-fold as a standalone Jekyll site; the fold-in moved
 # the source under packages/python/goldenmatch/docs/ but no Pages workflow

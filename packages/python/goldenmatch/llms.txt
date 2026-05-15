@@ -4,7 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (13 agent tools + 17 data tools = 30 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (30 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (30 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (10 skills)
 - CLI: `goldenmatch dedupe`, `goldenmatch match`, + 18 more commands
 - Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~101 exports
@@ -113,7 +113,7 @@ lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, normal
 Auto-config only applies these when the profiled `col_type` agrees with the column name (e.g. a `last_name` column holding numeric IDs keeps its plain scorer). See docs/reference-data.
 
 ## Docs
-- [Full docs](https://benzsevern.github.io/goldenmatch/): 22 guides
-- [Full API reference](https://benzsevern.github.io/goldenmatch/python-api): 101 exports
+- [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 22 guides
+- [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 101 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
-- [GitHub](https://github.com/benzsevern/goldenmatch)
+- [GitHub](https://github.com/benseverndev-oss/goldenmatch)

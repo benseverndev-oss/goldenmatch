@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.benzsevern/goldencheck -->
+<!-- mcp-name: io.github.benseverndev-oss/goldencheck -->
 # GoldenCheck
 
 Data validation that discovers rules from your data so you don't have to write them.
@@ -6,17 +6,17 @@ Built by [Ben Severn](https://bensevern.dev).
 
 [![PyPI](https://img.shields.io/pypi/v/goldencheck?logo=pypi&logoColor=white&label=PyPI&color=d4a017)](https://pypi.org/project/goldencheck/)
 [![npm](https://img.shields.io/npm/v/goldencheck?logo=npm&logoColor=white&label=npm&color=cb3837)](https://www.npmjs.com/package/goldencheck)
-[![CI](https://img.shields.io/github/actions/workflow/status/benzsevern/goldencheck/test.yml?logo=github&label=CI)](https://github.com/benzsevern/goldencheck/actions/workflows/test.yml)
-[![codecov](https://img.shields.io/codecov/c/gh/benzsevern/goldencheck?logo=codecov&logoColor=white)](https://codecov.io/gh/benzsevern/goldencheck)
+[![CI](https://img.shields.io/github/actions/workflow/status/benseverndev-oss/goldencheck/test.yml?logo=github&label=CI)](https://github.com/benseverndev-oss/goldencheck/actions/workflows/test.yml)
+[![codecov](https://img.shields.io/codecov/c/gh/benseverndev-oss/goldencheck?logo=codecov&logoColor=white)](https://codecov.io/gh/benseverndev-oss/goldencheck)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/goldencheck?logo=python&logoColor=white&label=PyPI%20downloads&color=3776ab)](https://pepy.tech/project/goldencheck)
 [![npm Downloads](https://img.shields.io/npm/dm/goldencheck?logo=npm&logoColor=white&label=npm%20downloads&color=cb3837)](https://www.npmjs.com/package/goldencheck)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://python.org)
 [![Node 20+](https://img.shields.io/badge/node-20%2B-5fa04e?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4%2B-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![DQBench](https://img.shields.io/badge/DQBench-88.40-gold?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHRleHQgeD0iMCIgeT0iMTQiIGZvbnQtc2l6ZT0iMTQiPuKtkTwvdGV4dD48L3N2Zz4=)](https://github.com/benzsevern/dqbench)
-[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017?logo=github&logoColor=white)](https://benzsevern.github.io/goldencheck/)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
+[![DQBench](https://img.shields.io/badge/DQBench-88.40-gold?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHRleHQgeD0iMCIgeT0iMTQiIGZvbnQtc2l6ZT0iMTQiPuKtkTwvdGV4dD48L3N2Zz4=)](https://github.com/benseverndev-oss/dqbench)
+[![Docs](https://img.shields.io/badge/docs-benzsevern.github.io-d4a017?logo=github&logoColor=white)](https://benseverndev-oss.github.io/goldencheck/)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benseverndev-oss/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 > Every competitor makes you write rules first. GoldenCheck flips it: **validate first, keep the rules you care about.**
 
@@ -559,7 +559,7 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 
 ## Remote MCP Server
 
-GoldenCheck is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldencheck) — connect from any MCP client without installing anything.
+GoldenCheck is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldencheck) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
@@ -596,7 +596,7 @@ findings = apply_confidence_downgrade(findings, llm_boost=False)
 ScanResult(findings=findings, profile=profile)
 ```
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benzsevern/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/benseverndev-oss/goldencheck/blob/main/scripts/goldencheck_demo.ipynb)
 
 ## API Quick Reference
 
@@ -687,12 +687,12 @@ MIT — see [LICENSE](LICENSE)
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| [GoldenCheck](https://github.com/benzsevern/goldencheck) | Validate & profile data quality | `pip install goldencheck` / `npm install goldencheck` |
-| [GoldenFlow](https://github.com/benzsevern/goldenflow) | Transform & standardize data | `pip install goldenflow` |
-| [GoldenMatch](https://github.com/benzsevern/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
-| [GoldenPipe](https://github.com/benzsevern/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
+| [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) | Validate & profile data quality | `pip install goldencheck` / `npm install goldencheck` |
+| [GoldenFlow](https://github.com/benseverndev-oss/goldenflow) | Transform & standardize data | `pip install goldenflow` |
+| [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) | Deduplicate & match records | `pip install goldenmatch` |
+| [GoldenPipe](https://github.com/benseverndev-oss/goldenpipe) | Orchestrate the full pipeline | `pip install goldenpipe` |
 
 **Companion projects:**
-- [dbt-goldencheck](https://github.com/benzsevern/dbt-goldencheck) — data validation as a dbt test.
-- [goldencheck-types](https://github.com/benzsevern/goldencheck-types) — community-contributed domain type packs.
-- [goldencheck-action](https://github.com/benzsevern/goldencheck-action) — GitHub Action for CI with PR comments.
+- [dbt-goldencheck](https://github.com/benseverndev-oss/dbt-goldencheck) — data validation as a dbt test.
+- [goldencheck-types](https://github.com/benseverndev-oss/goldencheck-types) — community-contributed domain type packs.
+- [goldencheck-action](https://github.com/benseverndev-oss/goldencheck-action) — GitHub Action for CI with PR comments.

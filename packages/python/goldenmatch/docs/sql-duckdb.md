@@ -256,4 +256,4 @@ tables = backend.list_tables()
 
 - DuckDB UDFs cannot query the same connection they are called on (deadlock) -- the extension uses `con.cursor()` for internal table reads
 - `.pl()` (Polars conversion) requires `pyarrow` as a dependency
-- See [goldenmatch-extensions](https://github.com/benzsevern/goldenmatch-extensions) for source code and CI details
+- See [goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions) for source code and CI details

@@ -24,5 +24,5 @@ goldenpipe run data.csv
 
 ## Links
 
-- [GitHub Repository](https://github.com/benzsevern/goldenpipe)
+- [GitHub Repository](https://github.com/benseverndev-oss/goldenpipe)
 - [PyPI Package](https://pypi.org/project/goldenpipe/)

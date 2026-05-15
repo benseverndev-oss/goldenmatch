@@ -30,13 +30,13 @@
   },
   "license": "MIT",
   "author": "Ben Severn (https://bensevern.dev)",
-  "homepage": "https://github.com/benzsevern/goldenmatch/tree/main/packages/typescript/goldencheck-types",
+  "homepage": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/typescript/goldencheck-types",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/benzsevern/goldenmatch.git",
+    "url": "git+https://github.com/benseverndev-oss/goldenmatch.git",
     "directory": "packages/typescript/goldencheck-types"
   },
   "bugs": {
-    "url": "https://github.com/benzsevern/goldenmatch/issues"
+    "url": "https://github.com/benseverndev-oss/goldenmatch/issues"
   }
 }

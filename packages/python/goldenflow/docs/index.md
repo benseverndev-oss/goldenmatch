@@ -39,6 +39,6 @@ One command to clean what GoldenCheck found and prep what GoldenMatch needs.
 
 ## Links
 
-- [GitHub Repository](https://github.com/benzsevern/goldenflow)
+- [GitHub Repository](https://github.com/benseverndev-oss/goldenflow)
 - [PyPI Package](https://pypi.org/project/goldenflow/)
-- [Smithery MCP Server](https://smithery.ai/servers/benzsevern/goldenflow)
+- [Smithery MCP Server](https://smithery.ai/servers/benseverndev-oss/goldenflow)

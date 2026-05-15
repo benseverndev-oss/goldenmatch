@@ -8,7 +8,7 @@
 
 **Body:**
 
-I've been building [GoldenMatch](https://github.com/benzsevern/goldenmatch), an entity resolution / record deduplication toolkit in Python. Just shipped v0.3.0 with some features I haven't seen in other open-source ER tools, so wanted to share.
+I've been building [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch), an entity resolution / record deduplication toolkit in Python. Just shipped v0.3.0 with some features I haven't seen in other open-source ER tools, so wanted to share.
 
 **The pitch:** `pip install goldenmatch` gives you fuzzy matching, embedding matching, LLM-powered scoring, Fellegi-Sunter probabilistic matching, privacy-preserving matching (bloom filters), streaming/CDC mode, and connectors to Snowflake/Databricks/BigQuery/HubSpot/Salesforce. No Spark, no JVM, no cluster needed.
 
@@ -50,7 +50,7 @@ ingest -> auto_fix -> validate -> standardize -> matchkeys -> block -> score -> 
 - Product matching without LLM is mediocre (44% F1)
 
 PyPI: `pip install goldenmatch`
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 792 tests, MIT license.
 
 Happy to answer questions about the architecture or benchmarks.
@@ -63,7 +63,7 @@ Happy to answer questions about the architecture or benchmarks.
 
 **Body:**
 
-I've been working on the record matching / entity resolution problem and wanted to share results from [GoldenMatch](https://github.com/benzsevern/goldenmatch) v0.3.0.
+I've been working on the record matching / entity resolution problem and wanted to share results from [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) v0.3.0.
 
 **The problem:** Matching product records across sources is hard. "Sony Cyber-shot DSC-T77" vs "Sony - Cyber-shot 10.1-Megapixel Digital Camera" -- fuzzy string matching fails, embeddings help but create false positives.
 
@@ -95,7 +95,7 @@ Also implemented:
 
 It's all open source: `pip install goldenmatch`
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 Would love feedback from anyone who's worked on ER/dedup at scale.
 
@@ -114,7 +114,7 @@ goldenmatch dedupe customers.csv
 
 That's it. It auto-detects your column types (name, email, phone, zip, address), picks scorers, chooses blocking strategy, and launches a TUI for review.
 
-[GoldenMatch](https://github.com/benzsevern/goldenmatch) v0.3.0 just shipped. It's an entity resolution toolkit built on Polars and RapidFuzz.
+[GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) v0.3.0 just shipped. It's an entity resolution toolkit built on Polars and RapidFuzz.
 
 **What's new in v0.3.0:**
 
@@ -148,7 +148,7 @@ goldenmatch sync --table customers --connection-string "$DB" --config config.yam
 ```
 
 PyPI: https://pypi.org/project/goldenmatch/
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -160,7 +160,7 @@ GitHub: https://github.com/benzsevern/goldenmatch
 
 If you've ever paid for Dedupe.io or spent hours manually deduplicating CSVs, this might save you some pain.
 
-[GoldenMatch](https://github.com/benzsevern/goldenmatch) is a self-hosted entity resolution tool. Install it with pip, run it from your terminal, no cloud service needed.
+[GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) is a self-hosted entity resolution tool. Install it with pip, run it from your terminal, no cloud service needed.
 
 ```bash
 pip install goldenmatch
@@ -185,7 +185,7 @@ It auto-detects your columns, picks matching strategies, and launches an interac
 
 No account needed, no data leaves your machine (unless you opt into LLM scoring), no subscription.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 PyPI: `pip install goldenmatch`
 
 ---
@@ -196,7 +196,7 @@ PyPI: `pip install goldenmatch`
 
 **Body:**
 
-Sharing [GoldenMatch](https://github.com/benzsevern/goldenmatch), an open-source entity resolution / record deduplication toolkit I've been building.
+Sharing [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch), an open-source entity resolution / record deduplication toolkit I've been building.
 
 v0.3.0 just shipped with a big feature set:
 
@@ -216,7 +216,7 @@ v0.3.0 just shipped with a big feature set:
 
 Built with Python 3.11+, Polars, RapidFuzz, Pydantic. 792 tests, MIT license.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 PyPI: `pip install goldenmatch`
 
 Contributions welcome -- the plugin system makes it easy to add custom scorers or connectors.
@@ -261,7 +261,7 @@ For harder cases (like matching product SKUs or company names that differ across
 
 Free, open source, MIT license. Your data stays on your machine unless you opt into LLM scoring.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -298,7 +298,7 @@ It handles:
 
 97.2% accuracy on name/address data. Free, open source, runs on your machine.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -334,7 +334,7 @@ Catches things like:
 
 97.2% accuracy. Free, open source, MIT license. Your data is processed locally.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -364,7 +364,7 @@ Works with CSV, Excel, Parquet. Also connects to Snowflake, BigQuery, HubSpot, S
 
 No coding required beyond the pip install. Free, open source.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -374,7 +374,7 @@ GitHub: https://github.com/benzsevern/goldenmatch
 
 **Body:**
 
-Working with messy data that has duplicates? [GoldenMatch](https://github.com/benzsevern/goldenmatch) is an entity resolution toolkit that finds and merges duplicate records.
+Working with messy data that has duplicates? [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) is an entity resolution toolkit that finds and merges duplicate records.
 
 **v0.3.0 benchmarks (Leipzig datasets):**
 
@@ -395,7 +395,7 @@ Working with messy data that has duplicates? [GoldenMatch](https://github.com/be
 
 `pip install goldenmatch` -- 792 tests, MIT license.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ---
 
@@ -405,7 +405,7 @@ GitHub: https://github.com/benzsevern/goldenmatch
 
 **Body:**
 
-Sharing [GoldenMatch](https://github.com/benzsevern/goldenmatch), an open-source entity resolution toolkit with a few approaches I found interesting from an ML perspective.
+Sharing [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch), an open-source entity resolution toolkit with a few approaches I found interesting from an ML perspective.
 
 **Three scoring paradigms in one pipeline:**
 
@@ -436,6 +436,6 @@ Sharing [GoldenMatch](https://github.com/benzsevern/goldenmatch), an open-source
 
 `pip install goldenmatch` -- Python 3.11+, Polars, RapidFuzz, 792 tests, MIT.
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 Would appreciate feedback on the F-S implementation from anyone with record linkage experience.

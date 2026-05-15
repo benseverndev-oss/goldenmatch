@@ -5,7 +5,7 @@ Thanks for your interest in improving infermap!
 ## Getting Started
 
 ```bash
-git clone https://github.com/benzsevern/infermap.git
+git clone https://github.com/benseverndev-oss/infermap.git
 cd infermap
 pip install -e ".[dev]"
 pytest

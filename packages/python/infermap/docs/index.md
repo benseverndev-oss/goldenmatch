@@ -9,9 +9,9 @@ nav_order: 1
 Inference-driven schema mapping engine. Map messy source columns to a known target schema -- accurately, explainably, and with zero config.
 
 [![PyPI](https://img.shields.io/pypi/v/infermap?color=d4a017)](https://pypi.org/project/infermap/)
-[![CI](https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg)](https://github.com/benzsevern/infermap/actions/workflows/test.yml)
+[![CI](https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml/badge.svg)](https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/benzsevern/infermap/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/benseverndev-oss/infermap/blob/main/LICENSE)
 
 ## Install
 
@@ -64,8 +64,8 @@ Each scorer returns a confidence score and human-readable reasoning. The engine 
 
 ## Links
 
-- [GitHub](https://github.com/benzsevern/infermap)
+- [GitHub](https://github.com/benseverndev-oss/infermap)
 - [PyPI](https://pypi.org/project/infermap/)
 - [npm](https://www.npmjs.com/package/infermap)
-- [Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)
+- [Open in Colab](https://colab.research.google.com/github/benseverndev-oss/infermap/blob/main/scripts/infermap_demo.ipynb)
 - [Author -- Ben Severn](https://bensevern.dev)

@@ -268,7 +268,7 @@ goldenflow mcp-serve                               # MCP server
 ## Interfaces
 
 - **MCP Server**: `goldenflow mcp-serve` — 4 tools for Claude Desktop
-- **Remote MCP**: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
+- **Remote MCP**: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenflow)
 - **REST API**: `goldenflow serve` on port 8000
 - **CLI**: 14+ Typer commands
 - **Python API**: `import goldenflow` — 40+ exports
@@ -276,5 +276,5 @@ goldenflow mcp-serve                               # MCP server
 
 ## Links
 
-- [GitHub](https://github.com/benzsevern/goldenflow)
+- [GitHub](https://github.com/benseverndev-oss/goldenflow)
 - [Concise overview](llms.txt)

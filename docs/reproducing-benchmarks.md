@@ -189,7 +189,7 @@ not a re-runnable target.
 
 ```bash
 # Fresh checkout, fresh venv, no inherited memory cache
-git clone https://github.com/benzsevern/goldenmatch
+git clone https://github.com/benseverndev-oss/goldenmatch
 cd goldenmatch
 git checkout v1.12.0      # tag where the 91.04 number landed
 

@@ -19,4 +19,4 @@ Thank you for contributing to GoldenCheck Community Types!
 
 ## Questions?
 
-Open an issue or discussion on [GoldenCheck](https://github.com/benzsevern/goldencheck/discussions).
+Open an issue or discussion on [GoldenCheck](https://github.com/benseverndev-oss/goldencheck/discussions).

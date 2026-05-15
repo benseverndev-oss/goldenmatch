@@ -6,7 +6,7 @@ Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 - **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
 - **GoldenFlow:** `D:\show_case\goldenflow` -- Data transformation. Has its own CLAUDE.md.
 - **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenpipe`, `benzsevern/goldencheck`, `benzsevern/goldenflow`, `benzsevern/goldenmatch`
+- **GitHub:** `benseverndev-oss/goldenpipe`, `benseverndev-oss/goldencheck`, `benseverndev-oss/goldenflow`, `benseverndev-oss/goldenmatch`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main
@@ -49,7 +49,7 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenpipe-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenpipe`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenpipe`
 - **Server card:** `https://goldenpipe-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

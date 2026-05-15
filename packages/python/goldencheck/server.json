@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.benzsevern/goldencheck",
+  "name": "io.github.benseverndev-oss/goldencheck",
   "title": "GoldenCheck",
   "description": "Auto-discover validation rules from data — scan, profile, health-score. No rules to write.",
-  "websiteUrl": "https://benzsevern.github.io/goldencheck/",
+  "websiteUrl": "https://benseverndev-oss.github.io/goldencheck/",
   "version": "1.2.0",
   "repository": {
-    "url": "https://github.com/benzsevern/goldencheck",
+    "url": "https://github.com/benseverndev-oss/goldencheck",
     "source": "github"
   },
   "packages": [

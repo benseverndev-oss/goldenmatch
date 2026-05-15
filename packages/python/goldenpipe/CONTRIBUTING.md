@@ -5,7 +5,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Quick Start
 
 ```bash
-git clone https://github.com/benzsevern/goldenpipe.git
+git clone https://github.com/benseverndev-oss/goldenpipe.git
 cd goldenpipe
 pip install -e ".[dev,golden-suite]"
 pytest --tb=short

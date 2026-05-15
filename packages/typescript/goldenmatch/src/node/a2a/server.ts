@@ -58,7 +58,7 @@ export const AGENT_CARD: {
   version: "0.1.0",
   provider: {
     organization: "goldenmatch",
-    url: "https://github.com/benzsevern/goldenmatch",
+    url: "https://github.com/benseverndev-oss/goldenmatch",
   },
   capabilities: {
     streaming: false,

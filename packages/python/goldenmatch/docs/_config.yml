@@ -1,7 +1,7 @@
 title: GoldenMatch
 description: Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records
 baseurl: /goldenmatch
-url: https://benzsevern.github.io
+url: https://benseverndev-oss.github.io
 
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 
@@ -18,7 +18,7 @@ aux_links:
   "PyPI":
     - "https://pypi.org/project/goldenmatch/"
   "GitHub":
-    - "https://github.com/benzsevern/goldenmatch"
+    - "https://github.com/benseverndev-oss/goldenmatch"
 
 aux_links_new_tab: true
 

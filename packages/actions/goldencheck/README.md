@@ -1,13 +1,13 @@
 # GoldenCheck Action
 
-GitHub Action for [GoldenCheck](https://github.com/benzsevern/goldencheck) — data validation that discovers rules from your data.
+GitHub Action for [GoldenCheck](https://github.com/benseverndev-oss/goldencheck) — data validation that discovers rules from your data.
 
 Scans data files in CI, posts PR comments with findings, and provides pass/fail status checks.
 
 ## Usage
 
 ```yaml
-- uses: benzsevern/goldencheck-action@v1
+- uses: benseverndev-oss/goldencheck-action@v1
   with:
     files: "data/*.csv"
 ```
@@ -15,7 +15,7 @@ Scans data files in CI, posts PR comments with findings, and provides pass/fail 
 ### With options
 
 ```yaml
-- uses: benzsevern/goldencheck-action@v1
+- uses: benseverndev-oss/goldencheck-action@v1
   with:
     files: "data/*.csv"
     fail-on: error          # or "warning"
@@ -25,7 +25,7 @@ Scans data files in CI, posts PR comments with findings, and provides pass/fail 
 ### With LLM boost
 
 ```yaml
-- uses: benzsevern/goldencheck-action@v1
+- uses: benseverndev-oss/goldencheck-action@v1
   with:
     files: "data/*.csv"
     llm-boost: true

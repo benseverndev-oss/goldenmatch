@@ -4,7 +4,7 @@ Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 
 ## Related Projects
 Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenflow,goldenmatch,infermap}/`. Pre-fold standalone repos lived at `D:\show_case\<name>`; their history is in `_archive/goldenmatch-pre-fold/`.
-- **GitHub:** `benzsevern/goldenmatch` (single monorepo since 2026-05-02)
+- **GitHub:** `benseverndev-oss/goldenmatch` (single monorepo since 2026-05-02)
 
 ## Architecture
 - `goldenpipe/pipeline.py` -- Pipeline class, run() function. ONLY file that imports from tools.
@@ -34,7 +34,7 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenpipe-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenpipe`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenpipe`
 - **Server card:** `https://goldenpipe-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

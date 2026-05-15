@@ -44,7 +44,7 @@ I've been working on this for a while and just shipped v0.3.0. Here's what I thi
 
 Python 3.11+, Polars, RapidFuzz, 792 tests, MIT license.
 
-Code: https://github.com/benzsevern/goldenmatch
+Code: https://github.com/benseverndev-oss/goldenmatch
 PyPI: https://pypi.org/project/goldenmatch/
 
 ---
@@ -177,7 +177,7 @@ pip install goldenmatch
 goldenmatch dedupe your_data.csv --output-all --output-dir results/
 ```
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 PyPI: https://pypi.org/project/goldenmatch/
 
 792 tests, MIT license. Contributions welcome.
@@ -220,7 +220,7 @@ Traditional approaches hit a wall here:
 
 What if we let the fuzzy/embedding matching handle the easy cases and only call an LLM for the hard ones?
 
-In [GoldenMatch](https://github.com/benzsevern/goldenmatch) v0.3.0, I implemented a three-tier scoring system:
+In [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) v0.3.0, I implemented a three-tier scoring system:
 
 **Tier 1: Auto-accept (score >= 0.95)**
 These are near-identical records. No LLM needed. Score = 1.0.
@@ -291,7 +291,7 @@ GoldenMatch is open source (MIT) and available on PyPI:
 pip install goldenmatch
 ```
 
-GitHub: https://github.com/benzsevern/goldenmatch
+GitHub: https://github.com/benseverndev-oss/goldenmatch
 
 ### Benchmarks Summary
 
@@ -314,7 +314,7 @@ The structured data story (97.2% F1) is already strong. The product data story i
 
 **Body:**
 
-I've been building [GoldenMatch](https://github.com/benzsevern/goldenmatch), an entity resolution toolkit in Python. v0.3.0 shipped today with some technically interesting features:
+I've been building [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch), an entity resolution toolkit in Python. v0.3.0 shipped today with some technically interesting features:
 
 **Fellegi-Sunter with Splink-style EM training.** The classic probabilistic record linkage model, but with a fix for the well-known EM collapse problem: estimate u-probabilities from random pairs (which are overwhelmingly non-matches), fix them, and only train m-probabilities via EM. Discrete comparison vectors with 3 levels -- the continuous Gaussian extension (Winkler 2006) collapses when match rates are <1%. Result: 98.8% precision, 57.6% recall on DBLP-ACM.
 
@@ -328,4 +328,4 @@ Built on Polars + RapidFuzz. 7,823 rec/s at 100K records. 792 tests, MIT.
 
 The honest limitations: OOMs at ~1M records without DuckDB, F-S recall is lower than weighted scoring, product matching without LLM is mediocre.
 
-`pip install goldenmatch` / https://github.com/benzsevern/goldenmatch
+`pip install goldenmatch` / https://github.com/benseverndev-oss/goldenmatch

@@ -9,10 +9,10 @@ dependencies = ["pyyaml>=6.0"]
 dev = ["pytest>=8.0"]
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenmatch"
-Repository = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldencheck-types#readme"
-Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck-types#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 
 [build-system]
 requires = ["hatchling"]

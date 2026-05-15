@@ -87,5 +87,5 @@ const { findings } = await scanDataWithLLM(data, {
 ## Links
 
 - [npm package](https://www.npmjs.com/package/goldencheck)
-- [GitHub source](https://github.com/benzsevern/goldencheck/tree/main/packages/goldencheck-js)
-- [Python docs](https://benzsevern.github.io/goldencheck/)
+- [GitHub source](https://github.com/benseverndev-oss/goldencheck/tree/main/packages/goldencheck-js)
+- [Python docs](https://benseverndev-oss.github.io/goldencheck/)

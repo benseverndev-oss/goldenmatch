@@ -14,7 +14,7 @@ Use GoldenMatch directly from SQL. The PostgreSQL extension provides 18 function
 
 ### Pre-built packages
 
-Download from [goldenmatch-extensions releases](https://github.com/benzsevern/goldenmatch-extensions/releases):
+Download from [goldenmatch-extensions releases](https://github.com/benseverndev-oss/goldenmatch-extensions/releases):
 
 ```bash
 # Debian/Ubuntu
@@ -29,12 +29,12 @@ sudo systemctl restart postgresql
 ### Docker
 
 ```bash
-docker pull ghcr.io/benzsevern/goldenmatch-extensions:latest
+docker pull ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 
 docker run -d \
   -e POSTGRES_PASSWORD=secret \
   -p 5432:5432 \
-  ghcr.io/benzsevern/goldenmatch-extensions:latest
+  ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 ```
 
 ### From source
@@ -257,4 +257,4 @@ WHERE a.id < b.id
 - Extension functions live in the `goldenmatch` schema -- use `goldenmatch.function_name()` or set `search_path`
 - Explicit `::TEXT` casts may be needed for some argument types in psql
 - pgrx does not auto-generate SQL files -- the extension uses handwritten SQL at `sql/goldenmatch_pg--0.1.0.sql`
-- See [goldenmatch-extensions](https://github.com/benzsevern/goldenmatch-extensions) for full documentation and CI details
+- See [goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions) for full documentation and CI details

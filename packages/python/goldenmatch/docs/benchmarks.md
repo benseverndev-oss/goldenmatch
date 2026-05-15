@@ -87,7 +87,7 @@ Head-to-head against Splink, Dedupe, and RecordLinkage. GoldenMatch uses explici
 
 Using iterative LLM calibration, the LLM learned threshold=0.947 from 200 sampled pairs instead of scoring 37,500 pairs. ANN hybrid blocking recovered 363 sub-blocks from 15 oversized blocks, matching 949 additional records that string blocking missed. 87.7% of clusters have confidence >= 0.4.
 
-See [`examples/equipment_dedup.py`](https://github.com/benzsevern/goldenmatch/blob/main/examples/equipment_dedup.py) for the full configuration.
+See [`examples/equipment_dedup.py`](https://github.com/benseverndev-oss/goldenmatch/blob/main/examples/equipment_dedup.py) for the full configuration.
 
 ---
 

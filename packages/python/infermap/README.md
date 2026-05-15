@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.benzsevern/infermap -->
+<!-- mcp-name: io.github.benseverndev-oss/infermap -->
 <h1 align="center">infermap</h1>
 
 <p align="center"><strong>Inference-driven schema mapping engine.</strong><br>
@@ -10,7 +10,7 @@ Built by <a href="https://bensevern.dev">Ben Severn</a>.</p>
   <a href="https://www.npmjs.com/package/infermap"><img src="https://img.shields.io/npm/v/infermap?color=cb3837&label=npm" alt="npm"></a>
   <a href="https://pypi.org/project/infermap/"><img src="https://img.shields.io/pypi/dm/infermap?color=d4a017&label=PyPI%20downloads" alt="PyPI downloads"></a>
   <a href="https://www.npmjs.com/package/infermap"><img src="https://img.shields.io/npm/dw/infermap?color=cb3837&label=npm%20downloads" alt="npm downloads"></a>
-  <a href="https://github.com/benzsevern/infermap/actions/workflows/test.yml"><img src="https://github.com/benzsevern/infermap/actions/workflows/test.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml"><img src="https://github.com/benseverndev-oss/infermap/actions/workflows/test.yml/badge.svg?branch=main" alt="CI"></a>
 </p>
 
 <p align="center">
@@ -18,16 +18,16 @@ Built by <a href="https://bensevern.dev">Ben Severn</a>.</p>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-20%2B-339933?logo=node.js&logoColor=white" alt="Node 20+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/typescript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript"></a>
   <a href="https://nextjs.org/docs/app/api-reference/edge"><img src="https://img.shields.io/badge/edge%20runtime-compatible-000000?logo=vercel&logoColor=white" alt="Edge runtime"></a>
-  <a href="https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript"><img src="https://img.shields.io/badge/parity-Python%20%E2%86%94%20TypeScript-d4a017" alt="Parity"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/benzsevern/infermap?color=green" alt="License: MIT"></a>
+  <a href="https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript"><img src="https://img.shields.io/badge/parity-Python%20%E2%86%94%20TypeScript-d4a017" alt="Parity"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/benseverndev-oss/infermap?color=green" alt="License: MIT"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/benzsevern/infermap/wiki">📖 Wiki</a> ·
-  <a href="https://benzsevern.github.io/infermap/">🌐 Docs</a> ·
+  <a href="https://github.com/benseverndev-oss/infermap/wiki">📖 Wiki</a> ·
+  <a href="https://benseverndev-oss.github.io/infermap/">🌐 Docs</a> ·
   <a href="examples/">🧪 Examples</a> ·
-  <a href="https://github.com/benzsevern/infermap/discussions">💬 Discussions</a> ·
-  <a href="https://github.com/benzsevern/infermap/issues">🐛 Issues</a>
+  <a href="https://github.com/benseverndev-oss/infermap/discussions">💬 Discussions</a> ·
+  <a href="https://github.com/benseverndev-oss/infermap/issues">🐛 Issues</a>
 </p>
 
 ---
@@ -154,7 +154,7 @@ Each field pair runs through a pipeline of **7 scorers**. Each scorer returns a 
 
 The engine also applies **common-prefix canonicalization** — automatically stripping schema-wide prefixes like `prospect_` so that `City` vs `prospect_City` is compared as `City` vs `City`. And **optional confidence calibration** transforms raw scores into calibrated probabilities post-assignment (ECE from 0.46 to 0.005 on real-world data).
 
-[Read the full architecture →](https://github.com/benzsevern/infermap/wiki/Architecture)
+[Read the full architecture →](https://github.com/benseverndev-oss/infermap/wiki/Architecture)
 
 ## Features
 
@@ -178,7 +178,7 @@ The engine also applies **common-prefix canonicalization** — automatically str
 | Zero runtime deps | n/a | ✅ |
 | Accuracy benchmark | ✅ (162 cases, F1 0.84) | ✅ (parity within 0.0005) |
 
-[Full feature parity matrix →](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript)
+[Full feature parity matrix →](https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript)
 
 ## Which package should I use?
 
@@ -309,21 +309,21 @@ See [`infermap.yaml.example`](./infermap.yaml.example) for a full annotated refe
 
 ## Documentation
 
-- 📖 **[Wiki](https://github.com/benzsevern/infermap/wiki)** — full reference for both languages
-  - [Getting Started](https://github.com/benzsevern/infermap/wiki/Getting-Started)
-  - [Python API](https://github.com/benzsevern/infermap/wiki/Python-API)
-  - [TypeScript API](https://github.com/benzsevern/infermap/wiki/TypeScript-API)
-  - [Python vs TypeScript](https://github.com/benzsevern/infermap/wiki/Python-vs-TypeScript) — migration guide
-  - [Scorers](https://github.com/benzsevern/infermap/wiki/Scorers)
-  - [Architecture](https://github.com/benzsevern/infermap/wiki/Architecture)
-  - [FAQ](https://github.com/benzsevern/infermap/wiki/FAQ)
-- 🌐 **[Documentation site](https://benzsevern.github.io/infermap/)**
+- 📖 **[Wiki](https://github.com/benseverndev-oss/infermap/wiki)** — full reference for both languages
+  - [Getting Started](https://github.com/benseverndev-oss/infermap/wiki/Getting-Started)
+  - [Python API](https://github.com/benseverndev-oss/infermap/wiki/Python-API)
+  - [TypeScript API](https://github.com/benseverndev-oss/infermap/wiki/TypeScript-API)
+  - [Python vs TypeScript](https://github.com/benseverndev-oss/infermap/wiki/Python-vs-TypeScript) — migration guide
+  - [Scorers](https://github.com/benseverndev-oss/infermap/wiki/Scorers)
+  - [Architecture](https://github.com/benseverndev-oss/infermap/wiki/Architecture)
+  - [FAQ](https://github.com/benseverndev-oss/infermap/wiki/FAQ)
+- 🌐 **[Documentation site](https://benseverndev-oss.github.io/infermap/)**
 - 🧪 **Examples**
   - [Python examples](./examples/) — 10 numbered scripts covering basic mapping, databases, custom scorers, config, domain dictionaries, calibration, and score-matrix introspection
   - [TypeScript examples](./examples/typescript/) — basic mapping, Next.js Edge Runtime, custom scorer, databases, domain dictionaries, save/reuse
-- 📓 **[Open in Colab](https://colab.research.google.com/github/benzsevern/infermap/blob/main/scripts/infermap_demo.ipynb)** — Python notebook
-- 💬 **[GitHub Discussions](https://github.com/benzsevern/infermap/discussions)**
-- 🐛 **[Issue tracker](https://github.com/benzsevern/infermap/issues)**
+- 📓 **[Open in Colab](https://colab.research.google.com/github/benseverndev-oss/infermap/blob/main/scripts/infermap_demo.ipynb)** — Python notebook
+- 💬 **[GitHub Discussions](https://github.com/benseverndev-oss/infermap/discussions)**
+- 🐛 **[Issue tracker](https://github.com/benseverndev-oss/infermap/issues)**
 
 ## Author
 

@@ -289,7 +289,7 @@ This is a release-plumbing wave: typed-accessor API additions, PyPI metadata ref
 - **Postgres CI lane** (PR #144): flipped from skipped to live so DB integration tests now run on every PR.
 
 ### Changed
-- **PyPI metadata corrected** (PR #148): `[project.urls]` Homepage / Repository / Documentation entries now point at the monorepo at `benzsevern/goldenmatch`. The pre-fold standalone-repo URLs are gone. Metadata only refreshes on a wheel build, so this release is what makes the corrected URLs visible on PyPI.
+- **PyPI metadata corrected** (PR #148): `[project.urls]` Homepage / Repository / Documentation entries now point at the monorepo at `benseverndev-oss/goldenmatch`. The pre-fold standalone-repo URLs are gone. Metadata only refreshes on a wheel build, so this release is what makes the corrected URLs visible on PyPI.
 
 ### Fixed
 - **Reproducibility of all four published benchmark numbers** (PR #152, replaces #150): DQbench composite 91.04, DBLP-ACM 0.9641, Febrl3 0.9443, NCVR 0.9719 now all reproduce from a fresh clone. See `docs/reproducing-benchmarks.md` for the exact commands and dataset prep steps.
@@ -617,7 +617,7 @@ The original v1.9 spec assumed best-effort RED commit would deliver a DQbench co
 - `gm.explain_pair_df()` -- explain a pair match from record dicts
 - Internal: `run_dedupe_df()` and `run_match_df()` pipeline entry points
 - These functions are the prerequisite for native SQL extensions (Postgres/DuckDB)
-- New companion repo: [goldenmatch-extensions](https://github.com/benzsevern/goldenmatch-extensions) -- PostgreSQL extension (`goldenmatch_pg`) and DuckDB extension (`goldenmatch-duckdb`) for in-database entity resolution via SQL
+- New companion repo: [goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions) -- PostgreSQL extension (`goldenmatch_pg`) and DuckDB extension (`goldenmatch-duckdb`) for in-database entity resolution via SQL
 
 ## [1.0.0] - 2026-03-23
 

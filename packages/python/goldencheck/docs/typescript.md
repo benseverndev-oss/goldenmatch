@@ -174,5 +174,5 @@ Each finding has these fields:
 ## Links
 
 - [npm package](https://www.npmjs.com/package/goldencheck)
-- [GitHub source](https://github.com/benzsevern/goldencheck/tree/main/packages/goldencheck-js)
+- [GitHub source](https://github.com/benseverndev-oss/goldencheck/tree/main/packages/goldencheck-js)
 - [Python documentation]({% link installation.md %})

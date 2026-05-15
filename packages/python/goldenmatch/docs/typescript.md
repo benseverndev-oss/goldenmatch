@@ -251,14 +251,14 @@ All peer deps are optional. Install only what you need:
 
 ## Examples
 
-See [`packages/goldenmatch-js/examples/`](https://github.com/benzsevern/goldenmatch/tree/main/packages/goldenmatch-js/examples) for 11 full end-to-end TypeScript examples covering dedupe, match, PPRL, streaming, graph ER, Fellegi-Sunter, and more.
+See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js/examples) for 11 full end-to-end TypeScript examples covering dedupe, match, PPRL, streaming, graph ER, Fellegi-Sunter, and more.
 
 ---
 
 ## Source
 
 - **npm**: [https://www.npmjs.com/package/goldenmatch](https://www.npmjs.com/package/goldenmatch)
-- **GitHub**: [https://github.com/benzsevern/goldenmatch/tree/main/packages/goldenmatch-js](https://github.com/benzsevern/goldenmatch/tree/main/packages/goldenmatch-js)
+- **GitHub**: [https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js)
 
 ---
 

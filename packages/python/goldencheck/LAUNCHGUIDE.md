@@ -44,7 +44,7 @@ Data validation, Data profiling, Data quality monitoring, ETL pipeline checks, S
 data-validation, data-quality, profiling, data-checks, health-score, csv, parquet, excel, domain-packs, drift-detection, etl, pipeline, zero-config, mcp, ai-tools
 
 ## Documentation URL
-https://benzsevern.github.io/goldencheck/
+https://benseverndev-oss.github.io/goldencheck/
 
 ## Health Check URL
 https://goldencheck-mcp-production.up.railway.app/mcp/
