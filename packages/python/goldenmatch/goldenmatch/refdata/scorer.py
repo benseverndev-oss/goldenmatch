@@ -26,7 +26,10 @@ from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cdist
 
 from goldenmatch.plugins.registry import PluginRegistry
-from goldenmatch.refdata.given_names import are_equivalent
+from goldenmatch.refdata.given_names import (
+    aliases_of,
+    are_equivalent,
+)
 from goldenmatch.refdata.given_names import is_available as given_names_available
 from goldenmatch.refdata.surnames import is_available, surname_idf, surname_rank
 
@@ -143,6 +146,73 @@ class GivenNameAliasedJW(ScorerPlugin):
         if given_names_available() and are_equivalent(val_a, val_b):
             return 1.0
         return JaroWinkler.similarity(val_a, val_b)
+
+    def score_matrix(self, values: list[str | None]) -> np.ndarray:
+        """Vectorized N×N scorer.
+
+        Critical for performance: without this method, the scorer plugin
+        path in ``core.scorer._fuzzy_score_matrix`` falls through to a
+        pure-Python O(N²) ``score_pair`` double-loop. At a 658-record
+        block that's 216K Python calls running at ~50K ops/sec — single-
+        handedly responsible for ~94% of wall on a 100K zero-config run
+        (measured via ``core/bench.py``). The vectorized path here
+        replaces that with one ``rapidfuzz.cdist`` call plus a single
+        ``aliases_of`` lookup per unique input — the per-pair work drops
+        to a sparse boolean equivalence mask.
+
+        Algorithm:
+            1. base = cdist(values, JaroWinkler.similarity)
+            2. For each input, compute its alias frozenset once.
+            3. equiv_mask[i,j] = aliases[i] & aliases[j] is non-empty.
+            4. final = where(equiv_mask, 1.0, base).
+        """
+        n = len(values)
+        clean = [v if v is not None else "" for v in values]
+        base = np.asarray(
+            cdist(clean, clean, scorer=JaroWinkler.similarity),
+            dtype=np.float32,
+        )
+        if n == 0 or not given_names_available():
+            return base
+
+        # Cache aliases_of per unique value — many records in a block
+        # often share the same first name (Bob, Bob, Bob...). Without
+        # this dedup, we'd call aliases_of() up to N times for identical
+        # inputs.
+        unique_lookup: dict[str, frozenset[str]] = {}
+        per_row: list[frozenset[str]] = []
+        for v in clean:
+            cache = unique_lookup.get(v)
+            if cache is None:
+                cache = aliases_of(v) if v else frozenset()
+                unique_lookup[v] = cache
+            per_row.append(cache)
+
+        # Identify rows that have a non-empty alias set; pairs where
+        # either side is OOV can't be promoted by the alias rule.
+        has_aliases = np.array(
+            [bool(s) for s in per_row], dtype=bool,
+        )
+        if not has_aliases.any():
+            return base
+
+        # equiv_mask[i,j] = aliases[i] ∩ aliases[j] non-empty. Set
+        # intersection is fast on small frozensets; the worst case is
+        # O(N²) intersections, which is the same cost class as cdist
+        # itself. Skip when neither side has aliases.
+        equiv_mask = np.zeros((n, n), dtype=bool)
+        for i in range(n):
+            if not has_aliases[i]:
+                continue
+            ai = per_row[i]
+            for j in range(i + 1, n):
+                if not has_aliases[j]:
+                    continue
+                if ai & per_row[j]:
+                    equiv_mask[i, j] = True
+                    equiv_mask[j, i] = True
+
+        return np.where(equiv_mask, np.float32(1.0), base)
 
 
 def register_scorers() -> None:

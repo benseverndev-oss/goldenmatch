@@ -642,6 +642,13 @@ def find_fuzzy_matches(
         fuzzy_denominator = np.zeros((n, n), dtype=np.float32)
 
         all_expensive_fields = list(fuzzy_fields) + list(record_emb_fields)
+        # WARNING: do NOT add `with stage()` inside this loop. The
+        # bench harness's `add_timing` does a dict write under the
+        # GIL; with 4 worker threads in score_blocks_parallel, those
+        # writes contend with rapidfuzz's GIL release and slow the
+        # whole pipeline by ~5x (measured: 24s no-bench vs 127s with
+        # per-scorer stages). Stage wrappers at the pipeline level
+        # are fine (single main thread, written once per stage).
         for f_idx, f in enumerate(all_expensive_fields):
             if f.scorer == "record_embedding":
                 try:

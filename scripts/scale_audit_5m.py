@@ -71,8 +71,9 @@ def _pairs_from_ground_truth(gt_path: Path) -> set[tuple[int, int]]:
     internal ``__row_id__`` space (which is what ``cluster.members``
     holds).
     """
-    import polars as pl
     from itertools import combinations
+
+    import polars as pl
 
     df = pl.read_csv(gt_path)
     pairs: set[tuple[int, int]] = set()
@@ -92,8 +93,8 @@ def run_audit(
     output_json: Path,
     summary_md: Path | None,
 ) -> dict:
-    import polars as pl
     import goldenmatch as gm
+    import polars as pl
     from goldenmatch.core.evaluate import evaluate_clusters
 
     print(f"Loading fixture {fixture}...")
@@ -146,12 +147,17 @@ def run_audit(
         config.quality = QualityConfig(mode="disabled")
 
     print("Running dedupe (backend=duckdb)...")
+    # Capture per-stage wall + pair-count accounting under the bench
+    # harness (no cost when no recorder is pushed; we push one here).
+    from goldenmatch.core.bench import bench_capture
     t_dedupe_start = time.time()
-    result = gm.dedupe_df(df, config=config)
+    with bench_capture() as bench:
+        result = gm.dedupe_df(df, config=config)
     t_dedupe = time.time() - t_dedupe_start
     stop.set()
     poller.join(timeout=1.0)
     print(f"Dedupe done in {t_dedupe:.1f}s. Peak RSS: {peak_rss[0]:,.0f} MB")
+    pipeline_bench = bench.to_dict() if bench is not None else {}
 
     # Cluster size distribution.
     cluster_sizes = sorted(
@@ -206,6 +212,7 @@ def run_audit(
         "cluster_size_p99": p99,
         "cluster_size_max": max_cluster,
         "stage_breakdown_seconds": stage_breakdown,
+        "pipeline_bench": pipeline_bench,
         "backend": "duckdb",
     }
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -237,10 +244,32 @@ def _render_markdown(report: dict) -> str:
         "",
     ]
     if report.get("stage_breakdown_seconds"):
-        lines.append("### Per-stage breakdown")
+        lines.append("### Controller per-iteration breakdown")
         lines.append("")
-        for stage, secs in report["stage_breakdown_seconds"].items():
-            lines.append(f"- {stage}: {secs:.1f}s")
+        for stage_name, secs in report["stage_breakdown_seconds"].items():
+            lines.append(f"- {stage_name}: {secs:.1f}s")
+        lines.append("")
+    bench = report.get("pipeline_bench") or {}
+    if bench.get("stage_timings_seconds"):
+        lines.append("### Pipeline stage wall (s)")
+        lines.append("")
+        # Sort descending — biggest wall first, so the bottleneck is at top.
+        sorted_stages = sorted(
+            bench["stage_timings_seconds"].items(),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+        for stage_name, secs in sorted_stages:
+            lines.append(f"- {stage_name}: {secs:.2f}s")
+        lines.append("")
+    if bench.get("metrics"):
+        lines.append("### Pipeline metrics")
+        lines.append("")
+        for key, val in sorted(bench["metrics"].items()):
+            if isinstance(val, (int, float)):
+                lines.append(f"- {key}: {val:,}")
+            else:
+                lines.append(f"- {key}: {val}")
         lines.append("")
     return "\n".join(lines)
 

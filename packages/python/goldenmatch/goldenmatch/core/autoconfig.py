@@ -1326,6 +1326,64 @@ def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 5
     return "all-MiniLM-L6-v2"
 
 
+# ── Scale-aware backend selection ─────────────────────────────────────────
+#
+# Zero-config promise: users run `gm.dedupe_df(big_df)` and get a working
+# pipeline. The default polars-direct backend OOMs around 5M on 16 GB; the
+# duckdb pair-store backend fits 5M in ~12 GB and is the recorded
+# scale-audit baseline (CLAUDE.md lines 90-92). Selecting it automatically
+# at large N is the smallest change that makes "zero-config at 5M" a thing
+# that exists.
+#
+# Override knobs:
+#   GOLDENMATCH_AUTOCONFIG_BACKEND=0       → disable auto-selection entirely
+#   GOLDENMATCH_AUTOCONFIG_BACKEND=duckdb  → force duckdb regardless of N
+#   GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=<int>
+#       → override the row-count cutoff (default 1_000_000)
+
+_AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD = 1_000_000
+
+
+def _scale_aware_backend(row_count: int) -> str | None:
+    """Select an execution backend based on row count.
+
+    Returns the value to assign to ``GoldenMatchConfig.backend``:
+      * ``None`` for small data → in-memory polars-direct (fastest).
+      * ``"duckdb"`` at large N → spills pair accumulator off-heap.
+
+    Future tiers (chunked, ray) will extend this ladder once they're
+    wired into the public pipeline. For now the duckdb pair store is
+    the only out-of-core option the main pipeline already routes
+    through (``_get_block_scorer`` in core/pipeline.py).
+    """
+    override = os.environ.get("GOLDENMATCH_AUTOCONFIG_BACKEND")
+    if override is not None:
+        token = override.strip().lower()
+        if token in ("0", "false", "disabled", ""):
+            return None
+        if token in ("none", "null"):
+            return None
+        # Pass through explicit backend names ("duckdb", "ray").
+        return token
+
+    raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD")
+    if raw is not None:
+        try:
+            threshold = int(raw)
+        except ValueError:
+            logger.warning(
+                "GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=%r is not an int; "
+                "ignoring and using default.", raw,
+            )
+            threshold = _AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD
+    else:
+        threshold = _AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD
+
+    if row_count >= threshold:
+        return "duckdb"
+    return None
+
+
 # ── Main entry point ──────────────────────────────────────────────────────
 
 # ContextVar populated by auto_configure_df after each successful controller
@@ -1458,6 +1516,19 @@ def auto_configure_df(
         v0_kwargs=v0_kw,
         skip_finalize=_skip_finalize,
     )
+
+    # Scale-aware backend selection. Only set when the controller didn't
+    # already commit a backend choice (preserves explicit user/test
+    # overrides plumbed through v0_kwargs in the future).
+    if getattr(config, "backend", None) is None:
+        selected = _scale_aware_backend(df.height)
+        if selected is not None:
+            config.backend = selected
+            logger.info(
+                "auto-config: selected backend=%s for %d rows (threshold heuristic)",
+                selected, df.height,
+            )
+
     _LAST_CONTROLLER_RUN.set((profile, history))
     return config
 

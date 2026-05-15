@@ -364,12 +364,14 @@ def dedupe_df(
             # auto_configure_df we'd recurse). Task 5.2 fix.
             # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
             _auto_config_provider = _detect_llm_provider() if llm_scorer else None
-            config = _self_api.auto_configure_df(
-                df,
-                llm_provider=_auto_config_provider,
-                llm_auto=llm_auto,
-                _skip_finalize=True,
-            )
+            from goldenmatch.core.bench import stage as _bench_stage
+            with _bench_stage("auto_configure"):
+                config = _self_api.auto_configure_df(
+                    df,
+                    llm_provider=_auto_config_provider,
+                    llm_auto=llm_auto,
+                    _skip_finalize=True,
+                )
             _used_controller = True
 
     # All branches above bind config to GoldenMatchConfig (load_config returns
