@@ -75,7 +75,7 @@ The fold is performed in a fresh clone of `goldenmatch` (the new monorepo workin
 
 ### 1. Prep
 
-1. `git clone https://github.com/benzsevern/goldenmatch.git monorepo-staging`
+1. `git clone https://github.com/benseverndev-oss/goldenmatch.git monorepo-staging`
 2. In the staging clone, perform an initial filter-repo pass on **the existing goldenmatch history itself**:
    - Re-root python paths to `packages/python/goldenmatch/`.
    - Re-root `packages/goldenmatch-js/**` to `packages/typescript/goldenmatch/`.
@@ -116,7 +116,7 @@ Then merge each into staging via `--allow-unrelated-histories`.
 
 1. Add monorepo-level files (`pyproject.toml` workspace root, root `package.json`, `Cargo.toml`, `justfile`, `.gitignore`, root `README.md`).
 2. Verify each package builds in isolation: `uv sync && uv run pytest`, `npm install && npm test` per TS package, `cargo build`, `cargo test`.
-3. Tag the current remote `main` as `main-pre-monorepo` and **push that tag to the remote first** (so the pre-monorepo state survives any local disk loss). Then force-push staging to `benzsevern/goldenmatch` `main`, gated on user verification.
+3. Tag the current remote `main` as `main-pre-monorepo` and **push that tag to the remote first** (so the pre-monorepo state survives any local disk loss). Then force-push staging to `benseverndev-oss/goldenmatch` `main`, gated on user verification.
 
 ## Workspace tooling
 
@@ -206,7 +206,7 @@ No release / publish automation in this fold-in — that is follow-up work after
 After staging is force-pushed and verified:
 
 1. Archive all 8 source repos on GitHub (read-only, history preserved publicly).
-2. Edit each archived repo's README to add a header: *"Moved to [`benzsevern/goldenmatch`](https://github.com/benzsevern/goldenmatch) monorepo at `packages/<lang>/<name>/`"*.
+2. Edit each archived repo's README to add a header: *"Moved to [`benseverndev-oss/goldenmatch`](https://github.com/benseverndev-oss/goldenmatch) monorepo at `packages/<lang>/<name>/`"*.
 3. PyPI / npm publish targets unchanged — packages continue to publish under their original names (`goldenmatch`, `goldencheck`, `goldenflow`, `goldenpipe`, `infermap`, `@golden/goldencheck-types`, etc.) from their new monorepo locations.
 
 ## Risks and mitigations

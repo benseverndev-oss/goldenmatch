@@ -8,8 +8,8 @@ npm install goldenmatch
 
 [![npm](https://img.shields.io/npm/v/goldenmatch?color=d4a017)](https://www.npmjs.com/package/goldenmatch)
 [![Node](https://img.shields.io/node/v/goldenmatch?color=339933)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/benzsevern/goldenmatch/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-590%20passing-brightgreen)](https://github.com/benzsevern/goldenmatch/tree/main/packages/goldenmatch-js/tests)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/benseverndev-oss/goldenmatch/blob/main/LICENSE)
+[![Tests](https://img.shields.io/badge/tests-590%20passing-brightgreen)](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js/tests)
 
 ---
 
@@ -185,8 +185,8 @@ probabilistic matching (Fellegi-Sunter), PPRL, streaming, LLM scoring, explanati
 
 ## Documentation
 
-Full docs: https://benzsevern.github.io/goldenmatch/typescript
+Full docs: https://benseverndev-oss.github.io/goldenmatch/typescript
 
 ## License
 
-MIT. See [LICENSE](https://github.com/benzsevern/goldenmatch/blob/main/LICENSE).
+MIT. See [LICENSE](https://github.com/benseverndev-oss/goldenmatch/blob/main/LICENSE).

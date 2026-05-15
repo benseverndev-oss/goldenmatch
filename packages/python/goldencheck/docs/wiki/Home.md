@@ -65,4 +65,4 @@ GoldenCheck's zero-config discovery outperforms every competitor — even when t
 
 ---
 
-**From the maker of [GoldenMatch](https://github.com/benzsevern/goldenmatch)** — entity resolution toolkit.
+**From the maker of [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch)** — entity resolution toolkit.

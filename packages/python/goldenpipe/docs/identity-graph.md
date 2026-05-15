@@ -138,5 +138,5 @@ Test contracts: `tests/test_identity_stage.py::test_two_runs_produce_stable_enti
 ## See also
 
 - `examples/airflow/golden_suite_identity_graph.py`
-- [GoldenMatch Identity Graph docs](https://benzsevern.github.io/goldenmatch/identity-graph)
+- [GoldenMatch Identity Graph docs](https://benseverndev-oss.github.io/goldenmatch/identity-graph)
 - `docs/superpowers/specs/2026-05-13-goldenpipe-v1.2-identity-orchestration-design.md` — the spec this implements

@@ -330,7 +330,7 @@ Step 3 of the original 4-step user directive ("attack wall time") is promoted to
 
 The production user-facing entry point (`goldenmatch._api.dedupe_df`) was already threading `_skip_finalize=True` specifically to prevent this duplication. The audit harness was the only caller not matching the production pattern. Fix landed in PR #187.
 
-### Corrected 1M measurements (cloud run [25714358083](https://github.com/benzsevern/goldenmatch/actions/runs/25714358083))
+### Corrected 1M measurements (cloud run [25714358083](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25714358083))
 
 `ubuntu-latest` (4-core, 16 GB Linux), tracemalloc off, both PRs #186 + #187 on main.
 
@@ -376,7 +376,7 @@ Both bugs landed in PRs alongside their discoveries (#173 hardened tracemalloc h
 
 PR #189 — `perf(blocker): replace df.filter(is_in([...])) with direct row indexing`. Three hotpaths in `core/blocker.py` (ANN, canopy) and `core/learned_blocking.py` were doing `df.filter(pl.col("__row_id__").is_in([list_of_member_row_ids]))` per block — an O(N×blocks) scan that materialised a fresh LazyFrame each time. Swap to direct positional indexing `df[sorted(member_positions)]` — O(K) per block. 42.9× microbench speedup; 45% reduction in `run_dedupe` wall at 1M.
 
-### Measurement (cloud validation run [25738348722](https://github.com/benzsevern/goldenmatch/actions/runs/25738348722))
+### Measurement (cloud validation run [25738348722](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25738348722))
 
 `ubuntu-latest` (4-core, 16 GB Linux), tracemalloc off, post-#189.
 
@@ -436,7 +436,7 @@ These three are independent — can run in any order or in parallel. None are ur
 
 PR #197 fixed the commit-policy bug (issue #195): `pick_committed()`'s lex tiebreaker in the precision-collapsed regime was mechanically biased toward iterations that lowered threshold most. Post-fix, the controller correctly commits v0 in the collapsed regime instead of an over-corrected later iteration.
 
-**Cloud validation at 2M ([run 25749197084](https://github.com/benzsevern/goldenmatch/actions/runs/25749197084)) confirms the commit policy is fixed**: log shows `auto-config committed best-effort RED config (iter=v0, ...)`. Pre-fix, this would have been `iter=3`.
+**Cloud validation at 2M ([run 25749197084](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25749197084)) confirms the commit policy is fixed**: log shows `auto-config committed best-effort RED config (iter=v0, ...)`. Pre-fix, this would have been `iter=3`.
 
 **But the user-facing symptom is barely changed:**
 
@@ -498,7 +498,7 @@ PR #200 lands the learned-blocking sample-dependence fix from #199. The autoconf
 
 Replaced with row-count-aware `max(1000, min(10_000, total_rows // 200))`. At 5K-200K the clamp pins to 1000 (preserving existing behaviour and small-data tests). At 1M it's 5000 (matches pipeline default). At 2M it's 10000 (extra headroom).
 
-### Cloud 2M validation ([run 25757948918](https://github.com/benzsevern/goldenmatch/actions/runs/25757948918))
+### Cloud 2M validation ([run 25757948918](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25757948918))
 
 | metric | 2M pre-#200 (degenerate) | **2M post-#200 (working pipeline)** |
 |---|---:|---:|
@@ -524,7 +524,7 @@ A 16 GB Linux runner is the wrong size for 2M dedupe with the current memory pro
 ### Status of the scale-audit workstream
 
 - **1M on 16 GB Linux**: solid baseline. 12.3 min, 8.4 GB peak, 836K correct clusters. Unchanged user-facing claim.
-- **2M on 16 GB Linux**: memory-bound (confirmed). Working set climbs past 13.5 GB and is still rising at trip time. Tested watchdog bump 14.5 → 15.0 GB ([run 25764924298](https://github.com/benzsevern/goldenmatch/actions/runs/25764924298)): RSS reached 13.6 GB before tripping, 12 min later in wall than the prior run — confirming RSS is genuinely growing, not plateauing. Linear extrapolation says ~15-16 GB at full pipeline completion, right at the OS-OOM ceiling on a 16 GB runner. Memory optimisations (future-work items 1+2) or a bigger runner are the only paths. Marginal watchdog bumps do not help.
+- **2M on 16 GB Linux**: memory-bound (confirmed). Working set climbs past 13.5 GB and is still rising at trip time. Tested watchdog bump 14.5 → 15.0 GB ([run 25764924298](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25764924298)): RSS reached 13.6 GB before tripping, 12 min later in wall than the prior run — confirming RSS is genuinely growing, not plateauing. Linear extrapolation says ~15-16 GB at full pipeline completion, right at the OS-OOM ceiling on a 16 GB runner. Memory optimisations (future-work items 1+2) or a bigger runner are the only paths. Marginal watchdog bumps do not help.
 - **5M+ on 16 GB Linux**: out of reach without architectural changes.
 
 Issues #195 and #199 are both **closed**. The scale-audit workstream's commit-policy + learned-blocking bugs are resolved; what remains is a memory ceiling at 2M+, which is a separate, smaller workstream.

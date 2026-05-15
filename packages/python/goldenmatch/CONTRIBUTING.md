@@ -5,23 +5,23 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Quick Start
 
 ```bash
-git clone https://github.com/benzsevern/goldenmatch.git
+git clone https://github.com/benseverndev-oss/goldenmatch.git
 cd goldenmatch
 pip install -e ".[dev]"
 pytest --tb=short
 ```
 
-Or open a [Codespace](https://github.com/benzsevern/goldenmatch/codespaces) for a pre-configured dev environment.
+Or open a [Codespace](https://github.com/benseverndev-oss/goldenmatch/codespaces) for a pre-configured dev environment.
 
 ## Ways to Contribute
 
 ### Report Bugs
 
-Use the [bug report template](https://github.com/benzsevern/goldenmatch/issues/new?template=bug_report.yml). Include your version, config, and the full error output.
+Use the [bug report template](https://github.com/benseverndev-oss/goldenmatch/issues/new?template=bug_report.yml). Include your version, config, and the full error output.
 
 ### Suggest Features
 
-Use the [feature request template](https://github.com/benzsevern/goldenmatch/issues/new?template=feature_request.yml) or post in [Discussions > Ideas](https://github.com/benzsevern/goldenmatch/discussions/categories/ideas).
+Use the [feature request template](https://github.com/benseverndev-oss/goldenmatch/issues/new?template=feature_request.yml) or post in [Discussions > Ideas](https://github.com/benseverndev-oss/goldenmatch/discussions/categories/ideas).
 
 ### Add a Domain Pack
 
@@ -90,5 +90,5 @@ docs: update benchmarks with v0.3.1 results
 
 ## Questions?
 
-- [Discussions Q&A](https://github.com/benzsevern/goldenmatch/discussions/categories/q-a) for help
-- [Discussions Ideas](https://github.com/benzsevern/goldenmatch/discussions/categories/ideas) for feature brainstorming
+- [Discussions Q&A](https://github.com/benseverndev-oss/goldenmatch/discussions/categories/q-a) for help
+- [Discussions Ideas](https://github.com/benseverndev-oss/goldenmatch/discussions/categories/ideas) for feature brainstorming

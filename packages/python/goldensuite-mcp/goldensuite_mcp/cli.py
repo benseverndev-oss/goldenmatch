@@ -49,7 +49,7 @@ def _serve_http(host: str, port: int) -> None:
                     "goldenmatch, goldencheck, goldenflow, goldenpipe, infermap. "
                     "First-wins on tool-name collisions; collisions are logged at startup."
                 ),
-                "homepage": "https://github.com/benzsevern/goldenmatch",
+                "homepage": "https://github.com/benseverndev-oss/goldenmatch",
                 "iconUrl": "https://avatars.githubusercontent.com/u/192581748",
             }
         )

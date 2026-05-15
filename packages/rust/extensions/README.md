@@ -1,6 +1,6 @@
 # goldenmatch-extensions
 
-Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatch) -- run entity resolution directly from PostgreSQL and DuckDB.
+Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) -- run entity resolution directly from PostgreSQL and DuckDB.
 
 ```sql
 -- Deduplicate a table
@@ -52,7 +52,7 @@ curl -sSL https://raw.githubusercontent.com/benzsevern/goldenmatch-extensions/ma
 ### Docker (zero config)
 
 ```bash
-docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benzsevern/goldenmatch-extensions:latest
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 # Extension is pre-installed. Connect and use:
 psql -h localhost -U postgres -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
 ```

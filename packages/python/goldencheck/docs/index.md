@@ -83,7 +83,7 @@ goldencheck data.csv
 ---
 
 **Part of the Golden Suite:**
-[GoldenMatch](https://github.com/benzsevern/goldenmatch) ·
+[GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) ·
 [dbt-goldencheck](https://github.com/benzsevern/dbt-goldencheck) ·
 [goldencheck-types](https://github.com/benzsevern/goldencheck-types) ·
 [goldencheck-action](https://github.com/benzsevern/goldencheck-action)

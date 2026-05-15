@@ -6,7 +6,7 @@ Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 - **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
 - **GoldenFlow:** `D:\show_case\goldenflow` -- Data transformation. Has its own CLAUDE.md.
 - **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenpipe`, `benzsevern/goldencheck`, `benzsevern/goldenflow`, `benzsevern/goldenmatch`
+- **GitHub:** `benzsevern/goldenpipe`, `benzsevern/goldencheck`, `benzsevern/goldenflow`, `benseverndev-oss/goldenmatch`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main

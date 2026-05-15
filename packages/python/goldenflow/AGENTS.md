@@ -5,7 +5,7 @@ Data transformation toolkit -- standardize, reshape, and normalize messy data. D
 ## Related Projects
 - **GoldenCheck:** `D:\show_case\goldencheck` -- Data validation. Has its own CLAUDE.md.
 - **GoldenMatch:** `D:\show_case\goldenmatch` -- Entity resolution. Has its own CLAUDE.md.
-- **GitHub:** `benzsevern/goldenflow`, `benzsevern/goldencheck`, `benzsevern/goldenmatch`
+- **GitHub:** `benzsevern/goldenflow`, `benzsevern/goldencheck`, `benseverndev-oss/goldenmatch`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main

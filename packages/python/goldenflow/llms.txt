@@ -106,5 +106,5 @@ dedup:
 ## Part of the Golden Suite
 - [GoldenCheck](https://github.com/benzsevern/goldencheck) — Validate & profile
 - [GoldenFlow](https://github.com/benzsevern/goldenflow) — Transform & standardize
-- [GoldenMatch](https://github.com/benzsevern/goldenmatch) — Deduplicate & match
+- [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) — Deduplicate & match
 - [GoldenPipe](https://github.com/benzsevern/goldenpipe) — Orchestrate the pipeline

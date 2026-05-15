@@ -244,7 +244,7 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
   "description": "Autonomous entity resolution agent.",
   "provider": {
     "organization": "GoldenMatch",
-    "url": "https://github.com/benzsevern/goldenmatch"
+    "url": "https://github.com/benseverndev-oss/goldenmatch"
   },
   "capabilities": {
     "streaming": true,

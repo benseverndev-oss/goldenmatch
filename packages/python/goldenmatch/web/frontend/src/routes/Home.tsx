@@ -189,7 +189,7 @@ export function Home() {
  *  reproducibility doc (PR #152) and the scale envelope guide (PR #149). The
  *  benchmarks are the ones the README claims; this is just the receipts. */
 function ProvenanceCallout() {
-  const REPO = "https://github.com/benzsevern/goldenmatch";
+  const REPO = "https://github.com/benseverndev-oss/goldenmatch";
   const benchmarks: { name: string; f1: string; note: string }[] = [
     { name: "DQbench", f1: "91.04", note: "composite, no LLM" },
     { name: "DBLP-ACM", f1: "0.9641", note: "auto-config beats hand-tuned" },

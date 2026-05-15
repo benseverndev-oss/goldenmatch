@@ -3,7 +3,7 @@
 ## Related Projects
 - **SQL Extensions repo:** `D:\show_case\goldenmatch-extensions` -- Postgres extension + DuckDB UDFs. Has its own CLAUDE.md.
 - **PyPI:** `goldenmatch` (Python toolkit), `goldenmatch-duckdb` (DuckDB UDFs)
-- **GitHub:** `benzsevern/goldenmatch`, `benzsevern/goldenmatch-extensions`
+- **GitHub:** `benseverndev-oss/goldenmatch`, `benzsevern/goldenmatch-extensions`
 
 ## Branch & Merge SOP (all Golden Suite repos)
 - Feature work goes on `feature/<name>` branches, never directly to main
@@ -167,7 +167,7 @@
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenmatch-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenmatch`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenmatch`
 - **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

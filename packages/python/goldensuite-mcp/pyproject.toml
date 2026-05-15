@@ -41,10 +41,10 @@ dev = ["pytest>=8", "ruff>=0.6"]
 goldensuite-mcp = "goldensuite_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenmatch"
-Repository = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldensuite-mcp#readme"
-Issues = "https://github.com/benzsevern/goldenmatch/issues"
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldensuite-mcp#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
 
 [tool.uv.sources]
 goldenmatch = { workspace = true }

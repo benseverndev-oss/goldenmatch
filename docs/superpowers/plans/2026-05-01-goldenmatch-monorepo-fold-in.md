@@ -4,7 +4,7 @@
 
 **Goal:** Fold 8 sibling GitHub repos into the existing `goldenmatch` repo as a polyglot monorepo with full git history preserved for every source.
 
-**Architecture:** Use `git filter-repo` to rewrite each source repo's history under its target prefix in `packages/<lang>/<name>/`. For the four parity repos (python+TS), do two filter-repo passes producing two rewritten clones each. Merge every rewritten clone into a fresh `monorepo-staging` working tree using `git merge --allow-unrelated-histories`. Add monorepo-level workspace plumbing (uv, fake JS workspace, cargo, just, CI). Verify per-language builds, then tag-and-force-push to `benzsevern/goldenmatch`.
+**Architecture:** Use `git filter-repo` to rewrite each source repo's history under its target prefix in `packages/<lang>/<name>/`. For the four parity repos (python+TS), do two filter-repo passes producing two rewritten clones each. Merge every rewritten clone into a fresh `monorepo-staging` working tree using `git merge --allow-unrelated-histories`. Add monorepo-level workspace plumbing (uv, fake JS workspace, cargo, just, CI). Verify per-language builds, then tag-and-force-push to `benseverndev-oss/goldenmatch`.
 
 **Note on deliberate spec divergence:** The spec describes performing the goldenmatch rewrite "in place" inside the staging clone. This plan treats goldenmatch symmetrically with the other parity repos — staging starts as an empty repo with a placeholder root commit, and goldenmatch's two filter-repo passes are merged in just like every other source. End state matches the spec; the procedure is cleaner and avoids special-casing.
 
@@ -42,7 +42,7 @@
 
 ```bash
 mkdir -p D:/mr && cd D:/mr
-git clone https://github.com/benzsevern/goldenmatch.git goldenmatch-source
+git clone https://github.com/benseverndev-oss/goldenmatch.git goldenmatch-source
 cd goldenmatch-source
 git fetch --all --tags
 ```
@@ -56,12 +56,12 @@ git tag -a main-pre-monorepo -m "State of main before monorepo fold-in (2026-05-
 git push origin main-pre-monorepo
 ```
 
-Verify on GitHub: https://github.com/benzsevern/goldenmatch/releases/tag/main-pre-monorepo exists.
+Verify on GitHub: https://github.com/benseverndev-oss/goldenmatch/releases/tag/main-pre-monorepo exists.
 
 - [ ] **Step 3: Verify safety tag is reachable from a fresh clone**
 
 ```bash
-cd D:/mr && git clone --depth 1 --branch main-pre-monorepo https://github.com/benzsevern/goldenmatch.git verify-tag
+cd D:/mr && git clone --depth 1 --branch main-pre-monorepo https://github.com/benseverndev-oss/goldenmatch.git verify-tag
 ls verify-tag
 rm -rf verify-tag
 ```
@@ -751,13 +751,13 @@ Wait for explicit user approval before Phase 7.
 
 ## Phase 7 — Push to remote
 
-### Task 7.1: Force-push staging to `benzsevern/goldenmatch` `main`
+### Task 7.1: Force-push staging to `benseverndev-oss/goldenmatch` `main`
 
 - [ ] **Step 1: Add the real remote**
 
 ```bash
 cd D:/mr/monorepo-staging
-git remote add origin https://github.com/benzsevern/goldenmatch.git
+git remote add origin https://github.com/benseverndev-oss/goldenmatch.git
 git fetch origin
 ```
 
@@ -783,7 +783,7 @@ Expected: `+ <oldsha>...<newsha> main -> main (forced update)`.
 
 ```bash
 cd D:/mr && rm -rf verify-monorepo
-git clone https://github.com/benzsevern/goldenmatch.git verify-monorepo
+git clone https://github.com/benseverndev-oss/goldenmatch.git verify-monorepo
 cd verify-monorepo
 just install
 ```
@@ -810,7 +810,7 @@ git checkout main  # or feature/ai-coder-docs for goldenmatch-extensions
 python -c "
 import pathlib
 p = pathlib.Path('README.md')
-notice = '> **Moved.** This repo has moved into the [\`benzsevern/goldenmatch\`](https://github.com/benzsevern/goldenmatch) monorepo at \`packages/<lang>/<name>/\`. This repo is archived; new development happens in the monorepo.\n\n'
+notice = '> **Moved.** This repo has moved into the [\`benseverndev-oss/goldenmatch\`](https://github.com/benseverndev-oss/goldenmatch) monorepo at \`packages/<lang>/<name>/\`. This repo is archived; new development happens in the monorepo.\n\n'
 existing = p.read_bytes() if p.exists() else b''
 p.write_bytes(notice.encode('utf-8') + existing)
 "
@@ -852,7 +852,7 @@ Expected: all `true`.
 - [ ] **Step 2: Confirm `goldenmatch` is NOT archived and shows the new layout**
 
 ```bash
-gh repo view benzsevern/goldenmatch --json isArchived --jq .isArchived
+gh repo view benseverndev-oss/goldenmatch --json isArchived --jq .isArchived
 ```
 
 Expected: `false`.
@@ -864,7 +864,7 @@ Expected: `false`.
 If catastrophic failure between Phase 7 step 3 (force-push) and Phase 8:
 
 ```bash
-cd /tmp && git clone --branch main-pre-monorepo https://github.com/benzsevern/goldenmatch.git rollback
+cd /tmp && git clone --branch main-pre-monorepo https://github.com/benseverndev-oss/goldenmatch.git rollback
 cd rollback
 git push --force origin main-pre-monorepo:main
 ```

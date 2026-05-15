@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.benzsevern/goldenmatch",
+  "name": "io.github.benseverndev-oss/goldenmatch",
   "title": "GoldenMatch",
   "description": "Find duplicate records in 30 seconds. Zero-config entity resolution, 97.2% F1 out of the box.",
-  "websiteUrl": "https://benzsevern.github.io/goldenmatch/",
+  "websiteUrl": "https://benseverndev-oss.github.io/goldenmatch/",
   "version": "1.13.0",
   "repository": {
-    "url": "https://github.com/benzsevern/goldenmatch",
+    "url": "https://github.com/benseverndev-oss/goldenmatch",
     "source": "github"
   },
   "packages": [

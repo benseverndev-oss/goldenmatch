@@ -63,7 +63,7 @@ Out of scope for the v1 quality program; tracked as a TODO.
 - `OPENAI_API_KEY` repo secret (cost-controlled by `BudgetConfig(max_calls=500, max_cost_usd=1.0)`)
 - `import torch` doesn't crash the runner — this segfaults on the maintainer's local Windows but works on Linux
 
-The lane's `case` block already checks `OPENAI_API_KEY`. Setting the secret in the `benzsevern/goldenmatch` repo (Settings → Secrets and variables → Actions) flips this lane to `configured`. Cost: ~$0.05–0.50 per run depending on test scope.
+The lane's `case` block already checks `OPENAI_API_KEY`. Setting the secret in the `benseverndev-oss/goldenmatch` repo (Settings → Secrets and variables → Actions) flips this lane to `configured`. Cost: ~$0.05–0.50 per run depending on test scope.
 
 ### `embedder` lane — Vertex AI tests
 
@@ -93,7 +93,7 @@ Runs on `schedule` (weekly) + `workflow_dispatch`. Gated by `vars.RUN_BENCHMARKS
 
 To trigger a one-off measurement (e.g. before a release):
 ```bash
-gh workflow run benchmarks --repo benzsevern/goldenmatch -f datasets=all -f with_llm=false
+gh workflow run benchmarks --repo benseverndev-oss/goldenmatch -f datasets=all -f with_llm=false
 ```
 
 ## Coverage gate

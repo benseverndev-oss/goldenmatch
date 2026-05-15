@@ -16,7 +16,7 @@ npx tsx examples/typescript/01-quickstart.ts
 For 03, spin up the master MCP server first:
 
 ```bash
-docker run -p 8300:8300 ghcr.io/benzsevern/goldensuite-mcp:latest
+docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
 npx tsx examples/typescript/03-mcp-client.ts
 ```
 

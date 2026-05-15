@@ -29,7 +29,7 @@ pip install goldenmatch[embeddings,llm,postgres]
 ## Development Install
 
 ```bash
-git clone https://github.com/benzsevern/goldenmatch.git
+git clone https://github.com/benseverndev-oss/goldenmatch.git
 cd goldenmatch
 pip install -e ".[dev,embeddings,llm,postgres]"
 ```

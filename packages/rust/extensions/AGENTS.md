@@ -1,6 +1,6 @@
 # GoldenMatch Extensions
 
-Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatch) (`D:\show_case\goldenmatch`).
+Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) (`D:\show_case\goldenmatch`).
 
 ## Related Projects
 - **Main repo:** `D:\show_case\goldenmatch` -- Python entity resolution toolkit (v1.1.0+).

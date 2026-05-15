@@ -27,7 +27,7 @@ def test_agent_card_has_required_fields():
     assert card["url"] == "http://localhost:8080"
     assert card["version"]
     assert card["provider"]["organization"] == "GoldenMatch"
-    assert card["provider"]["url"] == "https://github.com/benzsevern/goldenmatch"
+    assert card["provider"]["url"] == "https://github.com/benseverndev-oss/goldenmatch"
     assert card["capabilities"]["streaming"] is True
     assert card["capabilities"]["pushNotifications"] is False
     assert card["authentication"]["schemes"] == ["bearer"]

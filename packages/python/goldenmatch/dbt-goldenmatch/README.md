@@ -1,6 +1,6 @@
 # dbt-goldenmatch
 
-dbt integration for [GoldenMatch](https://github.com/benzsevern/goldenmatch) entity resolution.
+dbt integration for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) entity resolution.
 
 ## Installation
 

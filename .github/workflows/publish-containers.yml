@@ -1,6 +1,6 @@
 name: publish-containers
 
-# Builds and pushes 7 container images to ghcr.io/benzsevern/*:
+# Builds and pushes 7 container images to ghcr.io/benseverndev-oss/*:
 #   goldensuite-mcp, goldenmatch-mcp, goldencheck-mcp, goldenflow-mcp,
 #   goldenpipe-mcp, infermap-mcp, goldenmatch-extensions
 #

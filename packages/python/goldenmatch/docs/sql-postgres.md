@@ -29,12 +29,12 @@ sudo systemctl restart postgresql
 ### Docker
 
 ```bash
-docker pull ghcr.io/benzsevern/goldenmatch-extensions:latest
+docker pull ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 
 docker run -d \
   -e POSTGRES_PASSWORD=secret \
   -p 5432:5432 \
-  ghcr.io/benzsevern/goldenmatch-extensions:latest
+  ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 ```
 
 ### From source

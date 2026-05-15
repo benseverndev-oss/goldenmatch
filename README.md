@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.benzsevern/goldenmatch -->
+<!-- mcp-name: io.github.benseverndev-oss/goldenmatch -->
 <div align="center">
 
 # 🟡 Golden Suite
@@ -17,31 +17,31 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 <!-- Quality / proof -->
-[![CI](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benzsevern/goldenmatch/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/benzsevern/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benzsevern/goldenmatch)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benzsevern/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benzsevern/goldenmatch)
+[![CI](https://github.com/benseverndev-oss/goldenmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/benseverndev-oss/goldenmatch/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/benseverndev-oss/goldenmatch/graph/badge.svg)](https://codecov.io/gh/benseverndev-oss/goldenmatch)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/benseverndev-oss/goldenmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/benseverndev-oss/goldenmatch)
 [![DQBench ER](https://img.shields.io/badge/DQBench%20ER-95.30-d4a017)](https://github.com/benzsevern/dqbench)
 [![DBLP-ACM F1](https://img.shields.io/badge/DBLP--ACM%20F1-97.2%25-d4a017)](packages/python/goldenmatch/README.md#benchmarks)
 
 <!-- Reach -->
 [![PyPI downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenzsevern%2Fgoldenmatch%2Fbadges%2Fpypi-downloads.json)](https://pepy.tech/projects?q=goldenmatch+goldencheck+goldenpipe+goldenflow+infermap+goldencheck-types)
 [![npm downloads (suite)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbenzsevern%2Fgoldenmatch%2Fbadges%2Fnpm-downloads.json)](https://www.npmjs.com/~benzsevern)
-[![GitHub stars](https://img.shields.io/github/stars/benzsevern/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benzsevern/goldenmatch/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
 [![Docs](https://img.shields.io/badge/docs-bensevern.dev-d4a017)](https://bensevern.dev/)
-[![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benzsevern/goldenmatch/wiki)
-[![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
-[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
+[![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benseverndev-oss/goldenmatch/wiki)
+[![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
+[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benseverndev-oss/goldenmatch)
 
 <!-- Activity -->
-[![Last commit](https://img.shields.io/github/last-commit/benzsevern/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benzsevern/goldenmatch/commits/main)
+[![Last commit](https://img.shields.io/github/last-commit/benseverndev-oss/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benseverndev-oss/goldenmatch/commits/main)
 
 </div>
 
-[![GoldenMatch web workbench — pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benzsevern/goldenmatch/wiki/Web-UI)
+[![GoldenMatch web workbench — pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
 
-<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benzsevern/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
+<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 ```bash
 # Headline package: dedupe a CSV in 30 seconds
@@ -126,7 +126,7 @@ flowchart LR
 | Deduplicate a CSV right now | [`packages/python/goldenmatch`](packages/python/goldenmatch/README.md#quick-start) |
 | Use from Claude Desktop / Code | [`packages/python/goldenmatch` — MCP](packages/python/goldenmatch/README.md#remote-mcp-server) |
 | Edit rules in a browser, label pairs, compare runs | [`packages/python/goldenmatch` — Web UI](packages/python/goldenmatch/README.md#web-ui) |
-| Build AI agents that deduplicate | [ER Agent / A2A wiki page](https://github.com/benzsevern/goldenmatch/wiki/ER-Agent) |
+| Build AI agents that deduplicate | [ER Agent / A2A wiki page](https://github.com/benseverndev-oss/goldenmatch/wiki/ER-Agent) |
 | Profile data quality before matching | [`packages/python/goldencheck`](packages/python/goldencheck/README.md) |
 | Standardize messy fields (phone, date, address) | [`packages/python/goldenflow`](packages/python/goldenflow/README.md) |
 | Run the full pipeline declaratively | [`packages/python/goldenpipe`](packages/python/goldenpipe/README.md) |
@@ -136,7 +136,7 @@ flowchart LR
 | Add data-quality gates to dbt | [`packages/dbt/goldencheck`](packages/dbt/goldencheck/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
 | Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
-| Run from a single MCP container | [`docker run ghcr.io/benzsevern/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
+| Run from a single MCP container | [`docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
 | Pull every Suite container | [GitHub Packages](https://github.com/benzsevern?tab=packages) |
 
 ---
@@ -237,7 +237,7 @@ Sister packages compose: `pip install goldenpipe[full]` brings in Check + Flow +
 
 ## Remote MCP Server
 
-GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch) — connect from any MCP client without installing anything.
+GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch) — connect from any MCP client without installing anything.
 
 ```json
 {
@@ -259,17 +259,17 @@ Every Suite package ships as a multi-arch container image (linux/amd64 + linux/a
 
 ```bash
 # One container, every Suite tool — the convenience option
-docker run -p 8300:8300 ghcr.io/benzsevern/goldensuite-mcp:latest
+docker run -p 8300:8300 ghcr.io/benseverndev-oss/goldensuite-mcp:latest
 
 # Per-package containers — narrower deployments
-docker run -p 8200:8200 ghcr.io/benzsevern/goldenmatch-mcp:latest
-docker run -p 8100:8100 ghcr.io/benzsevern/goldencheck-mcp:latest
-docker run -p 8150:8150 ghcr.io/benzsevern/goldenflow-mcp:latest
-docker run -p 8250:8250 ghcr.io/benzsevern/goldenpipe-mcp:latest
-docker run -p 8400:8400 ghcr.io/benzsevern/infermap-mcp:latest
+docker run -p 8200:8200 ghcr.io/benseverndev-oss/goldenmatch-mcp:latest
+docker run -p 8100:8100 ghcr.io/benseverndev-oss/goldencheck-mcp:latest
+docker run -p 8150:8150 ghcr.io/benseverndev-oss/goldenflow-mcp:latest
+docker run -p 8250:8250 ghcr.io/benseverndev-oss/goldenpipe-mcp:latest
+docker run -p 8400:8400 ghcr.io/benseverndev-oss/infermap-mcp:latest
 
 # Postgres + extension preinstalled
-docker run -e POSTGRES_PASSWORD=secret ghcr.io/benzsevern/goldenmatch-extensions:latest
+docker run -e POSTGRES_PASSWORD=secret ghcr.io/benseverndev-oss/goldenmatch-extensions:latest
 ```
 
 Tags:

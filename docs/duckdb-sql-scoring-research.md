@@ -116,7 +116,7 @@ print(f'parity: {parity}/{N}')
 
 Separate question from "should we rewrite scoring as SQL?": **how does the existing `goldenmatch-duckdb` UDF surface actually perform at 1M?** That UDF doesn't push scoring into SQL — it loads the DuckDB table into Polars via `con.cursor().sql(...).pl()` and dispatches to `dedupe_df` in-process. So the wall should be ~Python-baseline plus the DuckDB load overhead.
 
-Measured via `scripts/scale_audit.py --backend duckdb-udf --rows 1000000` ([run 25742044451](https://github.com/benzsevern/goldenmatch/actions/runs/25742044451), `ubuntu-latest` 4-core 16 GB, tracemalloc off).
+Measured via `scripts/scale_audit.py --backend duckdb-udf --rows 1000000` ([run 25742044451](https://github.com/benseverndev-oss/goldenmatch/actions/runs/25742044451), `ubuntu-latest` 4-core 16 GB, tracemalloc off).
 
 | stage | polars-direct (Round 5) | duckdb-udf | Δ |
 |---|---:|---:|---|

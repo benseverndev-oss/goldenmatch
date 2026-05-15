@@ -44,14 +44,14 @@ pip install goldenmatch[embeddings,llm,postgres]
 ## Docker
 
 ```bash
-docker pull ghcr.io/benzsevern/goldenmatch:latest
+docker pull ghcr.io/benseverndev-oss/goldenmatch:latest
 
 # Run a dedupe
-docker run --rm -v $(pwd):/data ghcr.io/benzsevern/goldenmatch:latest \
+docker run --rm -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
     dedupe /data/customers.csv --output-dir /data/results
 
 # Start the REST API
-docker run --rm -p 8080:8080 -v $(pwd):/data ghcr.io/benzsevern/goldenmatch:latest \
+docker run --rm -p 8080:8080 -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
     serve --file /data/customers.csv --port 8080
 ```
 

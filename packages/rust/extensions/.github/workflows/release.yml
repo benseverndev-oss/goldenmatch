@@ -148,5 +148,5 @@ jobs:
           context: .
           push: true
           tags: |
-            benzsevern/goldenmatch-pg:${{ github.event.release.tag_name || github.ref_name }}
-            benzsevern/goldenmatch-pg:latest
+            benseverndev-oss/goldenmatch-pg:${{ github.event.release.tag_name || github.ref_name }}
+            benseverndev-oss/goldenmatch-pg:latest

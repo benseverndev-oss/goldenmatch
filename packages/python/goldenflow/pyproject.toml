@@ -51,11 +51,11 @@ all = ["goldenflow[check,excel,db,mcp,agent,s3,gcs]"]
 goldenflow = "goldenflow.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/benzsevern/goldenmatch"
-Repository = "https://github.com/benzsevern/goldenmatch"
-Documentation = "https://github.com/benzsevern/goldenmatch/tree/main/packages/python/goldenflow#readme"
-Issues = "https://github.com/benzsevern/goldenmatch/issues"
-Changelog = "https://github.com/benzsevern/goldenmatch/blob/main/packages/python/goldenflow/CHANGELOG.md"
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenflow#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+Changelog = "https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenflow/CHANGELOG.md"
 Author = "https://bensevern.dev"
 
 [tool.pytest.ini_options]

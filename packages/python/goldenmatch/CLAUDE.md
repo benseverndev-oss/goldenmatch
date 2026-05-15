@@ -4,7 +4,7 @@
 - **SQL Extensions repo:** `D:\show_case\goldenmatch-extensions` -- Postgres extension + DuckDB UDFs. Has its own CLAUDE.md.
 - **PyPI:** `goldenmatch` (Python toolkit), `goldenmatch-duckdb` (DuckDB UDFs)
 - **npm:** `goldenmatch` (TypeScript port at `packages/goldenmatch-js/`)
-- **GitHub:** `benzsevern/goldenmatch`, `benzsevern/goldenmatch-extensions`
+- **GitHub:** `benseverndev-oss/goldenmatch`, `benzsevern/goldenmatch-extensions`
 
 ## TypeScript Port
 Lives at `packages/typescript/goldenmatch/`. See that package's CLAUDE.md for npm release flow, edge-safety rules, parity harness, and port-specific gotchas.
@@ -201,7 +201,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenmatch-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenmatch`
+- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenmatch`
 - **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
@@ -246,7 +246,7 @@ Hosted on Railway, registered on Smithery:
 - `gh run watch <run-id> --exit-status` blocks until a workflow completes — useful for confirming publish success before moving on
 - GitHub Discussions API: REST returns 404. Use GraphQL `createDiscussion` mutation with `repositoryId` (R_kgDORoztPA for this repo) and a `categoryId` fetched via `discussionCategories`.
 - `gh repo edit --add-topic` fails at 20 topics (API-side cap). Drop low-value topics with `--remove-topic` before adding.
-- Wiki repo: `git clone https://github.com/benzsevern/goldenmatch.wiki.git`, branch is `master` (not `main`).
+- Wiki repo: `git clone https://github.com/benseverndev-oss/goldenmatch.wiki.git`, branch is `master` (not `main`).
 - GoldenFlow (`date_iso8601`) runs BEFORE the inside-pipeline `auto_configure_df` call. This reshapes year-only columns into ISO date form, which then looks phone-shaped to the phone classifier. If auto-config misclassifies a date-ish column, check transform order, not just the classifier.
 - GitHub release → PyPI publish workflow: ~25s via trusted publishing. PyPI JSON API takes ~20s to reflect new version after workflow completes — don't check immediately. Trigger is `release: published`, not tag push.
 - `.github/workflows/*.yml` currently pin `actions/checkout@v4` and `actions/setup-python@v5` on Node.js 20, which deprecates Sep 2026. Bump or set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` before then.

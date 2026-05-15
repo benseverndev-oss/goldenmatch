@@ -4,7 +4,7 @@ Golden Suite orchestrator -- chains GoldenCheck, GoldenFlow, GoldenMatch.
 
 ## Related Projects
 Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenflow,goldenmatch,infermap}/`. Pre-fold standalone repos lived at `D:\show_case\<name>`; their history is in `_archive/goldenmatch-pre-fold/`.
-- **GitHub:** `benzsevern/goldenmatch` (single monorepo since 2026-05-02)
+- **GitHub:** `benseverndev-oss/goldenmatch` (single monorepo since 2026-05-02)
 
 ## Architecture
 - `goldenpipe/pipeline.py` -- Pipeline class, run() function. ONLY file that imports from tools.

@@ -14,7 +14,7 @@
 | `goldencheck-js` | latest minor only |
 | `infermap-js`    | latest minor only |
 
-The monorepo at `benzsevern/goldenmatch` hosts the Golden Suite (six Python
+The monorepo at `benseverndev-oss/goldenmatch` hosts the Golden Suite (six Python
 packages plus the TypeScript ports under `packages/typescript/`). Each
 package ships its own version stream on PyPI / npm.
 
@@ -29,7 +29,7 @@ upgrade.
 Use one of these private channels instead:
 
 1. **GitHub Private Security Advisory** (preferred): open one at
-   <https://github.com/benzsevern/goldenmatch/security/advisories/new>.
+   <https://github.com/benseverndev-oss/goldenmatch/security/advisories/new>.
    You can reference any of the Golden Suite packages from that one
    monorepo advisory.
 2. **Email**: `ben@bensevern.dev` with `[security]` in the subject.

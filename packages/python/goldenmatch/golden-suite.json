@@ -26,7 +26,7 @@
     {
       "name": "GoldenMatch",
       "purpose": "Entity resolution and deduplication",
-      "repo": "github.com/benzsevern/goldenmatch",
+      "repo": "github.com/benseverndev-oss/goldenmatch",
       "install": "pip install goldenmatch",
       "mcp": {"command": "goldenmatch mcp-serve", "tools": 10},
       "a2a": {"command": "goldenmatch agent-serve --port 8200", "skills": 8},

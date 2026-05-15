@@ -381,7 +381,7 @@ Key files to reference:
 gh auth switch --user benzsevern
 
 # Set NPM_TOKEN (reuse the same token from goldenflow repo)
-# gh secret set NPM_TOKEN --repo benzsevern/goldenmatch --body "<your-npm-token>"
+# gh secret set NPM_TOKEN --repo benseverndev-oss/goldenmatch --body "<your-npm-token>"
 
 # Branch, commit, PR, merge
 git checkout -b ts-port
@@ -396,8 +396,8 @@ git push origin goldenmatch-js-v0.1.0
 gh release create v2.x.x --title "vX.Y.Z — TypeScript Port" ...
 
 # Update repo metadata
-gh repo edit benzsevern/goldenmatch --description "Entity resolution toolkit — deduplicate, match, and create golden records. Python & TypeScript."
-gh repo edit benzsevern/goldenmatch --add-topic typescript --add-topic nodejs --add-topic npm
+gh repo edit benseverndev-oss/goldenmatch --description "Entity resolution toolkit — deduplicate, match, and create golden records. Python & TypeScript."
+gh repo edit benseverndev-oss/goldenmatch --add-topic typescript --add-topic nodejs --add-topic npm
 
 # Switch back
 gh auth switch --user benzsevern-mjh
