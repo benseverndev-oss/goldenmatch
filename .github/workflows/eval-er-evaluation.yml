@@ -41,7 +41,14 @@ permissions:
 
 jobs:
   eval:
-    runs-on: ubuntu-latest  # free runner — eval is cheap enough not to need larger
+    # Benchmarking workflows default to the org's large-new-64GB runner
+    # (16c/64GB/600GB Ubuntu 24.04). Consistent shape across all benchmark
+    # lanes makes the numbers directly comparable. The free ubuntu-latest
+    # (4c/16GB) was enough for er-evaluation scoring alone, but on synthetic
+    # fixtures >= 500K the gm.dedupe_df() step would dominate the cost
+    # there; staying on the larger runner gives headroom for scaling up
+    # without editing the workflow each time.
+    runs-on: large-new-64GB
     timeout-minutes: 60
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
