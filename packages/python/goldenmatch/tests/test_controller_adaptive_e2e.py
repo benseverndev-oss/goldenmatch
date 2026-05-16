@@ -45,23 +45,17 @@ def _adversarial_df_at_threshold() -> pl.DataFrame:
     })
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Adversarial fixture causes every iteration to ERROR (DuplicateError "
-        "on auto-fix column derivation), which hits the controller's separate "
-        "'every iteration errored' fallback path that returns config_v0 + "
-        "_RED_PROFILE WITHOUT going through pick_committed -- so the gate "
-        "doesn't fire. Followup: either find a fixture that REDs without "
-        "erroring, or extend the gate to fire on the all-errored fallback "
-        "path too (Phase 3 contract change). The Phase 3 monkey-patched "
-        "gate tests still cover the gate's branching."
-    ),
-    strict=True,
-)
 def test_gate_fires_via_real_iteration_loop():
     """End-to-end: build a 100K-row adversarial fixture, let
     AutoConfigController iterate normally (no monkey-patch). When it
-    commits RED, the gate must fire."""
+    commits RED OR every iteration errors, the gate must fire.
+
+    Note: the adversarial fixture (all surnames in one soundex bucket)
+    actually triggers the *all-iterations-errored* fallback path rather
+    than a clean RED commit (DuplicateError on auto-fix column
+    derivation). The followup-#62 extension of the gate to that
+    fallback path is what makes this test pass via the real iteration
+    loop instead of monkey-patched pick_committed."""
     df = _adversarial_df_at_threshold()
     with pytest.raises(ControllerNotConfidentError) as exc_info:
         gm.dedupe_df(df)
