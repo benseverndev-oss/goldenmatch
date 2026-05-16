@@ -169,6 +169,37 @@ class BlockingProfile:
     singleton_block_count: int = 0
     oversized_block_count: int = 0
 
+    @property
+    def estimated_pair_count(self) -> int:
+        """Spec §Signals: total candidate pairs at this blocking layout.
+
+        Identical to ``total_comparisons``; surfaced under the
+        planner-friendly name so callers don't need to know the underlying
+        field name.
+        """
+        return self.total_comparisons
+
+    def extrapolate_to(self, n_rows_sample: int, n_rows_full: int) -> "BlockingProfile":
+        """Project sample's pair-count signal to a full-data row count.
+
+        Spec §Pipeline integration: pair count scales linearly with the
+        row-count ratio. Over-estimation just pushes toward a heavier
+        plan, which is safer than under-estimating. Block-size percentiles
+        are not scaled -- distribution shape is roughly invariant to N
+        when blocking is well-behaved (spec §Open questions #1).
+        """
+        import dataclasses
+
+        if n_rows_sample <= 0 or n_rows_full <= 0:
+            return self
+        ratio = n_rows_full / n_rows_sample
+        return dataclasses.replace(
+            self,
+            n_blocks=int(self.n_blocks * ratio),
+            total_comparisons=int(self.total_comparisons * ratio),
+            singleton_block_count=int(self.singleton_block_count * ratio),
+        )
+
     def health(self, n_rows: int) -> HealthVerdict:
         if self.n_blocks == 0:
             return HealthVerdict.RED
