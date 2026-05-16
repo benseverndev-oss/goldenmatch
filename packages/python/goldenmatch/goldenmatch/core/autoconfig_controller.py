@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 # Sentinel: forces RED via DataProfile.health() when n_rows == 0.
 _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 
+# Confidence gate threshold (Phase 3 of controller-budget-pathology spec).
+# Back-projected from the 500K -> ~26 min measured wall on synthetic
+# surname fixtures: committing a RED config on a large input produces
+# degenerate full-data dedupe. 100K is the safe upper bound below which
+# the pipeline still completes in a tolerable wall-clock window.
+REFUSE_AT_N: int = 100_000
+
 # ContextVar populated at every exit path of AutoConfigController.run()
 # (including KeyboardInterrupt) so callers can inspect RunHistory after
 # either normal return or exception.  Stores RunHistory directly
@@ -331,6 +338,7 @@ class AutoConfigController:
         reference: pl.DataFrame | None = None,
         v0_kwargs: dict | None = None,
         skip_finalize: bool = False,
+        confidence_required: bool = True,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -524,6 +532,32 @@ class AutoConfigController:
             )
             _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
+
+        # Confidence gate (Phase 3 of controller-budget pathology spec).
+        # When the controller committed a RED entry on a large input,
+        # running the full pipeline would produce ~26-min degenerate
+        # dedupe. Refuse loudly instead. Spec §Design / Confidence gate.
+        if (
+            confidence_required
+            and df.height >= REFUSE_AT_N
+            and best_entry.profile.health() == HealthVerdict.RED
+        ):
+            failing = _identify_failing_subprofile(best_entry.profile)
+            # ``_LAST_CONTROLLER_RUN`` here is the CONTROLLER-LOCAL ContextVar
+            # defined at the top of this file (line ~45), NOT the
+            # ``(profile, history)`` tuple ContextVar in ``autoconfig.py``.
+            # Mirror the existing pattern (line 456, line 549) that sets it
+            # right before each return.
+            _LAST_CONTROLLER_RUN.set(history)  # surface history before raise
+            raise ControllerNotConfidentError(
+                n_rows=df.height,
+                failing_sub_profile=failing,
+                stop_reason=(
+                    history.stop_reason.name
+                    if history.stop_reason
+                    else "unset"
+                ),
+            )
 
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
