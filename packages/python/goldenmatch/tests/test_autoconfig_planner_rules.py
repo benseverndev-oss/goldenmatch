@@ -11,12 +11,16 @@ rules -- a different layer.
 """
 from __future__ import annotations
 
+import pytest
 from goldenmatch.core.autoconfig_planner_rules import (
     DEFAULT_RULES,
+    _has_ray,
     auto_chunk_size,
     rule_chunked,
+    rule_duckdb,
     rule_fast_box,
     rule_pathological,
+    rule_ray,
     rule_simple_plan,
     rule_user_override,
 )
@@ -27,6 +31,8 @@ from goldenmatch.core.complexity_profile import (
     ProfileMeta,
 )
 from goldenmatch.core.runtime_profile import RuntimeProfile
+
+HAS_RAY = _has_ray()
 
 
 def _profile(n_rows: int = 1000, total_comparisons: int = 100) -> ComplexityProfile:
@@ -101,9 +107,10 @@ def test_rule_simple_plan_does_not_fire_over_50m_pairs():
     assert rule_simple_plan.predicate(p, _runtime(), 50_000) is False
 
 
-def test_default_rules_phase_4_order():
-    """Phase 4: user_override MUST be first; pathological precedes simple;
-    fast-box / chunked come after. Phase 5 will append duckdb + ray."""
+def test_default_rules_phase_5_order():
+    """Phase 5: user_override first; pathological precedes simple; fast-box,
+    chunked, then ray BEFORE duckdb so 50M+ tries ray first and falls
+    through to duckdb when ray isn't installed."""
     rule_names = [r.name for r in DEFAULT_RULES]
     assert rule_names == [
         "plan_user_override",
@@ -111,6 +118,8 @@ def test_default_rules_phase_4_order():
         "plan_selected_simple",
         "plan_selected_fast_box",
         "plan_selected_chunked",
+        "plan_selected_ray",
+        "plan_selected_duckdb",
     ]
 
 
@@ -244,3 +253,91 @@ def test_rule_user_override_fires_first_in_dispatcher():
     )
     assert plan.rule_name == "plan_user_override"
     assert plan.backend == "duckdb"
+
+
+# ── Rule 5: DuckDB ──────────────────────────────────────────────────────────
+
+
+def test_rule_duckdb_fires_when_pairs_exceed_5b():
+    """Spec §Rule 5: pair_count >= 5B (regardless of RAM)."""
+    p = _profile(n_rows=10_000_000, total_comparisons=6_000_000_000)
+    assert rule_duckdb.predicate(p, _runtime(ram_gb=64.0, cpus=16), 10_000_000) is True
+    plan = rule_duckdb.action(p, _runtime(ram_gb=64.0, cpus=16), 10_000_000)
+    assert plan.backend == "duckdb"
+    assert plan.pair_spill_threshold == "duckdb"
+    assert plan.clustering_strategy == "partitioned_union_find"
+    assert plan.max_workers == 8
+    assert plan.rule_name == "plan_selected_duckdb"
+
+
+def test_rule_duckdb_fires_on_low_ram_even_with_few_pairs():
+    """Spec §Rule 5: OR condition -- RAM < 16GB forces DuckDB regardless."""
+    p = _profile(n_rows=200_000, total_comparisons=1_000_000)
+    assert rule_duckdb.predicate(p, _runtime(ram_gb=8.0), 200_000) is True
+
+
+def test_rule_duckdb_does_not_fire_at_ram_threshold_with_modest_pairs():
+    """16GB RAM (exactly the floor) + < 5B pairs: should not fire."""
+    p = _profile(n_rows=1_000_000, total_comparisons=100_000_000)
+    assert rule_duckdb.predicate(p, _runtime(ram_gb=16.0), 1_000_000) is False
+
+
+def test_rule_duckdb_max_workers_caps_at_8():
+    """Spec: max_workers = min(cpu_count, 8). Even 64-core box gets 8."""
+    p = _profile(n_rows=10_000_000, total_comparisons=6_000_000_000)
+    plan = rule_duckdb.action(p, _runtime(ram_gb=64.0, cpus=64), 10_000_000)
+    assert plan.max_workers == 8
+
+
+# ── Rule 6: Ray ─────────────────────────────────────────────────────────────
+
+
+def test_rule_ray_does_not_fire_below_50m_rows():
+    p = _profile(n_rows=10_000_000)
+    assert rule_ray.predicate(p, _runtime(), 10_000_000) is False
+
+
+@pytest.mark.skipif(not HAS_RAY, reason="ray optional dep not installed")
+def test_rule_ray_fires_at_50m_when_ray_is_available():
+    """Spec §Rule 6: n_rows >= 50M AND ray import succeeds."""
+    p = _profile(n_rows=50_000_000)
+    assert rule_ray.predicate(p, _runtime(cpus=32), 50_000_000) is True
+    plan = rule_ray.action(p, _runtime(cpus=32), 50_000_000)
+    assert plan.backend == "ray"
+    assert plan.pair_spill_threshold == "disk_per_worker"
+    assert plan.clustering_strategy == "streaming_cc"
+    assert plan.max_workers == 32  # full cluster cpu count, no cap
+    assert plan.rule_name == "plan_selected_ray"
+
+
+def test_rule_ray_falls_through_to_duckdb_when_ray_unavailable(monkeypatch):
+    """Spec §Rule 6 fail-closed: when ``import ray`` raises, predicate
+    returns False; dispatcher falls through to rule_duckdb at 50M+."""
+    from goldenmatch.core import autoconfig_planner_rules as rules_mod
+    from goldenmatch.core.autoconfig_planner import apply_planner_rules
+
+    monkeypatch.setattr(rules_mod, "_has_ray", lambda: False)
+
+    p = _profile(n_rows=50_000_000, total_comparisons=10_000_000_000)
+    plan = apply_planner_rules(
+        profile=p,
+        runtime=_runtime(ram_gb=32.0, cpus=16),
+        n_rows_full=50_000_000,
+        rules=DEFAULT_RULES,
+        context={"user_backend": None},
+    )
+    # Falls through past rule_ray; rule_duckdb fires because pairs >= 5B.
+    assert plan.rule_name == "plan_selected_duckdb"
+    assert plan.backend == "duckdb"
+
+
+def test_rule_ray_picks_up_full_cluster_cpu_count():
+    """Spec: max_workers=cpu_count_total_cluster (no min(...) cap)."""
+    p = _profile(n_rows=50_000_000)
+    plan = rule_ray.action(p, _runtime(cpus=128), 50_000_000)
+    assert plan.max_workers == 128
+
+
+def test_has_ray_helper_returns_bool():
+    """``_has_ray`` returns True or False, never raises."""
+    assert isinstance(_has_ray(), bool)
