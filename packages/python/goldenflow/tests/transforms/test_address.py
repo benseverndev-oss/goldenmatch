@@ -56,8 +56,9 @@ def test_state_expand():
 
 
 def test_zip_normalize():
-    s = pl.Series("z", ["19103", "9001", "10001-1234", "abcde"])
-    result = zip_normalize(s)
+    result = _apply_expr(
+        zip_normalize, "z", ["19103", "9001", "10001-1234", "abcde"],
+    )
     assert result[0] == "19103"
     assert result[1] == "09001"  # zero-padded
     assert result[2] == "10001"  # strip +4

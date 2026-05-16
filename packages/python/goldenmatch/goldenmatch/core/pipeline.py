@@ -550,6 +550,41 @@ def run_dedupe(
     )
 
 
+def _prep_cache_signature(config: GoldenMatchConfig) -> str:
+    """Stable string signature of the prep-step config slots.
+
+    Covers GoldenCheck quality scan, GoldenFlow transform, and auto-fix.
+    Used as part of the cache key in ``_run_dedupe_pipeline`` (Attack C
+    of the map_elements perf spec). Other config slots (matchkeys,
+    blocking, threshold) are NOT part of the signature — they don't
+    influence prep output.
+    """
+    import json
+    q = config.quality.model_dump() if config.quality is not None else None
+    t = config.transform.model_dump() if config.transform is not None else None
+    af = bool(config.validation and config.validation.auto_fix)
+    return json.dumps(
+        {"quality": q, "transform": t, "auto_fix": af},
+        sort_keys=True,
+        default=str,
+    )
+
+
+# Process-level LRU cache for the prep steps (quality + transform + auto-fix).
+# Holds at most ``_PREP_CACHE_MAX`` entries; eviction is FIFO on insertion
+# order. Single-threaded design; the controller's iteration loop drives the
+# only realistic cache-hit scenario (5 dedupe_df calls on the same sample).
+_PREP_CACHE: dict[tuple, pl.DataFrame] = {}
+_PREP_CACHE_LRU: list[tuple] = []
+_PREP_CACHE_MAX = 4
+
+
+def _prep_cache_clear() -> None:
+    """Reset the cache. Called by tests to isolate state."""
+    _PREP_CACHE.clear()
+    _PREP_CACHE_LRU.clear()
+
+
 def _run_dedupe_pipeline(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -572,32 +607,66 @@ def _run_dedupe_pipeline(
     output. Both run_dedupe() and run_dedupe_df() delegate to this function.
     """
     memory_store = _open_memory_store(config)
-    # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
-    if config.quality is None or config.quality.mode != "disabled":
-        from goldenmatch.core.quality import run_quality_check
-        combined_df_tmp = combined_lf.collect()
-        combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
-        if gc_fixes:
-            logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-        combined_lf = combined_df_tmp.lazy()
 
-    # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
-    # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
-    # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
-    if config.transform is None or config.transform.mode != "disabled":
-        from goldenmatch.core.transform import run_transform
-        combined_df_tmp = combined_lf.collect()
-        combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
-        if gf_fixes:
-            logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
-        combined_lf = combined_df_tmp.lazy()
+    # ── Attack C cache lookup (map_elements spec Tier 2): quality + transform
+    # + auto-fix are deterministic in (input_lf, config.quality, config.transform,
+    # config.validation). The auto-config controller calls dedupe_df ~5x on
+    # the same sample per `auto_configure_df` call; iteration only mutates
+    # matchkeys/blocking/threshold, so these prep steps produce identical
+    # output every time.
+    #
+    # Cache key: (id(combined_lf), tuple(columns), prep_config_signature).
+    # The columns tuple is a cheap fingerprint that defends against Python
+    # reusing `id()` slots after GC — without it, a NEW LazyFrame that happens
+    # to land at the same memory address as a previously-cached one would
+    # silently get the stale entry. Column names + the id slot together are
+    # collision-proof in practice.
+    prep_cache_key = (
+        id(combined_lf),
+        tuple(combined_lf.collect_schema().names()),
+        _prep_cache_signature(config),
+    )
+    cached_prep = _PREP_CACHE.get(prep_cache_key)
+    if cached_prep is not None:
+        combined_lf = cached_prep.lazy()
+        logger.debug("prep cache HIT (id=%s)", prep_cache_key[0])
+    else:
+        # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
+        if config.quality is None or config.quality.mode != "disabled":
+            from goldenmatch.core.quality import run_quality_check
+            combined_df_tmp = combined_lf.collect()
+            combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
+            if gc_fixes:
+                logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+            combined_lf = combined_df_tmp.lazy()
 
-    # ── Step 1.5a: AUTO-FIX + VALIDATION ──
-    if config.validation and config.validation.auto_fix:
-        combined_df_tmp = combined_lf.collect()
-        combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
-        logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
-        combined_lf = combined_df_tmp.lazy()
+        # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
+        # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
+        # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
+        if config.transform is None or config.transform.mode != "disabled":
+            from goldenmatch.core.transform import run_transform
+            combined_df_tmp = combined_lf.collect()
+            combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+            if gf_fixes:
+                logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
+            combined_lf = combined_df_tmp.lazy()
+
+        # ── Step 1.5a: AUTO-FIX + VALIDATION ──
+        if config.validation and config.validation.auto_fix:
+            combined_df_tmp = combined_lf.collect()
+            combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
+            logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
+            combined_lf = combined_df_tmp.lazy()
+
+        # Populate cache (LRU eviction). We materialize as an eager DataFrame
+        # so subsequent hits don't re-evaluate a long lazy plan.
+        prepped_df = combined_lf.collect()
+        if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
+            evicted = _PREP_CACHE_LRU.pop(0)
+            _PREP_CACHE.pop(evicted, None)
+        _PREP_CACHE[prep_cache_key] = prepped_df
+        _PREP_CACHE_LRU.append(prep_cache_key)
+        combined_lf = prepped_df.lazy()
 
     # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
     if auto_config:

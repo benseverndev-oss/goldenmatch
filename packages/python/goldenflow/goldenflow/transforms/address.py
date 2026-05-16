@@ -118,19 +118,22 @@ def state_expand(column: str) -> pl.Expr:
 
 
 @register_transform(
-    name="zip_normalize", input_types=["zip"], auto_apply=True, priority=55, mode="series"
+    name="zip_normalize", input_types=["zip"], auto_apply=True, priority=55, mode="expr"
 )
-def zip_normalize(series: pl.Series) -> pl.Series:
-    def _norm(val: str | None) -> str | None:
-        if val is None:
-            return None
-        val = val.strip()
-        val = val.split("-")[0]  # strip +4
-        if val.isdigit():
-            return val.zfill(5)
-        return val  # preserve invalid
+def zip_normalize(column: str) -> pl.Expr:
+    """Normalize US ZIP to 5-digit form. Strip +4, zero-pad if all-digits,
+    preserve invalid inputs unchanged.
 
-    return series.map_elements(_norm, return_dtype=pl.Utf8)
+    Native Polars: strip + take first segment before '-' + check all-digits
+    via regex contains, then conditionally zfill. Spec Tier 2 (auto_apply=True
+    transform; was firing per-row Python on every dedupe iteration).
+    """
+    base = pl.col(column).str.strip_chars().str.split("-").list.first()
+    return (
+        pl.when(base.str.contains(r"^\d+$"))
+        .then(base.str.zfill(5))
+        .otherwise(base)
+    )
 
 
 @register_transform(
