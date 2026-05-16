@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 import traceback
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
@@ -30,6 +32,7 @@ from goldenmatch.core.complexity_profile import (
 
 if TYPE_CHECKING:
     from goldenmatch.core.autoconfig_history import HistoryEntry
+    from goldenmatch.distributed.record_store import PreparedRecordStore
 from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
 from goldenmatch.core.autoconfig_policy import RefitPolicy
 
@@ -432,6 +435,28 @@ class AutoConfigController:
             sparsity_verdict=sparsity_verdict,
         )
 
+        # Phase 3: Component 1 -- one PreparedRecordStore shared across all
+        # iterations within this controller.run() call. Phase 2's pipeline-side
+        # branch reads/writes via the kwarg threaded through _run_pipeline_sample
+        # and _finalize. All 5 iterations share the same DuckDB handle so iter
+        # 2-5 hit the disk store instead of re-running prep steps.
+        _prep_store: PreparedRecordStore | None = None
+        if config_v0.prepared_record_store:
+            from goldenmatch.distributed.record_store import PreparedRecordStore as _PRS
+            base_dir = os.environ.get("GOLDENMATCH_PREPARED_RECORD_STORE_DIR")
+            persist = os.environ.get(
+                "GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST", "0"
+            ).lower() in ("1", "true", "yes")
+            store_path = (
+                Path(base_dir) / "goldenmatch_prepared.duckdb"
+                if base_dir is not None
+                else None
+            )
+            if store_path is not None:
+                _prep_store = _PRS(path=store_path, cleanup=not persist)
+            else:
+                _prep_store = _PRS(cleanup=not persist)
+
         try:
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
@@ -442,7 +467,13 @@ class AutoConfigController:
                 try:
                     from goldenmatch.core.profile_emitter import profile_capture
                     with profile_capture() as emitter:
-                        self._run_pipeline_sample(sample, sample_ref, config_n)
+                        if _prep_store is not None:
+                            self._run_pipeline_sample(
+                                sample, sample_ref, config_n,
+                                _prep_store=_prep_store,
+                            )
+                        else:
+                            self._run_pipeline_sample(sample, sample_ref, config_n)
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,
                         reference=sample_ref, config=config_n,
@@ -522,6 +553,8 @@ class AutoConfigController:
                 config_n = config_next
         finally:
             history.elapsed = timedelta(seconds=time.time() - start)
+            if _prep_store is not None:
+                _prep_store.close()
 
         # Natural loop exhaustion (loop completed without break)
         if history.stop_reason is None:
@@ -885,17 +918,24 @@ class AutoConfigController:
         sample: pl.DataFrame,
         reference: pl.DataFrame | None,
         config: GoldenMatchConfig,
+        *,
+        _prep_store: PreparedRecordStore | None = None,
     ) -> None:
         """Run the lightweight pipeline (blocking → score → cluster) on the sample.
 
-        Uses the public ``dedupe_df`` / ``match_df`` API so the same instrumented
+        Uses ``run_dedupe_df`` / ``run_match_df`` directly so the same instrumented
         stages run; the active ``profile_capture()`` collects sub-profiles.
+
+        ``_prep_store``: when supplied (Phase 3 controller path), threaded through
+        to ``run_dedupe_df`` so all iterations within one controller.run() call share
+        the same DuckDB-backed prepared-record store. The caller (controller.run)
+        owns the store lifecycle.
         """
-        from goldenmatch._api import dedupe_df, match_df
+        from goldenmatch.core.pipeline import run_dedupe_df, run_match_df
         if reference is None:
-            dedupe_df(sample, config=config)
+            run_dedupe_df(sample, config=config, _prep_store=_prep_store)
         else:
-            match_df(sample, reference, config=config)
+            run_match_df(sample, reference, config=config)
 
     def _compute_recall_probe(
         self,

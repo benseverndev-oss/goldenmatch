@@ -1196,8 +1196,16 @@ def run_dedupe_df(
     output_report: bool = False,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
+    _prep_store: PreparedRecordStore | None = None,
 ) -> dict:
-    """Run dedupe pipeline on a DataFrame directly (no file I/O)."""
+    """Run dedupe pipeline on a DataFrame directly (no file I/O).
+
+    ``_prep_store``: caller-provided PreparedRecordStore. When supplied
+    (Phase 3: controller path), this function does NOT open its own store
+    and does NOT close the provided one — lifecycle belongs to the caller.
+    When None and ``config.prepared_record_store=True``, opens a
+    per-call store (Phase 2 stopgap for non-controller paths).
+    """
     # Attack C cache seed: stash the caller's df id BEFORE the .cast() below
     # creates a new DataFrame. The seed is the stable identity the controller's
     # iteration loop reuses across 5 dedupe_df calls on the same `sample`.
@@ -1221,9 +1229,12 @@ def run_dedupe_df(
     # _prep_store (Phase 3's controller will supply one), open our own store
     # from env vars. cleanup=not persist so ephemeral runs don't leave files
     # behind, but PERSIST=1 enables stable cross-call reuse.
+    # Phase 3 reconciliation: when _prep_store is already provided by the
+    # controller, skip opening a second store (own_store=False keeps the
+    # finally block from closing the caller's store).
     own_store = False
-    _prep_store_ctx: PreparedRecordStore | None = None
-    if getattr(config, "prepared_record_store", False):
+    _prep_store_ctx: PreparedRecordStore | None = _prep_store
+    if _prep_store is None and getattr(config, "prepared_record_store", False):
         from goldenmatch.distributed.record_store import PreparedRecordStore as _PRS
         base_dir_env = os.environ.get("GOLDENMATCH_PREPARED_RECORD_STORE_DIR")
         persist = os.environ.get(
