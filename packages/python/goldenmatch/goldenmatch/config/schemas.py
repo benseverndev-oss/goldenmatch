@@ -642,6 +642,19 @@ class GoldenMatchConfig(BaseModel):
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
+    prepared_record_store: bool = Field(
+        default=False,
+        description=(
+            "When True, the prep stage (quality scan + transform + auto-fix) "
+            "writes its output to a DuckDB-backed disk store keyed by config "
+            "signature. Subsequent calls with the same config + data shape "
+            "read prepared records from disk instead of re-prepping. Path "
+            "via GOLDENMATCH_PREPARED_RECORD_STORE_DIR env var; persistence "
+            "via GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST=1. Spec: "
+            "docs/superpowers/specs/2026-05-15-distributed-plan-v1-design.md "
+            "§Component 1."
+        ),
+    )
 
     # Auto-config verification hand-offs (see goldenmatch/core/autoconfig_verify.py).
     # These attrs are set by auto_configure_df and read by the pipeline;
