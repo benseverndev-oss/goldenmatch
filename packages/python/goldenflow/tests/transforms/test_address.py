@@ -11,24 +11,35 @@ from goldenflow.transforms.address import (
 )
 
 
+def _apply_expr(func, column: str, data: list, *params) -> list:
+    """Helper to apply an expr-mode transform to test data."""
+    df = pl.DataFrame({column: data})
+    expr = func(column, *params)
+    return df.select(expr.alias(column))[column].to_list()
+
+
 def test_address_standardize():
-    s = pl.Series("a", ["123 Main Street", "456 Oak Avenue", "789 Elm Drive"])
-    result = address_standardize(s)
+    result = _apply_expr(
+        address_standardize, "a",
+        ["123 Main Street", "456 Oak Avenue", "789 Elm Drive"],
+    )
     assert result[0] == "123 Main St"
     assert result[1] == "456 Oak Ave"
     assert result[2] == "789 Elm Dr"
 
 
 def test_address_expand():
-    s = pl.Series("a", ["123 Main St", "456 Oak Ave"])
-    result = address_expand(s)
+    result = _apply_expr(
+        address_expand, "a", ["123 Main St", "456 Oak Ave"],
+    )
     assert result[0] == "123 Main Street"
     assert result[1] == "456 Oak Avenue"
 
 
 def test_state_abbreviate():
-    s = pl.Series("st", ["Pennsylvania", "California", "new york", "TX"])
-    result = state_abbreviate(s)
+    result = _apply_expr(
+        state_abbreviate, "st", ["Pennsylvania", "California", "new york", "TX"],
+    )
     assert result[0] == "PA"
     assert result[1] == "CA"
     assert result[2] == "NY"
@@ -36,8 +47,9 @@ def test_state_abbreviate():
 
 
 def test_state_expand():
-    s = pl.Series("st", ["PA", "CA", "NY"])
-    result = state_expand(s)
+    result = _apply_expr(
+        state_expand, "st", ["PA", "CA", "NY"],
+    )
     assert result[0] == "Pennsylvania"
     assert result[1] == "California"
     assert result[2] == "New York"

@@ -34,61 +34,87 @@ _STATES_LOWER = {k.lower(): v for k, v in _STATES.items()}
 
 
 @register_transform(
-    name="address_standardize", input_types=["address"], auto_apply=False, priority=50, mode="series"
+    name="address_standardize", input_types=["address"], auto_apply=False, priority=50, mode="expr"
 )
-def address_standardize(series: pl.Series) -> pl.Series:
-    def _std(val: str | None) -> str | None:
-        if val is None:
-            return None
-        result = val
-        for full, abbr in _STREET_ABBREV.items():
-            result = re.sub(rf"\b{full}\b", abbr, result, flags=re.IGNORECASE)
-        return result
+def address_standardize(column: str) -> pl.Expr:
+    """Replace full street suffixes (Street, Avenue...) with abbreviations.
 
-    return series.map_elements(_std, return_dtype=pl.Utf8)
+    Native Polars: chain of case-insensitive word-boundary regex replaces.
+    One `str.replace_all` per (full, abbr) pair. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    expr = pl.col(column)
+    for full, abbr in _STREET_ABBREV.items():
+        expr = expr.str.replace_all(rf"(?i)\b{full}\b", abbr)
+    return expr
 
 
 @register_transform(
-    name="address_expand", input_types=["address"], auto_apply=False, priority=50, mode="series"
+    name="address_expand", input_types=["address"], auto_apply=False, priority=50, mode="expr"
 )
-def address_expand(series: pl.Series) -> pl.Series:
-    def _expand(val: str | None) -> str | None:
-        if val is None:
-            return None
-        result = val
-        for abbr, full in _STREET_EXPAND.items():
-            result = re.sub(rf"\b{abbr}\b", full, result, flags=re.IGNORECASE)
-        return result
+def address_expand(column: str) -> pl.Expr:
+    """Replace street abbreviations (St, Ave...) with full forms.
 
-    return series.map_elements(_expand, return_dtype=pl.Utf8)
+    Native Polars: chain of case-insensitive word-boundary regex replaces.
+    Spec docs/superpowers/specs/2026-05-15-map-elements-attack-design.md
+    Tier 1.
+    """
+    expr = pl.col(column)
+    for abbr, full in _STREET_EXPAND.items():
+        expr = expr.str.replace_all(rf"(?i)\b{abbr}\b", full)
+    return expr
 
 
 @register_transform(
-    name="state_abbreviate", input_types=["state", "string"], auto_apply=False, priority=50, mode="series"
+    name="state_abbreviate", input_types=["state", "string"], auto_apply=False, priority=50, mode="expr"
 )
-def state_abbreviate(series: pl.Series) -> pl.Series:
-    def _abbr(val: str | None) -> str | None:
-        if val is None:
-            return None
-        val_stripped = val.strip()
-        if len(val_stripped) == 2 and val_stripped.upper() in _STATES_REVERSE:
-            return val_stripped.upper()
-        matched = _STATES_LOWER.get(val_stripped.lower())
-        return matched if matched else val
+def state_abbreviate(column: str) -> pl.Expr:
+    """Normalize state name to 2-letter abbreviation.
 
-    return series.map_elements(_abbr, return_dtype=pl.Utf8)
+    Three-way fallback:
+      1. 2-letter input that's a valid abbreviation -> uppercase it.
+      2. Full name (case-insensitive) -> look up in _STATES_LOWER.
+      3. Neither matched -> return original column value unchanged.
+
+    Native Polars: `replace_strict` with `default=...` provides the
+    not-matched fallback; combined with `when/then` to handle the
+    2-letter-already-valid case. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    cleaned = pl.col(column).str.strip_chars()
+    upper = cleaned.str.to_uppercase()
+    is_valid_2letter = (cleaned.str.len_chars() == 2) & upper.is_in(
+        list(_STATES_REVERSE.keys())
+    )
+    # Lower-cased lookup; default to a sentinel that means "not in dict".
+    matched_full = cleaned.str.to_lowercase().replace_strict(
+        _STATES_LOWER, default=None, return_dtype=pl.Utf8,
+    )
+    return (
+        pl.when(is_valid_2letter).then(upper)
+        .when(matched_full.is_not_null()).then(matched_full)
+        .otherwise(pl.col(column))
+    )
 
 
 @register_transform(
-    name="state_expand", input_types=["state", "string"], auto_apply=False, priority=50, mode="series"
+    name="state_expand", input_types=["state", "string"], auto_apply=False, priority=50, mode="expr"
 )
-def state_expand(series: pl.Series) -> pl.Series:
-    def _expand(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _STATES_REVERSE.get(val.strip().upper(), val)
+def state_expand(column: str) -> pl.Expr:
+    """Expand 2-letter state abbreviation to full name.
 
-    return series.map_elements(_expand, return_dtype=pl.Utf8)
+    Native Polars: `replace_strict` with the dict, default=original value
+    for unmatched inputs. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .str.strip_chars()
+        .str.to_uppercase()
+        .replace_strict(
+            _STATES_REVERSE, default=pl.col(column), return_dtype=pl.Utf8,
+        )
+    )
 
 
 @register_transform(

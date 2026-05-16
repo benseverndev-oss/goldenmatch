@@ -62,10 +62,17 @@ def collapse_whitespace(column: str) -> pl.Expr:
 
 
 @register_transform(
-    name="truncate", input_types=["string"], auto_apply=False, priority=30, mode="series"
+    name="truncate", input_types=["string"], auto_apply=False, priority=30, mode="expr"
 )
-def truncate(series: pl.Series, n: int = 255) -> pl.Series:
-    return series.str.slice(0, n)
+def truncate(column: str, n: int | str = 255) -> pl.Expr:
+    """Truncate string to first n characters.
+
+    Native Polars: str.slice. Accepts str or int for `n` because the engine
+    passes config params as strings; tests + code passing kwargs use int.
+    Spec docs/superpowers/specs/2026-05-15-map-elements-attack-design.md
+    Tier 1 (parameterized).
+    """
+    return pl.col(column).str.slice(0, int(n))
 
 
 @register_transform(
@@ -137,17 +144,15 @@ def remove_digits(column: str) -> pl.Expr:
     input_types=["string"],
     auto_apply=False,
     priority=30,
-    mode="series",
+    mode="expr",
 )
-def pad_left(series: pl.Series, width: int = 10, char: str = "0") -> pl.Series:
-    """Left-pad strings to a fixed width."""
+def pad_left(column: str, width: int | str = 10, char: str = "0") -> pl.Expr:
+    """Left-pad strings to a fixed width.
 
-    def _pad(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return val.rjust(width, char)
-
-    return series.map_elements(_pad, return_dtype=pl.Utf8)
+    Native Polars: str.pad_start. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.pad_start(int(width), char)
 
 
 @register_transform(
@@ -155,17 +160,15 @@ def pad_left(series: pl.Series, width: int = 10, char: str = "0") -> pl.Series:
     input_types=["string"],
     auto_apply=False,
     priority=30,
-    mode="series",
+    mode="expr",
 )
-def pad_right(series: pl.Series, width: int = 10, char: str = " ") -> pl.Series:
-    """Right-pad strings to a fixed width."""
+def pad_right(column: str, width: int | str = 10, char: str = " ") -> pl.Expr:
+    """Right-pad strings to a fixed width.
 
-    def _pad(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return val.ljust(width, char)
-
-    return series.map_elements(_pad, return_dtype=pl.Utf8)
+    Native Polars: str.pad_end. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.pad_end(int(width), char)
 
 
 _EMOJI_RE = re.compile(

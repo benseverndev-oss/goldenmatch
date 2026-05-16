@@ -21,10 +21,14 @@ from goldenflow.transforms.text import (
 )
 
 
-def _apply_expr(func, column: str, data: list[str]) -> list[str]:
-    """Helper to apply an expr-mode transform to test data."""
+def _apply_expr(func, column: str, data: list, *params) -> list:
+    """Helper to apply an expr-mode transform to test data.
+
+    Trailing positional args are forwarded to ``func`` after the column
+    name (engine-equivalent call shape: ``func(column, *params)``).
+    """
     df = pl.DataFrame({column: data})
-    expr = func(column)
+    expr = func(column, *params)
     return df.select(expr.alias(column))[column].to_list()
 
 
@@ -65,9 +69,8 @@ def test_collapse_whitespace():
 
 
 def test_truncate():
-    s = pl.Series("a", ["hello world", "hi", "a very long string"])
-    result = truncate(s, n=5)
-    assert result.to_list() == ["hello", "hi", "a ver"]
+    result = _apply_expr(truncate, "a", ["hello world", "hi", "a very long string"], 5)
+    assert result == ["hello", "hi", "a ver"]
 
 
 def test_normalize_quotes():
@@ -114,8 +117,7 @@ def test_remove_digits():
 
 
 def test_pad_left():
-    s = pl.Series("a", ["42", "7", "123", None])
-    result = pad_left(s, width=5, char="0")
+    result = _apply_expr(pad_left, "a", ["42", "7", "123", None], 5, "0")
     assert result[0] == "00042"
     assert result[1] == "00007"
     assert result[2] == "00123"
@@ -123,8 +125,7 @@ def test_pad_left():
 
 
 def test_pad_right():
-    s = pl.Series("a", ["AB", "X", "ABCDE", None])
-    result = pad_right(s, width=5, char=" ")
+    result = _apply_expr(pad_right, "a", ["AB", "X", "ABCDE", None], 5, " ")
     assert result[0] == "AB   "
     assert result[1] == "X    "
     assert result[2] == "ABCDE"
