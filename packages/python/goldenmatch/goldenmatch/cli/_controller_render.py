@@ -296,6 +296,9 @@ def render_controller_panel(
     """
     parts: list[RenderableType] = []
     parts.append(_header(profile, history))
+    plan_row = _execution_plan(history)
+    if plan_row is not None:
+        parts.append(plan_row)
     mks = _committed_matchkeys(committed_config)
     if mks is not None:
         parts.append(mks)
@@ -330,6 +333,9 @@ def render_short_status(*, profile: Any, history: Any, committed_config: Any) ->
     if history is not None:
         decisions = [e for e in getattr(history, "entries", []) if e.decision is not None]
         bits.append(f"iterations={len(decisions)}")
+    plan_short = _execution_plan_short(history)
+    if plan_short:
+        bits.append(plan_short)
     if committed_config is not None:
         try:
             matchkeys = committed_config.get_matchkeys()
@@ -343,6 +349,51 @@ def render_short_status(*, profile: Any, history: Any, committed_config: Any) ->
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _execution_plan(history: Any) -> RenderableType | None:
+    """Render the controller v3 ExecutionPlan as a Rich Text row.
+
+    ``None`` when history is missing or pre-v3 (no execution_plan field).
+    Highlights the rule + backend; tuning knobs follow in dim style so the
+    rule selection is the headline.
+    """
+    if history is None:
+        return None
+    plan = getattr(history, "execution_plan", None)
+    if plan is None:
+        return None
+    rule = getattr(plan, "rule_name", None) or "unknown"
+    backend = getattr(plan, "backend", "polars-direct")
+    extras: list[str] = []
+    chunk = getattr(plan, "chunk_size", None)
+    if chunk is not None:
+        extras.append(f"chunk_size={chunk}")
+    workers = getattr(plan, "max_workers", None)
+    if workers:
+        extras.append(f"max_workers={workers}")
+    spill = getattr(plan, "pair_spill_threshold", None)
+    if spill:
+        extras.append(f"spill={spill}")
+    strategy = getattr(plan, "clustering_strategy", None)
+    if strategy and strategy != "in_memory":
+        extras.append(f"clustering={strategy}")
+    head = f"[bold cyan]Plan:[/] [bold]{rule}[/] -> backend=[bold]{backend}[/]"
+    if extras:
+        head = f"{head} [dim]({', '.join(extras)})[/]"
+    return Text.from_markup(head)
+
+
+def _execution_plan_short(history: Any) -> str:
+    """One-token summary of the execution plan, or empty string when absent."""
+    if history is None:
+        return ""
+    plan = getattr(history, "execution_plan", None)
+    if plan is None:
+        return ""
+    rule = getattr(plan, "rule_name", None) or "unknown"
+    backend = getattr(plan, "backend", "polars-direct")
+    return f"plan={rule}/{backend}"
 
 
 def _truncate(s: str, max_len: int) -> str:
