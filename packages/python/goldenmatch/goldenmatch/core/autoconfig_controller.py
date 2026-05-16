@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 # Sentinel: forces RED via DataProfile.health() when n_rows == 0.
 _RED_PROFILE: ComplexityProfile = ComplexityProfile(data=DataProfile(n_rows=0))
 
+# Confidence gate threshold (Phase 3 of controller-budget-pathology spec).
+# Back-projected from the 500K -> ~26 min measured wall on synthetic
+# surname fixtures: committing a RED config on a large input produces
+# degenerate full-data dedupe. 100K is the safe upper bound below which
+# the pipeline still completes in a tolerable wall-clock window.
+REFUSE_AT_N: int = 100_000
+
 # ContextVar populated at every exit path of AutoConfigController.run()
 # (including KeyboardInterrupt) so callers can inspect RunHistory after
 # either normal return or exception.  Stores RunHistory directly
@@ -145,6 +152,75 @@ def _call_policy_propose(
 
 class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
+
+
+class ControllerNotConfidentError(Exception):
+    """Raised when AutoConfigController committed a RED-health config on
+    a large input (df.height >= REFUSE_AT_N). Carries the failing
+    sub-profile + a DOCS_URL so the caller can recover programmatically.
+
+    Spec: docs/superpowers/specs/2026-05-16-controller-budget-vs-
+    blocking-discovery-design.md §Design / Confidence gate.
+
+    The exception deliberately does NOT carry a "suggested config"
+    because the only material the controller has to suggest from is
+    config_v0 + the priors that produced the RED commit -- handing those
+    back as a suggestion is a footgun (looks authoritative; isn't).
+    """
+
+    DOCS_URL = (
+        "https://github.com/benseverndev-oss/goldenmatch/blob/main/"
+        "docs/explicit-config.md"
+    )
+
+    def __init__(
+        self,
+        *,
+        n_rows: int,
+        failing_sub_profile: str,
+        stop_reason: str,
+    ) -> None:
+        self.n_rows = n_rows
+        self.failing_sub_profile = failing_sub_profile
+        self.stop_reason = stop_reason
+        super().__init__(
+            f"AutoConfigController committed a RED config on a "
+            f"{n_rows}-row input (failing sub-profile: {failing_sub_profile}, "
+            f"stop_reason: {stop_reason}). Running this config would produce "
+            f"degenerate dedupe; passing it back instead of running. "
+            f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
+            f"threshold, or re-call with confidence_required=False. See "
+            f"{self.DOCS_URL}."
+        )
+
+
+# Priority order for failing-sub-profile diagnostics: root causes
+# upstream first. Spec §Design / Confidence gate.
+_SUBPROFILE_PRIORITY_ORDER = ("data", "blocking", "scoring", "matchkey", "cluster")
+
+
+def _identify_failing_subprofile(profile: ComplexityProfile) -> str:  # pyright: ignore[reportUnusedFunction]
+    """Walk the ComplexityProfile sub-profiles in priority order; return
+    the name of the first one reporting RED. Returns '' when none are
+    RED (defensive -- the confidence gate's RED precondition guarantees
+    at least one will be).
+
+    Priority order [data, blocking, scoring, matchkey, cluster] surfaces
+    upstream causes first: if data is RED, blocking RED is a consequence;
+    if blocking is RED, scoring RED is a consequence; etc.
+    """
+    n_rows = profile.data.n_rows
+    health_calls = {
+        "data": lambda: profile.data.health(),
+        "blocking": lambda: profile.blocking.health(n_rows=n_rows),
+        "scoring": lambda: profile.scoring.health(),
+        "matchkey": lambda: profile.matchkey.health(),
+        "cluster": lambda: profile.cluster.health(n_rows=n_rows),
+    }
+    for name in _SUBPROFILE_PRIORITY_ORDER:
+        if health_calls[name]() == HealthVerdict.RED:
+            return name
+    return ""
 
 
 def _assemble_v0_history_entry(
@@ -286,6 +362,7 @@ class AutoConfigController:
         reference: pl.DataFrame | None = None,
         v0_kwargs: dict | None = None,
         skip_finalize: bool = False,
+        confidence_required: bool = True,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -479,6 +556,32 @@ class AutoConfigController:
             )
             _LAST_CONTROLLER_RUN.set(history)
             return config_v0, _RED_PROFILE, history
+
+        # Confidence gate (Phase 3 of controller-budget pathology spec).
+        # When the controller committed a RED entry on a large input,
+        # running the full pipeline would produce ~26-min degenerate
+        # dedupe. Refuse loudly instead. Spec §Design / Confidence gate.
+        if (
+            confidence_required
+            and df.height >= REFUSE_AT_N
+            and best_entry.profile.health() == HealthVerdict.RED
+        ):
+            failing = _identify_failing_subprofile(best_entry.profile)
+            # ``_LAST_CONTROLLER_RUN`` here is the CONTROLLER-LOCAL ContextVar
+            # defined at the top of this file (line ~45), NOT the
+            # ``(profile, history)`` tuple ContextVar in ``autoconfig.py``.
+            # Mirror the existing pattern (line 456, line 549) that sets it
+            # right before each return.
+            _LAST_CONTROLLER_RUN.set(history)  # surface history before raise
+            raise ControllerNotConfidentError(
+                n_rows=df.height,
+                failing_sub_profile=failing,
+                stop_reason=(
+                    history.stop_reason.name
+                    if history.stop_reason
+                    else "unset"
+                ),
+            )
 
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
