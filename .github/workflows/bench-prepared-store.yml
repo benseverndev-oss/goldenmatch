@@ -1,0 +1,60 @@
+name: bench-prepared-store
+
+# Compare dedupe_df with and without config.prepared_record_store on a
+# synthetic person-shape df. Validates Component 1 of Distributed Plan v1.
+#
+# Trigger: workflow_dispatch (manual). Default rows = 500_000.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Synthetic df row count"
+        required: false
+        default: "500000"
+      ref:
+        description: "Branch / tag / SHA to bench (default: workflow ref)"
+        required: false
+
+jobs:
+  bench:
+    name: "bench prepared-record-store"
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          mkdir -p bench-out
+          python scripts/bench_prepared_store.py \
+            --rows "${{ inputs.rows }}" \
+            --store-dir bench-out/store \
+            --out bench-out/results.json
+          echo '## bench-prepared-store results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/results.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-prepared-store-${{ inputs.rows }}-rows
+          path: packages/python/goldenmatch/bench-out/results.json
+          retention-days: 30
