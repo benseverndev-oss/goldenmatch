@@ -193,22 +193,38 @@ _EMOJI_RE = re.compile(
 )
 
 
+_EMOJI_PATTERN = (
+    "["
+    "\U0001f600-\U0001f64f"
+    "\U0001f300-\U0001f5ff"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f1e0-\U0001f1ff"
+    "\U00002702-\U000027b0"
+    "\U000024c2-\U0001f251"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa00-\U0001fa6f"
+    "\U0001fa70-\U0001faff"
+    "\U00002600-\U000026ff"
+    "\U0000200d"
+    "\U0000fe0f"
+    "]+"
+)
+
+
 @register_transform(
     name="remove_emojis",
     input_types=["string"],
     auto_apply=False,
     priority=38,
-    mode="series",
+    mode="expr",
 )
-def remove_emojis(series: pl.Series) -> pl.Series:
-    """Remove emoji characters from text."""
+def remove_emojis(column: str) -> pl.Expr:
+    """Remove emoji characters from text.
 
-    def _strip(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _EMOJI_RE.sub("", val)
-
-    return series.map_elements(_strip, return_dtype=pl.Utf8)
+    Native Polars regex replace_all. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.replace_all(_EMOJI_PATTERN, "")
 
 
 @register_transform(
@@ -237,17 +253,20 @@ def fix_mojibake(series: pl.Series) -> pl.Series:
     input_types=["string"],
     auto_apply=False,
     priority=82,
-    mode="series",
+    mode="expr",
 )
-def normalize_line_endings(series: pl.Series) -> pl.Series:
-    """Normalize \\r\\n and \\r to \\n."""
+def normalize_line_endings(column: str) -> pl.Expr:
+    """Normalize \\r\\n and \\r to \\n.
 
-    def _norm(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return val.replace("\r\n", "\n").replace("\r", "\n")
-
-    return series.map_elements(_norm, return_dtype=pl.Utf8)
+    Native Polars: chained literal replace_all. Order matters — replace
+    \\r\\n first (longer match wins), then any remaining \\r. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .str.replace_all("\r\n", "\n", literal=True)
+        .str.replace_all("\r", "\n", literal=True)
+    )
 
 
 _NUMBER_RE = re.compile(r"\d+\.?\d*")

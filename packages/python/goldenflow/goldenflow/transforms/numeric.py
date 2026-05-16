@@ -8,19 +8,22 @@ from goldenflow.transforms import register_transform
 
 
 @register_transform(
-    name="currency_strip", input_types=["string", "numeric"], auto_apply=False, priority=50, mode="series"
+    name="currency_strip", input_types=["string", "numeric"], auto_apply=False, priority=50, mode="expr"
 )
-def currency_strip(series: pl.Series) -> pl.Series:
-    def _strip(val: str | None) -> float | None:
-        if val is None:
-            return None
-        cleaned = re.sub(r"[^\d.\-]", "", str(val))
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
+def currency_strip(column: str) -> pl.Expr:
+    """Strip currency symbols and thousand separators, return numeric.
 
-    return series.map_elements(_strip, return_dtype=pl.Float64)
+    Native Polars: cast to Utf8, regex-strip non-numeric chars, cast to
+    Float64 (strict=False yields null on failure, matching the old
+    try/except). Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8, strict=False)
+        .str.replace_all(r"[^\d.\-]", "")
+        .cast(pl.Float64, strict=False)
+    )
 
 
 @register_transform(
@@ -28,19 +31,23 @@ def currency_strip(series: pl.Series) -> pl.Series:
     input_types=["string", "numeric"],
     auto_apply=False,
     priority=50,
-    mode="series",
+    mode="expr",
 )
-def percentage_normalize(series: pl.Series) -> pl.Series:
-    def _norm(val: str | None) -> float | None:
-        if val is None:
-            return None
-        v = str(val).strip().rstrip("%")
-        try:
-            return float(v) / 100.0
-        except ValueError:
-            return None
+def percentage_normalize(column: str) -> pl.Expr:
+    """Strip trailing %, parse to float, divide by 100.
 
-    return series.map_elements(_norm, return_dtype=pl.Float64)
+    Native Polars: cast to Utf8, strip whitespace + trailing %, cast to
+    Float64 (null on failure), then divide. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Utf8, strict=False)
+        .str.strip_chars()
+        .str.replace(r"%+$", "")
+        .cast(pl.Float64, strict=False)
+        / 100.0
+    )
 
 
 @register_transform(
@@ -62,20 +69,21 @@ def clamp(series: pl.Series, min_val: float = 0.0, max_val: float = 1.0) -> pl.S
     input_types=["string", "numeric"],
     auto_apply=False,
     priority=45,
-    mode="series",
+    mode="expr",
 )
-def to_integer(series: pl.Series) -> pl.Series:
-    """Parse string to integer, truncating any decimal part."""
+def to_integer(column: str) -> pl.Expr:
+    """Parse string to integer, truncating any decimal part.
 
-    def _to_int(val: str | None) -> int | None:
-        if val is None:
-            return None
-        try:
-            return int(float(val))
-        except (ValueError, OverflowError):
-            return None
-
-    return series.map_elements(_to_int, return_dtype=pl.Int64)
+    Native Polars: cast via Float64 (truncation matches the old int(float(val))
+    semantics) then Int64. strict=False yields null on parse failure, matching
+    the old try/except. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .cast(pl.Float64, strict=False)
+        .cast(pl.Int64, strict=False)
+    )
 
 
 @register_transform(
