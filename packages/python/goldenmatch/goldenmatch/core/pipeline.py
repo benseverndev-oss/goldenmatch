@@ -579,8 +579,12 @@ _PREP_CACHE_LRU: list[tuple] = []
 _PREP_CACHE_MAX = 4
 
 
-def _prep_cache_clear() -> None:
-    """Reset the cache. Called by tests to isolate state."""
+def _prep_cache_clear() -> None:  # pyright: ignore[reportUnusedFunction]
+    """Reset the cache. Called by tests to isolate state.
+
+    Pyright flags this as unused because its only callers live in
+    ``tests/test_prep_cache.py`` which the pyright config excludes.
+    """
     _PREP_CACHE.clear()
     _PREP_CACHE_LRU.clear()
 
