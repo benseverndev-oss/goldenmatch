@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from goldenmatch.distributed.record_store import PreparedRecordStore
 
 import polars as pl
 
@@ -605,6 +609,7 @@ def _run_dedupe_pipeline(
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
     _prep_cache_seed: int | None = None,
+    _prep_store: PreparedRecordStore | None = None,
 ) -> dict:
     """Shared dedupe pipeline logic (post-ingest).
 
@@ -642,42 +647,82 @@ def _run_dedupe_pipeline(
         combined_lf = cached_prep.lazy()
         logger.debug("prep cache HIT (id=%s)", prep_cache_key[0])
     else:
-        # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
-        if config.quality is None or config.quality.mode != "disabled":
-            from goldenmatch.core.quality import run_quality_check
-            combined_df_tmp = combined_lf.collect()
-            combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
-            if gc_fixes:
-                logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-            combined_lf = combined_df_tmp.lazy()
+        # NEW (Phase 2): try the disk-backed prepared-record store before
+        # re-prepping. In-memory _PREP_CACHE was already consulted above;
+        # disk store covers cross-call + cross-process cases that the
+        # per-process LRU can't. Same signature -> same prepared records.
+        disk_signature = _prep_cache_signature(config)
+        if _prep_store is not None:
+            from goldenmatch.distributed.record_store import load_prepared_records
+            cached_disk = load_prepared_records(_prep_store, signature=disk_signature)
+            if cached_disk is not None:
+                combined_lf = cached_disk.lazy()
+                # Seed in-memory cache so subsequent in-process iterations
+                # skip the disk read (RAM > DuckDB+Arrow latency).
+                # Guard against _PREP_CACHE_MAX == 0 (tests use this to
+                # disable the in-memory cache) -- the existing eviction
+                # logic would IndexError on pop() from an empty LRU list
+                # when ``0 >= 0`` is true.
+                if _PREP_CACHE_MAX > 0:
+                    if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
+                        evicted = _PREP_CACHE_LRU.pop(0)
+                        _PREP_CACHE.pop(evicted, None)
+                    _PREP_CACHE[prep_cache_key] = cached_disk
+                    _PREP_CACHE_LRU.append(prep_cache_key)
+                logger.debug("prep store DISK-HIT (signature=%s)", disk_signature)
+            else:
+                cached_disk = None  # explicit; falls through to prep steps
+        else:
+            cached_disk = None
 
-        # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
-        # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
-        # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
-        if config.transform is None or config.transform.mode != "disabled":
-            from goldenmatch.core.transform import run_transform
-            combined_df_tmp = combined_lf.collect()
-            combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
-            if gf_fixes:
-                logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
-            combined_lf = combined_df_tmp.lazy()
+        if cached_disk is None:
+            # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
+            if config.quality is None or config.quality.mode != "disabled":
+                from goldenmatch.core.quality import run_quality_check
+                combined_df_tmp = combined_lf.collect()
+                combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
+                if gc_fixes:
+                    logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+                combined_lf = combined_df_tmp.lazy()
 
-        # ── Step 1.5a: AUTO-FIX + VALIDATION ──
-        if config.validation and config.validation.auto_fix:
-            combined_df_tmp = combined_lf.collect()
-            combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
-            logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
-            combined_lf = combined_df_tmp.lazy()
+            # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
+            # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
+            # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
+            if config.transform is None or config.transform.mode != "disabled":
+                from goldenmatch.core.transform import run_transform
+                combined_df_tmp = combined_lf.collect()
+                combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+                if gf_fixes:
+                    logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
+                combined_lf = combined_df_tmp.lazy()
 
-        # Populate cache (LRU eviction). We materialize as an eager DataFrame
-        # so subsequent hits don't re-evaluate a long lazy plan.
-        prepped_df = combined_lf.collect()
-        if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
-            evicted = _PREP_CACHE_LRU.pop(0)
-            _PREP_CACHE.pop(evicted, None)
-        _PREP_CACHE[prep_cache_key] = prepped_df
-        _PREP_CACHE_LRU.append(prep_cache_key)
-        combined_lf = prepped_df.lazy()
+            # ── Step 1.5a: AUTO-FIX + VALIDATION ──
+            if config.validation and config.validation.auto_fix:
+                combined_df_tmp = combined_lf.collect()
+                combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
+                logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
+                combined_lf = combined_df_tmp.lazy()
+
+            # Populate in-memory cache (LRU eviction). We materialize as an
+            # eager DataFrame so subsequent hits don't re-evaluate a long lazy
+            # plan. Guard _PREP_CACHE_MAX > 0 so tests that monkey-patch it to
+            # 0 don't trigger IndexError on pop() from an empty LRU list.
+            prepped_df = combined_lf.collect()
+            if _PREP_CACHE_MAX > 0:
+                if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
+                    evicted = _PREP_CACHE_LRU.pop(0)
+                    _PREP_CACHE.pop(evicted, None)
+                _PREP_CACHE[prep_cache_key] = prepped_df
+                _PREP_CACHE_LRU.append(prep_cache_key)
+            combined_lf = prepped_df.lazy()
+
+            # NEW (Phase 2): also write to disk store, if provided.
+            if _prep_store is not None:
+                from goldenmatch.distributed.record_store import materialize_prepared_records
+                materialize_prepared_records(
+                    _prep_store, prepped_df, signature=disk_signature,
+                )
+                logger.debug("prep store DISK-WRITE (signature=%s)", disk_signature)
 
     # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
     if auto_config:
@@ -1171,12 +1216,36 @@ def run_dedupe_df(
     lf = lf.with_columns(pl.lit(source_name).alias("__source__"))
     lf = _add_row_ids(lf, offset=0)
     combined_lf = lf.collect().lazy()
-    return _run_dedupe_pipeline(combined_lf, config, matchkeys,
-                                output_golden, output_clusters,
-                                output_dupes, output_unique, output_report,
-                                auto_config=auto_config,
-                                auto_config_llm_provider=auto_config_llm_provider,
-                                _prep_cache_seed=cache_seed)
+
+    # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
+    # _prep_store (Phase 3's controller will supply one), open our own store
+    # from env vars. cleanup=not persist so ephemeral runs don't leave files
+    # behind, but PERSIST=1 enables stable cross-call reuse.
+    own_store = False
+    _prep_store_ctx: PreparedRecordStore | None = None
+    if getattr(config, "prepared_record_store", False):
+        from goldenmatch.distributed.record_store import PreparedRecordStore as _PRS
+        base_dir_env = os.environ.get("GOLDENMATCH_PREPARED_RECORD_STORE_DIR")
+        persist = os.environ.get(
+            "GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST", "0"
+        ).lower() in ("1", "true", "yes")
+        if base_dir_env is not None:
+            store_path = Path(base_dir_env) / "goldenmatch_prepared.duckdb"
+            _prep_store_ctx = _PRS(path=store_path, cleanup=not persist)
+        else:
+            _prep_store_ctx = _PRS(cleanup=not persist)
+        own_store = True
+    try:
+        return _run_dedupe_pipeline(combined_lf, config, matchkeys,
+                                    output_golden, output_clusters,
+                                    output_dupes, output_unique, output_report,
+                                    auto_config=auto_config,
+                                    auto_config_llm_provider=auto_config_llm_provider,
+                                    _prep_cache_seed=cache_seed,
+                                    _prep_store=_prep_store_ctx)
+    finally:
+        if own_store and _prep_store_ctx is not None:
+            _prep_store_ctx.close()
 
 
 def run_match(
