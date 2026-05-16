@@ -1451,6 +1451,7 @@ def auto_configure_df(
     *,
     reference: pl.DataFrame | pl.LazyFrame | None = None,
     _skip_finalize: bool = False,
+    confidence_required: bool = True,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -1512,7 +1513,7 @@ def auto_configure_df(
         policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
         policy=policy,
-        budget=ControllerBudget(),
+        budget=ControllerBudget.for_dataset(df.height),
         memory=memory,
     )
     v0_kw = {
@@ -1527,6 +1528,7 @@ def auto_configure_df(
         reference=reference,
         v0_kwargs=v0_kw,
         skip_finalize=_skip_finalize,
+        confidence_required=confidence_required,
     )
 
     # Backend selection is now driven by the controller v3 planner inside

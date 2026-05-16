@@ -142,7 +142,6 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
     assert result is not None
 
 
-@pytest.mark.skip(reason="confidence_required kwarg lands in Phase 4")
 def test_gate_short_circuits_with_confidence_required_false(monkeypatch):
     """Spec §Backward compatibility: kwarg opt-out preserves today's
     warn-and-run behavior. Un-skipped in Phase 4."""
