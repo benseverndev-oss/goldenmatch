@@ -39,6 +39,7 @@ dependencies = [
     "diptest>=0.5.2",
     "psutil>=5.9",
     "duckdb>=0.9",
+    "pyarrow>=10",
 ]
 
 [project.urls]
