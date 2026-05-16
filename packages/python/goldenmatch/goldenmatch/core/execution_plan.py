@@ -6,11 +6,14 @@ docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from goldenmatch.config.schemas import GoldenMatchConfig
 
 BackendName = Literal["polars-direct", "chunked", "duckdb", "ray"]
 ClusteringStrategy = Literal["in_memory", "partitioned_union_find", "streaming_cc"]
-SpillThreshold = Optional[Literal["ram", "duckdb", "disk_per_worker"]]
+SpillThreshold = Literal["ram", "duckdb", "disk_per_worker"] | None
 
 
 @dataclass(frozen=True)
@@ -28,7 +31,7 @@ class ExecutionPlan:
     clustering_strategy: ClusteringStrategy = "in_memory"
     rule_name: str | None = None
 
-    def apply_to(self, config) -> None:
+    def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.
 
         Only ``backend`` lives on the existing config schema today; the

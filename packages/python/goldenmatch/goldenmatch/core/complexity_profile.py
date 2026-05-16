@@ -179,7 +179,7 @@ class BlockingProfile:
         """
         return self.total_comparisons
 
-    def extrapolate_to(self, n_rows_sample: int, n_rows_full: int) -> "BlockingProfile":
+    def extrapolate_to(self, n_rows_sample: int, n_rows_full: int) -> BlockingProfile:
         """Project sample's pair-count signal to a full-data row count.
 
         Spec §Pipeline integration: pair count scales linearly with the
