@@ -1,6 +1,7 @@
 # Controller v3 — the auto-config controller becomes the execution planner
 
-**Status:** Design (drafted 2026-05-15)
+**Status:** COMPLETE — landed 2026-05-16 across PRs #259-#267. Acceptance criteria below.
+**Status (original):** Design (drafted 2026-05-15)
 **Author:** Claude + bsevern, brainstorm from the 50M readiness conversation
 **Scope:** `packages/python/goldenmatch/goldenmatch/core/autoconfig.py`, `core/autoconfig_controller.py`, `core/autoconfig_policy.py`. Extension to the existing introspective controller's decision space.
 **Related:**
