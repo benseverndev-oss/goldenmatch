@@ -82,8 +82,7 @@ def test_normalize_quotes():
 
 
 def test_remove_html_tags():
-    s = pl.Series("a", ["<p>Hello</p>", "<b>bold</b> text", "no tags", None])
-    result = remove_html_tags(s)
+    result = _apply_expr(remove_html_tags, "a", ["<p>Hello</p>", "<b>bold</b> text", "no tags", None])
     assert result[0] == "Hello"
     assert result[1] == "bold text"
     assert result[2] == "no tags"
@@ -91,20 +90,18 @@ def test_remove_html_tags():
 
 
 def test_remove_html_tags_nested():
-    s = pl.Series("a", ["<div><span>nested</span></div>", "<a href='url'>link</a>"])
-    result = remove_html_tags(s)
+    result = _apply_expr(remove_html_tags, "a", ["<div><span>nested</span></div>", "<a href='url'>link</a>"])
     assert result[0] == "nested"
     assert result[1] == "link"
 
 
 def test_remove_urls():
-    s = pl.Series("a", [
+    result = _apply_expr(remove_urls, "a", [
         "visit https://example.com for info",
         "go to http://test.org/path?q=1 now",
         "no url here",
         None,
     ])
-    result = remove_urls(s)
     assert result[0] == "visit  for info"
     assert result[1] == "go to  now"
     assert result[2] == "no url here"
@@ -167,8 +164,7 @@ def test_normalize_line_endings():
 
 
 def test_extract_numbers():
-    s = pl.Series("a", ["Weight: 150 lbs", "Age 25, Height 5.11", "none", None])
-    result = extract_numbers(s)
+    result = _apply_expr(extract_numbers, "a", ["Weight: 150 lbs", "Age 25, Height 5.11", "none", None])
     assert result[0] == "150"
     assert result[1] == "25 5.11"
     assert result[2] == ""

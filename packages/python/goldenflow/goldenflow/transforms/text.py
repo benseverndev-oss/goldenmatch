@@ -93,18 +93,15 @@ def normalize_quotes(column: str) -> pl.Expr:
     input_types=["string"],
     auto_apply=False,
     priority=45,
-    mode="series",
+    mode="expr",
 )
-def remove_html_tags(series: pl.Series) -> pl.Series:
-    """Strip HTML tags from text."""
-    _tag_re = re.compile(r"<[^>]+>")
+def remove_html_tags(column: str) -> pl.Expr:
+    """Strip HTML tags from text.
 
-    def _strip(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _tag_re.sub("", val)
-
-    return series.map_elements(_strip, return_dtype=pl.Utf8)
+    Native Polars regex replace_all. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.replace_all(r"<[^>]+>", "")
 
 
 @register_transform(
@@ -112,18 +109,15 @@ def remove_html_tags(series: pl.Series) -> pl.Series:
     input_types=["string"],
     auto_apply=False,
     priority=40,
-    mode="series",
+    mode="expr",
 )
-def remove_urls(series: pl.Series) -> pl.Series:
-    """Strip URLs (http/https) from text."""
-    _url_re = re.compile(r"https?://\S+")
+def remove_urls(column: str) -> pl.Expr:
+    """Strip URLs (http/https) from text.
 
-    def _strip(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _url_re.sub("", val)
-
-    return series.map_elements(_strip, return_dtype=pl.Utf8)
+    Native Polars regex replace_all. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.replace_all(r"https?://\S+", "")
 
 
 @register_transform(
@@ -258,14 +252,12 @@ _NUMBER_RE = re.compile(r"\d+\.?\d*")
     input_types=["string"],
     auto_apply=False,
     priority=30,
-    mode="series",
+    mode="expr",
 )
-def extract_numbers(series: pl.Series) -> pl.Series:
-    """Extract all numbers from text, joined by spaces."""
+def extract_numbers(column: str) -> pl.Expr:
+    """Extract all numbers from text, joined by spaces.
 
-    def _extract(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return " ".join(_NUMBER_RE.findall(val))
-
-    return series.map_elements(_extract, return_dtype=pl.Utf8)
+    Native Polars: extract_all → list.join. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.extract_all(r"\d+\.?\d*").list.join(" ")
