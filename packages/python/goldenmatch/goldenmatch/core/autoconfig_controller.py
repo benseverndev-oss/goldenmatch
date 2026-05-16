@@ -555,6 +555,19 @@ class AutoConfigController:
                 history.stop_reason.name if history.stop_reason else "unset",
             )
             _LAST_CONTROLLER_RUN.set(history)
+            # Confidence gate (followup to Phase 3 of controller-budget spec):
+            # the all-iterations-errored path is the same user-facing
+            # pathology as a RED committed entry -- caller would run the
+            # full pipeline on the _RED_PROFILE sentinel and produce
+            # degenerate output. Refuse loudly at scale.
+            if confidence_required and df.height >= REFUSE_AT_N:
+                raise ControllerNotConfidentError(
+                    n_rows=df.height,
+                    failing_sub_profile="data",  # n_errored=all means data path itself failed
+                    stop_reason=(
+                        history.stop_reason.name if history.stop_reason else "unset"
+                    ),
+                )
             return config_v0, _RED_PROFILE, history
 
         # Confidence gate (Phase 3 of controller-budget pathology spec).
