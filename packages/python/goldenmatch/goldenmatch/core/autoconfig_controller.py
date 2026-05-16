@@ -147,6 +147,75 @@ class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
 
 
+class ControllerNotConfidentError(Exception):
+    """Raised when AutoConfigController committed a RED-health config on
+    a large input (df.height >= REFUSE_AT_N). Carries the failing
+    sub-profile + a DOCS_URL so the caller can recover programmatically.
+
+    Spec: docs/superpowers/specs/2026-05-16-controller-budget-vs-
+    blocking-discovery-design.md §Design / Confidence gate.
+
+    The exception deliberately does NOT carry a "suggested config"
+    because the only material the controller has to suggest from is
+    config_v0 + the priors that produced the RED commit -- handing those
+    back as a suggestion is a footgun (looks authoritative; isn't).
+    """
+
+    DOCS_URL = (
+        "https://github.com/benseverndev-oss/goldenmatch/blob/main/"
+        "docs/explicit-config.md"
+    )
+
+    def __init__(
+        self,
+        *,
+        n_rows: int,
+        failing_sub_profile: str,
+        stop_reason: str,
+    ) -> None:
+        self.n_rows = n_rows
+        self.failing_sub_profile = failing_sub_profile
+        self.stop_reason = stop_reason
+        super().__init__(
+            f"AutoConfigController committed a RED config on a "
+            f"{n_rows}-row input (failing sub-profile: {failing_sub_profile}, "
+            f"stop_reason: {stop_reason}). Running this config would produce "
+            f"degenerate dedupe; passing it back instead of running. "
+            f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
+            f"threshold, or re-call with confidence_required=False. See "
+            f"{self.DOCS_URL}."
+        )
+
+
+# Priority order for failing-sub-profile diagnostics: root causes
+# upstream first. Spec §Design / Confidence gate.
+_SUBPROFILE_PRIORITY_ORDER = ("data", "blocking", "scoring", "matchkey", "cluster")
+
+
+def _identify_failing_subprofile(profile: ComplexityProfile) -> str:  # pyright: ignore[reportUnusedFunction]
+    """Walk the ComplexityProfile sub-profiles in priority order; return
+    the name of the first one reporting RED. Returns '' when none are
+    RED (defensive -- the confidence gate's RED precondition guarantees
+    at least one will be).
+
+    Priority order [data, blocking, scoring, matchkey, cluster] surfaces
+    upstream causes first: if data is RED, blocking RED is a consequence;
+    if blocking is RED, scoring RED is a consequence; etc.
+    """
+    n_rows = profile.data.n_rows
+    health_calls = {
+        "data": lambda: profile.data.health(),
+        "blocking": lambda: profile.blocking.health(n_rows=n_rows),
+        "scoring": lambda: profile.scoring.health(),
+        "matchkey": lambda: profile.matchkey.health(),
+        "cluster": lambda: profile.cluster.health(n_rows=n_rows),
+    }
+    for name in _SUBPROFILE_PRIORITY_ORDER:
+        if health_calls[name]() == HealthVerdict.RED:
+            return name
+    return ""
+
+
 def _assemble_v0_history_entry(
     sample: pl.DataFrame,
     reference: pl.DataFrame | None,
