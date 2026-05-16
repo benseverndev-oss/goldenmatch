@@ -261,7 +261,34 @@ class PostflightReport:
         mem_line = _render_memory_line(self.memory_stats)
         if mem_line:
             parts.append(f"  {mem_line}")
+        plan_line = _render_plan_line(self.controller_history)
+        if plan_line:
+            parts.append(f"  {plan_line}")
         return "\n".join(parts)
+
+
+def _render_plan_line(history: Any) -> str:
+    """Render the controller v3 execution plan in one line, or '' when absent.
+
+    Reads ``history.execution_plan`` (an ``ExecutionPlan`` from the v3
+    planner). Surfaces the rule that fired + the resulting backend so users
+    can answer "why did goldenmatch pick chunked?" at a glance. ASCII only.
+    """
+    if history is None:
+        return ""
+    plan = getattr(history, "execution_plan", None)
+    if plan is None:
+        return ""
+    rule = getattr(plan, "rule_name", None) or "unknown"
+    backend = getattr(plan, "backend", "polars-direct")
+    parts = [f"Plan: {rule} -> backend={backend}"]
+    chunk = getattr(plan, "chunk_size", None)
+    if chunk is not None:
+        parts.append(f"chunk_size={chunk}")
+    workers = getattr(plan, "max_workers", None)
+    if workers:
+        parts.append(f"max_workers={workers}")
+    return ", ".join(parts)
 
 
 def _render_memory_line(stats: Any) -> str:

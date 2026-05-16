@@ -287,6 +287,29 @@ def serialize_telemetry(
         "column_priors": _column_priors(profile),
         "decisions": _decisions(history),
         "errors": _errors(history),
+        "execution_plan": _execution_plan(history),
         "committed_matchkeys": _committed_matchkeys_summary(committed_config),
         "negative_evidence": _negative_evidence(committed_config),
+    }
+
+
+def _execution_plan(history: Any) -> dict[str, Any] | None:
+    """Serialize the controller v3 ExecutionPlan, or None when absent.
+
+    Pulls from ``history.execution_plan`` (populated by
+    ``AutoConfigController.run``). Returns None for legacy histories or
+    hand-written configs that bypass the controller.
+    """
+    if history is None:
+        return None
+    plan = getattr(history, "execution_plan", None)
+    if plan is None:
+        return None
+    return {
+        "rule_name": plan.rule_name,
+        "backend": plan.backend,
+        "chunk_size": plan.chunk_size,
+        "max_workers": plan.max_workers,
+        "pair_spill_threshold": plan.pair_spill_threshold,
+        "clustering_strategy": plan.clustering_strategy,
     }
