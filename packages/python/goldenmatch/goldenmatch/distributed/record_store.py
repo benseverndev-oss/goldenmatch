@@ -93,16 +93,21 @@ class PreparedRecordStore:
         return self._con
 
     def close(self) -> None:
-        """Idempotent close. Removes the file when cleanup=True and the
-        store owns it."""
+        """Idempotent close. Removes the file when cleanup=True regardless
+        of whether the store created the file (tempfile) or opened an
+        existing path. Set cleanup=False to preserve the file across calls
+        (cross-call / cross-process persistence)."""
         if self._closed:
             return
         self._closed = True
         if self._con is not None:
             self._con.close()
             self._con = None
-        if self._cleanup and self._owns_file and self.path.exists():
-            self.path.unlink(missing_ok=True)
+        if self._cleanup and self.path.exists():
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass  # Windows: file may still be locked; best-effort cleanup
 
     def __enter__(self) -> PreparedRecordStore:
         return self
