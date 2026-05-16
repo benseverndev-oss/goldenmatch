@@ -12,9 +12,17 @@ from goldenflow.transforms.numeric import (
 )
 
 
+def _apply_expr(func, column: str, data: list) -> list:
+    """Helper to apply an expr-mode transform to test data."""
+    df = pl.DataFrame({column: data})
+    expr = func(column)
+    return df.select(expr.alias(column))[column].to_list()
+
+
 def test_currency_strip():
-    s = pl.Series("p", ["$1,234.56", "$99.99", "$0.50", "free"])
-    result = currency_strip(s)
+    result = _apply_expr(
+        currency_strip, "p", ["$1,234.56", "$99.99", "$0.50", "free"],
+    )
     assert result[0] == 1234.56
     assert result[1] == 99.99
     assert result[2] == 0.50
@@ -22,8 +30,9 @@ def test_currency_strip():
 
 
 def test_percentage_normalize():
-    s = pl.Series("p", ["85%", "100%", "0.5%", "50"])
-    result = percentage_normalize(s)
+    result = _apply_expr(
+        percentage_normalize, "p", ["85%", "100%", "0.5%", "50"],
+    )
     assert result[0] == 0.85
     assert result[1] == 1.0
     assert result[2] == 0.005
@@ -42,8 +51,9 @@ def test_clamp():
 
 
 def test_to_integer():
-    s = pl.Series("v", ["42", "3.7", "100", "abc", None])
-    result = to_integer(s)
+    result = _apply_expr(
+        to_integer, "v", ["42", "3.7", "100", "abc", None],
+    )
     assert result[0] == 42
     assert result[1] == 3  # truncates decimal
     assert result[2] == 100

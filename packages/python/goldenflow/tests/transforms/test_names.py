@@ -11,6 +11,13 @@ from goldenflow.transforms.names import (
 )
 
 
+def _apply_expr(func, column: str, data: list) -> list:
+    """Helper to apply an expr-mode transform to test data."""
+    df = pl.DataFrame({column: data})
+    expr = func(column)
+    return df.select(expr.alias(column))[column].to_list()
+
+
 def test_split_name():
     df = pl.DataFrame({"name": ["John Smith", "Jane Marie Doe", "Madonna"]})
     result = split_name(df, "name")
@@ -26,16 +33,20 @@ def test_split_name_reverse():
 
 
 def test_strip_titles():
-    s = pl.Series("n", ["Dr. James Wilson", "Mrs. Jane Smith", "Mr. Bob Jones Jr."])
-    result = strip_titles(s)
+    result = _apply_expr(
+        strip_titles, "n",
+        ["Dr. James Wilson", "Mrs. Jane Smith", "Mr. Bob Jones Jr."],
+    )
     assert result[0] == "James Wilson"
     assert result[1] == "Jane Smith"
     assert result[2] == "Bob Jones Jr."
 
 
 def test_strip_suffixes():
-    s = pl.Series("n", ["James Wilson MD", "Jane Smith PhD", "Bob Jones Esq"])
-    result = strip_suffixes(s)
+    result = _apply_expr(
+        strip_suffixes, "n",
+        ["James Wilson MD", "Jane Smith PhD", "Bob Jones Esq"],
+    )
     assert result[0] == "James Wilson"
     assert result[1] == "Jane Smith"
     assert result[2] == "Bob Jones"

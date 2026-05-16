@@ -69,27 +69,41 @@ def split_name_reverse(df: pl.DataFrame, column: str) -> pl.DataFrame:
 
 
 @register_transform(
-    name="strip_titles", input_types=["name"], auto_apply=True, priority=70, mode="series"
+    name="strip_titles", input_types=["name"], auto_apply=True, priority=70, mode="expr"
 )
-def strip_titles(series: pl.Series) -> pl.Series:
-    def _strip(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _TITLES.sub("", val).strip()
+def strip_titles(column: str) -> pl.Expr:
+    """Strip leading personal titles (Mr/Mrs/Ms/Dr/Prof/etc.) from names.
 
-    return series.map_elements(_strip, return_dtype=pl.Utf8)
+    Native Polars: case-insensitive regex replace then strip. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .str.replace(
+            r"(?i)^(Mr\.?|Mrs\.?|Ms\.?|Miss\.?|Dr\.?|Prof\.?|Rev\.?|Sr\.?|Sra\.?)\s+",
+            "",
+        )
+        .str.strip_chars()
+    )
 
 
 @register_transform(
-    name="strip_suffixes", input_types=["name"], auto_apply=False, priority=60, mode="series"
+    name="strip_suffixes", input_types=["name"], auto_apply=False, priority=60, mode="expr"
 )
-def strip_suffixes(series: pl.Series) -> pl.Series:
-    def _strip(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return _SUFFIXES.sub("", val).strip()
+def strip_suffixes(column: str) -> pl.Expr:
+    """Strip trailing professional suffixes (Jr/Sr/II/MD/PhD/etc.) from names.
 
-    return series.map_elements(_strip, return_dtype=pl.Utf8)
+    Native Polars: case-insensitive regex replace then strip. Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return (
+        pl.col(column)
+        .str.replace(
+            r"(?i)\s+(Jr\.?|Sr\.?|II|III|IV|MD|PhD|PharmD|DDS|DVM|Esq\.?|CPA|RN|DO)$",
+            "",
+        )
+        .str.strip_chars()
+    )
 
 
 @register_transform(
