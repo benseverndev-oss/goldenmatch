@@ -557,11 +557,18 @@ class AutoConfigController:
         else:
             profile_for_planner = committed_profile
 
+        # Rule 7 (user_override) consumes ``context["user_backend"]``.
+        # auto_configure_df does not yet expose a ``backend`` kwarg, so the
+        # signal is always None here -- Rule 7 stays a no-op in production
+        # until the kwarg lands. Threading the context now means the
+        # infrastructure is in place and rule_user_override is unit-testable
+        # in isolation.
         plan = apply_planner_rules(
             profile=profile_for_planner,
             runtime=runtime,
             n_rows_full=df.height,
             rules=DEFAULT_RULES,
+            context={"user_backend": None},
         )
         plan.apply_to(committed_config)
         history.execution_plan = plan

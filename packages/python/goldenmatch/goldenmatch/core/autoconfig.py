@@ -1344,18 +1344,30 @@ def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 5
 _AUTOCONFIG_BACKEND_DEFAULT_THRESHOLD = 1_000_000
 
 
-def _scale_aware_backend(row_count: int) -> str | None:
-    """Select an execution backend based on row count.
+def _scale_aware_backend(row_count: int) -> str | None:  # pyright: ignore[reportUnusedFunction]
+    """DEPRECATED: frozen PR-#239 shim, kept for one release.
 
-    Returns the value to assign to ``GoldenMatchConfig.backend``:
-      * ``None`` for small data → in-memory polars-direct (fastest).
-      * ``"duckdb"`` at large N → spills pair accumulator off-heap.
+    The controller v3 planner (``apply_planner_rules`` in
+    ``core/autoconfig_planner.py``) is now the source of truth for
+    backend selection during ``auto_configure_df``. This helper is
+    frozen at PR-#239 behavior (single-threshold ``"duckdb"`` if
+    ``row_count >= GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD``) and does
+    NOT reflect the full v3 rule table -- external callers consuming
+    the shim get stable behavior across the deprecation window. Will
+    be removed in v2.0.
 
-    Future tiers (chunked, ray) will extend this ladder once they're
-    wired into the public pipeline. For now the duckdb pair store is
-    the only out-of-core option the main pipeline already routes
-    through (``_get_block_scorer`` in core/pipeline.py).
+    Spec: docs/superpowers/specs/2026-05-15-controller-v3-planner-design.md
+    §Backward compatibility.
     """
+    import warnings
+
+    warnings.warn(
+        "_scale_aware_backend is deprecated; the v3 planner "
+        "(goldenmatch.core.autoconfig_planner.apply_planner_rules) is "
+        "now the source of truth. Will be removed in v2.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     override = os.environ.get("GOLDENMATCH_AUTOCONFIG_BACKEND")
     if override is not None:
         token = override.strip().lower()
@@ -1517,17 +1529,13 @@ def auto_configure_df(
         skip_finalize=_skip_finalize,
     )
 
-    # Scale-aware backend selection. Only set when the controller didn't
-    # already commit a backend choice (preserves explicit user/test
-    # overrides plumbed through v0_kwargs in the future).
-    if getattr(config, "backend", None) is None:
-        selected = _scale_aware_backend(df.height)
-        if selected is not None:
-            config.backend = selected
-            logger.info(
-                "auto-config: selected backend=%s for %d rows (threshold heuristic)",
-                selected, df.height,
-            )
+    # Backend selection is now driven by the controller v3 planner inside
+    # AutoConfigController.run -- it captures RuntimeProfile, extrapolates
+    # the committed BlockingProfile to full-row count, and writes the
+    # selected backend onto config via ExecutionPlan.apply_to. The legacy
+    # _scale_aware_backend env-var path (PR #239) is preserved as a frozen
+    # shim for external callers during the deprecation window but is no
+    # longer consulted from this entry point.
 
     _LAST_CONTROLLER_RUN.set((profile, history))
     return config
