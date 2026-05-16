@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -155,3 +156,101 @@ def load_prepared_records(
         return None
     arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
     return pl.from_arrow(arrow_table)
+
+
+_BLOCK_PREFIX = "block_"
+
+
+def _block_table_name(signature: str, block_key: str) -> str:
+    sig_h = _sanitize_signature(signature)
+    blk_h = _sanitize_signature(block_key)
+    return f"{_BLOCK_PREFIX}{sig_h}_{blk_h}"
+
+
+def materialize_blocks(
+    store: PreparedRecordStore,
+    df: pl.DataFrame,
+    *,
+    block_assignments: dict[int, str],
+    signature: str,
+) -> None:
+    """Partition ``df`` by ``block_assignments`` ({__row_id__ -> block_key}) and
+    write each block as its own DuckDB table.
+
+    Also writes a `block_index_<sig_hash16>` table mapping block_key -> table_name
+    so list_blocks / iter_blocks can enumerate without scanning ``duckdb_tables()``
+    (which would be O(all_blocks_in_store) across all signatures).
+    """
+    con = store.connection
+    sig_h = _sanitize_signature(signature)
+    index_table = f"block_index_{sig_h}"
+
+    # Build a tiny lookup df once.
+    rid_to_block = pl.DataFrame({
+        "__row_id__": list(block_assignments.keys()),
+        "__block_key__": list(block_assignments.values()),
+    })
+    joined = df.join(rid_to_block, on="__row_id__", how="inner")
+    # Partition by block_key. Order is deterministic for test stability.
+    block_keys: list[str] = sorted(set(block_assignments.values()))
+
+    # Reset prior index for this signature (overwrite semantics).
+    con.execute(f'DROP TABLE IF EXISTS "{index_table}"')
+    con.execute(f'CREATE TABLE "{index_table}" (block_key TEXT, table_name TEXT)')
+
+    for bk in block_keys:
+        block_df = joined.filter(pl.col("__block_key__") == bk).drop("__block_key__")
+        table = _block_table_name(signature, bk)
+        arrow_table = block_df.to_arrow()  # noqa: F841 -- DuckDB resolves by local name
+        con.execute(f'DROP TABLE IF EXISTS "{table}"')
+        con.execute(f'CREATE TABLE "{table}" AS SELECT * FROM arrow_table')
+        con.execute(
+            f'INSERT INTO "{index_table}" VALUES (?, ?)',
+            [bk, table],
+        )
+
+
+def load_block(
+    store: PreparedRecordStore,
+    *,
+    signature: str,
+    block_key: str,
+) -> pl.DataFrame | None:
+    """Read one block's records as a Polars DataFrame. None on miss."""
+    table = _block_table_name(signature, block_key)
+    con = store.connection
+    exists = con.execute(
+        "SELECT 1 FROM duckdb_tables() WHERE table_name = ?",
+        [table],
+    ).fetchone()
+    if exists is None:
+        return None
+    arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
+    return pl.from_arrow(arrow_table)
+
+
+def list_blocks(store: PreparedRecordStore, *, signature: str) -> list[str]:
+    """Return all block_keys known for ``signature``. Empty list on unknown sig."""
+    sig_h = _sanitize_signature(signature)
+    index_table = f"block_index_{sig_h}"
+    con = store.connection
+    exists = con.execute(
+        "SELECT 1 FROM duckdb_tables() WHERE table_name = ?",
+        [index_table],
+    ).fetchone()
+    if exists is None:
+        return []
+    rows = con.execute(f'SELECT block_key FROM "{index_table}"').fetchall()
+    return [r[0] for r in rows]
+
+
+def iter_blocks(
+    store: PreparedRecordStore,
+    *,
+    signature: str,
+) -> Iterator[tuple[str, pl.DataFrame]]:
+    """Yield ``(block_key, block_df)`` pairs in sorted block_key order."""
+    for bk in sorted(list_blocks(store, signature=signature)):
+        df = load_block(store, signature=signature, block_key=bk)
+        if df is not None:
+            yield bk, df
