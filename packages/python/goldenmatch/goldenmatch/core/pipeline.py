@@ -613,10 +613,19 @@ def _run_dedupe_pipeline(
     # config.validation). The auto-config controller calls dedupe_df ~5x on
     # the same sample per `auto_configure_df` call; iteration only mutates
     # matchkeys/blocking/threshold, so these prep steps produce identical
-    # output every time. Cache by id(combined_lf) + prep-config signature.
-    # Other callers (production dedupe_df) miss the cache on first call and
-    # populate; if they ever re-call with the same id+config they hit.
-    prep_cache_key = (id(combined_lf), _prep_cache_signature(config))
+    # output every time.
+    #
+    # Cache key: (id(combined_lf), tuple(columns), prep_config_signature).
+    # The columns tuple is a cheap fingerprint that defends against Python
+    # reusing `id()` slots after GC — without it, a NEW LazyFrame that happens
+    # to land at the same memory address as a previously-cached one would
+    # silently get the stale entry. Column names + the id slot together are
+    # collision-proof in practice.
+    prep_cache_key = (
+        id(combined_lf),
+        tuple(combined_lf.collect_schema().names()),
+        _prep_cache_signature(config),
+    )
     cached_prep = _PREP_CACHE.get(prep_cache_key)
     if cached_prep is not None:
         combined_lf = cached_prep.lazy()
