@@ -149,9 +149,9 @@ def test_controller_run_attaches_execution_plan_to_history():
     _profile, history = ctrl_state
     plan = getattr(history, "execution_plan", None)
     assert plan is not None, "history should have execution_plan attached"
-    assert plan.rule_name in ("no_rules_registered", "no_rule_matched"), (
-        f"phase 2 has no rules registered; got {plan.rule_name}"
-    )
-    assert plan.backend == "polars-direct", (
-        f"phase 2 default plan should preserve polars-direct; got {plan.backend}"
-    )
+    # rule_name is one of the registered DEFAULT_RULES, or a sentinel if
+    # no rule matched. Specific rule selection is covered by
+    # test_autoconfig_planner_rules.py + per-phase integration tests.
+    assert plan.rule_name is not None
+    # 80-row fixture hits the simple plan (rule 2), preserving polars-direct.
+    assert plan.backend == "polars-direct"

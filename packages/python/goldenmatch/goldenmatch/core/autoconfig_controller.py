@@ -541,6 +541,7 @@ class AutoConfigController:
         # committed profile + runtime introspection. Phase 2 lands with an
         # empty rule list (no behavior change); phases 3-6 register rules.
         from goldenmatch.core.autoconfig_planner import apply_planner_rules
+        from goldenmatch.core.autoconfig_planner_rules import DEFAULT_RULES
         from goldenmatch.core.runtime_profile import capture_runtime_profile
 
         runtime = capture_runtime_profile()
@@ -560,7 +561,7 @@ class AutoConfigController:
             profile=profile_for_planner,
             runtime=runtime,
             n_rows_full=df.height,
-            rules=[],  # phases 3-6 register rules
+            rules=DEFAULT_RULES,
         )
         plan.apply_to(committed_config)
         history.execution_plan = plan
