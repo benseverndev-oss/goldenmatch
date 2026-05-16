@@ -239,12 +239,113 @@ rule_user_override = PlannerRule(
 )
 
 
+# ── Rule 6: Ray escape hatch (spec §Rule 6) ─────────────────────────────────
+# Slotted BEFORE rule_duckdb so ray gets first crack at 50M+; falls through
+# to rule_duckdb when ``import ray`` fails (closed-fail behavior per spec).
+
+RAY_MIN_ROWS = 50_000_000
+
+
+def _has_ray() -> bool:
+    """Probe whether ``ray`` is importable. Cheap and side-effect free.
+
+    Uses ``importlib.util.find_spec`` so pyright doesn't complain about
+    the optional ``ray`` dep being unresolvable; ``find_spec`` returns
+    None when the package isn't installed, without raising.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("ray") is not None
+
+
+def _is_ray_eligible(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> bool:
+    """Spec §Rule 6: 50M+ rows AND ray import succeeds.
+
+    Failing closed: when ray isn't installed, predicate returns False and
+    the planner falls through to rule_duckdb (Rule 5).
+    """
+    return n_rows_full >= RAY_MIN_ROWS and _has_ray()
+
+
+def _ray_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        backend="ray",
+        max_workers=runtime.cpu_count,
+        pair_spill_threshold="disk_per_worker",
+        clustering_strategy="streaming_cc",
+        rule_name="plan_selected_ray",
+    )
+
+
+rule_ray = PlannerRule(
+    name="plan_selected_ray",
+    predicate=_is_ray_eligible,
+    action=_ray_plan,
+)
+
+
+# ── Rule 5: DuckDB out-of-core regime (spec §Rule 5) ────────────────────────
+
+DUCKDB_MIN_PAIRS = 5_000_000_000  # 5B
+DUCKDB_MAX_RAM_GB = 16.0  # below this, force DuckDB regardless of pair count
+DUCKDB_MAX_WORKERS = 8
+
+
+def _is_duckdb_eligible(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> bool:
+    """Spec §Rule 5: pair_count >= 5B OR available_ram_gb < 16.
+
+    Single-box at-scale plan. Uses DuckDB for the pair store + partitioned
+    union-find for clustering (full pair set won't fit in Python memory).
+    """
+    pairs = profile.blocking.estimated_pair_count
+    return (
+        pairs >= DUCKDB_MIN_PAIRS
+        or runtime.available_ram_gb < DUCKDB_MAX_RAM_GB
+    )
+
+
+def _duckdb_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        backend="duckdb",
+        max_workers=min(DUCKDB_MAX_WORKERS, runtime.cpu_count),
+        pair_spill_threshold="duckdb",
+        clustering_strategy="partitioned_union_find",
+        rule_name="plan_selected_duckdb",
+    )
+
+
+rule_duckdb = PlannerRule(
+    name="plan_selected_duckdb",
+    predicate=_is_duckdb_eligible,
+    action=_duckdb_plan,
+)
+
+
 # ── Registry ────────────────────────────────────────────────────────────────
 #
-# Order matters: rule_user_override MUST be first (beats every other rule);
-# rule_pathological must precede rule_simple_plan so 1-row inputs hit the
-# defensive path. Phases 5-6 append rule_duckdb + rule_ray below
-# rule_chunked.
+# Order matters:
+#   - rule_user_override MUST be first (beats every other rule).
+#   - rule_pathological must precede rule_simple_plan so 1-row inputs hit
+#     the defensive path.
+#   - rule_ray sits BEFORE rule_duckdb so 50M+ inputs hit ray when it's
+#     installed; when ``import ray`` fails, predicate returns False and
+#     the planner falls through to rule_duckdb.
 
 DEFAULT_RULES: list[PlannerRule] = [
     rule_user_override,  # MUST be first -- explicit user backend beats all
@@ -252,4 +353,6 @@ DEFAULT_RULES: list[PlannerRule] = [
     rule_simple_plan,
     rule_fast_box,
     rule_chunked,
+    rule_ray,            # try first at 50M+; falls through if ray unavailable
+    rule_duckdb,         # catch-all for very dense pair counts or low RAM
 ]
