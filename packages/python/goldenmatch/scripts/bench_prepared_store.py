@@ -70,17 +70,29 @@ def build_df(n: int) -> pl.DataFrame:
 
 
 def run_one(label: str, df: pl.DataFrame, *, prepared_record_store: bool) -> dict:
-    """Run dedupe_df once under bench_capture + tracemalloc."""
-    import goldenmatch as gm
-    from goldenmatch.config.schemas import GoldenMatchConfig
-    from goldenmatch.core.bench import bench_capture
+    """Run dedupe_df once under bench_capture + tracemalloc.
 
-    cfg = GoldenMatchConfig(prepared_record_store=prepared_record_store)
+    Must go through the auto-config path so the controller's 5-iteration
+    loop actually runs -- that's the loop Component 1's disk store
+    benefits. An empty GoldenMatchConfig short-circuits the controller
+    and produces zero pairs (PR #284's first run had cluster_count=N,
+    multi_member_count=0 because of this exact mistake).
+    """
+    import goldenmatch as gm
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.bench import bench_capture, stage
 
     tracemalloc.start()
     t0 = perf_counter()
     with bench_capture() as rec:
-        result = gm.dedupe_df(df, config=cfg, confidence_required=False)
+        # Stage the auto-config call separately from the final dedupe so
+        # the diff between controller-iteration cost and final-run cost
+        # is visible in the JSON output.
+        with stage("auto_configure_outer"):
+            cfg = auto_configure_df(df, confidence_required=False)
+        cfg.prepared_record_store = prepared_record_store
+        with stage("dedupe_final"):
+            result = gm.dedupe_df(df, config=cfg, confidence_required=False)
     wall = perf_counter() - t0
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
