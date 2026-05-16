@@ -46,6 +46,39 @@ def test_dedupe_populates_cache():
     assert len(_PREP_CACHE) >= 1
 
 
+def test_controller_iterations_hit_cache():
+    """The whole point of Attack C: the controller calls dedupe_df ~5x
+    on the same sample per auto_configure_df call. With the cache working,
+    run_transform should fire **once**, not five times.
+
+    Without the cache seeded by the caller's df id, each iteration's
+    fresh LazyFrame wrapping would have a different id() and the cache
+    would never hit. This is the load-bearing regression test that
+    surfaced the original cache-seed bug.
+    """
+    _prep_cache_clear()
+    import goldenmatch.core.transform as tm
+    original = tm.run_transform
+    call_count = [0]
+
+    def counting(*args, **kwargs):
+        call_count[0] += 1
+        return original(*args, **kwargs)
+
+    tm.run_transform = counting
+    try:
+        df = _make_df()
+        gm.dedupe_df(df, fuzzy={"name": 0.7})
+    finally:
+        tm.run_transform = original
+    # One call per dedupe_df invocation: the first iteration populates
+    # the cache; iterations 2-5 hit and skip the entire prep block.
+    assert call_count[0] == 1, (
+        f"run_transform called {call_count[0]} times "
+        f"(expected 1 — cache should be hitting on iterations 2-5)"
+    )
+
+
 def test_repeated_dedupe_same_df_uses_cache():
     """Calling dedupe_df twice with the same df object should hit the cache.
 
