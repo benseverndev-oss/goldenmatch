@@ -537,6 +537,34 @@ class AutoConfigController:
             best_entry.config, best_entry.profile,
         )
 
+        # ── Controller v3 planner (phase 2): pick execution plan based on the
+        # committed profile + runtime introspection. Phase 2 lands with an
+        # empty rule list (no behavior change); phases 3-6 register rules.
+        from goldenmatch.core.autoconfig_planner import apply_planner_rules
+        from goldenmatch.core.runtime_profile import capture_runtime_profile
+
+        runtime = capture_runtime_profile()
+        # Extrapolate the committed (sample) blocking profile to full-row count
+        # so the planner rules in later phases see signals at full scale.
+        committed_profile = best_entry.profile
+        if committed_profile.meta.is_sample and committed_profile.meta.sample_size > 0:
+            blocking_full = committed_profile.blocking.extrapolate_to(
+                n_rows_sample=committed_profile.meta.sample_size,
+                n_rows_full=df.height,
+            )
+            profile_for_planner = dataclasses.replace(committed_profile, blocking=blocking_full)
+        else:
+            profile_for_planner = committed_profile
+
+        plan = apply_planner_rules(
+            profile=profile_for_planner,
+            runtime=runtime,
+            n_rows_full=df.height,
+            rules=[],  # phases 3-6 register rules
+        )
+        plan.apply_to(committed_config)
+        history.execution_plan = plan
+
         # Fix 4: When skip_finalize=True (called from _api zero-config path),
         # skip the full-data _finalize run. The caller will execute the real
         # full pipeline immediately after, so running it here would be a double

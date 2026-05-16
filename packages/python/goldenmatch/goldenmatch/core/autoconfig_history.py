@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict, StopReason
+from goldenmatch.core.execution_plan import ExecutionPlan
 
 
 @dataclass
@@ -67,6 +68,7 @@ class RunHistory:
     elapsed: timedelta = field(default_factory=lambda: timedelta(0))
     prior_runs: list[Any] = field(default_factory=list)  # v2 hook for Learning Memory
     stop_reason: StopReason | None = None
+    execution_plan: ExecutionPlan | None = None
 
     @property
     def iteration(self) -> int:
