@@ -133,8 +133,9 @@ def test_pad_right():
 
 
 def test_remove_emojis():
-    s = pl.Series("a", ["Hello \U0001f600 World", "No emojis", "\U0001f44d Great \U0001f44d", None])
-    result = remove_emojis(s)
+    result = _apply_expr(remove_emojis, "a", [
+        "Hello \U0001f600 World", "No emojis", "\U0001f44d Great \U0001f44d", None,
+    ])
     assert result[0] == "Hello  World"
     assert result[1] == "No emojis"
     assert result[2] == " Great "
@@ -156,8 +157,9 @@ def test_fix_mojibake():
 
 
 def test_normalize_line_endings():
-    s = pl.Series("a", ["hello\r\nworld", "foo\rbar", "no change\n", None])
-    result = normalize_line_endings(s)
+    result = _apply_expr(normalize_line_endings, "a", [
+        "hello\r\nworld", "foo\rbar", "no change\n", None,
+    ])
     assert result[0] == "hello\nworld"
     assert result[1] == "foo\nbar"
     assert result[2] == "no change\n"
