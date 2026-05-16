@@ -240,6 +240,30 @@ class ControllerBudget:
     converge_epsilon: float = 0.05
     drift_threshold: float = 0.30
 
+    @classmethod
+    def for_dataset(cls, n_rows: int) -> ControllerBudget:
+        """Calibrate budget + sample size to the input row count.
+
+        Spec §Design / ControllerBudget.for_dataset. Sqrt-scaling above
+        100K preserves expected dup-pair density in the sample within an
+        order of magnitude as N grows from 100K -> 1M. Cap at 20K so
+        sample-iteration cost stays bounded above 1M.
+
+        Tiers (n_rows -> max_seconds, sample_size_default):
+          - <5K        -> 15s, 2K (sample_skip_below bypasses sampling)
+          - 5K-100K    -> 30s, 2K (historical defaults; preserves 100K bench)
+          - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K
+          - >=1M       -> 120s, 20K (capped)
+        """
+        if n_rows < 5_000:
+            return cls(max_seconds=15.0)
+        if n_rows < 100_000:
+            return cls()  # historical defaults
+        if n_rows < 1_000_000:
+            sample = min(int((n_rows**0.5) * 20), 20_000)
+            return cls(sample_size_default=sample, max_seconds=60.0)
+        return cls(sample_size_default=20_000, max_seconds=120.0)
+
 
 class AutoConfigController:
     """Drives iterative refit: pathological-input gates, sampling, policy loop, finalize."""
