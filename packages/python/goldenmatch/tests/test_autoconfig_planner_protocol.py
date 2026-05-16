@@ -134,8 +134,8 @@ def test_controller_run_attaches_execution_plan_to_history():
     """After phase 2, every successful run leaves an ExecutionPlan on
     RunHistory.execution_plan. With no rules registered, rule_name is one
     of the sentinels."""
-    import polars as pl
     import goldenmatch as gm
+    import polars as pl
     from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
 
     df = pl.DataFrame({

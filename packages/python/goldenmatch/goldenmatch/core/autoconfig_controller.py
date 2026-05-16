@@ -10,7 +10,6 @@ import logging
 import time
 import traceback
 from contextvars import ContextVar
-import dataclasses
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any

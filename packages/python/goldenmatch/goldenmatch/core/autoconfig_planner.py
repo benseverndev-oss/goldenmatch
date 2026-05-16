@@ -14,8 +14,8 @@ Phases 3-6 register rules; this module just dispatches.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.execution_plan import ExecutionPlan
