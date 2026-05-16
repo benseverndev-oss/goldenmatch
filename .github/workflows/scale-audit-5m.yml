@@ -45,13 +45,11 @@ jobs:
         run: pip install uv
 
       - name: Sync workspace
+        # psutil (used by scripts/scale_audit_5m.py for peak-RSS polling) is
+        # a declared goldenmatch dep as of Phase 1 of controller v3 -- the
+        # separate ".venv/bin/python -m pip install psutil" step that used
+        # to live here was both redundant AND broken on uv venvs (no pip).
         run: uv sync --all-packages
-
-      - name: Install audit-only deps
-        # psutil is used by scripts/scale_audit_5m.py for peak-RSS polling.
-        # Not a declared workspace dep; installed here so the audit script
-        # doesn't have to be patched into pyproject.toml just for one runner.
-        run: .venv/bin/python -m pip install psutil
 
       - name: Generate ${{ inputs.n_records }}-row fixture
         run: |
