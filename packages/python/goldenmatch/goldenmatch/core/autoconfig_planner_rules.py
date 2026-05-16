@@ -90,14 +90,166 @@ rule_simple_plan = PlannerRule(
 )
 
 
+# ── Rule 3: fast-box plan (spec §Rule 3) ────────────────────────────────────
+
+FAST_BOX_MIN_RAM_GB = 32.0
+
+
+def _is_fast_box_eligible(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> bool:
+    """Spec §Rule 3: large row count but sparse pair count on a fat machine.
+
+    Fires when the simple plan's row ceiling is exceeded but pair count
+    still fits in RAM and the machine has >= 32 GB available.
+    """
+    return (
+        n_rows_full >= SIMPLE_PLAN_MAX_ROWS
+        and profile.blocking.estimated_pair_count < SIMPLE_PLAN_MAX_PAIRS
+        and runtime.available_ram_gb >= FAST_BOX_MIN_RAM_GB
+    )
+
+
+def _fast_box_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        backend="polars-direct",
+        max_workers=min(16, runtime.cpu_count),
+        clustering_strategy="in_memory",
+        rule_name="plan_selected_fast_box",
+    )
+
+
+rule_fast_box = PlannerRule(
+    name="plan_selected_fast_box",
+    predicate=_is_fast_box_eligible,
+    action=_fast_box_plan,
+)
+
+
+# ── Rule 4: chunked plan (spec §Rule 4) ─────────────────────────────────────
+
+CHUNKED_MIN_PAIRS = SIMPLE_PLAN_MAX_PAIRS  # 50M
+CHUNKED_MAX_PAIRS = 5_000_000_000  # 5B
+CHUNKED_MIN_RAM_GB = 16.0
+CHUNKED_TARGET_RAM_USE_FRACTION = 0.6
+_CHUNKED_BYTES_PER_ROW = 1024  # empirical: ~1 KB per row incl. __row_id__ + matchkey
+
+
+def auto_chunk_size(n_rows_full: int, available_ram_gb: float) -> int:
+    """Spec §Rule 4: pick chunk_size targeting ~60% of available RAM.
+
+    Estimated bytes per row is a constant tuning lever; result clamped
+    to ``[10_000, 1_000_000]`` per spec range.
+    """
+    import math
+
+    estimated_gb = (n_rows_full * _CHUNKED_BYTES_PER_ROW) / (1024 ** 3)
+    target_chunks = math.ceil(
+        estimated_gb / max(available_ram_gb * CHUNKED_TARGET_RAM_USE_FRACTION, 0.001)
+    )
+    target_chunks = max(target_chunks, 1)
+    chunk = n_rows_full // target_chunks
+    return max(10_000, min(1_000_000, chunk))
+
+
+def _is_chunked_eligible(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> bool:
+    pairs = profile.blocking.estimated_pair_count
+    return (
+        pairs >= CHUNKED_MIN_PAIRS
+        and pairs < CHUNKED_MAX_PAIRS
+        and runtime.available_ram_gb >= CHUNKED_MIN_RAM_GB
+    )
+
+
+def _chunked_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        backend="chunked",
+        chunk_size=auto_chunk_size(n_rows_full, runtime.available_ram_gb),
+        max_workers=min(16, runtime.cpu_count),
+        pair_spill_threshold="ram",
+        clustering_strategy="in_memory",
+        rule_name="plan_selected_chunked",
+    )
+
+
+rule_chunked = PlannerRule(
+    name="plan_selected_chunked",
+    predicate=_is_chunked_eligible,
+    action=_chunked_plan,
+)
+
+
+# ── Rule 7: explicit user override (spec §Rule 7) ───────────────────────────
+# Must be FIRST in the registry -- beats every other rule.
+
+
+def _user_set_backend(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+    context: dict | None,
+) -> bool:
+    """Spec §Rule 7: fires when context says user set ``config.backend``
+    explicitly. Empty / None means no preference; user-set ``polars-direct``
+    is technically a no-op vs the default but still counts as an explicit
+    preference (don't second-guess the user)."""
+    if context is None:
+        return False
+    return context.get("user_backend") not in (None, "")
+
+
+def _user_override_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+    context: dict | None,
+) -> ExecutionPlan:
+    user_backend = (context or {}).get("user_backend", "polars-direct")
+    if user_backend == "chunked":
+        chunk = auto_chunk_size(n_rows_full, runtime.available_ram_gb)
+    else:
+        chunk = None
+    return ExecutionPlan(
+        backend=user_backend,
+        chunk_size=chunk,
+        max_workers=min(16, runtime.cpu_count),
+        clustering_strategy="in_memory",
+        rule_name="plan_user_override",
+    )
+
+
+rule_user_override = PlannerRule(
+    name="plan_user_override",
+    predicate=_user_set_backend,
+    action=_user_override_plan,
+)
+
+
 # ── Registry ────────────────────────────────────────────────────────────────
 #
-# Phase 3 ships these two rules. Order matters: pathological must fire
-# before the simple plan, otherwise the simple plan would absorb
-# 1-row inputs. Phases 4-6 append fast-box, chunked, DuckDB, Ray, and
-# the user-override rule (which moves to position [0]).
+# Order matters: rule_user_override MUST be first (beats every other rule);
+# rule_pathological must precede rule_simple_plan so 1-row inputs hit the
+# defensive path. Phases 5-6 append rule_duckdb + rule_ray below
+# rule_chunked.
 
 DEFAULT_RULES: list[PlannerRule] = [
+    rule_user_override,  # MUST be first -- explicit user backend beats all
     rule_pathological,
     rule_simple_plan,
+    rule_fast_box,
+    rule_chunked,
 ]
