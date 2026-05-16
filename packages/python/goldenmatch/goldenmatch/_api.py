@@ -318,6 +318,7 @@ def dedupe_df(
     llm_auto: bool = False,
     backend: str | None = None,
     source_name: str = "dataframe",
+    confidence_required: bool = True,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -371,6 +372,7 @@ def dedupe_df(
                     llm_provider=_auto_config_provider,
                     llm_auto=llm_auto,
                     _skip_finalize=True,
+                    confidence_required=confidence_required,
                 )
             _used_controller = True
 
@@ -437,6 +439,7 @@ def match_df(
     blocking: list[str] | None = None,
     threshold: float | None = None,
     backend: str | None = None,
+    confidence_required: bool = True,
 ) -> MatchResult:
     """Match a target DataFrame against a reference DataFrame (no file I/O).
 
@@ -482,6 +485,7 @@ def match_df(
             # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
             config = _self_api.auto_configure_df(
                 target, reference=reference, _skip_finalize=True,
+                confidence_required=confidence_required,
             )
             _used_controller = True
 
