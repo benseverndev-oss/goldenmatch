@@ -14,17 +14,16 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     input_types=["email", "string"],
     auto_apply=False,
     priority=55,
-    mode="series",
+    mode="expr",
 )
-def email_lowercase(series: pl.Series) -> pl.Series:
-    """Lowercase the entire email address."""
+def email_lowercase(column: str) -> pl.Expr:
+    """Lowercase the entire email address.
 
-    def _lower(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return val.strip().lower()
-
-    return series.map_elements(_lower, return_dtype=pl.Utf8)
+    Native Polars: strip then to_lowercase. Drops the per-row Python UDF
+    (previously map_elements). Spec
+    docs/superpowers/specs/2026-05-15-map-elements-attack-design.md Tier 1.
+    """
+    return pl.col(column).str.strip_chars().str.to_lowercase()
 
 
 @register_transform(
@@ -60,19 +59,22 @@ def email_normalize(series: pl.Series) -> pl.Series:
     input_types=["email"],
     auto_apply=False,
     priority=40,
-    mode="series",
+    mode="expr",
 )
-def email_extract_domain(series: pl.Series) -> pl.Series:
-    """Extract the domain from an email address."""
+def email_extract_domain(column: str) -> pl.Expr:
+    """Extract the lowercased domain from an email address.
 
-    def _domain(val: str | None) -> str | None:
-        if val is None:
-            return None
-        if "@" not in val:
-            return None
-        return val.strip().rsplit("@", 1)[1].lower()
-
-    return series.map_elements(_domain, return_dtype=pl.Utf8)
+    Native Polars: strip → regex extract after '@' → lowercase. Inputs
+    without '@' (or None) yield None via Polars's native null propagation.
+    Spec docs/superpowers/specs/2026-05-15-map-elements-attack-design.md
+    Tier 1.
+    """
+    return (
+        pl.col(column)
+        .str.strip_chars()
+        .str.extract(r"@([^@]+)$", 1)
+        .str.to_lowercase()
+    )
 
 
 @register_transform(
