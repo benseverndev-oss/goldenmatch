@@ -11,6 +11,13 @@ from goldenflow.transforms.address import (
 )
 
 
+def _apply_expr(func, column: str, data: list, *params) -> list:
+    """Helper to apply an expr-mode transform to test data."""
+    df = pl.DataFrame({column: data})
+    expr = func(column, *params)
+    return df.select(expr.alias(column))[column].to_list()
+
+
 def test_address_standardize():
     s = pl.Series("a", ["123 Main Street", "456 Oak Avenue", "789 Elm Drive"])
     result = address_standardize(s)
@@ -44,8 +51,9 @@ def test_state_expand():
 
 
 def test_zip_normalize():
-    s = pl.Series("z", ["19103", "9001", "10001-1234", "abcde"])
-    result = zip_normalize(s)
+    result = _apply_expr(
+        zip_normalize, "z", ["19103", "9001", "10001-1234", "abcde"],
+    )
     assert result[0] == "19103"
     assert result[1] == "09001"  # zero-padded
     assert result[2] == "10001"  # strip +4
