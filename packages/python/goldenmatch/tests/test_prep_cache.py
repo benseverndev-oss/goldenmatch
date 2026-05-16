@@ -11,9 +11,8 @@ the deterministic prep work entirely.
 """
 from __future__ import annotations
 
-import polars as pl
-
 import goldenmatch as gm
+import polars as pl
 from goldenmatch.core.pipeline import (
     _PREP_CACHE,
     _PREP_CACHE_LRU,
@@ -57,7 +56,6 @@ def test_repeated_dedupe_same_df_uses_cache():
     _prep_cache_clear()
     df = _make_df()
     result_a = gm.dedupe_df(df, fuzzy={"name": 0.7})
-    after_first = dict(_PREP_CACHE)
     result_b = gm.dedupe_df(df, fuzzy={"name": 0.7})
     # Same input → same cluster output.
     a_clusters = {tuple(sorted(c["members"])) for c in result_a.clusters.values()}
@@ -90,8 +88,12 @@ def test_lru_eviction():
 def test_prep_cache_signature_quality_change_misses():
     """Different quality.mode → different signature → cache miss."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig, QualityConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        QualityConfig,
     )
     mk = MatchkeyConfig(
         name="m", type="weighted", threshold=0.5,
@@ -115,8 +117,11 @@ def test_prep_cache_signature_matchkey_change_does_not_miss():
     invariant that makes the controller-iteration cache hits possible:
     iterating matchkey/blocking/threshold doesn't bust the cache."""
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
-        BlockingConfig, BlockingKeyConfig,
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     mk_v1 = MatchkeyConfig(
         name="m", type="weighted", threshold=0.5,
