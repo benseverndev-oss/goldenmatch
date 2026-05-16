@@ -15,7 +15,6 @@ from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.execution_plan import ExecutionPlan
 from goldenmatch.core.runtime_profile import RuntimeProfile
 
-
 # ── Rule 1: pathological inputs (spec §Rule 1) ──────────────────────────────
 
 
