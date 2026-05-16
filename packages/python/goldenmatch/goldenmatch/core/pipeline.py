@@ -600,11 +600,18 @@ def _run_dedupe_pipeline(
     llm_max_labels: int = 500,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
+    _prep_cache_seed: int | None = None,
 ) -> dict:
     """Shared dedupe pipeline logic (post-ingest).
 
     This function contains all pipeline steps from auto-fix/validation through
     output. Both run_dedupe() and run_dedupe_df() delegate to this function.
+
+    ``_prep_cache_seed``: optional stable identity (typically ``id(df)`` of
+    the caller's input DataFrame) used as the prep-cache key. Defaults to
+    ``id(combined_lf)`` when None; the seeded form is required for the
+    controller's iteration loop to hit the cache because each iteration
+    wraps the same caller-side ``df`` in a fresh LazyFrame.
     """
     memory_store = _open_memory_store(config)
 
@@ -622,7 +629,7 @@ def _run_dedupe_pipeline(
     # silently get the stale entry. Column names + the id slot together are
     # collision-proof in practice.
     prep_cache_key = (
-        id(combined_lf),
+        _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
         tuple(combined_lf.collect_schema().names()),
         _prep_cache_signature(config),
     )
@@ -1142,6 +1149,12 @@ def run_dedupe_df(
     auto_config_llm_provider: str | None = None,
 ) -> dict:
     """Run dedupe pipeline on a DataFrame directly (no file I/O)."""
+    # Attack C cache seed: stash the caller's df id BEFORE the .cast() below
+    # creates a new DataFrame. The seed is the stable identity the controller's
+    # iteration loop reuses across 5 dedupe_df calls on the same `sample`.
+    # Without it, each iteration's freshly-wrapped LazyFrame had a different
+    # id() and the cache never hit.
+    cache_seed = id(df)
     # Cast all columns to string to prevent schema mismatch errors when
     # mixed-type columns (e.g. birth_year inferred as i64 in some rows,
     # str in others) reach blocking/scoring operations.
@@ -1158,7 +1171,8 @@ def run_dedupe_df(
                                 output_golden, output_clusters,
                                 output_dupes, output_unique, output_report,
                                 auto_config=auto_config,
-                                auto_config_llm_provider=auto_config_llm_provider)
+                                auto_config_llm_provider=auto_config_llm_provider,
+                                _prep_cache_seed=cache_seed)
 
 
 def run_match(
