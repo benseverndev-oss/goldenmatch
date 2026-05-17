@@ -917,6 +917,14 @@ def _run_dedupe_pipeline(
                 ):
                     key_mode_kwargs["store_path"] = str(_prep_store.path)
                     key_mode_kwargs["signature"] = _prep_cache_signature(config)
+                    # Windows (and some Linux file systems) hold an exclusive
+                    # write-lock on the DuckDB file for the driver process. Ray
+                    # workers in separate processes cannot open the same file
+                    # read-only while that lock is held. Release the driver
+                    # connection here -- all writes are already flushed to disk
+                    # by the time we reach the scoring stage -- so workers can
+                    # open the file concurrently.
+                    _prep_store.release_connection()
 
                 with stage("fuzzy_score_blocks"):
                     pairs = block_scorer(

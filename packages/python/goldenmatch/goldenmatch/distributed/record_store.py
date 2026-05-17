@@ -96,6 +96,24 @@ class PreparedRecordStore:
             raise RuntimeError("PreparedRecordStore is closed")
         return self._con
 
+    def release_connection(self) -> None:
+        """Close the DuckDB connection without marking the store as closed
+        or deleting the file.
+
+        Used by the key-mode Ray dispatch path on Windows: DuckDB acquires
+        an exclusive write lock on the file even in the driver process.
+        Worker processes that open the same file read-only are blocked by
+        that lock. Calling release_connection() from the driver before
+        dispatching Ray tasks lets workers open the file concurrently.
+
+        The store object remains usable after this call for metadata access
+        (self.path, self._cleanup). The DB connection itself is gone; any
+        further call that needs self.connection will raise RuntimeError.
+        """
+        if self._con is not None:
+            self._con.close()
+            self._con = None
+
     def close(self) -> None:
         """Idempotent close. Removes the file when cleanup=True regardless
         of whether the store created the file (tempfile) or opened an
