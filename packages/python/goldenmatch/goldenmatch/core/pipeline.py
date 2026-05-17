@@ -906,7 +906,14 @@ def _run_dedupe_pipeline(
                     _prep_store.release_connection()
 
                 with stage("fuzzy_score_blocks"):
-                    pairs = block_scorer(
+                    # The **key_mode_kwargs unpack feeds str values
+                    # (store_path, signature) to score_blocks_ray; the
+                    # parallel/duckdb scorers never see them since the
+                    # dict is empty unless backend=="ray". Pyright can't
+                    # narrow the dynamic dispatch and flags every union
+                    # arm against the str values -- intentional dynamic
+                    # dispatch, suppress.
+                    pairs = block_scorer(  # pyright: ignore[reportArgumentType]
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
