@@ -845,6 +845,46 @@ def _run_dedupe_pipeline(
                     continue
                 with stage("fuzzy_build_blocks"):
                     blocks = build_blocks(combined_lf, config.blocking)
+                # Phase 2 of Component 2: materialize blocks to disk
+                # store as a side effect (default off). Pure scaffolding
+                # for Component 3; no in-process scoring change.
+                #
+                # NOTE: a row in multiple overlapping blocks (multi-pass
+                # blocking) gets its assignment overwritten in the dict.
+                # That's acceptable for Phase 2 -- Component 3 will need
+                # to handle multi-pass differently anyway.
+                if (
+                    config.prepared_record_store
+                    and config.partitioned_block_scoring
+                    and _prep_store is not None
+                ):
+                    with stage("partition_blocks_to_store"):
+                        block_assignments: dict[int, str] = {}
+                        for blk in blocks:
+                            df_blk = blk.df
+                            if isinstance(df_blk, pl.LazyFrame):
+                                df_blk_eager = df_blk.collect()
+                            else:
+                                df_blk_eager = df_blk
+                            for rid in df_blk_eager["__row_id__"].to_list():
+                                block_assignments[int(rid)] = blk.block_key
+                        if block_assignments:
+                            from goldenmatch.distributed.record_store import (
+                                materialize_blocks,
+                            )
+                            prepped_full = combined_lf.collect()
+                            materialize_blocks(
+                                _prep_store,
+                                prepped_full,
+                                block_assignments=block_assignments,
+                                signature=_prep_cache_signature(config),
+                            )
+                            logger.debug(
+                                "partitioned_block_scoring: materialized %d blocks"
+                                " (%d rows) to disk store",
+                                len(set(block_assignments.values())),
+                                len(block_assignments),
+                            )
                 total_blocks += len(blocks)
                 # Cheap sampling: collect block sizes for the histogram
                 # metric. Most blocks arrive as LazyFrames; do a

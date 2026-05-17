@@ -655,6 +655,16 @@ class GoldenMatchConfig(BaseModel):
             "§Component 1."
         ),
     )
+    partitioned_block_scoring: bool = Field(
+        default=False,
+        description=(
+            "When True AND prepared_record_store is True, the pipeline "
+            "materializes blocks to the disk store as a side effect of "
+            "build_blocks (Component 2 Phase 2 of Distributed Plan v1). "
+            "Stages on-disk blocks for Component 3 (distributed scoring); "
+            "no single-process win expected. Default off."
+        ),
+    )
 
     # Auto-config verification hand-offs (see goldenmatch/core/autoconfig_verify.py).
     # These attrs are set by auto_configure_df and read by the pipeline;
