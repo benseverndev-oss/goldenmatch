@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -794,11 +795,23 @@ def _score_one_block(
     return pairs
 
 
+_DEFAULT_MAX_WORKERS = min(os.cpu_count() or 4, 16)
+"""Default thread-pool size for score_blocks_parallel. Scales to the host
+CPU count (capped at 16 to avoid pathological hyperthreaded systems where
+extra threads only add contention).
+
+The historical default of 4 was hard-coded long before
+`large-new-64GB` (16-core) became the bench runner. On 5M-row /
+1.67M-block workloads, 4 threads = 25% CPU utilization and
+fuzzy_score_blocks dominates total wall (~55%); raising this to
+cpu_count brings effective parallelism in line with the box."""
+
+
 def score_blocks_parallel(
     blocks: list,
     mk: MatchkeyConfig,
     matched_pairs: set[tuple[int, int]],
-    max_workers: int = 4,
+    max_workers: int | None = None,
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
@@ -813,7 +826,8 @@ def score_blocks_parallel(
         blocks: List of BlockResult objects.
         mk: Matchkey configuration.
         matched_pairs: Set of already-matched (min_id, max_id) pairs.
-        max_workers: Thread pool size (default 4).
+        max_workers: Thread pool size. None (default) uses
+            ``_DEFAULT_MAX_WORKERS`` (= ``min(cpu_count(), 16)``).
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
@@ -821,6 +835,8 @@ def score_blocks_parallel(
     Returns:
         All fuzzy pairs found across blocks.
     """
+    if max_workers is None:
+        max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
         return []
 
@@ -851,16 +867,21 @@ def score_blocks_parallel(
     # Snapshot exclude_pairs so threads see a frozen copy
     frozen_exclude = frozenset(matched_pairs)
 
-    # Total candidate pairs across all blocks — computed cheaply by collecting
-    # the LazyFrame.  Note: each block is collected here for counting, then
-    # collected again inside _score_one_block.  Polars LazyFrames backed by
-    # in-memory data re-collect in O(1), so this is acceptable overhead.
-    # Overcounts when matched_pairs already covers some intra-block pairs;
-    # acceptable approximation documented in ScoringProfile.candidates_compared.
+    # Total candidate pairs across all blocks. Historical implementation
+    # called `block.df.collect().height` per block, which materializes
+    # every row of every block just to read row count. At 1.67M blocks
+    # of 3 rows that's 5M row materializations of pure overhead before
+    # any scoring runs. Switch to `select(pl.len())` -- a metadata-level
+    # operation Polars resolves without materializing rows. On lazy
+    # frames it's a plan transformation; on already-collected frames
+    # it's effectively O(1) field access.
+    #
+    # Each block IS still collected separately inside _score_one_block;
+    # this loop's only job is the ScoringProfile.candidates_compared stat.
     total_candidates = 0
     for block in blocks:
         try:
-            n = block.df.collect().height
+            n = int(block.df.select(pl.len()).collect().item())
         except Exception:
             n = 0
         total_candidates += n * (n - 1) // 2
