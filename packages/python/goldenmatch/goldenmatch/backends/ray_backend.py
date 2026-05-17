@@ -11,10 +11,39 @@ Usage:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+
+import polars as pl
 
 logger = logging.getLogger(__name__)
 
 _ray = None
+
+
+_PAIR_BYTES_ESTIMATE = 80
+"""Approx bytes per scored pair (3-tuple of int, int, float) in a flat
+list. CPython tuple header ~56 bytes + ints + float. Conservative;
+underestimating would let the driver-OOM guard fire late.
+
+Used by Phase 3's incremental ray.wait gather to project cumulative
+pair memory against psutil.virtual_memory().available * 0.5.
+"""
+
+
+@dataclass(frozen=True)
+class _KeyModeBlock:
+    """Minimal block shim used by the key-mode Ray task (defined inside
+    score_blocks_ray).
+
+    _score_one_block (core/scorer.py) only reads .block_key + .df +
+    .pre_scored_pairs; this matches that contract without dragging in
+    BlockResult's multi-pass fields (strategy, depth, parent_key)
+    which key-mode v1 doesn't support. Module-level so Ray pickling
+    resolves it on workers — a nested class breaks serialization.
+    """
+    block_key: str
+    df: pl.LazyFrame
+    pre_scored_pairs: list | None = None
 
 
 def _ensure_ray():
@@ -41,11 +70,14 @@ def _ensure_ray():
 
 def score_blocks_ray(
     blocks: list,
-    mk: MatchkeyConfig,  # noqa: F821  # forward ref, resolved lazily via __future__ annotations
+    mk,  # noqa: F821  # forward ref, resolved lazily via __future__ annotations
     matched_pairs: set[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    *,
+    store_path: str | None = None,
+    signature: str | None = None,
 ) -> list[tuple[int, int, float]]:
     """Score all blocks using Ray distributed tasks.
 
@@ -60,14 +92,23 @@ def score_blocks_ray(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
+        store_path: Optional path to a PreparedRecordStore .duckdb file.
+            When set together with ``signature``, enables key-mode dispatch:
+            workers receive block keys and open the store themselves instead
+            of receiving materialized DataFrames from the driver.
+        signature: Cache signature matching the one used when the store was
+            written (via materialize_blocks). Must be set alongside
+            ``store_path`` to activate key-mode.
 
     Returns:
         All fuzzy pairs found across blocks.
     """
-    ray = _ensure_ray()
-
+    # Short-circuit BEFORE _ensure_ray() so callers with no blocks (and
+    # potentially no Ray install) don't trigger a lazy Ray import + init.
     if not blocks:
         return []
+
+    ray = _ensure_ray()
 
     # For very small block counts, use the regular scorer (no Ray overhead)
     if len(blocks) <= 4:
@@ -98,30 +139,86 @@ def score_blocks_ray(
             source_lookup=src_lookup,
         )
 
-    # Submit all blocks as Ray tasks
-    futures = []
-    for block in blocks:
-        # Collect the lazy DataFrame before sending to Ray
-        if hasattr(block, 'df') and hasattr(block.df, 'collect'):
-            collected_block = type(block)(
-                block_key=block.block_key,
-                df=block.df.collect().lazy(),
-                strategy=block.strategy,
-                depth=getattr(block, 'depth', 0),
-                parent_key=getattr(block, 'parent_key', None),
-                pre_scored_pairs=getattr(block, 'pre_scored_pairs', None),
-            )
-        else:
-            collected_block = block
-
-        future = _score_block_remote.remote(
-            collected_block, mk_ref, exclude_ref,
-            across_files_only, source_ref,
+    @ray.remote(max_retries=0)
+    def _score_block_remote_by_key(
+        block_key: str,
+        store_path_inner: str,
+        signature_inner: str,
+        mk_config,
+        exclude,
+        src_lookup,
+        across_only: bool,
+    ):
+        """Component 3 key-mode Ray task: worker opens the store and
+        loads its block by key. Driver only ships strings."""
+        from goldenmatch.core.scorer import _score_one_block as _sob
+        from goldenmatch.distributed.record_store import (
+            PreparedRecordStore,
+            load_block,
         )
-        futures.append(future)
 
-    logger.info("Submitted %d blocks to Ray (%d CPUs available)",
-                len(futures), int(ray.cluster_resources().get("CPU", 0)))
+        store = PreparedRecordStore(
+            path=store_path_inner, cleanup=False, read_only=True,
+        )
+        try:
+            block_df = load_block(
+                store, signature=signature_inner, block_key=block_key,
+            )
+            if block_df is None:
+                raise RuntimeError(
+                    f"Component 3: block_key={block_key!r} not found in "
+                    f"store at {store_path_inner} for signature="
+                    f"{signature_inner!r} -- likely cause is signature "
+                    f"drift between driver and worker (config mutated "
+                    f"mid-run) or off-by-one in block_assignments"
+                )
+            shim = _KeyModeBlock(block_key=block_key, df=block_df.lazy())
+            return _sob(
+                shim, mk_config, exclude,
+                across_files_only=across_only, source_lookup=src_lookup,
+            )
+        finally:
+            store.close()
+
+    use_key_mode = store_path is not None and signature is not None
+
+    futures = []
+    if use_key_mode:
+        for block in blocks:
+            future = _score_block_remote_by_key.remote(
+                block.block_key, store_path, signature,
+                mk_ref, exclude_ref, source_ref,
+                across_files_only,
+            )
+            futures.append(future)
+    else:
+        for block in blocks:
+            # Collect the lazy DataFrame before sending to Ray (existing
+            # df-mode behavior, preserved verbatim).
+            if hasattr(block, 'df') and hasattr(block.df, 'collect'):
+                collected_block = type(block)(
+                    block_key=block.block_key,
+                    df=block.df.collect().lazy(),
+                    strategy=block.strategy,
+                    depth=getattr(block, 'depth', 0),
+                    parent_key=getattr(block, 'parent_key', None),
+                    pre_scored_pairs=getattr(block, 'pre_scored_pairs', None),
+                )
+            else:
+                collected_block = block
+
+            future = _score_block_remote.remote(
+                collected_block, mk_ref, exclude_ref,
+                across_files_only, source_ref,
+            )
+            futures.append(future)
+
+    logger.info(
+        "Submitted %d blocks to Ray (%s mode, %d CPUs available)",
+        len(futures),
+        "key" if use_key_mode else "df",
+        int(ray.cluster_resources().get("CPU", 0)),
+    )
 
     # Collect results
     all_pairs = []
