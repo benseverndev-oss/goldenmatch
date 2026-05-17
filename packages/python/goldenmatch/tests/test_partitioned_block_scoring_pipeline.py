@@ -98,3 +98,81 @@ def test_flag_on_materializes_blocks_to_store(tmp_path: Path, monkeypatch):
         f"expected partitioned_block_scoring=True to write at least one "
         f"block to the store; got 0. sig={sig}"
     )
+
+
+def test_pipeline_passes_store_path_when_all_flags_on(tmp_path: Path, monkeypatch):
+    """When backend=ray + prepared_record_store + partitioned_block_scoring
+    are all on, the pipeline must pass store_path + signature kwargs to
+    score_blocks_ray. Monkeypatch score_blocks_ray to record kwargs --
+    we don't need ray actually installed to assert pipeline-side wiring."""
+    import goldenmatch as gm
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_PREPARED_RECORD_STORE_DIR", str(tmp_path))
+    monkeypatch.setenv("GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST", "1")
+
+    df = _diverse_df()
+    cfg = auto_configure_df(df, confidence_required=False)
+    cfg.prepared_record_store = True
+    cfg.partitioned_block_scoring = True
+    cfg.backend = "ray"
+
+    captured: dict = {}
+    def fake_score_blocks_ray(blocks, mk, matched_pairs, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    # The pipeline imports score_blocks_ray via _get_block_scorer, which
+    # may resolve to a different name at runtime. Patch at the module
+    # import point.
+    monkeypatch.setattr(
+        "goldenmatch.backends.ray_backend.score_blocks_ray",
+        fake_score_blocks_ray,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "goldenmatch.core.pipeline._get_block_scorer",
+        lambda config: fake_score_blocks_ray,
+    )
+
+    gm.dedupe_df(df, config=cfg, confidence_required=False)
+
+    assert "store_path" in captured, (
+        f"pipeline must pass store_path kwarg to score_blocks_ray when "
+        f"all three flags are on; got kwargs={captured!r}"
+    )
+    assert "signature" in captured
+    assert captured["store_path"] is not None
+    assert captured["signature"] is not None
+
+
+def test_pipeline_does_not_pass_store_path_when_disk_store_off(tmp_path: Path, monkeypatch):
+    """backend=ray but prepared_record_store=False -> no store_path kwarg.
+    Ensures df-mode is unaffected for users who picked Ray but not the
+    disk store."""
+    import goldenmatch as gm
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+
+    df = _diverse_df()
+    cfg = auto_configure_df(df, confidence_required=False)
+    cfg.prepared_record_store = False
+    cfg.partitioned_block_scoring = False
+    cfg.backend = "ray"
+
+    captured: dict = {}
+    def fake_score_blocks_ray(blocks, mk, matched_pairs, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "goldenmatch.core.pipeline._get_block_scorer",
+        lambda config: fake_score_blocks_ray,
+    )
+
+    gm.dedupe_df(df, config=cfg, confidence_required=False)
+
+    assert captured.get("store_path") is None
+    assert captured.get("signature") is None
