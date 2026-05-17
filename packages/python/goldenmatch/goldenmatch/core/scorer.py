@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -795,16 +794,32 @@ def _score_one_block(
     return pairs
 
 
-_DEFAULT_MAX_WORKERS = min(os.cpu_count() or 4, 16)
-"""Default thread-pool size for score_blocks_parallel. Scales to the host
-CPU count (capped at 16 to avoid pathological hyperthreaded systems where
-extra threads only add contention).
+_DEFAULT_MAX_WORKERS = 4
+"""Default thread-pool size for score_blocks_parallel.
 
-The historical default of 4 was hard-coded long before
-`large-new-64GB` (16-core) became the bench runner. On 5M-row /
-1.67M-block workloads, 4 threads = 25% CPU utilization and
-fuzzy_score_blocks dominates total wall (~55%); raising this to
-cpu_count brings effective parallelism in line with the box."""
+Stays at 4 (NOT cpu_count) because of a memory-pathology observed on
+the bench-distributed-stack run 26002766443 against the 5M /
+1.67M-block fixture: at max_workers=16 on a 16-core / 64GB runner, RSS
+climbed ~3 GB/min through fuzzy_score_blocks and the runner OOM-killed
+the job around t=20-76 min. PR #295's same workload with
+max_workers=4 finished in 160 min with peak RSS = 4476 MB.
+
+The 14x RSS blow-up isn't parallelism-proportional; it's that each
+worker calls block.df.collect() on a LazyFrame which is a FILTER
+against the 5M parent df, so 16 simultaneous workers run 16
+simultaneous full-table scans whose intermediates accumulate faster
+than they're released. Fixing this requires either:
+
+(a) materializing per-block dfs once outside the worker (the
+    Component 2 v2 spec direction; turned out to need real
+    multi-node infra that we don't have), or
+(b) batching tiny blocks into super-blocks so per-worker setup is
+    amortized over more rows.
+
+Until (b) ships, keep workers at 4 -- it's the safe default that's
+been proven to fit on the bench runner. Callers can override
+explicitly via the max_workers kwarg when their workload doesn't
+exhibit this pathology."""
 
 
 def score_blocks_parallel(
