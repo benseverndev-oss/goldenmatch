@@ -10,6 +10,10 @@ on:
       ref:
         description: "Branch / tag / SHA to bench (default: workflow ref)"
         required: false
+      dataset_tag:
+        description: "Release tag of pre-generated bench dataset (empty = generate on the fly)"
+        required: false
+        default: "bench-dataset-v1"
 
 jobs:
   bench:
@@ -32,14 +36,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[ray]"
 
+      - name: Download pre-generated dataset
+        # Pulls the parquet asset from the Release identified by
+        # dataset_tag. Falls back to in-script generation when the
+        # tag is empty -- preserves the on-the-fly path for ad-hoc
+        # row counts that don't have a pre-published asset.
+        if: inputs.dataset_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bench_${{ inputs.rows }}.parquet" \
+            --dir bench-dataset/
+          ls -lh bench-dataset/
+
       - name: Run bench
         working-directory: packages/python/goldenmatch
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
         run: |
           mkdir -p bench-out
+          DATASET_ARG=""
+          if [ -f "bench-dataset/bench_${{ inputs.rows }}.parquet" ]; then
+            DATASET_ARG="--dataset bench-dataset/bench_${{ inputs.rows }}.parquet"
+            echo "Using pre-generated dataset: bench-dataset/bench_${{ inputs.rows }}.parquet"
+          else
+            echo "No pre-generated dataset found; falling back to in-script generation."
+          fi
           python scripts/bench_distributed_stack.py \
             --rows "${{ inputs.rows }}" \
+            $DATASET_ARG \
             --store-dir bench-out/store \
             --out bench-out/results.json
           echo '## bench-distributed-stack results' >> "$GITHUB_STEP_SUMMARY"
