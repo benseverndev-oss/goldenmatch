@@ -845,25 +845,56 @@ def _run_dedupe_pipeline(
                     continue
                 with stage("fuzzy_build_blocks"):
                     blocks = build_blocks(combined_lf, config.blocking)
-                # Phase 2 of Component 2: materialize blocks to disk
-                # store as a side effect (default off). Pure scaffolding
-                # for Component 3; no in-process scoring change.
-                #
-                # NOTE: a row in multiple overlapping blocks (multi-pass
-                # blocking) gets its assignment overwritten in the dict.
-                # That's acceptable for Phase 2 -- Component 3 will need
-                # to handle multi-pass differently anyway.
+                # Component 2 v2: materialize blocks to hash-bucketed Parquet
+                # (default off). Phase 2 wiring: replaces Phase 1's
+                # NotImplementedError stub. Workers load one bucket Parquet
+                # and recover per-block grouping in-worker via partition_by.
                 if (
                     config.prepared_record_store
                     and config.partitioned_block_scoring
                     and _prep_store is not None
                 ):
-                    raise NotImplementedError(
-                        "Component 2 v2 Phase 1: v1 materialize_blocks API "
-                        "removed; v2 materialize_bucketed_blocks wiring "
-                        "lands in Phase 2. Disable partitioned_block_scoring "
-                        "for now."
+                    from goldenmatch.distributed.record_store import (
+                        materialize_bucketed_blocks,
                     )
+                    # Component 2 v2: build the (row_id, block_key)
+                    # assignment table fully vectorized in Polars. v1's
+                    # dict-comprehension at 5M / 1.67M blocks was the
+                    # bottleneck v2 exists to avoid; this path stays in
+                    # Arrow/Rust the whole way.
+                    #
+                    # Multi-pass blocking semantics: a row that appears in
+                    # blocks A then B then C ends up with block_key = "C".
+                    # The .unique(subset=["__row_id__"], keep="last")
+                    # enforces last-write-wins by deduplicating ON the
+                    # row_id with the trailing block_key. After unique(),
+                    # the row -> block_key map is single-valued, so the
+                    # downstream inner join in materialize_bucketed_blocks
+                    # has no ambiguity.
+                    assignment_parts = []
+                    for blk in blocks:
+                        lf = blk.df if isinstance(blk.df, pl.LazyFrame) else blk.df.lazy()
+                        assignment_parts.append(
+                            lf.select("__row_id__").with_columns(
+                                pl.lit(blk.block_key).alias("__block_key__"),
+                            )
+                        )
+                    assignments_df = (
+                        pl.concat(assignment_parts)
+                        .unique(subset=["__row_id__"], keep="last")
+                        .collect()
+                    )
+
+                    n_buckets = config.n_buckets or max((os.cpu_count() or 1) * 4, 64)
+                    n_buckets = min(n_buckets, 1024)
+                    with stage("partition_blocks_to_buckets"):
+                        materialize_bucketed_blocks(
+                            _prep_store,
+                            combined_lf.collect(),
+                            block_assignments=assignments_df,
+                            n_buckets=n_buckets,
+                            signature=_prep_cache_signature(config),
+                        )
                 total_blocks += len(blocks)
                 # Cheap sampling: collect block sizes for the histogram
                 # metric. Most blocks arrive as LazyFrames; do a
