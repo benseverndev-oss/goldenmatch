@@ -903,11 +903,27 @@ def _run_dedupe_pipeline(
                     except Exception:  # pragma: no cover — defensive
                         continue
                 block_scorer = _get_block_scorer(config)
+
+                # Component 3: when all three gating flags are on AND we have a live
+                # _prep_store, hand the backend the store_path + signature so the Ray
+                # key-mode dispatch path can fire. Backend ignores these kwargs in
+                # df-mode and the non-Ray scorers.
+                key_mode_kwargs: dict[str, str] = {}
+                if (
+                    config.backend == "ray"
+                    and config.prepared_record_store
+                    and config.partitioned_block_scoring
+                    and _prep_store is not None
+                ):
+                    key_mode_kwargs["store_path"] = str(_prep_store.path)
+                    key_mode_kwargs["signature"] = _prep_cache_signature(config)
+
                 with stage("fuzzy_score_blocks"):
                     pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
+                        **key_mode_kwargs,
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
