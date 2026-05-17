@@ -48,6 +48,10 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
+        # if: always() so a FAIL verdict (script exits 1) still uploads
+        # the JSON. Without this the post-mortem investigation has no
+        # data and we have to re-run.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-distributed-stack-${{ inputs.rows }}-rows
