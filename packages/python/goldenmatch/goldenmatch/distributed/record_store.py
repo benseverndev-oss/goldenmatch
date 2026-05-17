@@ -67,6 +67,7 @@ class PreparedRecordStore:
         base_dir: Path | str | None = None,
         path: Path | str | None = None,
         cleanup: bool = True,
+        read_only: bool = False,
     ) -> None:
         if path is not None:
             self.path = Path(path)
@@ -84,7 +85,9 @@ class PreparedRecordStore:
             self.path = Path(p)
             self._owns_file = True
         self._cleanup = cleanup
-        self._con: duckdb.DuckDBPyConnection | None = duckdb.connect(str(self.path))
+        self._con: duckdb.DuckDBPyConnection | None = duckdb.connect(
+            str(self.path), read_only=read_only,
+        )
         self._closed = False
 
     @property
