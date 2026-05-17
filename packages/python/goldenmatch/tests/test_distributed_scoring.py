@@ -5,6 +5,8 @@ falls through (no errors) when the [ray] extra isn't installed.
 """
 from __future__ import annotations
 
+import multiprocessing as mp
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -176,3 +178,108 @@ def test_driver_oom_guard_passes_under_normal_memory(_ray_local, tmp_path: Path)
         store_path=store_path, signature=sig,
     )
     assert isinstance(pairs, list)
+
+
+# ── Phase 4 tests: real-Ray equivalence + block-not-found + cross-process ─
+
+
+def test_key_mode_equivalence_with_df_mode(_ray_local, tmp_path: Path):
+    """Same input -> same pairs whether key-mode or df-mode. Locks in the
+    semantic invariant; without this, key-mode silently producing
+    different pairs would be unobservable."""
+    from goldenmatch.backends import ray_backend
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    store_path, sig, blocks = _build_small_blocks(tmp_path)
+    mk = MatchkeyConfig(
+        name="name_exact",
+        type="weighted",
+        threshold=0.5,
+        fields=[MatchkeyField(field="name", scorer="exact", weight=1.0)],
+    )
+
+    pairs_df_mode = ray_backend.score_blocks_ray(blocks, mk, set())
+    pairs_key_mode = ray_backend.score_blocks_ray(
+        blocks, mk, set(),
+        store_path=store_path, signature=sig,
+    )
+
+    # Pairs may arrive in different orders; compare as sets after
+    # canonicalizing (id_a, id_b) order.
+    def canon(p):
+        a, b, s = p
+        return (min(a, b), max(a, b), round(s, 6))
+
+    assert {canon(p) for p in pairs_key_mode} == {canon(p) for p in pairs_df_mode}
+
+
+def test_key_mode_block_not_found_raises_runtime_error(_ray_local, tmp_path: Path):
+    """Pass a wrong signature; worker raises RuntimeError citing both
+    likely root causes (signature drift, block_assignments off-by-one)."""
+    from goldenmatch.backends import ray_backend
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    store_path, _good_sig, blocks = _build_small_blocks(tmp_path)
+    mk = MatchkeyConfig(
+        name="name_exact",
+        type="weighted",
+        threshold=0.5,
+        fields=[MatchkeyField(field="name", scorer="exact", weight=1.0)],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        ray_backend.score_blocks_ray(
+            blocks, mk, set(),
+            store_path=store_path, signature="WRONG-SIG",
+        )
+    msg = str(exc_info.value)
+    assert "signature drift" in msg
+    assert "block_assignments" in msg
+
+
+def _worker_open_and_read(store_path: str, signature: str, block_key: str, queue):
+    """Top-level (picklable) target for multiprocessing.Process.
+
+    Opens a read-only PreparedRecordStore, calls load_block, puts the
+    row count (or exception) on the queue.
+    """
+    try:
+        from goldenmatch.distributed.record_store import (
+            PreparedRecordStore,
+            load_block,
+        )
+        store = PreparedRecordStore(path=store_path, cleanup=False, read_only=True)
+        try:
+            df = load_block(store, signature=signature, block_key=block_key)
+            queue.put(("ok", df.height if df is not None else None))
+        finally:
+            store.close()
+    except Exception as e:  # noqa: BLE001 -- preserve in the queue
+        queue.put(("err", repr(e)))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific concurrent-read regression anchor")
+def test_two_processes_can_read_same_store_concurrently(tmp_path: Path):
+    """Spawn 2 multiprocessing.Process workers that each open the same
+    DuckDB file read-only and call load_block simultaneously. Both must
+    succeed. This is the direct test of the spec Error handling Windows
+    concurrent-read concern; Ray's local mode might serialize workers
+    and paper over the issue."""
+    store_path, sig, _ = _build_small_blocks(tmp_path)
+
+    ctx = mp.get_context("spawn")
+    q1 = ctx.Queue()
+    q2 = ctx.Queue()
+    p1 = ctx.Process(target=_worker_open_and_read, args=(store_path, sig, "A", q1))
+    p2 = ctx.Process(target=_worker_open_and_read, args=(store_path, sig, "B", q2))
+    p1.start()
+    p2.start()
+    p1.join(timeout=30)
+    p2.join(timeout=30)
+
+    r1 = q1.get(timeout=5)
+    r2 = q2.get(timeout=5)
+    assert r1[0] == "ok", f"worker 1 failed: {r1}"
+    assert r2[0] == "ok", f"worker 2 failed: {r2}"
+    assert r1[1] is not None and r1[1] > 0
+    assert r2[1] is not None and r2[1] > 0
