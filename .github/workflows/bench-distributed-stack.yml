@@ -1,0 +1,55 @@
+name: bench-distributed-stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Synthetic df row count"
+        required: false
+        default: "5000000"
+      ref:
+        description: "Branch / tag / SHA to bench (default: workflow ref)"
+        required: false
+
+jobs:
+  bench:
+    name: "bench distributed stack (chunked vs Component 1+2+3)"
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch with ray extra
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+
+      - name: Run bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: |
+          mkdir -p bench-out
+          python scripts/bench_distributed_stack.py \
+            --rows "${{ inputs.rows }}" \
+            --store-dir bench-out/store \
+            --out bench-out/results.json
+          echo '## bench-distributed-stack results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/results.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-distributed-stack-${{ inputs.rows }}-rows
+          path: packages/python/goldenmatch/bench-out/results.json
+          retention-days: 30
