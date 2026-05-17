@@ -913,11 +913,11 @@ def _run_dedupe_pipeline(
                     # narrow the dynamic dispatch and flags every union
                     # arm against the str values -- intentional dynamic
                     # dispatch, suppress.
-                    pairs = block_scorer(  # pyright: ignore[reportArgumentType]
+                    pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
-                        **key_mode_kwargs,
+                        **key_mode_kwargs,  # pyright: ignore[reportArgumentType]
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
