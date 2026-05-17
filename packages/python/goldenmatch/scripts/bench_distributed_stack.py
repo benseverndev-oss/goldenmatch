@@ -20,28 +20,84 @@ import polars as pl
 
 
 def build_df(n: int) -> pl.DataFrame:
-    """Diverse-surname person-shape df. Per feedback_synthetic_surname_fixtures
-    each surname spans its own soundex bucket so blocking doesn't degenerate
-    into one O(N^2) block."""
-    surnames = [
+    """Diverse-surname person-shape df with REAL duplicates per email block.
+
+    Prior version (PR #295) was degenerate: each 3-row email block had 3
+    fully different person identities (different first AND last names),
+    so fuzzy scoring yielded zero pairs within blocks. The 5M bench
+    measured two backends spending 24 min on prep + zero scoring.
+
+    Fixed: groups of 3 consecutive rows share email AND have small
+    name-typo variants of a base person identity. Within each group:
+        row 0: canonical "Alice Smith"
+        row 1: "alice smith" (case + same name)
+        row 2: "Alicia Smyth" (typo on both)
+    This produces ~n/3 real duplicate clusters; fuzzy scoring finds them
+    via Jaro-Winkler / token-sort similarity on first_name + last_name.
+    """
+    base_firsts = [
+        "Alice", "Bob", "Charlie", "Dana", "Eve", "Frank",
+        "Grace", "Henry", "Iris", "Jack",
+    ]
+    base_lasts = [
         "Smith", "Johnson", "Williams", "Brown", "Jones",
         "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
         "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
         "Thomas", "Taylor", "Moore", "Jackson", "Martin",
     ]
-    first_names = [
-        "Alice", "Bob", "Charlie", "Dana", "Eve", "Frank",
-        "Grace", "Henry", "Iris", "Jack",
-    ]
+    # Typo variants applied within each duplicate group (rows 1 and 2 of
+    # each 3-row block). Variants drop / change one character so fuzzy
+    # scorers can detect similarity but exact scorers cannot.
+    def _variant(s: str, kind: int) -> str:
+        if kind == 0:
+            return s              # canonical
+        if kind == 1:
+            return s.lower()      # case variant
+        # kind == 2: drop or swap one char
+        if len(s) > 3:
+            return s[0] + s[2:]   # drop second char ("Alice" -> "Aice")
+        return s + "e"
+
     rows = []
     for i in range(n):
+        group_id = i // 3            # rows 0,1,2 share a group
+        within = i % 3               # variant index 0/1/2
+        first_base = base_firsts[group_id % len(base_firsts)]
+        last_base = base_lasts[group_id % len(base_lasts)]
         rows.append({
-            "first_name": first_names[i % len(first_names)],
-            "last_name":  surnames[i % len(surnames)],
-            "email":      f"u{i // 3}@example.com",
-            "zip":        f"{10000 + (i % 100):05d}",
+            "first_name": _variant(first_base, within),
+            "last_name":  _variant(last_base, within),
+            "email":      f"u{group_id}@example.com",  # same per group
+            "zip":        f"{10000 + (group_id % 100):05d}",
         })
     return pl.DataFrame(rows)
+
+
+def _summarize_config(cfg) -> dict:
+    """Snapshot the autoconfig'd config so we can see, in the diagnostic
+    log, exactly what the controller picked. Without this we can't tell
+    whether the disk-store + partitioned-block-scoring flags actually
+    activated key-mode dispatch, vs. silently falling back to df-mode."""
+    matchkeys = cfg.get_matchkeys() if hasattr(cfg, "get_matchkeys") else []
+    blocking_summary = None
+    if cfg.blocking is not None:
+        blocking_summary = {
+            "strategy": cfg.blocking.strategy,
+            "max_block_size": getattr(cfg.blocking, "max_block_size", None),
+            "skip_oversized": getattr(cfg.blocking, "skip_oversized", None),
+            "n_keys": len(cfg.blocking.keys) if cfg.blocking.keys else 0,
+            "key_fields": [
+                list(k.fields) for k in (cfg.blocking.keys or [])
+            ],
+        }
+    return {
+        "backend": cfg.backend,
+        "prepared_record_store": getattr(cfg, "prepared_record_store", None),
+        "partitioned_block_scoring": getattr(cfg, "partitioned_block_scoring", None),
+        "matchkey_count": len(matchkeys),
+        "matchkey_types": [mk.type for mk in matchkeys],
+        "blocking": blocking_summary,
+    }
 
 
 def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store: bool, partitioned_block_scoring: bool) -> dict:
@@ -56,6 +112,7 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
         cfg.backend = backend
         cfg.prepared_record_store = prepared_record_store
         cfg.partitioned_block_scoring = partitioned_block_scoring
+        config_snapshot = _summarize_config(cfg)
         result = gm.dedupe_df(df, config=cfg, confidence_required=False)
     wall = perf_counter() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -70,6 +127,10 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
         "wall_seconds": round(wall, 3),
         "peak_rss_mb": round(peak / (1024 * 1024), 2),
         "clusters": len(result.clusters),
+        "multi_member_clusters": sum(
+            1 for c in result.clusters.values() if c.get("size", 0) > 1
+        ),
+        "config_snapshot": config_snapshot,
         "stage_timings_seconds": rec.to_dict()["stage_timings_seconds"],
         "metrics": rec.to_dict()["metrics"],
     }
@@ -93,11 +154,18 @@ def main(argv: list[str] | None = None) -> int:
 
     print("Run 1/2: baseline (backend=chunked)...", flush=True)
     baseline = run_one("baseline", df, backend="chunked", prepared_record_store=False, partitioned_block_scoring=False)
+    # Echo the full per-run JSON to stdout so the data is in the workflow
+    # logs even when the upload-artifact step is skipped (e.g. when the
+    # script exits 1 on FAIL). Critical for post-mortem investigation.
     print(f"  wall = {baseline['wall_seconds']}s; peak = {baseline['peak_rss_mb']} MB", flush=True)
+    print("  baseline diagnostic:", flush=True)
+    print(json.dumps(baseline, indent=2), flush=True)
 
     print("Run 2/2: treatment (full stack: ray + store + partitioned)...", flush=True)
     treatment = run_one("treatment", df, backend="ray", prepared_record_store=True, partitioned_block_scoring=True)
     print(f"  wall = {treatment['wall_seconds']}s; peak = {treatment['peak_rss_mb']} MB", flush=True)
+    print("  treatment diagnostic:", flush=True)
+    print(json.dumps(treatment, indent=2), flush=True)
 
     wall_delta = baseline["wall_seconds"] - treatment["wall_seconds"]
     rss_delta = baseline["peak_rss_mb"] - treatment["peak_rss_mb"]
