@@ -120,3 +120,59 @@ def test_score_blocks_ray_signature_accepts_new_kwargs():
         signature="sig-v1",
     )
     assert result == []
+
+
+def test_driver_oom_guard_raises_when_budget_exceeded(_ray_local, tmp_path: Path, monkeypatch):
+    """End-to-end: with psutil claiming near-zero available memory, the
+    incremental gather must trip the OOM guard and raise MemoryError
+    citing 'scored pairs'.
+
+    Uses real Ray + real PreparedRecordStore so the guard's interaction
+    with ray.wait + ray.cancel + ray.get is exercised, not stubbed."""
+    import psutil
+    from goldenmatch.backends import ray_backend
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    store_path, sig, blocks = _build_small_blocks(tmp_path)
+    # Score on __mk_name__ with exact scorer -- within each block both rows
+    # share an identical __mk_name__ value, so every block emits exactly 1
+    # pair. This guarantees n_pairs > 0 regardless of psutil state.
+    mk = MatchkeyConfig(
+        name="mk_exact", type="weighted", threshold=0.5,
+        fields=[MatchkeyField(field="__mk_name__", scorer="exact", weight=1.0)],
+    )
+
+    # Pretend the system has 80 bytes of available memory total ->
+    # budget_pairs = 80 * 0.5 / 80 = 0. Any non-empty pair list trips.
+    class FakeMem:
+        available = 80
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: FakeMem)
+
+    with pytest.raises(MemoryError, match="scored pairs"):
+        ray_backend.score_blocks_ray(
+            blocks, mk, set(),
+            store_path=store_path, signature=sig,
+        )
+
+
+def test_driver_oom_guard_passes_under_normal_memory(_ray_local, tmp_path: Path):
+    """Sanity: with real psutil reporting actual system memory, the
+    guard does NOT fire on a tiny test fixture. Anchors that the guard
+    isn't pathologically tight."""
+    from goldenmatch.backends import ray_backend
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    store_path, sig, blocks = _build_small_blocks(tmp_path)
+    # Score on __mk_name__ -- same as the OOM test so both tests exercise
+    # the same code path; guard difference is purely the psutil mock.
+    mk = MatchkeyConfig(
+        name="mk_exact", type="weighted", threshold=0.5,
+        fields=[MatchkeyField(field="__mk_name__", scorer="exact", weight=1.0)],
+    )
+    # Should return normally (pairs depend on fixture content; just
+    # assert no exception).
+    pairs = ray_backend.score_blocks_ray(
+        blocks, mk, set(),
+        store_path=store_path, signature=sig,
+    )
+    assert isinstance(pairs, list)
