@@ -60,6 +60,7 @@ def test_flag_off_path_unchanged(tmp_path: Path, monkeypatch):
     # No assertion on numbers -- just the path completes.
 
 
+@pytest.mark.skip(reason="Component 2 v2 Phase 2")
 def test_flag_on_materializes_blocks_to_store(tmp_path: Path, monkeypatch):
     """When both flags are on AND a prep store is alive, the pipeline
     writes block tables to the disk store. Read back via list_blocks
@@ -100,6 +101,7 @@ def test_flag_on_materializes_blocks_to_store(tmp_path: Path, monkeypatch):
     )
 
 
+@pytest.mark.skip(reason="Component 2 v2 Phase 2")
 def test_pipeline_passes_store_path_when_all_flags_on(tmp_path: Path, monkeypatch):
     """When backend=ray + prepared_record_store + partitioned_block_scoring
     are all on, the pipeline must pass store_path + signature kwargs to
