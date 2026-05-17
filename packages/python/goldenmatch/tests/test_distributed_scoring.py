@@ -89,9 +89,11 @@ def test_key_mode_block_shim_exposes_required_attributes():
     block = _KeyModeBlock(block_key="key-1", df=df.lazy())
     assert block.block_key == "key-1"
     assert block.df is not None
-    # Frozen dataclass: assignment must raise.
+    # Frozen dataclass: assignment must raise at runtime. Pyright also
+    # flags it statically -- that's the point of frozen dataclasses, so
+    # suppress the static warning rather than work around it.
     with pytest.raises(Exception):  # noqa: B017 -- frozen dataclass error class
-        block.block_key = "mutated"
+        block.block_key = "mutated"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_pair_bytes_estimate_constant_is_module_level():
