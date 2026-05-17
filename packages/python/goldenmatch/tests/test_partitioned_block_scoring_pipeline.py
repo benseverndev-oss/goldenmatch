@@ -60,45 +60,10 @@ def test_flag_off_path_unchanged(tmp_path: Path, monkeypatch):
     # No assertion on numbers -- just the path completes.
 
 
-@pytest.mark.skip(reason="Component 2 v2 Phase 2")
+@pytest.mark.skip(reason="Component 2 v2 Phase 2 -- rewrite against iter_buckets")
 def test_flag_on_materializes_blocks_to_store(tmp_path: Path, monkeypatch):
-    """When both flags are on AND a prep store is alive, the pipeline
-    writes block tables to the disk store. Read back via list_blocks
-    on the same signature."""
-    import goldenmatch as gm
-    from goldenmatch.core.autoconfig import auto_configure_df
-
-    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
-    monkeypatch.setenv("GOLDENMATCH_PREPARED_RECORD_STORE_DIR", str(tmp_path))
-    monkeypatch.setenv("GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST", "1")
-
-    df = _diverse_df()
-    cfg = auto_configure_df(df, confidence_required=False)
-    cfg.prepared_record_store = True
-    cfg.partitioned_block_scoring = True
-    gm.dedupe_df(df, config=cfg, confidence_required=False)
-
-    # After the call, the persisted store file should contain block
-    # tables. Re-open it and verify list_blocks returns >= 1 block.
-    from goldenmatch.core.pipeline import _prep_cache_signature
-    from goldenmatch.distributed.record_store import (
-        PreparedRecordStore,
-        list_blocks,
-    )
-    store_path = tmp_path / "goldenmatch_prepared.duckdb"
-    if not store_path.exists():
-        pytest.skip(
-            "store path heuristic missed -- the controller may use a "
-            "different filename. Test is informational; the assertion "
-            "below would still anchor the materialization happened."
-        )
-    sig = _prep_cache_signature(cfg)
-    with PreparedRecordStore(path=store_path, cleanup=False) as store:
-        keys = list_blocks(store, signature=sig)
-    assert len(keys) >= 1, (
-        f"expected partitioned_block_scoring=True to write at least one "
-        f"block to the store; got 0. sig={sig}"
-    )
+    """Phase 1 stub. Phase 2 rewrites the body against the v2 iter_buckets
+    API (v1's list_blocks was removed in C2 v2 Phase 1)."""
 
 
 @pytest.mark.skip(reason="Component 2 v2 Phase 2")

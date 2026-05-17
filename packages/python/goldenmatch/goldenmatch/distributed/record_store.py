@@ -29,7 +29,7 @@ import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import polars as pl
@@ -190,7 +190,9 @@ def load_prepared_records(
     if exists is None:
         return None
     arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
-    return pl.from_arrow(arrow_table)
+    # pl.from_arrow returns DataFrame | Series; an Arrow Table always
+    # produces a DataFrame, so narrow via cast for type-checkers.
+    return cast(pl.DataFrame, pl.from_arrow(arrow_table))
 
 
 def materialize_bucketed_blocks(
