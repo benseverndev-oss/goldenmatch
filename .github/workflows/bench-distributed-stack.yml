@@ -36,11 +36,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install goldenmatch with ray extra
+      - name: Install goldenmatch with ray extra + py-spy
         working-directory: packages/python/goldenmatch
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[ray]"
+          # py-spy: sampling profiler. Used in the next step to capture
+          # a flamegraph of the bench process. Linux runners are root-
+          # capable so py-spy can attach without setcap.
+          pip install py-spy
 
       - name: Download pre-generated dataset
         # Pulls the parquet asset from the Release identified by
@@ -59,7 +63,7 @@ jobs:
             --dir bench-dataset/
           ls -lh bench-dataset/
 
-      - name: Run bench
+      - name: Run bench under py-spy
         working-directory: packages/python/goldenmatch
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
@@ -72,23 +76,44 @@ jobs:
           else
             echo "No pre-generated dataset found; falling back to in-script generation."
           fi
-          python scripts/bench_distributed_stack.py \
-            --rows "${{ inputs.rows }}" \
-            $DATASET_ARG \
-            --store-dir bench-out/store \
-            --out bench-out/results.json
+          # py-spy record samples the entire bench process (including
+          # ThreadPool workers via --subprocesses), writes the SVG
+          # flamegraph incrementally so even an OOM-killed runner
+          # leaves a partial profile. --rate 50 = 50 Hz sampling (low
+          # overhead at minute-scale walls). --idle includes blocked
+          # threads (useful for "where do workers wait" analysis).
+          py-spy record \
+            --output bench-out/profile.svg \
+            --format flamegraph \
+            --rate 50 \
+            --idle \
+            --subprocesses \
+            -- \
+            python scripts/bench_distributed_stack.py \
+              --rows "${{ inputs.rows }}" \
+              $DATASET_ARG \
+              --store-dir bench-out/store \
+              --out bench-out/results.json
           echo '## bench-distributed-stack results' >> "$GITHUB_STEP_SUMMARY"
-          echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          cat bench-out/results.json >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f bench-out/results.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat bench-out/results.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '_results.json missing -- bench died before write. See profile.svg artifact for flamegraph._' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Upload results
-        # if: always() so a FAIL verdict (script exits 1) still uploads
-        # the JSON. Without this the post-mortem investigation has no
-        # data and we have to re-run.
+      - name: Upload results + profile
+        # if: always() so a FAIL verdict (script exits 1) or a hard
+        # runner kill still uploads whatever was written. py-spy
+        # writes the SVG incrementally so even partial profiles
+        # survive an OOM-kill.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-distributed-stack-${{ inputs.rows }}-rows
-          path: packages/python/goldenmatch/bench-out/results.json
+          path: |
+            packages/python/goldenmatch/bench-out/results.json
+            packages/python/goldenmatch/bench-out/profile.svg
+          if-no-files-found: warn
           retention-days: 30
