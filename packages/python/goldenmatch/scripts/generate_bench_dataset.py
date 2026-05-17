@@ -36,7 +36,6 @@ from time import perf_counter
 
 import polars as pl
 
-
 # ── Fixture construction ────────────────────────────────────────────
 
 
