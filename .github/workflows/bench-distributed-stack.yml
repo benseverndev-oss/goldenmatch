@@ -19,7 +19,13 @@ jobs:
   bench:
     name: "bench distributed stack (chunked vs Component 1+2+3)"
     runs-on: large-new-64GB
-    timeout-minutes: 180
+    # 300 min = baseline (~160 min observed in run 25980529866) +
+    # treatment-target (~128 min if it beats baseline by 20%) +
+    # 12 min buffer. If treatment runs longer than 128 min, that's
+    # already the kill criterion failing on wall_pct alone -- the
+    # workflow timing out IS the FAIL signal. Do NOT extend further
+    # without justifying against measured numbers.
+    timeout-minutes: 300
 
     steps:
       - uses: actions/checkout@v4
