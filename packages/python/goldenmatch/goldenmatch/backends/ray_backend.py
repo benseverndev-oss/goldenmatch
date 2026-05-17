@@ -220,19 +220,40 @@ def score_blocks_ray(
         int(ray.cluster_resources().get("CPU", 0)),
     )
 
-    # Collect results
-    all_pairs = []
-    results = ray.get(futures)
-    for pairs in results:
+    # Incremental gather with driver-OOM guard.
+    import psutil
+    budget_bytes = psutil.virtual_memory().available * 0.5
+    budget_pairs = int(budget_bytes // _PAIR_BYTES_ESTIMATE)
+
+    all_pairs: list[tuple[int, int, float]] = []
+    remaining = list(futures)
+    n_pairs = 0
+    while remaining:
+        ready, remaining = ray.wait(remaining, num_returns=1)
+        block_pairs = ray.get(ready[0])
         if target_ids is not None:
-            pairs = [
-                (a, b, s) for a, b, s in pairs
+            block_pairs = [
+                (a, b, s) for a, b, s in block_pairs
                 if (a in target_ids) != (b in target_ids)
             ]
-        all_pairs.extend(pairs)
-        for a, b, s in pairs:
+        all_pairs.extend(block_pairs)
+        for a, b, s in block_pairs:
             matched_pairs.add((min(a, b), max(a, b)))
-
+        n_pairs += len(block_pairs)
+        if n_pairs > budget_pairs:
+            for f in remaining:
+                try:
+                    ray.cancel(f)
+                except Exception:  # noqa: BLE001 -- best-effort cleanup
+                    pass
+            raise MemoryError(
+                f"Component 3: scored pairs ({n_pairs:,}) would exceed "
+                f"50% of available driver RAM "
+                f"({int(budget_bytes // (1024 * 1024))} MB budget, "
+                f"~{_PAIR_BYTES_ESTIMATE} bytes/pair) -- switch to "
+                f"backend='chunked' or wait for Component 4 "
+                f"(streaming pair store)"
+            )
     return all_pairs
 
 
