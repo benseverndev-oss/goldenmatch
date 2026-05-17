@@ -25,15 +25,21 @@ exact-match.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import polars as pl
 
 _TABLE_PREFIX = "prepared_"
+
+BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
+"""Deterministic seed for Polars' xxHash-based bucket assignment.
+Changing this value reshuffles every bucket assignment; treat as a
+constant. See spec §Decisions log."""
 
 
 def _sanitize_signature(signature: str) -> str:
@@ -130,6 +136,14 @@ class PreparedRecordStore:
                 self.path.unlink(missing_ok=True)
             except OSError:
                 pass  # Windows: file may still be locked; best-effort cleanup
+        # v2 bucket directory cleanup (NEW per spec §Error handling #7).
+        # shutil.rmtree does NOT expand globs -- iterate explicitly via
+        # Path.glob. ignore_errors=True absorbs benign Windows file-locking
+        # races (mirrors v1's unlink(missing_ok=True) style).
+        if self._cleanup and self._owns_file:
+            for sibling in self.path.parent.glob("buckets_*"):
+                if sibling.is_dir():
+                    shutil.rmtree(sibling, ignore_errors=True)
 
     def __enter__(self) -> PreparedRecordStore:
         return self
@@ -176,102 +190,115 @@ def load_prepared_records(
     if exists is None:
         return None
     arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
-    return pl.from_arrow(arrow_table)
+    # pl.from_arrow returns DataFrame | Series; an Arrow Table always
+    # produces a DataFrame, so narrow via cast for type-checkers.
+    return cast(pl.DataFrame, pl.from_arrow(arrow_table))
 
 
-_BLOCK_PREFIX = "block_"
-
-
-def _block_table_name(signature: str, block_key: str) -> str:
-    sig_h = _sanitize_signature(signature)
-    blk_h = _sanitize_signature(block_key)
-    return f"{_BLOCK_PREFIX}{sig_h}_{blk_h}"
-
-
-def materialize_blocks(
+def materialize_bucketed_blocks(
     store: PreparedRecordStore,
     df: pl.DataFrame,
     *,
-    block_assignments: dict[int, str],
+    block_assignments: dict[int, str] | pl.DataFrame,
+    n_buckets: int,
     signature: str,
-) -> None:
-    """Partition ``df`` by ``block_assignments`` ({__row_id__ -> block_key}) and
-    write each block as its own DuckDB table.
+) -> Path:
+    """Write `df` partitioned into N hash buckets at
+    `store.path.parent / buckets_<sig_hash>/bucket=K/data.parquet`.
 
-    Also writes a `block_index_<sig_hash16>` table mapping block_key -> table_name
-    so list_blocks / iter_blocks can enumerate without scanning ``duckdb_tables()``
-    (which would be O(all_blocks_in_store) across all signatures).
+    `block_assignments` accepts EITHER:
+    * `dict[int, str]` mapping `__row_id__` -> `block_key` (convenient
+      for tests; converted to a 2-col df internally).
+    * `pl.DataFrame` with `__row_id__` (int) and `__block_key__` (str)
+      columns. Production callers pass this form -- building a
+      5M-entry Python dict is precisely the per-row Python loop v2
+      exists to avoid.
+
+    Empty assignments yield a bucket_dir with no Parquet files
+    (Polars' partition_by skips empty groups).
+
+    Spec: docs/superpowers/specs/2026-05-17-...-v2-bucketed-storage-design.md
+    §Components #1.
     """
-    con = store.connection
-    sig_h = _sanitize_signature(signature)
-    index_table = f"block_index_{sig_h}"
+    sig_hash = _sanitize_signature(signature)
+    bucket_dir = store.path.parent / f"buckets_{sig_hash}"
+    bucket_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build a tiny lookup df once.
-    rid_to_block = pl.DataFrame({
-        "__row_id__": list(block_assignments.keys()),
-        "__block_key__": list(block_assignments.values()),
-    })
-    joined = df.join(rid_to_block, on="__row_id__", how="inner")
-    # Partition by block_key. Order is deterministic for test stability.
-    block_keys: list[str] = sorted(set(block_assignments.values()))
+    # Normalize to a Polars DataFrame.
+    if isinstance(block_assignments, dict):
+        if not block_assignments:
+            return bucket_dir
+        rid_to_block = pl.DataFrame({
+            "__row_id__": list(block_assignments.keys()),
+            "__block_key__": list(block_assignments.values()),
+        })
+    else:
+        rid_to_block = block_assignments
+        if rid_to_block.height == 0:
+            return bucket_dir
+        required = {"__row_id__", "__block_key__"}
+        if not required.issubset(set(rid_to_block.columns)):
+            raise ValueError(
+                f"block_assignments DataFrame must have columns "
+                f"{required}; got {set(rid_to_block.columns)}"
+            )
 
-    # Reset prior index for this signature (overwrite semantics).
-    con.execute(f'DROP TABLE IF EXISTS "{index_table}"')
-    con.execute(f'CREATE TABLE "{index_table}" (block_key TEXT, table_name TEXT)')
+    # Inner join attaches __block_key__. Rows in `df` without an
+    # assignment drop out (matches v1: unassigned rows weren't scored).
+    keyed = df.join(rid_to_block, on="__row_id__", how="inner")
 
-    for bk in block_keys:
-        block_df = joined.filter(pl.col("__block_key__") == bk).drop("__block_key__")
-        table = _block_table_name(signature, bk)
-        arrow_table = block_df.to_arrow()  # noqa: F841 -- DuckDB resolves by local name
-        con.execute(f'DROP TABLE IF EXISTS "{table}"')
-        con.execute(f'CREATE TABLE "{table}" AS SELECT * FROM arrow_table')
-        con.execute(
-            f'INSERT INTO "{index_table}" VALUES (?, ?)',
-            [bk, table],
+    # Bucket assignment via Polars xxHash with fixed seed.
+    with_bucket = keyed.with_columns(
+        (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
+        .alias("__bucket__"),
+    )
+
+    for bucket_id, bucket_df in with_bucket.partition_by(
+        "__bucket__", as_dict=True,
+    ).items():
+        # bucket_id may arrive as a tuple (Polars >= 1.0 with as_dict=True
+        # uses tuple keys for partition cols). Unwrap.
+        if isinstance(bucket_id, tuple):
+            bucket_id = bucket_id[0]
+        bucket_path = bucket_dir / f"bucket={int(bucket_id)}" / "data.parquet"
+        bucket_path.parent.mkdir(parents=True, exist_ok=True)
+        bucket_df.drop("__bucket__").write_parquet(
+            bucket_path, compression="snappy",
         )
 
-
-def load_block(
-    store: PreparedRecordStore,
-    *,
-    signature: str,
-    block_key: str,
-) -> pl.DataFrame | None:
-    """Read one block's records as a Polars DataFrame. None on miss."""
-    table = _block_table_name(signature, block_key)
-    con = store.connection
-    exists = con.execute(
-        "SELECT 1 FROM duckdb_tables() WHERE table_name = ?",
-        [table],
-    ).fetchone()
-    if exists is None:
-        return None
-    arrow_table = con.execute(f'SELECT * FROM "{table}"').arrow()
-    return pl.from_arrow(arrow_table)
+    return bucket_dir
 
 
-def list_blocks(store: PreparedRecordStore, *, signature: str) -> list[str]:
-    """Return all block_keys known for ``signature``. Empty list on unknown sig."""
-    sig_h = _sanitize_signature(signature)
-    index_table = f"block_index_{sig_h}"
-    con = store.connection
-    exists = con.execute(
-        "SELECT 1 FROM duckdb_tables() WHERE table_name = ?",
-        [index_table],
-    ).fetchone()
-    if exists is None:
-        return []
-    rows = con.execute(f'SELECT block_key FROM "{index_table}"').fetchall()
-    return [r[0] for r in rows]
+def load_bucket(bucket_path: Path) -> pl.DataFrame:
+    """Read a bucket Parquet file as a Polars DataFrame.
+
+    Trivial wrapper, lifted to a function so future enhancements
+    (streaming, column projection) have one site to change.
+    """
+    return pl.read_parquet(bucket_path)
 
 
-def iter_blocks(
-    store: PreparedRecordStore,
-    *,
-    signature: str,
-) -> Iterator[tuple[str, pl.DataFrame]]:
-    """Yield ``(block_key, block_df)`` pairs in sorted block_key order."""
-    for bk in sorted(list_blocks(store, signature=signature)):
-        df = load_block(store, signature=signature, block_key=bk)
-        if df is not None:
-            yield bk, df
+def iter_buckets(bucket_dir: Path) -> Iterator[tuple[int, Path]]:
+    """Yield (bucket_id, parquet_path) pairs for each bucket=K/data.parquet
+    under `bucket_dir`. Sorted by bucket_id for determinism.
+
+    Missing directory yields zero items (does NOT raise) -- spec
+    §Components #3 missing-dir semantics. Workers receive these paths;
+    the driver never reads bucket contents.
+    """
+    if not bucket_dir.exists():
+        return
+    pairs: list[tuple[int, Path]] = []
+    for sub in bucket_dir.iterdir():
+        if not sub.is_dir() or not sub.name.startswith("bucket="):
+            continue
+        try:
+            bid = int(sub.name.split("=", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        path = sub / "data.parquet"
+        if path.is_file():
+            pairs.append((bid, path))
+    pairs.sort(key=lambda p: p[0])
+    for bid, path in pairs:
+        yield bid, path

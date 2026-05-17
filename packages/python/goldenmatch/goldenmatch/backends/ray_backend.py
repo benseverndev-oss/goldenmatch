@@ -92,13 +92,11 @@ def score_blocks_ray(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
-        store_path: Optional path to a PreparedRecordStore .duckdb file.
-            When set together with ``signature``, enables key-mode dispatch:
-            workers receive block keys and open the store themselves instead
-            of receiving materialized DataFrames from the driver.
-        signature: Cache signature matching the one used when the store was
-            written (via materialize_blocks). Must be set alongside
-            ``store_path`` to activate key-mode.
+        store_path: Reserved for Component 2 v2 Phase 2 bucket-mode dispatch.
+            Passing a non-None value currently raises NotImplementedError
+            (Phase 1 stub). Will activate bucket-mode in Phase 2.
+        signature: Reserved for Component 2 v2 Phase 2. Must be set alongside
+            ``store_path`` to activate bucket-mode (Phase 2).
 
     Returns:
         All fuzzy pairs found across blocks.
@@ -139,58 +137,17 @@ def score_blocks_ray(
             source_lookup=src_lookup,
         )
 
-    @ray.remote(max_retries=0)
-    def _score_block_remote_by_key(
-        block_key: str,
-        store_path_inner: str,
-        signature_inner: str,
-        mk_config,
-        exclude,
-        src_lookup,
-        across_only: bool,
-    ):
-        """Component 3 key-mode Ray task: worker opens the store and
-        loads its block by key. Driver only ships strings."""
-        from goldenmatch.core.scorer import _score_one_block as _sob
-        from goldenmatch.distributed.record_store import (
-            PreparedRecordStore,
-            load_block,
-        )
-
-        store = PreparedRecordStore(
-            path=store_path_inner, cleanup=False, read_only=True,
-        )
-        try:
-            block_df = load_block(
-                store, signature=signature_inner, block_key=block_key,
-            )
-            if block_df is None:
-                raise RuntimeError(
-                    f"Component 3: block_key={block_key!r} not found in "
-                    f"store at {store_path_inner} for signature="
-                    f"{signature_inner!r} -- likely cause is signature "
-                    f"drift between driver and worker (config mutated "
-                    f"mid-run) or off-by-one in block_assignments"
-                )
-            shim = _KeyModeBlock(block_key=block_key, df=block_df.lazy())
-            return _sob(
-                shim, mk_config, exclude,
-                across_files_only=across_only, source_lookup=src_lookup,
-            )
-        finally:
-            store.close()
-
     use_key_mode = store_path is not None and signature is not None
+    if use_key_mode:
+        raise NotImplementedError(
+            "Component 2 v2 Phase 1: key-mode dispatch removed; "
+            "bucket-mode dispatch lands in Phase 2. Pass "
+            "store_path=None/signature=None for df-mode."
+        )
 
     futures = []
-    if use_key_mode:
-        for block in blocks:
-            future = _score_block_remote_by_key.remote(
-                block.block_key, store_path, signature,
-                mk_ref, exclude_ref, source_ref,
-                across_files_only,
-            )
-            futures.append(future)
+    if False:  # noqa: SIM210 -- Phase 2 will replace this with bucket-mode
+        pass
     else:
         for block in blocks:
             # Collect the lazy DataFrame before sending to Ray (existing
@@ -214,9 +171,8 @@ def score_blocks_ray(
             futures.append(future)
 
     logger.info(
-        "Submitted %d blocks to Ray (%s mode, %d CPUs available)",
+        "Submitted %d blocks to Ray (df mode, %d CPUs available)",
         len(futures),
-        "key" if use_key_mode else "df",
         int(ray.cluster_resources().get("CPU", 0)),
     )
 

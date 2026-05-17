@@ -858,33 +858,12 @@ def _run_dedupe_pipeline(
                     and config.partitioned_block_scoring
                     and _prep_store is not None
                 ):
-                    with stage("partition_blocks_to_store"):
-                        block_assignments: dict[int, str] = {}
-                        for blk in blocks:
-                            df_blk = blk.df
-                            if isinstance(df_blk, pl.LazyFrame):
-                                df_blk_eager = df_blk.collect()
-                            else:
-                                df_blk_eager = df_blk
-                            for rid in df_blk_eager["__row_id__"].to_list():
-                                block_assignments[int(rid)] = blk.block_key
-                        if block_assignments:
-                            from goldenmatch.distributed.record_store import (
-                                materialize_blocks,
-                            )
-                            prepped_full = combined_lf.collect()
-                            materialize_blocks(
-                                _prep_store,
-                                prepped_full,
-                                block_assignments=block_assignments,
-                                signature=_prep_cache_signature(config),
-                            )
-                            logger.debug(
-                                "partitioned_block_scoring: materialized %d blocks"
-                                " (%d rows) to disk store",
-                                len(set(block_assignments.values())),
-                                len(block_assignments),
-                            )
+                    raise NotImplementedError(
+                        "Component 2 v2 Phase 1: v1 materialize_blocks API "
+                        "removed; v2 materialize_bucketed_blocks wiring "
+                        "lands in Phase 2. Disable partitioned_block_scoring "
+                        "for now."
+                    )
                 total_blocks += len(blocks)
                 # Cheap sampling: collect block sizes for the histogram
                 # metric. Most blocks arrive as LazyFrames; do a
@@ -927,11 +906,18 @@ def _run_dedupe_pipeline(
                     _prep_store.release_connection()
 
                 with stage("fuzzy_score_blocks"):
+                    # The **key_mode_kwargs unpack feeds str values
+                    # (store_path, signature) to score_blocks_ray; the
+                    # parallel/duckdb scorers never see them since the
+                    # dict is empty unless backend=="ray". Pyright can't
+                    # narrow the dynamic dispatch and flags every union
+                    # arm against the str values -- intentional dynamic
+                    # dispatch, suppress.
                     pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
-                        **key_mode_kwargs,
+                        **key_mode_kwargs,  # pyright: ignore[reportArgumentType]
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
