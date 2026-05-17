@@ -141,6 +141,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rows", type=int, default=5_000_000)
     parser.add_argument("--out", type=Path, default=Path("bench_distributed_stack.json"))
     parser.add_argument("--store-dir", type=Path, default=None)
+    parser.add_argument(
+        "--dataset", type=Path, default=None,
+        help="Pre-generated Parquet fixture from "
+             "scripts/generate_bench_dataset.py. When supplied, skips "
+             "build_df() and reads from this path. Required for stable "
+             "comparisons across bench runs; the in-script generator "
+             "stays as a fallback for ad-hoc local smoke testing.",
+    )
     args = parser.parse_args(argv)
 
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
@@ -149,8 +157,18 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["GOLDENMATCH_PREPARED_RECORD_STORE_DIR"] = str(args.store_dir)
         os.environ["GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST"] = "1"
 
-    print(f"Building synthetic df ({args.rows:,} rows)...", flush=True)
-    df = build_df(args.rows)
+    if args.dataset is not None:
+        print(f"Loading pre-generated dataset from {args.dataset}...", flush=True)
+        df = pl.read_parquet(args.dataset)
+        if df.height != args.rows:
+            print(
+                f"  note: --rows={args.rows:,} disagrees with dataset "
+                f"height ({df.height:,}); using dataset height.",
+                flush=True,
+            )
+    else:
+        print(f"Building synthetic df ({args.rows:,} rows) in-script...", flush=True)
+        df = build_df(args.rows)
 
     print("Run 1/2: baseline (backend=chunked)...", flush=True)
     baseline = run_one("baseline", df, backend="chunked", prepared_record_store=False, partitioned_block_scoring=False)
