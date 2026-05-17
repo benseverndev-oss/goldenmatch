@@ -92,11 +92,13 @@ def score_blocks_ray(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
-        store_path: Reserved for Component 2 v2 Phase 2 bucket-mode dispatch.
-            Passing a non-None value currently raises NotImplementedError
-            (Phase 1 stub). Will activate bucket-mode in Phase 2.
-        signature: Reserved for Component 2 v2 Phase 2. Must be set alongside
-            ``store_path`` to activate bucket-mode (Phase 2).
+        store_path: Path to the PreparedRecordStore DuckDB file. When set
+            (alongside ``signature``), activates bucket-mode dispatch: each
+            Ray task loads one bucket Parquet from the sibling ``buckets_*``
+            directory instead of receiving an in-memory block.
+        signature: Config signature used to locate the ``buckets_<sig>``
+            directory. Must be set alongside ``store_path`` to activate
+            bucket-mode.
 
     Returns:
         All fuzzy pairs found across blocks.
@@ -137,21 +139,61 @@ def score_blocks_ray(
             source_lookup=src_lookup,
         )
 
-    use_key_mode = store_path is not None and signature is not None
-    if use_key_mode:
-        raise NotImplementedError(
-            "Component 2 v2 Phase 1: key-mode dispatch removed; "
-            "bucket-mode dispatch lands in Phase 2. Pass "
-            "store_path=None/signature=None for df-mode."
-        )
+    @ray.remote(max_retries=0)  # type: ignore[misc]
+    def _score_block_remote_by_bucket(
+        bucket_path: str,
+        mk_config,  # pyright: ignore[reportMissingParameterType]
+        exclude,  # pyright: ignore[reportMissingParameterType]
+        src_lookup,  # pyright: ignore[reportMissingParameterType]
+        across_only: bool,
+    ):
+        """Component 2 v2 / Component 3: worker loads one bucket
+        Parquet, recovers per-block grouping via partition_by, scores
+        each block, returns concatenated pairs."""
+        from pathlib import Path as _Path
+
+        from goldenmatch.core.scorer import _score_one_block
+        from goldenmatch.distributed.record_store import load_bucket
+
+        bucket_df = load_bucket(_Path(bucket_path))
+        all_pairs: list[tuple[int, int, float]] = []
+        for block_key, block_df in bucket_df.partition_by(
+            "__block_key__", as_dict=True,
+        ).items():
+            # block_key arrives as tuple under Polars >= 1.0 partition_by.
+            if isinstance(block_key, tuple):
+                block_key = block_key[0]
+            shim = _KeyModeBlock(block_key=str(block_key), df=block_df.lazy())
+            all_pairs.extend(
+                _score_one_block(
+                    shim, mk_config, exclude,
+                    across_files_only=across_only, source_lookup=src_lookup,
+                )
+            )
+        return all_pairs
+
+    use_bucket_mode = store_path is not None and signature is not None
 
     futures = []
-    if False:  # noqa: SIM210 -- Phase 2 will replace this with bucket-mode
-        pass
+    if use_bucket_mode:
+        from pathlib import Path as _Path
+
+        from goldenmatch.distributed.record_store import (
+            _sanitize_signature,
+            iter_buckets,
+        )
+        sig_hash = _sanitize_signature(signature)  # type: ignore[arg-type]
+        bucket_dir = _Path(store_path).parent / f"buckets_{sig_hash}"  # type: ignore[arg-type]
+        for _bucket_id, bucket_path in iter_buckets(bucket_dir):
+            future = _score_block_remote_by_bucket.remote(  # type: ignore[attr-defined]
+                str(bucket_path),
+                mk_ref, exclude_ref, source_ref,
+                across_files_only,
+            )
+            futures.append(future)
     else:
+        # df-mode unchanged from Component 3 v1.
         for block in blocks:
-            # Collect the lazy DataFrame before sending to Ray (existing
-            # df-mode behavior, preserved verbatim).
             if hasattr(block, 'df') and hasattr(block.df, 'collect'):
                 collected_block = type(block)(
                     block_key=block.block_key,
@@ -163,16 +205,17 @@ def score_blocks_ray(
                 )
             else:
                 collected_block = block
-
-            future = _score_block_remote.remote(
+            future = _score_block_remote.remote(  # type: ignore[attr-defined]
                 collected_block, mk_ref, exclude_ref,
                 across_files_only, source_ref,
             )
             futures.append(future)
 
     logger.info(
-        "Submitted %d blocks to Ray (df mode, %d CPUs available)",
+        "Submitted %d %s to Ray (%s mode, %d CPUs available)",
         len(futures),
+        "buckets" if use_bucket_mode else "blocks",
+        "bucket" if use_bucket_mode else "df",
         int(ray.cluster_resources().get("CPU", 0)),
     )
 
