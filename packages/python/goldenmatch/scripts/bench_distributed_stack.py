@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import tracemalloc
 from pathlib import Path
 from time import perf_counter
@@ -100,6 +101,41 @@ def _summarize_config(cfg) -> dict:
     }
 
 
+def _start_heartbeat(label: str, recorder, stop_event: threading.Event) -> threading.Thread:
+    """Background thread that flushes a snapshot of the bench recorder
+    state + current peak RSS + wall to stdout every 30 seconds.
+
+    The GitHub Actions step log streams stdout in real time, but the
+    artifact upload step doesn't run when the runner is hard-killed
+    (e.g. by an OOM-killer or fleet-side timeout). Two consecutive 5M
+    bench runs died at ~76 min with no artifact and no completion of
+    the "Run bench" step -- the streaming log was the only trail. This
+    thread ensures that trail always has cumulative state.
+    """
+    start_wall = perf_counter()
+
+    def _tick():
+        import psutil
+        proc = psutil.Process()
+        while not stop_event.wait(30):
+            try:
+                rss_mb = proc.memory_info().rss / (1024 * 1024)
+                elapsed = perf_counter() - start_wall
+                snapshot = recorder.to_dict()
+                print(
+                    f"[heartbeat {label} t={elapsed:.0f}s rss={rss_mb:.0f}MB] "
+                    f"stages={snapshot['stage_timings_seconds']} "
+                    f"metrics_keys={list(snapshot['metrics'].keys())}",
+                    flush=True,
+                )
+            except Exception as e:  # noqa: BLE001 -- heartbeat must never crash the bench
+                print(f"[heartbeat {label} ERROR: {e}]", flush=True)
+
+    t = threading.Thread(target=_tick, name=f"heartbeat-{label}", daemon=True)
+    t.start()
+    return t
+
+
 def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store: bool, partitioned_block_scoring: bool) -> dict:
     import goldenmatch as gm
     from goldenmatch.core.autoconfig import auto_configure_df
@@ -107,13 +143,22 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
 
     tracemalloc.start()
     t0 = perf_counter()
+    stop_event = threading.Event()
     with bench_capture() as rec:
-        cfg = auto_configure_df(df, confidence_required=False)
-        cfg.backend = backend
-        cfg.prepared_record_store = prepared_record_store
-        cfg.partitioned_block_scoring = partitioned_block_scoring
-        config_snapshot = _summarize_config(cfg)
-        result = gm.dedupe_df(df, config=cfg, confidence_required=False)
+        # Heartbeat must start AFTER bench_capture so it has the
+        # context-var recorder; otherwise rec.to_dict() reads an
+        # empty default-constructed bag.
+        hb = _start_heartbeat(label, rec, stop_event)
+        try:
+            cfg = auto_configure_df(df, confidence_required=False)
+            cfg.backend = backend
+            cfg.prepared_record_store = prepared_record_store
+            cfg.partitioned_block_scoring = partitioned_block_scoring
+            config_snapshot = _summarize_config(cfg)
+            result = gm.dedupe_df(df, config=cfg, confidence_required=False)
+        finally:
+            stop_event.set()
+            hb.join(timeout=2)
     wall = perf_counter() - t0
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
