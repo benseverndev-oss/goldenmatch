@@ -67,6 +67,19 @@ jobs:
         working-directory: packages/python/goldenmatch
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          # MALLOC_ARENA_MAX=2 caps glibc's per-thread memory arenas
+          # at 2 (default = 8 * cpu_count on Linux = 128 on the
+          # 16-core runner). Classic Polars+threads workload
+          # pathology: many small allocations across many arenas
+          # fragment the heap and RSS climbs steadily without
+          # OS-level freeing. Local Windows runs (single arena via
+          # ucrt) and PR #295's lightly-allocating fixture didn't
+          # surface the issue. Five consecutive runner runs since
+          # the realistic fixture landed (#296) have hung at 60+
+          # GB RSS with no progress -- this is the standard
+          # well-documented fix for that pattern.
+          # https://stackoverflow.com/q/72632580 (Polars memory fragmentation)
+          MALLOC_ARENA_MAX: "2"
         run: |
           mkdir -p bench-out
           DATASET_ARG=""
