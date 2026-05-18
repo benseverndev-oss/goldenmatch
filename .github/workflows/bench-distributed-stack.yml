@@ -82,10 +82,14 @@ jobs:
           # leaves a partial profile. --rate 50 = 50 Hz sampling (low
           # overhead at minute-scale walls). --idle includes blocked
           # threads (useful for "where do workers wait" analysis).
+          # --rate 10 (was 50): on run 26006853280 py-spy fell ~1400s
+          # behind in sampling. Lower rate keeps it tracking the
+          # bench process without the kernel starving its read syscalls
+          # under the bench's own memory pressure.
           py-spy record \
             --output bench-out/profile.svg \
             --format flamegraph \
-            --rate 50 \
+            --rate 10 \
             --idle \
             --subprocesses \
             -- \
