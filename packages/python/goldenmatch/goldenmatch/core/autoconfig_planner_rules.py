@@ -258,17 +258,37 @@ def _has_ray() -> bool:
     return importlib.util.find_spec("ray") is not None
 
 
+def _ray_auto_select_enabled() -> bool:
+    """Soft-revert gate (2026-05-18). Distributed Plan v1 (ray + prepared_record_store +
+    partitioned_block_scoring) failed the binding 5M kill criterion: treatment RSS
+    climbed >> baseline's 7.4 GB peak before completing, while baseline (bucket
+    backend) succeeded at 53.7 min / 7.4 GB. Per
+    ``project_distributed_plan_v1_kill_criterion`` the auto-pick is gated:
+    rule_ray and ``backend="ray"`` still work, but the v3 planner won't pick ray
+    automatically unless ``GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`` is set.
+    """
+    import os
+
+    return os.environ.get("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "0").lower() in (
+        "1", "true", "yes",
+    )
+
+
 def _is_ray_eligible(
     profile: ComplexityProfile,
     runtime: RuntimeProfile,
     n_rows_full: int,
 ) -> bool:
-    """Spec §Rule 6: 50M+ rows AND ray import succeeds.
+    """Spec §Rule 6: 50M+ rows AND ray import succeeds AND auto-select gate is on.
 
-    Failing closed: when ray isn't installed, predicate returns False and
-    the planner falls through to rule_duckdb (Rule 5).
+    Failing closed: when ray isn't installed OR the soft-revert gate isn't set,
+    predicate returns False and the planner falls through to rule_duckdb (Rule 5).
     """
-    return n_rows_full >= RAY_MIN_ROWS and _has_ray()
+    return (
+        n_rows_full >= RAY_MIN_ROWS
+        and _ray_auto_select_enabled()
+        and _has_ray()
+    )
 
 
 def _ray_plan(
