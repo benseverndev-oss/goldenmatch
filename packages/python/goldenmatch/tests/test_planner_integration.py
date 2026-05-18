@@ -202,9 +202,15 @@ def test_integration_user_override_beats_rule_table(monkeypatch):
 def test_integration_ray_plan_fires_at_50m_when_ray_available(monkeypatch):
     """Rule 6: 50M+ rows AND ray installed. Hijack n_rows_full to 50M.
     apply_to is stubbed so we exercise the planner without actually
-    spinning up a Ray cluster inside the test."""
+    spinning up a Ray cluster inside the test.
+
+    Ray auto-select is soft-reverted as of 2026-05-18 (kill criterion
+    failure); explicitly set ``GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`` so
+    the planner stays eligible for this test.
+    """
     from goldenmatch.core import autoconfig_planner as planner_mod
 
+    monkeypatch.setenv("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
     _stub_apply_to(monkeypatch)
 
     real_apply = planner_mod.apply_planner_rules
