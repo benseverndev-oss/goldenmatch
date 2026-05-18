@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import polars as pl
@@ -129,26 +130,33 @@ def score_buckets(
         )
 
     frozen_exclude = frozenset(matched_pairs)
-    all_pairs: list[tuple[int, int, float]] = []
-    total_blocks_scored = 0
-    n_non_empty_buckets = 0
+    non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
+    n_non_empty_buckets = len(non_empty_buckets)
 
-    with stage("bucket_score"):
-        for _bucket_key, bucket_df in buckets_dict.items():
-            if bucket_df.height == 0:
-                continue
-            n_non_empty_buckets += 1
-            # Second-level partition: per-block eager DataFrames.
-            block_groups: dict[Any, pl.DataFrame] = bucket_df.partition_by(
-                "__block_key__", as_dict=True,
-            )
-            for block_key, block_df in block_groups.items():
-                if block_df.height < 2:
-                    continue
-                # Polars >= 1.0 partition_by with single column returns
-                # tuple keys ("k",) -- unwrap.
-                if isinstance(block_key, tuple):
-                    block_key = block_key[0]
+    def _score_one_bucket(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
+        # Sort once, slice per block. Avoids partition_by's millions-of-tiny-
+        # eager-frames allocation that fragments glibc's malloc arena on Linux
+        # (RSS climbed 1.4 GB / 30s on 5M runs through inner partition_by).
+        # `slice` is a zero-copy view over the sorted parent.
+        sorted_df = bucket_df.sort("__block_key__")
+        sizes = (
+            sorted_df.lazy()
+            .group_by("__block_key__", maintain_order=True)
+            .agg(pl.len().alias("__size__"))
+            .collect()
+        )
+        if sizes.height == 0:
+            return [], 0
+        size_col = sizes["__size__"]
+        key_col = sizes["__block_key__"]
+        local_pairs: list[tuple[int, int, float]] = []
+        local_blocks = 0
+        offset = 0
+        for i in range(sizes.height):
+            size = int(size_col[i])
+            if size >= 2:
+                block_df = sorted_df.slice(offset, size)
+                block_key = key_col[i]
                 shim = _BlockShim(block_key=str(block_key), df=block_df)
                 pairs = _score_one_block(
                     shim, mk, frozen_exclude,
@@ -160,10 +168,30 @@ def score_buckets(
                         (a, b, s) for a, b, s in pairs
                         if (a in target_ids) != (b in target_ids)
                     ]
+                local_pairs.extend(pairs)
+                local_blocks += 1
+            offset += size
+        return local_pairs, local_blocks
+
+    all_pairs: list[tuple[int, int, float]] = []
+    total_blocks_scored = 0
+
+    with stage("bucket_score"):
+        # rapidfuzz.cdist releases the GIL inside _score_one_block, so threads
+        # give real parallelism. Mirror score_blocks_parallel's worker cap.
+        max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
+        if max_workers <= 1 or n_non_empty_buckets <= 2:
+            for bucket_df in non_empty_buckets:
+                pairs, n = _score_one_bucket(bucket_df)
                 all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                total_blocks_scored += 1
+                total_blocks_scored += n
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for pairs, n in pool.map(_score_one_bucket, non_empty_buckets):
+                    all_pairs.extend(pairs)
+                    total_blocks_scored += n
+        for a, b, _s in all_pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
 
     record_metrics({
         "bucket_count": n_non_empty_buckets,
