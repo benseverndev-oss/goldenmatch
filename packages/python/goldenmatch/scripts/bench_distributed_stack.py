@@ -156,7 +156,11 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
             cfg.partitioned_block_scoring = partitioned_block_scoring
             config_snapshot = _summarize_config(cfg)
             print(f"[run_one {label}] calling dedupe_df...", flush=True)
-            result = gm.dedupe_df(df, config=cfg, confidence_required=False)
+            # Bench reads counts from the bench recorder (metrics-only), so we
+            # discard the DedupeResult here. Materializing result.clusters at
+            # 5M (1.67M-cluster dict) is catastrophic and was masquerading as
+            # a score_buckets hang.
+            _ = gm.dedupe_df(df, config=cfg, confidence_required=False)
             print(f"[run_one {label}] dedupe_df returned at t={perf_counter()-t0:.1f}s", flush=True)
         finally:
             stop_event.set()
