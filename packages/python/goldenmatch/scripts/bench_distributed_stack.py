@@ -214,6 +214,15 @@ def main(argv: list[str] | None = None) -> int:
              "comparisons across bench runs; the in-script generator "
              "stays as a fallback for ad-hoc local smoke testing.",
     )
+    parser.add_argument(
+        "--run-treatment", action="store_true",
+        help="Also run the distributed-stack treatment (ray + "
+             "prepared_record_store + partitioned_block_scoring) and apply "
+             "the 20%% wall + 20%% RSS kill criterion. Default OFF since the "
+             "treatment was soft-reverted on 2026-05-18 (failed the 5M kill "
+             "criterion). Set to retrofit kill-criterion proofs when reviving "
+             "Distributed Plan v2 or auditing the original failure.",
+    )
     args = parser.parse_args(argv)
 
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
@@ -250,6 +259,27 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  wall = {baseline['wall_seconds']}s; peak = {baseline['peak_rss_mb']} MB", flush=True)
     print("  baseline diagnostic:", flush=True)
     print(json.dumps(baseline, indent=2), flush=True)
+
+    if not args.run_treatment:
+        # Default path: baseline-only. The treatment (Distributed Plan v1)
+        # was soft-reverted 2026-05-18; running it every bench burns 5-30
+        # minutes of runner time confirming the known-failing kill criterion.
+        # See goldenmatch/core/autoconfig_planner_rules.py::_ray_auto_select_enabled.
+        out = {
+            "rows": args.rows,
+            "baseline": baseline,
+            "treatment": None,
+            "diff": None,
+            "kill_criterion": {
+                "threshold_pct": -20.0,
+                "verdict": "SKIPPED",
+                "note": "Treatment skipped; pass --run-treatment to enable.",
+            },
+        }
+        args.out.write_text(json.dumps(out, indent=2))
+        print(f"\nWrote {args.out}.", flush=True)
+        print("Treatment skipped (pass --run-treatment to include).", flush=True)
+        return 0
 
     print("Run 2/2: treatment (full stack: ray + store + partitioned)...", flush=True)
     treatment = run_one("treatment", df, backend="ray", prepared_record_store=True, partitioned_block_scoring=True)
