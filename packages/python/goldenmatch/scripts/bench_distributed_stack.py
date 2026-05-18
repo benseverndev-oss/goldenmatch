@@ -215,8 +215,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Building synthetic df ({args.rows:,} rows) in-script...", flush=True)
         df = build_df(args.rows)
 
-    print("Run 1/2: baseline (backend=chunked)...", flush=True)
-    baseline = run_one("baseline", df, backend="chunked", prepared_record_store=False, partitioned_block_scoring=False)
+    # Baseline switched from "chunked" -> "bucket" 2026-05-18: the legacy
+    # chunked path hangs at 62.99 GB RSS on Linux runners with realistic
+    # 1.67M-block fixtures (7 consecutive runs since #296). The bucket
+    # backend (added in this PR) replaces the per-block LazyFrame fan-out
+    # with a two-level partition_by over an eager prepared df. See
+    # goldenmatch/backends/score_buckets.py module docstring for the
+    # full rationale + run IDs.
+    print("Run 1/2: baseline (backend=bucket)...", flush=True)
+    baseline = run_one("baseline", df, backend="bucket", prepared_record_store=False, partitioned_block_scoring=False)
     # Echo the full per-run JSON to stdout so the data is in the workflow
     # logs even when the upload-artifact step is skipped (e.g. when the
     # script exits 1 on FAIL). Critical for post-mortem investigation.
