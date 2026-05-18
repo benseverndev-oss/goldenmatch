@@ -768,25 +768,39 @@ def _run_dedupe_pipeline(
 
     # ── Step 1.5b: STANDARDIZE ──
     if config.standardization and config.standardization.rules:
-        combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+        with stage("standardize"):
+            combined_lf = apply_standardization(combined_lf, config.standardization.rules)
 
     # ── Step 1.5c: DOMAIN FEATURE EXTRACTION ──
-    combined_lf = _apply_domain_extraction(combined_lf, config)
+    with stage("domain_extraction"):
+        combined_lf = _apply_domain_extraction(combined_lf, config)
 
     # ── Learning Memory: pre-scoring learner overlay ──
-    _apply_memory_pre(memory_store, config, matchkeys)
+    with stage("memory_pre_overlay"):
+        _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 2: TRANSFORM ──
-    combined_lf = compute_matchkeys(combined_lf, matchkeys)
+    with stage("compute_matchkeys"):
+        combined_lf = compute_matchkeys(combined_lf, matchkeys)
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
     # Hoist matchkey transforms onto the materialized df once — eliminates
     # one .select() per (block × matchkey field) during scoring (folds into
     # the existing collect; no extra materialization). See spec
     # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
-    collected_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
+    #
+    # NEW (2026-05-18): two distinct stages so the heartbeat-stream can
+    # tell us whether the LazyFrame collect or the precompute step is
+    # the long pole at 5M scale. Prior runner runs had a ~5 min black
+    # hole between auto_configure_df returning and any fuzzy stage
+    # entering -- this instrumentation closes it.
+    with stage("combined_lf_collect"):
+        _collected_pre_mk = combined_lf.collect()
+    with stage("precompute_matchkey_transforms"):
+        collected_df = precompute_matchkey_transforms(_collected_pre_mk, matchkeys)
     combined_lf = collected_df.lazy()
-    _run_auto_suggest(collected_df, config)
+    with stage("auto_suggest_blocking"):
+        _run_auto_suggest(collected_df, config)
 
     # ── Step 3: BLOCK + COMPARE (cascading: exact first, then fuzzy) ──
     all_pairs: list[tuple[int, int, float]] = []
