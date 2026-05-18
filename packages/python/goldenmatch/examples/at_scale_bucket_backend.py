@@ -22,11 +22,9 @@ from __future__ import annotations
 import os
 import time
 
-import polars as pl
-
 import goldenmatch as gm
+import polars as pl
 from goldenmatch.core.autoconfig import auto_configure_df
-
 
 # ---------------------------------------------------------------------------
 # 1. Headline: 5M-on-one-node bucket backend
