@@ -882,24 +882,46 @@ def score_blocks_parallel(
     # Snapshot exclude_pairs so threads see a frozen copy
     frozen_exclude = frozenset(matched_pairs)
 
-    # Total candidate pairs across all blocks. Historical implementation
-    # called `block.df.collect().height` per block, which materializes
-    # every row of every block just to read row count. At 1.67M blocks
-    # of 3 rows that's 5M row materializations of pure overhead before
-    # any scoring runs. Switch to `select(pl.len())` -- a metadata-level
-    # operation Polars resolves without materializing rows. On lazy
-    # frames it's a plan transformation; on already-collected frames
-    # it's effectively O(1) field access.
+    # Total candidate pairs across all blocks -- a single stat that feeds
+    # ScoringProfile.candidates_compared. Historical loops materialized
+    # every block via `.collect().height` or `.select(pl.len()).collect()`
+    # just to read row count. At 1.67M tiny-block workloads (real-shape
+    # 5M auto-config on email), BOTH variants caused runner OOM-kills
+    # around ~70 min wall: each LazyFrame here is a filter expression
+    # over the 5M parent df, and 1.67M `.collect()` calls accumulate
+    # Polars arena memory faster than it's released.
     #
-    # Each block IS still collected separately inside _score_one_block;
-    # this loop's only job is the ScoringProfile.candidates_compared stat.
-    total_candidates = 0
-    for block in blocks:
-        try:
-            n = int(block.df.select(pl.len()).collect().item())
-        except Exception:
-            n = 0
-        total_candidates += n * (n - 1) // 2
+    # Bench run history (5M / 1.67M-blocks on large-new-64GB):
+    #   PR #295 (.collect().height, max_workers=4): 160 min, 4.5 GB peak. OK.
+    #   PR #301 (.select(pl.len()), max_workers=16): RSS climbs to 60+ GB
+    #     before scoring starts, OOM-killed. Bumped workers blamed; reverted.
+    #   PR #303 (.select(pl.len()), max_workers=4 revert): same OOM.
+    #     -> the candidate-count loop ITSELF is the leak at this scale.
+    #
+    # Cheapest fix: skip the count loop entirely when there are more
+    # than _CANDIDATE_COUNT_SKIP_THRESHOLD blocks. The stat becomes 0
+    # at scale; profile readers should treat 0 as "skipped at scale,
+    # not literally zero candidates." For small-N workloads (the actual
+    # use case for the stat -- debugging, diagnostics) we still compute
+    # it cheaply because there are few blocks.
+    _CANDIDATE_COUNT_SKIP_THRESHOLD = 10_000
+    _n_blocks_for_count_gate = len(blocks)
+    if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
+        total_candidates = 0
+        for block in blocks:
+            try:
+                n = int(block.df.select(pl.len()).collect().item())
+            except Exception:
+                n = 0
+            total_candidates += n * (n - 1) // 2
+    else:
+        # Skip -- the stat isn't load-bearing for scoring correctness.
+        logger.info(
+            "Skipping candidate-count loop at scale: %d blocks > %d threshold "
+            "(ScoringProfile.candidates_compared will be 0)",
+            _n_blocks_for_count_gate, _CANDIDATE_COUNT_SKIP_THRESHOLD,
+        )
+        total_candidates = 0
 
     all_pairs = []
     total_blocks = len(blocks)
