@@ -55,6 +55,105 @@ def _default_n_buckets() -> int:
     return min((os.cpu_count() or 4) * 4, 1024)
 
 
+def _resolve_score_pair_callable(scorer_name: str) -> Any:
+    """Return a (str_a, str_b) -> float | None callable for a scorer name.
+
+    Used by the bucket scorer's fast path so per-pair work skips the
+    PluginRegistry / dispatch overhead that ``_fuzzy_score_matrix`` does
+    per (block x field). None when the scorer isn't fast-path safe
+    (embedding, ensemble, record_embedding, unknown).
+    """
+    if scorer_name == "jaro_winkler":
+        from rapidfuzz.distance import JaroWinkler
+        return JaroWinkler.similarity
+    if scorer_name == "levenshtein":
+        from rapidfuzz.distance import Levenshtein
+        return Levenshtein.normalized_similarity
+    if scorer_name == "token_sort":
+        from rapidfuzz.fuzz import token_sort_ratio
+        return lambda a, b: token_sort_ratio(a, b) / 100.0
+    if scorer_name == "exact":
+        return lambda a, b: 1.0 if a == b else 0.0
+    if scorer_name in ("embedding", "ensemble", "record_embedding"):
+        # Multi-component or model-backed -- not fast-path eligible.
+        return None
+    if scorer_name in ("dice", "jaccard"):
+        # Need vectorized bit-array math; not yet wired through fast path.
+        return None
+    # Plugin scorer -- accept only when it exposes ``score_pair``.
+    try:
+        from goldenmatch.plugins.registry import PluginRegistry
+        plugin = PluginRegistry.instance().get_scorer(scorer_name)
+    except Exception:
+        return None
+    if plugin is None:
+        return None
+    fn = getattr(plugin, "score_pair", None)
+    return fn  # may itself be None for matrix-only plugins
+
+
+def _resolve_fast_path(
+    mk: MatchkeyConfig,
+    prepared_df: pl.DataFrame,
+    *,
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+    target_ids: set[int] | None,
+) -> tuple[float, float, list[tuple[str, float, Any]]] | None:
+    """Decide whether mk is fast-path eligible and pre-resolve field specs.
+
+    Returns (threshold, total_weight, [(xform_col, weight, score_fn), ...])
+    when eligible, else None. Resolution is done ONCE at score_buckets entry
+    so per-pair work never touches the PluginRegistry, _get_transformed_values,
+    or scorer-name dispatch.
+
+    Eligibility gates (conservative — fall back to find_fuzzy_matches for
+    anything more complex):
+      - mk.type == "weighted"
+      - mk.threshold set
+      - no negative_evidence
+      - no rerank / LLM
+      - across_files_only=False, target_ids=None (dedupe single-source case)
+      - every field resolves to a score_pair callable via
+        _resolve_score_pair_callable AND has its xform column precomputed
+    """
+    from goldenmatch.core.matchkey import _xform_sig
+
+    if mk.type != "weighted":
+        return None
+    if mk.threshold is None:
+        return None
+    if getattr(mk, "negative_evidence", None):
+        return None
+    if getattr(mk, "rerank", False):
+        return None
+    if getattr(mk, "llm", None):
+        return None
+    if across_files_only or source_lookup or target_ids is not None:
+        return None
+    if not mk.fields:
+        return None
+
+    field_specs: list[tuple[str, float, Any]] = []
+    total_weight = 0.0
+    for f in mk.fields:
+        scorer = getattr(f, "scorer", None)
+        weight = getattr(f, "weight", None)
+        if scorer is None or weight is None:
+            return None
+        fn = _resolve_score_pair_callable(scorer)
+        if fn is None:
+            return None
+        xform_col = _xform_sig(f)
+        if xform_col not in prepared_df.columns:
+            return None
+        field_specs.append((xform_col, float(weight), fn))
+        total_weight += float(weight)
+    if total_weight <= 0:
+        return None
+    return (float(mk.threshold), total_weight, field_specs)
+
+
 def score_buckets(
     prepared_df: pl.DataFrame,
     blocking_config: BlockingConfig,
@@ -130,16 +229,87 @@ def score_buckets(
     n_non_empty_buckets = len(non_empty_buckets)
     print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
-    # Inline find_fuzzy_matches in the hot loop. The previous _BlockShim path
-    # did: shim = _BlockShim(block_df.lazy()); _score_one_block(shim) which
-    # internally called block.df.collect() -- undoing the .lazy() round-trip
-    # entirely. At 1.67M blocks x ~3 rows each, Python orchestration
-    # (shim alloc + lazy/collect + per-Series scalar indexing) dominates
-    # wall: 2513s on the 5M Linux bench vs ~155s 16-core ideal cdist time.
-    # Skip the shim, call find_fuzzy_matches with the eager slice directly,
-    # and pre-extract size/key columns to Python lists so the loop avoids
-    # per-iter Polars scalar indexing.
+    # Fast-path eligibility: tiny-block workloads (5M-on-one-node, p99 block
+    # size ~3 rows) spend most of bucket_score wall in Python orchestration --
+    # numpy 3x3 matrix allocations, PluginRegistry lookup, _get_transformed_values
+    # dispatch per (block x field). For the simple "weighted matchkey, plain
+    # fuzzy scorers, no NE/rerank/exact/record_embedding" shape we can skip
+    # find_fuzzy_matches entirely and do per-pair scoring directly. Pre-resolve
+    # the scorer callable + xform column per field ONCE at score_buckets entry
+    # (instead of per block).
     from goldenmatch.core.scorer import find_fuzzy_matches
+
+    fast_path_specs = _resolve_fast_path(
+        mk, prepared_df,
+        across_files_only=across_files_only,
+        source_lookup=source_lookup,
+        target_ids=target_ids,
+    )
+
+    def _score_one_bucket_fast(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
+        # Fast path for tiny-block workloads. Pre-extracts each transformed
+        # field as a Python list ONCE per bucket, then iterates pairs within
+        # each block via simple Python loops + direct scorer.score_pair calls.
+        # Skips numpy NxN matrix dance entirely -- for 3-row blocks the matrix
+        # is a 3x3 array and the alloc/free + np.zeros call cost dwarfs the
+        # actual rapidfuzz work.
+        assert fast_path_specs is not None  # gated by dispatcher
+        threshold, total_weight, field_specs = fast_path_specs
+        sorted_df = bucket_df.sort("__block_key__")
+        sizes = (
+            sorted_df.lazy()
+            .group_by("__block_key__", maintain_order=True)
+            .agg(pl.len().alias("__size__"))
+            .collect()
+        )
+        if sizes.height == 0:
+            return [], 0
+        size_list = sizes["__size__"].to_list()
+        row_ids = sorted_df["__row_id__"].to_list()
+        # field_specs: list of (xform_col, weight, score_fn).
+        field_arrays = [
+            sorted_df[col].to_list() for col, _w, _fn in field_specs
+        ]
+        weights = [w for _col, w, _fn in field_specs]
+        score_fns = [fn for _col, _w, fn in field_specs]
+        n_fields = len(field_specs)
+        local_pairs: list[tuple[int, int, float]] = []
+        local_blocks = 0
+        offset = 0
+        for size in size_list:
+            if size >= 2:
+                end = offset + size
+                for i in range(offset, end - 1):
+                    ri = row_ids[i]
+                    for j in range(i + 1, end):
+                        rj = row_ids[j]
+                        if ri < rj:
+                            pair_key = (ri, rj)
+                        else:
+                            pair_key = (rj, ri)
+                        if pair_key in frozen_exclude:
+                            continue
+                        score_sum = 0.0
+                        weight_sum = 0.0
+                        for f_idx in range(n_fields):
+                            va = field_arrays[f_idx][i]
+                            vb = field_arrays[f_idx][j]
+                            if va is None or vb is None:
+                                continue
+                            s = score_fns[f_idx](va, vb)
+                            if s is None:
+                                continue
+                            score_sum += s * weights[f_idx]
+                            weight_sum += weights[f_idx]
+                        if weight_sum > 0:
+                            combined = score_sum / total_weight
+                            if combined >= threshold:
+                                local_pairs.append(
+                                    (pair_key[0], pair_key[1], float(combined))
+                                )
+                local_blocks += 1
+            offset += size
+        return local_pairs, local_blocks
 
     def _score_one_bucket(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
         # Sort once, slice per block (zero-copy view over the sorted parent).
@@ -192,19 +362,21 @@ def score_buckets(
     total_blocks_scored = 0
 
     with stage("bucket_score"):
-        # rapidfuzz.cdist releases the GIL inside _score_one_block, so threads
+        # rapidfuzz.cdist releases the GIL inside the scorer, so threads
         # give real parallelism. Mirror score_blocks_parallel's worker cap.
         max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
         _ts = time.perf_counter()
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers}", flush=True)
+        worker = _score_one_bucket_fast if fast_path_specs is not None else _score_one_bucket
+        path_label = "fast" if fast_path_specs is not None else "find_fuzzy_matches"
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
         if max_workers <= 1 or n_non_empty_buckets <= 2:
             for bucket_df in non_empty_buckets:
-                pairs, n = _score_one_bucket(bucket_df)
+                pairs, n = worker(bucket_df)
                 all_pairs.extend(pairs)
                 total_blocks_scored += n
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for pairs, n in pool.map(_score_one_bucket, non_empty_buckets):
+                for pairs, n in pool.map(worker, non_empty_buckets):
                     all_pairs.extend(pairs)
                     total_blocks_scored += n
         for a, b, _s in all_pairs:
