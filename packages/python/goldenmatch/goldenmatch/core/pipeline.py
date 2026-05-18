@@ -896,22 +896,40 @@ def _run_dedupe_pipeline(
                             signature=_prep_cache_signature(config),
                         )
                 total_blocks += len(blocks)
-                # Cheap sampling: collect block sizes for the histogram
-                # metric. Most blocks arrive as LazyFrames; do a
-                # zero-row-materialization peek via `select(pl.len())`
-                # which is O(1) for already-collected frames and a cheap
-                # plan operation for lazy ones. We need the sizes to
-                # surface the P99/max that drives hot-block decisions.
-                for blk in blocks:
-                    try:
-                        df_blk = blk.df
-                        if isinstance(df_blk, pl.LazyFrame):
-                            size = int(df_blk.select(pl.len()).collect().item())
-                        else:
-                            size = int(df_blk.height)
-                        block_size_samples.append(size)
-                    except Exception:  # pragma: no cover — defensive
-                        continue
+                # Block-size sampling for the histogram metric.
+                # Despite the historical "cheap O(1) plan operation"
+                # comment, at 1.67M filter-LazyFrames over a 5M parent
+                # the `.select(pl.len()).collect().item()` per block
+                # accumulates Polars arena memory at ~3 GB/min --
+                # observed via heartbeat instrumentation on bench runs
+                # 25998537828, 26000789629, 26002766443, 26004842882,
+                # 26006853280 (all OOM-killed before scoring started
+                # at 60+ GB RSS by t~20 min).
+                #
+                # Skip the sampling loop at scale: P50/P95/P99/max are
+                # diagnostic metrics, not load-bearing for scoring.
+                # Profile readers should treat the absence of these
+                # keys as "skipped at scale (>10K blocks)", not as
+                # zero-sized blocks. Small-N workloads still get the
+                # full histogram cheaply.
+                _BLOCK_SAMPLE_SKIP_THRESHOLD = 10_000
+                if len(blocks) <= _BLOCK_SAMPLE_SKIP_THRESHOLD:
+                    for blk in blocks:
+                        try:
+                            df_blk = blk.df
+                            if isinstance(df_blk, pl.LazyFrame):
+                                size = int(df_blk.select(pl.len()).collect().item())
+                            else:
+                                size = int(df_blk.height)
+                            block_size_samples.append(size)
+                        except Exception:  # pragma: no cover -- defensive
+                            continue
+                else:
+                    logger.info(
+                        "Skipping block-size sampling at scale: %d blocks "
+                        "> %d threshold (block_size_p* metrics will be absent)",
+                        len(blocks), _BLOCK_SAMPLE_SKIP_THRESHOLD,
+                    )
                 block_scorer = _get_block_scorer(config)
 
                 # Component 3: when all three gating flags are on AND we have a live
