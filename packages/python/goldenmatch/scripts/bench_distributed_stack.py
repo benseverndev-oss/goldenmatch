@@ -155,7 +155,9 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
             cfg.prepared_record_store = prepared_record_store
             cfg.partitioned_block_scoring = partitioned_block_scoring
             config_snapshot = _summarize_config(cfg)
+            print(f"[run_one {label}] calling dedupe_df...", flush=True)
             result = gm.dedupe_df(df, config=cfg, confidence_required=False)
+            print(f"[run_one {label}] dedupe_df returned at t={perf_counter()-t0:.1f}s", flush=True)
         finally:
             stop_event.set()
             hb.join(timeout=2)
@@ -163,6 +165,13 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
+    # Metrics-only: do NOT touch result.clusters at scale. At 5M with 1.67M
+    # clusters, materializing the Python dict (and walking .values() to count
+    # multi-members) is catastrophic and was masquerading as a score_buckets
+    # hang. Read counts from the bench recorder, which the pipeline already
+    # populates via record_metric("cluster_count", ...) and
+    # record_metric("multi_member_cluster_count", ...).
+    metrics = rec.to_dict()["metrics"]
     return {
         "label": label,
         "backend": backend,
@@ -171,13 +180,11 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
         "rows": df.height,
         "wall_seconds": round(wall, 3),
         "peak_rss_mb": round(peak / (1024 * 1024), 2),
-        "clusters": len(result.clusters),
-        "multi_member_clusters": sum(
-            1 for c in result.clusters.values() if c.get("size", 0) > 1
-        ),
+        "clusters": metrics.get("cluster_count"),
+        "multi_member_clusters": metrics.get("multi_member_cluster_count"),
         "config_snapshot": config_snapshot,
         "stage_timings_seconds": rec.to_dict()["stage_timings_seconds"],
-        "metrics": rec.to_dict()["metrics"],
+        "metrics": metrics,
     }
 
 
