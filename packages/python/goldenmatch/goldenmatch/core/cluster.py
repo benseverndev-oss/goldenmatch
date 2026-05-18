@@ -216,24 +216,11 @@ def build_clusters(
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
 ) -> dict[int, dict]:
-    """Build clusters from scored pairs.
+    """Build clusters from scored pairs using Union-Find.
 
-    Auto-splits oversized clusters via MST (when auto_split=True). Assigns
-    cluster_quality ("strong", "weak", "split") and downgrades confidence
-    for weak clusters.
-
-    Implementation: at 5M / 1.67M-pair scale the Python ``UnionFind`` union
-    loop + per-cluster ``compute_cluster_confidence`` Python pass cost ~120s
-    on a 16-core runner. This routes through scipy's
-    ``connected_components`` (C-implemented) for labelling + numpy reduceat
-    for vectorized confidence math. Smaller workloads fall through the same
-    code path -- correctness is preserved; the Python work is just
-    materializing the result dict structure.
+    Auto-splits oversized clusters via MST (when auto_split=True). Assigns cluster_quality
+    ("strong", "weak", "split") and downgrades confidence for weak clusters.
     """
-    import numpy as np
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
-
     # Derive all_ids from pairs when not provided explicitly
     if all_ids is None:
         seen: set[int] = set()
@@ -242,120 +229,37 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
-    n = len(all_ids)
-    if n == 0:
-        _emit_cluster_profile({})
-        return {}
+    uf = UnionFind()
+    uf.add_many(all_ids)
+    for id_a, id_b, _score in pairs:
+        uf.union(id_a, id_b)
 
-    id_to_idx: dict[int, int] = {rid: i for i, rid in enumerate(all_ids)}
+    clusters = uf.get_clusters()
 
-    if pairs:
-        a_idx = np.fromiter(
-            (id_to_idx[p[0]] for p in pairs), dtype=np.int64, count=len(pairs)
-        )
-        b_idx = np.fromiter(
-            (id_to_idx[p[1]] for p in pairs), dtype=np.int64, count=len(pairs)
-        )
-        scores_arr = np.fromiter(
-            (p[2] for p in pairs), dtype=np.float64, count=len(pairs)
-        )
-        data = np.ones(len(pairs), dtype=np.int8)
-        adj = coo_matrix((data, (a_idx, b_idx)), shape=(n, n))
-        _n_comp, labels = connected_components(adj, directed=False)
-    else:
-        labels = np.arange(n, dtype=np.int64)
+    member_to_cid: dict[int, int] = {}
+    sorted_clusters = sorted(clusters, key=lambda s: min(s))
+    for cluster_id, members in enumerate(sorted_clusters, start=1):
+        for m in members:
+            member_to_cid[m] = cluster_id
 
-    # Stable cluster_id ordering: sort components by min row_id-in-component.
-    # Use a Polars groupby to gather members per component (fast vectorized
-    # path) then re-key by 1-based cluster_id in min-row-id order.
-    import polars as pl
-    member_df = pl.DataFrame({
-        "__row_id__": all_ids,
-        "__component__": labels.tolist(),
-    })
-    comp_info = (
-        member_df.lazy()
-        .group_by("__component__")
-        .agg([
-            pl.col("__row_id__").alias("__members__"),
-            pl.col("__row_id__").min().alias("__min_id__"),
-        ])
-        .sort("__min_id__")
-        .collect()
-    )
-    comp_ids_in_order: list[int] = comp_info["__component__"].to_list()
-    members_per_cluster: list[list[int]] = comp_info["__members__"].to_list()
-    component_to_cid: dict[int, int] = {
-        int(comp): cid for cid, comp in enumerate(comp_ids_in_order, start=1)
-    }
-
-    # Per-cluster confidence metrics, vectorized in numpy.
-    cluster_metrics: dict[int, dict[str, float]] = {}
-    if pairs:
-        pair_cid_arr = np.fromiter(
-            (component_to_cid[int(c)] for c in labels[a_idx]),
-            dtype=np.int64, count=len(pairs),
-        )
-        sort_idx = np.argsort(pair_cid_arr, kind="stable")
-        sorted_cids = pair_cid_arr[sort_idx]
-        sorted_scores = scores_arr[sort_idx]
-        unique_cids, start_idx, counts = np.unique(
-            sorted_cids, return_index=True, return_counts=True,
-        )
-        # reduceat over the sorted score array gives per-cluster min / sum
-        # in two C-level passes (replaces the Python compute_cluster_confidence
-        # per-cluster loop, which was ~30s of the 120s wall at 5M).
-        min_per_cluster = np.minimum.reduceat(sorted_scores, start_idx)
-        sum_per_cluster = np.add.reduceat(sorted_scores, start_idx)
-        avg_per_cluster = sum_per_cluster / counts
-        cluster_metrics = {
-            int(cid): {
-                "min_edge": float(min_per_cluster[i]),
-                "avg_edge": float(avg_per_cluster[i]),
-                "n_edges": int(counts[i]),
-            }
-            for i, cid in enumerate(unique_cids)
-        }
-
-    # Build pair_scores dict per cluster (still per-pair Python — output
-    # shape is dict[int, dict[tuple, float]] which only Python can populate).
-    pair_scores_per_cluster: dict[int, dict[tuple[int, int], float]] = {}
-    if pairs:
-        for i, (id_a, id_b, score) in enumerate(pairs):
-            cid = component_to_cid[int(labels[a_idx[i]])]
-            d = pair_scores_per_cluster.get(cid)
-            if d is None:
-                d = {}
-                pair_scores_per_cluster[cid] = d
-            d[(id_a, id_b)] = score
-
-    # Assemble result. One Python pass over 3.3M clusters with pre-computed
-    # confidence; no Python computation inside the loop body.
     result: dict[int, dict] = {}
-    for cluster_id, members in enumerate(members_per_cluster, start=1):
-        members_sorted = sorted(members)
-        size = len(members_sorted)
-        ps = pair_scores_per_cluster.get(cluster_id, {})
-        if size <= 1 or not ps:
-            confidence = 1.0 if size <= 1 else 0.0
-            bottleneck_pair = None
-        else:
-            metrics = cluster_metrics[cluster_id]
-            min_edge = metrics["min_edge"]
-            avg_edge = metrics["avg_edge"]
-            n_edges = metrics["n_edges"]
-            max_possible = size * (size - 1) / 2
-            connectivity = n_edges / max_possible if max_possible > 0 else 0.0
-            confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity
-            bottleneck_pair = min(ps, key=ps.__getitem__)
+    for cluster_id, members in enumerate(sorted_clusters, start=1):
+        size = len(members)
         result[cluster_id] = {
-            "members": members_sorted,
+            "members": sorted(members),
             "size": size,
             "oversized": size > max_cluster_size,
-            "pair_scores": ps,
-            "confidence": confidence,
-            "bottleneck_pair": bottleneck_pair,
+            "pair_scores": {},
         }
+
+    for id_a, id_b, score in pairs:
+        cid = member_to_cid[id_a]
+        result[cid]["pair_scores"][(id_a, id_b)] = score
+
+    for cid, cinfo in result.items():
+        conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
+        cinfo["confidence"] = conf["confidence"]
+        cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
 
     # Auto-split oversized clusters (when enabled)
     to_split = [cid for cid, c in result.items() if c["oversized"]] if auto_split else []
