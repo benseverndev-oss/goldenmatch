@@ -11,13 +11,15 @@ backend choice does at every scale we have measured.
 
 ---
 
-## TL;DR picker
+## TL;DR picker (v1.16.0)
 
 | Rows         | Backend             | Notes                                                |
 |--------------|---------------------|------------------------------------------------------|
 | < 500K       | `polars` (default)  | In-memory. Fastest per record. OOM ceiling near 500K.|
-| 500K - 50M   | `duckdb`            | Out-of-core. Single machine. No OOM ceiling.         |
-| >= 50M, or many large blocks | `ray` | Distributed block scoring. Needs >= 4 blocks to pay back overhead. |
+| 500K - 5M (16c / 32+ GB) | **`bucket`** (recommended) | In-process hash-bucketed scorer. **5M dedupe in 9.94 min / 6.4 GB peak RSS** on a 16c/64GB node. Auto-picked by the v3 planner. PRs #310-#326. |
+| 500K - 5M (4c / 16GB)    | `chunked` | Streaming `scan_csv().slice()` + Polars-native cross-chunk join. 5M in ~50 min on `ubuntu-latest` (v1.15). |
+| 5M - 50M     | `duckdb`            | Out-of-core. Single machine. No OOM ceiling.         |
+| >= 50M       | `ray` (opt-in)      | Distributed block scoring. v1.16+ requires `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` or explicit `backend="ray"` after the Distributed Plan v1 kill criterion failure (PR #318). |
 
 Switching backend changes the storage and parallelism model. It does not
 fix a bad blocking key. See "Block-size failure modes" below.
