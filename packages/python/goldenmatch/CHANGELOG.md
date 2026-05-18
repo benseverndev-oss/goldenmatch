@@ -6,6 +6,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-05-18
+
+<!-- README-callout
+**5M records in 9.94 min, 6.4 GB peak RSS, on one 16-core node** — the new `backend="bucket"` path is now the recommended 5M-on-one-node config. 5x wall reduction and 2x peak RSS reduction vs the v1.15 chunked baseline (~50 min, 11.9 GB), with rock-solid reliability on Linux runners where the chunked path was hanging at 63 GB plateau on the same fixture. PRs #310-#326.
+-->
+
+### Added -- 5M-on-one-node performance pass (PRs #310-#326)
+
+The 5M-record workload on a 16-core / 64 GB Linux runner went from "chunked path hangs at 63 GB plateau" to a **clean 9.94-minute completion at 6.4 GB peak RSS** through a focused set of in-process pipeline optimisations. Headline:
+
+| Path | Wall | Peak RSS | Reliability |
+|---|---|---|---|
+| Pre-v1.16 `chunked` on same fixture | hung @ 63 GB plateau | — | never completed |
+| **v1.16 `backend="bucket"`** | **596s / 9.94 min** | **6.4 GB** | reliable |
+
+What landed:
+
+- **`backend="bucket"` (PR #308)** — in-process bucket scorer that replaces the per-block `LazyFrame` model. A single `with_columns(hash(block_key) % N)` plus one `partition_by("__bucket__")` produces N≈64 eager bucket DataFrames; per-block scoring runs inside each bucket without re-materialising millions of small frames. The legacy chunked path's per-block `.collect()` on filter-LazyFrames was the root cause of the Linux arena pathology where 1.67M small frames OOM-killed the runner.
+- **Bucket fast path for tiny-block / weighted workloads (PR #320)** — when a matchkey has no negative-evidence, no rerank, no LLM, no `record_embedding`, and a single-source dedupe, the scorer pre-resolves each field's `score_pair` callable + xform column ONCE at entry, then iterates row pairs inside each block via direct Python loops with inlined scorer calls. At 5M / 1.67M 3-row blocks this is **~24× faster** than the previous `find_fuzzy_matches` per block path (2513s → 91s on the bench).
+- **Pre-fuzzy stage sweep (PRs #310/#311/#312)** — three independent Python-UDF bottlenecks fixed: `analyze_blocking` now samples to 100K rows before scoring candidates; the bucket scorer drops a wasteful `_BlockShim` + `LazyFrame.collect()` round-trip; `_build_block_key_expr` uses native Polars expression chains (`lowercase`, `strip`, `substring`, …) instead of `pl.col().map_elements(apply_transforms)` per row.
+- **Golden batch builder + Polars-native fast path (PRs #322/#324)** — `build_golden_records_batch` pre-extracts each user column to a Python list ONCE per multi_df instead of calling `cluster_df[col].to_list()` 6.7M times. For the common "uniform default_strategy, no field_rules, no quality_scores" case, the new `_build_golden_records_polars_native` path computes the entire stage via Polars `group_by(...).agg(top_k_by(len)).first()` per column — golden stage 307s → 122s at 5M.
+- **Cluster pure-Python UnionFind retained.** A scipy.csgraph rewrite (PR #323) regressed cluster from 121s → 297s at 3.3M-cluster scale because the Polars list-of-lists materialisation for per-cluster members cost more than the original Python loop saved. Reverted in PR #326; the Python UnionFind path is the keeper.
+- **Bench harness gates** (PRs #314 / #316 / #321) — bench is now metrics-only (never materialises `result.clusters` at scale), passes `_skip_finalize=True` to `auto_configure_df` so the controller doesn't double-run the full pipeline, and gates the legacy Distributed-Plan-v1 treatment lane behind `--run-treatment` (default off; see soft-revert note below).
+
+### Changed -- Distributed Plan v1 soft-reverted (PRs #318/#321)
+
+The Distributed Plan v1 stack (`prepared_record_store=True` + `partitioned_block_scoring=True` + `backend="ray"`) FAILED the binding 5M kill criterion set in `docs/superpowers/specs/2026-05-15-distributed-plan-v1-design.md`: on the same `large-new-64GB` runner where the new bucket path completes in 9.94 min at 6.4 GB peak RSS, the distributed stack climbed past baseline's peak within minutes and had to be cancelled.
+
+The fix is a SOFT revert: code paths stay (PRs #280-#287 untouched), but the v3 planner no longer auto-picks ray. Set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to opt back in, or pass `backend="ray"` explicitly. Defaults for `prepared_record_store` and `partitioned_block_scoring` are unchanged (already False).
+
+### Added -- `_skip_finalize` is now a documented stable knob
+
+Already a kwarg on `auto_configure_df` but previously underscore-prefixed and undocumented. The bench harness uses it (PR #316) to prevent the controller from running the full pipeline inside `auto_configure_df` (which masquerades as a hang and double-counts wall in any external benchmark). Users running their own benches against an explicit config should pass `_skip_finalize=True`.
+
+### Bench progression (5M, `large-new-64GB`, `backend="bucket"`)
+
+| PR | Wall | Δ | bucket_score | golden | Notes |
+|---|---|---|---|---|---|
+| v1.15 baseline (`chunked`) | hung @ 63 GB | — | — | — | never completed on same fixture |
+| #308 (bucket backend) | ~54 min | — | ~30 min | ~5 min | reliable |
+| #317 (drop shim) | 48 min | -10% | 36 min | 5 min | |
+| #320 (fast path) | 13.2 min | -73% | 1.5 min | 5 min | the headline |
+| #322 (golden batch) | 11.2 min | -15% | 1.5 min | 3.3 min | |
+| **#324 (golden polars-native) — v1.16.0** | **9.94 min** | **-11%** | **1.5 min** | **2.1 min** | shipping |
+
+## [1.15.0] - prior
+
 <!-- README-callout
 **5M records in ~50 min on commodity hardware** — Chunked mode now actually delivers on its "1M to 100M+" promise. The streaming `scan_csv().slice()` reader + Polars-native cross-chunk join (B) + block-keyed bucketed index (C) + DuckDB pair-store backend (D) replace a broken eager-read + Python-double-loop path that OOM-killed at 3h+ on the pre-fix 5M dispatch. **Measured: 5M records, 50 min wall, 11.9 GB peak RSS, 618,817 multi-member clusters, no OOM** on a 4c/16GB GitHub runner. Pass `backend="chunked"` with an explicit blocking config. PRs #233/#234/#235.
 -->
