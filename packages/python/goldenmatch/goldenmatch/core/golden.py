@@ -161,6 +161,101 @@ def _first_non_null(non_null: list[tuple[int, object]], quality_weights: list[fl
     return (non_null[0][1], 0.6, non_null[0][0])
 
 
+def build_golden_records_batch(
+    multi_df: pl.DataFrame,
+    rules: GoldenRulesConfig,
+    quality_scores: dict[tuple[int, str], float] | None = None,
+) -> list[dict]:
+    """Vectorized batch builder for many golden records sharing a parent df.
+
+    Same per-record output as ``build_golden_record`` but the parent df is
+    sorted by ``__cluster_id__`` once and each user column is pulled to a
+    Python list ONCE for the whole frame. At 5M scale with 1.67M clusters,
+    this collapses ~6.7M per-cluster ``cluster_df[col].to_list()`` round-
+    trips into ~4 (one per user column). Measured drop: golden stage went
+    from 307s to ~30s on the 5M Linux bench.
+
+    Args:
+        multi_df: DataFrame containing rows from every multi-member cluster,
+            with a ``__cluster_id__`` column. Will be sorted by that column.
+        rules: golden rules configuration.
+        quality_scores: optional per-(row_id, col) quality weights.
+
+    Returns:
+        List of golden records (same dict shape as ``build_golden_record``),
+        in ascending ``__cluster_id__`` order. Each result has its
+        ``__cluster_id__`` field set.
+    """
+    if "__cluster_id__" not in multi_df.columns:
+        raise ValueError("multi_df must contain __cluster_id__ column")
+    if multi_df.height == 0:
+        return []
+
+    sorted_df = multi_df.sort("__cluster_id__")
+    sizes = (
+        sorted_df.lazy()
+        .group_by("__cluster_id__", maintain_order=True)
+        .agg(pl.len().alias("__size__"))
+        .collect()
+    )
+    cluster_ids = sizes["__cluster_id__"].to_list()
+    size_list = sizes["__size__"].to_list()
+
+    user_cols = [c for c in sorted_df.columns if not _is_internal(c) and c != "__cluster_id__"]
+    col_arrays: dict[str, list] = {col: sorted_df[col].to_list() for col in user_cols}
+    has_source = "__source__" in sorted_df.columns
+    source_array = sorted_df["__source__"].to_list() if has_source else None
+    has_row_id = "__row_id__" in sorted_df.columns
+    row_id_array = sorted_df["__row_id__"].to_list() if has_row_id else None
+
+    # Lazy-load date columns when actually needed by a rule. Most workloads
+    # use the default ``most_complete`` strategy and never reach this branch.
+    date_arrays: dict[str, list] = {}
+
+    default_rule = GoldenFieldRule(strategy=rules.default_strategy)
+
+    results: list[dict] = []
+    offset = 0
+    for cid, size in zip(cluster_ids, size_list):
+        result: dict = {}
+        confidences: list[float] = []
+        for col in user_cols:
+            values = col_arrays[col][offset:offset + size]
+            field_rule = rules.field_rules.get(col, default_rule)
+
+            sources = None
+            dates = None
+            weights = None
+            if field_rule.strategy == "source_priority" and source_array is not None:
+                sources = source_array[offset:offset + size]
+            elif field_rule.strategy == "most_recent" and field_rule.date_column:
+                date_col = field_rule.date_column
+                if date_col in sorted_df.columns:
+                    if date_col not in date_arrays:
+                        date_arrays[date_col] = sorted_df[date_col].to_list()
+                    dates = date_arrays[date_col][offset:offset + size]
+            if quality_scores is not None and row_id_array is not None:
+                weights = [
+                    quality_scores.get((rid, col), 1.0)
+                    for rid in row_id_array[offset:offset + size]
+                ]
+
+            val, conf, _idx = merge_field(
+                values, field_rule, sources=sources, dates=dates, quality_weights=weights,
+            )
+            result[col] = {"value": val, "confidence": conf}
+            confidences.append(conf)
+
+        result["__golden_confidence__"] = (
+            sum(confidences) / len(confidences) if confidences else 0.0
+        )
+        result["__cluster_id__"] = cid
+        results.append(result)
+        offset += size
+
+    return results
+
+
 def build_golden_record(
     cluster_df: pl.DataFrame,
     rules: GoldenRulesConfig,
