@@ -151,7 +151,14 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
         hb = _start_heartbeat(label, rec, stop_event)
         try:
             print(f"[run_one {label}] calling auto_configure_df...", flush=True)
-            cfg = auto_configure_df(df, confidence_required=False)
+            # _skip_finalize=True: controller would otherwise run the full
+            # pipeline once with the committed config and the controller's
+            # CHOSEN backend (not the bucket override the bench sets below).
+            # That double-run was the actual 5M hang -- it ran a full chunked
+            # / polars-direct pipeline before the bench got to call dedupe_df
+            # with backend="bucket". Skip it; the bench measures the real
+            # bucket pipeline below.
+            cfg = auto_configure_df(df, confidence_required=False, _skip_finalize=True)
             print(f"[run_one {label}] auto_configure_df returned at t={perf_counter()-t0:.1f}s", flush=True)
             cfg.backend = backend
             cfg.prepared_record_store = prepared_record_store
