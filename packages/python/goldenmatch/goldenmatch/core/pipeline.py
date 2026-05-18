@@ -843,6 +843,30 @@ def _run_dedupe_pipeline(
             if mk.type == "weighted":
                 if config.blocking is None:
                     continue
+                # Bucket backend: skip build_blocks entirely. The bucket
+                # scorer derives block-key + bucket assignment from
+                # `collected_df` in a single eager pass and partitions
+                # twice (bucket, then key) -- no per-block LazyFrame
+                # construction at all. Designed for 5M+ tiny-block
+                # workloads where the historical build_blocks +
+                # per-block .collect() chain explodes Polars arena
+                # memory on Linux runners (7 consecutive 5M bench runs
+                # hung at 62.99 GB RSS plateau before reaching real
+                # scoring).
+                if config.backend == "bucket":
+                    from goldenmatch.backends.score_buckets import score_buckets
+                    pairs = score_buckets(
+                        collected_df,
+                        config.blocking,
+                        mk,
+                        matched_pairs,
+                        n_buckets=config.n_buckets,
+                        across_files_only=across_files_only,
+                        source_lookup=source_lookup if across_files_only else None,
+                    )
+                    all_pairs.extend(pairs)
+                    fuzzy_pair_count += len(pairs)
+                    continue  # skip the legacy build_blocks path below
                 with stage("fuzzy_build_blocks"):
                     blocks = build_blocks(combined_lf, config.blocking)
                 # Component 2 v2: materialize blocks to hash-bucketed Parquet
