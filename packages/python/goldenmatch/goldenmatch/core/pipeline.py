@@ -768,25 +768,39 @@ def _run_dedupe_pipeline(
 
     # ── Step 1.5b: STANDARDIZE ──
     if config.standardization and config.standardization.rules:
-        combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+        with stage("standardize"):
+            combined_lf = apply_standardization(combined_lf, config.standardization.rules)
 
     # ── Step 1.5c: DOMAIN FEATURE EXTRACTION ──
-    combined_lf = _apply_domain_extraction(combined_lf, config)
+    with stage("domain_extraction"):
+        combined_lf = _apply_domain_extraction(combined_lf, config)
 
     # ── Learning Memory: pre-scoring learner overlay ──
-    _apply_memory_pre(memory_store, config, matchkeys)
+    with stage("memory_pre_overlay"):
+        _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 2: TRANSFORM ──
-    combined_lf = compute_matchkeys(combined_lf, matchkeys)
+    with stage("compute_matchkeys"):
+        combined_lf = compute_matchkeys(combined_lf, matchkeys)
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
     # Hoist matchkey transforms onto the materialized df once — eliminates
     # one .select() per (block × matchkey field) during scoring (folds into
     # the existing collect; no extra materialization). See spec
     # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
-    collected_df = precompute_matchkey_transforms(combined_lf.collect(), matchkeys)
+    #
+    # NEW (2026-05-18): two distinct stages so the heartbeat-stream can
+    # tell us whether the LazyFrame collect or the precompute step is
+    # the long pole at 5M scale. Prior runner runs had a ~5 min black
+    # hole between auto_configure_df returning and any fuzzy stage
+    # entering -- this instrumentation closes it.
+    with stage("combined_lf_collect"):
+        _collected_pre_mk = combined_lf.collect()
+    with stage("precompute_matchkey_transforms"):
+        collected_df = precompute_matchkey_transforms(_collected_pre_mk, matchkeys)
     combined_lf = collected_df.lazy()
-    _run_auto_suggest(collected_df, config)
+    with stage("auto_suggest_blocking"):
+        _run_auto_suggest(collected_df, config)
 
     # ── Step 3: BLOCK + COMPARE (cascading: exact first, then fuzzy) ──
     all_pairs: list[tuple[int, int, float]] = []
@@ -843,31 +857,154 @@ def _run_dedupe_pipeline(
             if mk.type == "weighted":
                 if config.blocking is None:
                     continue
+                # Bucket backend: skip build_blocks entirely. The bucket
+                # scorer derives block-key + bucket assignment from
+                # `collected_df` in a single eager pass and partitions
+                # twice (bucket, then key) -- no per-block LazyFrame
+                # construction at all. Designed for 5M+ tiny-block
+                # workloads where the historical build_blocks +
+                # per-block .collect() chain explodes Polars arena
+                # memory on Linux runners (7 consecutive 5M bench runs
+                # hung at 62.99 GB RSS plateau before reaching real
+                # scoring).
+                if config.backend == "bucket":
+                    from goldenmatch.backends.score_buckets import score_buckets
+                    pairs = score_buckets(
+                        collected_df,
+                        config.blocking,
+                        mk,
+                        matched_pairs,
+                        n_buckets=config.n_buckets,
+                        across_files_only=across_files_only,
+                        source_lookup=source_lookup if across_files_only else None,
+                    )
+                    all_pairs.extend(pairs)
+                    fuzzy_pair_count += len(pairs)
+                    continue  # skip the legacy build_blocks path below
                 with stage("fuzzy_build_blocks"):
                     blocks = build_blocks(combined_lf, config.blocking)
+                # Component 2 v2: materialize blocks to hash-bucketed Parquet
+                # (default off). Phase 2 wiring: replaces Phase 1's
+                # NotImplementedError stub. Workers load one bucket Parquet
+                # and recover per-block grouping in-worker via partition_by.
+                if (
+                    config.prepared_record_store
+                    and config.partitioned_block_scoring
+                    and _prep_store is not None
+                ):
+                    from goldenmatch.distributed.record_store import (
+                        materialize_bucketed_blocks,
+                    )
+                    # Component 2 v2: build the (row_id, block_key)
+                    # assignment table fully vectorized in Polars. v1's
+                    # dict-comprehension at 5M / 1.67M blocks was the
+                    # bottleneck v2 exists to avoid; this path stays in
+                    # Arrow/Rust the whole way.
+                    #
+                    # Multi-pass blocking semantics: a row that appears in
+                    # blocks A then B then C ends up with block_key = "C".
+                    # The .unique(subset=["__row_id__"], keep="last")
+                    # enforces last-write-wins by deduplicating ON the
+                    # row_id with the trailing block_key. After unique(),
+                    # the row -> block_key map is single-valued, so the
+                    # downstream inner join in materialize_bucketed_blocks
+                    # has no ambiguity.
+                    assignment_parts = []
+                    for blk in blocks:
+                        lf = blk.df if isinstance(blk.df, pl.LazyFrame) else blk.df.lazy()
+                        assignment_parts.append(
+                            lf.select("__row_id__").with_columns(
+                                pl.lit(blk.block_key).alias("__block_key__"),
+                            )
+                        )
+                    assignments_df = (
+                        pl.concat(assignment_parts)
+                        .unique(subset=["__row_id__"], keep="last")
+                        .collect()
+                    )
+
+                    n_buckets = config.n_buckets or max((os.cpu_count() or 1) * 4, 64)
+                    n_buckets = min(n_buckets, 1024)
+                    with stage("partition_blocks_to_buckets"):
+                        materialize_bucketed_blocks(
+                            _prep_store,
+                            combined_lf.collect(),
+                            block_assignments=assignments_df,
+                            n_buckets=n_buckets,
+                            signature=_prep_cache_signature(config),
+                        )
                 total_blocks += len(blocks)
-                # Cheap sampling: collect block sizes for the histogram
-                # metric. Most blocks arrive as LazyFrames; do a
-                # zero-row-materialization peek via `select(pl.len())`
-                # which is O(1) for already-collected frames and a cheap
-                # plan operation for lazy ones. We need the sizes to
-                # surface the P99/max that drives hot-block decisions.
-                for blk in blocks:
-                    try:
-                        df_blk = blk.df
-                        if isinstance(df_blk, pl.LazyFrame):
-                            size = int(df_blk.select(pl.len()).collect().item())
-                        else:
-                            size = int(df_blk.height)
-                        block_size_samples.append(size)
-                    except Exception:  # pragma: no cover — defensive
-                        continue
+                # Block-size sampling for the histogram metric.
+                # Despite the historical "cheap O(1) plan operation"
+                # comment, at 1.67M filter-LazyFrames over a 5M parent
+                # the `.select(pl.len()).collect().item()` per block
+                # accumulates Polars arena memory at ~3 GB/min --
+                # observed via heartbeat instrumentation on bench runs
+                # 25998537828, 26000789629, 26002766443, 26004842882,
+                # 26006853280 (all OOM-killed before scoring started
+                # at 60+ GB RSS by t~20 min).
+                #
+                # Skip the sampling loop at scale: P50/P95/P99/max are
+                # diagnostic metrics, not load-bearing for scoring.
+                # Profile readers should treat the absence of these
+                # keys as "skipped at scale (>10K blocks)", not as
+                # zero-sized blocks. Small-N workloads still get the
+                # full histogram cheaply.
+                _BLOCK_SAMPLE_SKIP_THRESHOLD = 10_000
+                if len(blocks) <= _BLOCK_SAMPLE_SKIP_THRESHOLD:
+                    for blk in blocks:
+                        try:
+                            df_blk = blk.df
+                            if isinstance(df_blk, pl.LazyFrame):
+                                size = int(df_blk.select(pl.len()).collect().item())
+                            else:
+                                size = int(df_blk.height)
+                            block_size_samples.append(size)
+                        except Exception:  # pragma: no cover -- defensive
+                            continue
+                else:
+                    logger.info(
+                        "Skipping block-size sampling at scale: %d blocks "
+                        "> %d threshold (block_size_p* metrics will be absent)",
+                        len(blocks), _BLOCK_SAMPLE_SKIP_THRESHOLD,
+                    )
                 block_scorer = _get_block_scorer(config)
+
+                # Component 3: when all three gating flags are on AND we have a live
+                # _prep_store, hand the backend the store_path + signature so the Ray
+                # key-mode dispatch path can fire. Backend ignores these kwargs in
+                # df-mode and the non-Ray scorers.
+                key_mode_kwargs: dict[str, str] = {}
+                if (
+                    config.backend == "ray"
+                    and config.prepared_record_store
+                    and config.partitioned_block_scoring
+                    and _prep_store is not None
+                ):
+                    key_mode_kwargs["store_path"] = str(_prep_store.path)
+                    key_mode_kwargs["signature"] = _prep_cache_signature(config)
+                    # Windows (and some Linux file systems) hold an exclusive
+                    # write-lock on the DuckDB file for the driver process. Ray
+                    # workers in separate processes cannot open the same file
+                    # read-only while that lock is held. Release the driver
+                    # connection here -- all writes are already flushed to disk
+                    # by the time we reach the scoring stage -- so workers can
+                    # open the file concurrently.
+                    _prep_store.release_connection()
+
                 with stage("fuzzy_score_blocks"):
+                    # The **key_mode_kwargs unpack feeds str values
+                    # (store_path, signature) to score_blocks_ray; the
+                    # parallel/duckdb scorers never see them since the
+                    # dict is empty unless backend=="ray". Pyright can't
+                    # narrow the dynamic dispatch and flags every union
+                    # arm against the str values -- intentional dynamic
+                    # dispatch, suppress.
                     pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
+                        **key_mode_kwargs,  # pyright: ignore[reportArgumentType]
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)

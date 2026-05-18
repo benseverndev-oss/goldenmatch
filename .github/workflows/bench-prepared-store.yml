@@ -20,7 +20,7 @@ jobs:
   bench:
     name: "bench prepared-record-store"
     runs-on: large-new-64GB
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4

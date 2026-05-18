@@ -794,11 +794,39 @@ def _score_one_block(
     return pairs
 
 
+_DEFAULT_MAX_WORKERS = 4
+"""Default thread-pool size for score_blocks_parallel.
+
+Stays at 4 (NOT cpu_count) because of a memory-pathology observed on
+the bench-distributed-stack run 26002766443 against the 5M /
+1.67M-block fixture: at max_workers=16 on a 16-core / 64GB runner, RSS
+climbed ~3 GB/min through fuzzy_score_blocks and the runner OOM-killed
+the job around t=20-76 min. PR #295's same workload with
+max_workers=4 finished in 160 min with peak RSS = 4476 MB.
+
+The 14x RSS blow-up isn't parallelism-proportional; it's that each
+worker calls block.df.collect() on a LazyFrame which is a FILTER
+against the 5M parent df, so 16 simultaneous workers run 16
+simultaneous full-table scans whose intermediates accumulate faster
+than they're released. Fixing this requires either:
+
+(a) materializing per-block dfs once outside the worker (the
+    Component 2 v2 spec direction; turned out to need real
+    multi-node infra that we don't have), or
+(b) batching tiny blocks into super-blocks so per-worker setup is
+    amortized over more rows.
+
+Until (b) ships, keep workers at 4 -- it's the safe default that's
+been proven to fit on the bench runner. Callers can override
+explicitly via the max_workers kwarg when their workload doesn't
+exhibit this pathology."""
+
+
 def score_blocks_parallel(
     blocks: list,
     mk: MatchkeyConfig,
     matched_pairs: set[tuple[int, int]],
-    max_workers: int = 4,
+    max_workers: int | None = None,
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
@@ -813,7 +841,8 @@ def score_blocks_parallel(
         blocks: List of BlockResult objects.
         mk: Matchkey configuration.
         matched_pairs: Set of already-matched (min_id, max_id) pairs.
-        max_workers: Thread pool size (default 4).
+        max_workers: Thread pool size. None (default) uses
+            ``_DEFAULT_MAX_WORKERS`` (= ``min(cpu_count(), 16)``).
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
@@ -821,6 +850,8 @@ def score_blocks_parallel(
     Returns:
         All fuzzy pairs found across blocks.
     """
+    if max_workers is None:
+        max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
         return []
 
@@ -851,19 +882,46 @@ def score_blocks_parallel(
     # Snapshot exclude_pairs so threads see a frozen copy
     frozen_exclude = frozenset(matched_pairs)
 
-    # Total candidate pairs across all blocks — computed cheaply by collecting
-    # the LazyFrame.  Note: each block is collected here for counting, then
-    # collected again inside _score_one_block.  Polars LazyFrames backed by
-    # in-memory data re-collect in O(1), so this is acceptable overhead.
-    # Overcounts when matched_pairs already covers some intra-block pairs;
-    # acceptable approximation documented in ScoringProfile.candidates_compared.
-    total_candidates = 0
-    for block in blocks:
-        try:
-            n = block.df.collect().height
-        except Exception:
-            n = 0
-        total_candidates += n * (n - 1) // 2
+    # Total candidate pairs across all blocks -- a single stat that feeds
+    # ScoringProfile.candidates_compared. Historical loops materialized
+    # every block via `.collect().height` or `.select(pl.len()).collect()`
+    # just to read row count. At 1.67M tiny-block workloads (real-shape
+    # 5M auto-config on email), BOTH variants caused runner OOM-kills
+    # around ~70 min wall: each LazyFrame here is a filter expression
+    # over the 5M parent df, and 1.67M `.collect()` calls accumulate
+    # Polars arena memory faster than it's released.
+    #
+    # Bench run history (5M / 1.67M-blocks on large-new-64GB):
+    #   PR #295 (.collect().height, max_workers=4): 160 min, 4.5 GB peak. OK.
+    #   PR #301 (.select(pl.len()), max_workers=16): RSS climbs to 60+ GB
+    #     before scoring starts, OOM-killed. Bumped workers blamed; reverted.
+    #   PR #303 (.select(pl.len()), max_workers=4 revert): same OOM.
+    #     -> the candidate-count loop ITSELF is the leak at this scale.
+    #
+    # Cheapest fix: skip the count loop entirely when there are more
+    # than _CANDIDATE_COUNT_SKIP_THRESHOLD blocks. The stat becomes 0
+    # at scale; profile readers should treat 0 as "skipped at scale,
+    # not literally zero candidates." For small-N workloads (the actual
+    # use case for the stat -- debugging, diagnostics) we still compute
+    # it cheaply because there are few blocks.
+    _CANDIDATE_COUNT_SKIP_THRESHOLD = 10_000
+    _n_blocks_for_count_gate = len(blocks)
+    if _n_blocks_for_count_gate <= _CANDIDATE_COUNT_SKIP_THRESHOLD:
+        total_candidates = 0
+        for block in blocks:
+            try:
+                n = int(block.df.select(pl.len()).collect().item())
+            except Exception:
+                n = 0
+            total_candidates += n * (n - 1) // 2
+    else:
+        # Skip -- the stat isn't load-bearing for scoring correctness.
+        logger.info(
+            "Skipping candidate-count loop at scale: %d blocks > %d threshold "
+            "(ScoringProfile.candidates_compared will be 0)",
+            _n_blocks_for_count_gate, _CANDIDATE_COUNT_SKIP_THRESHOLD,
+        )
+        total_candidates = 0
 
     all_pairs = []
     total_blocks = len(blocks)

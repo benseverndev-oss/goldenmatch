@@ -122,3 +122,54 @@ def test_context_manager_closes_on_exit(tmp_path: Path):
         p = store.path
         assert p.exists()
     assert not p.exists()
+
+
+# ---------------------------------------------------------------------------
+# Component 3 prereq: read_only kwarg (Phase 1 of distributed-scoring plan)
+# ---------------------------------------------------------------------------
+
+
+def test_read_only_false_allows_write(tmp_path: Path):
+    """Default read_only=False permits materialize_prepared_records."""
+    store = PreparedRecordStore(base_dir=tmp_path, read_only=False)
+    try:
+        materialize_prepared_records(store, _sample_df(), signature="sig-ro")
+        loaded = load_prepared_records(store, signature="sig-ro")
+        assert loaded is not None
+        assert loaded.height == 4
+    finally:
+        store.close()
+
+
+def test_read_only_true_raises_on_write(tmp_path: Path):
+    """read_only=True opens the store in DuckDB read-only mode; writes raise."""
+    # First create a valid DuckDB file with a known-path store.
+    p = tmp_path / "ro_test.duckdb"
+    writer = PreparedRecordStore(path=p, cleanup=False)
+    materialize_prepared_records(writer, _sample_df(), signature="sig-ro")
+    writer.close()
+
+    # Re-open in read-only mode; any write must raise.
+    store = PreparedRecordStore(path=p, cleanup=False, read_only=True)
+    try:
+        import pytest
+        with pytest.raises(Exception):
+            materialize_prepared_records(store, _sample_df(), signature="sig-ro-new")
+    finally:
+        store.close()
+
+
+def test_read_only_true_allows_read(tmp_path: Path):
+    """read_only=True can read tables that were written before opening."""
+    p = tmp_path / "ro_read_test.duckdb"
+    writer = PreparedRecordStore(path=p, cleanup=False)
+    materialize_prepared_records(writer, _sample_df(), signature="sig-ro-read")
+    writer.close()
+
+    store = PreparedRecordStore(path=p, cleanup=False, read_only=True)
+    try:
+        loaded = load_prepared_records(store, signature="sig-ro-read")
+        assert loaded is not None
+        assert set(loaded.iter_rows()) == set(_sample_df().iter_rows())
+    finally:
+        store.close()
