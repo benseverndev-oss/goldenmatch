@@ -99,18 +99,32 @@ class BlockResult:
 def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
     """Build a block key expression from a BlockingKeyConfig.
 
-    Transforms each field and concatenates with || separator.
+    Transforms each field and concatenates with || separator. Uses native
+    Polars expressions when every configured transform is vectorizable
+    (lowercase, strip, substring, etc. -- see matchkey._try_native_transform).
+    Falls back to map_elements only for transforms that need Python
+    (soundex, metaphone). The native fast path matters at scale: a 5M-row
+    blocking key with map_elements is 10M Python calls and was the root
+    cause of the 5M bench hang (RSS climbed 1.5 GB / 30s with no instrumented
+    stage closing).
     """
-    field_exprs = []
+    from goldenmatch.core.matchkey import _try_native_chain
+
+    field_exprs: list[pl.Expr] = []
     for field_name in key_config.fields:
-        if key_config.transforms:
-            expr = pl.col(field_name).map_elements(
-                lambda val, transforms=key_config.transforms: apply_transforms(val, transforms),
-                return_dtype=pl.Utf8,
+        transforms = key_config.transforms or []
+        native = _try_native_chain(field_name, transforms) if transforms else None
+        if native is not None:
+            field_exprs.append(native)
+        elif transforms:
+            field_exprs.append(
+                pl.col(field_name).map_elements(
+                    lambda val, transforms=transforms: apply_transforms(val, transforms),
+                    return_dtype=pl.Utf8,
+                )
             )
         else:
-            expr = pl.col(field_name).cast(pl.Utf8)
-        field_exprs.append(expr)
+            field_exprs.append(pl.col(field_name).cast(pl.Utf8))
 
     if len(field_exprs) == 1:
         return field_exprs[0].alias("__block_key__")
