@@ -150,7 +150,9 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
         # empty default-constructed bag.
         hb = _start_heartbeat(label, rec, stop_event)
         try:
+            print(f"[run_one {label}] calling auto_configure_df...", flush=True)
             cfg = auto_configure_df(df, confidence_required=False)
+            print(f"[run_one {label}] auto_configure_df returned at t={perf_counter()-t0:.1f}s", flush=True)
             cfg.backend = backend
             cfg.prepared_record_store = prepared_record_store
             cfg.partitioned_block_scoring = partitioned_block_scoring

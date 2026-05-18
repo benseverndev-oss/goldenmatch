@@ -399,9 +399,19 @@ class AutoConfigController:
             yellow_profile = self._yellow_sentinel_profile(df.height, user_cols)
             return v0, yellow_profile, RunHistory()
 
+        # Diag flush prints to localize 5M Linux hang. controller.run was found
+        # to be the hidden hang site after PRs #310-#314 attacked the wrong
+        # layers (bench heartbeat stage dict missed full-df-only substeps here).
+        _diag_t0 = time.time()
+        def _diag(msg: str) -> None:
+            print(f"[controller.run df.height={df.height}] t={time.time()-_diag_t0:.1f}s: {msg}", flush=True)
+        _diag("entry")
+
         # Iteration loop (Task 4.2)
         config_v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)
+        _diag("_initial_config done")
         sample, sample_ref = self._take_sample(df, reference=reference)
+        _diag(f"_take_sample done (sample.height={sample.height})")
         history = RunHistory()
         config_n = config_v0
         start = time.time()
@@ -414,12 +424,14 @@ class AutoConfigController:
             estimate_sparse_match_signal,
         )
         column_priors = compute_column_priors(df)
+        _diag("compute_column_priors done")
 
         # v1.11: eager NE promotion — runs before the iteration loop so that
         # identity-prior columns (phone, address, etc.) are added as negative
         # evidence on weighted matchkeys before the first iteration profiles them.
         from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
         config_v0 = promote_negative_evidence(config_v0, df, column_priors)
+        _diag("promote_negative_evidence done")
         config_n = config_v0
 
         exact_columns: list[str] = []
@@ -429,6 +441,7 @@ class AutoConfigController:
                     if f.field is not None:
                         exact_columns.append(f.field)
         sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
+        _diag(f"estimate_sparse_match_signal done (exact_cols={len(exact_columns)})")
         ctx = IndicatorContext(
             df=df,
             column_priors=column_priors,
@@ -458,12 +471,14 @@ class AutoConfigController:
                 _prep_store = _PRS(cleanup=not persist)
 
         try:
+            _diag("entering iteration loop")
             for iteration in range(self.budget.max_iterations + 1):
                 elapsed = time.time() - start
                 if elapsed > self.budget.max_seconds and iteration > 0:
                     history.stop_reason = StopReason.BUDGET_TIME
                     break
                 iter_start = time.time()
+                _diag(f"iter {iteration} start")
                 try:
                     from goldenmatch.core.profile_emitter import profile_capture
                     with profile_capture() as emitter:
@@ -474,6 +489,7 @@ class AutoConfigController:
                             )
                         else:
                             self._run_pipeline_sample(sample, sample_ref, config_n)
+                    _diag(f"iter {iteration} _run_pipeline_sample done in {time.time()-iter_start:.1f}s")
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,
                         reference=sample_ref, config=config_n,
