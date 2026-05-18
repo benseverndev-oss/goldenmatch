@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -112,26 +113,41 @@ def score_buckets(
     if n_buckets is None:
         n_buckets = _default_n_buckets()
 
+    # Diag prints (flushed) so we can see substep timing on runner heartbeats
+    # independent of the bench stage recorder, which only logs CLOSED stages.
+    # Three 5M Linux runs hung mid-score_buckets with no substage closing;
+    # these prints expose the actual hang line.
+    _t0 = time.perf_counter()
+    print(f"[score_buckets] entry: prepared_df.height={prepared_df.height} n_buckets={n_buckets}", flush=True)
+
     key_expr = _build_block_key_expr(blocking_config.keys[0])
+    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: key_expr built", flush=True)
 
     with stage("bucket_assign"):
+        _ta = time.perf_counter()
         keyed = prepared_df.with_columns(key_expr)
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
+        _tb = time.perf_counter()
         bucketed = keyed.with_columns(
             (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
             .alias("__bucket__")
         )
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
     with stage("bucket_partition"):
+        _tp = time.perf_counter()
         # First-level partition: N eager DataFrames keyed by bucket id.
         # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
         # single partition column; unwrap below.
         buckets_dict: dict[Any, pl.DataFrame] = bucketed.partition_by(
             "__bucket__", as_dict=True,
         )
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
     frozen_exclude = frozenset(matched_pairs)
     non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
     n_non_empty_buckets = len(non_empty_buckets)
+    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
     def _score_one_bucket(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
         # Sort once, slice per block. Avoids partition_by's millions-of-tiny-
@@ -180,6 +196,8 @@ def score_buckets(
         # rapidfuzz.cdist releases the GIL inside _score_one_block, so threads
         # give real parallelism. Mirror score_blocks_parallel's worker cap.
         max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
+        _ts = time.perf_counter()
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers}", flush=True)
         if max_workers <= 1 or n_non_empty_buckets <= 2:
             for bucket_df in non_empty_buckets:
                 pairs, n = _score_one_bucket(bucket_df)
@@ -198,6 +216,7 @@ def score_buckets(
         "bucket_n_target": n_buckets,
         "block_count_scored": total_blocks_scored,
     })
+    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {total_blocks_scored} blocks, {len(all_pairs)} pairs", flush=True)
     logger.info(
         "score_buckets: %d non-empty buckets (target N=%d), %d blocks scored, %d pairs",
         n_non_empty_buckets, n_buckets, total_blocks_scored, len(all_pairs),
