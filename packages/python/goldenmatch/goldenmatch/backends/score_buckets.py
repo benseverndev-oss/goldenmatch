@@ -40,7 +40,6 @@ import polars as pl
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
 from goldenmatch.core.bench import record_metrics, stage
 from goldenmatch.core.blocker import _build_block_key_expr
-from goldenmatch.core.scorer import _score_one_block
 
 logger = logging.getLogger(__name__)
 
@@ -54,24 +53,6 @@ def _default_n_buckets() -> int:
     """Default bucket count. min(cpu_count() * 4, 1024). Same heuristic as
     Component 2 v2's materialize_bucketed_blocks."""
     return min((os.cpu_count() or 4) * 4, 1024)
-
-
-class _BlockShim:
-    """BlockResult-shaped wrapper around an eager per-block DataFrame.
-
-    `_score_one_block` reads `.block_key`, `.df`, and `.pre_scored_pairs`.
-    Multi-pass blocking (pre_scored_pairs) is not supported in bucket mode
-    v1; pass None.
-    """
-    __slots__ = ("block_key", "df", "pre_scored_pairs")
-
-    def __init__(self, block_key: str, df: pl.DataFrame):
-        self.block_key = block_key
-        # _score_one_block does `block.df.collect()` first; passing an
-        # eager df via .lazy() makes the collect a no-op. Cheaper than
-        # threading a separate eager-aware path through scorer.py.
-        self.df = df.lazy()
-        self.pre_scored_pairs: list[tuple[int, int, float]] | None = None
 
 
 def score_buckets(
@@ -149,11 +130,21 @@ def score_buckets(
     n_non_empty_buckets = len(non_empty_buckets)
     print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
+    # Inline find_fuzzy_matches in the hot loop. The previous _BlockShim path
+    # did: shim = _BlockShim(block_df.lazy()); _score_one_block(shim) which
+    # internally called block.df.collect() -- undoing the .lazy() round-trip
+    # entirely. At 1.67M blocks x ~3 rows each, Python orchestration
+    # (shim alloc + lazy/collect + per-Series scalar indexing) dominates
+    # wall: 2513s on the 5M Linux bench vs ~155s 16-core ideal cdist time.
+    # Skip the shim, call find_fuzzy_matches with the eager slice directly,
+    # and pre-extract size/key columns to Python lists so the loop avoids
+    # per-iter Polars scalar indexing.
+    from goldenmatch.core.scorer import find_fuzzy_matches
+
     def _score_one_bucket(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
-        # Sort once, slice per block. Avoids partition_by's millions-of-tiny-
-        # eager-frames allocation that fragments glibc's malloc arena on Linux
-        # (RSS climbed 1.4 GB / 30s on 5M runs through inner partition_by).
-        # `slice` is a zero-copy view over the sorted parent.
+        # Sort once, slice per block (zero-copy view over the sorted parent).
+        # Avoids partition_by's millions-of-tiny-eager-frames allocation that
+        # fragments glibc's malloc arena on Linux (1.4 GB / 30s RSS climb).
         sorted_df = bucket_df.sort("__block_key__")
         sizes = (
             sorted_df.lazy()
@@ -163,22 +154,30 @@ def score_buckets(
         )
         if sizes.height == 0:
             return [], 0
-        size_col = sizes["__size__"]
-        key_col = sizes["__block_key__"]
+        # Pre-materialize as Python lists so the inner loop avoids per-iter
+        # Polars scalar indexing (the hottest line per block at 1.67M blocks).
+        size_list = sizes["__size__"].to_list()
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
-        for i in range(sizes.height):
-            size = int(size_col[i])
+        for size in size_list:
             if size >= 2:
                 block_df = sorted_df.slice(offset, size)
-                block_key = key_col[i]
-                shim = _BlockShim(block_key=str(block_key), df=block_df)
-                pairs = _score_one_block(
-                    shim, mk, frozen_exclude,
-                    across_files_only=across_files_only,
-                    source_lookup=source_lookup,
+                if across_files_only and source_lookup:
+                    sources_in_block = block_df["__source__"].unique().to_list()
+                    if len(sources_in_block) < 2:
+                        offset += size
+                        continue
+                pairs = find_fuzzy_matches(
+                    block_df, mk,
+                    exclude_pairs=frozen_exclude,
+                    pre_scored_pairs=None,
                 )
+                if across_files_only and source_lookup:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if source_lookup.get(a) != source_lookup.get(b)
+                    ]
                 if target_ids is not None:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
