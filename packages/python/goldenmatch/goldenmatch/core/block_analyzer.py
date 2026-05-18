@@ -350,6 +350,10 @@ class BlockingSuggestion:
 # ── Main analyzer ────────────────────────────────────────────────────────────
 
 
+_SCORE_SAMPLE_THRESHOLD = 100_000
+_SCORE_SAMPLE_SIZE = 100_000
+
+
 def analyze_blocking(
     df: pl.DataFrame,
     matchkey_columns: list[str],
@@ -368,10 +372,23 @@ def analyze_blocking(
     """
     candidates = generate_candidates(matchkey_columns)
 
+    # At scale, per-candidate scoring runs a Python-UDF `map_elements` over the
+    # full df. With ~260 candidates that's a multi-GB, multi-minute hang at 5M
+    # rows. Block-size distribution is shape-only; sample is sufficient.
+    n_full = df.height
+    if n_full > _SCORE_SAMPLE_THRESHOLD:
+        score_df = df.sample(_SCORE_SAMPLE_SIZE, seed=42)
+        logger.info(
+            "analyze_blocking: sampling %d rows from %d for candidate scoring",
+            _SCORE_SAMPLE_SIZE, n_full,
+        )
+    else:
+        score_df = df
+
     # Score each candidate
     scored = []
     for cand in candidates:
-        metrics = score_candidate(df, cand, target_block_size=target_block_size)
+        metrics = score_candidate(score_df, cand, target_block_size=target_block_size)
         if metrics["group_count"] == 0:
             continue
         scored.append((cand, metrics))
