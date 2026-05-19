@@ -1,13 +1,24 @@
 """Phase 3 kill criterion: cluster stage < 60s at 25M pairs.
 
-Loads pre-scored pairs from parquet, runs `build_clusters_distributed`
-end-to-end, asserts cluster wall < 60s.
+Two modes:
+
+1. ``--pairs <parquet>`` — clusters a pre-scored pairs parquet. Columns:
+   ``id_a:int64, id_b:int64, score:float64``. Fast path for repeated bench
+   runs once the score artifact is built.
+
+2. ``--input <parquet>`` — raw records parquet (the bench-dataset-v1 shape:
+   ``first_name``, ``last_name``, ``email``, ``zip``). The script runs
+   ``goldenmatch.dedupe_df`` to score in-memory, then times JUST the
+   distributed cluster stage on the resulting pair list. The pre-score
+   time is reported separately as ``prescore_wall_sec``; the kill
+   criterion is on ``cluster_wall_sec``.
 
 Run:
     GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1 \
     python scripts/bench_phase3_cluster.py \
-        --pairs bench-dataset-v1/pairs_25000000.parquet
+        --input bench-dataset-v1/bench_25000000.parquet
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,13 +31,54 @@ import psutil
 KILL_WALL_SEC = 60.0
 
 
+def _prescore(input_path: str) -> tuple[list[tuple[int, int, float]], float]:
+    """Run dedupe_df to produce scored pairs. Returns (pairs, wall_sec).
+
+    Uses the in-memory pipeline. This is intentionally the slow path —
+    the bench is measuring the DISTRIBUTED cluster stage, not the scorer.
+    """
+    import polars as pl
+    from goldenmatch import dedupe_df
+
+    t0 = time.perf_counter()
+    df = pl.read_parquet(input_path)
+    result = dedupe_df(df, confidence_required=False)
+    elapsed = time.perf_counter() - t0
+    return result.scored_pairs, elapsed
+
+
+def _write_pairs_parquet(
+    pairs: list[tuple[int, int, float]], path: str
+) -> None:
+    import polars as pl
+
+    pl.DataFrame(
+        {
+            "id_a": [a for a, _, _ in pairs],
+            "id_b": [b for _, b, _ in pairs],
+            "score": [s for _, _, s in pairs],
+        }
+    ).write_parquet(path)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument(
         "--pairs",
         type=str,
-        required=True,
-        help="Parquet path: columns id_a:int64, id_b:int64, score:float64",
+        help="Parquet of pre-scored pairs (id_a, id_b, score).",
+    )
+    src.add_argument(
+        "--input",
+        type=str,
+        help="Raw records parquet; the bench will pre-score it via dedupe_df.",
+    )
+    ap.add_argument(
+        "--scratch-pairs",
+        type=str,
+        default="bench-out/phase3_pairs.parquet",
+        help="Where to write the intermediate pairs parquet when using --input.",
     )
     ap.add_argument("--kill-wall-sec", type=float, default=KILL_WALL_SEC)
     args = ap.parse_args()
@@ -39,8 +91,19 @@ def main() -> int:
     proc = psutil.Process()
     baseline = proc.memory_info().rss
 
+    prescore_wall = 0.0
+    if args.input is not None:
+        os.makedirs(os.path.dirname(args.scratch_pairs) or ".", exist_ok=True)
+        pairs, prescore_wall = _prescore(args.input)
+        _write_pairs_parquet(pairs, args.scratch_pairs)
+        pairs_path = args.scratch_pairs
+        print(f"prescore_wall_sec={prescore_wall:.1f}")
+        print(f"pairs_written={len(pairs)} -> {pairs_path}")
+    else:
+        pairs_path = args.pairs
+
     t_load = time.perf_counter()
-    pairs_ds = read_parquet_partitioned(args.pairs, n_partitions=64)
+    pairs_ds = read_parquet_partitioned(pairs_path, n_partitions=64)
     ids: set[int] = set()
     for row in pairs_ds.take_all():
         ids.add(row["id_a"])
