@@ -375,28 +375,53 @@ class AutoConfigController:
           - all-null cols → ConfigValidationError("no usable columns")
           - n_rows == 1 → v0 + YELLOW + history empty
           - 1 user column → v0 + YELLOW + history empty
+
+        Phase 2: ``df`` may also be a ``ray.data.Dataset``. When it is, the
+        controller materializes a small (5K-row) Polars sample for the
+        pathological gates and ``_initial_config``, uses
+        ``take_sample_distributed`` for the iteration sample, and routes the
+        full-df indicator calls through the dispatch shims in
+        ``core/indicators.py`` (which themselves collect a bounded sample on
+        the distributed path). The iteration loop itself is unchanged — it
+        always consumes Polars samples.
         """
+        # --- Phase 2: distributed branch detection --------------------------
+        from goldenmatch.distributed._utils import is_ray_dataset
+        distributed = is_ray_dataset(df)
+
+        if distributed:
+            from goldenmatch.distributed.sample import take_sample_distributed as _tsd
+            # Materialize a 5K-row sample for gates + _initial_config.
+            # Never collects the full dataset on the driver.
+            init_sample: pl.DataFrame = _tsd(df, sample_cap=5000)
+            n_rows: int = df.count()  # type: ignore[union-attr]
+            _df_for_gates = init_sample
+        else:
+            _df_for_gates = df  # type: ignore[assignment]
+            n_rows = df.height  # type: ignore[union-attr]
+            init_sample = df  # type: ignore[assignment]  # alias; never collected twice
+
         # Pathological gates ------------------------------------------------
-        if df.height == 0:
+        if _df_for_gates.height == 0:
             raise ConfigValidationError("no data to configure on")
 
-        user_cols = [c for c in df.columns if not c.startswith("__")]
+        user_cols = [c for c in _df_for_gates.columns if not c.startswith("__")]
         if not user_cols:
             raise ConfigValidationError("no usable columns")
 
         # Check all-null defensively across user columns
         all_null = True
         for col in user_cols:
-            if df[col].drop_nulls().len() > 0:
+            if _df_for_gates[col].drop_nulls().len() > 0:
                 all_null = False
                 break
         if all_null:
             raise ConfigValidationError("no usable columns (all values null)")
 
         # Single non-empty column or single row → return v0 yellow, skip loop
-        if df.height == 1 or len(user_cols) == 1:
-            v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)
-            yellow_profile = self._yellow_sentinel_profile(df.height, user_cols)
+        if n_rows == 1 or len(user_cols) == 1:
+            v0 = self._initial_config(init_sample, reference=reference, v0_kwargs=v0_kwargs)
+            yellow_profile = self._yellow_sentinel_profile(n_rows, user_cols)
             return v0, yellow_profile, RunHistory()
 
         # Diag flush prints to localize 5M Linux hang. controller.run was found
@@ -404,14 +429,24 @@ class AutoConfigController:
         # layers (bench heartbeat stage dict missed full-df-only substeps here).
         _diag_t0 = time.time()
         def _diag(msg: str) -> None:
-            print(f"[controller.run df.height={df.height}] t={time.time()-_diag_t0:.1f}s: {msg}", flush=True)
+            print(f"[controller.run n_rows={n_rows}] t={time.time()-_diag_t0:.1f}s: {msg}", flush=True)
         _diag("entry")
 
         # Iteration loop (Task 4.2)
-        config_v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)
-        _diag("_initial_config done")
-        sample, sample_ref = self._take_sample(df, reference=reference)
-        _diag(f"_take_sample done (sample.height={sample.height})")
+        # Phase 2: distributed path uses init_sample for _initial_config and
+        # take_sample_distributed for the iteration sample. Polars path unchanged.
+        if distributed:
+            from goldenmatch.distributed.sample import take_sample_distributed as _tsd2
+            config_v0 = self._initial_config(init_sample, reference=reference, v0_kwargs=v0_kwargs)
+            _diag("_initial_config done (distributed)")
+            sample: pl.DataFrame = _tsd2(df, sample_cap=20_000)
+            sample_ref: pl.DataFrame | None = None  # stratified by reference: Phase 3
+            _diag(f"take_sample_distributed done (sample.height={sample.height})")
+        else:
+            config_v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)  # type: ignore[arg-type]
+            _diag("_initial_config done")
+            sample, sample_ref = self._take_sample(df, reference=reference)  # type: ignore[arg-type]
+            _diag(f"_take_sample done (sample.height={sample.height})")
         history = RunHistory()
         config_n = config_v0
         start = time.time()
@@ -419,18 +454,22 @@ class AutoConfigController:
         # Task 6.1: eager indicator compute — runs once, before the iteration loop,
         # on the full df (not the sample) so blocking cardinality/overlap signals
         # are representative.
+        # Phase 2: route through dispatch shims so the distributed path collects
+        # a bounded sample internally rather than materializing the full dataset.
         from goldenmatch.core.indicators import (
-            compute_column_priors,
-            estimate_sparse_match_signal,
+            dispatch_compute_column_priors,
+            dispatch_estimate_sparse_match_signal,
         )
-        column_priors = compute_column_priors(df)
+        column_priors = dispatch_compute_column_priors(df)
         _diag("compute_column_priors done")
 
         # v1.11: eager NE promotion — runs before the iteration loop so that
         # identity-prior columns (phone, address, etc.) are added as negative
         # evidence on weighted matchkeys before the first iteration profiles them.
+        # For the distributed path, use the init_sample (already a Polars frame).
         from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
-        config_v0 = promote_negative_evidence(config_v0, df, column_priors)
+        _ne_df = init_sample if distributed else df  # type: ignore[assignment]
+        config_v0 = promote_negative_evidence(config_v0, _ne_df, column_priors)
         _diag("promote_negative_evidence done")
         config_n = config_v0
 
@@ -440,10 +479,13 @@ class AutoConfigController:
                 for f in mk.fields:
                     if f.field is not None:
                         exact_columns.append(f.field)
-        sparsity_verdict = estimate_sparse_match_signal(df, exact_columns=exact_columns)
+        sparsity_verdict = dispatch_estimate_sparse_match_signal(df, exact_columns=exact_columns)
         _diag(f"estimate_sparse_match_signal done (exact_cols={len(exact_columns)})")
+        # IndicatorContext requires a Polars DataFrame for lazy indicator calls.
+        # On the distributed path we supply the init_sample (already materialized).
+        _ctx_df = init_sample if distributed else df  # type: ignore[assignment]
         ctx = IndicatorContext(
-            df=df,
+            df=_ctx_df,
             column_priors=column_priors,
             sparsity_verdict=sparsity_verdict,
         )
@@ -609,9 +651,9 @@ class AutoConfigController:
             # pathology as a RED committed entry -- caller would run the
             # full pipeline on the _RED_PROFILE sentinel and produce
             # degenerate output. Refuse loudly at scale.
-            if confidence_required and df.height >= REFUSE_AT_N:
+            if confidence_required and n_rows >= REFUSE_AT_N:
                 raise ControllerNotConfidentError(
-                    n_rows=df.height,
+                    n_rows=n_rows,
                     failing_sub_profile="data",  # n_errored=all means data path itself failed
                     stop_reason=(
                         history.stop_reason.name if history.stop_reason else "unset"
@@ -625,7 +667,7 @@ class AutoConfigController:
         # dedupe. Refuse loudly instead. Spec §Design / Confidence gate.
         if (
             confidence_required
-            and df.height >= REFUSE_AT_N
+            and n_rows >= REFUSE_AT_N
             and best_entry.profile.health() == HealthVerdict.RED
         ):
             failing = _identify_failing_subprofile(best_entry.profile)
@@ -636,7 +678,7 @@ class AutoConfigController:
             # right before each return.
             _LAST_CONTROLLER_RUN.set(history)  # surface history before raise
             raise ControllerNotConfidentError(
-                n_rows=df.height,
+                n_rows=n_rows,
                 failing_sub_profile=failing,
                 stop_reason=(
                     history.stop_reason.name
@@ -740,7 +782,7 @@ class AutoConfigController:
         if committed_profile.meta.is_sample and committed_profile.meta.sample_size > 0:
             blocking_full = committed_profile.blocking.extrapolate_to(
                 n_rows_sample=committed_profile.meta.sample_size,
-                n_rows_full=df.height,
+                n_rows_full=n_rows,
             )
             profile_for_planner = dataclasses.replace(committed_profile, blocking=blocking_full)
         else:
@@ -755,7 +797,7 @@ class AutoConfigController:
         plan = apply_planner_rules(
             profile=profile_for_planner,
             runtime=runtime,
-            n_rows_full=df.height,
+            n_rows_full=n_rows,
             rules=DEFAULT_RULES,
             context={"user_backend": None},
         )
@@ -763,19 +805,21 @@ class AutoConfigController:
         history.execution_plan = plan
 
         # Fix 4: When skip_finalize=True (called from _api zero-config path),
-        # skip the full-data _finalize run. The caller will execute the real
-        # full pipeline immediately after, so running it here would be a double
-        # full run. Drift detection is deferred to Task 6.1 when the caller can
-        # compare pf.signals (a typed ComplexityProfile) against best_entry.profile.
-        if skip_finalize:
+        # OR when running on a distributed dataset (Phase 2: _finalize takes a
+        # Polars DataFrame; distributing finalize is Phase 3),
+        # skip the full-data _finalize run. Return the best sample profile.
+        if skip_finalize or distributed:
             # Return the best sample profile in lieu of a full-data profile.
             # history.full_vs_sample_drift is left None (drift not computed).
-            self._record_run(df, reference, best_entry, history)
+            # For the distributed path, pass init_sample to _record_run so
+            # profile_signature can build a shape hash from column names/dtypes.
+            _record_df = init_sample if distributed else df  # type: ignore[assignment]
+            self._record_run(_record_df, reference, best_entry, history)
             _LAST_CONTROLLER_RUN.set(history)
             return committed_config, best_entry.profile, history
 
         # Finalize on full data (Task 4.3)
-        profile_full = self._finalize(committed_config, df, reference)
+        profile_full = self._finalize(committed_config, df, reference)  # type: ignore[arg-type]
         # Stamp full-data profile with eager column_priors + indicators too.
         _full_stamped_data = dataclasses.replace(
             profile_full.data,
@@ -792,7 +836,7 @@ class AutoConfigController:
         drift = sum(abs(a - b) for a, b in zip(sample_vec, full_vec))
         history.full_vs_sample_drift = drift
 
-        self._record_run(df, reference, best_entry, history)
+        self._record_run(df, reference, best_entry, history)  # type: ignore[arg-type]
         _LAST_CONTROLLER_RUN.set(history)
         return committed_config, profile_full, history
 

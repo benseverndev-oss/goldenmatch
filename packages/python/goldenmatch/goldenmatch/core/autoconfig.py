@@ -1482,13 +1482,21 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
-    # Coerce + validate input types
-    if isinstance(df, pl.LazyFrame):
+    # Coerce + validate input types.
+    # Phase 2: also accept ray.data.Dataset on the distributed path.
+    from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_dataset
+    if _is_ray_dataset(df):
+        # Dataset stays as-is; controller.run() handles it natively.
+        _n_rows_for_budget: int = df.count()  # type: ignore[union-attr]
+    elif isinstance(df, pl.LazyFrame):
         df = df.collect()
-    elif not isinstance(df, pl.DataFrame):
+        _n_rows_for_budget = df.height
+    elif isinstance(df, pl.DataFrame):
+        _n_rows_for_budget = df.height
+    else:
         raise TypeError(
-            f"auto_configure_df requires pl.DataFrame or pl.LazyFrame, "
-            f"got {type(df).__name__}"
+            f"auto_configure_df requires pl.DataFrame, pl.LazyFrame, or "
+            f"ray.data.Dataset, got {type(df).__name__}"
         )
     if reference is not None:
         if isinstance(reference, pl.LazyFrame):
@@ -1513,7 +1521,7 @@ def auto_configure_df(
         policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
         policy=policy,
-        budget=ControllerBudget.for_dataset(df.height),
+        budget=ControllerBudget.for_dataset(_n_rows_for_budget),
         memory=memory,
     )
     v0_kw = {
