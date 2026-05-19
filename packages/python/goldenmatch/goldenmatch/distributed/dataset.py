@@ -19,11 +19,16 @@ def read_csv_partitioned(
     Returns a LAZY Dataset — Ray defers execution until the caller forces it
     (via .count(), .take(), .write_*, etc). This is the load-bearing property
     of Phase 1: the driver never holds the full frame.
+
+    schema: optional column projection. When provided, only the listed columns
+    are kept (Arrow-level projection, no driver-side materialization).
     """
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, log_to_driver=False)
     paths = path if isinstance(path, list) else [path]
     ds: Dataset = ray.data.read_csv(paths)
+    if schema is not None:
+        ds = ds.select_columns(list(schema.keys()))
     return ds.repartition(n_partitions)
 
 
