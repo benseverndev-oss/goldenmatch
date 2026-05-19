@@ -10,9 +10,13 @@ distributed clustering, planner integration) ship as their own sub-projects.
 from goldenmatch.distributed.dataset import (
     apply_transforms_distributed,
     read_csv_partitioned,
+    read_parquet_partitioned,
+    read_partitioned,
 )
 
 __all__ = [
     "apply_transforms_distributed",
     "read_csv_partitioned",
+    "read_parquet_partitioned",
+    "read_partitioned",
 ]

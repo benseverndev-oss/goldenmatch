@@ -1,6 +1,6 @@
 """Phase 1 kill criterion: driver RSS < 8 GB during prep stage.
 
-Loads N rows via `goldenmatch.distributed.read_csv_partitioned`, applies a
+Loads N rows via `goldenmatch.distributed.read_partitioned`, applies a
 two-step TransformPlan chain, and measures peak driver RSS via a psutil
 sampler thread. Exits non-zero if peak RSS >= 8 GB.
 
@@ -45,7 +45,7 @@ def main() -> int:
 
     from goldenmatch.distributed import (
         apply_transforms_distributed,
-        read_csv_partitioned,
+        read_partitioned,
     )
     from goldenmatch.distributed.transforms import TransformPlan
 
@@ -63,7 +63,7 @@ def main() -> int:
     sampler.start()
 
     t0 = time.perf_counter()
-    ds = read_csv_partitioned(args.input, n_partitions=args.partitions)
+    ds = read_partitioned(args.input, n_partitions=args.partitions)
     ds = apply_transforms_distributed(
         ds,
         [

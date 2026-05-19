@@ -106,3 +106,27 @@ def test_loader_driver_rss_does_not_grow_with_input_size(tmp_path):
     after = proc.memory_info().rss
     growth_mb = (after - baseline) / 1024 / 1024
     assert growth_mb < 200, f"driver RSS grew {growth_mb:.0f} MB — loader is materializing on driver"
+
+
+def test_read_parquet_partitioned_round_trip(tmp_path):
+    import polars as pl
+    from goldenmatch.distributed import read_parquet_partitioned
+
+    p = tmp_path / "people.parquet"
+    pl.DataFrame({"id": range(500), "name": ["x"] * 500}).write_parquet(p)
+
+    ds = read_parquet_partitioned(str(p), n_partitions=4)
+    assert ds.count() == 500
+
+
+def test_read_partitioned_dispatches_by_suffix(tmp_path):
+    import polars as pl
+    from goldenmatch.distributed import read_partitioned
+
+    csv = tmp_path / "in.csv"
+    pl.DataFrame({"id": range(50), "name": ["x"] * 50}).write_csv(csv)
+    pq = tmp_path / "in.parquet"
+    pl.DataFrame({"id": range(30), "name": ["x"] * 30}).write_parquet(pq)
+
+    assert read_partitioned(str(csv), n_partitions=2).count() == 50
+    assert read_partitioned(str(pq), n_partitions=2).count() == 30

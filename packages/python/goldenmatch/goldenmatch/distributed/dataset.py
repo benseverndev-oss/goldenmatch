@@ -41,6 +41,44 @@ def read_csv_partitioned(
     return ds.repartition(n_partitions)
 
 
+def read_parquet_partitioned(
+    path: str | list[str],
+    n_partitions: int,
+    schema: dict[str, str] | None = None,
+) -> Dataset:
+    """Read parquet file(s) into a Ray Dataset partitioned into n_partitions blocks.
+
+    Same contract as :func:`read_csv_partitioned` but for parquet input.
+    Same laziness guarantee: driver never holds the full frame.
+    """
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
+    paths = path if isinstance(path, list) else [path]
+    ds = ray.data.read_parquet(paths)
+    if schema is not None:
+        ds = ds.select_columns(list(schema.keys()))
+    return ds.repartition(n_partitions)
+
+
+def read_partitioned(
+    path: str | list[str],
+    n_partitions: int,
+    schema: dict[str, str] | None = None,
+) -> Dataset:
+    """Dispatch to read_csv_partitioned or read_parquet_partitioned by suffix.
+
+    Convenience wrapper for callers that don't know the format up front (e.g.
+    bench scripts). Uses the first path's suffix to pick the reader.
+    """
+    first = path[0] if isinstance(path, list) else path
+    suffix = first.rsplit(".", 1)[-1].lower()
+    if suffix == "parquet":
+        return read_parquet_partitioned(path, n_partitions, schema)
+    return read_csv_partitioned(path, n_partitions, schema)
+
+
 def _apply_plans_to_arrow_batch(batch: Any, plans: list) -> Any:
     """Convert pyarrow batch -> Polars -> apply plans -> back to pyarrow."""
     import polars as pl
