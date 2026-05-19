@@ -20,7 +20,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - `core.cluster.build_clusters` polymorphic on Ray Dataset input via
   `is_ray_dataset` dispatch; in-memory callers byte-identical.
 - `scripts/bench_phase3_cluster.py` + `bench-phase3-cluster` workflow job.
-  Kill criterion: cluster wall < 60s at 25M pairs (was 126.6s single-node).
+- **Splink-style routing** in `build_clusters_distributed`:
+  pair count < 50M routes to driver-side scipy.csgraph;
+  >= 50M routes to distributed label propagation. Override via
+  `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` env var or
+  `force_label_propagation=True`. Calibrated against run `26119800863`:
+  at 8.3M pairs, label-prop's per-iter Ray Dataset HashAggregate
+  overhead (10-20s/iter) dominates; scipy.csgraph on the same pair
+  count is seconds. Mirrors Splink's own pattern (DuckDB below scale,
+  Spark above). Label propagation's binding multi-node proof point is
+  Phase 5.
 - The Phase 2 cheat-line in `run_dedupe_pipeline_distributed` stays in
   place — Phase 4 distributes golden and removes the materialize.
 
