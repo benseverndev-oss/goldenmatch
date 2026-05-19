@@ -1,11 +1,14 @@
 """Cheat-line wrapper that materializes a Ray Dataset to Polars then
 calls the in-memory dedupe pipeline.
 
-Phase 2 deliberate concession. The point of Phase 2 is to remove driver-
-side materialization for the *controller's full-df indicator stage*.
-Once the controller commits a config and reaches _finalize, we re-collect
-to Polars and run the proven in-memory pipeline. Phase 3 distributes the
-scoring/clustering/golden stages so _finalize doesn't materialize.
+Phase 2 deliberate concession. Phase 3 keeps the cheat-line for the
+pipeline-level call, but `goldenmatch.core.cluster.build_clusters` is now
+polymorphic on Ray Dataset input -- callers that pre-score and pass a
+pairs Dataset get the distributed clustering path via
+`goldenmatch.distributed.clustering.build_clusters_distributed`.
+
+Phase 4 removes the materialize entirely by distributing golden record
+build.
 """
 from __future__ import annotations
 
@@ -20,8 +23,10 @@ if TYPE_CHECKING:
 def run_dedupe_pipeline_distributed(ds: Dataset, **kwargs: Any):
     """Materialize the Ray Dataset and call dedupe_df.
 
-    Phase 2 deliberately collects the full df to driver here. Phase 3 will
-    push scoring/clustering/golden into Ray actors so the collect goes away.
+    Phase 2/3 cheat-line: collects the full df to driver then runs the proven
+    in-memory pipeline. `build_clusters` is already polymorphic on Ray Dataset
+    pairs input (Phase 3). Phase 4 removes this materialize by distributing
+    the golden record build stage.
     """
     from goldenmatch import dedupe_df
 
