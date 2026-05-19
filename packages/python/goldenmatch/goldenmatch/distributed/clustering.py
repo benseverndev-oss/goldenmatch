@@ -213,3 +213,72 @@ def _build_clusters_scipy_fallback(
             "oversized": size > max_cluster_size,
         })
     return ray.data.from_items(rows)
+
+
+def materialize_cluster_dict(
+    clusters_ds: Dataset,
+    pairs_ds: Dataset,
+) -> dict[int, dict]:
+    """Convert distributed cluster output back to dict[int, dict] for
+    back-compat with golden, identity, output.
+
+    Phase 4 removes this adapter.
+    """
+    cluster_rows = clusters_ds.take_all()
+    pair_rows = pairs_ds.take_all()
+
+    raw_ids_sorted = sorted({r["cluster_id"] for r in cluster_rows})
+    id_remap = {raw: new for new, raw in enumerate(raw_ids_sorted, start=1)}
+
+    members_by_cluster: dict[int, list[int]] = {}
+    size_by_cluster: dict[int, int] = {}
+    oversized_by_cluster: dict[int, bool] = {}
+    for r in cluster_rows:
+        cid = id_remap[r["cluster_id"]]
+        members_by_cluster.setdefault(cid, []).append(r["member_id"])
+        size_by_cluster[cid] = r["cluster_size"]
+        oversized_by_cluster[cid] = r["oversized"]
+
+    member_to_cid: dict[int, int] = {}
+    for cid, members in members_by_cluster.items():
+        for m in members:
+            member_to_cid[m] = cid
+
+    result: dict[int, dict] = {}
+    for cid, members in members_by_cluster.items():
+        result[cid] = {
+            "members": sorted(members),
+            "size": size_by_cluster[cid],
+            "oversized": oversized_by_cluster[cid],
+            "pair_scores": {},
+        }
+
+    for r in pair_rows:
+        a, b, s = r["id_a"], r["id_b"], r["score"]
+        cid = member_to_cid.get(a)
+        if cid is not None:
+            result[cid]["pair_scores"][(a, b)] = s
+
+    _attach_quality_metadata(result)
+    return result
+
+
+def _attach_quality_metadata(clusters: dict[int, dict]) -> None:
+    """Populate confidence, bottleneck_pair, cluster_quality on each cluster.
+
+    Mirrors the in-memory build_clusters semantics. Mutates in place.
+    """
+    for cinfo in clusters.values():
+        scores = list(cinfo["pair_scores"].values())
+        if not scores:
+            cinfo["confidence"] = 1.0
+            cinfo["bottleneck_pair"] = None
+            cinfo["cluster_quality"] = "strong"
+            continue
+        min_edge = min(scores)
+        avg_edge = sum(scores) / len(scores)
+        connectivity = avg_edge
+        cinfo["confidence"] = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity
+        weakest = min(cinfo["pair_scores"].items(), key=lambda kv: kv[1])
+        cinfo["bottleneck_pair"] = weakest[0]
+        cinfo["cluster_quality"] = "weak" if cinfo["confidence"] < 0.3 else "strong"

@@ -91,3 +91,41 @@ def test_build_clusters_distributed_produces_cluster_assignments():
     assert by_member[1]["cluster_id"] != by_member[5]["cluster_id"]
     assert by_member[1]["cluster_size"] == 3
     assert by_member[5]["cluster_size"] == 2
+
+
+def test_materialize_cluster_dict_matches_in_memory_shape():
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        build_clusters_distributed,
+        materialize_cluster_dict,
+    )
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
+    in_mem = build_clusters(pairs, all_ids=[1, 2, 3, 5, 6])
+    pairs_ds = pairs_list_to_dataset(pairs)
+    clusters_ds = build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3, 5, 6])
+    distributed = materialize_cluster_dict(clusters_ds, pairs_ds)
+
+    def partitions(cluster_dict):
+        return sorted(tuple(sorted(info["members"])) for info in cluster_dict.values())
+
+    assert partitions(in_mem) == partitions(distributed)
+
+
+def test_materialize_cluster_dict_includes_pair_scores():
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        build_clusters_distributed,
+        materialize_cluster_dict,
+    )
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+    clusters_ds = build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3])
+    result = materialize_cluster_dict(clusters_ds, pairs_ds)
+    assert len(result) == 1
+    info = next(iter(result.values()))
+    assert info["size"] == 3
+    assert "pair_scores" in info
+    assert len(info["pair_scores"]) == 2
