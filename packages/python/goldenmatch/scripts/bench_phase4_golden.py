@@ -41,6 +41,13 @@ def main() -> int:
 
     t_load = time.perf_counter()
     df = pl.read_parquet(args.input)
+    # bench-dataset-v1 doesn't carry __row_id__; goldenmatch adds it
+    # internally inside dedupe_df. Add it explicitly so we can match
+    # cluster members back to source rows after the dedupe call.
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(
+            pl.col("__row_id__").cast(pl.Int64)
+        )
     load_wall = time.perf_counter() - t_load
 
     # Pre-pipeline via in-memory bucket backend (same as Phase 3 bench).
