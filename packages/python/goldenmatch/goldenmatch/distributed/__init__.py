@@ -14,6 +14,7 @@ from goldenmatch.distributed.dataset import (
     read_partitioned,
 )
 from goldenmatch.distributed._utils import is_ray_dataset
+from goldenmatch.distributed.sample import take_sample_distributed
 
 __all__ = [
     "apply_transforms_distributed",
@@ -21,4 +22,5 @@ __all__ = [
     "read_csv_partitioned",
     "read_parquet_partitioned",
     "read_partitioned",
+    "take_sample_distributed",
 ]
