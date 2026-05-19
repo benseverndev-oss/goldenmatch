@@ -13,9 +13,11 @@ from goldenmatch.distributed.dataset import (
     read_parquet_partitioned,
     read_partitioned,
 )
+from goldenmatch.distributed._utils import is_ray_dataset
 
 __all__ = [
     "apply_transforms_distributed",
+    "is_ray_dataset",
     "read_csv_partitioned",
     "read_parquet_partitioned",
     "read_partitioned",
