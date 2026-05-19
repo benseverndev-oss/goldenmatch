@@ -235,9 +235,17 @@ def build_clusters(
         uf.union(id_a, id_b)
 
     clusters = uf.get_clusters()
+    # Release UnionFind internals (parent + rank dicts). At 25M these hold
+    # ~2.5 GB combined; Python GC won't free them until `uf` falls out of
+    # scope, which is later in this function. Force-release now.
+    del uf
 
     member_to_cid: dict[int, int] = {}
     sorted_clusters = sorted(clusters, key=lambda s: min(s))
+    # `clusters` is the list-of-sets view returned by get_clusters(); after
+    # sorting we don't need the original list, only the sorted view.
+    del clusters
+
     for cluster_id, members in enumerate(sorted_clusters, start=1):
         for m in members:
             member_to_cid[m] = cluster_id
@@ -255,6 +263,10 @@ def build_clusters(
     for id_a, id_b, score in pairs:
         cid = member_to_cid[id_a]
         result[cid]["pair_scores"][(id_a, id_b)] = score
+    # member_to_cid + sorted_clusters held ~1.25 + 1.0 GB at 25M scale; once
+    # pair_scores is populated they aren't read again inside this function.
+    del member_to_cid
+    del sorted_clusters
 
     for cid, cinfo in result.items():
         conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
