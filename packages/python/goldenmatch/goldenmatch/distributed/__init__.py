@@ -8,6 +8,11 @@ distributed clustering, planner integration) ship as their own sub-projects.
 """
 
 from goldenmatch.distributed._utils import is_ray_dataset
+from goldenmatch.distributed.clustering import (
+    build_clusters_distributed,
+    materialize_cluster_dict,
+    pairs_list_to_dataset,
+)
 from goldenmatch.distributed.dataset import (
     apply_transforms_distributed,
     read_csv_partitioned,
@@ -18,7 +23,10 @@ from goldenmatch.distributed.sample import take_sample_distributed
 
 __all__ = [
     "apply_transforms_distributed",
+    "build_clusters_distributed",
     "is_ray_dataset",
+    "materialize_cluster_dict",
+    "pairs_list_to_dataset",
     "read_csv_partitioned",
     "read_parquet_partitioned",
     "read_partitioned",
