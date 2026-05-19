@@ -44,8 +44,8 @@ def _propagate_one_step(pairs_ds: Dataset, labels_ds: Dataset) -> Dataset:
     and (id_b, min(label_a, label_b)). Each id then takes the min of its
     current label and all proposals it received.
     """
-    import ray
     import pyarrow as pa
+    import ray
 
     # Materialize labels to a small dict broadcast via object store.
     label_rows = labels_ds.take_all()
@@ -134,8 +134,8 @@ def build_clusters_distributed(
     member_id in the connected component). cluster_size is the count of
     members sharing that label.
     """
-    import ray
     import pyarrow as pa
+    import ray
 
     try:
         labels_ds, _iters = label_propagation(
@@ -184,8 +184,8 @@ def _build_clusters_scipy_fallback(
     max_cluster_size: int,
 ) -> Dataset:
     """Driver-side scipy.csgraph fallback when label propagation fails."""
-    import ray
     import numpy as np
+    import ray
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
 

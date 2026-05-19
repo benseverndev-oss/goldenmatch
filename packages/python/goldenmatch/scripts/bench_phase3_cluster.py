@@ -17,7 +17,6 @@ import time
 
 import psutil
 
-
 KILL_WALL_SEC = 60.0
 
 

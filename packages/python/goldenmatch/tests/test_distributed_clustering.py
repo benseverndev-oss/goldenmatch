@@ -17,8 +17,8 @@ def test_pairs_list_to_dataset_roundtrips():
 def test_propagate_one_step_emits_min_labels():
     import ray
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         _propagate_one_step,
+        pairs_list_to_dataset,
     )
 
     pairs_ds = pairs_list_to_dataset([(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)])
@@ -37,8 +37,8 @@ def test_propagate_one_step_emits_min_labels():
 
 def test_label_propagation_converges_on_simple_graph():
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         label_propagation,
+        pairs_list_to_dataset,
     )
 
     pairs_ds = pairs_list_to_dataset([
@@ -58,8 +58,8 @@ def test_label_propagation_converges_on_simple_graph():
 
 def test_label_propagation_isolated_nodes_keep_own_labels():
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         label_propagation,
+        pairs_list_to_dataset,
     )
 
     pairs_ds = pairs_list_to_dataset([(1, 2, 0.9)])
@@ -73,8 +73,8 @@ def test_label_propagation_isolated_nodes_keep_own_labels():
 
 def test_build_clusters_distributed_produces_cluster_assignments():
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         build_clusters_distributed,
+        pairs_list_to_dataset,
     )
 
     pairs_ds = pairs_list_to_dataset([
@@ -96,9 +96,9 @@ def test_build_clusters_distributed_produces_cluster_assignments():
 def test_materialize_cluster_dict_matches_in_memory_shape():
     from goldenmatch.core.cluster import build_clusters
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         build_clusters_distributed,
         materialize_cluster_dict,
+        pairs_list_to_dataset,
     )
 
     pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
@@ -115,9 +115,9 @@ def test_materialize_cluster_dict_matches_in_memory_shape():
 
 def test_materialize_cluster_dict_includes_pair_scores():
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         build_clusters_distributed,
         materialize_cluster_dict,
+        pairs_list_to_dataset,
     )
 
     pairs = [(1, 2, 0.9), (2, 3, 0.85)]
@@ -133,9 +133,10 @@ def test_materialize_cluster_dict_includes_pair_scores():
 
 def test_build_clusters_distributed_falls_back_on_non_convergence(caplog):
     import logging
+
     from goldenmatch.distributed.clustering import (
-        pairs_list_to_dataset,
         build_clusters_distributed,
+        pairs_list_to_dataset,
     )
 
     pairs = [(1, 2, 0.9), (2, 3, 0.85), (3, 4, 0.8), (4, 5, 0.75)]
