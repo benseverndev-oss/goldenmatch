@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 4)
+- **Distributed golden record build:** `goldenmatch.distributed.golden`:
+  - `build_golden_records_distributed(multi_ds, rules, user_columns)` —
+    Ray Dataset `repartition(keys=["__cluster_id__"]) + map_batches`. Hash
+    partitioning co-locates each cluster's rows; no cross-partition splits.
+    `groupby.map_groups` not used — it re-enters Ray's streaming executor
+    and deadlocks in 2.54.
+  - `build_golden_records_smart` — cluster-count routing
+    (default 5M threshold; `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` override).
+  - `materialize_golden_dataframe(golden_ds)` — adapter to `pl.DataFrame`.
+- `core.golden.build_golden_records_batch` polymorphic on Ray Dataset
+  input. In-memory `pl.DataFrame` callers byte-identical.
+- Custom field rules + `quality_scores` always route to in-memory
+  (closure serialization + N×K dict size considerations).
+- `run_dedupe_pipeline_distributed` env-gated Phase 4 path
+  (`GOLDENMATCH_DISTRIBUTED_PIPELINE=1`). Today the Phase 4 path retains
+  the take_all cheat-line; the polymorphic dispatch in build_clusters
+  (Phase 3) and build_golden_records_batch (Phase 4) handles Dataset
+  callers directly. Phase 5 retires the take_all once scoring distributes.
+- `scripts/bench_phase4_golden.py` + `bench-phase4-golden` workflow job.
+  Kill criterion: golden wall < 180s at 25M.
+
 ### Added (Phase 3)
 - **Distributed clustering:** `goldenmatch.distributed.clustering`:
   - `pairs_list_to_dataset(pairs)` — convert scored pairs to a Ray Dataset.
