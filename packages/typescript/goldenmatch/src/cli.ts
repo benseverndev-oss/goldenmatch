@@ -620,6 +620,237 @@ memoryCmd
     process.stdout.write(`  created_at:     ${c.createdAt.toISOString()}\n`);
   });
 
+// ---------- identity ----------
+// Mirrors `goldenmatch identity ...` in Python (cli/identity.py). Wraps the
+// SqliteIdentityStore for inspecting nodes, source records, edges, events,
+// and aliases. `resolve` is intentionally NOT yet shipped -- it depends on
+// the pipeline-driven `resolveClusters` hook which is deferred to a future
+// wave per CHANGELOG.md v0.10.0 deferred items.
+const identityCmd = program
+  .command("identity")
+  .description("Inspect and manage the Identity Graph");
+
+const DEFAULT_IDENTITY_PATH = ".goldenmatch/identity.db";
+
+async function openIdentityStoreForCli(path: string) {
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(path)) {
+    process.stderr.write(`Identity DB not found: ${path}\n`);
+    process.exit(2);
+  }
+  const { SqliteIdentityStore } = await import("./node/identity/sqlite-store.js");
+  return SqliteIdentityStore.open({ path });
+}
+
+identityCmd
+  .command("list")
+  .description("List identities (most recently updated first)")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .option("--dataset <name>", "Filter by dataset")
+  .option(
+    "--status <status>",
+    "Filter by status (active | merged_into | split | retired)",
+  )
+  .option("--limit <n>", "Max rows", "50")
+  .option("--offset <n>", "Pagination offset", "0")
+  .option("--json", "Emit JSON instead of a table")
+  .action(
+    async (opts: {
+      path: string;
+      dataset?: string;
+      status?: string;
+      limit: string;
+      offset: string;
+      json?: boolean;
+    }) => {
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const listOpts: {
+          dataset?: string;
+          status?: "active" | "merged_into" | "split" | "retired";
+          limit?: number;
+          offset?: number;
+        } = {
+          limit: Number(opts.limit),
+          offset: Number(opts.offset),
+        };
+        if (opts.dataset) listOpts.dataset = opts.dataset;
+        if (opts.status) {
+          listOpts.status = opts.status as
+            | "active"
+            | "merged_into"
+            | "split"
+            | "retired";
+        }
+        const rows = await store.listIdentities(listOpts);
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+          return;
+        }
+        process.stdout.write(`Identities (${rows.length})\n`);
+        for (const r of rows) {
+          const conf = r.confidence !== null ? r.confidence.toFixed(3) : "-";
+          process.stdout.write(
+            `  ${r.entityId.substring(0, 8)}...  ${r.status}  conf=${conf}  ` +
+              `dataset=${r.dataset ?? "-"}  updated=${r.updatedAt.toISOString()}\n`,
+          );
+        }
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
+identityCmd
+  .command("show")
+  .description("Show an identity with members, edges, and recent events")
+  .argument("<entity-id>", "Entity ID")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .option("--json", "Emit JSON instead of a summary")
+  .action(async (entityId: string, opts: { path: string; json?: boolean }) => {
+    const store = await openIdentityStoreForCli(opts.path);
+    try {
+      const node = await store.getIdentity(entityId);
+      if (!node) {
+        process.stderr.write(`Not found: ${entityId}\n`);
+        process.exit(1);
+      }
+      const records = await store.getRecordsForEntity(entityId);
+      const edges = await store.edgesForEntity(entityId);
+      const events = await store.history(entityId);
+      if (opts.json) {
+        process.stdout.write(
+          JSON.stringify({ node, records, edges, events }, null, 2) + "\n",
+        );
+        return;
+      }
+      const conf = node?.confidence !== null ? String(node?.confidence) : "-";
+      process.stdout.write(`${node?.entityId}  status=${node?.status}\n`);
+      process.stdout.write(`  confidence: ${conf}\n`);
+      process.stdout.write(`  dataset:    ${node?.dataset ?? "-"}\n`);
+      process.stdout.write(
+        `  records:    ${records.length}, edges: ${edges.length}, events: ${events.length}\n`,
+      );
+      for (const r of records) {
+        process.stdout.write(
+          `    - ${r.recordId}  source=${r.source}  hash=${r.recordHash.substring(0, 12)}\n`,
+        );
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+identityCmd
+  .command("history")
+  .description("Show event log for an identity")
+  .argument("<entity-id>", "Entity ID")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .option("--limit <n>", "Max events", "50")
+  .option("--json", "Emit JSON")
+  .action(
+    async (
+      entityId: string,
+      opts: { path: string; limit: string; json?: boolean },
+    ) => {
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const events = await store.history(entityId, Number(opts.limit));
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(events, null, 2) + "\n");
+          return;
+        }
+        process.stdout.write(`Events (${events.length})\n`);
+        for (const e of events) {
+          process.stdout.write(
+            `  ${e.recordedAt.toISOString()}  ${e.kind}  run=${e.runName ?? "-"}\n`,
+          );
+        }
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
+identityCmd
+  .command("conflicts")
+  .description("List conflict edges (kind=conflicts_with)")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .option("--dataset <name>", "Filter by dataset")
+  .option("--json", "Emit JSON")
+  .action(
+    async (opts: { path: string; dataset?: string; json?: boolean }) => {
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const conflicts = await store.findConflicts(opts.dataset);
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(conflicts, null, 2) + "\n");
+          return;
+        }
+        process.stdout.write(`Conflicts (${conflicts.length})\n`);
+        for (const c of conflicts) {
+          process.stdout.write(
+            `  ${c.recordedAt.toISOString()}  entity=${c.entityId.substring(0, 8)}` +
+              `  pair=${c.recordAId},${c.recordBId}  score=${c.score ?? "-"}\n`,
+          );
+        }
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
+identityCmd
+  .command("merge")
+  .description("Manually merge two identities (source -> target)")
+  .argument("<source-id>", "Source entity ID")
+  .argument("<target-id>", "Target entity ID")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .action(
+    async (
+      sourceId: string,
+      targetId: string,
+      opts: { path: string },
+    ) => {
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const { manualMerge } = await import("./core/identity/query.js");
+        // manualMerge(store, keep, absorb) -- target stays, source is absorbed.
+        const result = await manualMerge(store, targetId, sourceId);
+        process.stdout.write(`Merged ${sourceId} -> ${targetId}\n`);
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
+identityCmd
+  .command("split")
+  .description("Manually split records into a new identity")
+  .argument("<entity-id>", "Source entity ID")
+  .argument("<record-ids...>", "Record IDs to move into a new identity")
+  .option("--path <path>", "Identity DB path", DEFAULT_IDENTITY_PATH)
+  .action(
+    async (
+      entityId: string,
+      recordIds: string[],
+      opts: { path: string },
+    ) => {
+      const store = await openIdentityStoreForCli(opts.path);
+      try {
+        const { manualSplit } = await import("./core/identity/query.js");
+        const result = await manualSplit(store, entityId, recordIds);
+        process.stdout.write(
+          `Split ${recordIds.length} record(s) from ${entityId}\n`,
+        );
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } finally {
+        await store.close();
+      }
+    },
+  );
+
 // ---------- mcp-serve ----------
 program
   .command("mcp-serve")

@@ -4,6 +4,42 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [0.10.0] - 2026-05-19
+
+Identity Graph on the CLI and REST API surfaces. The v0.9.0 persistent backend lit up the storage layer; v0.10.0 lights up two of the four user-facing surfaces Python ships (`web` UI is Python-only, TUI has no identity tab in Python either).
+
+### Added — CLI
+
+- New `goldenmatch identity` subgroup with 6 subcommands, mirroring `packages/python/goldenmatch/goldenmatch/cli/identity.py`:
+  - `goldenmatch identity list [--dataset] [--status] [--limit] [--offset] [--json]`
+  - `goldenmatch identity show <entity-id> [--json]`
+  - `goldenmatch identity history <entity-id> [--limit] [--json]`
+  - `goldenmatch identity conflicts [--dataset] [--json]`
+  - `goldenmatch identity merge <source-id> <target-id>` (target stays, source absorbed)
+  - `goldenmatch identity split <entity-id> <record-ids...>`
+- All commands accept `--path <path>` (default `.goldenmatch/identity.db`). The store is opened lazily per command via the v0.9.0 `SqliteIdentityStore`.
+
+### Added — REST API
+
+- `setServerIdentityStore(store)` binder mirrors `setServerMemoryStore`. When set, the following routes are live; otherwise 503 with a hint.
+  - `GET /identities?dataset&status&limit&offset` → list
+  - `GET /identities/:id` → node + records + edges + events (full `IdentityView`)
+  - `GET /identities/:id/history?limit` → event log
+  - `GET /identities/conflicts?dataset` → conflict edges
+  - `POST /identities/merge` body=`{keep, absorb}` → manualMerge
+  - `POST /identities/split` body=`{entity_id, record_ids[]}` → manualSplit
+- 9 new integration tests under `tests/unit/api-identity.test.ts` exercising every route plus the 503-when-unbound path.
+
+### Not ported (Python deltas with no TS analogue)
+
+- **Web UI Identities tab.** TS port doesn't ship a React workbench — the Python web UI at `packages/python/goldenmatch/web/frontend/` is the only one. Out of scope.
+- **TUI Identities tab.** Python TUI has no identity tab either (controller tab landed v1.14, no identity tab on the roadmap).
+- **`resolve` CLI subcommand.** Python ships it because the pipeline writes identity events post-cluster. The TS pipeline doesn't yet wire `resolveClusters`; deferred to a future wave.
+- **MCP identity tools.** Six tools (`identity_list/show/resolve/history/conflicts/merge/split`) on the Python MCP server. TS port can ship these in a follow-up now that the API surface is stable; not in this PR to keep scope tight.
+
+### Test counts
+877 → 886 (+9 API identity).
+
 ## [0.9.0] - 2026-05-19
 
 Persistent Identity Graph backend (Python `goldenmatch.identity.IdentityStore(backend="sqlite")` parity).

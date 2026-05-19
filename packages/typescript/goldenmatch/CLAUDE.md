@@ -1,6 +1,6 @@
 # goldenmatch (TypeScript)
 
-npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. Currently at **v0.9.0** (Identity Graph persistent backend; Python v1.15 + persistent IdentityStore parity). Python sibling is at v1.16; v1.13/v1.14/v1.16 are explicitly not-ported (see CHANGELOG.md for the per-version rationale).
+npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. Currently at **v0.10.0** (Identity Graph CLI + REST API; Python v1.15 surface parity). Python sibling is at v1.16; v1.13/v1.14/v1.16 are explicitly not-ported (see CHANGELOG.md for the per-version rationale).
 
 ## Wave history
 | npm | Python parity | Headline |
@@ -11,6 +11,7 @@ npm package `goldenmatch`. Parity port of the Python sibling at `packages/python
 | 0.7.0 | v1.11 + v1.12 | NegativeEvidenceField + Path Y (exact-MK post-filter) |
 | 0.8.0 | v1.15 (partial) | Identity Graph edge-safe core (`InMemoryIdentityStore` + query helpers). Persistent SQLite backend + pipeline-driven population deferred to a future wave. |
 | 0.9.0 | v1.15 + persistent IdentityStore | `SqliteIdentityStore` in `src/node/identity/` — full IdentityStore interface (19 methods), schema byte-identical with Python so a `.goldenmatch/identity.db` is cross-toolkit readable. Pipeline-driven population + MCP identity tools deferred to v0.10. |
+| 0.10.0 | v1.15 CLI + REST surface | `goldenmatch identity {list,show,history,conflicts,merge,split}` CLI subcommands + matching `/identities/*` REST routes (bound via `setServerIdentityStore`). Web UI / TUI / MCP-identity-tools / pipeline-driven `resolveClusters` still deferred. |
 
 Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.md` + per-wave plans.
 
@@ -22,7 +23,7 @@ Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.m
 ## Commands
 ```bash
 cd packages/typescript/goldenmatch
-pnpm --filter goldenmatch test      # vitest (877 tests at v0.9.0)
+pnpm --filter goldenmatch test      # vitest (886 tests at v0.10.0)
 pnpm --filter goldenmatch typecheck # tsc --noEmit (strict)
 pnpm --filter goldenmatch build     # tsup (5 entry points)
 npx vitest run tests/parity/        # parity-only suite
