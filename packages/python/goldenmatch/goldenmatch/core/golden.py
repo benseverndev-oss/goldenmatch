@@ -226,32 +226,42 @@ def _build_golden_records_polars_native(
     else:
         raise ValueError(f"polars-native path does not handle strategy {strategy!r}")
 
-    cluster_ids = agg["__cluster_id__"].to_list()
-    val_arrays = {col: agg[f"__val_{col}__"].to_list() for col in user_cols}
-    nuniq_arrays = {col: agg[f"__nuniq_{col}__"].to_list() for col in user_cols}
+    # Stream the agg in 500K-cluster batches so peak Python-list footprint
+    # caps regardless of cluster count. At 25M with 16.6M clusters the
+    # non-streamed path materialised ~10 GB of Python strings + dicts
+    # simultaneously, pushing combined RSS (cluster dict + golden) past
+    # the 64 GB ceiling. With streaming, per-batch peak is
+    # BATCH_SIZE * n_user_cols * mean_string_size which is bounded.
+    BATCH_SIZE = 500_000
     same_strategy_conf = 1.0  # when all same
     diff_strategy_conf = 0.7 if strategy == "most_complete" else 0.6
+    n_clusters = agg.height
 
     results: list[dict] = []
-    for i, cid in enumerate(cluster_ids):
-        result: dict = {}
-        confidences: list[float] = []
-        for col in user_cols:
-            val = val_arrays[col][i]
-            nuniq = nuniq_arrays[col][i] or 0
-            if val is None:
-                conf = 0.0
-            elif nuniq <= 1:
-                conf = same_strategy_conf
-            else:
-                conf = diff_strategy_conf
-            result[col] = {"value": val, "confidence": conf}
-            confidences.append(conf)
-        result["__golden_confidence__"] = (
-            sum(confidences) / len(confidences) if confidences else 0.0
-        )
-        result["__cluster_id__"] = cid
-        results.append(result)
+    for batch_start in range(0, n_clusters, BATCH_SIZE):
+        batch = agg.slice(batch_start, BATCH_SIZE)
+        cluster_ids = batch["__cluster_id__"].to_list()
+        val_arrays = {col: batch[f"__val_{col}__"].to_list() for col in user_cols}
+        nuniq_arrays = {col: batch[f"__nuniq_{col}__"].to_list() for col in user_cols}
+        for i, cid in enumerate(cluster_ids):
+            result: dict = {}
+            confidences: list[float] = []
+            for col in user_cols:
+                val = val_arrays[col][i]
+                nuniq = nuniq_arrays[col][i] or 0
+                if val is None:
+                    conf = 0.0
+                elif nuniq <= 1:
+                    conf = same_strategy_conf
+                else:
+                    conf = diff_strategy_conf
+                result[col] = {"value": val, "confidence": conf}
+                confidences.append(conf)
+            result["__golden_confidence__"] = (
+                sum(confidences) / len(confidences) if confidences else 0.0
+            )
+            result["__cluster_id__"] = cid
+            results.append(result)
     return results
 
 
