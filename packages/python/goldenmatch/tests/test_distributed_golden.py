@@ -182,3 +182,38 @@ def test_distributed_golden_falls_back_on_custom_field_rules(monkeypatch, caplog
     assert len(result) == 2
     msgs = [r.message.lower() for r in caplog.records]
     assert any("custom field rules" in m for m in msgs), msgs
+
+
+# ── Task 5: polymorphic dispatch in build_golden_records_batch ───────────────
+
+def test_build_golden_records_batch_dispatches_to_distributed_on_ray_dataset():
+    import polars as pl
+    import ray
+
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    multi_df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "__cluster_id__": [1, 1, 2, 2],
+        "first_name": ["a", "ab", "b", "bc"],
+    })
+    ds = ray.data.from_arrow(multi_df.to_arrow())
+    out = build_golden_records_batch(ds, GoldenRulesConfig(default_strategy="most_complete"))
+    assert isinstance(out, list)
+    assert len(out) == 2
+
+
+def test_build_golden_records_batch_dispatches_to_in_memory_on_polars_df():
+    import polars as pl
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    multi_df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "__cluster_id__": [1, 1, 2, 2],
+        "first_name": ["a", "ab", "b", "bc"],
+    })
+    out = build_golden_records_batch(multi_df, GoldenRulesConfig(default_strategy="most_complete"))
+    assert isinstance(out, list)
+    assert len(out) == 2
