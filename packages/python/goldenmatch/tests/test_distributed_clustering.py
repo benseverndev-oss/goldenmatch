@@ -69,3 +69,25 @@ def test_label_propagation_isolated_nodes_keep_own_labels():
     rows = {r["id"]: r["label"] for r in labels_ds.take_all()}
     assert rows[1] == rows[2]
     assert rows[99] == 99
+
+
+def test_build_clusters_distributed_produces_cluster_assignments():
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        build_clusters_distributed,
+    )
+
+    pairs_ds = pairs_list_to_dataset([
+        (1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95),
+    ])
+    clusters_ds = build_clusters_distributed(
+        pairs_ds, all_ids=[1, 2, 3, 5, 6],
+    )
+    rows = sorted(clusters_ds.take_all(), key=lambda r: r["member_id"])
+    assert {"member_id", "cluster_id", "cluster_size"} <= set(rows[0].keys())
+    by_member = {r["member_id"]: r for r in rows}
+    assert by_member[1]["cluster_id"] == by_member[2]["cluster_id"] == by_member[3]["cluster_id"]
+    assert by_member[5]["cluster_id"] == by_member[6]["cluster_id"]
+    assert by_member[1]["cluster_id"] != by_member[5]["cluster_id"]
+    assert by_member[1]["cluster_size"] == 3
+    assert by_member[5]["cluster_size"] == 2

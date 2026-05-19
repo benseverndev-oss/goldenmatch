@@ -116,3 +116,100 @@ def label_propagation(
     raise ConvergenceError(
         f"label propagation did not converge in {convergence_max_iterations} iterations"
     )
+
+
+def build_clusters_distributed(
+    pairs_ds: Dataset,
+    all_ids: list[int],
+    *,
+    max_cluster_size: int = 100,
+    weak_cluster_threshold: float = 0.3,
+    convergence_max_iterations: int = 30,
+) -> Dataset:
+    """Distributed clustering. Returns a Ray Dataset of cluster assignments.
+
+    Row shape: {member_id, cluster_id, cluster_size, oversized}.
+
+    cluster_id is the label that label propagation converged to (the minimum
+    member_id in the connected component). cluster_size is the count of
+    members sharing that label.
+    """
+    import ray
+    import pyarrow as pa
+
+    try:
+        labels_ds, _iters = label_propagation(
+            pairs_ds, all_ids,
+            convergence_max_iterations=convergence_max_iterations,
+        )
+    except ConvergenceError as e:
+        logger.warning(
+            "label propagation did not converge; scipy.csgraph fallback on driver. %s",
+            e,
+        )
+        return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+
+    sizes_ds = labels_ds.groupby("label").count()
+    size_rows = sizes_ds.take_all()
+    size_map: dict[int, int] = {}
+    for r in size_rows:
+        for k, v in r.items():
+            if k != "label" and "count" in k.lower():
+                size_map[r["label"]] = v
+                break
+
+    size_map_ref = ray.put(size_map)
+
+    def _emit_cluster_rows(batch: pa.Table) -> pa.Table:
+        sm = ray.get(size_map_ref)
+        out = []
+        for row in batch.to_pylist():
+            mid = row["id"]
+            label = row["label"]
+            size = sm.get(label, 1)
+            out.append({
+                "member_id": mid,
+                "cluster_id": label,
+                "cluster_size": size,
+                "oversized": size > max_cluster_size,
+            })
+        return pa.Table.from_pylist(out)
+
+    return labels_ds.map_batches(_emit_cluster_rows, batch_format="pyarrow")
+
+
+def _build_clusters_scipy_fallback(
+    pairs_ds: Dataset,
+    all_ids: list[int],
+    max_cluster_size: int,
+) -> Dataset:
+    """Driver-side scipy.csgraph fallback when label propagation fails."""
+    import ray
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    pair_rows = pairs_ds.take_all()
+    sorted_ids = sorted(all_ids)
+    id_index = {i: idx for idx, i in enumerate(sorted_ids)}
+    inv_id_index = {idx: i for i, idx in id_index.items()}
+
+    row = [id_index[r["id_a"]] for r in pair_rows]
+    col = [id_index[r["id_b"]] for r in pair_rows]
+    data = [1] * len(pair_rows)
+    n = len(id_index)
+    graph = csr_matrix((data, (row, col)), shape=(n, n))
+    n_components, labels = connected_components(graph, directed=False)
+
+    sizes = np.bincount(labels)
+    rows = []
+    for idx, label in enumerate(labels):
+        mid = inv_id_index[idx]
+        size = int(sizes[label])
+        rows.append({
+            "member_id": mid,
+            "cluster_id": int(label),
+            "cluster_size": size,
+            "oversized": size > max_cluster_size,
+        })
+    return ray.data.from_items(rows)
