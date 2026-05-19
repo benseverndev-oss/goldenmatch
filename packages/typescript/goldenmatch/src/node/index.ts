@@ -11,6 +11,9 @@ export * from "../core/index.js";
 // Node-only memory persistence (better-sqlite3 optional peer dep)
 export * from "./memory/index.js";
 
+// Node-only identity persistence (better-sqlite3 optional peer dep)
+export * from "./identity/index.js";
+
 // Node-only file I/O
 export {
   readCsv,

@@ -4,6 +4,25 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [0.9.0] - 2026-05-19
+
+Persistent Identity Graph backend (Python `goldenmatch.identity.IdentityStore(backend="sqlite")` parity).
+
+### Added
+
+- **`SqliteIdentityStore`** in `src/node/identity/sqlite-store.ts` — full Node-only persistent backend for the Identity Graph. Implements every method on the `IdentityStore` interface (19 methods covering nodes, source records, evidence edges, events, aliases). Schema is byte-identical to Python's `goldenmatch/identity/store.py`, so an `identity.db` produced by either toolkit is readable by the other.
+  - `better-sqlite3` is an optional peer dep (same pattern as `SqliteMemoryStore`).
+  - WAL journal mode + 5s busy timeout + `foreign_keys=ON` for multi-process safety.
+  - Schema versioning via `PRAGMA user_version` (currently v2). Migration body from Python v1 → v2 (evidence_edges unique key) preserved verbatim so a TS-opened Python v1 DB upgrades in place.
+  - Record pairs canonicalized to `(min, max)` on insert (mirrors `canon_record_pair`).
+- **23 new TS unit tests** under `tests/node/identity/sqlite-store.test.ts` covering every method, the close/reopen round trip, and edge canonicalization.
+- **Public API:** `SqliteIdentityStore`, `SqliteIdentityStoreOptions` re-exported from `goldenmatch` (Node entry).
+
+### Not yet shipped (deferred to v0.10.0)
+
+- **Pipeline-driven population** — the Python `resolve_clusters(...)` hook runs after dedupe clustering and writes identity events. Wiring this into the TS pipeline is the v0.10 wave.
+- **MCP identity tools** — Python ships 6 `identity_*` MCP tools backed by the persistent store. Will follow in v0.10 alongside the resolveClusters hook.
+
 ## [0.8.0] - 2026-05-12
 
 Identity Graph edge-safe core (Python `goldenmatch` v1.15 partial parity).

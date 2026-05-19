@@ -1,6 +1,6 @@
 # goldenmatch (TypeScript)
 
-npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. Currently at **v0.8.0** (Identity Graph edge-safe core, Python v1.15 partial). Python sibling is at v1.16; v1.13/v1.14/v1.16 are explicitly not-ported (see CHANGELOG.md for the per-version rationale).
+npm package `goldenmatch`. Parity port of the Python sibling at `packages/python/goldenmatch/`. Currently at **v0.9.0** (Identity Graph persistent backend; Python v1.15 + persistent IdentityStore parity). Python sibling is at v1.16; v1.13/v1.14/v1.16 are explicitly not-ported (see CHANGELOG.md for the per-version rationale).
 
 ## Wave history
 | npm | Python parity | Headline |
@@ -10,6 +10,7 @@ npm package `goldenmatch`. Parity port of the Python sibling at `packages/python
 | 0.6.0 | v1.9 + v1.10 | 5 complexity indicators + indicator-aware refit rules; scorer selection aligned with Python |
 | 0.7.0 | v1.11 + v1.12 | NegativeEvidenceField + Path Y (exact-MK post-filter) |
 | 0.8.0 | v1.15 (partial) | Identity Graph edge-safe core (`InMemoryIdentityStore` + query helpers). Persistent SQLite backend + pipeline-driven population deferred to a future wave. |
+| 0.9.0 | v1.15 + persistent IdentityStore | `SqliteIdentityStore` in `src/node/identity/` — full IdentityStore interface (19 methods), schema byte-identical with Python so a `.goldenmatch/identity.db` is cross-toolkit readable. Pipeline-driven population + MCP identity tools deferred to v0.10. |
 
 Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.md` + per-wave plans.
 
@@ -21,7 +22,7 @@ Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.m
 ## Commands
 ```bash
 cd packages/typescript/goldenmatch
-pnpm --filter goldenmatch test      # vitest (854 tests at v0.8.0)
+pnpm --filter goldenmatch test      # vitest (877 tests at v0.9.0)
 pnpm --filter goldenmatch typecheck # tsc --noEmit (strict)
 pnpm --filter goldenmatch build     # tsup (5 entry points)
 npx vitest run tests/parity/        # parity-only suite
@@ -50,7 +51,8 @@ npx vitest run tests/parity/        # parity-only suite
 - `NegativeEvidenceField`, `applyNegativeEvidence`, `applyNegativeEvidenceToExactPairs`, `promoteNegativeEvidence`.
 - Memory mirror: `getMemory`, `addCorrection`, `learn`, `memoryStats`.
 - **Identity Graph (v0.8.0, edge-safe core):** `InMemoryIdentityStore`, `newEntityId`, `findByRecord`, `getEntity`, `listEntities`, `manualMerge`, `manualSplit`, `IdentityView`, types (`IdentityNode`, `SourceRecord`, `EvidenceEdge`, `IdentityEvent`, `IdentityAlias`, `IdentityStatus`, `EventKind`, `EdgeKind`, `IdentityStore`).
-- MCP tool count: 24 (19 base + 5 memory). Description literal at `src/node/mcp/server.ts:6` — keep in sync via the existing regex test. Identity MCP tools will be added alongside the persistent backend in a future wave.
+- **Identity Graph (v0.9.0, persistent backend):** `SqliteIdentityStore` in `src/node/identity/`. Implements every `IdentityStore` method (19 total) against an SQLite file at `.goldenmatch/identity.db` (configurable). `better-sqlite3` is an optional peer dep. Schema is byte-identical to Python so cross-toolkit DBs round-trip.
+- MCP tool count: 24 (19 base + 5 memory). Description literal at `src/node/mcp/server.ts:6` — keep in sync via the existing regex test. Identity MCP tools will be added in v0.10 alongside the pipeline-driven `resolveClusters` hook.
 
 ## Build outputs
 - tsup with 5 entry points: `index`, `core/index`, `node/index`, `cli`, `node/backends/score-worker` (piscina worker).
