@@ -1,9 +1,11 @@
 /**
  * Identity Graph -- public surface (edge-safe).
  *
- * Persistent (Node-only) SQLite backend lives at `src/node/identity/`. Both
- * implementations satisfy the same `IdentityStore` interface so consumers
- * stay backend-agnostic.
+ * Today only ``InMemoryIdentityStore`` is shipped. A persistent (Node-only)
+ * SQLite backend is planned at ``src/node/identity/`` to satisfy the same
+ * ``IdentityStore`` interface; that work is deferred to a future wave (see
+ * CHANGELOG.md v0.8.0 "Not yet shipped"). Consumers should code against the
+ * ``IdentityStore`` interface so they can swap implementations later.
  */
 
 export * from "./types.js";
