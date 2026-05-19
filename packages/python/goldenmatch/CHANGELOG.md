@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Distributed Phase 1: partition-aware data loader on Ray Datasets.**
+  Opt-in via `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` env var combined with
+  `backend="ray"`. New module `goldenmatch.distributed`:
+  - `read_csv_partitioned(path, n_partitions, schema=None)` — returns a
+    lazy `ray.data.Dataset` partitioned into N blocks. Driver never holds
+    the full input frame. Supports single path or list of paths.
+  - `apply_transforms_distributed(ds, transforms)` — runs a list of
+    `TransformPlan`s per-partition via `ds.map_batches(batch_format="pyarrow")`.
+  - `TransformPlan` (in `goldenmatch.distributed.transforms`) — frozen
+    dataclass replacing closure-based transforms from `core/transform.py`.
+    Round-trips cleanly across Ray worker boundaries. Ops: `lower`, `upper`,
+    `strip`, `strip_punctuation`, `nfkc`.
+  - `_load_input_frames(config)` in `core/pipeline.py` — env-gated branch
+    point. Routes to the distributed loader only when both `backend="ray"`
+    AND the env flag are set; otherwise legacy `core.ingest.load_files`.
+- **Phase 1 kill-criterion bench:** `scripts/bench_phase1_loader.py` +
+  `bench-phase1-loader` job in `.github/workflows/bench-distributed-stack.yml`.
+  Kill criterion: driver peak RSS < 8 GB at 25M rows on a 16c/64GB runner.
+- **`core/transform.build_transform(column, op)`** back-compat shim: returns a
+  closure that delegates to `apply_plan(df, TransformPlan(column, op))`.
+  Callers still consuming the callable-style transform get equivalent output.
+
+### Notes
+- Phase 1 is plumbing only — `_load_input_frames` is NOT yet wired into the
+  default pipeline path. Production runs without the env flag continue
+  through `core.ingest.load_files` byte-for-byte. Phases 2-5 (controller
+  iteration on distributed samples, distributed clustering, distributed
+  golden, cluster orchestration) remain TODO. See
+  `docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md`.
+- The 25M-on-bucket single-node path landed in the same window (run
+  26095134836, 6.5 min / 57.7 GB peak RSS) and is the supported
+  recommendation for the 5M-25M lane. Phase 1 is value-add for 50M+
+  workloads, not a prerequisite for 25M.
+
 ## [1.16.0] - 2026-05-18
 
 <!-- README-callout
