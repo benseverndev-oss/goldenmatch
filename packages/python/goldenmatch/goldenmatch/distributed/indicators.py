@@ -9,6 +9,7 @@ Phase 3 may push these to ds.aggregate / ds.map_batches if measured wall
 exceeds budget.
 """
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 _INDICATOR_SAMPLE_CAP = 5000
 
 
-def _collect_indicator_sample(ds: "Dataset", cap: int = _INDICATOR_SAMPLE_CAP) -> pl.DataFrame:
+def _collect_indicator_sample(ds: Dataset, cap: int = _INDICATOR_SAMPLE_CAP) -> pl.DataFrame:
     total = ds.count()
     if total == 0:
         return pl.DataFrame()
@@ -30,14 +31,14 @@ def _collect_indicator_sample(ds: "Dataset", cap: int = _INDICATOR_SAMPLE_CAP) -
     return pl.from_dicts(list(rows))
 
 
-def compute_column_priors_distributed(ds: "Dataset") -> dict[str, ColumnPrior]:
+def compute_column_priors_distributed(ds: Dataset) -> dict[str, ColumnPrior]:
     from goldenmatch.core.indicators import compute_column_priors
     sample = _collect_indicator_sample(ds)
     return compute_column_priors(sample)
 
 
 def estimate_sparse_match_signal_distributed(
-    ds: "Dataset",
+    ds: Dataset,
     exact_columns: list[str],
 ) -> SparsityVerdict:
     from goldenmatch.core.indicators import estimate_sparse_match_signal

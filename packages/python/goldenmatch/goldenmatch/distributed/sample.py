@@ -1,5 +1,6 @@
 """Distributed sampling helper for the controller iteration loop."""
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -8,7 +9,7 @@ if TYPE_CHECKING:
     from ray.data import Dataset
 
 
-def take_sample_distributed(ds: "Dataset", sample_cap: int = 20_000) -> pl.DataFrame:
+def take_sample_distributed(ds: Dataset, sample_cap: int = 20_000) -> pl.DataFrame:
     """Pull a bounded sample from a Ray Dataset as a Polars DataFrame.
 
     Used by AutoConfigController to materialize a per-iteration sample.

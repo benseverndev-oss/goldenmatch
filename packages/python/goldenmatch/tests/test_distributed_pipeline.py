@@ -5,7 +5,6 @@ ray = pytest.importorskip("ray")
 
 def test_run_dedupe_pipeline_distributed_materializes_and_calls_in_memory(tmp_path):
     import polars as pl
-
     from goldenmatch.distributed import read_csv_partitioned
     from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
 

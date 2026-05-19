@@ -8,6 +8,7 @@ to Polars and run the proven in-memory pipeline. Phase 3 distributes the
 scoring/clustering/golden stages so _finalize doesn't materialize.
 """
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from ray.data import Dataset
 
 
-def run_dedupe_pipeline_distributed(ds: "Dataset", **kwargs: Any):
+def run_dedupe_pipeline_distributed(ds: Dataset, **kwargs: Any):
     """Materialize the Ray Dataset and call dedupe_df.
 
     Phase 2 deliberately collects the full df to driver here. Phase 3 will

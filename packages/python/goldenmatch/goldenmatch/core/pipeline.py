@@ -30,8 +30,12 @@ from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
 
-def _load_input_frames(config):
+def _load_input_frames(config: Any) -> Any:  # pyright: ignore[reportUnusedFunction]
     """Route input loading to distributed or legacy loader.
+
+    Phase 1 helper, opt-in via env flag. Not yet wired into the default
+    pipeline — Phase 2+ work. Suppression on the unused-function lint is
+    deliberate; removing this would lose the env-gated route.
 
     Distributed (Ray Dataset) when:
       - config.backend == "ray", AND

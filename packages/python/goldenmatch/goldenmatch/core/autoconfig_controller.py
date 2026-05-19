@@ -360,7 +360,7 @@ class AutoConfigController:
     # ---- Public entry point ------------------------------------------------
     def run(
         self,
-        df: pl.DataFrame,
+        df: Any,  # pl.DataFrame | ray.data.Dataset (Phase 2)
         *,
         reference: pl.DataFrame | None = None,
         v0_kwargs: dict | None = None,

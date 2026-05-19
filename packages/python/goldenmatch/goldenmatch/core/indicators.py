@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from typing import Any
 
 import polars as pl
 
@@ -289,7 +290,7 @@ def compute_cross_blocking_overlap(
         return None
 
 
-def dispatch_compute_column_priors(df_or_ds):
+def dispatch_compute_column_priors(df_or_ds: Any) -> dict[str, ColumnPrior]:
     """Route to in-memory or distributed compute_column_priors by input type."""
     from goldenmatch.distributed import is_ray_dataset
     if is_ray_dataset(df_or_ds):
@@ -298,7 +299,9 @@ def dispatch_compute_column_priors(df_or_ds):
     return compute_column_priors(df_or_ds)
 
 
-def dispatch_estimate_sparse_match_signal(df_or_ds, *, exact_columns):
+def dispatch_estimate_sparse_match_signal(
+    df_or_ds: Any, *, exact_columns: list[str]
+) -> SparsityVerdict:
     from goldenmatch.distributed import is_ray_dataset
     if is_ray_dataset(df_or_ds):
         from goldenmatch.distributed.indicators import estimate_sparse_match_signal_distributed
