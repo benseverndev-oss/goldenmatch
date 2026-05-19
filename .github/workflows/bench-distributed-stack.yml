@@ -339,3 +339,63 @@ jobs:
           path: packages/python/goldenmatch/bench-out/phase3_cluster.log
           if-no-files-found: warn
           retention-days: 30
+
+  bench-phase4-golden:
+    name: "bench Phase 4 distributed golden (wall < 180s @ 25M)"
+    # Phase 4 of the Splink-Spark roadmap. Kill criterion: golden stage
+    # wall < 180s at 25M on 16c/64GB. Pre-scores via in-memory bucket
+    # (same as Phase 3 bench), then times only the distributed golden
+    # stage via the polymorphic dispatch.
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch with ray extra
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+          pip install psutil pandas scipy
+      - name: Download raw records dataset
+        if: inputs.dataset_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bench_${{ inputs.rows }}.parquet" \
+            --dir bench-dataset/
+          ls -lh bench-dataset/
+      - name: Run Phase 4 kill-criterion bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          MALLOC_ARENA_MAX: "2"
+        run: |
+          set -o pipefail
+          mkdir -p bench-out
+          INPUT="bench-dataset/bench_${{ inputs.rows }}.parquet"
+          [ -f "$INPUT" ] || { echo "ERROR: $INPUT not found"; exit 1; }
+          python scripts/bench_phase4_golden.py \
+            --input "$INPUT" \
+            2>&1 | tee bench-out/phase4_golden.log
+          echo '## bench-phase4-golden results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase4_golden.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Phase 4 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase4-golden-${{ inputs.rows }}-rows
+          path: packages/python/goldenmatch/bench-out/phase4_golden.log
+          if-no-files-found: warn
+          retention-days: 30
