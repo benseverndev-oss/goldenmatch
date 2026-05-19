@@ -16,17 +16,15 @@ def read_csv_partitioned(
 ) -> Dataset:
     """Read CSV(s) into a Ray Dataset partitioned into n_partitions blocks.
 
-    Returns a MaterializedDataset so callers can inspect num_blocks() without
-    triggering a second execution pass.  Ray 2.x requires materialization for
-    the block count to be stable; the data is stored in the object store (not
-    the driver heap), so this does NOT pull the full frame into driver memory.
+    Returns a LAZY Dataset — Ray defers execution until the caller forces it
+    (via .count(), .take(), .write_*, etc). This is the load-bearing property
+    of Phase 1: the driver never holds the full frame.
     """
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, log_to_driver=False)
     paths = path if isinstance(path, list) else [path]
     ds: Dataset = ray.data.read_csv(paths)
-    ds = ds.repartition(n_partitions)
-    return ds.materialize()
+    return ds.repartition(n_partitions)
 
 
 def apply_transforms_distributed(ds: Dataset, transforms: list[object]) -> Dataset:
