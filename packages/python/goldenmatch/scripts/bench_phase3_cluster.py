@@ -34,15 +34,27 @@ KILL_WALL_SEC = 60.0
 def _prescore(input_path: str) -> tuple[list[tuple[int, int, float]], float]:
     """Run dedupe_df to produce scored pairs. Returns (pairs, wall_sec).
 
-    Uses the in-memory pipeline. This is intentionally the slow path —
-    the bench is measuring the DISTRIBUTED cluster stage, not the scorer.
+    Forces backend="bucket" — the supported 25M-on-64GB single-node path
+    (run 26095134836: 6.5 min / 57.7 GB peak RSS). Without this, dedupe_df
+    auto-picks the polars backend, which OOMs at 25M (run 26118400787
+    SIGTERM'd at the 16 min mark).
+
+    The bench is measuring the DISTRIBUTED cluster stage, not the scorer.
+    Pre-score time is reported separately as prescore_wall_sec.
     """
+    import goldenmatch as gm
     import polars as pl
-    from goldenmatch import dedupe_df
+    from goldenmatch.core.autoconfig import auto_configure_df
 
     t0 = time.perf_counter()
     df = pl.read_parquet(input_path)
-    result = dedupe_df(df, confidence_required=False)
+
+    # Mirror bench_distributed_stack pattern: auto-configure first with
+    # _skip_finalize so the controller commits a config but doesn't run
+    # the pipeline yet; override backend to "bucket"; then run dedupe_df.
+    cfg = auto_configure_df(df, confidence_required=False, _skip_finalize=True)
+    cfg.backend = "bucket"
+    result = gm.dedupe_df(df, config=cfg, confidence_required=False)
     elapsed = time.perf_counter() - t0
     return result.scored_pairs, elapsed
 
