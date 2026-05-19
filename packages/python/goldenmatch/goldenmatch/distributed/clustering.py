@@ -118,6 +118,32 @@ def label_propagation(
     )
 
 
+# Pair-count threshold above which we route to distributed label propagation.
+# Below this, driver-side scipy.csgraph dominates (per run 26119800863:
+# label-prop on 8.3M pairs ran > 14 min; scipy on the same shape would be
+# seconds). Splink-Spark follows the same pattern: DuckDB backend below
+# the scale where Spark is necessary; Spark above.
+#
+# 50M chosen as a conservative threshold:
+#  - 50M pairs = ~1.2 GB driver memory for the (int64, int64, float64) triple
+#  - scipy.csgraph on that scale: ~30-60s, manageable on 64 GB box
+#  - Above 50M, driver materialization starts to compete with Ray's overhead
+# Override via GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD env var (pairs).
+_LABEL_PROP_PAIR_THRESHOLD = 50_000_000
+
+
+def _label_prop_threshold() -> int:
+    import os
+
+    raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD")
+    if raw is None:
+        return _LABEL_PROP_PAIR_THRESHOLD
+    try:
+        return int(raw)
+    except ValueError:
+        return _LABEL_PROP_PAIR_THRESHOLD
+
+
 def build_clusters_distributed(
     pairs_ds: Dataset,
     all_ids: list[int],
@@ -125,18 +151,45 @@ def build_clusters_distributed(
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     convergence_max_iterations: int = 30,
+    force_label_propagation: bool = False,
 ) -> Dataset:
     """Distributed clustering. Returns a Ray Dataset of cluster assignments.
 
     Row shape: {member_id, cluster_id, cluster_size, oversized}.
 
-    cluster_id is the label that label propagation converged to (the minimum
-    member_id in the connected component). cluster_size is the count of
-    members sharing that label.
+    Routing (Splink-Spark style):
+      - Pair count below threshold (default 50M): driver-side scipy.csgraph.
+        Faster than distributed label propagation until the pair list stops
+        fitting in driver memory.
+      - Pair count above threshold OR force_label_propagation=True:
+        distributed label propagation on Ray Datasets. Falls back to scipy
+        on non-convergence.
+
+    Override threshold via env var GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD.
+
+    cluster_id is the minimum member_id in the connected component.
+    cluster_size is the count of members sharing that label.
     """
     import pyarrow as pa
     import ray
 
+    threshold = _label_prop_threshold()
+    pair_count = pairs_ds.count()
+    use_label_prop = force_label_propagation or pair_count >= threshold
+
+    if not use_label_prop:
+        logger.info(
+            "build_clusters_distributed: %d pairs < %d threshold; "
+            "routing to scipy.csgraph (driver-side, faster at this scale).",
+            pair_count, threshold,
+        )
+        return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+
+    logger.info(
+        "build_clusters_distributed: %d pairs >= %d threshold; "
+        "routing to distributed label propagation.",
+        pair_count, threshold,
+    )
     try:
         labels_ds, _iters = label_propagation(
             pairs_ds, all_ids,

@@ -132,6 +132,8 @@ def test_materialize_cluster_dict_includes_pair_scores():
 
 
 def test_build_clusters_distributed_falls_back_on_non_convergence(caplog):
+    """With force_label_propagation=True and an unrealistically low iteration
+    cap, the convergence fallback fires cleanly. Output stays correct."""
     import logging
 
     from goldenmatch.distributed.clustering import (
@@ -145,8 +147,76 @@ def test_build_clusters_distributed_falls_back_on_non_convergence(caplog):
         clusters_ds = build_clusters_distributed(
             pairs_ds, all_ids=[1, 2, 3, 4, 5],
             convergence_max_iterations=1,
+            force_label_propagation=True,
         )
     rows = clusters_ds.take_all()
     cluster_ids = {r["cluster_id"] for r in rows}
     assert len(cluster_ids) == 1
     assert any("fallback" in r.message.lower() for r in caplog.records)
+
+
+def test_build_clusters_distributed_routes_to_scipy_below_threshold(caplog):
+    """Default routing: small pair lists go straight to scipy.csgraph."""
+    import logging
+
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+
+    with caplog.at_level(logging.INFO):
+        clusters_ds = build_clusters_distributed(
+            pairs_ds, all_ids=[1, 2, 3, 5, 6],
+        )
+
+    rows = clusters_ds.take_all()
+    assert len(rows) == 5
+    # Routing log must mention scipy.csgraph; label-prop log must NOT fire.
+    routing_msgs = [r.message.lower() for r in caplog.records]
+    assert any("scipy" in m for m in routing_msgs), routing_msgs
+    assert not any("distributed label propagation" in m for m in routing_msgs)
+
+
+def test_build_clusters_distributed_routes_to_label_prop_when_forced(caplog):
+    """force_label_propagation=True overrides the threshold."""
+    import logging
+
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+
+    with caplog.at_level(logging.INFO):
+        build_clusters_distributed(
+            pairs_ds, all_ids=[1, 2, 3, 5, 6],
+            force_label_propagation=True,
+        )
+
+    routing_msgs = [r.message.lower() for r in caplog.records]
+    assert any("distributed label propagation" in m for m in routing_msgs), routing_msgs
+
+
+def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
+    """GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=0 forces label-prop path."""
+    import logging
+
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+    pairs = [(1, 2, 0.9), (2, 3, 0.85)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+
+    with caplog.at_level(logging.INFO):
+        build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3])
+
+    routing_msgs = [r.message.lower() for r in caplog.records]
+    assert any("distributed label propagation" in m for m in routing_msgs)
