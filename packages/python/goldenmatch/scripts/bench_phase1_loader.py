@@ -62,13 +62,19 @@ def main() -> int:
     sampler = threading.Thread(target=_sample_rss, name="rss-peak", daemon=True)
     sampler.start()
 
+    # Transform column names match the bench-dataset-v1 schema
+    # (first_name, last_name, email, zip). Multiple ops per column give
+    # the per-partition Python path a non-trivial workload.
     t0 = time.perf_counter()
     ds = read_partitioned(args.input, n_partitions=args.partitions)
     ds = apply_transforms_distributed(
         ds,
         [
-            TransformPlan(column="name", op="lower"),
-            TransformPlan(column="name", op="strip_punctuation"),
+            TransformPlan(column="first_name", op="lower"),
+            TransformPlan(column="first_name", op="strip_punctuation"),
+            TransformPlan(column="last_name", op="lower"),
+            TransformPlan(column="last_name", op="strip_punctuation"),
+            TransformPlan(column="email", op="lower"),
         ],
     )
     count = ds.count()
