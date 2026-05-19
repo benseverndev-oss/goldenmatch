@@ -1,9 +1,11 @@
+import pytest
+
 import polars as pl
 
 
 def test_transform_plan_roundtrips_via_cloudpickle():
     """TransformPlan must survive cloudpickle (Ray's serializer) unchanged."""
-    cloudpickle = __import__("cloudpickle")
+    cloudpickle = pytest.importorskip("cloudpickle")
     from goldenmatch.distributed.transforms import TransformPlan, apply_plan
 
     plan = TransformPlan(column="name", op="lower")

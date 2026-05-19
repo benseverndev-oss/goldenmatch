@@ -2,12 +2,18 @@
 
 Phase 1 of the Splink-Spark parity roadmap. See
 docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md.
+
+Ray is an optional dependency (`goldenmatch[ray]`). All ray + pyarrow imports
+are deferred to function bodies so module-level `from goldenmatch.distributed
+import ...` succeeds even when the [ray] extra isn't installed — callers that
+actually invoke these functions still need ray on the path.
 """
 from __future__ import annotations
 
-import pyarrow as pa
-import ray
-from ray.data import Dataset
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ray.data import Dataset
 
 
 def read_csv_partitioned(
@@ -24,16 +30,18 @@ def read_csv_partitioned(
     schema: optional column projection. When provided, only the listed columns
     are kept (Arrow-level projection, no driver-side materialization).
     """
+    import ray
+
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, log_to_driver=False)
     paths = path if isinstance(path, list) else [path]
-    ds: Dataset = ray.data.read_csv(paths)
+    ds = ray.data.read_csv(paths)
     if schema is not None:
         ds = ds.select_columns(list(schema.keys()))
     return ds.repartition(n_partitions)
 
 
-def _apply_plans_to_arrow_batch(batch: pa.Table, plans: list) -> pa.Table:
+def _apply_plans_to_arrow_batch(batch: Any, plans: list) -> Any:
     """Convert pyarrow batch -> Polars -> apply plans -> back to pyarrow."""
     import polars as pl
 
