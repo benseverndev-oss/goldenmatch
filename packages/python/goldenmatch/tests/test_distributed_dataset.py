@@ -54,3 +54,30 @@ def test_read_csv_partitioned_accepts_list_of_paths(tmp_path):
 
     ds = read_csv_partitioned(paths, n_partitions=6)
     assert ds.count() == 300
+
+
+def test_apply_transforms_distributed_runs_plan_per_partition(tmp_path):
+    import polars as pl
+    from goldenmatch.distributed import read_csv_partitioned, apply_transforms_distributed
+    from goldenmatch.distributed.transforms import TransformPlan
+
+    csv = tmp_path / "people.csv"
+    pl.DataFrame({"id": range(1000), "name": ["ALICE"] * 1000}).write_csv(csv)
+
+    ds = read_csv_partitioned(str(csv), n_partitions=4)
+    ds = apply_transforms_distributed(ds, [TransformPlan(column="name", op="lower")])
+    sample = ds.take(5)
+    for row in sample:
+        assert row["name"] == "alice"
+
+
+def test_apply_transforms_distributed_empty_transforms_returns_unchanged(tmp_path):
+    import polars as pl
+    from goldenmatch.distributed import read_csv_partitioned, apply_transforms_distributed
+
+    csv = tmp_path / "people.csv"
+    pl.DataFrame({"id": range(10), "name": ["x"] * 10}).write_csv(csv)
+
+    ds = read_csv_partitioned(str(csv), n_partitions=2)
+    out = apply_transforms_distributed(ds, [])
+    assert out.count() == 10

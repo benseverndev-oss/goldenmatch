@@ -5,6 +5,7 @@ docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md.
 """
 from __future__ import annotations
 
+import pyarrow as pa
 import ray
 from ray.data import Dataset
 
@@ -32,6 +33,26 @@ def read_csv_partitioned(
     return ds.repartition(n_partitions)
 
 
+def _apply_plans_to_arrow_batch(batch: pa.Table, plans: list) -> pa.Table:
+    """Convert pyarrow batch -> Polars -> apply plans -> back to pyarrow."""
+    import polars as pl
+    from goldenmatch.distributed.transforms import apply_plan
+
+    df = pl.from_arrow(batch)
+    for plan in plans:
+        df = apply_plan(df, plan)
+    return df.to_arrow()
+
+
 def apply_transforms_distributed(ds: Dataset, transforms: list[object]) -> Dataset:
-    del ds, transforms
-    raise NotImplementedError("Implemented in Task 7")
+    """Apply a list of TransformPlans to a Ray Dataset, one batch at a time.
+
+    Each partition is processed independently: pyarrow batch -> Polars DataFrame ->
+    apply each plan -> pyarrow batch. Driver does NOT materialize.
+    """
+    if not transforms:
+        return ds
+    return ds.map_batches(
+        lambda b: _apply_plans_to_arrow_batch(b, transforms),
+        batch_format="pyarrow",
+    )
