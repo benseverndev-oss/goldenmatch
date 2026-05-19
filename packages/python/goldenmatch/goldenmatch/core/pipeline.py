@@ -30,6 +30,40 @@ from goldenmatch.core.standardize import apply_standardization
 from goldenmatch.core.validate import ValidationRule, validate_dataframe
 
 
+def _load_input_frames(config):
+    """Route input loading to distributed or legacy loader.
+
+    Distributed (Ray Dataset) when:
+      - config.backend == "ray", AND
+      - GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
+
+    Otherwise legacy ``core.ingest.load_files`` returning ``list[pl.LazyFrame]``.
+    Phase 1 of the Splink-Spark roadmap — see
+    docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md.
+    """
+    import os
+    use_distributed = (
+        getattr(config, "backend", None) == "ray"
+        and os.environ.get("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY") == "1"
+    )
+    if use_distributed:
+        from goldenmatch.distributed import read_csv_partitioned
+        n = getattr(config, "n_partitions", None) or _default_distributed_partitions()
+        return read_csv_partitioned(list(config.inputs), n_partitions=n)
+    from goldenmatch.core.ingest import load_files
+    return load_files([(p, "csv") for p in config.inputs])
+
+
+def _default_distributed_partitions() -> int:
+    """Default partition count for the distributed loader.
+
+    4 partitions per core, clamped to [4, 256]. Phase 2 will compute this
+    from runtime profile; Phase 1 uses a heuristic.
+    """
+    import os
+    return min(256, max(4, (os.cpu_count() or 4) * 4))
+
+
 def _unwrap_llm_pairs(
     result: list[tuple[int, int, float]] | tuple[list[tuple[int, int, float]], Any]
 ) -> list[tuple[int, int, float]]:
