@@ -6,6 +6,7 @@ cost is high and closed-over state is silently shared). Plan objects are
 frozen dataclasses with stable fields -- trivial to serialize and inspect.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Literal
 

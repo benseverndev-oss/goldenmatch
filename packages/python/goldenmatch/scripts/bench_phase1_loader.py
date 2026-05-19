@@ -25,7 +25,6 @@ import time
 
 import psutil
 
-
 KILL_RSS_GB = 8.0
 
 

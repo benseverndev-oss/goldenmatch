@@ -58,7 +58,7 @@ def test_read_csv_partitioned_accepts_list_of_paths(tmp_path):
 
 def test_apply_transforms_distributed_runs_plan_per_partition(tmp_path):
     import polars as pl
-    from goldenmatch.distributed import read_csv_partitioned, apply_transforms_distributed
+    from goldenmatch.distributed import apply_transforms_distributed, read_csv_partitioned
     from goldenmatch.distributed.transforms import TransformPlan
 
     csv = tmp_path / "people.csv"
@@ -73,7 +73,7 @@ def test_apply_transforms_distributed_runs_plan_per_partition(tmp_path):
 
 def test_apply_transforms_distributed_empty_transforms_returns_unchanged(tmp_path):
     import polars as pl
-    from goldenmatch.distributed import read_csv_partitioned, apply_transforms_distributed
+    from goldenmatch.distributed import apply_transforms_distributed, read_csv_partitioned
 
     csv = tmp_path / "people.csv"
     pl.DataFrame({"id": range(10), "name": ["x"] * 10}).write_csv(csv)

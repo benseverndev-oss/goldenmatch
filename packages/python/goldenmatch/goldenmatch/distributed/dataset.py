@@ -36,6 +36,7 @@ def read_csv_partitioned(
 def _apply_plans_to_arrow_batch(batch: pa.Table, plans: list) -> pa.Table:
     """Convert pyarrow batch -> Polars -> apply plans -> back to pyarrow."""
     import polars as pl
+
     from goldenmatch.distributed.transforms import apply_plan
 
     df = pl.from_arrow(batch)
