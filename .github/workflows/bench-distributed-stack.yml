@@ -158,7 +158,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[ray]"
-          pip install psutil
+          # pandas is a runtime dep of ray.data (not declared in the
+          # [ray] extra). Without it, `ray.data.read_csv` errors with
+          # ModuleNotFoundError before the bench can produce any output.
+          pip install psutil pandas
 
       - name: Download pre-generated dataset
         if: inputs.dataset_tag != ''
@@ -178,7 +181,13 @@ jobs:
         env:
           GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
           MALLOC_ARENA_MAX: "2"
+        # set -o pipefail so the script's exit code propagates past
+        # `tee`. Without this, a script crash returns 0 to the runner
+        # and the kill-criterion check silently turns into a no-op.
+        # Bit us once already (run 26098279854 reported success on a
+        # ModuleNotFoundError exit).
         run: |
+          set -o pipefail
           mkdir -p bench-out
           INPUT="bench-dataset/bench_${{ inputs.rows }}.parquet"
           if [ ! -f "$INPUT" ]; then
@@ -189,7 +198,7 @@ jobs:
             --input "$INPUT" \
             --rows "${{ inputs.rows }}" \
             --partitions 64 \
-            | tee bench-out/phase1_loader.log
+            2>&1 | tee bench-out/phase1_loader.log
           echo '## bench-phase1-loader results' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat bench-out/phase1_loader.log >> "$GITHUB_STEP_SUMMARY"
