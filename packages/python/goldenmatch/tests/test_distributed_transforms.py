@@ -1,6 +1,5 @@
-import pytest
-
 import polars as pl
+import pytest
 
 
 def test_transform_plan_roundtrips_via_cloudpickle():
