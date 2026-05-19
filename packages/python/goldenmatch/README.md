@@ -285,6 +285,30 @@ output lands **inside** the package at `goldenmatch/web/static/` (gitignored
 except for a `.gitkeep`, included in the wheel via `force-include`). The
 dev server (`pnpm dev`) proxies `/api/v1/*` to `http://localhost:5050`.
 
+## Use Cases (real-world deployments)
+
+Three companion repos run GoldenMatch end-to-end on public data at scale. Each is a reproducible pipeline with measured headline numbers, not a toy demo.
+
+### 🕵️ [`goldenmatch-shell-company-network`](https://github.com/benseverndev-oss/goldenmatch-shell-company-network)
+
+Investigative entity resolution across **ICIJ Offshore Leaks + OpenSanctions + GLEIF + UK PSC + UK disqualified-directors**. Builds a confidence-weighted graph, runs unsupervised structure mining, and emits named investigative candidates with per-entity novelty proofs vs single-source search baselines.
+
+> **Pipeline matches or beats every operational baseline measured:** +11.2% multi-source anchors surfaced, **−62.5% analyst-hours to triage**, +133% adversarial perturbation recovery, expected calibration error → 0.
+
+### 🛡️ [`goldenmatch-vuln-attribution`](https://github.com/benseverndev-oss/goldenmatch-vuln-attribution)
+
+Cross-database entity resolution on **6.1M public OSS vulnerability records across 40 sources** (33 OSV ecosystems, GHSA reviewed + unreviewed, PyPA, RustSec, Go vulndb, EPSS, CISA KEV, CVE Project bulk). Reconciles `(vuln_id, alias)` graphs into canonical IDs via union-find. The full Golden Suite stack — GoldenCheck DQ + GoldenFlow normalize + GoldenMatch cluster + GoldenPipe orchestrate — runs **end-to-end in ~5 minutes** on a `large-new-64GB` GitHub Actions runner.
+
+> **6,126,895 records → 847,475 canonical vulnerabilities.** Surfaces concrete failure modes in cross-source agreement that consumers shouldn't trust.
+
+### ⚖️ [`goldenmatch-sanctions-reconciliation`](https://github.com/benseverndev-oss/goldenmatch-sanctions-reconciliation)
+
+Cross-list coverage analysis on the **85 distinct public sanctions lists** in the OpenSanctions `sanctions` collection (50+ jurisdictions). Plus 10-year OFAC SDN history and PEP/crypto cross-analysis. Asks the questions a compliance team should have an answer to: how many canonical entities exist across every free public list combined? What fraction does an OFAC-SDN-only screening vendor actually see?
+
+> **Coverage-analysis benchmark for any sanctions-screening tool.** OpenSanctions already does the ER work — this repo turns that into evidence about which lists are structurally isolated and which entities anchor the global consensus.
+
+---
+
 ## Installation
 
 ```bash
