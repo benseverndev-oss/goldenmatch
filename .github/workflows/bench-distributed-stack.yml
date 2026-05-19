@@ -274,3 +274,67 @@ jobs:
           path: packages/python/goldenmatch/bench-out/phase2_controller.log
           if-no-files-found: warn
           retention-days: 30
+
+  bench-phase3-cluster:
+    name: "bench Phase 3 distributed cluster (wall < 60s @ 25M pairs)"
+    # Phase 3 of the Splink-Spark roadmap. Kill criterion: cluster wall < 60s
+    # at 25M pairs on 16c/64GB. Requires a pre-scored pairs parquet at
+    # bench-dataset/pairs_<rows>.parquet (generated separately).
+    runs-on: large-new-64GB
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch with ray extra
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+          pip install psutil pandas scipy
+      - name: Download pre-scored pairs dataset
+        if: inputs.dataset_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "pairs_${{ inputs.rows }}.parquet" \
+            --dir bench-dataset/ || echo "(no pre-scored pairs file)"
+          ls -lh bench-dataset/ || true
+      - name: Run Phase 3 kill-criterion bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          MALLOC_ARENA_MAX: "2"
+        run: |
+          set -o pipefail
+          mkdir -p bench-out
+          PAIRS="bench-dataset/pairs_${{ inputs.rows }}.parquet"
+          if [ ! -f "$PAIRS" ]; then
+            echo "ERROR: pairs dataset $PAIRS not found. Phase 3 bench needs"
+            echo "a pre-scored pair list. Generate one and attach to the"
+            echo "${{ inputs.dataset_tag }} release as pairs_${{ inputs.rows }}.parquet"
+            echo "with columns id_a:int64, id_b:int64, score:float64."
+            exit 1
+          fi
+          python scripts/bench_phase3_cluster.py \
+            --pairs "$PAIRS" \
+            2>&1 | tee bench-out/phase3_cluster.log
+          echo '## bench-phase3-cluster results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase3_cluster.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Phase 3 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase3-cluster-${{ inputs.rows }}-rows
+          path: packages/python/goldenmatch/bench-out/phase3_cluster.log
+          if-no-files-found: warn
+          retention-days: 30

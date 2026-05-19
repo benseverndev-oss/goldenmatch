@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 3)
+- **Distributed clustering:** `goldenmatch.distributed.clustering`:
+  - `pairs_list_to_dataset(pairs)` — convert scored pairs to a Ray Dataset.
+  - `label_propagation(pairs_ds, all_ids, convergence_max_iterations=30)`
+    — iterative label-prop; raises `ConvergenceError` on non-convergence.
+  - `build_clusters_distributed(pairs_ds, all_ids, ...)` — returns a Ray
+    Dataset of `{member_id, cluster_id, cluster_size, oversized}` rows.
+    Falls back to driver-side scipy.csgraph on non-convergence with a
+    WARNING log.
+  - `materialize_cluster_dict(clusters_ds, pairs_ds)` — adapter to the
+    existing `dict[int, dict]` shape (Phase 4 removes this).
+- `core.cluster.build_clusters` polymorphic on Ray Dataset input via
+  `is_ray_dataset` dispatch; in-memory callers byte-identical.
+- `scripts/bench_phase3_cluster.py` + `bench-phase3-cluster` workflow job.
+  Kill criterion: cluster wall < 60s at 25M pairs (was 126.6s single-node).
+- The Phase 2 cheat-line in `run_dedupe_pipeline_distributed` stays in
+  place — Phase 4 distributes golden and removes the materialize.
+
 ### Added (Phase 2)
 - **Distributed controller:** `AutoConfigController.run` polymorphic on
   `pl.DataFrame | ray.data.Dataset`. New modules under `goldenmatch.distributed`:
