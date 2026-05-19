@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 2)
+- **Distributed controller:** `AutoConfigController.run` polymorphic on
+  `pl.DataFrame | ray.data.Dataset`. New modules under `goldenmatch.distributed`:
+  - `indicators` — `compute_column_priors_distributed`,
+    `estimate_sparse_match_signal_distributed` (bounded-sample collect).
+  - `sample` — `take_sample_distributed(ds, sample_cap)` returns a
+    Polars DataFrame for the iteration loop.
+  - `pipeline` — `run_dedupe_pipeline_distributed`: materialize-then-call
+    cheat-line for `_finalize` (Phase 3 removes the materialize).
+  - `_utils.is_ray_dataset` — module-name duck-type helper.
+- Dispatch shims in `core.indicators`: `dispatch_compute_column_priors`,
+  `dispatch_estimate_sparse_match_signal`.
+- `scripts/bench_phase2_controller.py` + `bench-phase2-controller`
+  workflow job. Kill criterion: controller wall < 30s at 25M.
+
 ### Added
 - **Distributed Phase 1: partition-aware data loader on Ray Datasets.**
   Opt-in via `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` env var combined with
