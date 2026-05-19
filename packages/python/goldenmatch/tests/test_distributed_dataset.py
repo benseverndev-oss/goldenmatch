@@ -38,3 +38,19 @@ def test_read_csv_partitioned_enforces_schema(tmp_path):
     )
     sample = ds.take(1)[0]
     assert set(sample.keys()) == {"id", "name"}
+
+
+def test_read_csv_partitioned_accepts_list_of_paths(tmp_path):
+    import polars as pl
+    from goldenmatch.distributed import read_csv_partitioned
+
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"part{i}.csv"
+        pl.DataFrame(
+            {"id": range(i * 100, (i + 1) * 100), "name": ["x"] * 100}
+        ).write_csv(p)
+        paths.append(str(p))
+
+    ds = read_csv_partitioned(paths, n_partitions=6)
+    assert ds.count() == 300
