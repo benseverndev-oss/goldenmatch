@@ -93,3 +93,15 @@ def run_transform(
         logger.info("GoldenFlow: no transforms needed")
 
     return result.df, fixes
+
+
+def build_transform(column: str, op: str):
+    """Back-compat shim. Returns a closure equivalent to apply_plan(df, TransformPlan(column, op)).
+
+    New code should construct `TransformPlan` directly and call `apply_plan`.
+    This shim exists so callers that still take a callable continue working.
+    """
+    from goldenmatch.distributed.transforms import TransformPlan, apply_plan
+
+    plan = TransformPlan(column=column, op=op)
+    return lambda df: apply_plan(df, plan)
