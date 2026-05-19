@@ -283,7 +283,7 @@ def _polars_native_eligible(
 
 
 def build_golden_records_batch(
-    multi_df,  # pl.DataFrame | ray.data.Dataset
+    multi_df: Any,  # pl.DataFrame | ray.data.Dataset (Phase 4)
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
 ) -> list[dict]:
@@ -324,6 +324,7 @@ def build_golden_records_batch(
     if is_ray_dataset(multi_df):
         if quality_scores:
             import logging
+
             import pyarrow as pa
             logging.getLogger(__name__).info(
                 "build_golden_records_batch: quality_scores set on Ray Dataset "

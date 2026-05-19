@@ -189,7 +189,6 @@ def test_distributed_golden_falls_back_on_custom_field_rules(monkeypatch, caplog
 def test_build_golden_records_batch_dispatches_to_distributed_on_ray_dataset():
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.core.golden import build_golden_records_batch
 
