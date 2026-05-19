@@ -80,10 +80,21 @@ def build_golden_records_distributed(
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, log_to_driver=False)
 
-    total_rows = multi_ds.count()
-    # One partition per ~max_cluster_size rows, so each partition roughly
-    # holds one cluster worth of rows. Minimum 1.
-    num_partitions = max(1, total_rows // max(max_cluster_size, 1))
+    del max_cluster_size  # kept in signature for API stability; partition
+    # count is no longer tied to it — see comment below.
+
+    # Partition count tuned for Ray's shuffle overhead: too few partitions
+    # underutilizes the cluster; too many create O(N²) shuffle coordination
+    # cost. Run 26130317522 stuck at Shuffle 0/? for 25 min on 166666
+    # partitions (one per ~max_cluster_size rows). Cap at ~4x cpu_count so
+    # each partition does meaningful work and shuffle stays manageable.
+    import os
+
+    cpu_count = os.cpu_count() or 16
+    # 4x cpu_count gives parallelism with reasonable per-partition work;
+    # capped at 256 for very large workers. Min 4 for parallelism on
+    # small inputs.
+    num_partitions = min(256, max(4, cpu_count * 4))
 
     # Hash-partition by __cluster_id__ so all rows for a cluster co-locate.
     repartitioned = multi_ds.repartition(num_partitions, keys=["__cluster_id__"])
