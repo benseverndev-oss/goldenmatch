@@ -59,7 +59,12 @@ export type {
 
 // Servers (MCP / REST / A2A)
 export { startMcpServer, handleTool, TOOLS } from "./mcp/server.js";
-export { startApiServer, ReviewQueue } from "./api/server.js";
+export {
+  startApiServer,
+  ReviewQueue,
+  setServerMemoryStore,
+  setServerIdentityStore,
+} from "./api/server.js";
 export type { StartApiOptions } from "./api/server.js";
 export { startA2aServer, AGENT_CARD } from "./a2a/server.js";
 export type { StartA2aOptions, AgentSkill } from "./a2a/server.js";

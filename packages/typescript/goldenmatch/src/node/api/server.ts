@@ -100,6 +100,21 @@ export function setServerMemoryStore(
   serverMemoryStore = store;
 }
 
+// Identity store (Phase 2.5): bound by `setServerIdentityStore`. When set,
+// the `/identities/*` routes are live; otherwise they return 503.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let serverIdentityStore: any = null;
+
+/**
+ * Bind an `IdentityStore` to the REST server. When set, `GET /identities`,
+ * `GET /identities/:id`, etc. are live. Pass `null` to disable.
+ */
+export function setServerIdentityStore(
+  store: import("../../core/identity/types.js").IdentityStore | null,
+): void {
+  serverIdentityStore = store;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -419,6 +434,100 @@ async function handleRequest(
         rowB,
       });
       sendJson(res, 200, { item });
+      return;
+    }
+
+    // ----- Identity Graph routes ------------------------------------------
+    // Mirrors `goldenmatch.web.routers.identity` (Python). Routes guard on
+    // serverIdentityStore being bound; otherwise 503 with hint.
+    if (pathname.startsWith("/identities") && method === "GET") {
+      if (!serverIdentityStore) {
+        sendJson(res, 503, {
+          error: "IdentityStore not bound to server",
+          hint: "call setServerIdentityStore(store) at startup",
+        });
+        return;
+      }
+      const sub = pathname.slice("/identities".length);
+      // Order matters: more-specific paths before /:id wildcard.
+      if (sub === "/conflicts") {
+        const dataset = url.searchParams.get("dataset") ?? undefined;
+        const conflicts = await serverIdentityStore.findConflicts(dataset);
+        sendJson(res, 200, { conflicts });
+        return;
+      }
+      if (sub === "" || sub === "/") {
+        const dataset = url.searchParams.get("dataset") ?? undefined;
+        const status = url.searchParams.get("status") ?? undefined;
+        const limit = Number(url.searchParams.get("limit") ?? "50");
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        const opts: Record<string, unknown> = { limit, offset };
+        if (dataset !== undefined) opts["dataset"] = dataset;
+        if (status !== undefined) opts["status"] = status;
+        const items = await serverIdentityStore.listIdentities(opts);
+        sendJson(res, 200, { items, limit, offset });
+        return;
+      }
+      // /identities/:id  or  /identities/:id/history
+      const parts = sub.split("/").filter((s) => s.length > 0);
+      const entityId = parts[0];
+      if (entityId && parts.length === 1) {
+        const node = await serverIdentityStore.getIdentity(entityId);
+        if (!node) {
+          sendJson(res, 404, { error: `Not found: ${entityId}` });
+          return;
+        }
+        const records = await serverIdentityStore.getRecordsForEntity(entityId);
+        const edges = await serverIdentityStore.edgesForEntity(entityId);
+        const events = await serverIdentityStore.history(entityId);
+        sendJson(res, 200, { node, records, edges, events });
+        return;
+      }
+      if (entityId && parts[1] === "history" && parts.length === 2) {
+        const limit = Number(url.searchParams.get("limit") ?? "50");
+        const events = await serverIdentityStore.history(entityId, limit);
+        sendJson(res, 200, { events });
+        return;
+      }
+    }
+
+    if (pathname === "/identities/merge" && method === "POST") {
+      if (!serverIdentityStore) {
+        sendJson(res, 503, { error: "IdentityStore not bound to server" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const keep = typeof body["keep"] === "string" ? (body["keep"] as string) : "";
+      const absorb =
+        typeof body["absorb"] === "string" ? (body["absorb"] as string) : "";
+      if (!keep || !absorb) {
+        throw new Error("'keep' and 'absorb' entity IDs are required");
+      }
+      const { manualMerge } = await import("../../core/identity/query.js");
+      const result = await manualMerge(serverIdentityStore, keep, absorb);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (pathname === "/identities/split" && method === "POST") {
+      if (!serverIdentityStore) {
+        sendJson(res, 503, { error: "IdentityStore not bound to server" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const entityId =
+        typeof body["entity_id"] === "string" ? (body["entity_id"] as string) : "";
+      const rawRecordIds = body["record_ids"];
+      if (!Array.isArray(rawRecordIds)) {
+        throw new Error("'record_ids' must be an array");
+      }
+      const recordIds = rawRecordIds.map((v) => String(v));
+      if (!entityId || recordIds.length === 0) {
+        throw new Error("'entity_id' and non-empty 'record_ids' are required");
+      }
+      const { manualSplit } = await import("../../core/identity/query.js");
+      const result = await manualSplit(serverIdentityStore, entityId, recordIds);
+      sendJson(res, 200, result);
       return;
     }
 
