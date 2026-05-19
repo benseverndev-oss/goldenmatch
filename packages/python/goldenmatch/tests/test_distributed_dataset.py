@@ -81,3 +81,28 @@ def test_apply_transforms_distributed_empty_transforms_returns_unchanged(tmp_pat
     ds = read_csv_partitioned(str(csv), n_partitions=2)
     out = apply_transforms_distributed(ds, [])
     assert out.count() == 10
+
+
+def test_loader_driver_rss_does_not_grow_with_input_size(tmp_path):
+    """At 1M rows, driver RSS growth between baseline and post-load must stay <200 MB.
+
+    This is the in-CI proxy for the Phase 1 25M kill criterion. If this fails,
+    the loader is materializing on the driver and the whole roadmap stops here.
+    """
+    import polars as pl
+    import psutil
+    from goldenmatch.distributed import read_csv_partitioned
+
+    csv = tmp_path / "big.csv"
+    pl.DataFrame({"id": range(1_000_000), "name": ["alice"] * 1_000_000}).write_csv(csv)
+
+    proc = psutil.Process()
+    baseline = proc.memory_info().rss
+
+    ds = read_csv_partitioned(str(csv), n_partitions=8)
+    # Touch ds to confirm it exists, but do NOT force materialization
+    assert ds is not None
+
+    after = proc.memory_info().rss
+    growth_mb = (after - baseline) / 1024 / 1024
+    assert growth_mb < 200, f"driver RSS grew {growth_mb:.0f} MB — loader is materializing on driver"
