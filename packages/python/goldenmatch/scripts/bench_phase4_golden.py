@@ -41,16 +41,11 @@ def main() -> int:
 
     t_load = time.perf_counter()
     df = pl.read_parquet(args.input)
-    # bench-dataset-v1 doesn't carry __row_id__; goldenmatch adds it
-    # internally inside dedupe_df. Add it explicitly so we can match
-    # cluster members back to source rows after the dedupe call.
-    if "__row_id__" not in df.columns:
-        df = df.with_row_index("__row_id__").with_columns(
-            pl.col("__row_id__").cast(pl.Int64)
-        )
     load_wall = time.perf_counter() - t_load
 
     # Pre-pipeline via in-memory bucket backend (same as Phase 3 bench).
+    # dedupe_df adds __row_id__ internally as a 0..N-1 sequential index
+    # matching the input row order. cluster members reference those ints.
     t_dedupe = time.perf_counter()
     cfg = auto_configure_df(df, confidence_required=False, _skip_finalize=True)
     cfg.backend = "bucket"
@@ -58,6 +53,8 @@ def main() -> int:
     dedupe_wall = time.perf_counter() - t_dedupe
 
     # Reconstruct multi_df: rows in multi-member clusters with __cluster_id__.
+    # cluster members are __row_id__ ints from dedupe_df's internal 0..N-1
+    # numbering, which lines up with df row position via with_row_index.
     member_to_cid: dict[int, int] = {}
     for cid, info in result.clusters.items():
         if info["size"] > 1:
@@ -68,8 +65,12 @@ def main() -> int:
         print("no multi-member clusters; nothing to bench")
         return 0
 
+    # Add __row_id__ now (AFTER dedupe so we don't conflict with goldenmatch's
+    # internal column), then map cluster_id from member_to_cid.
     multi_df = (
-        df.with_columns(
+        df.with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+        .with_columns(
             pl.col("__row_id__")
             .replace_strict(
                 list(member_to_cid.keys()),
