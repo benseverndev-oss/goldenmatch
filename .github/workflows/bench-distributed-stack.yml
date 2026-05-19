@@ -134,3 +134,72 @@ jobs:
             packages/python/goldenmatch/bench-out/profile.svg
           if-no-files-found: warn
           retention-days: 30
+
+  bench-phase1-loader:
+    name: "bench Phase 1 distributed loader (driver-RSS kill criterion)"
+    # Phase 1 of the Splink-Spark roadmap. Kill criterion: driver
+    # peak RSS < 8 GB at 25M rows on a 16c/64GB runner. See
+    # docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md
+    # and the engine selection design doc dated the same day.
+    runs-on: large-new-64GB
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch with ray extra
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+          pip install psutil
+
+      - name: Download pre-generated dataset
+        if: inputs.dataset_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bench_${{ inputs.rows }}.parquet" \
+            --dir bench-dataset/
+          ls -lh bench-dataset/
+
+      - name: Run Phase 1 kill-criterion bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          MALLOC_ARENA_MAX: "2"
+        run: |
+          mkdir -p bench-out
+          INPUT="bench-dataset/bench_${{ inputs.rows }}.parquet"
+          if [ ! -f "$INPUT" ]; then
+            echo "ERROR: dataset $INPUT not found; this bench requires a pre-generated parquet."
+            exit 1
+          fi
+          python scripts/bench_phase1_loader.py \
+            --input "$INPUT" \
+            --rows "${{ inputs.rows }}" \
+            --partitions 64 \
+            | tee bench-out/phase1_loader.log
+          echo '## bench-phase1-loader results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase1_loader.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Phase 1 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase1-loader-${{ inputs.rows }}-rows
+          path: packages/python/goldenmatch/bench-out/phase1_loader.log
+          if-no-files-found: warn
+          retention-days: 30
