@@ -129,3 +129,23 @@ def test_materialize_cluster_dict_includes_pair_scores():
     assert info["size"] == 3
     assert "pair_scores" in info
     assert len(info["pair_scores"]) == 2
+
+
+def test_build_clusters_distributed_falls_back_on_non_convergence(caplog):
+    import logging
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        build_clusters_distributed,
+    )
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (3, 4, 0.8), (4, 5, 0.75)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+    with caplog.at_level(logging.WARNING):
+        clusters_ds = build_clusters_distributed(
+            pairs_ds, all_ids=[1, 2, 3, 4, 5],
+            convergence_max_iterations=1,
+        )
+    rows = clusters_ds.take_all()
+    cluster_ids = {r["cluster_id"] for r in rows}
+    assert len(cluster_ids) == 1
+    assert any("fallback" in r.message.lower() for r in caplog.records)
