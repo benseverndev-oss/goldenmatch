@@ -4,6 +4,32 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [0.8.0] - 2026-05-12
+
+Identity Graph edge-safe core (Python `goldenmatch` v1.15 partial parity).
+
+### Added
+
+- **`goldenmatch.identity`** edge-safe surface mirroring the Python `goldenmatch.identity.*` module. All exports are safe to import from Vercel Edge, Cloudflare Workers, and other Web-Standards runtimes — no `node:*` imports.
+  - **Types:** `IdentityNode`, `SourceRecord`, `EvidenceEdge`, `IdentityEvent`, `IdentityAlias`, `IdentityStatus`, `EventKind`, `EdgeKind`, `IdentityView`, `IdentityStore` interface.
+  - **`newEntityId(prefix?)`** — UUIDv7 via Web Crypto; deterministic when seeded for tests.
+  - **`InMemoryIdentityStore`** — process-local store satisfying the full `IdentityStore` interface. Suitable for tests, edge-runtime scratch state, and code paths that don't require cross-call durability.
+  - **`findByRecord(store, record)` / `getEntity(store, id)` / `listEntities(store)`** — read paths.
+  - **`manualMerge(store, sourceId, targetId, ...)` / `manualSplit(store, entityId, recordIds, ...)`** — steward operations.
+- **TS parity tests** (13 cases) under `tests/identity/` covering the cluster-resolve absorb/merge/create branches, `findByRecord` semantics, manual merge/split idempotency, and `IdentityView` shape parity vs the Python `IdentityView` dataclass.
+
+### Not yet shipped (deferred to a future wave)
+
+- **Persistent SQLite-backed `IdentityStore`** in `src/node/identity/` — the Python `IdentityStore(backend="sqlite")` writes to `.goldenmatch/identity.db`. The TS port keeps the edge-safe interface but the Node-only persistent implementation is a future wave's work. Today, `InMemoryIdentityStore` resets on process restart.
+- **Pipeline-driven population** — the Python `resolve_clusters(...)` hook runs after dedupe clustering and writes identity events; the TS pipeline doesn't yet wire this hook.
+- **MCP identity tools** — Python ships 6 `identity_*` MCP tools backed by the persistent store. TS will follow after the persistent backend lands.
+
+### Python deltas NOT relevant to this wave
+
+- **Python v1.13 (release plumbing, typed accessors).** TypeScript's strict mode already enforces equivalent invariants without runtime accessor properties; the TS surface didn't drift.
+- **Python v1.14 (AutoConfigController surface-parity arc).** The arc threaded telemetry through TUI / CLI / Postgres / DuckDB surfaces that TS doesn't expose. TS already surfaces telemetry on its MCP server (added v0.5.0); the shared `serialize_telemetry` JSON shape is preserved.
+- **Python v1.16 (`backend="bucket"` 5M-on-one-node)**. Polars-only path; TS port runs edge-safe in Web Crypto and doesn't ship Polars. The `backend="bucket"` Python recommendation has no TS analogue and is intentionally not ported. The TS port's scale envelope is unchanged from v0.7.0 — single-node workloads, no out-of-core backend.
+
 ## [0.7.0] - 2026-05-10
 
 Negative-evidence parity with Python `goldenmatch` v1.11 + v1.12 (Path Y).
