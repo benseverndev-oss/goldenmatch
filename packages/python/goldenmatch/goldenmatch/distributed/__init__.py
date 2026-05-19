@@ -19,13 +19,21 @@ from goldenmatch.distributed.dataset import (
     read_parquet_partitioned,
     read_partitioned,
 )
+from goldenmatch.distributed.golden import (
+    build_golden_records_distributed,
+    build_golden_records_smart,
+    materialize_golden_dataframe,
+)
 from goldenmatch.distributed.sample import take_sample_distributed
 
 __all__ = [
     "apply_transforms_distributed",
     "build_clusters_distributed",
+    "build_golden_records_distributed",
+    "build_golden_records_smart",
     "is_ray_dataset",
     "materialize_cluster_dict",
+    "materialize_golden_dataframe",
     "pairs_list_to_dataset",
     "read_csv_partitioned",
     "read_parquet_partitioned",
