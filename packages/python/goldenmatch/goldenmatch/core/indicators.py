@@ -289,6 +289,23 @@ def compute_cross_blocking_overlap(
         return None
 
 
+def dispatch_compute_column_priors(df_or_ds):
+    """Route to in-memory or distributed compute_column_priors by input type."""
+    from goldenmatch.distributed import is_ray_dataset
+    if is_ray_dataset(df_or_ds):
+        from goldenmatch.distributed.indicators import compute_column_priors_distributed
+        return compute_column_priors_distributed(df_or_ds)
+    return compute_column_priors(df_or_ds)
+
+
+def dispatch_estimate_sparse_match_signal(df_or_ds, *, exact_columns):
+    from goldenmatch.distributed import is_ray_dataset
+    if is_ray_dataset(df_or_ds):
+        from goldenmatch.distributed.indicators import estimate_sparse_match_signal_distributed
+        return estimate_sparse_match_signal_distributed(df_or_ds, exact_columns=exact_columns)
+    return estimate_sparse_match_signal(df_or_ds, exact_columns=exact_columns)
+
+
 BUDGET_COLLISION = 8.0
 
 

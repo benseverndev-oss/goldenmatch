@@ -60,3 +60,35 @@ def test_estimate_sparse_match_signal_distributed_matches_in_memory(tmp_path):
     ds = read_csv_partitioned(str(csv), n_partitions=4)
     distributed = estimate_sparse_match_signal_distributed(ds, exact_columns=["email"])
     assert in_mem.is_sparse == distributed.is_sparse
+
+
+def test_dispatch_compute_column_priors_routes_by_type(tmp_path):
+    import polars as pl
+    from goldenmatch.core.indicators import dispatch_compute_column_priors
+    from goldenmatch.distributed import read_csv_partitioned
+
+    df = pl.DataFrame({"x": [1, 2, 3], "y": ["a", "b", "c"]})
+    in_mem = dispatch_compute_column_priors(df)
+    assert isinstance(in_mem, dict)
+
+    csv = tmp_path / "f.csv"
+    df.write_csv(csv)
+    ds = read_csv_partitioned(str(csv), n_partitions=2)
+    distributed = dispatch_compute_column_priors(ds)
+    assert isinstance(distributed, dict)
+
+
+def test_dispatch_estimate_sparse_match_signal_routes_by_type(tmp_path):
+    import polars as pl
+    from goldenmatch.core.indicators import dispatch_estimate_sparse_match_signal
+    from goldenmatch.distributed import read_csv_partitioned
+
+    df = pl.DataFrame({"email": [f"u{i}@x.com" for i in range(100)]})
+    in_mem = dispatch_estimate_sparse_match_signal(df, exact_columns=["email"])
+    assert in_mem is not None
+
+    csv = tmp_path / "f.csv"
+    df.write_csv(csv)
+    ds = read_csv_partitioned(str(csv), n_partitions=2)
+    distributed = dispatch_estimate_sparse_match_signal(ds, exact_columns=["email"])
+    assert distributed is not None
