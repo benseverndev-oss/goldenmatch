@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import polars as pl
+    import pyarrow as pa
     from ray.data import Dataset
 
     from goldenmatch.config.schemas import GoldenRulesConfig
@@ -34,7 +35,11 @@ def _golden_cluster_threshold() -> int:
         return _GOLDEN_CLUSTER_THRESHOLD
 
 
-def _per_partition_golden(batch, rules, user_columns):
+def _per_partition_golden(  # pyright: ignore[reportUnusedFunction]
+    batch: pa.Table,
+    rules: GoldenRulesConfig,
+    user_columns: list[str],
+) -> pa.Table:
     """Worker-side: pyarrow batch -> Polars -> in-memory builder -> pyarrow."""
     import polars as pl
     import pyarrow as pa
@@ -42,6 +47,7 @@ def _per_partition_golden(batch, rules, user_columns):
     from goldenmatch.core.golden import build_golden_records_batch
 
     df = pl.from_arrow(batch)
+    assert isinstance(df, pl.DataFrame)  # pa.Table input always yields DataFrame
     if df.height == 0:
         return pa.Table.from_pylist([])
     results = build_golden_records_batch(df, rules)
@@ -51,12 +57,12 @@ def _per_partition_golden(batch, rules, user_columns):
 
 
 def build_golden_records_distributed(
-    multi_ds: "Dataset",
-    rules: "GoldenRulesConfig",
+    multi_ds: Dataset,
+    rules: GoldenRulesConfig,
     *,
     user_columns: list[str],
     max_cluster_size: int = 100,
-) -> "Dataset":
+) -> Dataset:
     """Distributed golden via repartition(keys=["__cluster_id__"]) + map_batches.
 
     Co-locates each cluster's rows via hash-partitioning on __cluster_id__,
@@ -69,7 +75,10 @@ def build_golden_records_distributed(
     repartition(keys=[...]) hash-shuffle achieves the same co-location
     guarantee without the re-entrant Dataset issue.
     """
-    import ray  # noqa: F401 -- ensures ray.data is initialized when called
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
 
     total_rows = multi_ds.count()
     # One partition per ~max_cluster_size rows, so each partition roughly
@@ -79,13 +88,14 @@ def build_golden_records_distributed(
     # Hash-partition by __cluster_id__ so all rows for a cluster co-locate.
     repartitioned = multi_ds.repartition(num_partitions, keys=["__cluster_id__"])
 
-    def _process_partition(batch):  # batch is pyarrow.Table
+    def _process_partition(batch: pa.Table) -> pa.Table:
         import polars as pl
         import pyarrow as pa
 
         from goldenmatch.core.golden import build_golden_records_batch
 
         df = pl.from_arrow(batch)
+        assert isinstance(df, pl.DataFrame)
         if df.height == 0:
             return pa.Table.from_pylist([])
         results = build_golden_records_batch(df, rules)
@@ -96,7 +106,7 @@ def build_golden_records_distributed(
     return repartitioned.map_batches(_process_partition, batch_format="pyarrow")
 
 
-def materialize_golden_dataframe(golden_ds: "Dataset") -> "pl.DataFrame":
+def materialize_golden_dataframe(golden_ds: Dataset) -> pl.DataFrame:
     """Adapter back to pl.DataFrame for downstream stages."""
     import polars as pl
     import pyarrow as pa
@@ -105,10 +115,14 @@ def materialize_golden_dataframe(golden_ds: "Dataset") -> "pl.DataFrame":
     if not tables:
         return pl.DataFrame()
     full = pa.concat_tables(tables)
-    return pl.from_arrow(full)
+    df = pl.from_arrow(full)
+    assert isinstance(df, pl.DataFrame)
+    return df
 
 
-def _collect_and_call_in_memory(multi_ds, rules):
+def _collect_and_call_in_memory(
+    multi_ds: Dataset, rules: GoldenRulesConfig
+) -> list[dict]:
     import polars as pl
     import pyarrow as pa
 
@@ -118,12 +132,13 @@ def _collect_and_call_in_memory(multi_ds, rules):
     if not tables:
         return []
     df = pl.from_arrow(pa.concat_tables(tables))
+    assert isinstance(df, pl.DataFrame)
     return build_golden_records_batch(df, rules)
 
 
 def build_golden_records_smart(
-    multi_ds: "Dataset",
-    rules: "GoldenRulesConfig",
+    multi_ds: Dataset,
+    rules: GoldenRulesConfig,
     *,
     user_columns: list[str],
     max_cluster_size: int = 100,

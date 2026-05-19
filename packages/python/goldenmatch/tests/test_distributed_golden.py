@@ -29,7 +29,6 @@ def test_build_golden_records_distributed_matches_in_memory(tmp_path):
     for the simple uniform-strategy fast path."""
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.core.golden import build_golden_records_batch
     from goldenmatch.distributed.golden import (
@@ -66,7 +65,6 @@ def test_build_golden_records_distributed_co_locates_split_clusters():
     """Cluster rows scattered across input partitions must end up co-located."""
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.distributed.golden import (
         build_golden_records_distributed,
@@ -104,7 +102,6 @@ def test_distributed_golden_dispatches_to_in_memory_below_threshold(caplog):
 
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.distributed.golden import build_golden_records_smart
 
@@ -132,7 +129,6 @@ def test_distributed_golden_dispatches_to_distributed_above_threshold(monkeypatc
 
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenRulesConfig
     from goldenmatch.distributed.golden import build_golden_records_smart
 
@@ -163,7 +159,6 @@ def test_distributed_golden_falls_back_on_custom_field_rules(monkeypatch, caplog
 
     import polars as pl
     import ray
-
     from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
     from goldenmatch.distributed.golden import build_golden_records_smart
 
