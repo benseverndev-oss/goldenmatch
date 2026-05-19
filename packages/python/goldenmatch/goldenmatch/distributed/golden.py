@@ -154,12 +154,23 @@ def build_golden_records_smart(
     user_columns: list[str],
     max_cluster_size: int = 100,
 ) -> list[dict]:
-    """Dispatch by cluster count.
+    """Dispatch by row count.
 
-    Below threshold (default 5M clusters): in-memory builder.
+    Below threshold (default ~5M multi-member rows): in-memory builder
+    (PR #334's streaming 500K-cluster batch loop handles up to mid-millions
+    fine on 64 GB driver).
+
     Above threshold: distributed build_golden_records_distributed.
 
     Custom field rules always route to in-memory (closure serialization risk).
+
+    Note: original spec routed by *cluster count*, but
+    `groupby("__cluster_id__").count()` on a Ray Dataset with O(N) clusters
+    is itself the most expensive operation we're trying to avoid — run
+    26131602938 stuck for 8+ min on a single-partition HashAggregate.
+    Row count is a cheap proxy (Ray's `.count()` is metadata) and produces
+    the same routing decision: small workloads collect, large ones
+    distribute.
     """
     if rules.field_rules:
         logger.info(
@@ -170,21 +181,20 @@ def build_golden_records_smart(
         return _collect_and_call_in_memory(multi_ds, rules)
 
     threshold = _golden_cluster_threshold()
-    # Count distinct __cluster_id__ via groupby + count of resulting rows.
-    cluster_count = multi_ds.groupby("__cluster_id__").count().count()
+    row_count = multi_ds.count()
 
-    if cluster_count < threshold:
+    if row_count < threshold:
         logger.info(
-            "build_golden_records_smart: %d clusters < %d threshold; "
+            "build_golden_records_smart: %d rows < %d threshold; "
             "routing to in-memory build_golden_records_batch.",
-            cluster_count, threshold,
+            row_count, threshold,
         )
         return _collect_and_call_in_memory(multi_ds, rules)
 
     logger.info(
-        "build_golden_records_smart: %d clusters >= %d threshold; "
+        "build_golden_records_smart: %d rows >= %d threshold; "
         "routing to distributed golden build.",
-        cluster_count, threshold,
+        row_count, threshold,
     )
     distributed_ds = build_golden_records_distributed(
         multi_ds, rules,
