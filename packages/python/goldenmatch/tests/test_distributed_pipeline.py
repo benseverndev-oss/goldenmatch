@@ -20,3 +20,22 @@ def test_run_dedupe_pipeline_distributed_materializes_and_calls_in_memory(tmp_pa
 
     result = run_dedupe_pipeline_distributed(ds, confidence_required=False)
     assert result is not None
+
+
+def test_run_dedupe_pipeline_distributed_still_works_post_phase3(tmp_path):
+    """Phase 3 keeps the cheat-line for now; Phase 4 removes the materialize.
+    This guards against accidental regression from the polymorphic dispatch
+    work in Phase 3."""
+    import polars as pl
+    from goldenmatch.distributed import read_csv_partitioned
+    from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
+
+    csv = tmp_path / "in.csv"
+    pl.DataFrame({
+        "first_name": ["Alice"] * 50 + ["Bob"] * 50,
+        "last_name": ["Smith"] * 50 + ["Jones"] * 50,
+        "id": range(100),
+    }).write_csv(csv)
+    ds = read_csv_partitioned(str(csv), n_partitions=4)
+    result = run_dedupe_pipeline_distributed(ds, confidence_required=False)
+    assert result is not None
