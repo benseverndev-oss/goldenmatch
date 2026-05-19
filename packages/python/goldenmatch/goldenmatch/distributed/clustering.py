@@ -236,36 +236,64 @@ def _build_clusters_scipy_fallback(
     all_ids: list[int],
     max_cluster_size: int,
 ) -> Dataset:
-    """Driver-side scipy.csgraph fallback when label propagation fails."""
+    """Driver-side scipy.csgraph fallback.
+
+    Used for two paths in build_clusters_distributed:
+      - default route below the 50M-pair threshold (Splink-DuckDB analog)
+      - convergence-failure escape hatch when label propagation can't finish
+
+    Vectorized end-to-end: pair rows -> Arrow columns -> numpy index lookup
+    -> scipy connected_components -> Arrow output -> ray.data.from_arrow.
+    Run 26122054424 had this at 67s on 8.3M pairs / 16.6M members; the
+    naive Python-loop path drove that wall. Vectorized path targets <30s.
+    """
     import numpy as np
+    import polars as pl
+    import pyarrow as pa
     import ray
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
 
-    pair_rows = pairs_ds.take_all()
-    sorted_ids = sorted(all_ids)
-    id_index = {i: idx for idx, i in enumerate(sorted_ids)}
-    inv_id_index = {idx: i for i, idx in id_index.items()}
+    # Pull pairs in pyarrow batches and concatenate (vectorized; the prior
+    # take_all + per-row dict comprehension was the 67s bottleneck on
+    # run 26122054424).
+    pair_tables: list[pa.Table] = list(
+        pairs_ds.iter_batches(batch_format="pyarrow")
+    )
+    if pair_tables:
+        full = pa.concat_tables(pair_tables)
+    else:
+        full = pa.table({"id_a": [], "id_b": [], "score": []})
+    id_a_arr = full.column("id_a").to_numpy(zero_copy_only=False)
+    id_b_arr = full.column("id_b").to_numpy(zero_copy_only=False)
 
-    row = [id_index[r["id_a"]] for r in pair_rows]
-    col = [id_index[r["id_b"]] for r in pair_rows]
-    data = [1] * len(pair_rows)
-    n = len(id_index)
-    graph = csr_matrix((data, (row, col)), shape=(n, n))
-    n_components, labels = connected_components(graph, directed=False)
+    # Build id -> dense index via numpy searchsorted (O(n_pairs log n_ids)
+    # instead of dict[int, int].get per pair).
+    sorted_ids = np.array(sorted(all_ids), dtype=np.int64)
+    n = sorted_ids.shape[0]
+    row_idx = np.searchsorted(sorted_ids, id_a_arr)
+    col_idx = np.searchsorted(sorted_ids, id_b_arr)
 
-    sizes = np.bincount(labels)
-    rows = []
-    for idx, label in enumerate(labels):
-        mid = inv_id_index[idx]
-        size = int(sizes[label])
-        rows.append({
-            "member_id": mid,
-            "cluster_id": int(label),
-            "cluster_size": size,
-            "oversized": size > max_cluster_size,
-        })
-    return ray.data.from_items(rows)
+    data = np.ones(row_idx.shape[0], dtype=np.int8)
+    graph = csr_matrix((data, (row_idx, col_idx)), shape=(n, n))
+    _n_components, labels = connected_components(graph, directed=False)
+
+    # Compute per-cluster size via bincount; broadcast back to per-member.
+    sizes_per_label = np.bincount(labels, minlength=int(labels.max()) + 1 if labels.size else 1)
+    member_sizes = sizes_per_label[labels]
+    oversized = member_sizes > max_cluster_size
+
+    # Build output Arrow table column-at-a-time, then convert via from_arrow
+    # (zero-copy into Ray Dataset; much cheaper than from_items on 16M dicts).
+    out_table = pl.DataFrame(
+        {
+            "member_id": sorted_ids,
+            "cluster_id": labels.astype(np.int64),
+            "cluster_size": member_sizes.astype(np.int64),
+            "oversized": oversized,
+        }
+    ).to_arrow()
+    return ray.data.from_arrow(out_table)
 
 
 def materialize_cluster_dict(
