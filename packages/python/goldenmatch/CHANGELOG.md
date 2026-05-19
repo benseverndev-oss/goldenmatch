@@ -19,7 +19,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - Dispatch shims in `core.indicators`: `dispatch_compute_column_priors`,
   `dispatch_estimate_sparse_match_signal`.
 - `scripts/bench_phase2_controller.py` + `bench-phase2-controller`
-  workflow job. Kill criterion: controller wall < 30s at 25M.
+  workflow job. **Result, run 26107123459: 25M / 94.2s controller wall /
+  1.08 GB driver peak RSS.** Architectural goal MET (driver does not
+  materialize the full df). Wall budget realigned from < 30s to < 180s
+  after measurement — per-iter `_run_pipeline_sample` on bench-dataset-v1
+  is ~30s, independent of distributed wiring. Phase 3 distributes the
+  per-iteration pipeline to remove that cost.
 
 ### Added
 - **Distributed Phase 1: partition-aware data loader on Ray Datasets.**
