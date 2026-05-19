@@ -13,7 +13,14 @@ import json
 import os
 import sys
 import threading
-import tracemalloc
+
+# tracemalloc was previously used to report peak Python-allocated memory.
+# At 25M scale its allocation-snapshot table itself holds ~5-10 GB of state
+# (every Python object allocation gets a stack frame stored), which pushes
+# the bench over the runner's 64 GB ceiling. Switched to psutil's RSS
+# high-watermark instead -- it's the OS-level view (closer to what the
+# kill criterion actually cares about) and adds zero per-allocation
+# overhead.
 from pathlib import Path
 from time import perf_counter
 
@@ -138,12 +145,31 @@ def _start_heartbeat(label: str, recorder, stop_event: threading.Event) -> threa
 
 def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store: bool, partitioned_block_scoring: bool) -> dict:
     import goldenmatch as gm
+    import psutil
     from goldenmatch.core.autoconfig import auto_configure_df
     from goldenmatch.core.bench import bench_capture
-
-    tracemalloc.start()
+    proc = psutil.Process()
+    peak_rss_bytes = [proc.memory_info().rss]
     t0 = perf_counter()
     stop_event = threading.Event()
+    # Background sampler for peak RSS. psutil.memory_info() is cheap (~1us)
+    # so a 0.5s tick is well under our 30s heartbeat granularity. Replaces
+    # tracemalloc which itself held ~5-10 GB of allocation-tracking state
+    # at 25M scale.
+    rss_stop = threading.Event()
+
+    def _sample_rss():
+        while not rss_stop.wait(0.5):
+            try:
+                cur = proc.memory_info().rss
+                if cur > peak_rss_bytes[0]:
+                    peak_rss_bytes[0] = cur
+            except Exception:  # noqa: BLE001
+                pass
+
+    rss_thread = threading.Thread(target=_sample_rss, name="rss-peak", daemon=True)
+    rss_thread.start()
+
     with bench_capture() as rec:
         # Heartbeat must start AFTER bench_capture so it has the
         # context-var recorder; otherwise rec.to_dict() reads an
@@ -175,8 +201,9 @@ def run_one(label: str, df: pl.DataFrame, *, backend: str, prepared_record_store
             stop_event.set()
             hb.join(timeout=2)
     wall = perf_counter() - t0
-    _current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+    rss_stop.set()
+    rss_thread.join(timeout=2)
+    peak = peak_rss_bytes[0]
 
     # Metrics-only: do NOT touch result.clusters at scale. At 5M with 1.67M
     # clusters, materializing the Python dict (and walking .values() to count
