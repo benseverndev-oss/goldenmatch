@@ -364,14 +364,26 @@ def two_phase_wcc(
     return ray.data.from_items(rows)
 
 
-def _emit_boundary_pairs(batch: Any, member_to_root: dict[int, int]) -> Any:  # pa.Table -> pa.Table
+def _emit_boundary_pairs(batch: Any, member_to_root_ref: Any) -> Any:  # pa.Table -> pa.Table
     """Emit one row per boundary edge (pairs where the two endpoints
     have different local_roots).
 
     Output schema: {root_a, root_b}. Phase B does Union-Find on these
     super-edges.
+
+    ``member_to_root_ref`` is either a ``dict[int, int]`` (used by unit
+    tests + small graphs where serialization overhead doesn't matter) or
+    a Ray ObjectRef to one (used by the production map_batches call so
+    Ray shares one copy across all tasks on a node).
     """
-    import pyarrow as pa
+    import pyarrow as pa  # noqa: PLC0415
+
+    if isinstance(member_to_root_ref, dict):
+        member_to_root: dict[int, int] = member_to_root_ref
+    else:
+        import ray  # noqa: PLC0415
+
+        member_to_root = ray.get(member_to_root_ref)
 
     out = []
     for row in batch.to_pylist():
@@ -393,11 +405,20 @@ def _phase_b_merge_boundaries(
     Collects boundary edges (bounded by O(P^2)) to driver, runs Union-Find
     on the local_roots, and remaps every member to its final global root.
     """
+    import ray  # noqa: PLC0415
+
     from goldenmatch.core.cluster import UnionFind
+
+    # ray.put once: shares one copy of local_components across all workers
+    # via the object store. Without this, each map_batches task serializes
+    # the full dict into the UDF (~95 bytes per (k,v) pair in CPython 3.12,
+    # = 477 MiB at 5M entries) and Ray warns + kills the job at scale.
+    member_to_root_ref = ray.put(local_components)
 
     boundary_tables = list(
         pairs_ds.map_batches(
-            lambda b: _emit_boundary_pairs(b, local_components),
+            _emit_boundary_pairs,
+            fn_kwargs={"member_to_root_ref": member_to_root_ref},
             batch_format="pyarrow",
         ).iter_batches(batch_format="pyarrow")
     )

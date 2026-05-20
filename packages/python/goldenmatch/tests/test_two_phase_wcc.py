@@ -189,3 +189,32 @@ def test_build_clusters_distributed_routes_to_label_prop_via_env(monkeypatch, ca
 
     msgs = [r.message.lower() for r in caplog.records]
     assert any("label propagation" in m for m in msgs), msgs
+
+
+def test_two_phase_wcc_does_not_capture_local_components_in_udf():
+    """Regression: Phase B's _emit_boundary_pairs map_batches must not
+    serialize ``local_components`` into the UDF closure. With closure
+    capture, the UDF size scales linearly with len(local_components) and
+    Ray warns + kills the job above ~250 MiB.
+
+    We check the property structurally (does the map_batches UDF carry
+    the dict as a free var?) rather than running at 5M scale, so this
+    test stays in the fast lane. Closes the runner-OOM gap that the
+    Phase 5.5 bench surfaced (run 26159448413, exit 143 at 477 MiB UDF).
+    """
+    import inspect
+
+    from goldenmatch.distributed import clustering
+
+    src = inspect.getsource(clustering._phase_b_merge_boundaries)
+    # The lambda capture pattern from the original implementation was
+    # `lambda b: _emit_boundary_pairs(b, local_components)`. The fix
+    # routes local_components through ray.put + fn_kwargs instead.
+    assert "lambda b: _emit_boundary_pairs(b, local_components)" not in src, (
+        "Phase B closes over local_components again -- this is the closure"
+        " blowup that killed run 26159448413. Use ray.put + fn_kwargs."
+    )
+    assert "ray.put(local_components)" in src, (
+        "Phase B should ray.put(local_components) so workers share one copy"
+        " from the object store instead of receiving a copy per task."
+    )
