@@ -354,5 +354,71 @@ def test_read_all_unifies_dtype_drift_across_chunks():
     )
 
 
+# ----------------------------------------------------------------------
+# #384 -- LazyFrame thread-through avoids double materialization
+# ----------------------------------------------------------------------
+
+
+def test_read_all_lazy_returns_lazyframe_not_eager():
+    """#384: the full-scan path uses _read_all_lazy and threads a
+    LazyFrame through __source__/__row_id__/matchkey computation,
+    materializing ONCE inside _full_scan_pipeline. Previously the
+    eager `_read_all` materialized in the read step AND the matchkey
+    pipeline did a second collect -- peak RSS ~2x the frame size during
+    that second collect, OOMing an 8 GB sandbox at 1.13M rows.
+    """
+    from collections.abc import Iterator
+
+    from goldenmatch.db.connector import DatabaseConnector
+    from goldenmatch.db.sync import _read_all_lazy
+
+    class _Conn(DatabaseConnector):
+        def __init__(self, chunks: list[pl.DataFrame]):
+            self._chunks = chunks
+        def connect(self) -> None: ...
+        def close(self) -> None: ...
+        def read_table(
+            self, table: str, chunk_size: int = 10000,
+        ) -> Iterator[pl.DataFrame]:
+            yield from self._chunks
+        def read_query(self, query: str) -> pl.DataFrame:
+            return pl.DataFrame()
+        def write_dataframe(self, df, table, mode="append") -> int:
+            return 0
+        def execute(self, sql, params=None) -> None: ...
+        def table_exists(self, table: str) -> bool:
+            return False
+        def get_row_count(self, table: str) -> int:
+            return 0
+
+    chunks = [pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})]
+    lf = _read_all_lazy(_Conn(chunks), "ignored", chunk_size=10)
+    assert lf is not None
+    assert isinstance(lf, pl.LazyFrame), (
+        f"_read_all_lazy should return LazyFrame; got {type(lf).__name__}"
+    )
+    # Empty-input case returns None so caller can early-exit.
+    assert _read_all_lazy(_Conn([]), "ignored", chunk_size=10) is None
+
+
+def test_run_sync_full_scan_uses_lazyframe_path():
+    """#384 structural guard: run_sync's full-scan branch must call
+    _read_all_lazy (not _read_all) so the read step doesn't materialize
+    the full frame before _full_scan_pipeline can chain matchkeys onto
+    the lazy plan.
+    """
+    import inspect
+
+    from goldenmatch.db import sync
+
+    src = inspect.getsource(sync.run_sync)
+    code = "\n".join(
+        ln for ln in src.splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert "_read_all_lazy" in code, (
+        "run_sync's full-scan path should call _read_all_lazy. See #384."
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
