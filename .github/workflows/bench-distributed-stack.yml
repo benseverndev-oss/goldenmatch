@@ -22,6 +22,10 @@ on:
         description: "Run Phase 5.5 WCC head-to-head (Two-Phase vs label_propagation on adversarial chain)"
         type: boolean
         default: false
+      run_phase6_identity:
+        description: "Run Phase 6 identity bench (driver vs distributed against Postgres)"
+        type: boolean
+        default: false
 
 jobs:
   bench:
@@ -517,5 +521,83 @@ jobs:
         with:
           name: bench-phase5-5-wcc
           path: packages/python/goldenmatch/bench-out/phase5_5_wcc.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-phase6-identity:
+    name: "bench Phase 6 identity (driver vs distributed)"
+    if: github.event_name == 'workflow_dispatch' && inputs.run_phase6_identity == true
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch with ray + postgres
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray,postgres]"
+      - name: Apply Alembic baseline
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_IDENTITY_DSN: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          goldenmatch identity migrate --dsn "$GOLDENMATCH_IDENTITY_DSN" || true
+      - name: Run driver bench
+        working-directory: packages/python/goldenmatch
+        env:
+          POSTGRES_URL: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          mkdir -p bench-out
+          python scripts/bench_phase6_identity.py \
+            --mode driver \
+            --rows ${{ inputs.rows || '5000000' }} \
+            --dsn "$POSTGRES_URL" \
+            --out bench-out/phase6_driver.json
+      - name: Run distributed bench
+        working-directory: packages/python/goldenmatch
+        env:
+          POSTGRES_URL: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          python scripts/bench_phase6_identity.py \
+            --mode distributed \
+            --rows ${{ inputs.rows || '5000000' }} \
+            --dsn "$POSTGRES_URL" \
+            --out bench-out/phase6_distributed.json
+      - name: Summarize
+        working-directory: packages/python/goldenmatch
+        run: |
+          echo '## bench-phase6-identity results' >> "$GITHUB_STEP_SUMMARY"
+          echo '### driver mode' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase6_driver.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '### distributed mode' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase6_distributed.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase6-identity
+          path: packages/python/goldenmatch/bench-out/
           if-no-files-found: warn
           retention-days: 30
