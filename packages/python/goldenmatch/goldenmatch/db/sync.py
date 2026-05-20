@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import polars as pl
 
@@ -127,7 +128,7 @@ def run_sync(
 
 def _read_all_lazy(
     connector: DatabaseConnector, table: str, chunk_size: int,
-) -> "tuple[pl.LazyFrame, Path] | tuple[None, None]":
+) -> tuple[pl.LazyFrame, Path] | tuple[None, None]:
     """Stage chunks to a temp parquet and return (LazyFrame, staging_dir).
 
     Unlike ``_read_all``, this does NOT materialize the full frame --
