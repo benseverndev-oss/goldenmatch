@@ -21,15 +21,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
-from pathlib import Path
-
-import urllib.request
 import urllib.error
-import json
+import urllib.request
+from pathlib import Path
 
 
 def _env(name: str, required: bool = True) -> str:
@@ -163,8 +162,7 @@ def main() -> int:
         # for the same row count fails.
         proc = subprocess.run(
             ["gh", "release", "upload", tag, str(local), "--clobber"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
