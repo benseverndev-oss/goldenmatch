@@ -99,7 +99,6 @@ def test_bulk_upsert_identities_preserves_golden_record_and_confidence(
     import json
 
     import polars as pl
-
     from goldenmatch.identity.store import IdentityStore
 
     store = IdentityStore(backend="postgres", connection=pg_url)
@@ -133,7 +132,6 @@ def test_resolve_clusters_bulk_fast_path_writes_brand_new(pg_url: str) -> None:
     expected rows -- via 4 COPY batches instead of 5+ INSERTs per
     cluster. Closes #368 Phase 6 bench hang."""
     import polars as pl
-
     from goldenmatch.identity.resolve import resolve_clusters
     from goldenmatch.identity.store import IdentityStore
 
