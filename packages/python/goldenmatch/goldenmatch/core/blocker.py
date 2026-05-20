@@ -171,6 +171,12 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
         # block and OOM during scoring. The group-by-level
         # `if key_str is None: continue` only catches Polars None, not
         # the stringified forms.
+        # Filter ``nan``/``null``/``none`` sentinel keys -- those come
+        # from Polars' cast(Utf8) on NULL or NaN values, NOT from
+        # legitimate user-typed strings. Empty strings ("") are kept
+        # because they're real values (an explicit empty-cell in the
+        # source); dropping them aggressively lost 3 records on the
+        # cross-file dedupe regression suite (PR #390 fix).
         df_with_key = (
             lf
             .with_columns(block_key_expr)
@@ -179,7 +185,7 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
                 & ~pl.col("__block_key__")
                     .str.strip_chars()
                     .str.to_lowercase()
-                    .is_in(["nan", "null", "none", ""])
+                    .is_in(["nan", "null", "none"])
             )
             .collect()
         )
