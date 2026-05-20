@@ -114,3 +114,78 @@ def test_two_phase_wcc_isolated_nodes_keep_own_labels():
     assert label_map[1] == label_map[2]
     # 99 is isolated -> labels itself.
     assert label_map[99] == 99
+
+
+def test_two_phase_wcc_handles_chains_correctly():
+    """Adversarial chain: 100 chains of 10 nodes each = 900 edges,
+    longest path = 10. Two-Phase WCC must produce 100 components,
+    each containing exactly 10 members."""
+    from goldenmatch.distributed.clustering import (
+        pairs_list_to_dataset,
+        two_phase_wcc,
+    )
+
+    pairs = []
+    all_ids = []
+    for chain_idx in range(100):
+        base = chain_idx * 100
+        chain_nodes = list(range(base, base + 10))
+        all_ids.extend(chain_nodes)
+        for i in range(len(chain_nodes) - 1):
+            pairs.append((chain_nodes[i], chain_nodes[i + 1], 0.9))
+
+    pairs_ds = pairs_list_to_dataset(pairs)
+    labels_ds = two_phase_wcc(pairs_ds, all_ids=all_ids)
+    label_map = {r["id"]: r["label"] for r in labels_ds.take_all()}
+
+    by_label: dict[int, set[int]] = {}
+    for member, label in label_map.items():
+        by_label.setdefault(label, set()).add(member)
+
+    assert len(by_label) == 100
+    for members in by_label.values():
+        assert len(members) == 10
+
+
+def test_build_clusters_distributed_uses_two_phase_by_default(monkeypatch, caplog):
+    """Default WCC algorithm is two_phase."""
+    import logging
+
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    monkeypatch.delenv("GOLDENMATCH_DISTRIBUTED_WCC", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+
+    with caplog.at_level(logging.INFO):
+        build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3, 5, 6])
+
+    msgs = [r.message.lower() for r in caplog.records]
+    assert any("two_phase" in m for m in msgs), msgs
+
+
+def test_build_clusters_distributed_routes_to_label_prop_via_env(monkeypatch, caplog):
+    """GOLDENMATCH_DISTRIBUTED_WCC=label_propagation routes to label prop."""
+    import logging
+
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_WCC", "label_propagation")
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+
+    pairs = [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)]
+    pairs_ds = pairs_list_to_dataset(pairs)
+
+    with caplog.at_level(logging.INFO):
+        build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3, 5, 6])
+
+    msgs = [r.message.lower() for r in caplog.records]
+    assert any("label propagation" in m for m in msgs), msgs
