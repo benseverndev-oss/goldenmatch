@@ -73,3 +73,41 @@ def score_blocks_distributed(
         })
 
     return df_ds.map_batches(_score_partition, batch_format="pyarrow")
+
+
+def dedup_pairs_distributed(pairs_ds: "Dataset") -> "Dataset":
+    """Cross-partition pair dedup. Canonicalizes (id_a, id_b) to (min, max)
+    and keeps the maximum score per canonical pair.
+
+    Note: Ray's groupby column-output naming varies by version. Output
+    schema is {id_a, id_b, score}; normalization handled inline.
+    """
+    import pyarrow as pa
+    import ray  # noqa: F401
+
+    def _canonicalize(batch: "pa.Table") -> "pa.Table":
+        import polars as pl
+        df = pl.from_arrow(batch)
+        assert isinstance(df, pl.DataFrame)
+        out = df.with_columns([
+            pl.min_horizontal("id_a", "id_b").alias("id_a"),
+            pl.max_horizontal("id_a", "id_b").alias("id_b"),
+        ])
+        return out.to_arrow()
+
+    canonical = pairs_ds.map_batches(_canonicalize, batch_format="pyarrow")
+
+    grouped = canonical.groupby(["id_a", "id_b"]).max("score")
+
+    # Normalize "max(score)" / "score_max" -> "score".
+    def _rename(batch: "pa.Table") -> "pa.Table":
+        cols = batch.column_names
+        new_cols = []
+        for c in cols:
+            if c in ("id_a", "id_b"):
+                new_cols.append(c)
+            else:
+                new_cols.append("score")
+        return batch.rename_columns(new_cols)
+
+    return grouped.map_batches(_rename, batch_format="pyarrow")
