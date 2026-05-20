@@ -155,15 +155,14 @@ class IdentityStore:
             if not connection:
                 raise ValueError("postgres backend requires connection= DSN")
             try:
-                import psycopg2  # noqa: F401
-                import psycopg2.extras  # noqa: F401
+                import psycopg  # noqa: F401
             except ImportError as e:
                 raise ImportError(
-                    "postgres backend requires psycopg2: pip install psycopg2-binary",
+                    "postgres backend requires psycopg3: "
+                    "pip install 'psycopg[binary]'",
                 ) from e
-            import psycopg2
-            self._conn = psycopg2.connect(connection)
-            self._conn.autocommit = True
+            import psycopg
+            self._conn = psycopg.connect(connection, autocommit=True)
             self._pg_init_schema()
         else:
             raise NotImplementedError(f"Backend '{backend}' not supported")
@@ -294,6 +293,190 @@ class IdentityStore:
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
+
+    # ----- Bulk write methods (Postgres only) -----
+    #
+    # Each takes a Polars frame and pushes it through Postgres COPY into a
+    # temp staging table, then INSERT ... ON CONFLICT into the real table.
+    # Single transaction per call. SQLite raises NotImplementedError -- the
+    # SQLite path is single-process and the row-by-row upsert_* methods are
+    # plenty fast for that scale.
+
+    def bulk_upsert_identities(self, df: "Any") -> None:
+        if self._backend != "postgres":
+            raise NotImplementedError(
+                "bulk_upsert_identities requires Postgres backend; "
+                "use upsert_identity in a loop for SQLite",
+            )
+        if df.height == 0:
+            return
+        cols = [
+            "entity_id", "status", "merged_into", "dataset",
+            "created_at", "updated_at",
+        ]
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE _stage_identity_nodes "
+                "(LIKE identity_nodes INCLUDING DEFAULTS) ON COMMIT DROP"
+            )
+            with cur.copy(
+                "COPY _stage_identity_nodes "
+                "(entity_id, status, merged_into, dataset, "
+                "created_at, updated_at) FROM STDIN"
+            ) as copy:
+                for row in df.select(cols).iter_rows():
+                    copy.write_row(row)
+            cur.execute(
+                """
+                INSERT INTO identity_nodes
+                    (entity_id, status, merged_into, dataset,
+                     created_at, updated_at)
+                SELECT entity_id, status, merged_into, dataset,
+                       created_at, updated_at
+                FROM _stage_identity_nodes
+                ON CONFLICT (entity_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    merged_into = EXCLUDED.merged_into,
+                    updated_at = EXCLUDED.updated_at
+                """
+            )
+            cur.execute("DROP TABLE IF EXISTS _stage_identity_nodes")
+
+    def bulk_upsert_records(self, df: "Any") -> None:
+        if self._backend != "postgres":
+            raise NotImplementedError(
+                "bulk_upsert_records requires Postgres backend; "
+                "use upsert_record in a loop for SQLite",
+            )
+        if df.height == 0:
+            return
+        cols = [
+            "record_id", "source", "source_pk", "record_hash",
+            "entity_id", "dataset", "first_seen_at", "last_seen_at",
+        ]
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE _stage_source_records "
+                "(LIKE source_records INCLUDING DEFAULTS) ON COMMIT DROP"
+            )
+            with cur.copy(
+                "COPY _stage_source_records "
+                "(record_id, source, source_pk, record_hash, entity_id, "
+                "dataset, first_seen_at, last_seen_at) FROM STDIN"
+            ) as copy:
+                for row in df.select(cols).iter_rows():
+                    copy.write_row(row)
+            cur.execute(
+                """
+                INSERT INTO source_records
+                    (record_id, source, source_pk, record_hash, entity_id,
+                     dataset, first_seen_at, last_seen_at)
+                SELECT record_id, source, source_pk, record_hash, entity_id,
+                       dataset, first_seen_at, last_seen_at
+                FROM _stage_source_records
+                ON CONFLICT (record_id) DO UPDATE SET
+                    record_hash = EXCLUDED.record_hash,
+                    entity_id = EXCLUDED.entity_id,
+                    last_seen_at = EXCLUDED.last_seen_at
+                """
+            )
+            cur.execute("DROP TABLE IF EXISTS _stage_source_records")
+
+    def bulk_add_edges(self, df: "Any") -> None:
+        if self._backend != "postgres":
+            raise NotImplementedError(
+                "bulk_add_edges requires Postgres backend; "
+                "use add_edge in a loop for SQLite",
+            )
+        if df.height == 0:
+            return
+        cols = [
+            "entity_id", "record_a_id", "record_b_id", "kind", "score",
+            "matchkey_name", "run_name", "dataset", "recorded_at",
+        ]
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TEMP TABLE _stage_evidence_edges (
+                    entity_id TEXT,
+                    record_a_id TEXT,
+                    record_b_id TEXT,
+                    kind TEXT,
+                    score DOUBLE PRECISION,
+                    matchkey_name TEXT,
+                    run_name TEXT,
+                    dataset TEXT,
+                    recorded_at TIMESTAMPTZ
+                ) ON COMMIT DROP
+                """
+            )
+            with cur.copy(
+                "COPY _stage_evidence_edges "
+                "(entity_id, record_a_id, record_b_id, kind, score, "
+                "matchkey_name, run_name, dataset, recorded_at) FROM STDIN"
+            ) as copy:
+                for row in df.select(cols).iter_rows():
+                    copy.write_row(row)
+            cur.execute(
+                """
+                INSERT INTO evidence_edges
+                    (entity_id, record_a_id, record_b_id, kind, score,
+                     matchkey_name, run_name, dataset, recorded_at)
+                SELECT entity_id, record_a_id, record_b_id, kind, score,
+                       matchkey_name, run_name, dataset, recorded_at
+                FROM _stage_evidence_edges
+                ON CONFLICT (entity_id, record_a_id, record_b_id, kind,
+                             run_name) DO NOTHING
+                """
+            )
+            cur.execute("DROP TABLE IF EXISTS _stage_evidence_edges")
+
+    def bulk_emit_events(self, df: "Any") -> None:
+        if self._backend != "postgres":
+            raise NotImplementedError(
+                "bulk_emit_events requires Postgres backend; "
+                "use emit_event in a loop for SQLite",
+            )
+        if df.height == 0:
+            return
+        cols = [
+            "entity_id", "kind", "run_name", "dataset", "recorded_at",
+        ]
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TEMP TABLE _stage_identity_events (
+                    entity_id TEXT,
+                    kind TEXT,
+                    run_name TEXT,
+                    dataset TEXT,
+                    recorded_at TIMESTAMPTZ
+                ) ON COMMIT DROP
+                """
+            )
+            with cur.copy(
+                "COPY _stage_identity_events "
+                "(entity_id, kind, run_name, dataset, recorded_at) FROM STDIN"
+            ) as copy:
+                for row in df.select(cols).iter_rows():
+                    copy.write_row(row)
+            cur.execute(
+                """
+                INSERT INTO identity_events
+                    (entity_id, kind, run_name, dataset, recorded_at)
+                SELECT entity_id, kind, run_name, dataset, recorded_at
+                FROM _stage_identity_events
+                """
+            )
+            cur.execute("DROP TABLE IF EXISTS _stage_identity_events")
+
+    def count_nodes(self) -> int:
+        """Alias of count_identities (plan compat)."""
+        return self.count_identities()
+
+    def get_node(self, entity_id: str):
+        """Alias of get_identity (plan compat)."""
+        return self.get_identity(entity_id)
 
     def upsert_identity(self, node: IdentityNode) -> None:
         gr = json.dumps(node.golden_record) if node.golden_record is not None else None
@@ -543,16 +726,16 @@ class IdentityStore:
     def _fetchone(self, sql: str, params: tuple) -> Any:
         if self._backend == "sqlite":
             return self._conn.execute(sql, params).fetchone()
-        import psycopg2.extras
-        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        from psycopg.rows import dict_row
+        with self._conn.cursor(row_factory=dict_row) as cur:
             cur.execute(self._pg_sql(sql), params)
             return cur.fetchone()
 
     def _fetchall(self, sql: str, params: tuple) -> list[Any]:
         if self._backend == "sqlite":
             return self._conn.execute(sql, params).fetchall()
-        import psycopg2.extras
-        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        from psycopg.rows import dict_row
+        with self._conn.cursor(row_factory=dict_row) as cur:
             cur.execute(self._pg_sql(sql), params)
             return list(cur.fetchall())
 
