@@ -649,6 +649,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[ray,postgres]"
+          # pandas is a runtime dep of ray.data (not declared in the
+          # [ray] extra). Without it, the parquet read errors with
+          # ModuleNotFoundError before the bench can produce any output.
+          # Same gotcha as the other Phase X bench jobs in this file.
+          pip install psutil pandas
       - name: Apply Alembic baseline (identity variant only)
         if: inputs.run_phase5_simulated_identity == true
         working-directory: packages/python/goldenmatch
