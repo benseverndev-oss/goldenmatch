@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import polars as pl
 
@@ -73,22 +74,33 @@ def run_sync(
     # materialization instead of two, which keeps peak RSS bounded on
     # 1M+ row tables on 8 GB sandboxes (#384).
     if full_rescan or state is None:
+        import shutil  # noqa: PLC0415
         logger.info("Full scan: reading %d records from %s", total_rows, source_table)
-        new_records_lf = _read_all_lazy(connector, source_table, chunk_size)
+        new_records_lf, staging_dir = _read_all_lazy(
+            connector, source_table, chunk_size,
+        )
         if new_records_lf is None:
             logger.info("No new records to process.")
             return {"new_records": 0, "matches": 0, "actions": []}
-        # Chain the internal-column adds lazily.
-        new_records_lf = (
-            new_records_lf
-            .with_columns(pl.lit("new").alias("__source__"))
-            .with_row_index("__row_id__")
-            .with_columns(pl.col("__row_id__").cast(pl.Int64))
-        )
-        return _full_scan_pipeline(
-            connector, new_records_lf, source_table, config, matchkeys,
-            output_mode, dry_run, run_id, cfg_hash, total_rows,
-        )
+        try:
+            # Chain the internal-column adds lazily.
+            new_records_lf = (
+                new_records_lf
+                .with_columns(pl.lit("new").alias("__source__"))
+                .with_row_index("__row_id__")
+                .with_columns(pl.col("__row_id__").cast(pl.Int64))
+            )
+            return _full_scan_pipeline(
+                connector, new_records_lf, source_table, config, matchkeys,
+                output_mode, dry_run, run_id, cfg_hash, total_rows,
+            )
+        finally:
+            # Staging dir cleanup AFTER the pipeline's collect has read
+            # the parquet chunks (#388). The prior weakref.finalize on
+            # the LazyFrame fired too early when `lf.with_columns(...)`
+            # rebound the variable to a derived frame.
+            if staging_dir is not None:
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
     # Incremental path -- still eager because the rest of the
     # incremental pipeline expects DataFrame. Memory bound here is the
@@ -116,8 +128,8 @@ def run_sync(
 
 def _read_all_lazy(
     connector: DatabaseConnector, table: str, chunk_size: int,
-) -> pl.LazyFrame | None:
-    """Stage chunks to a temp parquet and return a LazyFrame over them.
+) -> tuple[pl.LazyFrame, Path] | tuple[None, None]:
+    """Stage chunks to a temp parquet and return (LazyFrame, staging_dir).
 
     Unlike ``_read_all``, this does NOT materialize the full frame --
     the LazyFrame points at the on-disk parquet so subsequent
@@ -125,14 +137,21 @@ def _read_all_lazy(
     The materialization happens later in the pipeline at the FIRST
     ``.collect()`` call -- typically once, not twice (#384).
 
-    The staging directory's lifetime is tied to the returned LazyFrame
-    via ``weakref.finalize``; callers don't need to manage cleanup.
-    Returns ``None`` if the connector yielded zero chunks (caller can
-    early-exit via ``new_records is None``).
+    Returns the staging path alongside the LazyFrame so the caller
+    can clean up in a try/finally **after** the pipeline finishes its
+    collect. An earlier version tied the staging-dir lifetime to the
+    LazyFrame object via ``weakref.finalize``, but that fires when the
+    initial Python wrapper is GC'd -- which happens as soon as
+    downstream ``lf.with_columns(...)`` rebinds the variable to a new
+    LazyFrame, even though the underlying plan still references the
+    original ``scan_parquet`` node. Net effect: the staging dir got
+    deleted before the eventual ``.collect()`` could read it, and
+    Polars erroreed with "expanded paths were empty" (#388).
+
+    Returns ``(None, None)`` if the connector yielded zero chunks.
     """
     import shutil
     import tempfile
-    import weakref
     from pathlib import Path
 
     staging = Path(tempfile.mkdtemp(prefix="gm_sync_read_"))
@@ -149,12 +168,13 @@ def _read_all_lazy(
         n_chunks += 1
     if n_chunks == 0:
         shutil.rmtree(staging, ignore_errors=True)
-        return None
+        return None, None
+    logger.info(
+        "Staged %d chunks to %s for lazy scan",
+        n_chunks, staging,
+    )
     lf = pl.scan_parquet(staging / "chunk_*.parquet")
-    # When the LazyFrame is GC'd (or the final collect's resulting
-    # DataFrame goes out of scope), tear down the staging directory.
-    weakref.finalize(lf, shutil.rmtree, str(staging), True)
-    return lf
+    return lf, staging
 
 
 def _read_all(connector: DatabaseConnector, table: str, chunk_size: int) -> pl.DataFrame:
