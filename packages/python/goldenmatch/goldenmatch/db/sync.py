@@ -110,7 +110,10 @@ def _read_all(connector: DatabaseConnector, table: str, chunk_size: int) -> pl.D
     chunks = []
     for chunk in connector.read_table(table, chunk_size):
         chunks.append(chunk)
-    return pl.concat(chunks) if chunks else pl.DataFrame()
+    # how="diagonal_relaxed" defends against any chunk where a column
+    # is all-NULL (Null dtype) slipping past _normalize_chunk_schema in
+    # the connector. See #363.
+    return pl.concat(chunks, how="diagonal_relaxed") if chunks else pl.DataFrame()
 
 
 def _read_incremental(
