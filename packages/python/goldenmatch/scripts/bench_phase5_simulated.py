@@ -115,12 +115,17 @@ def main() -> int:
             connection=postgres_url,
         )
 
+    # Ray workers start in a different cwd than the driver (typically
+    # /tmp/ray/session_*/...). A relative parquet path resolves wrong
+    # on the worker side and the open fails with FileNotFoundError.
+    # Resolve to absolute on the driver before handing off to Ray.
+    parquet_abs = str(args.parquet.resolve())
     log.info(
         "loading parquet %s with %d partitions",
-        args.parquet,
+        parquet_abs,
         n_partitions,
     )
-    ds = read_parquet_partitioned(str(args.parquet), n_partitions=n_partitions)
+    ds = read_parquet_partitioned(parquet_abs, n_partitions=n_partitions)
 
     rss_start_gb = _peak_rss_gb()
     t0 = time.perf_counter()
