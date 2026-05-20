@@ -296,6 +296,31 @@ def _build_clusters_scipy_fallback(
     return ray.data.from_arrow(out_table)
 
 
+def _phase_a_local_cc(batch):  # batch: pa.Table -> pa.Table
+    """Phase A of Two-Phase WCC: local Union-Find on this partition's pairs.
+
+    Emits one (member_id, local_root) row per member touched by the
+    partition's pairs. The local_root is meaningful only within the
+    partition; Phase B reconciles roots across partitions.
+    """
+    import pyarrow as pa
+
+    from goldenmatch.core.cluster import UnionFind
+
+    uf = UnionFind()
+    rows_in = batch.to_pylist()
+    if not rows_in:
+        return pa.Table.from_pylist([])
+
+    for row in rows_in:
+        uf.add(row["id_a"])
+        uf.add(row["id_b"])
+        uf.union(row["id_a"], row["id_b"])
+
+    out = [{"member_id": m, "local_root": uf.find(m)} for m in uf.nodes()]
+    return pa.Table.from_pylist(out)
+
+
 def materialize_cluster_dict(
     clusters_ds: Dataset,
     pairs_ds: Dataset,
