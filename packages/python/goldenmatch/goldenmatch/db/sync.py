@@ -125,19 +125,57 @@ def _read_all(connector: DatabaseConnector, table: str, chunk_size: int) -> pl.D
 
     staging = Path(tempfile.mkdtemp(prefix="gm_sync_read_"))
     try:
+        # Unified schema across all chunks. The first non-empty chunk
+        # establishes the canonical dtype for each column; subsequent
+        # chunks cast columns to that schema before write. Without this,
+        # Polars infers Null dtype on a chunk where a column is 100%
+        # NULL (e.g. a sparse bigint column with no values in the first
+        # 10K rows) and Int64 on a later chunk that does have values,
+        # then pl.read_parquet rejects the cross-file mismatch with
+        # "data type mismatch for column X: incoming: Null != target:
+        # Int64" (#381 -- regression introduced by the staging-parquet
+        # rewrite for #379).
+        unified_schema: dict[str, pl.DataType] | None = None
         n_chunks = 0
         for i, chunk in enumerate(connector.read_table(table, chunk_size)):
+            if unified_schema is None:
+                # First chunk seeds the schema. Promote any Null-dtype
+                # columns to Utf8 so they're castable later -- matches
+                # the _normalize_chunk_schema behavior in connector.py
+                # but applied here so the unified schema is concrete.
+                unified_schema = {
+                    name: pl.Utf8 if dt == pl.Null else dt
+                    for name, dt in chunk.schema.items()
+                }
+            chunk = _cast_to_schema(chunk, unified_schema)
             chunk.write_parquet(staging / f"chunk_{i:06d}.parquet")
             n_chunks += 1
         if n_chunks == 0:
             return pl.DataFrame()
-        # Read all staged chunks back via Polars' multi-file scan +
-        # collect. Polars unifies schemas across files (matches the
-        # prior how="diagonal_relaxed" semantics for #363's Null->Utf8
-        # case when paired with _normalize_chunk_schema in connector.py).
         return pl.read_parquet(staging / "chunk_*.parquet")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def _cast_to_schema(
+    df: pl.DataFrame,
+    schema: dict[str, pl.DataType],
+) -> pl.DataFrame:
+    """Cast ``df`` columns to the unified ``schema``, narrowing dtypes
+    where Polars inferred something looser (Null -> Utf8, Int64 -> the
+    canonical Int64, etc.). Missing columns are added as all-null with
+    the target dtype; extras are kept as-is so callers can still see
+    schema drift on read-back.
+    """
+    exprs = []
+    for name, dtype in schema.items():
+        if name not in df.columns:
+            exprs.append(pl.lit(None).cast(dtype).alias(name))
+        elif df.schema[name] != dtype:
+            exprs.append(pl.col(name).cast(dtype, strict=False))
+    if not exprs:
+        return df
+    return df.with_columns(exprs).select(list(schema.keys()))
 
 
 def _read_incremental(
