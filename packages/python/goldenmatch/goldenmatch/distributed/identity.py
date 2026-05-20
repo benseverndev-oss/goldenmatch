@@ -55,12 +55,16 @@ def resolve_identities_distributed(
         # Materialize cluster aggregates back to dict shape so the existing
         # in-memory resolver can consume them. Phase 6 lift goal is to skip
         # this step once the resolver is partition-friendly.
-        from goldenmatch.distributed.clustering import materialize_cluster_dict
+        from goldenmatch.distributed.clustering import (
+            materialize_cluster_dict,
+            pairs_list_to_dataset,
+        )
 
         log.info(
             "distributed identity: materializing Ray cluster dataset (driver-side)"
         )
-        clusters_dict = materialize_cluster_dict(clusters)
+        pairs_ds = pairs_list_to_dataset(scored_pairs)
+        clusters_dict = materialize_cluster_dict(clusters, pairs_ds)
     else:
         clusters_dict = clusters
 
