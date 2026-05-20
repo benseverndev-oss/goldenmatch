@@ -9,7 +9,7 @@ without the [ray] extra installed.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ray.data import Dataset
@@ -297,9 +297,9 @@ def _build_clusters_scipy_fallback(
 
 
 def two_phase_wcc(
-    pairs_ds,
-    all_ids: list,
-):
+    pairs_ds: Dataset,
+    all_ids: list[int],
+) -> Dataset:
     """Two-Phase Weakly Connected Components (Iverson et al, 2014).
 
     Phase A: per-partition local Union-Find (embarrassingly parallel).
@@ -319,9 +319,9 @@ def two_phase_wcc(
 
     # Phase A: per-partition local CC.
     local_ds = pairs_ds.map_batches(_phase_a_local_cc, batch_format="pyarrow")
-    local_components: dict = {}
+    local_components: dict[int, int] = {}
     for table in local_ds.iter_batches(batch_format="pyarrow"):
-        for row in table.to_pylist():
+        for row in table.to_pylist():  # type: ignore[attr-defined]
             local_components[row["member_id"]] = row["local_root"]
 
     # Seed isolated nodes (in all_ids but never touched by pairs).
@@ -334,10 +334,10 @@ def two_phase_wcc(
 
     # Normalize label to the min member id per component (matches
     # label_propagation's semantics).
-    by_global_root: dict = {}
+    by_global_root: dict[int, list[int]] = {}
     for member, root in global_components.items():
         by_global_root.setdefault(root, []).append(member)
-    final_labels: dict = {}
+    final_labels: dict[int, int] = {}
     for members in by_global_root.values():
         min_id = min(members)
         for m in members:
@@ -347,7 +347,7 @@ def two_phase_wcc(
     return ray.data.from_items(rows)
 
 
-def _emit_boundary_pairs(batch, member_to_root: dict):  # pa.Table -> pa.Table
+def _emit_boundary_pairs(batch: Any, member_to_root: dict[int, int]) -> Any:  # pa.Table -> pa.Table
     """Emit one row per boundary edge (pairs where the two endpoints
     have different local_roots).
 
@@ -368,9 +368,9 @@ def _emit_boundary_pairs(batch, member_to_root: dict):  # pa.Table -> pa.Table
 
 
 def _phase_b_merge_boundaries(
-    local_components: dict,
-    pairs_ds,
-) -> dict:
+    local_components: dict[int, int],
+    pairs_ds: Dataset,
+) -> dict[int, int]:
     """Phase B: reconcile local roots across partitions via super-graph UF.
 
     Collects boundary edges (bounded by O(P^2)) to driver, runs Union-Find
@@ -391,7 +391,7 @@ def _phase_b_merge_boundaries(
         uf.add(root)
 
     for table in boundary_tables:
-        for row in table.to_pylist():
+        for row in table.to_pylist():  # type: ignore[attr-defined]
             uf.add(row["root_a"])
             uf.add(row["root_b"])
             uf.union(row["root_a"], row["root_b"])
@@ -399,7 +399,7 @@ def _phase_b_merge_boundaries(
     return {m: uf.find(r) for m, r in local_components.items()}
 
 
-def _phase_a_local_cc(batch):  # batch: pa.Table -> pa.Table
+def _phase_a_local_cc(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
     """Phase A of Two-Phase WCC: local Union-Find on this partition's pairs.
 
     Emits one (member_id, local_root) row per member touched by the
