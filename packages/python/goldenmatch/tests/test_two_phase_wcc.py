@@ -218,3 +218,25 @@ def test_two_phase_wcc_does_not_capture_local_components_in_udf():
         "Phase B should ray.put(local_components) so workers share one copy"
         " from the object store instead of receiving a copy per task."
     )
+
+
+def test_emit_boundary_pairs_accepts_polars_frame():
+    """The columnar refactor path: pass a Polars frame as the lookup."""
+    import polars as pl
+    import pyarrow as pa
+    from goldenmatch.distributed.clustering import _emit_boundary_pairs
+
+    pairs_batch = pa.Table.from_pylist([
+        {"id_a": 1, "id_b": 2, "score": 0.9},   # same root -> drop
+        {"id_a": 3, "id_b": 4, "score": 0.85},  # different roots -> keep
+        {"id_a": 5, "id_b": 6, "score": 0.8},   # same root -> drop
+    ])
+    roots_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5, 6],
+        "local_root": [1, 1, 3, 4, 5, 5],
+    })
+
+    out = _emit_boundary_pairs(pairs_batch, roots_pl)
+    rows = out.to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["root_a"] == 3 and rows[0]["root_b"] == 4

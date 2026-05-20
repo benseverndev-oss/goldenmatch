@@ -364,36 +364,51 @@ def two_phase_wcc(
     return ray.data.from_items(rows)
 
 
-def _emit_boundary_pairs(batch: Any, member_to_root_ref: Any) -> Any:  # pa.Table -> pa.Table
-    """Emit one row per boundary edge (pairs where the two endpoints
-    have different local_roots).
+def _emit_boundary_pairs(batch: Any, member_to_root_ref: Any) -> Any:
+    """Emit one row per boundary edge via vectorized Polars join.
 
-    Output schema: {root_a, root_b}. Phase B does Union-Find on these
-    super-edges.
+    ``member_to_root_ref`` is one of:
+      - ``pl.DataFrame`` with columns {member_id, local_root}: used by
+        unit tests and by the production worker after deref.
+      - ``dict[int, int]``: legacy unit-test shape; auto-converted to
+        a Polars frame.
+      - Ray ``ObjectRef`` to a Polars frame: production map_batches
+        path; deref shares the Arrow buffer zero-copy from plasma.
 
-    ``member_to_root_ref`` is either a ``dict[int, int]`` (used by unit
-    tests + small graphs where serialization overhead doesn't matter) or
-    a Ray ObjectRef to one (used by the production map_batches call so
-    Ray shares one copy across all tasks on a node).
+    Polars frame at 5M entries is ~80 MiB resident; the equivalent
+    Python dict is ~475 MiB and was the root cause of run 26166347530's
+    SIGTERM (see docs/superpowers/specs/2026-05-20-two-phase-wcc-columnar-design.md).
     """
-    import pyarrow as pa  # noqa: PLC0415
+    import polars as pl  # noqa: PLC0415
 
-    if isinstance(member_to_root_ref, dict):
-        member_to_root: dict[int, int] = member_to_root_ref
+    if isinstance(member_to_root_ref, pl.DataFrame):
+        roots_pl = member_to_root_ref
+    elif isinstance(member_to_root_ref, dict):
+        roots_pl = pl.DataFrame({
+            "member_id": list(member_to_root_ref.keys()),
+            "local_root": list(member_to_root_ref.values()),
+        })
     else:
         import ray  # noqa: PLC0415
+        roots_pl = ray.get(member_to_root_ref)
 
-        member_to_root = ray.get(member_to_root_ref)
+    batch_pl = pl.from_arrow(batch).select(["id_a", "id_b"])
 
-    out = []
-    for row in batch.to_pylist():
-        ra = member_to_root.get(row["id_a"])
-        rb = member_to_root.get(row["id_b"])
-        if ra is None or rb is None or ra == rb:
-            continue
-        out.append({"root_a": int(ra), "root_b": int(rb)})
+    joined = (
+        batch_pl
+        .join(
+            roots_pl.rename({"member_id": "id_a", "local_root": "root_a"}),
+            on="id_a", how="inner",
+        )
+        .join(
+            roots_pl.rename({"member_id": "id_b", "local_root": "root_b"}),
+            on="id_b", how="inner",
+        )
+        .filter(pl.col("root_a") != pl.col("root_b"))
+        .select(["root_a", "root_b"])
+    )
 
-    return pa.Table.from_pylist(out)
+    return joined.to_arrow()
 
 
 def _phase_b_merge_boundaries(
