@@ -626,19 +626,36 @@ class IdentityStore:
         fs = json.dumps(edge.field_scores) if edge.field_scores else None
         ne = json.dumps(edge.negative_evidence) if edge.negative_evidence else None
         cs = json.dumps(edge.controller_snapshot) if edge.controller_snapshot else None
-        self._exec(
-            """
-            INSERT OR IGNORE INTO evidence_edges
-                (entity_id, record_a_id, record_b_id, kind, score, matchkey_name,
-                 field_scores, negative_evidence, controller_snapshot, run_name,
-                 dataset, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                edge.entity_id, a, b, edge.kind, edge.score, edge.matchkey_name,
-                fs, ne, cs, edge.run_name, edge.dataset, edge.recorded_at.isoformat(),
-            ),
-        )
+        if self._backend == "sqlite":
+            self._exec(
+                "INSERT OR IGNORE INTO evidence_edges "
+                "(entity_id, record_a_id, record_b_id, kind, score, "
+                "matchkey_name, field_scores, negative_evidence, "
+                "controller_snapshot, run_name, dataset, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    edge.entity_id, a, b, edge.kind, edge.score,
+                    edge.matchkey_name, fs, ne, cs, edge.run_name,
+                    edge.dataset, edge.recorded_at.isoformat(),
+                ),
+            )
+        else:
+            conn: Any = self._conn
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO evidence_edges "
+                    "(entity_id, record_a_id, record_b_id, kind, score, "
+                    "matchkey_name, field_scores, negative_evidence, "
+                    "controller_snapshot, run_name, dataset, recorded_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (entity_id, record_a_id, record_b_id, "
+                    "kind, run_name) DO NOTHING",
+                    (
+                        edge.entity_id, a, b, edge.kind, edge.score,
+                        edge.matchkey_name, fs, ne, cs, edge.run_name,
+                        edge.dataset, edge.recorded_at.isoformat(),
+                    ),
+                )
         row = self._fetchone(
             "SELECT edge_id FROM evidence_edges WHERE entity_id=? AND record_a_id=? "
             "AND record_b_id=? AND kind=? AND COALESCE(run_name,'')=COALESCE(?,'')",
