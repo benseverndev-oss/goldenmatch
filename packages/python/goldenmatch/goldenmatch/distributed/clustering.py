@@ -132,6 +132,12 @@ def label_propagation(
 _LABEL_PROP_PAIR_THRESHOLD = 50_000_000
 
 
+def _wcc_algorithm() -> str:
+    """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase')."""
+    import os
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
+
+
 def _label_prop_threshold() -> int:
     import os
 
@@ -185,22 +191,33 @@ def build_clusters_distributed(
         )
         return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
 
-    logger.info(
-        "build_clusters_distributed: %d pairs >= %d threshold; "
-        "routing to distributed label propagation.",
-        pair_count, threshold,
-    )
-    try:
-        labels_ds, _iters = label_propagation(
-            pairs_ds, all_ids,
-            convergence_max_iterations=convergence_max_iterations,
+    algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
+
+    if algorithm == "label_propagation":
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; "
+            "routing to distributed label propagation (env override or "
+            "force_label_propagation=True).",
+            pair_count, threshold,
         )
-    except ConvergenceError as e:
-        logger.warning(
-            "label propagation did not converge; scipy.csgraph fallback on driver. %s",
-            e,
+        try:
+            labels_ds, _iters = label_propagation(
+                pairs_ds, all_ids,
+                convergence_max_iterations=convergence_max_iterations,
+            )
+        except ConvergenceError as e:
+            logger.warning(
+                "label propagation did not converge; scipy.csgraph fallback on driver. %s",
+                e,
+            )
+            return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+    else:
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; "
+            "routing to two_phase_wcc (default, Sem Sinchenko recommendation).",
+            pair_count, threshold,
         )
-        return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+        labels_ds = two_phase_wcc(pairs_ds, all_ids)
 
     sizes_ds = labels_ds.groupby("label").count()
     size_rows = sizes_ds.take_all()
