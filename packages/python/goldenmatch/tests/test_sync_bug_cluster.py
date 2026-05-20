@@ -489,5 +489,65 @@ def test_read_all_lazy_staging_survives_lazyframe_rebinding():
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def test_full_scan_pipeline_drops_existing_row_id_before_dedupe_df():
+    """#394: run_sync attaches __row_id__ + __source__ to the LazyFrame
+    before calling _full_scan_pipeline. dedupe_df adds its own
+    __row_id__ unconditionally via _add_row_ids, so passing a frame that
+    already has the column raises "duplicate column name __row_id__"
+    from Polars' with_columns step.
+
+    Repro: hand _full_scan_pipeline a frame that already has both
+    bookkeeping columns. It must dispatch to dedupe_df successfully
+    instead of raising.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from goldenmatch._api import DedupeResult
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+    )
+    from goldenmatch.db.sync import _full_scan_pipeline
+
+    df = pl.DataFrame({
+        "name": ["alice", "alice", "bob", "carol"],
+        "city": ["nyc", "nyc", "la", "sf"],
+        "__source__": ["new"] * 4,
+        "__row_id__": [0, 1, 2, 3],
+    })
+
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="exact_name", type="exact",
+            fields=[MatchkeyField(field="name")],
+        )],
+    )
+
+    fake_result = DedupeResult(
+        golden=None,
+        clusters={},
+        dupes=None,
+        unique=None,
+        stats={},
+        scored_pairs=[],
+    )
+
+    connector = MagicMock()
+    with patch("goldenmatch._api.dedupe_df", return_value=fake_result) as mock_dedupe:
+        _full_scan_pipeline(
+            connector, df, "src_table", config, config.get_matchkeys(),
+            "separate", True, "run_1", "cfg_hash", 4,
+        )
+
+    passed_df = mock_dedupe.call_args[0][0]
+    assert "__row_id__" not in passed_df.columns, (
+        "_full_scan_pipeline must strip __row_id__ before dispatching to "
+        "dedupe_df -- dedupe_df re-adds it internally. See #394."
+    )
+    assert "__source__" not in passed_df.columns, (
+        "_full_scan_pipeline must strip __source__ before dispatching to "
+        "dedupe_df -- dedupe_df re-adds it internally. See #394."
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
