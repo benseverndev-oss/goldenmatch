@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- `bench-phase5-simulated` workflow job: runs a 4-worker Ray cluster
+  inside one `large-new-64GB` GitHub runner against 50M synthetic rows,
+  exercising the Phase 5 streaming pipeline without provisioning
+  external infrastructure. Workflow_dispatch only (gated on
+  `run_phase5_simulated=true`); optional identity variant via
+  `run_phase5_simulated_identity=true`. Honest scoping (single NIC,
+  single disk, shared OS page cache): this is a regression check, NOT
+  a Splink-Spark parity proof. The real-cluster bench
+  (`bench-phase5-end2end`) is still required for any parity claim.
+- `scripts/bench_phase5_simulated.py`: cluster-agnostic Phase 5 bench
+  driver (works against simulated AND real clusters, only `RAY_ADDRESS`
+  differs). Connects to a pre-started Ray cluster, runs
+  `run_dedupe_pipeline_distributed`, writes a JSON summary with wall
+  + RSS + cluster resources.
+- `scripts/generate_phase5_50m_dataset.py`: one-shot 50M dataset
+  generator wrapper. Outputs `bench-dataset/bench_50000000.parquet`
+  for upload to the `bench-dataset-v1` release. ~8 hr single-node
+  generation cost.
+
 ### Fixed
 
 - `goldenmatch sync` cluster: four user-visible bugs that all surfaced

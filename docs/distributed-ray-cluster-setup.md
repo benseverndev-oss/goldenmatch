@@ -13,6 +13,60 @@ Helm, etc.) that's better handled by the team running the workload than
 embedded in a Python package. Cluster lifecycle, autoscaling, network
 policy, and IAM all belong in your existing platform stack.
 
+## Simulated single-node cluster (for CI / code-path validation)
+
+For regression checks + code-path validation without provisioning real
+multi-node infrastructure, run a 4-worker Ray cluster inside one
+`large-new-64GB` GitHub runner (or one beefy local box):
+
+```bash
+# Start head + 3 workers, each with 4 CPU and 8 GB object store.
+ray start --head --port=6379 --num-cpus=4 \
+  --object-store-memory=8000000000 --dashboard-host=127.0.0.1
+for i in 1 2 3; do
+  ray start --address=127.0.0.1:6379 --num-cpus=4 \
+    --object-store-memory=8000000000
+done
+ray status  # confirm 4 nodes, 16 CPU total
+
+# Run the cluster-agnostic Phase 5 bench.
+RAY_ADDRESS=127.0.0.1:6379 \
+GOLDENMATCH_DISTRIBUTED_PIPELINE=2 \
+GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1 \
+python scripts/bench_phase5_simulated.py \
+  --parquet bench-dataset/bench_50000000.parquet \
+  --rows 50000000 \
+  --identity false \
+  --out bench_phase5_simulated.json
+
+# Tear down.
+ray stop --force
+```
+
+**Honest scoping caveats** (do not skip when sharing results):
+
+- Single NIC: inter-worker shuffle uses shared memory, not network. Real
+  multi-node shuffle behavior is invisible here.
+- Single disk: Ray's spill-to-disk for object-store eviction is fast
+  (NVMe). On real workers with slower disks, spill latency dominates
+  long-pole partitions in ways this bench can't see.
+- Shared page cache: parquet reads can land in OS page cache and not
+  re-hit disk on the second pass. Real workers cold-read from object
+  storage.
+
+The simulated bench is a **regression check** ("Phase 5 code still
+runs"), not a **parity proof** ("Phase 5 hits Splink-Spark on 100M").
+The real-cluster bench at `bench-phase5-end2end` is still required for
+any parity claim.
+
+The CI workflow that runs this path is `bench-phase5-simulated` in
+`.github/workflows/bench-distributed-stack.yml`, gated on the
+`run_phase5_simulated=true` workflow_dispatch input. The 50M asset
+must be pre-generated (`scripts/generate_phase5_50m_dataset.py`) and
+uploaded to the `bench-dataset-v1` release before the workflow can
+fire; the job exits fast with `::error::bench_50000000.parquet missing`
+otherwise.
+
 ## Recommended cluster shape
 
 Phase 5 kill criterion: **100M-row dedupe in under 30 min**. To hit that:
