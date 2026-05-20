@@ -30,6 +30,14 @@ on:
         description: "Run Phase 6 identity bench (driver vs distributed against Postgres)"
         type: boolean
         default: false
+      run_phase5_simulated:
+        description: "Run Phase 5 simulated 4-worker bench (one runner, 50M)"
+        type: boolean
+        default: false
+      run_phase5_simulated_identity:
+        description: "When phase5_simulated runs, also enable identity (needs Postgres)"
+        type: boolean
+        default: false
 
 jobs:
   bench:
@@ -603,6 +611,109 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bench-phase6-identity
+          path: packages/python/goldenmatch/bench-out/
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-phase5-simulated:
+    name: "bench Phase 5 simulated (4-worker Ray on one runner @ 50M)"
+    # Honest scoping: 4 Ray workers inside one large-new-64GB runner.
+    # Single NIC, single disk, shared OS page cache. Regression check,
+    # NOT a Splink-Spark parity proof. Real-cluster bench is still
+    # bench-phase5-end2end above.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_phase5_simulated == true
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch with ray + postgres
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray,postgres]"
+      - name: Apply Alembic baseline (identity variant only)
+        if: inputs.run_phase5_simulated_identity == true
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_IDENTITY_DSN: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          goldenmatch identity migrate --dsn "$GOLDENMATCH_IDENTITY_DSN" || true
+      - name: Download 50M dataset
+        # Fail-fast: on-the-fly 50M generation would take ~8 hr and
+        # blow the 60-min job cap. Asset must be pre-generated via
+        # scripts/generate_phase5_50m_dataset.py and uploaded to the
+        # bench-dataset-v1 release.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          if ! gh release download bench-dataset-v1 \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "bench_50000000.parquet" \
+              --dir bench-dataset/; then
+            echo "::error::bench_50000000.parquet missing on release. Run scripts/generate_phase5_50m_dataset.py and upload."
+            exit 1
+          fi
+          ls -lh bench-dataset/
+      - name: Start simulated 4-worker Ray cluster
+        run: |
+          ray start --head --port=6379 --num-cpus=4 \
+            --object-store-memory=8000000000 --dashboard-host=127.0.0.1
+          for i in 1 2 3; do
+            ray start --address=127.0.0.1:6379 --num-cpus=4 \
+              --object-store-memory=8000000000
+          done
+          ray status
+      - name: Run Phase 5 streaming bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_DISTRIBUTED_PIPELINE: "2"
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          RAY_ADDRESS: "127.0.0.1:6379"
+          POSTGRES_URL: postgresql://postgres:bench@localhost:5432/postgres
+        run: |
+          mkdir -p bench-out
+          python scripts/bench_phase5_simulated.py \
+            --parquet bench-dataset/bench_50000000.parquet \
+            --rows 50000000 \
+            --identity ${{ inputs.run_phase5_simulated_identity }} \
+            --out bench-out/phase5_simulated.json
+      - name: Tear down Ray
+        if: always()
+        run: ray stop --force
+      - name: Summarize
+        if: always()
+        working-directory: packages/python/goldenmatch
+        run: |
+          echo '## bench-phase5-simulated (4-worker Ray, one host @ 50M)' >> "$GITHUB_STEP_SUMMARY"
+          echo '**Honest scoping: single NIC, single disk, shared OS page cache. Regression check, NOT a multi-node parity claim.**' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase5_simulated.json 2>/dev/null || echo '{"error": "bench produced no output"}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase5-simulated
           path: packages/python/goldenmatch/bench-out/
           if-no-files-found: warn
           retention-days: 30
