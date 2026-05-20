@@ -362,3 +362,55 @@ class TestSortedNeighborhood:
 
         for r in results:
             assert r.strategy == "sorted_neighborhood"
+
+
+class TestNullBlockKeyFilter:
+    """Records whose blocking column is NULL / NaN / stringifies to a
+    missing-value sentinel should not be grouped together. (#372)"""
+
+    def test_null_blocking_column_drops_records_from_all_blocks(self):
+        """A column with NULL values should not produce a 'null' block."""
+        config = BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["last_name"], transforms=[])],
+            max_block_size=1000,
+        )
+        # 3 records share last_name=Smith (valid block), 4 have None
+        # (should drop). Without the filter, the 4 nulls would group
+        # under the literal string "null" or "nan" depending on Polars
+        # cast path.
+        df = pl.DataFrame({
+            "id": [1, 2, 3, 4, 5, 6, 7],
+            "last_name": ["Smith", "Smith", "Smith", None, None, None, None],
+        })
+        results = build_blocks(df.lazy(), config)
+        keys = {r.block_key for r in results}
+        assert "null" not in keys
+        assert "nan" not in keys
+        assert "none" not in keys
+        assert "" not in keys
+        # The Smith block should still be there.
+        assert any(r.block_key.lower() == "smith" for r in results)
+
+    def test_nan_float_blocking_column_drops_records(self):
+        """A Float64 column with NaN values gets stringified as 'NaN'
+        by Polars' cast(Utf8) and then collapsed to 'nan' by a
+        downstream lowercase transform. Records with NaN must be
+        filtered before grouping."""
+        config = BlockingConfig(
+            keys=[BlockingKeyConfig(
+                fields=["score_bucket"],
+                transforms=["lowercase"],
+            )],
+            max_block_size=1000,
+        )
+        df = pl.DataFrame({
+            "id": [1, 2, 3, 4, 5],
+            # Float64 with explicit NaN -- this is the bug surface.
+            "score_bucket": [1.0, 1.0, float("nan"), float("nan"), float("nan")],
+        })
+        results = build_blocks(df.lazy(), config)
+        keys = {r.block_key.lower() for r in results}
+        assert "nan" not in keys, (
+            f"Found 'nan' block in {keys}: NaN records should be "
+            "filtered before group_by. See #372."
+        )

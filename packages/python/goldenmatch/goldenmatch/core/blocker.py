@@ -159,6 +159,23 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
         # Add block key column and collect
         df_with_key = lf.with_columns(block_key_expr).collect()
 
+        # Filter records whose block key is null or stringifies as a
+        # missing-value sentinel ("nan", "null", "none", ""). NULLs in a
+        # blocking column mean "we don't know" -- those records shouldn't
+        # cluster together. The cast(Utf8) in _build_block_key_expr turns
+        # Polars NaN into the literal string "NaN", which a downstream
+        # lowercase transform then collapses to "nan" -- all such
+        # records ended up in a single ~12K-record block at 1.13M scale,
+        # OOMing the runner during scoring (#372). The group_by-level
+        # `if key_str is None: continue` only catches Polars None, not
+        # the stringified forms.
+        df_with_key = df_with_key.filter(
+            pl.col("__block_key__").is_not_null()
+            & ~pl.col("__block_key__").str.strip_chars().str.to_lowercase().is_in(
+                ["nan", "null", "none", ""]
+            )
+        )
+
         # Group by block key
         groups = df_with_key.group_by("__block_key__")
 
@@ -237,9 +254,19 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
                     hot_blocks_skipped += 1
                     continue
                 else:
-                    logger.warning(
+                    # skip_oversized=False -- the caller explicitly opted
+                    # into processing oversized blocks. We honor that but
+                    # log at ERROR so the OOM-vs-correctness tradeoff is
+                    # obvious in the run log. The actionable recovery is
+                    # always `skip_oversized=True` (drops the offending
+                    # block but lets the rest of the run land).
+                    logger.error(
                         f"Block {key_str!r} has {size} records "
-                        f"(exceeds max_block_size={config.max_block_size}). Processing anyway."
+                        f"(exceeds max_block_size={config.max_block_size}, "
+                        f"~{size * (size - 1) // 2:,} pairs to score). "
+                        f"Processing anyway because skip_oversized=False; "
+                        f"set blocking.skip_oversized=True to skip oversized "
+                        f"blocks instead of risking OOM. See #372."
                     )
 
             results.append(BlockResult(
