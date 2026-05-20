@@ -107,7 +107,9 @@ def _run_phase5_pipeline(
     multi_ds = _join_clusters_to_rows(ds, clusters_dict)
 
     # 5. Golden via Phase 4 polymorphic dispatch (handles both pl.DataFrame and Dataset).
-    golden = build_golden_records_batch(multi_ds, cfg.golden_rules)
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    rules = cfg.golden_rules or GoldenRulesConfig()
+    golden = build_golden_records_batch(multi_ds, rules)
 
     # 6. Write output.
     if output_path is not None:
@@ -142,7 +144,7 @@ def _join_clusters_to_rows(ds: Dataset, clusters: dict) -> Dataset:
 
     map_ref = ray.put(member_to_cid)
 
-    def _annotate(batch):  # batch: pa.Table -> pa.Table
+    def _annotate(batch: Any) -> Any:  # noqa: ANN401  # batch: pa.Table -> pa.Table
         import polars as pl
         import ray as _ray
         df = pl.from_arrow(batch)
@@ -151,7 +153,8 @@ def _join_clusters_to_rows(ds: Dataset, clusters: dict) -> Dataset:
             df = df.with_row_index("__row_id__").with_columns(
                 pl.col("__row_id__").cast(pl.Int64)
             )
-        lookup = _ray.get(map_ref)
+        lookup_raw = _ray.get(map_ref)
+        lookup: dict[int, int] = dict(lookup_raw) if not isinstance(lookup_raw, dict) else lookup_raw
         keys = list(lookup.keys())
         vals = list(lookup.values())
         out = df.with_columns(
@@ -164,7 +167,7 @@ def _join_clusters_to_rows(ds: Dataset, clusters: dict) -> Dataset:
     return ds.map_batches(_annotate, batch_format="pyarrow")
 
 
-def _write_golden_output(golden, output_path: str) -> None:
+def _write_golden_output(golden: Any, output_path: str) -> None:
     """Write golden records to parquet at end of Phase 5 pipeline."""
     if isinstance(golden, list):
         if golden:
