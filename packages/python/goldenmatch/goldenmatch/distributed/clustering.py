@@ -316,6 +316,38 @@ def _emit_boundary_pairs(batch, member_to_root: dict):  # pa.Table -> pa.Table
     return pa.Table.from_pylist(out)
 
 
+def _phase_b_merge_boundaries(
+    local_components: dict,
+    pairs_ds,
+) -> dict:
+    """Phase B: reconcile local roots across partitions via super-graph UF.
+
+    Collects boundary edges (bounded by O(P^2)) to driver, runs Union-Find
+    on the local_roots, and remaps every member to its final global root.
+    """
+    from goldenmatch.core.cluster import UnionFind
+
+    boundary_tables = list(
+        pairs_ds.map_batches(
+            lambda b: _emit_boundary_pairs(b, local_components),
+            batch_format="pyarrow",
+        ).iter_batches(batch_format="pyarrow")
+    )
+
+    uf = UnionFind()
+    # Seed with every distinct local_root so isolated components keep their roots.
+    for root in set(local_components.values()):
+        uf.add(root)
+
+    for table in boundary_tables:
+        for row in table.to_pylist():
+            uf.add(row["root_a"])
+            uf.add(row["root_b"])
+            uf.union(row["root_a"], row["root_b"])
+
+    return {m: uf.find(r) for m, r in local_components.items()}
+
+
 def _phase_a_local_cc(batch):  # batch: pa.Table -> pa.Table
     """Phase A of Two-Phase WCC: local Union-Find on this partition's pairs.
 
