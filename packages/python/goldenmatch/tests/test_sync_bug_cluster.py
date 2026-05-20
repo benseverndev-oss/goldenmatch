@@ -120,11 +120,17 @@ def test_most_complete_strategy_uses_sort_by_not_top_k_by():
     from goldenmatch.core import golden
 
     src = inspect.getsource(golden._build_golden_records_polars_native)
-    assert "top_k_by" not in src, (
+    # Strip comment lines so the historical-context comment can stay.
+    code_lines = [
+        ln for ln in src.splitlines()
+        if not ln.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert "top_k_by(" not in code, (
         "top_k_by(by=..., k=1, reverse=False) breaks on newer Polars; "
         "use sort_by(col, descending=True).first() instead. See #362."
     )
-    assert "sort_by(" in src
+    assert "sort_by(" in code
 
 
 def test_most_complete_picks_longest_string():

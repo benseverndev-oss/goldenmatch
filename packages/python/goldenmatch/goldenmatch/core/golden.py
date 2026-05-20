@@ -198,9 +198,14 @@ def _build_golden_records_polars_native(
         ])
         agg_exprs: list = []
         for col in user_cols:
+            # sort_by(descending=True).first() picks the longest non-null
+            # value, matching the prior top_k_by(by=..., k=1, reverse=False)
+            # intent. top_k_by mis-binds args on newer Polars where
+            # 'reverse' is no longer a kwarg; sort_by is stable across
+            # Polars 0.20+. See #362.
             agg_exprs.append(
                 pl.col(col).filter(pl.col(col).is_not_null())
-                .top_k_by(by=len_col_aliases[col], k=1, reverse=False)
+                .sort_by(len_col_aliases[col], descending=True)
                 .first().alias(f"__val_{col}__")
             )
             agg_exprs.append(
