@@ -97,7 +97,7 @@ class PostgresConnector(DatabaseConnector):
                 if not rows:
                     break
                 data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-                yield pl.DataFrame(data)
+                yield _normalize_chunk_schema(pl.DataFrame(data))
         finally:
             cursor.close()
 
@@ -179,10 +179,39 @@ class PostgresConnector(DatabaseConnector):
             cursor.close()
 
 
+def _normalize_chunk_schema(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast Null-dtype columns to Utf8 so vstack across chunks succeeds.
+
+    When a chunked Postgres read hits a chunk where a column is 100%
+    NULL, Polars infers ``Null`` dtype for it. A later chunk with real
+    values infers ``String``, and ``pl.concat`` rejects the mismatch
+    with 'type String is incompatible with expected type Null'.
+
+    Casting all-null ``Null`` columns to ``Utf8`` at the chunk boundary
+    sidesteps the issue. Utf8 is the lowest-cost fallback when we can't
+    know the true Postgres type from the cursor alone -- subsequent
+    chunks carry the real values. See #363.
+    """
+    null_cols = [c for c, dt in df.schema.items() if dt == pl.Null]
+    if not null_cols:
+        return df
+    return df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
+
+
 def _quote_ident(name: str) -> str:
-    """Quote a SQL identifier to prevent injection."""
-    # Simple quoting — replace any double quotes and wrap
-    return '"' + name.replace('"', '""') + '"'
+    """Quote a SQL identifier to prevent injection.
+
+    Splits a single ``schema.table`` arg into ``"schema"."table"`` so
+    callers can pass non-public schemas via ``sync --table gm.foo``.
+    See #365.
+
+    Edge case: tables with literal dots in the name are split on the
+    FIRST dot only -- yielding ``"odd_schema"."weird.name"``. Two-dot
+    identifiers are vanishingly rare in practice and there is no
+    portable escape syntax for them through a CLI flag.
+    """
+    parts = name.split(".", 1)  # max one split: schema.table
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def create_connector(config: dict) -> DatabaseConnector:
