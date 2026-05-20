@@ -277,104 +277,52 @@ def _full_scan_pipeline(
     connector, df_or_lf, source_table, config, matchkeys,
     output_mode, dry_run, run_id, cfg_hash, total_rows,
 ):
-    """Run full dedupe on all records.
+    """Run full dedupe on all records via the main dedupe_df entry.
 
-    Accepts either an eager ``pl.DataFrame`` (legacy callers) or a
-    ``pl.LazyFrame`` (new full-scan path from run_sync). The lazy path
-    keeps the data on disk through matchkey computation, materializing
-    only once via the ``.collect()`` below -- vs the old form which
-    materialized in _read_all AND again here after matchkeys, peaking
-    at ~2x the frame size during the second collect (#384).
+    Prior to #391's OOM diagnosis (exit 137 mid-pipeline at 1M rows on a
+    small-memory host) this function rolled its own pipeline -- direct
+    calls to ``find_exact_matches`` / ``build_blocks`` / ``find_fuzzy_matches``
+    / ``build_clusters`` / ``build_golden_record``. That path bypassed the
+    v3 backend planner and the controller-budget cap, so on real-world
+    skewed data (e.g. 100K rows sharing one normalized name) the Polars
+    self-join inside ``find_exact_matches`` produced billions of pair
+    rows and the kernel OOM-killed the process.
+
+    Routing through ``dedupe_df`` gets us the same machinery the bench
+    uses end-to-end:
+      * v3 planner picks ``backend="bucket"`` at >= 100K rows (streaming,
+        block-batched, no NxN allocation on skewed blocks)
+      * controller-budget cap protects against pathological iterations
+      * auto-fix + matchkey computation run inside the pipeline -- one
+        materialization, not two
+
+    ``confidence_required=False`` keeps the sync running end-to-end even
+    when the controller commits a RED profile; callers who want the
+    strict raise can pass an explicit ``GoldenMatchConfig`` with their
+    own posture. See #391 for the original OOM trace.
     """
-    from goldenmatch.core.autofix import auto_fix_dataframe
-    from goldenmatch.core.blocker import build_blocks
-    from goldenmatch.core.cluster import build_clusters
-    from goldenmatch.core.golden import build_golden_record
-    from goldenmatch.core.matchkey import compute_matchkeys
-    from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+    from goldenmatch._api import dedupe_df
 
-    # Normalize input -- accept either DataFrame (legacy) or LazyFrame
-    # (new memory-bounded path). DataFrame.lazy() is a no-op view; the
-    # collect() below is the one materialization.
     logger.info(
         "Pipeline: %d matchkeys configured (%s)",
         len(matchkeys),
         ", ".join(f"{mk.name}:{mk.type}" for mk in matchkeys) if matchkeys else "<none>",
     )
-    lf = df_or_lf.lazy() if isinstance(df_or_lf, pl.DataFrame) else df_or_lf
-    lf = compute_matchkeys(lf, matchkeys)
-    logger.info("Pipeline: materializing matchkey-joined frame...")
-    df = lf.collect()
+    logger.info("Pipeline: collecting input frame...")
+    df = df_or_lf.collect() if isinstance(df_or_lf, pl.LazyFrame) else df_or_lf
+    logger.info("Pipeline: materialized %d rows x %d cols", df.height, df.width)
+
+    logger.info("Pipeline: dispatching to dedupe_df (routes through v3 planner)...")
+    result = dedupe_df(df, config=config, confidence_required=False)
+    clusters = result.clusters
+    golden_df = result.golden
+    all_pairs = list(result.scored_pairs)
     logger.info(
-        "Pipeline: materialized %d rows x %d cols", df.height, df.width,
+        "Pipeline: dedupe_df returned %d scored pairs, %d clusters",
+        len(all_pairs), len(clusters),
     )
-    # auto_fix runs after the single collect so it operates on the
-    # already-materialized frame (it expects DataFrame).
-    df, _ = auto_fix_dataframe(df)
-    logger.info("Pipeline: auto_fix complete (%d rows)", df.height)
 
-    # Score pairs
-    all_pairs = []
-    matched_pairs = set()
-
-    exact_mks = [mk for mk in matchkeys if mk.type == "exact"]
-    for mk in exact_mks:
-        pairs = find_exact_matches(df.lazy(), mk)
-        all_pairs.extend(pairs)
-        for a, b, s in pairs:
-            matched_pairs.add((min(a, b), max(a, b)))
-    if exact_mks:
-        logger.info(
-            "Pipeline: %d pairs from %d exact matchkeys",
-            len(all_pairs), len(exact_mks),
-        )
-
-    if config.blocking:
-        weighted_mks = [mk for mk in matchkeys if mk.type == "weighted"]
-        for mk in weighted_mks:
-            pairs_before = len(all_pairs)
-            blocks = build_blocks(df.lazy(), config.blocking)
-            for block in blocks:
-                bdf = block.df.collect()
-                pairs = find_fuzzy_matches(
-                    bdf, mk,
-                    exclude_pairs=matched_pairs,
-                    pre_scored_pairs=block.pre_scored_pairs,
-                )
-                all_pairs.extend(pairs)
-                for a, b, s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-            if weighted_mks:
-                logger.info(
-                    "Pipeline: matchkey %r contributed %d pairs (total %d)",
-                    mk.name, len(all_pairs) - pairs_before, len(all_pairs),
-                )
-
-    # Cluster
-    all_ids = df["__row_id__"].to_list()
-    logger.info(
-        "Pipeline: clustering %d records from %d scored pairs",
-        len(all_ids), len(all_pairs),
-    )
-    clusters = build_clusters(all_pairs, all_ids, max_cluster_size=100)
-
-    # Golden records
-    golden_rules = config.golden_rules
-    golden_records = []
-    for cluster_id, cluster_info in clusters.items():
-        if cluster_info["size"] > 1 and not cluster_info.get("oversized"):
-            cluster_df = df.filter(pl.col("__row_id__").is_in(cluster_info["members"]))
-            golden = build_golden_record(cluster_df, golden_rules)
-            if golden:
-                golden["__cluster_id__"] = cluster_id
-                golden_records.append(golden)
-
-    golden_df = pl.DataFrame(golden_records) if golden_records else None
-
-    # Log matches
-    match_actions = []
-    for a, b, s in all_pairs:
-        match_actions.append((int(a), int(b), float(s), "merged"))
+    match_actions = [(int(a), int(b), float(s), "merged") for a, b, s in all_pairs]
 
     if not dry_run:
         log_matches_batch(connector, match_actions, run_id)
@@ -382,15 +330,11 @@ def _full_scan_pipeline(
         update_state(connector, source_table, cfg_hash=cfg_hash, record_count=total_rows)
 
     multi_clusters = {k: v for k, v in clusters.items() if v["size"] > 1}
+    golden_count = golden_df.height if golden_df is not None else 0
     logger.info(
         "Sync complete: %d records, %d pairs, %d multi-member clusters, %d golden records",
-        df.height, len(all_pairs), len(multi_clusters), len(golden_records),
+        df.height, len(all_pairs), len(multi_clusters), golden_count,
     )
-    # Loud-fail the silent-success case (#391): if the pipeline ran on
-    # non-empty input but produced zero pairs AND zero clusters, that's
-    # almost always a misconfiguration -- empty matchkey list, all-NULL
-    # blocking column, scorer threshold too high, etc. Make it
-    # observable instead of returning a clean exit with empty tables.
     if df.height > 0 and not all_pairs and not multi_clusters:
         logger.warning(
             "Sync produced zero pairs and zero clusters across %d records. "
@@ -403,7 +347,7 @@ def _full_scan_pipeline(
         "new_records": df.height,
         "matches": len(all_pairs),
         "clusters": len(multi_clusters),
-        "golden_records": len(golden_records),
+        "golden_records": golden_count,
         "actions": match_actions,
         "run_id": run_id,
     }
