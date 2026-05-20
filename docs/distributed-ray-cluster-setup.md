@@ -197,3 +197,62 @@ The roadmap kill criteria document where the boundaries sit:
 
 Numbers calibrated against actual measurements; revisit when hardware
 changes (256 GB workers move the boundary higher).
+
+## Phase 6: Identity Graph at distributed scale
+
+When `config.identity.enabled=True` on a distributed Phase 5 run, identity
+resolution runs against a pooled Postgres backend. Phase 6 lifts the
+single-process SQLite assumption from Identity Graph v2 and ships:
+
+- `psycopg3` driver (`psycopg[binary]>=3.1`) replaces `psycopg2`.
+- `psycopg_pool.ConnectionPool` as a process singleton.
+- Bulk `COPY ... FROM STDIN` writers on `IdentityStore` for high-volume
+  inserts (used by the partitioned resolver and any caller that wants
+  to skip per-row Python overhead).
+- Alembic-managed schema migrations.
+
+### Required Postgres setup
+
+- Postgres 14+ (uses `BIGSERIAL`, `JSONB`, `ON COMMIT DROP` on TEMP
+  tables, and `ON CONFLICT ... DO NOTHING` semantics).
+- `max_connections >= 200` for an 8-worker Ray cluster with the
+  default pool size of 8 per worker.
+- At >= 8 Ray workers, put PgBouncer in front of Postgres in
+  transaction-pooling mode. Connection churn from per-worker pools
+  saturates Postgres's per-process backend cost otherwise.
+
+### First-time schema setup
+
+Before the first distributed run with identity enabled, apply the
+Alembic baseline:
+
+```bash
+export GOLDENMATCH_IDENTITY_DSN="postgresql://goldenmatch:***@db:5432/goldenmatch"
+goldenmatch identity migrate --dsn "$GOLDENMATCH_IDENTITY_DSN"
+```
+
+If the schema was already created by a pre-Phase-6 IdentityStore (the
+`_pg_init_schema` path), stamp it under Alembic without re-creating
+tables:
+
+```bash
+goldenmatch identity migrate --dsn "$GOLDENMATCH_IDENTITY_DSN" --stamp-existing
+```
+
+### Environment variables
+
+- `GOLDENMATCH_IDENTITY_DSN` — Postgres DSN used by `goldenmatch
+  identity migrate` and the distributed identity stage.
+
+### When identity is skipped silently
+
+The distributed dispatch in `core.pipeline._resolve_identities` skips
+identity resolution (logs a warning, returns `None`) when:
+
+- `config.identity.backend != "postgres"` (SQLite is single-process).
+- `config.identity.connection` is unset.
+- An exception bubbles out of the distributed resolver (best-effort
+  behavior matches the in-memory path).
+
+The dedupe / cluster / golden output is unaffected in any of these
+cases; identity is additive.

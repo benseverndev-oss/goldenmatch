@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 6 — Identity Graph at distributed scale)
+- **psycopg3 migration** of the Postgres backend in `goldenmatch.identity.store`.
+  `psycopg2-binary` replaced by `psycopg[binary]>=3.1`. Adds first-class
+  COPY context manager support and `psycopg_pool` integration.
+- **Bulk COPY writes**: `IdentityStore.bulk_upsert_identities`,
+  `bulk_upsert_records`, `bulk_add_edges`, `bulk_emit_events`. Each
+  COPYs a Polars frame into a staging temp table, then
+  `INSERT ... ON CONFLICT` into the real table. Postgres only;
+  SQLite raises `NotImplementedError` with a helpful message.
+- **Connection pool**: `goldenmatch.identity.pool.get_identity_pool(dsn)`
+  process-singleton `psycopg_pool.ConnectionPool`. `IdentityStore`
+  constructor accepts optional `pool=` kwarg.
+- **Alembic migrations**: `goldenmatch/db/alembic/` with baseline
+  revision `0001_identity_v1` mirroring the existing schema. New CLI
+  `goldenmatch identity migrate --dsn ... [--stamp-existing]` runs
+  upgrades; `--stamp-existing` brings a pre-Alembic schema under
+  version control without touching tables.
+- **Distributed dispatch**: `goldenmatch.distributed.identity.resolve_identities_distributed`
+  polymorphic on `dict[int, dict] | ray.data.Dataset`. Ray Dataset
+  path materializes cluster aggregates driver-side via
+  `materialize_cluster_dict`, then runs the existing resolver against
+  a pooled Postgres connection.
+- `goldenmatch.core.pipeline._resolve_identities` polymorphic on
+  cluster shape; Ray Dataset path requires `identity.backend='postgres'`
+  and `identity.connection` set.
+- `IdentityStore.add_edge` on the Postgres branch now uses
+  `ON CONFLICT (entity_id, record_a_id, record_b_id, kind, run_name) DO NOTHING`
+  matching the SQLite `INSERT OR IGNORE` semantic. Fixes
+  `UniqueViolation` on replayed runs.
+- Tests: `tests/identity/test_pool.py`,
+  `tests/identity/test_alembic_migration.py`,
+  `tests/identity/test_uuid7_concurrent.py`,
+  `tests/identity/test_distributed_identity.py`.
+
 ### Added (Phase 5.5)
 - **Two-Phase WCC** (`goldenmatch.distributed.clustering.two_phase_wcc`)
   replaces label propagation as the default distributed connected-
