@@ -296,6 +296,57 @@ def _build_clusters_scipy_fallback(
     return ray.data.from_arrow(out_table)
 
 
+def two_phase_wcc(
+    pairs_ds,
+    all_ids: list,
+):
+    """Two-Phase Weakly Connected Components (Iverson et al, 2014).
+
+    Phase A: per-partition local Union-Find (embarrassingly parallel).
+    Phase B: cross-partition merge via super-graph UF on driver.
+
+    Same output shape as label_propagation: a Ray Dataset of {id, label}
+    rows where label is the min-id member of each connected component.
+
+    Recommended by GraphFrames maintainer Sem Sinchenko for ER graphs
+    because chains are label-prop's worst case but Phase B converges
+    in O(1) iterations on chains.
+    """
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
+
+    # Phase A: per-partition local CC.
+    local_ds = pairs_ds.map_batches(_phase_a_local_cc, batch_format="pyarrow")
+    local_components: dict = {}
+    for table in local_ds.iter_batches(batch_format="pyarrow"):
+        for row in table.to_pylist():
+            local_components[row["member_id"]] = row["local_root"]
+
+    # Seed isolated nodes (in all_ids but never touched by pairs).
+    for i in all_ids:
+        if i not in local_components:
+            local_components[i] = i
+
+    # Phase B: cross-partition merge.
+    global_components = _phase_b_merge_boundaries(local_components, pairs_ds)
+
+    # Normalize label to the min member id per component (matches
+    # label_propagation's semantics).
+    by_global_root: dict = {}
+    for member, root in global_components.items():
+        by_global_root.setdefault(root, []).append(member)
+    final_labels: dict = {}
+    for members in by_global_root.values():
+        min_id = min(members)
+        for m in members:
+            final_labels[m] = min_id
+
+    rows = [{"id": int(m), "label": int(label)} for m, label in final_labels.items()]
+    return ray.data.from_items(rows)
+
+
 def _emit_boundary_pairs(batch, member_to_root: dict):  # pa.Table -> pa.Table
     """Emit one row per boundary edge (pairs where the two endpoints
     have different local_roots).
