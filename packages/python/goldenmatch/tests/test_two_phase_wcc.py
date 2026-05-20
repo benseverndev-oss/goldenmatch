@@ -51,26 +51,52 @@ def test_emit_boundary_pairs_filters_to_cross_partition():
 def test_phase_b_merges_super_graph_correctly():
     """Phase B: given local roots + boundary pairs, every member maps
     to the same global root within its true component."""
+    import polars as pl
     from goldenmatch.distributed.clustering import (
         _phase_b_merge_boundaries,
         pairs_list_to_dataset,
     )
 
-    # 2 partitions each produced their own root for the SAME component:
-    # partition 1: {1,2,3} -> local_root=1
-    # partition 2: {3,4,5} -> local_root=3
-    # boundary edge (3,4) merges the two; final root for everyone = 1.
-    local_components = {1: 1, 2: 1, 3: 1, 4: 3, 5: 3}
-    # A pair where id_a (in partition 1) and id_b (in partition 2)
-    # have different local_roots:
-    pairs_ds = pairs_list_to_dataset([(3, 4, 1.0)])  # cross-partition edge
+    local_components_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5, 6],
+        "local_root": [1, 1, 1, 4, 4, 6],
+    })
+    pairs_ds = pairs_list_to_dataset([(2, 4, 0.9)])  # bridges {1,2,3} and {4,5}
 
-    final = _phase_b_merge_boundaries(local_components, pairs_ds)
+    out_pl = _phase_b_merge_boundaries(local_components_pl, pairs_ds)
 
-    # All five members now share one global root.
-    roots = set(final.values())
+    # Members 1-5 should share one global root; member 6 keeps its own.
+    by_member = dict(zip(
+        out_pl["member_id"].to_list(),
+        out_pl["global_root"].to_list(),
+    ))
+    assert by_member[1] == by_member[2] == by_member[3]
+    assert by_member[4] == by_member[5]
+    assert by_member[1] == by_member[4]
+    assert by_member[6] != by_member[1]
+
+
+def test_phase_b_merges_super_graph_via_polars():
+    """Phase B accepts a Polars frame for local_components and produces
+    the same global root remap as the in-memory dict path."""
+    import polars as pl
+    from goldenmatch.distributed.clustering import (
+        _phase_b_merge_boundaries,
+        pairs_list_to_dataset,
+    )
+
+    # Two partitions: {1,2,3} on partition A (root=1), {4,5} on B (root=4).
+    # Pair (3,4) is a boundary edge. After Phase B all 5 share one global root.
+    local_components_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5],
+        "local_root": [1, 1, 1, 4, 4],
+    })
+    pairs_ds = pairs_list_to_dataset([(3, 4, 0.9)])
+
+    out_pl = _phase_b_merge_boundaries(local_components_pl, pairs_ds)
+    # All 5 members map to the same global root
+    roots = set(out_pl["global_root"].to_list())
     assert len(roots) == 1
-    assert all(final[m] == final[1] for m in [1, 2, 3, 4, 5])
 
 
 def test_two_phase_wcc_partition_structure_matches_in_memory():
@@ -217,4 +243,51 @@ def test_two_phase_wcc_does_not_capture_local_components_in_udf():
     assert "ray.put(local_components)" in src, (
         "Phase B should ray.put(local_components) so workers share one copy"
         " from the object store instead of receiving a copy per task."
+    )
+
+
+def test_emit_boundary_pairs_accepts_polars_frame():
+    """The columnar refactor path: pass a Polars frame as the lookup."""
+    import polars as pl
+    import pyarrow as pa
+    from goldenmatch.distributed.clustering import _emit_boundary_pairs
+
+    pairs_batch = pa.Table.from_pylist([
+        {"id_a": 1, "id_b": 2, "score": 0.9},   # same root -> drop
+        {"id_a": 3, "id_b": 4, "score": 0.85},  # different roots -> keep
+        {"id_a": 5, "id_b": 6, "score": 0.8},   # same root -> drop
+    ])
+    roots_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5, 6],
+        "local_root": [1, 1, 3, 4, 5, 5],
+    })
+
+    out = _emit_boundary_pairs(pairs_batch, roots_pl)
+    rows = out.to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["root_a"] == 3 and rows[0]["root_b"] == 4
+
+
+def test_two_phase_wcc_no_python_dict_materialization():
+    """Regression: two_phase_wcc must not build a Python dict from
+    Phase A output. The 5M-scale OOM in run 26166347530 was caused by
+    each worker rehydrating a dict[int, int] via ray.get; the fix
+    requires the lookup table to be a Polars frame end-to-end.
+    """
+    import inspect
+
+    from goldenmatch.distributed import clustering
+
+    src = inspect.getsource(clustering.two_phase_wcc)
+    # The original code path:
+    #   local_components: dict[int, int] = {}
+    #   for table in local_ds.iter_batches(batch_format="pyarrow"):
+    #       for row in table.to_pylist():
+    #           local_components[row["member_id"]] = row["local_root"]
+    assert "dict[int, int] = {}" not in src and "local_components: dict" not in src, (
+        "two_phase_wcc materialized Phase A output to a Python dict again -- "
+        "this is the per-worker rehydration that killed run 26166347530."
+    )
+    assert "pl.from_arrow" in src or "pl.DataFrame" in src, (
+        "two_phase_wcc should carry Phase A output as a Polars frame."
     )

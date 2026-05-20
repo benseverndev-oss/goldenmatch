@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- `two_phase_wcc` no longer rehydrates a 475 MiB Python `dict[int, int]`
+  in every worker. Phase B's lookup table now travels as a Polars frame
+  via `ray.put`, zero-copy mapped from plasma into worker address space
+  (~80 MiB at 5M nodes, ~6x smaller). Phase B internals use vectorized
+  Polars joins instead of Python row-loops. Resolves the 5M-scale OOM
+  surfaced by run 26166347530.
+
 ### Added (Phase 6 — Identity Graph at distributed scale)
 - **psycopg3 migration** of the Postgres backend in `goldenmatch.identity.store`.
   `psycopg2-binary` replaced by `psycopg[binary]>=3.1`. Adds first-class
