@@ -199,3 +199,43 @@ def split_cmd(
     with _open(path) as s:
         out = manual_split(s, entity_id, record_ids, reason=reason)
     console.print(f"[green]Split[/green] {len(out['moved'])} records -> new id {out['new_entity_id'][:8]}...")
+
+
+@identity_app.command("migrate")
+def migrate_cmd(
+    dsn: str = typer.Option(
+        ...,
+        "--dsn",
+        envvar="GOLDENMATCH_IDENTITY_DSN",
+        help="Postgres DSN; can also be set via GOLDENMATCH_IDENTITY_DSN.",
+    ),
+    stamp_existing: bool = typer.Option(
+        False,
+        "--stamp-existing",
+        help="Stamp an existing v1 schema at revision 0001 without re-creating tables.",
+    ),
+    revision: str = typer.Option(
+        "head",
+        "--revision",
+        help="Target revision (default: head).",
+    ),
+) -> None:
+    """Run Alembic migrations on the Identity Graph schema."""
+    import pathlib
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg_path = pathlib.Path(__file__).parent.parent / "db" / "alembic.ini"
+    cfg = Config(str(cfg_path))
+    cfg.set_main_option("sqlalchemy.url", dsn)
+    cfg.set_main_option(
+        "script_location",
+        str(pathlib.Path(__file__).parent.parent / "db" / "alembic"),
+    )
+    if stamp_existing:
+        command.stamp(cfg, "0001")
+        console.print("[green]Stamped[/green] schema at revision 0001.")
+    else:
+        command.upgrade(cfg, revision)
+        console.print(f"[green]Upgraded[/green] to revision {revision}.")
