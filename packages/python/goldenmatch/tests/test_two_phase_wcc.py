@@ -51,26 +51,52 @@ def test_emit_boundary_pairs_filters_to_cross_partition():
 def test_phase_b_merges_super_graph_correctly():
     """Phase B: given local roots + boundary pairs, every member maps
     to the same global root within its true component."""
+    import polars as pl
     from goldenmatch.distributed.clustering import (
         _phase_b_merge_boundaries,
         pairs_list_to_dataset,
     )
 
-    # 2 partitions each produced their own root for the SAME component:
-    # partition 1: {1,2,3} -> local_root=1
-    # partition 2: {3,4,5} -> local_root=3
-    # boundary edge (3,4) merges the two; final root for everyone = 1.
-    local_components = {1: 1, 2: 1, 3: 1, 4: 3, 5: 3}
-    # A pair where id_a (in partition 1) and id_b (in partition 2)
-    # have different local_roots:
-    pairs_ds = pairs_list_to_dataset([(3, 4, 1.0)])  # cross-partition edge
+    local_components_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5, 6],
+        "local_root": [1, 1, 1, 4, 4, 6],
+    })
+    pairs_ds = pairs_list_to_dataset([(2, 4, 0.9)])  # bridges {1,2,3} and {4,5}
 
-    final = _phase_b_merge_boundaries(local_components, pairs_ds)
+    out_pl = _phase_b_merge_boundaries(local_components_pl, pairs_ds)
 
-    # All five members now share one global root.
-    roots = set(final.values())
+    # Members 1-5 should share one global root; member 6 keeps its own.
+    by_member = dict(zip(
+        out_pl["member_id"].to_list(),
+        out_pl["global_root"].to_list(),
+    ))
+    assert by_member[1] == by_member[2] == by_member[3]
+    assert by_member[4] == by_member[5]
+    assert by_member[1] == by_member[4]
+    assert by_member[6] != by_member[1]
+
+
+def test_phase_b_merges_super_graph_via_polars():
+    """Phase B accepts a Polars frame for local_components and produces
+    the same global root remap as the in-memory dict path."""
+    import polars as pl
+    from goldenmatch.distributed.clustering import (
+        _phase_b_merge_boundaries,
+        pairs_list_to_dataset,
+    )
+
+    # Two partitions: {1,2,3} on partition A (root=1), {4,5} on B (root=4).
+    # Pair (3,4) is a boundary edge. After Phase B all 5 share one global root.
+    local_components_pl = pl.DataFrame({
+        "member_id": [1, 2, 3, 4, 5],
+        "local_root": [1, 1, 1, 4, 4],
+    })
+    pairs_ds = pairs_list_to_dataset([(3, 4, 0.9)])
+
+    out_pl = _phase_b_merge_boundaries(local_components_pl, pairs_ds)
+    # All 5 members map to the same global root
+    roots = set(out_pl["global_root"].to_list())
     assert len(roots) == 1
-    assert all(final[m] == final[1] for m in [1, 2, 3, 4, 5])
 
 
 def test_two_phase_wcc_partition_structure_matches_in_memory():

@@ -329,39 +329,57 @@ def two_phase_wcc(
     because chains are label-prop's worst case but Phase B converges
     in O(1) iterations on chains.
     """
-    import ray
+    import polars as pl  # noqa: PLC0415
+    import pyarrow as pa  # noqa: PLC0415
+    import ray  # noqa: PLC0415
 
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, log_to_driver=False)
 
-    # Phase A: per-partition local CC.
+    # Phase A: per-partition local CC. Stays a Ray Dataset all the way.
     local_ds = pairs_ds.map_batches(_phase_a_local_cc, batch_format="pyarrow")
-    local_components: dict[int, int] = {}
-    for table in local_ds.iter_batches(batch_format="pyarrow"):
-        for row in table.to_pylist():  # type: ignore[attr-defined]
-            local_components[row["member_id"]] = row["local_root"]
+
+    # Materialize Phase A output as a Polars frame on the driver. At 5M
+    # members this is ~80 MiB; at 100M it's ~1.6 GiB, still fits a 64 GB
+    # driver. The Ray Dataset to Polars conversion is one Arrow concat.
+    phase_a_tables = list(local_ds.iter_batches(batch_format="pyarrow"))
+    if phase_a_tables:
+        local_components_pl = pl.from_arrow(pa.concat_tables(phase_a_tables))
+    else:
+        local_components_pl = pl.DataFrame(
+            {"member_id": [], "local_root": []},
+            schema={"member_id": pl.Int64, "local_root": pl.Int64},
+        )
 
     # Seed isolated nodes (in all_ids but never touched by pairs).
-    for i in all_ids:
-        if i not in local_components:
-            local_components[i] = i
+    seen = set(local_components_pl["member_id"].to_list())
+    isolated = [int(i) for i in all_ids if i not in seen]
+    if isolated:
+        seed_pl = pl.DataFrame(
+            {"member_id": isolated, "local_root": isolated},
+            schema={"member_id": pl.Int64, "local_root": pl.Int64},
+        )
+        local_components_pl = pl.concat([local_components_pl, seed_pl])
 
-    # Phase B: cross-partition merge.
-    global_components = _phase_b_merge_boundaries(local_components, pairs_ds)
+    # Phase B: returns a frame with {member_id, local_root, global_root}.
+    components_pl = _phase_b_merge_boundaries(local_components_pl, pairs_ds)
 
-    # Normalize label to the min member id per component (matches
-    # label_propagation's semantics).
-    by_global_root: dict[int, list[int]] = {}
-    for member, root in global_components.items():
-        by_global_root.setdefault(root, []).append(member)
-    final_labels: dict[int, int] = {}
-    for members in by_global_root.values():
-        min_id = min(members)
-        for m in members:
-            final_labels[m] = min_id
+    # Normalize label to min member_id per global root. Pure Polars groupby.
+    labels_pl = (
+        components_pl
+        .group_by("global_root")
+        .agg(pl.col("member_id").min().alias("label"))
+    )
+    final_pl = (
+        components_pl
+        .join(labels_pl, on="global_root", how="inner")
+        .select(
+            pl.col("member_id").cast(pl.Int64).alias("id"),
+            pl.col("label").cast(pl.Int64),
+        )
+    )
 
-    rows = [{"id": int(m), "label": int(label)} for m, label in final_labels.items()]
-    return ray.data.from_items(rows)
+    return ray.data.from_arrow(final_pl.to_arrow())
 
 
 def _emit_boundary_pairs(batch: Any, member_to_root_ref: Any) -> Any:
@@ -412,23 +430,35 @@ def _emit_boundary_pairs(batch: Any, member_to_root_ref: Any) -> Any:
 
 
 def _phase_b_merge_boundaries(
-    local_components: dict[int, int],
+    local_components: Any,  # pl.DataFrame with columns {member_id, local_root}
     pairs_ds: Dataset,
-) -> dict[int, int]:
+) -> Any:  # pl.DataFrame with columns {member_id, local_root, global_root}
     """Phase B: reconcile local roots across partitions via super-graph UF.
 
-    Collects boundary edges (bounded by O(P^2)) to driver, runs Union-Find
-    on the local_roots, and remaps every member to its final global root.
+    Returns a Polars frame with columns {member_id, local_root, global_root}.
+    The downstream consumer in ``two_phase_wcc`` projects this to the final
+    label per member.
+
+    The driver-side UnionFind scales with n_distinct(local_roots), not with
+    n_members. At 5M members + 16 partitions that's bounded by ~1.6M roots
+    in the worst case, ~80 MB driver memory.
+
+    ``ray.put(local_components)`` shares one Polars frame across all workers
+    via the object store. The Arrow buffers behind the frame are mapped
+    zero-copy from plasma into each worker, so per-worker resident cost is
+    O(1) instead of the prior 475 MiB-per-worker Python dict rehydration.
     """
+    import polars as pl  # noqa: PLC0415
     import ray  # noqa: PLC0415
 
     from goldenmatch.core.cluster import UnionFind
 
+    local_components_pl: pl.DataFrame = local_components
+
     # ray.put once: shares one copy of local_components across all workers
-    # via the object store. Without this, each map_batches task serializes
-    # the full dict into the UDF (~95 bytes per (k,v) pair in CPython 3.12,
-    # = 477 MiB at 5M entries) and Ray warns + kills the job at scale.
-    member_to_root_ref = ray.put(local_components)
+    # via the object store. Polars frame at 5M entries is ~80 MiB vs a Python
+    # dict's 475 MiB; Arrow buffers map zero-copy from plasma into workers.
+    member_to_root_ref = ray.put(local_components_pl)
 
     boundary_tables = list(
         pairs_ds.map_batches(
@@ -439,17 +469,31 @@ def _phase_b_merge_boundaries(
     )
 
     uf = UnionFind()
-    # Seed with every distinct local_root so isolated components keep their roots.
-    for root in set(local_components.values()):
-        uf.add(root)
+    # Seed UF with every distinct local_root so isolated components keep
+    # their roots even when no boundary edge touches them.
+    distinct_roots = local_components_pl["local_root"].unique().to_list()
+    for root in distinct_roots:
+        uf.add(int(root))
 
     for table in boundary_tables:
         for row in table.to_pylist():  # type: ignore[attr-defined]
-            uf.add(row["root_a"])
-            uf.add(row["root_b"])
-            uf.union(row["root_a"], row["root_b"])
+            uf.add(int(row["root_a"]))
+            uf.add(int(row["root_b"]))
+            uf.union(int(row["root_a"]), int(row["root_b"]))
 
-    return {m: uf.find(r) for m, r in local_components.items()}
+    # Build remap table once on driver (Polars frame, columnar).
+    remap_pl = pl.DataFrame({
+        "local_root": [int(r) for r in distinct_roots],
+        "global_root": [int(uf.find(int(r))) for r in distinct_roots],
+    })
+
+    return (
+        local_components_pl
+        .join(remap_pl, on="local_root", how="left")
+        .with_columns(
+            global_root=pl.coalesce("global_root", "local_root"),
+        )
+    )
 
 
 def _phase_a_local_cc(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
