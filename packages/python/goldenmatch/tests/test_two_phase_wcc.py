@@ -266,3 +266,28 @@ def test_emit_boundary_pairs_accepts_polars_frame():
     rows = out.to_pylist()
     assert len(rows) == 1
     assert rows[0]["root_a"] == 3 and rows[0]["root_b"] == 4
+
+
+def test_two_phase_wcc_no_python_dict_materialization():
+    """Regression: two_phase_wcc must not build a Python dict from
+    Phase A output. The 5M-scale OOM in run 26166347530 was caused by
+    each worker rehydrating a dict[int, int] via ray.get; the fix
+    requires the lookup table to be a Polars frame end-to-end.
+    """
+    import inspect
+
+    from goldenmatch.distributed import clustering
+
+    src = inspect.getsource(clustering.two_phase_wcc)
+    # The original code path:
+    #   local_components: dict[int, int] = {}
+    #   for table in local_ds.iter_batches(batch_format="pyarrow"):
+    #       for row in table.to_pylist():
+    #           local_components[row["member_id"]] = row["local_root"]
+    assert "dict[int, int] = {}" not in src and "local_components: dict" not in src, (
+        "two_phase_wcc materialized Phase A output to a Python dict again -- "
+        "this is the per-worker rehydration that killed run 26166347530."
+    )
+    assert "pl.from_arrow" in src or "pl.DataFrame" in src, (
+        "two_phase_wcc should carry Phase A output as a Polars frame."
+    )
