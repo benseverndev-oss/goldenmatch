@@ -317,10 +317,20 @@ class IdentityStore:
             )
         if df.height == 0:
             return
+        # All eight identity_nodes columns. ``golden_record`` and
+        # ``confidence`` are required for the bench fast-path -- without
+        # them, brand-new identities created via resolve_clusters lose
+        # their rolled-up record + confidence score on upsert (#368
+        # follow-up). Callers that don't have one of these can pass
+        # ``None``; we'll fill missing cols with ``None`` to be ergonomic.
         cols = [
-            "entity_id", "status", "merged_into", "dataset",
-            "created_at", "updated_at",
+            "entity_id", "status", "merged_into", "golden_record",
+            "confidence", "dataset", "created_at", "updated_at",
         ]
+        import polars as pl  # noqa: PLC0415
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -329,22 +339,25 @@ class IdentityStore:
             )
             with cur.copy(
                 "COPY _stage_identity_nodes "
-                "(entity_id, status, merged_into, dataset, "
-                "created_at, updated_at) FROM STDIN"
+                "(entity_id, status, merged_into, golden_record, "
+                "confidence, dataset, created_at, updated_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
             cur.execute(
                 """
                 INSERT INTO identity_nodes
-                    (entity_id, status, merged_into, dataset,
-                     created_at, updated_at)
-                SELECT entity_id, status, merged_into, dataset,
+                    (entity_id, status, merged_into, golden_record,
+                     confidence, dataset, created_at, updated_at)
+                SELECT entity_id, status, merged_into,
+                       golden_record::jsonb, confidence, dataset,
                        created_at, updated_at
                 FROM _stage_identity_nodes
                 ON CONFLICT (entity_id) DO UPDATE SET
                     status = EXCLUDED.status,
                     merged_into = EXCLUDED.merged_into,
+                    golden_record = EXCLUDED.golden_record,
+                    confidence = EXCLUDED.confidence,
                     updated_at = EXCLUDED.updated_at
                 """
             )
