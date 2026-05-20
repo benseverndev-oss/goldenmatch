@@ -296,41 +296,66 @@ def _full_scan_pipeline(
     # Normalize input -- accept either DataFrame (legacy) or LazyFrame
     # (new memory-bounded path). DataFrame.lazy() is a no-op view; the
     # collect() below is the one materialization.
+    logger.info(
+        "Pipeline: %d matchkeys configured (%s)",
+        len(matchkeys),
+        ", ".join(f"{mk.name}:{mk.type}" for mk in matchkeys) if matchkeys else "<none>",
+    )
     lf = df_or_lf.lazy() if isinstance(df_or_lf, pl.DataFrame) else df_or_lf
     lf = compute_matchkeys(lf, matchkeys)
+    logger.info("Pipeline: materializing matchkey-joined frame...")
     df = lf.collect()
+    logger.info(
+        "Pipeline: materialized %d rows x %d cols", df.height, df.width,
+    )
     # auto_fix runs after the single collect so it operates on the
     # already-materialized frame (it expects DataFrame).
     df, _ = auto_fix_dataframe(df)
+    logger.info("Pipeline: auto_fix complete (%d rows)", df.height)
 
     # Score pairs
     all_pairs = []
     matched_pairs = set()
 
-    for mk in matchkeys:
-        if mk.type == "exact":
-            pairs = find_exact_matches(df.lazy(), mk)
-            all_pairs.extend(pairs)
-            for a, b, s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+    exact_mks = [mk for mk in matchkeys if mk.type == "exact"]
+    for mk in exact_mks:
+        pairs = find_exact_matches(df.lazy(), mk)
+        all_pairs.extend(pairs)
+        for a, b, s in pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
+    if exact_mks:
+        logger.info(
+            "Pipeline: %d pairs from %d exact matchkeys",
+            len(all_pairs), len(exact_mks),
+        )
 
     if config.blocking:
-        for mk in matchkeys:
-            if mk.type == "weighted":
-                blocks = build_blocks(df.lazy(), config.blocking)
-                for block in blocks:
-                    bdf = block.df.collect()
-                    pairs = find_fuzzy_matches(
-                        bdf, mk,
-                        exclude_pairs=matched_pairs,
-                        pre_scored_pairs=block.pre_scored_pairs,
-                    )
-                    all_pairs.extend(pairs)
-                    for a, b, s in pairs:
-                        matched_pairs.add((min(a, b), max(a, b)))
+        weighted_mks = [mk for mk in matchkeys if mk.type == "weighted"]
+        for mk in weighted_mks:
+            pairs_before = len(all_pairs)
+            blocks = build_blocks(df.lazy(), config.blocking)
+            for block in blocks:
+                bdf = block.df.collect()
+                pairs = find_fuzzy_matches(
+                    bdf, mk,
+                    exclude_pairs=matched_pairs,
+                    pre_scored_pairs=block.pre_scored_pairs,
+                )
+                all_pairs.extend(pairs)
+                for a, b, s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+            if weighted_mks:
+                logger.info(
+                    "Pipeline: matchkey %r contributed %d pairs (total %d)",
+                    mk.name, len(all_pairs) - pairs_before, len(all_pairs),
+                )
 
     # Cluster
     all_ids = df["__row_id__"].to_list()
+    logger.info(
+        "Pipeline: clustering %d records from %d scored pairs",
+        len(all_ids), len(all_pairs),
+    )
     clusters = build_clusters(all_pairs, all_ids, max_cluster_size=100)
 
     # Golden records
@@ -358,9 +383,21 @@ def _full_scan_pipeline(
 
     multi_clusters = {k: v for k, v in clusters.items() if v["size"] > 1}
     logger.info(
-        "Sync complete: %d records, %d pairs, %d clusters",
-        df.height, len(all_pairs), len(multi_clusters),
+        "Sync complete: %d records, %d pairs, %d multi-member clusters, %d golden records",
+        df.height, len(all_pairs), len(multi_clusters), len(golden_records),
     )
+    # Loud-fail the silent-success case (#391): if the pipeline ran on
+    # non-empty input but produced zero pairs AND zero clusters, that's
+    # almost always a misconfiguration -- empty matchkey list, all-NULL
+    # blocking column, scorer threshold too high, etc. Make it
+    # observable instead of returning a clean exit with empty tables.
+    if df.height > 0 and not all_pairs and not multi_clusters:
+        logger.warning(
+            "Sync produced zero pairs and zero clusters across %d records. "
+            "Possible causes: empty matchkey config, all-NULL blocking "
+            "column, scorer threshold too high. See #391.",
+            df.height,
+        )
 
     return {
         "new_records": df.height,
