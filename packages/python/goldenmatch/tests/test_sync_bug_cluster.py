@@ -204,5 +204,91 @@ def test_postgres_read_table_uses_server_side_cursor():
     )
 
 
+# ----------------------------------------------------------------------
+# #378 -- _read_all stages chunks to disk, avoids double materialization
+# ----------------------------------------------------------------------
+
+
+def test_read_all_stages_chunks_to_disk_not_python_list():
+    """#378: _read_all must not accumulate chunks in a Python list +
+    pl.concat them -- that doubles peak memory during the read step.
+    On a 1.13M-row x 58-col Postgres view the prior behavior hit 6.6 GB
+    peak, OOMing an 8 GB sandbox.
+
+    Structural guard: the source should NOT contain `chunks = []` /
+    `chunks.append(chunk)` / `pl.concat(chunks` patterns. It should
+    stage to a tempfile parquet via `write_parquet` and read back via
+    `read_parquet`.
+    """
+    import inspect
+
+    from goldenmatch.db import sync
+
+    src = inspect.getsource(sync._read_all)
+    # Strip comment lines so historical-context comments can mention
+    # the old behavior without tripping the guard.
+    code_lines = [
+        ln for ln in src.splitlines()
+        if not ln.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+
+    assert "chunks.append" not in code, (
+        "_read_all should not accumulate chunks in a Python list -- "
+        "stream chunks to a temp parquet instead. See #378."
+    )
+    assert "pl.concat(chunks" not in code, (
+        "_read_all should not pl.concat a list of chunks -- that "
+        "doubles peak memory during the read step. See #378."
+    )
+    assert "write_parquet" in code and "read_parquet" in code, (
+        "_read_all should stage chunks to a temp parquet via "
+        "write_parquet and read them back via read_parquet. See #378."
+    )
+
+
+def test_read_all_round_trips_data_from_streaming_connector():
+    """End-to-end smoke: _read_all should still return a DataFrame
+    with the right rows / cols when the connector streams in chunks.
+    """
+    from collections.abc import Iterator
+
+    from goldenmatch.db.connector import DatabaseConnector
+    from goldenmatch.db.sync import _read_all
+
+    class _FakeConnector(DatabaseConnector):
+        """Yields three pre-built chunks; ignores chunk_size."""
+
+        def __init__(self, chunks: list[pl.DataFrame]):
+            self._chunks = chunks
+
+        def connect(self) -> None: ...
+        def close(self) -> None: ...
+        def read_table(
+            self, table: str, chunk_size: int = 10000,
+        ) -> Iterator[pl.DataFrame]:
+            yield from self._chunks
+        def read_query(self, query: str) -> pl.DataFrame:
+            return pl.DataFrame()
+        def write_dataframe(self, df, table, mode="append") -> int:
+            return 0
+        def execute(self, sql, params=None) -> None: ...
+        def table_exists(self, table: str) -> bool:
+            return False
+        def get_row_count(self, table: str) -> int:
+            return 0
+
+    chunks = [
+        pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]}),
+        pl.DataFrame({"id": [4, 5], "name": ["d", "e"]}),
+        pl.DataFrame({"id": [6], "name": ["f"]}),
+    ]
+    connector = _FakeConnector(chunks)
+    df = _read_all(connector, "ignored", chunk_size=10)
+    assert df.height == 6
+    assert sorted(df["id"].to_list()) == [1, 2, 3, 4, 5, 6]
+    assert sorted(df["name"].to_list()) == ["a", "b", "c", "d", "e", "f"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
