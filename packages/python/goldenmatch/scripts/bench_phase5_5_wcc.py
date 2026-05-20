@@ -35,6 +35,16 @@ def main() -> int:
         default=300.0,
         help="Cap label_propagation iterations to avoid hanging on chains.",
     )
+    ap.add_argument(
+        "--skip-label-prop",
+        action="store_true",
+        help=(
+            "Skip the label_propagation comparison entirely. At >= 5M pairs "
+            "label_prop's HashAggregate-per-iter is the whole point of the "
+            "Two-Phase WCC switch (it does not finish in the 30 min job cap). "
+            "Set this when validating Two-Phase WCC against current-main."
+        ),
+    )
     args = ap.parse_args()
 
     os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
@@ -60,6 +70,12 @@ def main() -> int:
     tp_wall = time.perf_counter() - t_tp
     tp_partitions = _partitions_from_labels(tp_rows)
     print(f"two_phase_wcc: {tp_wall:.1f}s, {len(tp_partitions)} components")
+
+    if args.skip_label_prop:
+        print("label_propagation: skipped (--skip-label-prop)")
+        print(f"two_phase_wcc_wall_s={tp_wall:.1f}")
+        print(f"two_phase_wcc_components={len(tp_partitions)}")
+        return 0
 
     # Label propagation (with iteration cap so it doesn't hang forever on chains)
     t_lp = time.perf_counter()

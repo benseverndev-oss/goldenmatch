@@ -22,6 +22,10 @@ on:
         description: "Run Phase 5.5 WCC head-to-head (Two-Phase vs label_propagation on adversarial chain)"
         type: boolean
         default: false
+      phase5_5_skip_label_prop:
+        description: "Skip label_propagation in the Phase 5.5 bench (it does not finish in 30 min at 5M chain scale by design; this is the validation mode for Two-Phase WCC alone)"
+        type: boolean
+        default: false
       run_phase6_identity:
         description: "Run Phase 6 identity bench (driver vs distributed against Postgres)"
         type: boolean
@@ -510,6 +514,7 @@ jobs:
           set -o pipefail
           python scripts/bench_phase5_5_wcc.py \
             --pairs bench-out/chains_50m.parquet \
+            ${{ inputs.phase5_5_skip_label_prop && '--skip-label-prop' || '' }} \
             2>&1 | tee bench-out/phase5_5_wcc.log
           echo '## bench-phase5-5-wcc results' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
