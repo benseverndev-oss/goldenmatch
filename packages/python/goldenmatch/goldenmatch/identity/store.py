@@ -126,6 +126,8 @@ def new_entity_id() -> str:
 class IdentityStore:
     """Persistence for the Identity Graph (nodes, records, edges, events, aliases)."""
 
+    _conn: Any
+
     def __init__(
         self,
         backend: str = "sqlite",
@@ -302,7 +304,7 @@ class IdentityStore:
     # SQLite path is single-process and the row-by-row upsert_* methods are
     # plenty fast for that scale.
 
-    def bulk_upsert_identities(self, df: "Any") -> None:
+    def bulk_upsert_identities(self, df: Any) -> None:
         if self._backend != "postgres":
             raise NotImplementedError(
                 "bulk_upsert_identities requires Postgres backend; "
@@ -314,7 +316,8 @@ class IdentityStore:
             "entity_id", "status", "merged_into", "dataset",
             "created_at", "updated_at",
         ]
-        with self._conn.transaction(), self._conn.cursor() as cur:
+        conn: Any = self._conn
+        with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 "CREATE TEMP TABLE _stage_identity_nodes "
                 "(LIKE identity_nodes INCLUDING DEFAULTS) ON COMMIT DROP"
@@ -342,7 +345,7 @@ class IdentityStore:
             )
             cur.execute("DROP TABLE IF EXISTS _stage_identity_nodes")
 
-    def bulk_upsert_records(self, df: "Any") -> None:
+    def bulk_upsert_records(self, df: Any) -> None:
         if self._backend != "postgres":
             raise NotImplementedError(
                 "bulk_upsert_records requires Postgres backend; "
@@ -354,7 +357,8 @@ class IdentityStore:
             "record_id", "source", "source_pk", "record_hash",
             "entity_id", "dataset", "first_seen_at", "last_seen_at",
         ]
-        with self._conn.transaction(), self._conn.cursor() as cur:
+        conn: Any = self._conn
+        with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 "CREATE TEMP TABLE _stage_source_records "
                 "(LIKE source_records INCLUDING DEFAULTS) ON COMMIT DROP"
@@ -382,7 +386,7 @@ class IdentityStore:
             )
             cur.execute("DROP TABLE IF EXISTS _stage_source_records")
 
-    def bulk_add_edges(self, df: "Any") -> None:
+    def bulk_add_edges(self, df: Any) -> None:
         if self._backend != "postgres":
             raise NotImplementedError(
                 "bulk_add_edges requires Postgres backend; "
@@ -394,7 +398,8 @@ class IdentityStore:
             "entity_id", "record_a_id", "record_b_id", "kind", "score",
             "matchkey_name", "run_name", "dataset", "recorded_at",
         ]
-        with self._conn.transaction(), self._conn.cursor() as cur:
+        conn: Any = self._conn
+        with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 """
                 CREATE TEMP TABLE _stage_evidence_edges (
@@ -431,7 +436,7 @@ class IdentityStore:
             )
             cur.execute("DROP TABLE IF EXISTS _stage_evidence_edges")
 
-    def bulk_emit_events(self, df: "Any") -> None:
+    def bulk_emit_events(self, df: Any) -> None:
         if self._backend != "postgres":
             raise NotImplementedError(
                 "bulk_emit_events requires Postgres backend; "
@@ -442,7 +447,8 @@ class IdentityStore:
         cols = [
             "entity_id", "kind", "run_name", "dataset", "recorded_at",
         ]
-        with self._conn.transaction(), self._conn.cursor() as cur:
+        conn: Any = self._conn
+        with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 """
                 CREATE TEMP TABLE _stage_identity_events (

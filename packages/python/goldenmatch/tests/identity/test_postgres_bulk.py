@@ -1,7 +1,9 @@
 """Postgres-backend tests for IdentityStore: psycopg3 + bulk COPY."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime  # noqa: F401  -- datetime used by tests below
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +12,7 @@ testing_pg = pytest.importorskip("testing.postgresql")
 
 
 @pytest.fixture
-def pg_url():
+def pg_url() -> Iterator[str]:
     """Yield a fresh testing.postgresql URL, suppressing the Windows
     SIGINT-teardown failure that otherwise marks the test as errored.
 
@@ -29,7 +31,7 @@ def pg_url():
             pass
 
 
-def test_postgres_backend_opens_via_psycopg3(pg_url):
+def test_postgres_backend_opens_via_psycopg3(pg_url: str) -> None:
     from goldenmatch.identity.store import IdentityStore
 
     store = IdentityStore(backend="postgres", connection=pg_url)
@@ -38,9 +40,8 @@ def test_postgres_backend_opens_via_psycopg3(pg_url):
     store.close()
 
 
-def test_bulk_upsert_identities_inserts_then_conflict_updates(pg_url):
+def test_bulk_upsert_identities_inserts_then_conflict_updates(pg_url: str) -> None:
     import polars as pl
-
     from goldenmatch.identity.store import IdentityStore
 
     store = IdentityStore(backend="postgres", connection=pg_url)
@@ -76,9 +77,8 @@ def test_bulk_upsert_identities_inserts_then_conflict_updates(pg_url):
     store.close()
 
 
-def test_bulk_upsert_identities_raises_on_sqlite(tmp_path):
+def test_bulk_upsert_identities_raises_on_sqlite(tmp_path: Path) -> None:
     import polars as pl
-
     from goldenmatch.identity.store import IdentityStore
 
     store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
