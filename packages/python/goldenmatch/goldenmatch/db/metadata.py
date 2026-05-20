@@ -154,13 +154,15 @@ def log_matches_batch(
     """Batch log match decisions."""
     if not matches:
         return
+    # psycopg3 dropped psycopg2.extras.execute_values; the documented
+    # replacement is executemany on a parameterized INSERT. psycopg3's
+    # executemany is also pipelined (single round-trip per N rows) so
+    # the throughput is comparable to the old VALUES-batched form.
     cursor = connector.conn.cursor()
     try:
-        from psycopg2.extras import execute_values
-        execute_values(
-            cursor,
+        cursor.executemany(
             "INSERT INTO gm_match_log (record_id_a, record_id_b, score, action, run_id) "
-            "VALUES %s",
+            "VALUES (%s, %s, %s, %s, %s)",
             [(a, b, s, action, run_id) for a, b, s, action in matches],
         )
         connector.conn.commit()
