@@ -25,12 +25,17 @@ from goldenmatch.distributed.golden import (
     materialize_golden_dataframe,
 )
 from goldenmatch.distributed.sample import take_sample_distributed
+from goldenmatch.distributed.scoring import (
+    dedup_pairs_distributed,
+    score_blocks_distributed,
+)
 
 __all__ = [
     "apply_transforms_distributed",
     "build_clusters_distributed",
     "build_golden_records_distributed",
     "build_golden_records_smart",
+    "dedup_pairs_distributed",
     "is_ray_dataset",
     "materialize_cluster_dict",
     "materialize_golden_dataframe",
@@ -38,5 +43,6 @@ __all__ = [
     "read_csv_partitioned",
     "read_parquet_partitioned",
     "read_partitioned",
+    "score_blocks_distributed",
     "take_sample_distributed",
 ]
