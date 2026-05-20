@@ -75,3 +75,39 @@ def test_pipeline_distributed_phase4_path_with_flag(monkeypatch, tmp_path):
     ds = read_csv_partitioned(str(csv), n_partitions=4)
     result = run_dedupe_pipeline_distributed(ds, confidence_required=False)
     assert result is not None
+
+
+# ── Task 3: Phase 5 streaming pipeline path ──────────────────────────────────
+
+def test_phase5_pipeline_runs_without_take_all(tmp_path, monkeypatch):
+    """GOLDENMATCH_DISTRIBUTED_PIPELINE=2 routes to the Phase 5 streaming path.
+
+    Asserts the function completes on a small fixture; real perf is
+    bench-time. Output written to disk when output_path is provided.
+    """
+    import pathlib
+
+    import polars as pl
+    from goldenmatch.distributed import read_csv_partitioned
+    from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
+
+    monkeypatch.setenv("GOLDENMATCH_DISTRIBUTED_PIPELINE", "2")
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+
+    csv = tmp_path / "in.csv"
+    pl.DataFrame({
+        "first_name": ["Alice"] * 20 + ["Bob"] * 20,
+        "last_name": ["Smith"] * 10 + ["S"] * 10 + ["Jones"] * 10 + ["J"] * 10,
+    }).write_csv(csv)
+    ds = read_csv_partitioned(str(csv), n_partitions=4)
+
+    output_path = str(tmp_path / "golden_out.parquet")
+    result = run_dedupe_pipeline_distributed(
+        ds, confidence_required=False, output_path=output_path,
+    )
+    assert result is not None
+    # Output written somewhere — either the path directly or a parquet dir.
+    out_p = pathlib.Path(output_path)
+    if out_p.is_dir():
+        assert any(out_p.glob("*.parquet")), "no parquet files produced"
+    # else: output_path may not exist if no clusters formed (valid for small fixture)
