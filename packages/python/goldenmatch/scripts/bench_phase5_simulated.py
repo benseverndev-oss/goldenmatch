@@ -85,10 +85,6 @@ def main() -> int:
         return 1
 
     import ray  # noqa: PLC0415
-    from goldenmatch.config.schemas import (  # noqa: PLC0415
-        GoldenMatchConfig,
-        IdentityConfig,
-    )
     from goldenmatch.distributed.dataset import (  # noqa: PLC0415
         read_parquet_partitioned,
     )
@@ -103,17 +99,17 @@ def main() -> int:
 
     n_partitions = int(cluster_resources.get("CPU", 16))
 
-    config = GoldenMatchConfig(backend="ray")
     if identity_enabled:
-        postgres_url = os.environ.get("POSTGRES_URL")
-        if not postgres_url:
-            log.error("--identity true requires POSTGRES_URL env var")
-            return 1
-        config.identity = IdentityConfig(
-            enabled=True,
-            backend="postgres",
-            connection=postgres_url,
+        # The Phase 5 streaming pipeline auto-configures internally and
+        # doesn't accept an injected IdentityConfig today. Identity-on-
+        # simulated-bench would require plumbing IdentityConfig through
+        # run_dedupe_pipeline_distributed; tracked separately.
+        log.error(
+            "--identity true is not yet supported on the simulated path. "
+            "Use `bench-phase6-identity` for the driver-vs-distributed "
+            "identity comparison; this bench is Phase 5 streaming only.",
         )
+        return 1
 
     # Ray workers start in a different cwd than the driver (typically
     # /tmp/ray/session_*/...). A relative parquet path resolves wrong
@@ -133,7 +129,11 @@ def main() -> int:
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     os.environ["GOLDENMATCH_ENABLE_DISTRIBUTED_RAY"] = "1"
 
-    result = run_dedupe_pipeline_distributed(ds, config)
+    # The pipeline auto-configures from the Ray Dataset itself; no
+    # explicit config arg accepted. confidence_required=False keeps the
+    # bench from raising ControllerNotConfidentError on the synthetic
+    # fixture (the controller's gates target real-shape data).
+    result = run_dedupe_pipeline_distributed(ds, confidence_required=False)
 
     wall_total = time.perf_counter() - t0
     rss_end_gb = _peak_rss_gb()
