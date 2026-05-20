@@ -14,6 +14,10 @@ on:
         description: "Release tag of pre-generated bench dataset (empty = generate on the fly)"
         required: false
         default: "bench-dataset-v1"
+      run_phase5_bench:
+        description: "Run Phase 5 100M multi-node bench (requires RAY_ADDRESS secret + bench_100000000.parquet)"
+        type: boolean
+        default: false
 
 jobs:
   bench:
@@ -397,5 +401,67 @@ jobs:
         with:
           name: bench-phase4-golden-${{ inputs.rows }}-rows
           path: packages/python/goldenmatch/bench-out/phase4_golden.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-phase5-end2end:
+    name: "bench Phase 5 multi-node end-to-end (100M < 30 min)"
+    # Phase 5 of the Splink-Spark roadmap. workflow_dispatch ONLY
+    # (run_phase5_bench=true). Requires a pre-provisioned multi-node Ray
+    # cluster (RAY_ADDRESS secret) + bench_100000000.parquet on the
+    # release. See docs/distributed-ray-cluster-setup.md.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_phase5_bench == true
+    runs-on: ubuntu-latest  # client only; Ray work happens on the remote cluster
+    timeout-minutes: 60  # 30 min kill criterion + ops slack
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+          pip install psutil pandas scipy
+      - name: Download 100M dataset
+        if: inputs.dataset_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bench_100000000.parquet" \
+            --dir bench-dataset/
+          ls -lh bench-dataset/
+      - name: Run Phase 5 100M bench
+        working-directory: packages/python/goldenmatch
+        env:
+          RAY_ADDRESS: ${{ secrets.RAY_ADDRESS }}
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          GOLDENMATCH_DISTRIBUTED_PIPELINE: "2"
+        run: |
+          set -o pipefail
+          mkdir -p bench-out
+          INPUT="bench-dataset/bench_100000000.parquet"
+          [ -f "$INPUT" ] || { echo "ERROR: $INPUT not found"; exit 1; }
+          python scripts/bench_phase5_end2end.py \
+            --input "$INPUT" \
+            --output bench-out/phase5_golden.parquet \
+            2>&1 | tee bench-out/phase5_end2end.log
+          echo '## bench-phase5-end2end results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase5_end2end.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Phase 5 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase5-end2end
+          path: packages/python/goldenmatch/bench-out/phase5_end2end.log
           if-no-files-found: warn
           retention-days: 30
