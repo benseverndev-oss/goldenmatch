@@ -156,24 +156,32 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
     for key_config in config.keys:
         block_key_expr = _build_block_key_expr(key_config)
 
-        # Add block key column and collect
-        df_with_key = lf.with_columns(block_key_expr).collect()
-
-        # Filter records whose block key is null or stringifies as a
-        # missing-value sentinel ("nan", "null", "none", ""). NULLs in a
-        # blocking column mean "we don't know" -- those records shouldn't
-        # cluster together. The cast(Utf8) in _build_block_key_expr turns
-        # Polars NaN into the literal string "NaN", which a downstream
-        # lowercase transform then collapses to "nan" -- all such
-        # records ended up in a single ~12K-record block at 1.13M scale,
-        # OOMing the runner during scoring (#372). The group_by-level
+        # Add block key column AND filter null/sentinel keys in a single
+        # lazy pipeline so Polars' optimizer fuses the filter with the
+        # projection. The eager `df.filter(...)` after `.collect()` form
+        # used to peak at ~2x the frame size (one for the materialized
+        # collect, one for the filtered result) -- enough to push a
+        # 1.13M-row × 58-col frame past an 8 GB sandbox cap (#375).
+        #
+        # NULL filter rationale (originally #372): records with NULL in
+        # the blocking column shouldn't cluster together. The cast(Utf8)
+        # in _build_block_key_expr turns Polars NaN into the literal
+        # string "NaN"; a downstream lowercase transform collapses that
+        # to "nan", and ~12K NULL records would otherwise share a single
+        # block and OOM during scoring. The group-by-level
         # `if key_str is None: continue` only catches Polars None, not
         # the stringified forms.
-        df_with_key = df_with_key.filter(
-            pl.col("__block_key__").is_not_null()
-            & ~pl.col("__block_key__").str.strip_chars().str.to_lowercase().is_in(
-                ["nan", "null", "none", ""]
+        df_with_key = (
+            lf
+            .with_columns(block_key_expr)
+            .filter(
+                pl.col("__block_key__").is_not_null()
+                & ~pl.col("__block_key__")
+                    .str.strip_chars()
+                    .str.to_lowercase()
+                    .is_in(["nan", "null", "none", ""])
             )
+            .collect()
         )
 
         # Group by block key
