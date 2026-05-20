@@ -64,60 +64,107 @@ def run_sync(
             logger.info("Config changed since last run. Forcing full rescan.")
             full_rescan = True
 
-    # Determine which records to process
+    # Determine which records to process.
+    #
+    # Full-scan path keeps the input as a LazyFrame (pl.scan_parquet over
+    # the on-disk staging dir) all the way through __source__/__row_id__
+    # + matchkey computation. The first .collect() happens inside
+    # _full_scan_pipeline AFTER matchkeys are merged in -- one
+    # materialization instead of two, which keeps peak RSS bounded on
+    # 1M+ row tables on 8 GB sandboxes (#384).
     if full_rescan or state is None:
         logger.info("Full scan: reading %d records from %s", total_rows, source_table)
-        new_records = _read_all(connector, source_table, chunk_size)
-        existing_records = pl.DataFrame()  # no existing for full scan
-    else:
-        new_records, existing_records = _read_incremental(
-            connector, source_table, state, incremental_column, chunk_size,
+        new_records_lf = _read_all_lazy(connector, source_table, chunk_size)
+        if new_records_lf is None:
+            logger.info("No new records to process.")
+            return {"new_records": 0, "matches": 0, "actions": []}
+        # Chain the internal-column adds lazily.
+        new_records_lf = (
+            new_records_lf
+            .with_columns(pl.lit("new").alias("__source__"))
+            .with_row_index("__row_id__")
+            .with_columns(pl.col("__row_id__").cast(pl.Int64))
         )
-        logger.info(
-            "Incremental: %d new records, %d existing in %s",
-            new_records.height, existing_records.height if existing_records.height else "N/A", source_table,
+        return _full_scan_pipeline(
+            connector, new_records_lf, source_table, config, matchkeys,
+            output_mode, dry_run, run_id, cfg_hash, total_rows,
         )
 
+    # Incremental path -- still eager because the rest of the
+    # incremental pipeline expects DataFrame. Memory bound here is the
+    # delta rows (typically small), not the full table.
+    new_records, existing_records = _read_incremental(
+        connector, source_table, state, incremental_column, chunk_size,
+    )
+    logger.info(
+        "Incremental: %d new records, %d existing in %s",
+        new_records.height, existing_records.height if existing_records.height else "N/A", source_table,
+    )
     if new_records.height == 0:
         logger.info("No new records to process.")
         return {"new_records": 0, "matches": 0, "actions": []}
-
-    # Add internal columns
     new_records = new_records.with_columns(pl.lit("new").alias("__source__"))
     new_records = new_records.with_row_index("__row_id__").with_columns(
         pl.col("__row_id__").cast(pl.Int64)
     )
-
-    # Auto-fix
     new_records, _ = auto_fix_dataframe(new_records)
-
-    # For full scan: run dedupe pipeline on all records
-    if full_rescan or state is None:
-        return _full_scan_pipeline(
-            connector, new_records, source_table, config, matchkeys,
-            output_mode, dry_run, run_id, cfg_hash, total_rows,
-        )
-
-    # For incremental: match new records against existing via DB-side blocking
     return _incremental_pipeline(
         connector, new_records, source_table, config, matchkeys,
         output_mode, dry_run, run_id, cfg_hash, total_rows,
     )
 
 
+def _read_all_lazy(
+    connector: DatabaseConnector, table: str, chunk_size: int,
+) -> pl.LazyFrame | None:
+    """Stage chunks to a temp parquet and return a LazyFrame over them.
+
+    Unlike ``_read_all``, this does NOT materialize the full frame --
+    the LazyFrame points at the on-disk parquet so subsequent
+    ``with_columns`` / ``compute_matchkeys`` operations chain lazily.
+    The materialization happens later in the pipeline at the FIRST
+    ``.collect()`` call -- typically once, not twice (#384).
+
+    The staging directory's lifetime is tied to the returned LazyFrame
+    via ``weakref.finalize``; callers don't need to manage cleanup.
+    Returns ``None`` if the connector yielded zero chunks (caller can
+    early-exit via ``new_records is None``).
+    """
+    import shutil
+    import tempfile
+    import weakref
+    from pathlib import Path
+
+    staging = Path(tempfile.mkdtemp(prefix="gm_sync_read_"))
+    unified_schema: dict[str, pl.DataType] | None = None
+    n_chunks = 0
+    for i, chunk in enumerate(connector.read_table(table, chunk_size)):
+        if unified_schema is None:
+            unified_schema = {
+                name: pl.Utf8 if dt == pl.Null else dt
+                for name, dt in chunk.schema.items()
+            }
+        chunk = _cast_to_schema(chunk, unified_schema)
+        chunk.write_parquet(staging / f"chunk_{i:06d}.parquet")
+        n_chunks += 1
+    if n_chunks == 0:
+        shutil.rmtree(staging, ignore_errors=True)
+        return None
+    lf = pl.scan_parquet(staging / "chunk_*.parquet")
+    # When the LazyFrame is GC'd (or the final collect's resulting
+    # DataFrame goes out of scope), tear down the staging directory.
+    weakref.finalize(lf, shutil.rmtree, str(staging), True)
+    return lf
+
+
 def _read_all(connector: DatabaseConnector, table: str, chunk_size: int) -> pl.DataFrame:
-    """Read entire table into a DataFrame, staging chunks to disk first.
+    """Eager variant of ``_read_all_lazy``: collects the LazyFrame so
+    callers that haven't been migrated to the lazy path still work.
 
-    Streams chunks from the connector to a temporary parquet directory
-    one chunk at a time, then reads them back as a single DataFrame via
-    ``pl.read_parquet`` glob. Peak memory during the read drops from
-    ~2x the raw frame size (chunks list + ``pl.concat`` materialization)
-    to ~1 chunk + the final read-back. On a 1.13M-row x 58-col Postgres
-    view this was the difference between an 8 GB sandbox OOMing at
-    ``pl.concat`` time vs landing the read step cleanly (#378).
-
-    The staging directory is removed once the DataFrame is loaded;
-    callers don't have to manage cleanup.
+    See ``_read_all_lazy`` for the streaming-friendly variant -- prefer
+    it for the full-scan path (#384). This shim stays for
+    ``_read_incremental``'s fallback case where the rest of the
+    incremental pipeline still expects an eager DataFrame.
     """
     import shutil
     import tempfile
@@ -207,20 +254,34 @@ def _read_incremental(
 
 
 def _full_scan_pipeline(
-    connector, df, source_table, config, matchkeys,
+    connector, df_or_lf, source_table, config, matchkeys,
     output_mode, dry_run, run_id, cfg_hash, total_rows,
 ):
-    """Run full dedupe on all records."""
+    """Run full dedupe on all records.
+
+    Accepts either an eager ``pl.DataFrame`` (legacy callers) or a
+    ``pl.LazyFrame`` (new full-scan path from run_sync). The lazy path
+    keeps the data on disk through matchkey computation, materializing
+    only once via the ``.collect()`` below -- vs the old form which
+    materialized in _read_all AND again here after matchkeys, peaking
+    at ~2x the frame size during the second collect (#384).
+    """
+    from goldenmatch.core.autofix import auto_fix_dataframe
     from goldenmatch.core.blocker import build_blocks
     from goldenmatch.core.cluster import build_clusters
     from goldenmatch.core.golden import build_golden_record
     from goldenmatch.core.matchkey import compute_matchkeys
     from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
 
-    # Compute matchkeys
-    lf = df.lazy()
+    # Normalize input -- accept either DataFrame (legacy) or LazyFrame
+    # (new memory-bounded path). DataFrame.lazy() is a no-op view; the
+    # collect() below is the one materialization.
+    lf = df_or_lf.lazy() if isinstance(df_or_lf, pl.DataFrame) else df_or_lf
     lf = compute_matchkeys(lf, matchkeys)
     df = lf.collect()
+    # auto_fix runs after the single collect so it operates on the
+    # already-materialized frame (it expects DataFrame).
+    df, _ = auto_fix_dataframe(df)
 
     # Score pairs
     all_pairs = []
