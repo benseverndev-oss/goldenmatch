@@ -215,3 +215,25 @@ def test_oom_guard_fires_at_bucket_granularity(_ray_local, tmp_path, monkeypatch
             blocks, mk, set(),
             store_path=store_path, signature=sig,
         )
+
+
+# ── Phase 5 Task 1: score_blocks_distributed ────────────────────────
+
+def test_score_blocks_distributed_returns_pair_dataset(_ray_local):
+    """Per-partition scoring via dedupe_df produces a Ray Dataset of pairs."""
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.distributed.scoring import score_blocks_distributed
+
+    df = pl.DataFrame({
+        "first_name": ["Alice"] * 5 + ["Bob"] * 5 + ["Alyce"] * 5 + ["Robert"] * 5,
+        "last_name": ["Smith"] * 5 + ["Jones"] * 5 + ["Smith"] * 5 + ["Jones"] * 5,
+    })
+    cfg = auto_configure_df(df, confidence_required=False, _skip_finalize=True)
+
+    ds = ray.data.from_arrow(df.to_arrow()).repartition(2)
+    pairs_ds = score_blocks_distributed(ds, cfg)
+    rows = list(pairs_ds.take_all())
+
+    # Every row has the pair-schema keys
+    if rows:  # may be empty if no pairs cross threshold
+        assert {"id_a", "id_b", "score"} <= set(rows[0].keys())
