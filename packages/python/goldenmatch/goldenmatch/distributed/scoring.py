@@ -15,6 +15,7 @@ partition's scorer runs in parallel on a different worker.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -24,6 +25,16 @@ if TYPE_CHECKING:
     from goldenmatch.config.schemas import GoldenMatchConfig
 
 logger = logging.getLogger(__name__)
+
+# Per-task CPU reservation for the scoring map_batches call. Defaults to 4
+# because each task runs the full in-memory bucket backend over its partition,
+# which allocates ~5 GB peak on a ~3M-row partition (50M dataset / 16
+# partitions). On a 16-vCPU / 64 GB runner that caps concurrency at 4 tasks
+# (~20 GB worker RAM) with headroom for the object store + driver. The
+# 2026-05-20 simulated bench OOM'd with the default num_cpus=1 -- Ray packed
+# 7 concurrent _score_partition tasks at ~5 GB each, exhausting node memory.
+# Override via env var when running on different shapes.
+_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "4"))
 
 
 def score_blocks_distributed(
@@ -72,7 +83,16 @@ def score_blocks_distributed(
             "score": [float(s) for _a, _b, s in pairs],
         })
 
-    return df_ds.map_batches(_score_partition, batch_format="pyarrow")
+    logger.info(
+        "score_blocks_distributed: dispatching with num_cpus=%d per task "
+        "(GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS to override)",
+        _SCORE_NUM_CPUS,
+    )
+    return df_ds.map_batches(
+        _score_partition,
+        batch_format="pyarrow",
+        num_cpus=_SCORE_NUM_CPUS,
+    )
 
 
 def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
