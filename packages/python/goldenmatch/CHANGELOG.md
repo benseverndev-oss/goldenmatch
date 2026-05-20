@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- `goldenmatch sync` cluster: four user-visible bugs that all surfaced
+  from one Postgres sync run against a 1.13M-row table on a slim Python
+  build.
+  - #362: `golden.py` no longer calls `top_k_by(..., reverse=False)`,
+    which mis-binds args on newer Polars versions. Replaced with
+    `sort_by(descending=True).first()`.
+  - #363: chunked Postgres reads now cast `Null`-dtype columns to
+    `Utf8` before `pl.concat`, fixing `type String is incompatible
+    with expected type Null` on sparse-column tables. Defensive
+    `how="diagonal_relaxed"` on the concat call too.
+  - #364: `sqlite3` is now lazy-imported inside `ReviewQueue`,
+    `MemoryStore`, and `IdentityStore`. `import goldenmatch` and the
+    CLI no longer require `_sqlite3` on minimal Python builds (Vercel
+    Sandbox, slim Docker, etc.).
+  - #365: `_quote_ident("schema.table")` now produces
+    `"schema"."table"`, allowing `goldenmatch sync --table gm.foo`
+    against non-public schemas without a search_path workaround.
+
 - `two_phase_wcc` no longer rehydrates a 475 MiB Python `dict[int, int]`
   in every worker. Phase B's lookup table now travels as a Polars frame
   via `ray.put`, zero-copy mapped from plasma into worker address space
