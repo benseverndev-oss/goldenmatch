@@ -205,7 +205,10 @@ def _build_golden_records_polars_native(
             # Polars 0.20+. See #362.
             agg_exprs.append(
                 pl.col(col).filter(pl.col(col).is_not_null())
-                .sort_by(len_col_aliases[col], descending=True)
+                .sort_by(
+                    pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
+                    descending=True,
+                )
                 .first().alias(f"__val_{col}__")
             )
             agg_exprs.append(
