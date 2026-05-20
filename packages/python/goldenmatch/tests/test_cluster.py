@@ -195,3 +195,13 @@ def test_was_split_not_in_output():
     clusters = build_clusters(pairs, [0, 1, 2, 3], max_cluster_size=2)
     for cinfo in clusters.values():
         assert "_was_split" not in cinfo
+
+
+def test_union_find_nodes_returns_added_members():
+    from goldenmatch.core.cluster import UnionFind
+
+    uf = UnionFind()
+    uf.add_many([1, 2, 3])
+    uf.union(1, 2)
+    nodes = sorted(uf.nodes())
+    assert nodes == [1, 2, 3]
