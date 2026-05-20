@@ -133,8 +133,13 @@ class IdentityStore:
         backend: str = "sqlite",
         path: str = ".goldenmatch/identity.db",
         connection: str | None = None,
+        pool: Any = None,
     ) -> None:
         self._backend = backend
+        # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
+        # check out a pooled conn for each call. Default None preserves the
+        # legacy per-store single-conn behavior the existing tests rely on.
+        self._pool = pool
         if backend == "sqlite":
             # Canonicalize path early so logs / errors see the resolved form
             # and the parent-dir create cannot escape via "..". Path is a
