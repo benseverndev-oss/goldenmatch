@@ -35,7 +35,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import polars as pl
 
-
 ROWS_PER_CLUSTER = 5
 TYPO_RATE = 0.1
 
