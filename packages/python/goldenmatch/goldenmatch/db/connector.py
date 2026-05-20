@@ -6,6 +6,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from typing import Any
 
 import polars as pl
 
@@ -56,7 +57,19 @@ class DatabaseConnector(ABC):
 
 
 class PostgresConnector(DatabaseConnector):
-    """PostgreSQL connector using psycopg2."""
+    """PostgreSQL connector using psycopg3.
+
+    psycopg3 is the supported driver (the [postgres] extra pins
+    `psycopg[binary]>=3.1` since the Phase 6 IdentityStore migration).
+    The default psycopg3 server-side portal cursor streams rows from
+    Postgres instead of buffering the full result set client-side,
+    which is what bit a 16 GB sandbox on a 1.13M-row read (#368).
+    """
+
+    # _conn is typed Any to short-circuit psycopg3's LiteralString-narrowing
+    # on cursor.execute -- the dynamic SQL we build via f-strings would
+    # otherwise need a Composed wrapper at every call site.
+    _conn: Any
 
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
@@ -64,14 +77,15 @@ class PostgresConnector(DatabaseConnector):
 
     def connect(self) -> None:
         try:
-            import psycopg2
-        except ImportError:
+            import psycopg
+        except ImportError as e:
             raise ImportError(
-                "Postgres support requires psycopg2. "
-                "Install with: pip install goldenmatch[postgres]"
-            )
-        self._conn = psycopg2.connect(self.connection_string)
-        self._conn.autocommit = False
+                "Postgres support requires psycopg3. "
+                "Install with: pip install 'goldenmatch[postgres]'"
+            ) from e
+        # autocommit=False matches the prior psycopg2 default; commits are
+        # explicit via self.conn.commit() in write paths.
+        self._conn = psycopg.connect(self.connection_string, autocommit=False)
         logger.info("Connected to PostgreSQL")
 
     def close(self) -> None:
@@ -80,14 +94,23 @@ class PostgresConnector(DatabaseConnector):
             self._conn = None
 
     @property
-    def conn(self):
+    def conn(self) -> Any:
         if self._conn is None:
             raise RuntimeError("Not connected. Call connect() first.")
         return self._conn
 
     def read_table(self, table: str, chunk_size: int = 10000) -> Iterator[pl.DataFrame]:
-        """Read table in chunks."""
-        cursor = self.conn.cursor()
+        """Read table in chunks via a server-side cursor.
+
+        The named cursor (`name="gm_sync_read"`) tells Postgres to declare
+        a server-side portal -- rows stream into the client `chunk_size`
+        at a time instead of materializing the full result set in the
+        psycopg connection buffer. Required to avoid OOM on multi-million
+        row reads (#368). Server-side cursors only work inside a
+        transaction; autocommit=False from connect() satisfies that.
+        """
+        cursor = self.conn.cursor(name="gm_sync_read")
+        cursor.itersize = chunk_size
         try:
             cursor.execute(f"SELECT * FROM {_quote_ident(table)}")
             columns = [desc[0] for desc in cursor.description]

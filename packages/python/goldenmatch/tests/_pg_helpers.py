@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 
 import pytest
@@ -29,9 +30,9 @@ import pytest
 _ADMIN_URL_ENV = "GOLDENMATCH_TEST_DATABASE_URL"
 
 
-def _has_psycopg2() -> bool:
+def _has_psycopg() -> bool:
     try:
-        import psycopg2  # noqa: F401
+        import psycopg  # noqa: F401
         return True
     except Exception:
         return False
@@ -49,7 +50,7 @@ def _has_testing_postgresql() -> bool:
 # True when *either* a services-container admin URL is configured OR
 # `testing.postgresql` is importable locally.
 HAS_POSTGRES = bool(os.environ.get(_ADMIN_URL_ENV)) or (
-    _has_testing_postgresql() and _has_psycopg2()
+    _has_testing_postgresql() and _has_psycopg()
 )
 
 
@@ -65,15 +66,16 @@ class _UrlHolder:
 
 def _provision_db_from_admin_url(admin_url: str) -> tuple[_UrlHolder, str, str]:
     """Create a fresh database off the admin URL. Returns (holder, db_name, admin_url)."""
-    import psycopg2
+    import psycopg
 
     parsed = urlparse(admin_url)
     db_name = f"gm_test_{uuid.uuid4().hex[:12]}"
 
     # Connect to the admin DB (typically 'postgres') to issue CREATE DATABASE.
-    admin_conn = psycopg2.connect(admin_url)
+    # autocommit is set on the connection up front -- CREATE DATABASE can't
+    # run inside a transaction block.
+    admin_conn = cast(Any, psycopg.connect(admin_url, autocommit=True))
     try:
-        admin_conn.autocommit = True
         with admin_conn.cursor() as cur:
             cur.execute(f'CREATE DATABASE "{db_name}"')
     finally:
@@ -85,14 +87,13 @@ def _provision_db_from_admin_url(admin_url: str) -> tuple[_UrlHolder, str, str]:
 
 
 def _drop_db(admin_url: str, db_name: str) -> None:
-    import psycopg2
+    import psycopg
 
-    admin_conn = psycopg2.connect(admin_url)
+    admin_conn = cast(Any, psycopg.connect(admin_url, autocommit=True))
     try:
-        admin_conn.autocommit = True
         with admin_conn.cursor() as cur:
-            # Terminate any leftover connections (psycopg2 sometimes leaves one
-            # in flight when a connector close errored on Windows etc.).
+            # Terminate any leftover connections (occasionally a connector
+            # close errors on Windows etc. and leaves a session open).
             cur.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE datname = %s AND pid <> pg_backend_pid()",
@@ -107,7 +108,7 @@ def pg_url_fixture() -> Iterator[_UrlHolder]:
     """Generator suitable for use inside a pytest fixture (`yield from`)."""
     admin_url = os.environ.get(_ADMIN_URL_ENV)
     if admin_url:
-        if not _has_psycopg2():
+        if not _has_psycopg():
             pytest.skip("psycopg2 not installed")
         holder, db_name, admin = _provision_db_from_admin_url(admin_url)
         try:
@@ -117,7 +118,7 @@ def pg_url_fixture() -> Iterator[_UrlHolder]:
         return
 
     # Local fallback: testing.postgresql.
-    if not (_has_testing_postgresql() and _has_psycopg2()):
+    if not (_has_testing_postgresql() and _has_psycopg()):
         pytest.skip(
             "PostgreSQL not available "
             f"(set {_ADMIN_URL_ENV} or install testing.postgresql + psycopg2)"

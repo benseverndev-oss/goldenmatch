@@ -158,5 +158,51 @@ def test_most_complete_picks_longest_string():
     assert by_cluster[2] == "Alice"   # longest among Alice/Al
 
 
+# ----------------------------------------------------------------------
+# #368 -- psycopg3 migration + server-side cursor for streaming reads
+# ----------------------------------------------------------------------
+
+
+def test_postgres_connector_imports_psycopg3_not_psycopg2():
+    """#368: PostgresConnector must require psycopg3, matching the
+    [postgres] extra. The legacy psycopg2 path was the root cause of
+    the install regression on slim Python builds + the OOM on 1.13M
+    row reads (psycopg2's client-side cursor buffered the full result
+    set before fetchmany could iterate).
+    """
+    import inspect
+
+    from goldenmatch.db import connector
+
+    src = inspect.getsource(connector)
+    assert "import psycopg2" not in src, (
+        "PostgresConnector still imports psycopg2; the [postgres] extra "
+        "ships psycopg3 only since the Phase 6 IdentityStore migration. See #368."
+    )
+    assert "import psycopg" in src
+    # Error message should also reference psycopg3 (the actual extra-installed driver).
+    assert "psycopg3" in src or "psycopg[binary]" in src
+
+
+def test_postgres_read_table_uses_server_side_cursor():
+    """#368: read_table must declare a server-side cursor (named cursor)
+    so Postgres streams rows from a portal instead of psycopg buffering
+    them all client-side. Required to read a 1.13M-row table inside a
+    16 GB sandbox without OOM.
+    """
+    import inspect
+
+    from goldenmatch.db.connector import PostgresConnector
+
+    src = inspect.getsource(PostgresConnector.read_table)
+    # A named cursor (name="...") is what asks psycopg3 to use a server-
+    # side portal. Without a name, the default cursor caches results in
+    # the connection buffer regardless of fetchmany() size.
+    assert 'name="gm_sync_read"' in src or "name='gm_sync_read'" in src, (
+        "read_table should open a named server-side cursor; without it the "
+        "1.13M-row read OOMs the client process before fetchmany iterates. See #368."
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
