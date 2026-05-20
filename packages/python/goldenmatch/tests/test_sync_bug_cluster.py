@@ -10,8 +10,7 @@ import builtins
 import sys
 
 import polars as pl
-import pytest
-
+import pytest  # noqa: F401 -- used via __main__ block
 
 # ----------------------------------------------------------------------
 # #364 -- lazy sqlite3 import in ReviewQueue

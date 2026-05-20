@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    import sqlite3
+
     import polars as pl
 
     from goldenmatch.core.memory.store import MemoryStore
@@ -225,7 +227,7 @@ class _SQLiteBackend:
                 parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> "sqlite3.Connection":
+    def _connect(self) -> sqlite3.Connection:
         import sqlite3  # noqa: PLC0415 -- lazy, see #364
         return sqlite3.connect(str(self._db_path))
 
