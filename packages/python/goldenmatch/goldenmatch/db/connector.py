@@ -180,9 +180,19 @@ class PostgresConnector(DatabaseConnector):
 
 
 def _quote_ident(name: str) -> str:
-    """Quote a SQL identifier to prevent injection."""
-    # Simple quoting — replace any double quotes and wrap
-    return '"' + name.replace('"', '""') + '"'
+    """Quote a SQL identifier to prevent injection.
+
+    Splits a single ``schema.table`` arg into ``"schema"."table"`` so
+    callers can pass non-public schemas via ``sync --table gm.foo``.
+    See #365.
+
+    Edge case: tables with literal dots in the name are split on the
+    FIRST dot only -- yielding ``"odd_schema"."weird.name"``. Two-dot
+    identifiers are vanishingly rare in practice and there is no
+    portable escape syntax for them through a CLI flag.
+    """
+    parts = name.split(".", 1)  # max one split: schema.table
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def create_connector(config: dict) -> DatabaseConnector:
