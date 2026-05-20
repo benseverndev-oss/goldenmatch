@@ -391,14 +391,25 @@ def test_read_all_lazy_returns_lazyframe_not_eager():
         def get_row_count(self, table: str) -> int:
             return 0
 
+    from pathlib import Path
+
     chunks = [pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})]
-    lf = _read_all_lazy(_Conn(chunks), "ignored", chunk_size=10)
+    result = _read_all_lazy(_Conn(chunks), "ignored", chunk_size=10)
+    assert isinstance(result, tuple) and len(result) == 2
+    lf, staging = result
     assert lf is not None
     assert isinstance(lf, pl.LazyFrame), (
         f"_read_all_lazy should return LazyFrame; got {type(lf).__name__}"
     )
-    # Empty-input case returns None so caller can early-exit.
-    assert _read_all_lazy(_Conn([]), "ignored", chunk_size=10) is None
+    assert isinstance(staging, Path)
+    # Staging files exist while caller is still iterating; collect proves
+    # the lazy scan actually reads them.
+    assert lf.collect().height == 3
+    import shutil  # noqa: PLC0415
+    shutil.rmtree(staging, ignore_errors=True)
+
+    # Empty-input case returns (None, None) so caller can early-exit.
+    assert _read_all_lazy(_Conn([]), "ignored", chunk_size=10) == (None, None)
 
 
 def test_run_sync_full_scan_uses_lazyframe_path():
@@ -418,6 +429,64 @@ def test_run_sync_full_scan_uses_lazyframe_path():
     assert "_read_all_lazy" in code, (
         "run_sync's full-scan path should call _read_all_lazy. See #384."
     )
+
+
+def test_read_all_lazy_staging_survives_lazyframe_rebinding():
+    """#388: the staging dir must NOT be tied to the LazyFrame's Python
+    object lifetime. When a caller does
+
+        lf = _read_all_lazy(...)
+        lf = lf.with_columns(...)  # new LazyFrame; original GC'd
+
+    the original LazyFrame's Python wrapper is GC'd while the underlying
+    scan_parquet node lives on in the derived frame's plan. If staging
+    cleanup is triggered by the wrapper's GC, the parquet files vanish
+    before the eventual .collect() can read them.
+
+    Repro: read into _read_all_lazy, do a chain of with_columns,
+    explicitly GC any intermediate references, then collect. Must
+    return the right row count (staging files still on disk).
+    """
+    import gc
+    import shutil  # noqa: PLC0415
+    from collections.abc import Iterator
+
+    from goldenmatch.db.connector import DatabaseConnector
+    from goldenmatch.db.sync import _read_all_lazy
+
+    class _Conn(DatabaseConnector):
+        def __init__(self, chunks: list[pl.DataFrame]):
+            self._chunks = chunks
+        def connect(self) -> None: ...
+        def close(self) -> None: ...
+        def read_table(
+            self, table: str, chunk_size: int = 10000,
+        ) -> Iterator[pl.DataFrame]:
+            yield from self._chunks
+        def read_query(self, query: str) -> pl.DataFrame:
+            return pl.DataFrame()
+        def write_dataframe(self, df, table, mode="append") -> int:
+            return 0
+        def execute(self, sql, params=None) -> None: ...
+        def table_exists(self, table: str) -> bool:
+            return False
+        def get_row_count(self, table: str) -> int:
+            return 0
+
+    chunks = [pl.DataFrame({"id": [1, 2, 3], "x": [10, 20, 30]})]
+    lf, staging = _read_all_lazy(_Conn(chunks), "ignored", chunk_size=10)
+    try:
+        # Chain that rebinds lf to a derived frame; the original's
+        # Python wrapper becomes eligible for GC. Force a cycle to
+        # surface any weakref-style early-cleanup bug deterministically.
+        lf = lf.with_columns(pl.lit("new").alias("__source__"))
+        lf = lf.with_row_index("__row_id__")
+        gc.collect()  # any premature staging-dir delete would fire here
+        df = lf.collect()
+        assert df.height == 3
+        assert "__source__" in df.columns and "__row_id__" in df.columns
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 if __name__ == "__main__":  # pragma: no cover
