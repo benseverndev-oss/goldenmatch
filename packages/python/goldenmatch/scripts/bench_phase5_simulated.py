@@ -85,7 +85,6 @@ def main() -> int:
         return 1
 
     import ray  # noqa: PLC0415
-
     from goldenmatch.config.schemas import (  # noqa: PLC0415
         GoldenMatchConfig,
         IdentityConfig,
