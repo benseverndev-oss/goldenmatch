@@ -67,7 +67,9 @@ llm = [
     "openai>=1.30",
 ]
 postgres = [
-    "psycopg2-binary>=2.9",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.2",
+    "alembic>=1.13",
 ]
 mcp = [
     "mcp>=1.0",

@@ -170,7 +170,7 @@ def _open_identity_store(config: GoldenMatchConfig):
 
 
 def _resolve_identities(
-    clusters: dict,
+    clusters: Any,
     df: pl.DataFrame,
     scored_pairs: list,
     matchkeys: list,
@@ -178,9 +178,54 @@ def _resolve_identities(
     run_name: str,
 ) -> dict | None:
     """Run identity resolution as a post-cluster step. Best-effort: failures
-    log a warning and return None without affecting dedupe output."""
+    log a warning and return None without affecting dedupe output.
+
+    Polymorphic on ``clusters``:
+    - ``dict[int, dict]`` -> in-memory resolver (default).
+    - ``ray.data.Dataset`` -> distributed dispatch (Phase 6). Requires
+      ``config.identity.backend == 'postgres'``.
+    """
     if not config.identity or not config.identity.enabled:
         return None
+
+    # Phase 6: distributed dispatch when clusters is a Ray Dataset.
+    try:
+        from goldenmatch.distributed._utils import is_ray_dataset
+    except Exception:
+        is_ray_dataset = lambda _x: False  # noqa: E731
+
+    if is_ray_dataset(clusters):
+        if config.identity.backend != "postgres":
+            logger.warning(
+                "Distributed identity resolution requires backend='postgres'; "
+                "got %r. Skipping identity.",
+                config.identity.backend,
+            )
+            return None
+        if not config.identity.connection:
+            logger.warning(
+                "Distributed identity resolution requires identity.connection "
+                "(Postgres DSN). Skipping identity."
+            )
+            return None
+        try:
+            from goldenmatch.distributed.identity import (
+                resolve_identities_distributed,
+            )
+            mk_name = matchkeys[0].name if matchkeys else None
+            summary = resolve_identities_distributed(
+                clusters, df, scored_pairs, mk_name,
+                dsn=config.identity.connection,
+                run_name=run_name,
+                dataset=config.identity.dataset,
+                source_pk_col=config.identity.source_pk_column,
+            )
+            return summary.as_dict()
+        except Exception as e:
+            logger.warning("Distributed identity resolution failed: %s", e)
+            return None
+
+    # In-memory path (legacy, unchanged).
     store = _open_identity_store(config)
     if store is None:
         return None
