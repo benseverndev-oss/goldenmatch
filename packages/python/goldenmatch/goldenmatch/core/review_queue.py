@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -226,7 +225,8 @@ class _SQLiteBackend:
                 parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> "sqlite3.Connection":
+        import sqlite3  # noqa: PLC0415 -- lazy, see #364
         return sqlite3.connect(str(self._db_path))
 
     def _init_db(self) -> None:

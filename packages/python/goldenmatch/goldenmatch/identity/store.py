@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from collections.abc import Iterable
@@ -141,6 +140,7 @@ class IdentityStore:
         # legacy per-store single-conn behavior the existing tests rely on.
         self._pool = pool
         if backend == "sqlite":
+            import sqlite3  # noqa: PLC0415 -- lazy, see #364
             # Canonicalize path early so logs / errors see the resolved form
             # and the parent-dir create cannot escape via "..". Path is a
             # trusted-config value supplied by the embedding application,
