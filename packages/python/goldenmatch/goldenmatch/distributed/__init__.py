@@ -12,6 +12,7 @@ from goldenmatch.distributed.clustering import (
     build_clusters_distributed,
     materialize_cluster_dict,
     pairs_list_to_dataset,
+    two_phase_wcc,
 )
 from goldenmatch.distributed.dataset import (
     apply_transforms_distributed,
@@ -45,4 +46,5 @@ __all__ = [
     "read_partitioned",
     "score_blocks_distributed",
     "take_sample_distributed",
+    "two_phase_wcc",
 ]

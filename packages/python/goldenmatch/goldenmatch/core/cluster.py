@@ -94,6 +94,10 @@ class UnionFind:
         if self._rank[ra] == self._rank[rb]:
             self._rank[ra] += 1
 
+    def nodes(self) -> list[int]:
+        """Return all added members. Order is insertion order via dict."""
+        return list(self._parent.keys())
+
     def get_clusters(self) -> list[set[int]]:
         """Return all clusters as a list of sets."""
         groups: dict[int, set[int]] = defaultdict(set)

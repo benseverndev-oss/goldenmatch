@@ -18,6 +18,10 @@ on:
         description: "Run Phase 5 100M multi-node bench (requires RAY_ADDRESS secret + bench_100000000.parquet)"
         type: boolean
         default: false
+      run_phase5_5_wcc:
+        description: "Run Phase 5.5 WCC head-to-head (Two-Phase vs label_propagation on adversarial chain)"
+        type: boolean
+        default: false
 
 jobs:
   bench:
@@ -463,5 +467,55 @@ jobs:
         with:
           name: bench-phase5-end2end
           path: packages/python/goldenmatch/bench-out/phase5_end2end.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-phase5-5-wcc:
+    name: "bench Phase 5.5 WCC head-to-head"
+    # workflow_dispatch only; user provides the chain dataset on the
+    # release or generates it on the fly.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_phase5_5_wcc == true
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install goldenmatch
+        working-directory: packages/python/goldenmatch
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ray]"
+          pip install psutil pandas scipy
+      - name: Generate chain dataset (5M chains x 10)
+        working-directory: packages/python/goldenmatch
+        run: |
+          mkdir -p bench-out
+          python scripts/generate_chain_dataset.py \
+            --chains 5000000 --chain-length 10 \
+            --output bench-out/chains_50m.parquet
+      - name: Run head-to-head bench
+        working-directory: packages/python/goldenmatch
+        env:
+          GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+          GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD: "0"
+        run: |
+          set -o pipefail
+          python scripts/bench_phase5_5_wcc.py \
+            --pairs bench-out/chains_50m.parquet \
+            2>&1 | tee bench-out/phase5_5_wcc.log
+          echo '## bench-phase5-5-wcc results' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-out/phase5_5_wcc.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-phase5-5-wcc
+          path: packages/python/goldenmatch/bench-out/phase5_5_wcc.log
           if-no-files-found: warn
           retention-days: 30

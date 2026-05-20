@@ -9,7 +9,7 @@ without the [ray] extra installed.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ray.data import Dataset
@@ -132,6 +132,12 @@ def label_propagation(
 _LABEL_PROP_PAIR_THRESHOLD = 50_000_000
 
 
+def _wcc_algorithm() -> str:
+    """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase')."""
+    import os
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
+
+
 def _label_prop_threshold() -> int:
     import os
 
@@ -185,22 +191,33 @@ def build_clusters_distributed(
         )
         return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
 
-    logger.info(
-        "build_clusters_distributed: %d pairs >= %d threshold; "
-        "routing to distributed label propagation.",
-        pair_count, threshold,
-    )
-    try:
-        labels_ds, _iters = label_propagation(
-            pairs_ds, all_ids,
-            convergence_max_iterations=convergence_max_iterations,
+    algorithm = _wcc_algorithm() if not force_label_propagation else "label_propagation"
+
+    if algorithm == "label_propagation":
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; "
+            "routing to distributed label propagation (env override or "
+            "force_label_propagation=True).",
+            pair_count, threshold,
         )
-    except ConvergenceError as e:
-        logger.warning(
-            "label propagation did not converge; scipy.csgraph fallback on driver. %s",
-            e,
+        try:
+            labels_ds, _iters = label_propagation(
+                pairs_ds, all_ids,
+                convergence_max_iterations=convergence_max_iterations,
+            )
+        except ConvergenceError as e:
+            logger.warning(
+                "label propagation did not converge; scipy.csgraph fallback on driver. %s",
+                e,
+            )
+            return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+    else:
+        logger.info(
+            "build_clusters_distributed: %d pairs >= %d threshold; "
+            "routing to two_phase_wcc (default, Sem Sinchenko recommendation).",
+            pair_count, threshold,
         )
-        return _build_clusters_scipy_fallback(pairs_ds, all_ids, max_cluster_size)
+        labels_ds = two_phase_wcc(pairs_ds, all_ids)
 
     sizes_ds = labels_ds.groupby("label").count()
     size_rows = sizes_ds.take_all()
@@ -294,6 +311,134 @@ def _build_clusters_scipy_fallback(
         }
     ).to_arrow()
     return ray.data.from_arrow(out_table)
+
+
+def two_phase_wcc(
+    pairs_ds: Dataset,
+    all_ids: list[int],
+) -> Dataset:
+    """Two-Phase Weakly Connected Components (Iverson et al, 2014).
+
+    Phase A: per-partition local Union-Find (embarrassingly parallel).
+    Phase B: cross-partition merge via super-graph UF on driver.
+
+    Same output shape as label_propagation: a Ray Dataset of {id, label}
+    rows where label is the min-id member of each connected component.
+
+    Recommended by GraphFrames maintainer Sem Sinchenko for ER graphs
+    because chains are label-prop's worst case but Phase B converges
+    in O(1) iterations on chains.
+    """
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, log_to_driver=False)
+
+    # Phase A: per-partition local CC.
+    local_ds = pairs_ds.map_batches(_phase_a_local_cc, batch_format="pyarrow")
+    local_components: dict[int, int] = {}
+    for table in local_ds.iter_batches(batch_format="pyarrow"):
+        for row in table.to_pylist():  # type: ignore[attr-defined]
+            local_components[row["member_id"]] = row["local_root"]
+
+    # Seed isolated nodes (in all_ids but never touched by pairs).
+    for i in all_ids:
+        if i not in local_components:
+            local_components[i] = i
+
+    # Phase B: cross-partition merge.
+    global_components = _phase_b_merge_boundaries(local_components, pairs_ds)
+
+    # Normalize label to the min member id per component (matches
+    # label_propagation's semantics).
+    by_global_root: dict[int, list[int]] = {}
+    for member, root in global_components.items():
+        by_global_root.setdefault(root, []).append(member)
+    final_labels: dict[int, int] = {}
+    for members in by_global_root.values():
+        min_id = min(members)
+        for m in members:
+            final_labels[m] = min_id
+
+    rows = [{"id": int(m), "label": int(label)} for m, label in final_labels.items()]
+    return ray.data.from_items(rows)
+
+
+def _emit_boundary_pairs(batch: Any, member_to_root: dict[int, int]) -> Any:  # pa.Table -> pa.Table
+    """Emit one row per boundary edge (pairs where the two endpoints
+    have different local_roots).
+
+    Output schema: {root_a, root_b}. Phase B does Union-Find on these
+    super-edges.
+    """
+    import pyarrow as pa
+
+    out = []
+    for row in batch.to_pylist():
+        ra = member_to_root.get(row["id_a"])
+        rb = member_to_root.get(row["id_b"])
+        if ra is None or rb is None or ra == rb:
+            continue
+        out.append({"root_a": int(ra), "root_b": int(rb)})
+
+    return pa.Table.from_pylist(out)
+
+
+def _phase_b_merge_boundaries(
+    local_components: dict[int, int],
+    pairs_ds: Dataset,
+) -> dict[int, int]:
+    """Phase B: reconcile local roots across partitions via super-graph UF.
+
+    Collects boundary edges (bounded by O(P^2)) to driver, runs Union-Find
+    on the local_roots, and remaps every member to its final global root.
+    """
+    from goldenmatch.core.cluster import UnionFind
+
+    boundary_tables = list(
+        pairs_ds.map_batches(
+            lambda b: _emit_boundary_pairs(b, local_components),
+            batch_format="pyarrow",
+        ).iter_batches(batch_format="pyarrow")
+    )
+
+    uf = UnionFind()
+    # Seed with every distinct local_root so isolated components keep their roots.
+    for root in set(local_components.values()):
+        uf.add(root)
+
+    for table in boundary_tables:
+        for row in table.to_pylist():  # type: ignore[attr-defined]
+            uf.add(row["root_a"])
+            uf.add(row["root_b"])
+            uf.union(row["root_a"], row["root_b"])
+
+    return {m: uf.find(r) for m, r in local_components.items()}
+
+
+def _phase_a_local_cc(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
+    """Phase A of Two-Phase WCC: local Union-Find on this partition's pairs.
+
+    Emits one (member_id, local_root) row per member touched by the
+    partition's pairs. The local_root is meaningful only within the
+    partition; Phase B reconciles roots across partitions.
+    """
+    import pyarrow as pa
+
+    from goldenmatch.core.cluster import UnionFind
+
+    uf = UnionFind()
+    rows_in = batch.to_pylist()
+    if not rows_in:
+        return pa.Table.from_pylist([])
+
+    for row in rows_in:
+        uf.add(row["id_a"])
+        uf.add(row["id_b"])
+        uf.union(row["id_a"], row["id_b"])
+
+    out = [{"member_id": m, "local_root": uf.find(m)} for m in uf.nodes()]
+    return pa.Table.from_pylist(out)
 
 
 def materialize_cluster_dict(

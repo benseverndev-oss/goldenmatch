@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 5.5)
+- **Two-Phase WCC** (`goldenmatch.distributed.clustering.two_phase_wcc`)
+  replaces label propagation as the default distributed connected-
+  components algorithm. Phase A: per-partition local `UnionFind` via
+  `map_batches` (embarrassingly parallel). Phase B: driver-side super-
+  graph Union-Find on boundary edges between partitions (bounded by
+  O(P^2) max edges).
+- New env var `GOLDENMATCH_DISTRIBUTED_WCC` — default `two_phase`,
+  opt back into `label_propagation` for regression testing.
+- `UnionFind.nodes()` accessor on `goldenmatch.core.cluster.UnionFind`.
+- `scripts/generate_chain_dataset.py` — synthetic chain-heavy graph
+  generator for the adversarial bench (label-prop's worst case).
+- `scripts/bench_phase5_5_wcc.py` — head-to-head bench timing both
+  algorithms on the same input + asserting partition-structure
+  equivalence.
+- `bench-phase5-5-wcc` workflow job (workflow_dispatch only,
+  `run_phase5_5_wcc=true`). Generates 5M-chain dataset on the fly.
+- Motivated by GraphFrames maintainer Sem Sinchenko's recommendation:
+  chains are label-prop's worst case and identity graphs are
+  chain-heavy.
+
 ### Added (Phase 5)
 - **Distributed scoring:** `goldenmatch.distributed.scoring`:
   - `score_blocks_distributed(df_ds, config)` — per-partition fuzzy +
