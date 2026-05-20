@@ -296,6 +296,26 @@ def _build_clusters_scipy_fallback(
     return ray.data.from_arrow(out_table)
 
 
+def _emit_boundary_pairs(batch, member_to_root: dict):  # pa.Table -> pa.Table
+    """Emit one row per boundary edge (pairs where the two endpoints
+    have different local_roots).
+
+    Output schema: {root_a, root_b}. Phase B does Union-Find on these
+    super-edges.
+    """
+    import pyarrow as pa
+
+    out = []
+    for row in batch.to_pylist():
+        ra = member_to_root.get(row["id_a"])
+        rb = member_to_root.get(row["id_b"])
+        if ra is None or rb is None or ra == rb:
+            continue
+        out.append({"root_a": int(ra), "root_b": int(rb)})
+
+    return pa.Table.from_pylist(out)
+
+
 def _phase_a_local_cc(batch):  # batch: pa.Table -> pa.Table
     """Phase A of Two-Phase WCC: local Union-Find on this partition's pairs.
 
