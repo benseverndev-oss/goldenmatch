@@ -106,14 +106,38 @@ def run_sync(
 
 
 def _read_all(connector: DatabaseConnector, table: str, chunk_size: int) -> pl.DataFrame:
-    """Read entire table into DataFrame."""
-    chunks = []
-    for chunk in connector.read_table(table, chunk_size):
-        chunks.append(chunk)
-    # how="diagonal_relaxed" defends against any chunk where a column
-    # is all-NULL (Null dtype) slipping past _normalize_chunk_schema in
-    # the connector. See #363.
-    return pl.concat(chunks, how="diagonal_relaxed") if chunks else pl.DataFrame()
+    """Read entire table into a DataFrame, staging chunks to disk first.
+
+    Streams chunks from the connector to a temporary parquet directory
+    one chunk at a time, then reads them back as a single DataFrame via
+    ``pl.read_parquet`` glob. Peak memory during the read drops from
+    ~2x the raw frame size (chunks list + ``pl.concat`` materialization)
+    to ~1 chunk + the final read-back. On a 1.13M-row x 58-col Postgres
+    view this was the difference between an 8 GB sandbox OOMing at
+    ``pl.concat`` time vs landing the read step cleanly (#378).
+
+    The staging directory is removed once the DataFrame is loaded;
+    callers don't have to manage cleanup.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    staging = Path(tempfile.mkdtemp(prefix="gm_sync_read_"))
+    try:
+        n_chunks = 0
+        for i, chunk in enumerate(connector.read_table(table, chunk_size)):
+            chunk.write_parquet(staging / f"chunk_{i:06d}.parquet")
+            n_chunks += 1
+        if n_chunks == 0:
+            return pl.DataFrame()
+        # Read all staged chunks back via Polars' multi-file scan +
+        # collect. Polars unifies schemas across files (matches the
+        # prior how="diagonal_relaxed" semantics for #363's Null->Utf8
+        # case when paired with _normalize_chunk_schema in connector.py).
+        return pl.read_parquet(staging / "chunk_*.parquet")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _read_incremental(
