@@ -15,10 +15,10 @@ partition's scorer runs in parallel on a different worker.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import pyarrow as pa
+    import pyarrow as pa  # noqa: F401  used in inline type annotation comments
     from ray.data import Dataset
 
     from goldenmatch.config.schemas import GoldenMatchConfig
@@ -27,21 +27,21 @@ logger = logging.getLogger(__name__)
 
 
 def score_blocks_distributed(
-    df_ds: "Dataset",
-    config: "GoldenMatchConfig",
-) -> "Dataset":
+    df_ds: Dataset,
+    config: GoldenMatchConfig,
+) -> Dataset:
     """Per-partition fuzzy + exact scoring via in-memory dedupe_df.
 
     Returns a Ray Dataset of {id_a, id_b, score} rows. Cross-partition
     collisions stay; caller invokes dedup_pairs_distributed to canonicalize.
     """
-    import pyarrow as pa
-    import ray  # noqa: F401
 
-    def _score_partition(batch: "pa.Table") -> "pa.Table":
+    def _score_partition(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
         import copy
 
         import polars as pl
+        import pyarrow as pa
+
         import goldenmatch as gm
 
         df = pl.from_arrow(batch)
@@ -75,17 +75,15 @@ def score_blocks_distributed(
     return df_ds.map_batches(_score_partition, batch_format="pyarrow")
 
 
-def dedup_pairs_distributed(pairs_ds: "Dataset") -> "Dataset":
+def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
     """Cross-partition pair dedup. Canonicalizes (id_a, id_b) to (min, max)
     and keeps the maximum score per canonical pair.
 
     Note: Ray's groupby column-output naming varies by version. Output
     schema is {id_a, id_b, score}; normalization handled inline.
     """
-    import pyarrow as pa
-    import ray  # noqa: F401
 
-    def _canonicalize(batch: "pa.Table") -> "pa.Table":
+    def _canonicalize(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
         import polars as pl
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
@@ -100,7 +98,7 @@ def dedup_pairs_distributed(pairs_ds: "Dataset") -> "Dataset":
     grouped = canonical.groupby(["id_a", "id_b"]).max("score")
 
     # Normalize "max(score)" / "score_max" -> "score".
-    def _rename(batch: "pa.Table") -> "pa.Table":
+    def _rename(batch: pa.Table) -> pa.Table:
         cols = batch.column_names
         new_cols = []
         for c in cols:
