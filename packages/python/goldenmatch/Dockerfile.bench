@@ -2,32 +2,25 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=never \
     GOLDENMATCH_BENCH_DATA_DIR=/data
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
-
+# No apt install -- python:3.12-slim already has ca-certificates,
+# and we don't need curl inside the container (Railway hits the
+# /healthz endpoint externally). Skipping apt-get also avoids the
+# Railway build disk-space exhaustion that killed the prior build.
 WORKDIR /app
 
-# Install the package + the runtime deps the bench-gen server needs.
-# We don't need [ray]/[postgres]/[web] for dataset generation; the
-# generator is pure numpy + Polars. fastapi + uvicorn are the server
-# layer (matches the shellnet-job pattern).
-COPY pyproject.toml uv.lock README.md ./
-COPY goldenmatch ./goldenmatch
-RUN uv venv /opt/venv \
-    && . /opt/venv/bin/activate \
-    && uv pip install --no-cache \
-        "polars>=1.0" "numpy>=1.26" "fastapi>=0.110" "uvicorn[standard]>=0.27"
+# Install only the runtime deps the bench-gen server actually needs.
+# No goldenmatch package install -- the generator is pure numpy + Polars,
+# and the server is FastAPI. Keeps the image small (no [ray]/[postgres]/
+# [web] toolchain).
+RUN pip install --no-cache-dir \
+        "polars>=1.0" \
+        "numpy>=1.26" \
+        "fastapi>=0.110" \
+        "uvicorn[standard]>=0.27"
 
 COPY scripts ./scripts
-
-ENV PATH="/opt/venv/bin:${PATH}"
 
 # Volume mount target -- Railway will attach a persistent volume here
 # so generated parquets survive redeploys. The state.json + per-job
