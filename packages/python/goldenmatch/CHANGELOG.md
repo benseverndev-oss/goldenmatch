@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (Phase 5)
+- **Distributed scoring:** `goldenmatch.distributed.scoring`:
+  - `score_blocks_distributed(df_ds, config)` — per-partition fuzzy +
+    exact scoring via `ds.map_batches`. Each worker runs in-memory
+    `dedupe_df` with `backend="bucket"` on its slice; pair tuples emitted
+    as a Ray Dataset.
+  - `dedup_pairs_distributed(pairs_ds)` — cross-partition pair dedup.
+    Canonicalizes `(min, max)` ordering, groupby + max(score) keeps the
+    highest score per canonical pair.
+- **Phase 5 streaming pipeline** in `goldenmatch.distributed.pipeline`:
+  `GOLDENMATCH_DISTRIBUTED_PIPELINE=2` activates `_run_phase5_pipeline`
+  — auto-configure → distributed score → distributed cluster (Phase 3
+  polymorphic) → annotate-with-cluster-id (broadcast dict via `ray.put`)
+  → distributed golden (Phase 4 polymorphic) → write_parquet. No entry-
+  side `take_all` on input. Phase 2 default cheat-line and Phase 4
+  scaffold (`=1`) remain available.
+- `output_path` kwarg on `run_dedupe_pipeline_distributed` writes the
+  golden output to parquet at end of pipeline.
+- **100M dataset generator:** `scripts/generate_phase5_dataset.py` —
+  synthetic 100M rows with ~5-member clusters + 10% typo injection.
+- **Multi-node Ray cluster docs:** `docs/distributed-ray-cluster-setup.md`
+  — sizing recommendations, `ray up` config, KubeRay equivalent, network
+  requirements, object store sizing, cost framing. Splink-posture:
+  documentation, not bootstrap automation.
+- **`bench-phase5-end2end` workflow job:** `workflow_dispatch` only,
+  gated on `run_phase5_bench=true`. Requires `RAY_ADDRESS` secret +
+  pre-uploaded `bench_100000000.parquet`. Runs on `ubuntu-latest`
+  client; Ray work happens on the remote cluster.
+- Kill criterion: 100M end-to-end < 30 min on a 4 × 16c/64GB worker
+  Ray cluster.
+- **Two-Phase WCC swap** (per GraphFrames maintainer advice on label-prop's
+  chain pathology) **deliberately deferred to Phase 5.5** — separate
+  spec/plan after we have real 100M chain-heavy graph data to verify
+  against. Label propagation stays the distributed clustering algorithm
+  with the existing routing threshold.
+
 ### Added (Phase 4)
 - **Distributed golden record build:** `goldenmatch.distributed.golden`:
   - `build_golden_records_distributed(multi_ds, rules, user_columns)` —
