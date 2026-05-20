@@ -290,5 +290,69 @@ def test_read_all_round_trips_data_from_streaming_connector():
     assert sorted(df["name"].to_list()) == ["a", "b", "c", "d", "e", "f"]
 
 
+# ----------------------------------------------------------------------
+# #381 -- _read_all unifies schema across chunks before staging
+# ----------------------------------------------------------------------
+
+
+def test_read_all_unifies_dtype_drift_across_chunks():
+    """#381: when chunk1 infers Null for an all-NULL column and chunk2
+    infers Int64 (or any other concrete type), _read_all must NOT let
+    that drift propagate to the staging parquet files. The prior
+    behavior (post-#379) failed at read-back with:
+
+        data type mismatch for column dm_npi:
+        incoming: Null != target: Int64
+
+    Fix: first non-empty chunk seeds the unified schema; subsequent
+    chunks cast columns to it before write.
+    """
+    from collections.abc import Iterator
+
+    from goldenmatch.db.connector import DatabaseConnector
+    from goldenmatch.db.sync import _read_all
+
+    class _DriftyConnector(DatabaseConnector):
+        """Chunk 1: dm_npi all-NULL (Polars infers Null dtype).
+        Chunk 2: dm_npi has Int64 values."""
+
+        def __init__(self, chunks: list[pl.DataFrame]):
+            self._chunks = chunks
+
+        def connect(self) -> None: ...
+        def close(self) -> None: ...
+        def read_table(
+            self, table: str, chunk_size: int = 10000,
+        ) -> Iterator[pl.DataFrame]:
+            yield from self._chunks
+        def read_query(self, query: str) -> pl.DataFrame:
+            return pl.DataFrame()
+        def write_dataframe(self, df, table, mode="append") -> int:
+            return 0
+        def execute(self, sql, params=None) -> None: ...
+        def table_exists(self, table: str) -> bool:
+            return False
+        def get_row_count(self, table: str) -> int:
+            return 0
+
+    chunk1 = pl.DataFrame(
+        {"id": [1, 2, 3], "dm_npi": [1234567890, 9876543210, 5555555555]},
+    )
+    chunk2 = pl.DataFrame(
+        {"id": [4, 5], "dm_npi": [None, None]},
+        schema={"id": pl.Int64, "dm_npi": pl.Null},  # the drift case
+    )
+    connector = _DriftyConnector([chunk1, chunk2])
+
+    # Without the schema-unify fix, this raised at the pl.read_parquet
+    # multi-file step. With the fix, the read-back succeeds and the
+    # resulting frame keeps Int64 dtype for dm_npi.
+    df = _read_all(connector, "ignored", chunk_size=10)
+    assert df.height == 5
+    assert df.schema["dm_npi"] == pl.Int64, (
+        f"dm_npi should retain Int64 dtype from the first chunk; got {df.schema['dm_npi']}"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
