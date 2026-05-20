@@ -44,7 +44,6 @@ def _synth_clusters(n_rows: int) -> tuple:
     """
     import polars as pl
 
-    n_clusters = max(1, n_rows // 2)
     members_a = list(range(0, n_rows, 2))
     members_b = list(range(1, n_rows, 2))[: len(members_a)]
     # Ensure equal length

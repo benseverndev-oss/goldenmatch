@@ -28,7 +28,7 @@ log = logging.getLogger("goldenmatch.distributed.identity")
 
 def resolve_identities_distributed(
     clusters: Any,
-    df: "pl.DataFrame",
+    df: pl.DataFrame,
     scored_pairs: list[tuple[int, int, float]],
     matchkey_name: str | None,
     *,
@@ -38,7 +38,7 @@ def resolve_identities_distributed(
     source_pk_col: str | None = None,
     pool_min_size: int = 2,
     pool_max_size: int = 8,
-) -> "ResolveSummary":
+) -> ResolveSummary:
     """Resolve identities from clusters that may be a dict or Ray Dataset.
 
     Always runs against a Postgres backend (SQLite is single-process and
@@ -84,6 +84,6 @@ def resolve_identities_distributed(
         )
 
 
-def materialize_identity_assignments(summary: "ResolveSummary") -> dict[str, int]:
+def materialize_identity_assignments(summary: ResolveSummary) -> dict[str, int]:
     """Adapter that returns the count breakdown from a ResolveSummary."""
     return summary.as_dict()
