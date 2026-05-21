@@ -99,10 +99,15 @@ PHONE_SENTINELS: frozenset[str] = frozenset({
     "(000) 000-0000", "(555) 555-5555",
 })
 
-# Substrings that indicate a placeholder email regardless of suffix.
+# Substrings that indicate a placeholder email. ONLY unambiguous
+# no-reply / null / test patterns -- NOT @example.com or @example.org,
+# which are RFC-reserved test domains widely used in legitimate
+# fixtures and demos. False-positive rate on example.* domains was
+# unacceptable (NCVR / DQbench / negative-evidence fixtures all use
+# @example.com as the legitimate domain).
 EMAIL_SENTINEL_SUBSTRINGS: tuple[str, ...] = (
     "noreply@", "noemail@", "no-reply@", "donotreply@", "do-not-reply@",
-    "null@", "none@", "n/a@", "@example.com", "@example.org",
+    "null@", "none@", "n/a@",
     "test@", "fake@", "@test.com",
 )
 
