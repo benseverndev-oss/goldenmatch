@@ -20,6 +20,15 @@ def sync_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Match without writing results"),
     incremental_column: str | None = typer.Option(None, "--incremental-column", help="Column for incremental detection"),
     chunk_size: int = typer.Option(10000, "--chunk-size", help="Records per chunk"),
+    exclude_columns: str | None = typer.Option(
+        None, "--exclude-columns",
+        help=(
+            "Comma-separated columns to skip across the suite. "
+            "GoldenMatch auto-config never picks these for "
+            "matchkeys/blocking; GoldenFlow transforms skip them. "
+            "Layered with config.exclude_columns when both are set."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
@@ -70,6 +79,21 @@ def sync_cmd(
                 cfg = auto_configure([(f.name, table)])
             if not quiet:
                 console.print("[green]Auto-configured matching rules.[/green]")
+
+        # Merge --exclude-columns into config (additive with YAML field).
+        # Done AFTER auto-configure if zero-config path ran, so detector
+        # exclusions are in place first; user CLI exclusions layer on top.
+        from goldenmatch._exclusions_schema import (
+            merge_exclude_columns_into_config,
+        )
+        _resolved_excludes = merge_exclude_columns_into_config(
+            cfg, exclude_columns,
+        )
+        if _resolved_excludes and not quiet:
+            console.print(
+                f"[dim]exclude_columns ({len(_resolved_excludes)}): "
+                f"{', '.join(_resolved_excludes)}[/dim]",
+            )
 
         # Run sync
         from goldenmatch.db.sync import run_sync

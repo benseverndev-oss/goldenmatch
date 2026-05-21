@@ -27,10 +27,20 @@ def pprl_link(
     protocol: str = typer.Option("trusted_third_party", "--protocol", "-p", help="Protocol: trusted_third_party or smc"),
     scorer: str = typer.Option("dice", "--scorer", help="Similarity scorer: dice or jaccard"),
     output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path for cluster assignments"),
+    exclude_columns: str | None = typer.Option(
+        None, "--exclude-columns",
+        help=(
+            "Comma-separated columns to skip across the suite. "
+            "GoldenFlow transforms skip them entirely; PPRL bloom "
+            "filters never hash them."
+        ),
+    ),
 ) -> None:
     """Link records across two parties without sharing raw data."""
     import polars as pl
 
+    from goldenmatch._exclusions_schema import parse_csv_exclude_columns
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
     if not file_a.exists():
@@ -41,6 +51,19 @@ def pprl_link(
         raise typer.Exit(1)
 
     field_list = [f.strip() for f in fields.split(",")]
+
+    # Surface exclusions to GoldenFlow + any internal auto-config path
+    # via the runtime ContextVar. PPRL doesn't carry a GoldenMatchConfig,
+    # so we use the ContextVar surface directly. PPRL's own field list
+    # remains explicit (the user wrote --fields).
+    _parsed_excludes = parse_csv_exclude_columns(exclude_columns)
+    _excl_token = None
+    if _parsed_excludes:
+        _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(_parsed_excludes))
+        console.print(
+            f"[dim]exclude_columns ({len(_parsed_excludes)}): "
+            f"{', '.join(_parsed_excludes)}[/dim]",
+        )
 
     config = PPRLConfig(
         fields=field_list,

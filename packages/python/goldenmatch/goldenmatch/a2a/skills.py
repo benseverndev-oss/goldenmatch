@@ -47,7 +47,17 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id == "autoconfig":
         # v1.7-v1.12: AutoConfigController via AgentSession. Returns committed
         # config + telemetry blob (stop_reason, health, decisions, NE fields).
-        return session.autoconfigure(params["file_path"])
+        excl = params.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            return session.autoconfigure(params["file_path"])
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
 
     if skill_id == "controller_telemetry":
         # Stateless A2A dispatch (one AgentSession per request) means we
@@ -64,10 +74,20 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         }
 
     if skill_id == "deduplicate":
-        result = session.deduplicate(
-            params["file_path"],
-            config=params.get("config"),
-        )
+        excl = params.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            result = session.deduplicate(
+                params["file_path"],
+                config=params.get("config"),
+            )
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         serialised = _serialise_result(result)
         # Plumb telemetry onto the wire result so callers see stop_reason /
         # decisions / NE alongside the dedupe output, not as a separate call.
@@ -75,11 +95,21 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         return serialised
 
     if skill_id == "match":
-        result = session.match_sources(
-            params["file_a"],
-            params["file_b"],
-            config=params.get("config"),
-        )
+        excl = params.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            result = session.match_sources(
+                params["file_a"],
+                params["file_b"],
+                config=params.get("config"),
+            )
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         serialised = _serialise_result(result)
         serialised["telemetry"] = session.last_telemetry or {"available": False, "source": None}
         return serialised
