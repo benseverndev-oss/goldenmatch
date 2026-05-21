@@ -1432,7 +1432,7 @@ def _env_force_include() -> list[str]:
 
 
 def _resolve_effective_exclusion_overrides(
-    config=None,
+    config: Any | None = None,
 ) -> tuple[list[str], list[str]]:
     """Combine every exclusion source into (force_exclude, force_include).
 
@@ -1472,25 +1472,6 @@ def _resolve_effective_exclusion_overrides(
     return fe, fi
 
 
-def _resolve_quality_config_for_exclusions():
-    """DEPRECATED: kept for backward-compat. New code should call
-    ``_resolve_effective_exclusion_overrides`` which combines every
-    exclusion source (top-level config field, kwarg ContextVar,
-    QualityConfig sub-fields, env vars).
-
-    Returns a shim object only when env vars set something -- preserves
-    the pre-unification behavior of "None means no override at all".
-    """
-    fe = _env_force_exclude()
-    fi = _env_force_include()
-    if not fe and not fi:
-        return None
-
-    class _ShimQualityConfig:
-        autoconfig_force_exclude = fe
-        autoconfig_force_include = fi
-
-    return _ShimQualityConfig()
 
 # Tier 4: cross-run memory.  Set GOLDENMATCH_AUTOCONFIG_MEMORY=0 (or "false"
 # or "disabled") to opt out (useful in CI or when disk I/O should be minimal).
