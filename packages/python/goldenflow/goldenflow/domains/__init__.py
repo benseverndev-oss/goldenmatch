@@ -11,6 +11,7 @@ _DOMAINS: dict[str, str] = {
     "finance": "goldenflow.domains.finance",
     "ecommerce": "goldenflow.domains.ecommerce",
     "real_estate": "goldenflow.domains.real_estate",
+    "carceral": "goldenflow.domains.carceral",
 }
 
 
