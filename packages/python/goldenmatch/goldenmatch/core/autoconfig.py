@@ -1098,18 +1098,38 @@ def build_blocking(
     # structurally capping recall regardless of how good the scoring is.
     # NOTE: max_null_rate serves as NULL_RATE_CEILING here (value = 0.20).
     NULL_RATE_CEILING = max_null_rate  # 0.20 — explicit alias for Tier 2 intent
+
+    # #408: cardinality-based blocking-candidate gate. The original
+    # `cardinality_ratio < 0.95` let near-unique columns (NPI, federal IDs,
+    # any column with >86% unique per record) through, producing singleton
+    # blocks. The new gate (default 0.5) filters those out; env-overridable
+    # via GOLDENMATCH_BLOCKING_MAX_RATIO. NPI keeps being picked as a
+    # matchkey upstream — only its blocking role is denied.
+    from goldenmatch.core.blocking_candidates import _blocking_max_ratio
+    blocking_max_ratio = _blocking_max_ratio()
     exact_cols = [
         p for p in profiles
         if p.col_type in ("email", "phone", "zip", "identifier", "year")
         and _null_rate(p.name) <= NULL_RATE_CEILING  # Tier 2: skip high-null candidates
-        and p.cardinality_ratio < 0.95
+        and p.cardinality_ratio <= blocking_max_ratio
         and _check_source_overlap(df, p.name) > 0.0
     ]
-    # Log skipped columns
+    # Log columns rejected by the cardinality gate (#408).
+    for p in profiles:
+        if (p.col_type in ("email", "phone", "zip", "identifier", "year")
+                and p.cardinality_ratio > blocking_max_ratio
+                and p.cardinality_ratio < 1.0):
+            logger.info(
+                "Blocking candidate rejected: %r (cardinality=%.3f > %.2f); "
+                "would produce near-singleton blocks. Kept for matchkey "
+                "consideration. See #408.",
+                p.name, p.cardinality_ratio, blocking_max_ratio,
+            )
+    # Log skipped columns (cross-source overlap).
     for p in profiles:
         if (p.col_type in ("email", "phone", "zip", "identifier", "year")
                 and _null_rate(p.name) <= max_null_rate
-                and p.cardinality_ratio < 0.95
+                and p.cardinality_ratio <= blocking_max_ratio
                 and _check_source_overlap(df, p.name) == 0.0):
             sources = df["__source__"].unique().to_list() if "__source__" in df.columns else []
             logger.warning(

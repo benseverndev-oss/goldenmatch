@@ -687,6 +687,38 @@ class AutoConfigController:
                 ),
             )
 
+        # #408: blocking-degenerate gate. Independent of the RED-health
+        # check above -- a config can score GREEN/YELLOW on the matchkey
+        # sub-profile (good identity signal) AND still commit a blocking
+        # strategy that produces singleton blocks (e.g. NPI matchkey AND
+        # NPI blocking key). The downstream sync would scan every row
+        # without producing useful candidate pairs.
+        #
+        # Estimate avg block size on the sample, scale to full population.
+        # Trigger only when confidence_required (default True) -- caller
+        # opts out via confidence_required=False to keep today's
+        # "warn-and-run" behavior on degenerate blocking.
+        if confidence_required and best_entry.config.blocking and best_entry.config.blocking.keys:
+            from goldenmatch.core.blocking_candidates import (
+                degenerate_guard_threshold,
+                estimate_avg_block_size,
+            )
+            _block_fields: list[str] = []
+            for _key in best_entry.config.blocking.keys:
+                if _key.fields:
+                    _block_fields.extend(_key.fields)
+            if _block_fields:
+                _avg_block_size = estimate_avg_block_size(
+                    sample, _block_fields, n_rows,
+                )
+                if _avg_block_size < degenerate_guard_threshold():
+                    _LAST_CONTROLLER_RUN.set(history)
+                    raise ControllerNotConfidentError(
+                        n_rows=n_rows,
+                        failing_sub_profile="blocking",
+                        stop_reason=StopReason.BLOCKING_DEGENERATE.name,
+                    )
+
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
 
