@@ -83,6 +83,26 @@ def run_sync(
             logger.info("No new records to process.")
             return {"new_records": 0, "matches": 0, "actions": []}
         try:
+            # Step 4 (#386): route to streaming-block path above the
+            # configurable row threshold. Below threshold = legacy
+            # single-collect (faster, fits comfortably in 16 GB up to
+            # 5M-ish rows). Above threshold = streaming (lower RSS,
+            # slower per-row).
+            import os  # noqa: PLC0415
+            streaming_threshold = int(
+                os.environ.get("GOLDENMATCH_SYNC_STREAMING_THRESHOLD", "5000000"),
+            )
+            if total_rows > streaming_threshold:
+                logger.info(
+                    "Routing to streaming-block sync (rows=%d > threshold=%d). "
+                    "Set GOLDENMATCH_SYNC_STREAMING_THRESHOLD to override. See #386.",
+                    total_rows, streaming_threshold,
+                )
+                return _full_scan_streaming(
+                    connector, staging_dir, source_table, config, matchkeys,
+                    output_mode, dry_run, run_id, cfg_hash, total_rows,
+                )
+
             # Chain the internal-column adds lazily.
             new_records_lf = (
                 new_records_lf
@@ -573,3 +593,303 @@ def _embed_next_chunk(
     except Exception as e:
         logger.warning("Progressive embedding failed: %s", e)
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Streaming-block sync (#386)
+#
+# Bounds peak RSS at any dataset size by scanning one block at a time from
+# the staging parquet instead of materializing the full frame. Gated by
+# GOLDENMATCH_SYNC_STREAMING_THRESHOLD (default 5_000_000); below the
+# threshold, the legacy _full_scan_pipeline single-collect path is faster.
+#
+# Spec: docs/superpowers/specs/2026-05-21-streaming-block-sync-design.md
+# Plan: docs/superpowers/plans/2026-05-21-streaming-block-sync.md
+# ---------------------------------------------------------------------------
+
+
+def _index_block_sizes(
+    staging_dir: Path,
+    config: GoldenMatchConfig,
+) -> pl.DataFrame:
+    """Stream-aggregate block sizes from the staging parquet.
+
+    Returns a ``{__block_key__, count}`` DataFrame sorted descending by
+    count so the per-block loop fails fast on hot blocks. Memory is
+    bounded by the group-by streaming engine, not the dataset size.
+
+    For multi-pass blocking (``config.blocking.keys`` length > 1), the
+    first key drives the index; multi-pass union is a follow-up.
+    Spec calls this out as a v1 simplification.
+
+    For ``config.blocking is None``, returns a degenerate single-block
+    index covering every row. Callers should warn the user — running
+    sync at 10M+ rows without blocking is not the path streaming sync
+    optimises.
+    """
+    from goldenmatch.core.blocker import _build_block_key_expr
+
+    parquet_glob = staging_dir / "chunk_*.parquet"
+    scan = pl.scan_parquet(parquet_glob)
+
+    if config.blocking is None or not config.blocking.keys:
+        # Degenerate single-block path. Still returns a real index frame
+        # (with one row) so downstream code can iterate uniformly.
+        n = scan.select(pl.len()).collect().item()
+        return pl.DataFrame({
+            "__block_key__": ["__all__"],
+            "count": [int(n)],
+        })
+
+    primary_key = config.blocking.keys[0]
+    block_key_expr = _build_block_key_expr(primary_key)
+
+    # Filter NULL block keys -- they don't form valid blocks (matches the
+    # gate in core.blocker._build_static_blocks). Streaming group-by keeps
+    # memory bounded; the result is small (~num distinct block keys).
+    return (
+        scan
+        .with_columns(block_key_expr)
+        .filter(pl.col("__block_key__").is_not_null())
+        .filter(pl.col("__block_key__") != "")
+        .group_by("__block_key__")
+        .agg(pl.len().alias("count"))
+        .sort("count", descending=True)
+        .collect(engine="streaming")
+    )
+
+
+def _score_block_streaming(
+    staging_dir: Path,
+    block_key: str,
+    config: GoldenMatchConfig,
+    matched_pairs: set[tuple[int, int]],
+) -> list[tuple[int, int, float]]:
+    """Score a single block by scan-filter-collect against the staging
+    parquet. Reuses ``_score_partition_with_config`` from #397 so the
+    streaming sync path and distributed scoring share the same kernel.
+
+    ``matched_pairs`` is mutated in-place (canonical ``(min, max)``
+    tuples added for every new pair). The set lives on the driver
+    across all blocks so cross-block dedup works without re-walking
+    pairs.
+
+    Returns the new pairs from this block (after de-duping against
+    ``matched_pairs``). Empty list if the block has < 2 rows or no
+    pairs cross the matchkey threshold.
+    """
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.pipeline import _score_partition_with_config
+
+    parquet_glob = staging_dir / "chunk_*.parquet"
+    scan = pl.scan_parquet(parquet_glob)
+
+    # Add __row_id__ BEFORE filtering so the kernel sees global row ids
+    # (position in the full staging parquet), not local-to-block ids.
+    # Without this, the same pair (0,1) emerges from every block and
+    # matched_pairs's cross-block dedup collapses them into one entry.
+    scan_with_ids = scan.with_row_index("__row_id__").with_columns(
+        pl.col("__row_id__").cast(pl.Int64),
+    )
+
+    if config.blocking is None or not config.blocking.keys:
+        # Degenerate single-block path -- whole frame is one block.
+        # The index pass assigns block_key="__all__"; honor that here
+        # by reading everything.
+        block_df = scan_with_ids.collect()
+    else:
+        primary_key = config.blocking.keys[0]
+        block_key_expr = _build_block_key_expr(primary_key)
+        block_df = (
+            scan_with_ids
+            .with_columns(block_key_expr)
+            .filter(pl.col("__block_key__") == block_key)
+            .drop("__block_key__")
+            .collect()
+        )
+
+    if block_df.height < 2:
+        return []
+
+    # Force bucket backend -- same posture as distributed scoring. The
+    # kernel will do its own matchkey + scoring work; clustering and
+    # golden are driver-side responsibilities.
+    if hasattr(config, "model_copy"):
+        local_cfg = config.model_copy()
+    else:
+        import copy as _copy
+        local_cfg = _copy.deepcopy(config)
+    local_cfg.backend = "bucket"
+
+    pairs = _score_partition_with_config(block_df, local_cfg)
+
+    # De-dup against the global matched_pairs set. Canonicalize each
+    # pair as (min, max) for the set entry to match the project-wide
+    # invariant.
+    new_pairs: list[tuple[int, int, float]] = []
+    for a, b, s in pairs:
+        canonical = (min(a, b), max(a, b))
+        if canonical in matched_pairs:
+            continue
+        matched_pairs.add(canonical)
+        new_pairs.append((a, b, s))
+    return new_pairs
+
+
+def _full_scan_streaming(
+    connector,
+    staging_dir: Path,
+    source_table: str,
+    config: GoldenMatchConfig,
+    matchkeys: list,
+    output_mode: str,
+    dry_run: bool,
+    run_id: str,
+    cfg_hash: str,
+    total_rows: int,
+) -> dict:
+    """Streaming-block sync orchestrator (#386).
+
+    Walks the staging parquet one block at a time. Peak RSS is bounded
+    by the largest individual block's scoring footprint, not by the
+    total dataset size.
+
+    Used when ``total_rows > GOLDENMATCH_SYNC_STREAMING_THRESHOLD``
+    (default 5_000_000). Below that, the legacy single-collect path
+    via ``_full_scan_pipeline`` is faster per-row and fits comfortably.
+
+    Returns the same shape as ``_full_scan_pipeline`` so callers see no
+    difference at the dict level.
+    """
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.core.golden import build_golden_record
+
+    logger.info(
+        "Streaming pipeline: %d matchkeys configured (%s)",
+        len(matchkeys),
+        ", ".join(f"{mk.name}:{mk.type}" for mk in matchkeys) if matchkeys else "<none>",
+    )
+
+    if config.blocking is None or not config.blocking.keys:
+        logger.warning(
+            "Streaming sync invoked with no blocking config. The whole "
+            "frame is one degenerate block; expect single-collect memory "
+            "characteristics. Configure blocking for true per-block "
+            "streaming. See #386.",
+        )
+
+    # Index pass -- bounded memory, returns the sorted block list.
+    logger.info("Streaming pipeline: indexing block sizes...")
+    block_index = _index_block_sizes(staging_dir, config)
+    logger.info(
+        "Streaming pipeline: indexed %d blocks; largest = %d rows",
+        block_index.height,
+        block_index["count"].max() if block_index.height > 0 else 0,
+    )
+
+    all_pairs: list[tuple[int, int, float]] = []
+    matched_pairs: set[tuple[int, int]] = set()
+
+    # Per-block scoring loop. Match log writes incrementally so a long
+    # run is visible in the gm_matches table as blocks complete.
+    for i, row in enumerate(block_index.iter_rows(named=True)):
+        block_key = row["__block_key__"]
+        block_n = row["count"]
+        if block_n < 2:
+            continue
+        logger.info(
+            "Streaming pipeline: block %d/%d (key=%r, size=%d)",
+            i + 1, block_index.height, block_key, block_n,
+        )
+        pairs = _score_block_streaming(
+            staging_dir, block_key, config, matched_pairs,
+        )
+        all_pairs.extend(pairs)
+        if pairs and not dry_run:
+            log_matches_batch(
+                connector,
+                [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
+                run_id,
+            )
+
+    logger.info(
+        "Streaming pipeline: scored %d pairs across %d blocks",
+        len(all_pairs), block_index.height,
+    )
+
+    # Cluster on the merged pair set. Driver-side, O(pairs).
+    # all_ids comes from a cheap projection across the staging parquet:
+    # only the __row_id__ column is read. Polars streams the select.
+    parquet_glob = staging_dir / "chunk_*.parquet"
+    all_ids_df = (
+        pl.scan_parquet(parquet_glob)
+        .with_row_index("__row_id__")
+        .select(pl.col("__row_id__").cast(pl.Int64))
+        .collect(engine="streaming")
+    )
+    all_ids = all_ids_df["__row_id__"].to_list()
+    logger.info(
+        "Streaming pipeline: clustering %d records from %d pairs",
+        len(all_ids), len(all_pairs),
+    )
+    clusters = build_clusters(all_pairs, all_ids, max_cluster_size=100)
+
+    # Per-cluster golden -- only multi-member clusters need a golden
+    # record. Mega-clusters are already capped by max_cluster_size=100.
+    golden_rules = config.golden_rules
+    golden_records: list[dict] = []
+    for cluster_id, cluster_info in clusters.items():
+        if cluster_info["size"] <= 1 or cluster_info.get("oversized"):
+            continue
+        member_ids = cluster_info["members"]
+        cluster_df = (
+            pl.scan_parquet(parquet_glob)
+            .with_row_index("__row_id__")
+            .with_columns(pl.col("__row_id__").cast(pl.Int64))
+            .filter(pl.col("__row_id__").is_in(member_ids))
+            .collect()
+        )
+        if cluster_df.height == 0:
+            continue
+        golden = build_golden_record(cluster_df, golden_rules)
+        if golden:
+            golden["__cluster_id__"] = cluster_id
+            golden_records.append(golden)
+
+    golden_df = pl.DataFrame(golden_records) if golden_records else None
+
+    match_actions = [
+        (int(a), int(b), float(s), "merged") for a, b, s in all_pairs
+    ]
+
+    if not dry_run:
+        write_golden_records(
+            connector, clusters, golden_df, source_table, output_mode,
+        )
+        update_state(
+            connector, source_table, cfg_hash=cfg_hash, record_count=total_rows,
+        )
+
+    multi_clusters = {k: v for k, v in clusters.items() if v["size"] > 1}
+    golden_count = golden_df.height if golden_df is not None else 0
+    logger.info(
+        "Streaming sync complete: %d records, %d pairs, %d multi-member "
+        "clusters, %d golden records",
+        total_rows, len(all_pairs), len(multi_clusters), golden_count,
+    )
+    if total_rows > 0 and not all_pairs and not multi_clusters:
+        logger.warning(
+            "Streaming sync produced zero pairs and zero clusters across "
+            "%d records. Possible causes: empty matchkey config, all-NULL "
+            "blocking column, scorer threshold too high.",
+            total_rows,
+        )
+
+    return {
+        "new_records": total_rows,
+        "matches": len(all_pairs),
+        "clusters": len(multi_clusters),
+        "golden_records": golden_count,
+        "actions": match_actions,
+        "run_id": run_id,
+    }
