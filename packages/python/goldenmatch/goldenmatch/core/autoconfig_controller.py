@@ -420,7 +420,12 @@ class AutoConfigController:
 
         # Single non-empty column or single row → return v0 yellow, skip loop
         if n_rows == 1 or len(user_cols) == 1:
-            v0 = self._initial_config(init_sample, reference=reference, v0_kwargs=v0_kwargs)
+            v0 = self._initial_config(
+                init_sample,
+                reference=reference,
+                v0_kwargs=v0_kwargs,
+                n_rows_full=n_rows,
+            )
             yellow_profile = self._yellow_sentinel_profile(n_rows, user_cols)
             return v0, yellow_profile, RunHistory()
 
@@ -437,13 +442,23 @@ class AutoConfigController:
         # take_sample_distributed for the iteration sample. Polars path unchanged.
         if distributed:
             from goldenmatch.distributed.sample import take_sample_distributed as _tsd2
-            config_v0 = self._initial_config(init_sample, reference=reference, v0_kwargs=v0_kwargs)
+            config_v0 = self._initial_config(
+                init_sample,
+                reference=reference,
+                v0_kwargs=v0_kwargs,
+                n_rows_full=n_rows,
+            )
             _diag("_initial_config done (distributed)")
             sample: pl.DataFrame = _tsd2(df, sample_cap=20_000)
             sample_ref: pl.DataFrame | None = None  # stratified by reference: Phase 3
             _diag(f"take_sample_distributed done (sample.height={sample.height})")
         else:
-            config_v0 = self._initial_config(df, reference=reference, v0_kwargs=v0_kwargs)  # type: ignore[arg-type]
+            config_v0 = self._initial_config(
+                df,
+                reference=reference,
+                v0_kwargs=v0_kwargs,
+                n_rows_full=n_rows,
+            )  # type: ignore[arg-type]
             _diag("_initial_config done")
             sample, sample_ref = self._take_sample(df, reference=reference)  # type: ignore[arg-type]
             _diag(f"_take_sample done (sample.height={sample.height})")
@@ -891,6 +906,7 @@ class AutoConfigController:
         *,
         reference: pl.DataFrame | None,
         v0_kwargs: dict | None = None,
+        n_rows_full: int | None = None,
     ) -> GoldenMatchConfig:
         """Return the starting config for the controller iteration loop.
 
@@ -923,7 +939,14 @@ class AutoConfigController:
         # Late import to avoid circulars
         from goldenmatch.core.autoconfig import _legacy_auto_configure_v0 as _legacy
 
-        kw = v0_kwargs or {}
+        kw = dict(v0_kwargs or {})
+        # #410: thread the full-population row count into v0 so the
+        # blocking-candidate gate (build_blocking) can Chao1-project
+        # the sample's cardinality to full scale. Without this, v0
+        # reads df.height (the SAMPLE's height) as total_rows and the
+        # gate's Chao1 short-circuit fires (sample_n == full_n).
+        if n_rows_full is not None and "n_rows_full" not in kw:
+            kw["n_rows_full"] = n_rows_full
 
         # The legacy function does not (yet) accept a `reference` kwarg; for
         # match-mode we call it on the concatenated frame as a v0 stand-in.

@@ -1805,11 +1805,23 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
+    n_rows_full: int | None = None,
 ) -> GoldenMatchConfig:
     """Legacy column-profiling + rule-based auto-config heuristic (the v0
     starting point for the controller). Implementation unchanged from the
     pre-Task-4.x ``auto_configure_df`` — just renamed and given a private
     underscore prefix so the controller can call it without recursing.
+
+    Args:
+        df: input frame (may be the controller's sub-sample, not the
+            full population). Profile + rule decisions made against
+            this frame; the candidate-pool gate uses ``n_rows_full``
+            below to project sample cardinalities to full scale.
+        n_rows_full: full-population row count. When the controller
+            sub-samples a large frame, this carries the original row
+            count so Chao1 sample-correction has the right denominator
+            (#410). When ``None`` (direct callers, tests passing a
+            full frame), defaults to ``df.height``.
     """
     # Initialized up front so the preflight-wiring block at the bottom can
     # safely test `if domain_profile is not None` even when the domain
@@ -1819,7 +1831,12 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # gets enriched with __row_id__ / domain-extracted columns; preflight
     # needs to check against the shape the pipeline will see.
     df_input = df
-    total_rows = df.height
+    # #410: total_rows is the FULL population, not the sample. When the
+    # controller passes a 5K sample of a 1.13M-row frame, df.height = 5K
+    # but the gate needs 1.13M to scale via Chao1. Caller threads the
+    # true count via n_rows_full; falls back to df.height for direct
+    # callers (tests / non-controller paths) that pass full frames.
+    total_rows = n_rows_full if n_rows_full is not None else df.height
 
     logger.info("Auto-configuring %d rows, %d columns", total_rows, len(df.columns))
 
