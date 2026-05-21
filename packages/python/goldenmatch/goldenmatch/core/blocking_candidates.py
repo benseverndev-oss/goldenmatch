@@ -38,6 +38,12 @@ DEFAULT_BLOCKING_MIN_RATIO = 0.001
 DEFAULT_BLOCKING_MAX_RATIO = 0.5
 DEFAULT_COMPOSITE_TARGET_AVG_BLOCK_SIZE = 20
 DEFAULT_DEGENERATE_GUARD_THRESHOLD = 2.0
+# #417: upper-bound guard. If avg block size exceeds this, blocking is
+# producing too few distinct blocks (the mega-block case: 1.13M rows in
+# 1 block ⇒ avg_block_size = 1.13M ≫ 10_000). Original guard only
+# checked the lower bound (singleton blocks); the user's case wedges in
+# bucket_score because a single mega-block runs all-pairs.
+DEFAULT_DEGENERATE_GUARD_MAX_AVG_BLOCK_SIZE = 10_000.0
 
 
 def _blocking_min_ratio() -> float:
@@ -267,12 +273,17 @@ def find_composite_blocking_keys(
     band_lo = max(n_rows // 100, 1)  # avg block size 100 (lower bound)
     band_hi = max(n_rows // 2, 1)    # avg block size 2 (upper bound)
 
+    # #417: collect candidates + reasons so the INFO log can show
+    # WHY each pair was accepted/rejected. Helps debug "blocking key
+    # is degenerate" reports without re-running with extra prints.
+    evaluated: list[tuple[str, str, int, str]] = []  # (c1, c2, joint_card, verdict)
     best_pair: tuple[str, str] | None = None
     best_distance = float("inf")
 
     for i, c1 in enumerate(mid_card_names):
         for c2 in mid_card_names[i + 1:]:
             if c1 not in df.columns or c2 not in df.columns:
+                evaluated.append((c1, c2, 0, "field_missing_from_df"))
                 continue
             try:
                 joint_card = int(df.select([c1, c2]).n_unique())
@@ -281,16 +292,46 @@ def find_composite_blocking_keys(
                     "find_composite_blocking_keys: skipping (%s, %s): %s",
                     c1, c2, exc,
                 )
+                evaluated.append((c1, c2, 0, f"error: {exc}"))
                 continue
-            if joint_card < band_lo or joint_card > band_hi:
+            if joint_card < band_lo:
+                evaluated.append((c1, c2, joint_card, f"below_band ({joint_card} < {band_lo})"))
+                continue
+            if joint_card > band_hi:
+                evaluated.append((c1, c2, joint_card, f"above_band ({joint_card} > {band_hi})"))
                 continue
             distance = abs(joint_card - target_cardinality)
+            verdict = f"in_band (distance_from_target={distance})"
+            evaluated.append((c1, c2, joint_card, verdict))
             if distance < best_distance:
                 best_distance = distance
                 best_pair = (c1, c2)
 
+    # #417: emit candidate evaluations at INFO so users can debug why
+    # composite search failed (or what it picked). One line per pair.
+    if evaluated:
+        logger.info(
+            "find_composite_blocking_keys: evaluated %d pairs on n_rows=%d, target=%d, band=[%d, %d]",
+            len(evaluated), n_rows, target_cardinality, band_lo, band_hi,
+        )
+        for c1, c2, jc, verdict in evaluated:
+            logger.info(
+                "  pair (%r, %r) joint_cardinality=%d -> %s",
+                c1, c2, jc, verdict,
+            )
+
     if best_pair is None:
+        if mid_card_names:
+            logger.info(
+                "find_composite_blocking_keys: no pair landed in band; "
+                "considered %d candidates from mid_card_names=%s",
+                len(evaluated), mid_card_names,
+            )
         return None
+    logger.info(
+        "find_composite_blocking_keys: chose %r (distance=%d from target=%d)",
+        list(best_pair), int(best_distance), target_cardinality,
+    )
     return list(best_pair)
 
 
@@ -345,7 +386,10 @@ def estimate_avg_block_size(
 
 
 def degenerate_guard_threshold() -> float:
-    """Env-overridable threshold for the BLOCKING_DEGENERATE guard."""
+    """Env-overridable lower threshold for the BLOCKING_DEGENERATE guard.
+
+    Fires when avg_block_size < this (singleton-block direction).
+    """
     raw = os.environ.get("GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD")
     if raw:
         try:
@@ -357,3 +401,23 @@ def degenerate_guard_threshold() -> float:
                 raw, DEFAULT_DEGENERATE_GUARD_THRESHOLD,
             )
     return DEFAULT_DEGENERATE_GUARD_THRESHOLD
+
+
+def degenerate_guard_max_avg_block_size() -> float:
+    """Env-overridable upper threshold for BLOCKING_DEGENERATE (#417).
+
+    Fires when avg_block_size > this (mega-block direction). Catches
+    the case where every row hashes to the same blocking key, producing
+    one giant O(n^2) block that wedges downstream scoring.
+    """
+    raw = os.environ.get("GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            logger.warning(
+                "GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE=%r is not "
+                "a float; falling back to %f",
+                raw, DEFAULT_DEGENERATE_GUARD_MAX_AVG_BLOCK_SIZE,
+            )
+    return DEFAULT_DEGENERATE_GUARD_MAX_AVG_BLOCK_SIZE

@@ -304,5 +304,36 @@ def test_controller_threads_full_n_to_v0(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# #417: BLOCKING_DEGENERATE upper-bound regression test
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_avg_block_size_on_constant_column():
+    """#417 unit-level coverage: a constant-valued blocking column
+    produces avg_block_size == n_rows, which the upper-bound guard
+    (degenerate_guard_max_avg_block_size, default 10K) now catches.
+
+    The controller-level integration is structurally trivial (single
+    if branch added next to the existing lower-bound check); the unit
+    test pins the underlying estimator behavior the branch reads."""
+    from goldenmatch.core.blocking_candidates import (
+        degenerate_guard_max_avg_block_size,
+        estimate_avg_block_size,
+    )
+
+    n = 200_000
+    sample = pl.DataFrame({
+        "constant_block_key": ["only_value"] * 5000,
+    })
+    avg = estimate_avg_block_size(sample, ["constant_block_key"], n)
+    # Single distinct value in sample -> scaled distinct = 1
+    # (sqrt(N/5000) * 1 = ~6, clamped). avg_block_size = N / scaled.
+    # The point: avg is much larger than the 10K threshold.
+    assert avg > degenerate_guard_max_avg_block_size(), (
+        f"avg_block_size={avg} should exceed the upper-bound guard"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
