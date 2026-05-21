@@ -16,10 +16,19 @@ from goldenmatch.core.execution_plan import ExecutionPlan
 
 @dataclass
 class PolicyDecision:
-    """Audit-trail record of one rule firing."""
+    """Audit-trail record of one rule firing.
+
+    #125: ``expand_sample`` is an out-of-band controller signal — when
+    set to a positive factor, the controller resamples ``df`` with
+    ``sample_cap *= factor`` before the next iteration. Used by
+    ``rule_sparse_match_expand`` to actually grow the sample
+    (replacing the v1.10 lower-threshold proxy). Default ``None`` =
+    no expansion requested.
+    """
     rule_name: str
     rationale: str
     config_diff: dict[str, Any]
+    expand_sample: float | None = None
 
 
 @dataclass

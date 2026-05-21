@@ -719,6 +719,39 @@ class AutoConfigController:
                     history.stop_reason = StopReason.POLICY_NO_PROGRESS
                     break
                 config_n = config_next
+
+                # #125: ExpandSample intercept. If the rule that fired
+                # this iteration set ``expand_sample``, resample df with
+                # a larger sample cap before the next iteration. Capped
+                # at 5x the initial cap; beyond that the rule's
+                # diminishing returns don't justify the wall-clock.
+                _last_entry = history.entries[-1] if history.entries else None
+                _last_decision = _last_entry.decision if _last_entry else None
+                _expand_factor = (
+                    getattr(_last_decision, "expand_sample", None)
+                    if _last_decision is not None else None
+                )
+                if _expand_factor is not None and not distributed:
+                    _factor = float(_expand_factor)
+                    if not hasattr(self, "_initial_sample_cap"):
+                        self._initial_sample_cap = sample.height  # type: ignore[has-type]
+                    new_cap = int(sample.height * _factor)
+                    if new_cap <= 5 * self._initial_sample_cap:
+                        # Bump budget + resample. Polars path only;
+                        # distributed sample shape is fixed at take time.
+                        self.budget.sample_size_default = new_cap
+                        sample, sample_ref = self._take_sample(
+                            df, reference=reference,  # type: ignore[arg-type]
+                        )
+                        _diag(
+                            f"ExpandSample({_factor}x): resampled to "
+                            f"height={sample.height}",
+                        )
+                    else:
+                        _diag(
+                            f"ExpandSample({_factor}x): capped at 5x initial "
+                            f"({5 * self._initial_sample_cap})",
+                        )
         finally:
             history.elapsed = timedelta(seconds=time.time() - start)
             if _prep_store is not None:
