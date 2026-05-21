@@ -26,22 +26,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Per-task CPU reservation for the scoring map_batches call. Defaults to 1
-# now that _score_partition runs the narrow scoring-only kernel
-# (`_score_partition_with_config`) instead of the full `gm.dedupe_df`
-# pipeline. Per-task peak RAM drops from ~5 GB (full pipeline + controller)
-# to ~2 GB (scoring only), so we can run up to 12 concurrent scorers on a
-# 16-vCPU / 64 GB runner (12 * 2 GB = 24 GB worker RAM, plenty of headroom).
+# Per-task CPU reservation for the scoring map_batches call.
 #
-# History: the 2026-05-20 simulated bench OOM'd with num_cpus=1 because
-# _score_partition called gm.dedupe_df per partition (~5 GB peak * ~7
-# concurrent = ~35 GB). PR #395 set num_cpus=4 to cap concurrency at 1
-# (after Ray reserved 4 CPU for HashAggregate), which fixed the OOM but
-# left the bench at 0% progress 52 min in. The narrow-kernel fix
-# (#396) lets us drop concurrency back to fully parallel.
+# History:
+#   - num_cpus=1 (original, pre-PR #395): OOM at 50M -- 7 concurrent
+#     gm.dedupe_df calls @ ~5 GB each = ~35 GB worker RAM > 64 GB cap.
+#   - num_cpus=4 (PR #395): Ray reserved 4 CPU for downstream HashAggregate,
+#     leaving only 4 for scoring -> 1 task at a time -> 0% progress at 52 min.
+#   - num_cpus=1 + narrow kernel (PR #397, #396): OOM at 50M -- the kernel
+#     stripped controller/clustering/golden but didn't touch score_buckets,
+#     which still allocates ~5-9 GB cdist matrices per partition. 7 concurrent
+#     * ~5 GB = ~30 GB > 64 GB - object_store(8 GB) - parquet(4.4 GB) - driver.
+#   - num_cpus=2 (current): 8 free CPU / 2 = 4 concurrent * ~5 GB = ~20 GB
+#     worker RAM. Fits with headroom. Trades parallelism for survival.
+#
+# The real fix for 50M-on-64GB is smaller n_buckets inside score_buckets so
+# per-partition cdist matrices stay small. That's a separate lift (#???).
+# This setting is the practical knob until then.
 #
 # Override via GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS for different shapes.
-_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "1"))
+_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "2"))
 
 
 def score_blocks_distributed(
