@@ -275,7 +275,39 @@ class PostflightReport:
         plan_line = _render_plan_line(self.controller_history)
         if plan_line:
             parts.append(f"  {plan_line}")
+        blocking_line = _render_blocking_line(self.controller_history)
+        if blocking_line:
+            parts.append(f"  {blocking_line}")
         return "\n".join(parts)
+
+
+def _render_blocking_line(history: Any) -> str:
+    """Render the committed blocking strategy in one line, or '' when absent.
+
+    Reads the committed entry's BlockingConfig and surfaces the keys.
+    Helps users see at a glance whether auto-config picked a sane
+    blocking strategy vs the degenerate singleton-blocks shape (#408).
+    """
+    if history is None:
+        return ""
+    try:
+        best = history.pick_committed() if hasattr(history, "pick_committed") else None
+    except Exception:
+        return ""
+    if best is None:
+        return ""
+    cfg = getattr(best, "config", None)
+    blocking = getattr(cfg, "blocking", None) if cfg else None
+    keys = getattr(blocking, "keys", None) if blocking else None
+    if not keys:
+        return ""
+    field_names: list[str] = []
+    for key in keys:
+        for f in (getattr(key, "fields", None) or []):
+            field_names.append(f)
+    if not field_names:
+        return ""
+    return f"Blocking: keys=[{', '.join(field_names)}]"
 
 
 def _render_plan_line(history: Any) -> str:
