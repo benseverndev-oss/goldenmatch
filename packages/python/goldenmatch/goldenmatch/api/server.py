@@ -269,7 +269,11 @@ class MatchServer:
 
     # ── v1.7-v1.12 controller telemetry ──────────────────────────────────
 
-    def autoconfigure(self, records: list[dict] | None = None) -> dict:
+    def autoconfigure(
+        self,
+        records: list[dict] | None = None,
+        exclude_columns: list[str] | None = None,
+    ) -> dict:
         """Run AutoConfigController; return committed config + telemetry.
 
         ``records`` overrides the server's currently-loaded data. ``None``
@@ -277,16 +281,33 @@ class MatchServer:
         useful for "show me what auto-config would do on this dataset" without
         re-uploading rows.
 
+        ``exclude_columns`` is a list of column names to skip across the
+        suite (matchkeys + blocking + GoldenFlow transforms). Layered
+        additively with detector-derived exclusions. Same shape as the
+        Python kwarg + CLI flag. See spec
+        docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md.
+
         Caches the telemetry on ``self._last_telemetry`` so a follow-up
         ``GET /controller/telemetry`` request returns the same blob without
         re-running the controller.
         """
         import polars as pl
 
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN, auto_configure_df
+        from goldenmatch.core.autoconfig import (
+            _LAST_CONTROLLER_RUN,
+            _RUNTIME_EXCLUDE_COLUMNS,
+            auto_configure_df,
+        )
 
         df = pl.DataFrame(records) if records else self.engine.data
-        cfg = auto_configure_df(df)
+        _excl_token = None
+        if exclude_columns:
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
+        try:
+            cfg = auto_configure_df(df)
+        finally:
+            if _excl_token is not None:
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         state = _LAST_CONTROLLER_RUN.get()
         profile, history = state if state is not None else (None, None)
 
@@ -389,9 +410,21 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == "/autoconfig":
             # Optional `records` body to autoconfig against a different dataset.
             # Omit it to reprofile the server's loaded data.
+            #
+            # Optional `exclude_columns: list[str]` skips those columns
+            # across matching + transforms. See spec
+            # docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md.
             records = data.get("records")
+            exclude_columns = data.get("exclude_columns") or None
+            if exclude_columns is not None and not isinstance(exclude_columns, list):
+                self._json_response(
+                    {"error": "exclude_columns must be a list of strings"}, 400,
+                )
+                return
             try:
-                result = _server_instance.autoconfigure(records=records)
+                result = _server_instance.autoconfigure(
+                    records=records, exclude_columns=exclude_columns,
+                )
                 self._json_response(result)
             except Exception as exc:
                 self._json_response({"error": f"autoconfig failed: {exc}"}, 400)
