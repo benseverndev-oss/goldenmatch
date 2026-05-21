@@ -233,6 +233,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **Phase 1 kill-criterion bench:** `scripts/bench_phase1_loader.py` +
   `bench-phase1-loader` job in `.github/workflows/bench-distributed-stack.yml`.
   Kill criterion: driver peak RSS < 8 GB at 25M rows on a 16c/64GB runner.
+  **PASS, run 26100132595: 25M rows in 14.7s prep wall at 0.24 GB driver
+  peak RSS (33x margin under the 8 GB threshold).** Phase 2 (controller
+  iteration on distributed samples) unblocks. Three bench-harness fixes
+  preceded the green result: pandas + pipefail (#338), parquet support
+  (#339), bench-dataset-v1 column names (#340).
 - **`core/transform.build_transform(column, op)`** back-compat shim: returns a
   closure that delegates to `apply_plan(df, TransformPlan(column, op))`.
   Callers still consuming the callable-style transform get equivalent output.
