@@ -504,7 +504,9 @@ def test_full_scan_pipeline_drops_existing_row_id_before_dedupe_df():
 
     from goldenmatch._api import DedupeResult
     from goldenmatch.config.schemas import (
-        GoldenMatchConfig, MatchkeyConfig, MatchkeyField,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
     from goldenmatch.db.sync import _full_scan_pipeline
 
