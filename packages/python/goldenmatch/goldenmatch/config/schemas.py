@@ -254,7 +254,19 @@ class MatchkeyConfig(BaseModel):
     rerank: bool = False
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_band: float = 0.1
-    # v1.11: negative evidence fields — default-None for v1.10 cache compat
+    # v1.11: negative evidence fields — default-None for v1.10 cache compat.
+    #
+    # #126 / Wave D: NE applies to ``weighted`` + ``exact`` matchkey types
+    # only. ``probabilistic`` (Fellegi-Sunter) matchkeys are intentionally
+    # NOT extended with NE under v1.13 — the LLR-additivity of FS doesn't
+    # cleanly compose with a flat penalty on the [0,1] score. See
+    # ``docs/superpowers/specs/2026-05-21-ne-fs-investigation.md`` for the
+    # formulation comparison; the Bayesian-factor (Formulation B) approach
+    # becomes viable once #129's labeled-correction substrate is available.
+    # Users who explicitly need NE-on-FS in v1.13 can opt into the
+    # calibration-losing post-FS floor via
+    # ``GOLDENMATCH_NE_FS_ESCAPE_MODE=floor`` (escape hatch; not the
+    # default; semantics not preserved across versions).
     negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
     em_iterations: int = 20
