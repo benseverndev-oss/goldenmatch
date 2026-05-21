@@ -83,25 +83,48 @@ def run_sync(
             logger.info("No new records to process.")
             return {"new_records": 0, "matches": 0, "actions": []}
         try:
-            # Step 4 (#386): route to streaming-block path above the
-            # configurable row threshold. Below threshold = legacy
-            # single-collect (faster, fits comfortably in 16 GB up to
-            # 5M-ish rows). Above threshold = streaming (lower RSS,
-            # slower per-row).
+            # Route to streaming-block path above a row-count floor.
+            #
+            # Default threshold = 500K rows. Reasoning: at 500K * 60 cols
+            # * ~50 bytes/cell, the eager collect inside _full_scan_pipeline
+            # is ~1.5 GB. dedupe_df then doubles+triples that for matchkey
+            # columns, scoring matrices, candidate pair sets, and
+            # auto-fix's intermediate frames -- another 3-5 GB. On an
+            # 8 GB sandbox (#401 trace) the dispatch boundary OOMs at
+            # 1.13M rows. 500K leaves a margin even on memory-constrained
+            # hosts; smaller datasets prefer the legacy path's faster
+            # per-row throughput.
+            #
+            # The prior 5M default (#386) was tuned for 16 GB+ hosts and
+            # failed open on 8 GB sandboxes. See #401.
+            #
+            # Override via GOLDENMATCH_SYNC_STREAMING_THRESHOLD for
+            # hosts where you'd rather take the perf hit / win.
             import os  # noqa: PLC0415
             streaming_threshold = int(
-                os.environ.get("GOLDENMATCH_SYNC_STREAMING_THRESHOLD", "5000000"),
+                os.environ.get("GOLDENMATCH_SYNC_STREAMING_THRESHOLD", "500000"),
             )
             if total_rows > streaming_threshold:
                 logger.info(
-                    "Routing to streaming-block sync (rows=%d > threshold=%d). "
-                    "Set GOLDENMATCH_SYNC_STREAMING_THRESHOLD to override. See #386.",
+                    "Sync backend selected: STREAMING-BLOCK "
+                    "(rows=%d > threshold=%d). Per-block scan keeps RSS "
+                    "bounded by largest block, not dataset size. "
+                    "Set GOLDENMATCH_SYNC_STREAMING_THRESHOLD to override. "
+                    "See #386, #401.",
                     total_rows, streaming_threshold,
                 )
                 return _full_scan_streaming(
                     connector, staging_dir, source_table, config, matchkeys,
                     output_mode, dry_run, run_id, cfg_hash, total_rows,
                 )
+
+            logger.info(
+                "Sync backend selected: LEGACY single-collect "
+                "(rows=%d <= threshold=%d). Faster per-row but materializes "
+                "the full frame; ensure the host has >= rows * cols * "
+                "~250 bytes free RAM for the dedupe_df dispatch. See #386, #401.",
+                total_rows, streaming_threshold,
+            )
 
             # Chain the internal-column adds lazily.
             new_records_lf = (

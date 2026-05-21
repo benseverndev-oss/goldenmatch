@@ -514,5 +514,107 @@ def test_run_sync_uses_legacy_path_below_threshold(monkeypatch):
     assert streaming_called["count"] == 0
 
 
+def test_default_threshold_routes_million_row_table_to_streaming(monkeypatch):
+    """#401: with the env var UNSET (default threshold), a real-world
+    1.13M-row sync must route to streaming-block. Pins the default
+    against future regressions that re-raise the threshold and break
+    8 GB sandbox users.
+
+    The historical default of 5M (from #386) failed open on 8 GB hosts;
+    the 500K default keeps memory bounded for any meaningful table.
+    """
+    from unittest.mock import MagicMock
+
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.db import sync as sync_mod
+
+    # Explicitly DELETE the env var so we exercise the default.
+    monkeypatch.delenv("GOLDENMATCH_SYNC_STREAMING_THRESHOLD", raising=False)
+
+    streaming_called = {"count": 0}
+    legacy_called = {"count": 0}
+
+    monkeypatch.setattr(
+        sync_mod, "_full_scan_streaming",
+        lambda *a, **kw: streaming_called.__setitem__("count", streaming_called["count"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        sync_mod, "_full_scan_pipeline",
+        lambda *a, **kw: legacy_called.__setitem__("count", legacy_called["count"] + 1) or {},
+    )
+
+    fake_lf = pl.DataFrame({"id": [1, 2, 3]}).lazy()
+    staging_path = Path(tempfile.mkdtemp(prefix="gm_route_test_"))
+    monkeypatch.setattr(
+        sync_mod, "_read_all_lazy",
+        lambda *a, **kw: (fake_lf, staging_path),
+    )
+    monkeypatch.setattr(sync_mod, "ensure_metadata_tables", lambda *a, **kw: None)
+    monkeypatch.setattr(sync_mod, "get_state", lambda *a, **kw: None)
+
+    fake_conn = MagicMock()
+    fake_conn.get_row_count.return_value = 1_131_769  # #401's actual table size
+
+    sync_mod.run_sync(
+        connector=fake_conn,
+        source_table="t",
+        config=GoldenMatchConfig(),
+        full_rescan=True,
+    )
+
+    assert streaming_called["count"] == 1, (
+        "1.13M-row sync must route to streaming with the default threshold. "
+        "If this fails, the default has crept back up past 1.13M and 8 GB "
+        "sandbox users will OOM again. See #401."
+    )
+    assert legacy_called["count"] == 0
+
+
+def test_default_threshold_keeps_small_tables_on_legacy_path(monkeypatch):
+    """Companion to the #401 default-threshold test: a small table
+    (< 500K rows) still routes to the faster legacy path with the
+    default threshold."""
+    from unittest.mock import MagicMock
+
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.db import sync as sync_mod
+
+    monkeypatch.delenv("GOLDENMATCH_SYNC_STREAMING_THRESHOLD", raising=False)
+
+    streaming_called = {"count": 0}
+    legacy_called = {"count": 0}
+
+    monkeypatch.setattr(
+        sync_mod, "_full_scan_streaming",
+        lambda *a, **kw: streaming_called.__setitem__("count", streaming_called["count"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        sync_mod, "_full_scan_pipeline",
+        lambda *a, **kw: legacy_called.__setitem__("count", legacy_called["count"] + 1) or {},
+    )
+
+    fake_lf = pl.DataFrame({"id": [1, 2, 3]}).lazy()
+    staging_path = Path(tempfile.mkdtemp(prefix="gm_route_test_"))
+    monkeypatch.setattr(
+        sync_mod, "_read_all_lazy",
+        lambda *a, **kw: (fake_lf, staging_path),
+    )
+    monkeypatch.setattr(sync_mod, "ensure_metadata_tables", lambda *a, **kw: None)
+    monkeypatch.setattr(sync_mod, "get_state", lambda *a, **kw: None)
+
+    fake_conn = MagicMock()
+    fake_conn.get_row_count.return_value = 100_000  # well below 500K
+
+    sync_mod.run_sync(
+        connector=fake_conn,
+        source_table="t",
+        config=GoldenMatchConfig(),
+        full_rescan=True,
+    )
+
+    assert legacy_called["count"] == 1
+    assert streaming_called["count"] == 0
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
