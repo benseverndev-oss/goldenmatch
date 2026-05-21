@@ -1410,32 +1410,85 @@ _LAST_AUTOCONFIG_EXCLUSIONS: ContextVar = ContextVar(
     "_LAST_AUTOCONFIG_EXCLUSIONS", default=None,
 )
 
-def _resolve_quality_config_for_exclusions():
-    """Read auto-config force-exclude / force-include overrides.
+# ContextVar set by dedupe_df / match_df with the kwarg-supplied
+# exclude_columns list (#unified-exclusions). Layered ADDITIVELY with
+# config.exclude_columns and detector-derived exclusions inside
+# auto_configure_df. Cleared after each call via context-bound semantics
+# (callers do `.set(...)` then rely on the ContextVar value living only
+# for the duration of their own frame).
+_RUNTIME_EXCLUDE_COLUMNS: ContextVar = ContextVar(
+    "_RUNTIME_EXCLUDE_COLUMNS", default=None,
+)
 
-    V1 reads from env vars (comma-separated column names):
-      GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE=col1,col2,col3
-      GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE=col1,col2,col3
 
-    The QualityConfig.autoconfig_force_{exclude,include} fields are
-    defined on the schema (#404) for future API plumbing, but threading
-    them through dedupe_df / match_df is a public API change deferred
-    to V2. For V1, env vars cover ad-hoc rescue + force-exclude cases.
+def _env_force_exclude() -> list[str]:
+    raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
 
-    Returns a shim object with the same attribute shape as
-    QualityConfig (so detect_autoconfig_exclusions can read either
-    interchangeably), or None when both env vars are empty.
+
+def _env_force_include() -> list[str]:
+    raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _resolve_effective_exclusion_overrides(
+    config=None,
+) -> tuple[list[str], list[str]]:
+    """Combine every exclusion source into (force_exclude, force_include).
+
+    Sources, layered additively for force_exclude:
+      1. ``config.exclude_columns`` -- new top-level field (this PR).
+      2. ``_RUNTIME_EXCLUDE_COLUMNS`` ContextVar -- kwarg from
+         ``dedupe_df`` / ``match_df``.
+      3. ``config.quality.autoconfig_force_exclude`` -- #404 sub-field.
+      4. ``GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`` env var -- #404 V1 path.
+
+    Sources for force_include (RESCUE -- beats every opt-out path):
+      a. ``config.quality.autoconfig_force_include`` -- #404 sub-field.
+      b. ``GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`` env var -- #404 V1 path.
+
+    Order in the final set is irrelevant (it's a union); ordering here
+    just makes the log line predictable.
     """
-    fe = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE", "")
-    fi = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE", "")
-    fe_list = [c.strip() for c in fe.split(",") if c.strip()]
-    fi_list = [c.strip() for c in fi.split(",") if c.strip()]
-    if not fe_list and not fi_list:
+    fe: list[str] = []
+    fi: list[str] = []
+    if config is not None:
+        # New top-level field.
+        cfg_excl = getattr(config, "exclude_columns", None) or []
+        fe.extend(cfg_excl)
+        # Legacy #404 sub-field on QualityConfig (still supported).
+        qc = getattr(config, "quality", None)
+        if qc is not None:
+            fe.extend(getattr(qc, "autoconfig_force_exclude", None) or [])
+            fi.extend(getattr(qc, "autoconfig_force_include", None) or [])
+    runtime_excl = _RUNTIME_EXCLUDE_COLUMNS.get()
+    if runtime_excl:
+        fe.extend(runtime_excl)
+    fe.extend(_env_force_exclude())
+    fi.extend(_env_force_include())
+    # De-dupe while preserving first-occurrence order for log readability.
+    fe = list(dict.fromkeys(fe))
+    fi = list(dict.fromkeys(fi))
+    return fe, fi
+
+
+def _resolve_quality_config_for_exclusions():
+    """DEPRECATED: kept for backward-compat. New code should call
+    ``_resolve_effective_exclusion_overrides`` which combines every
+    exclusion source (top-level config field, kwarg ContextVar,
+    QualityConfig sub-fields, env vars).
+
+    Returns a shim object only when env vars set something -- preserves
+    the pre-unification behavior of "None means no override at all".
+    """
+    fe = _env_force_exclude()
+    fi = _env_force_include()
+    if not fe and not fi:
         return None
 
     class _ShimQualityConfig:
-        autoconfig_force_exclude = fe_list
-        autoconfig_force_include = fi_list
+        autoconfig_force_exclude = fe
+        autoconfig_force_include = fi
 
     return _ShimQualityConfig()
 
@@ -1557,20 +1610,16 @@ def auto_configure_df(
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
         )
-        # Pull force-include/exclude overrides from the user's
-        # QualityConfig if present.
-        force_exclude_list: list[str] = []
-        force_include_list: list[str] = []
-        # The controller takes config from v0_kwargs; user-supplied
-        # quality config isn't threaded here yet. Read from a module-
-        # level place if needed in the future; for now the caller
-        # must drive overrides via _LAST_QUALITY_CONFIG (set by the
-        # public _api.dedupe_df dispatch). Falls back to empty lists
-        # when no quality config is present.
-        _qc = _resolve_quality_config_for_exclusions()
-        if _qc is not None:
-            force_exclude_list = list(_qc.autoconfig_force_exclude or [])
-            force_include_list = list(_qc.autoconfig_force_include or [])
+        # Combine every exclusion source: top-level config.exclude_columns
+        # (this PR), dedupe_df / match_df kwarg via _RUNTIME_EXCLUDE_COLUMNS
+        # ContextVar, QualityConfig.autoconfig_force_{exclude,include}
+        # (#404 sub-field), env vars. force_include rescues from every
+        # opt-out path. auto_configure_df has no input config -- only
+        # the ContextVar + env vars are visible here; the dedupe_df
+        # shim writes both before calling us.
+        force_exclude_list, force_include_list = (
+            _resolve_effective_exclusion_overrides(config=None)
+        )
         # Internal bookkeeping columns are invisible to detectors.
         skip = {"__row_id__", "__source__"}
         for col in df.columns:
