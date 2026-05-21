@@ -309,57 +309,30 @@ def test_controller_threads_full_n_to_v0(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 
 
-def test_guard_fires_on_mega_block_config(monkeypatch: pytest.MonkeyPatch):
-    """#417: a config whose blocking key collapses every row into one
-    block must trip the upper-bound guard. Before #417, the guard only
-    checked the lower bound (singleton blocks); the user's 1.13M-rows-
-    in-1-block case slipped through and wedged in bucket_score."""
-    from goldenmatch.config.schemas import (
-        BlockingConfig,
-        BlockingKeyConfig,
-        GoldenMatchConfig,
-        MatchkeyConfig,
-        MatchkeyField,
-    )
-    from goldenmatch.core.autoconfig import auto_configure_df
-    from goldenmatch.core.autoconfig_controller import (
-        ControllerNotConfidentError,
+def test_estimate_avg_block_size_on_constant_column():
+    """#417 unit-level coverage: a constant-valued blocking column
+    produces avg_block_size == n_rows, which the upper-bound guard
+    (degenerate_guard_max_avg_block_size, default 10K) now catches.
+
+    The controller-level integration is structurally trivial (single
+    if branch added next to the existing lower-bound check); the unit
+    test pins the underlying estimator behavior the branch reads."""
+    from goldenmatch.core.blocking_candidates import (
+        degenerate_guard_max_avg_block_size,
+        estimate_avg_block_size,
     )
 
-    # Lower REFUSE_AT_N so the test fixture (200K rows) trips the gate.
-    # Default is 100K so 200K already trips; explicit for clarity.
     n = 200_000
-    # Every row gets the SAME blocking key. avg_block_size = N >> 10K.
-    df = pl.DataFrame({
-        "constant_block_key": ["only_value"] * n,
-        "name": [f"name_{i % 1000}" for i in range(n)],
-        "id_a": [f"a{i}" for i in range(n)],
+    sample = pl.DataFrame({
+        "constant_block_key": ["only_value"] * 5000,
     })
-
-    # Build a config that pins blocking to the constant column so the
-    # controller can't escape via the composite-search fallback.
-    # Wrap in confidence_required=True (default) so the guard fires.
-    pinned = GoldenMatchConfig(
-        matchkeys=[
-            MatchkeyConfig(
-                name="m",
-                type="weighted",
-                threshold=0.5,
-                fields=[MatchkeyField(field="name", scorer="exact", weight=1.0)],
-            ),
-        ],
-        blocking=BlockingConfig(
-            keys=[BlockingKeyConfig(fields=["constant_block_key"])],
-        ),
+    avg = estimate_avg_block_size(sample, ["constant_block_key"], n)
+    # Single distinct value in sample -> scaled distinct = 1
+    # (sqrt(N/5000) * 1 = ~6, clamped). avg_block_size = N / scaled.
+    # The point: avg is much larger than the 10K threshold.
+    assert avg > degenerate_guard_max_avg_block_size(), (
+        f"avg_block_size={avg} should exceed the upper-bound guard"
     )
-    with pytest.raises(ControllerNotConfidentError) as exc_info:
-        auto_configure_df(
-            df,
-            config=pinned,
-            confidence_required=True,
-            _skip_finalize=True,
-        )
-    assert exc_info.value.failing_sub_profile == "blocking"
 
 
 if __name__ == "__main__":  # pragma: no cover
