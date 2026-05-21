@@ -657,6 +657,22 @@ class GoldenMatchConfig(BaseModel):
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
+    exclude_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Column names to skip across the suite. GoldenMatch "
+            "auto-config never picks these for matchkeys/blocking. "
+            "GoldenFlow transforms skip them entirely (column passes "
+            "through unchanged). Layered ADDITIVELY with GoldenCheck "
+            "detector-derived exclusions (#404) -- the user list is "
+            "OR'd with auto-detection, not a replacement. "
+            "`QualityConfig.autoconfig_force_include` still wins on "
+            "conflict (rescue beats every opt-out path). Column still "
+            "appears in golden record output -- exclusion is about "
+            "matching + transforming, not output. See spec "
+            "docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md."
+        ),
+    )
     prepared_record_store: bool = Field(
         default=False,
         description=(
