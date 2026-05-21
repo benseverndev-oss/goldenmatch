@@ -241,16 +241,10 @@ class TestCorrectionSourceEnum:
         assert sources_seen == {s.value for s in CorrectionSource}
 
 
-@pytest.mark.skip(
-    reason="WAL mode required for reliable concurrent writes from two "
-    "MemoryStore instances on the same SQLite file. Default journaling "
-    "intermittently raises 'database is locked'. Tracked as a follow-up; "
-    "test exists to surface the limitation rather than enforce it."
-)
 def test_concurrent_memory_store_writes_dont_lock(tmp_path):
     """Two MemoryStore instances pointing at the same DB; each writes one
-    correction; both are visible to a third reader. Skipped by default --
-    flips green only when WAL mode is enabled (TODO)."""
+    correction; both are visible to a third reader. #130: now enforced
+    after MemoryStore defaults journal_mode=WAL on every open."""
     db = str(tmp_path / "concurrent.db")
     s1 = MemoryStore(backend="sqlite", path=db)
     s2 = MemoryStore(backend="sqlite", path=db)
