@@ -153,6 +153,101 @@ def _call_policy_propose(
     return policy.propose(profile, current, history)
 
 
+# #131: stratified-sampling helpers. Mid-cardinality column picker +
+# Polars-native stratified sampler. Both module-level so tests can
+# unit-test them without spinning up a full AutoConfigController.
+
+# Stratification-key cardinality band. Below MIN, too few distinct
+# values to stratify usefully; above MAX, too many strata (every
+# stratum gets ~1 row, no signal).
+_STRAT_MIN_DISTINCT = 10
+_STRAT_MAX_DISTINCT = 500
+
+# Column-name regex preference: blocking-shaped columns make better
+# strat keys than arbitrary mid-card columns. Used as a tiebreak.
+_STRAT_NAME_PREFERENCE = (
+    "zip", "postal", "state", "region", "country", "city",
+    "phone_area", "area_code",
+)
+
+
+def _pick_stratification_key(df: pl.DataFrame) -> str | None:
+    """Pick the most-informative mid-cardinality column for stratification.
+
+    Picks columns with 10–500 distinct values AND ratio < 0.5 (so
+    strata aren't singletons). Prefers blocking-shaped names (zip,
+    state, etc) as tiebreak. Returns None when no column qualifies —
+    caller falls back to uniform random.
+    """
+    n_rows = df.height
+    if n_rows <= 0:
+        return None
+    candidates: list[tuple[str, int, int]] = []  # (name, distinct, preference_rank)
+    for col in df.columns:
+        if col.startswith("__"):  # skip internal bookkeeping
+            continue
+        try:
+            n_distinct = int(df[col].n_unique())
+        except Exception:  # pragma: no cover -- defensive
+            continue
+        if not (_STRAT_MIN_DISTINCT <= n_distinct <= _STRAT_MAX_DISTINCT):
+            continue
+        # Skip columns where most rows are unique. partition_by on a
+        # near-unique column produces N singleton strata; the inner loop's
+        # `alloc >= stratum.height` branch returns all of them, defeating
+        # the sample cap.
+        if n_distinct / n_rows > 0.5:
+            continue
+        # Lower preference_rank = better match. -1 = name matched preferences.
+        rank = -1 if any(p in col.lower() for p in _STRAT_NAME_PREFERENCE) else 0
+        candidates.append((col, n_distinct, rank))
+    if not candidates:
+        return None
+    # Sort: preference-rank ASC (preferred names first), then by
+    # distinct count DESC (more strata = finer stratification, up to cap).
+    candidates.sort(key=lambda x: (x[2], -x[1]))
+    return candidates[0][0]
+
+
+def _stratified_sample(
+    df: pl.DataFrame,
+    strat_key: str,
+    target_n: int,
+    *,
+    min_per_stratum: int = 10,
+    seed: int = 0,
+) -> pl.DataFrame:
+    """Sample ``target_n`` rows stratified by ``strat_key``.
+
+    Allocates rows proportionally to stratum size, with a minimum
+    floor (``min_per_stratum``) so rare strata get representation
+    even when proportional allocation would round them to 0. If the
+    sum of floors exceeds target_n (very many small strata), each
+    stratum gets ``target_n // n_strata`` rows.
+    """
+    strata = df.partition_by(strat_key, as_dict=False)
+    n_strata = len(strata)
+    if n_strata == 0:
+        return df.sample(n=min(target_n, df.height), seed=seed, shuffle=True)
+    # Proportional allocation with floor.
+    total = df.height
+    allocations: list[int] = []
+    for stratum in strata:
+        proportional = max(int(stratum.height * target_n / total), min_per_stratum)
+        allocations.append(min(proportional, stratum.height))
+    # If the floor blew the budget, fall back to even allocation.
+    if sum(allocations) > target_n * 1.5:
+        per_stratum = max(target_n // n_strata, 1)
+        allocations = [min(per_stratum, s.height) for s in strata]
+    samples = []
+    for stratum, alloc in zip(strata, allocations):
+        if alloc >= stratum.height:
+            samples.append(stratum)
+        elif alloc > 0:
+            samples.append(stratum.sample(n=alloc, seed=seed, shuffle=True))
+    return pl.concat(samples) if samples else df.head(target_n)
+
+
 class ConfigValidationError(Exception):
     """Raised when input data is unworkable for ER (empty, all-null, etc.)."""
 
@@ -1031,6 +1126,20 @@ class AutoConfigController:
             return df
         seed = self._seed_for(df)
         n = min(self.budget.sample_size_default, df.height)
+
+        # #131: stratified sampling. When a mid-cardinality column is
+        # available (typically zip, state, or similar blocking-shaped
+        # column), stratify by it so rare values get representation.
+        # Random sampling under-represents the long-tail on heavy-tailed
+        # distributions, skewing the controller's cardinality estimates.
+        if os.environ.get("GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY", "").lower() != "random":
+            strat_key = _pick_stratification_key(df)
+            if strat_key is not None:
+                return _stratified_sample(
+                    df, strat_key, n,
+                    min_per_stratum=10, seed=seed,
+                )
+
         # Polars sample with shuffle=False keeps row order; we want diverse coverage so shuffle=True.
         return df.sample(n=n, seed=seed, shuffle=True)
 
