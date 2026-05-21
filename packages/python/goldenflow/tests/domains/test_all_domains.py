@@ -24,3 +24,9 @@ def test_load_real_estate():
     pack = load_domain("real_estate")
     assert pack.name == "real_estate"
     assert "mls_normalize" in pack.transforms
+
+def test_load_carceral():
+    pack = load_domain("carceral")
+    assert pack.name == "carceral"
+    assert "carceral_org_strip" in pack.transforms
+    assert "carceral_name_normalize" in pack.transforms
