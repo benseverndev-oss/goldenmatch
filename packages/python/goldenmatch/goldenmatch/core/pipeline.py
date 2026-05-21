@@ -1872,7 +1872,7 @@ def run_match_df(
     )
 
 
-def _score_partition_with_config(
+def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     df: pl.DataFrame,
     config: GoldenMatchConfig,
 ) -> list[tuple[int, int, float]]:

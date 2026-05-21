@@ -237,6 +237,11 @@ class PostflightReport:
     controller_profile: Any = None
     # RunHistory | None — full iteration history including errors and drift.
     controller_history: Any = None
+    # GoldenCheck auto-config exclusions (#404). List of ExcludedColumn
+    # set by the zero-config API caller after auto_configure_df runs.
+    # Surfaces the audit trail: "auto-config excluded these columns
+    # and here's why." Empty when no detectors fired.
+    autoconfig_exclusions: list = field(default_factory=list)
 
     def __str__(self) -> str:
         """Human-readable rendering used by CLI/postflight summaries.
@@ -258,6 +263,12 @@ class PostflightReport:
             parts.append("  advisories:")
             for adv in self.advisories:
                 parts.append(f"    - {adv}")
+        if self.autoconfig_exclusions:
+            parts.append("  auto-config exclusions:")
+            for ec in self.autoconfig_exclusions:
+                parts.append(
+                    f"    - {ec.column!r}: {ec.detector} -- {ec.reason}"
+                )
         mem_line = _render_memory_line(self.memory_stats)
         if mem_line:
             parts.append(f"  {mem_line}")

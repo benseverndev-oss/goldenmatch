@@ -407,7 +407,10 @@ def dedupe_df(
     # once pf.signals is a typed ComplexityProfile (currently PostflightSignals
     # TypedDict). For now, drift is left unset on this path.
     if _used_controller:
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        from goldenmatch.core.autoconfig import (
+            _LAST_AUTOCONFIG_EXCLUSIONS,
+            _LAST_CONTROLLER_RUN,
+        )
         _ctrl_state = _LAST_CONTROLLER_RUN.get()
         if _ctrl_state is not None:
             _sample_profile, _history = _ctrl_state
@@ -415,6 +418,12 @@ def dedupe_df(
                 pf = PostflightReport()
             pf.controller_profile = _sample_profile
             pf.controller_history = _history
+        # #404: GoldenCheck auto-config exclusions surface in postflight.
+        _exclusions = _LAST_AUTOCONFIG_EXCLUSIONS.get()
+        if _exclusions:
+            if pf is None:
+                pf = PostflightReport()
+            pf.autoconfig_exclusions = list(_exclusions)
 
     return DedupeResult(
         golden=result.get("golden"),
@@ -503,7 +512,10 @@ def match_df(
     # See dedupe_df for full commentary. Drift unset when _skip_finalize=True
     # (Task 6.1 deferred).
     if _used_controller:
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        from goldenmatch.core.autoconfig import (
+            _LAST_AUTOCONFIG_EXCLUSIONS,
+            _LAST_CONTROLLER_RUN,
+        )
         _ctrl_state = _LAST_CONTROLLER_RUN.get()
         if _ctrl_state is not None:
             _sample_profile, _history = _ctrl_state
@@ -511,6 +523,12 @@ def match_df(
                 pf = PostflightReport()
             pf.controller_profile = _sample_profile
             pf.controller_history = _history
+        # #404: GoldenCheck auto-config exclusions surface in postflight.
+        _exclusions = _LAST_AUTOCONFIG_EXCLUSIONS.get()
+        if _exclusions:
+            if pf is None:
+                pf = PostflightReport()
+            pf.autoconfig_exclusions = list(_exclusions)
 
     return MatchResult(
         matched=result.get("matched"),

@@ -457,6 +457,21 @@ class QualityConfig(BaseModel):
     fix_mode: str = "safe"     # "safe" | "moderate" | "none"
     domain: str | None = None  # "healthcare" | "finance" | "ecommerce"
 
+    # Auto-config column-exclusion overrides (#404). The exclusion
+    # detectors in `core.quality_exclusions` identify columns that are
+    # statistically attractive but counter-productive for matching
+    # (audit timestamps, foreign-system IDs, sentinel values, etc).
+    # These two fields let the user override the auto-detection:
+    #
+    #   - autoconfig_force_exclude: extra columns to always exclude
+    #     regardless of detector output. Useful when you know a column
+    #     is bad for matching but the detectors don't catch it.
+    #   - autoconfig_force_include: columns to RESCUE from any
+    #     auto-detection. Useful for legitimate hash columns used in
+    #     PPRL, etc. force_include wins on conflict.
+    autoconfig_force_exclude: list[str] = Field(default_factory=list)
+    autoconfig_force_include: list[str] = Field(default_factory=list)
+
 
 class TransformConfig(BaseModel):
     """GoldenFlow integration config for data transformation."""
