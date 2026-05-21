@@ -174,10 +174,14 @@ _STRAT_NAME_PREFERENCE = (
 def _pick_stratification_key(df: pl.DataFrame) -> str | None:
     """Pick the most-informative mid-cardinality column for stratification.
 
-    Picks columns with 10–500 distinct values; prefers blocking-shaped
-    names (zip, state, etc) as tiebreak. Returns None when no column
-    qualifies — caller falls back to uniform random.
+    Picks columns with 10–500 distinct values AND ratio < 0.5 (so
+    strata aren't singletons). Prefers blocking-shaped names (zip,
+    state, etc) as tiebreak. Returns None when no column qualifies —
+    caller falls back to uniform random.
     """
+    n_rows = df.height
+    if n_rows <= 0:
+        return None
     candidates: list[tuple[str, int, int]] = []  # (name, distinct, preference_rank)
     for col in df.columns:
         if col.startswith("__"):  # skip internal bookkeeping
@@ -187,6 +191,12 @@ def _pick_stratification_key(df: pl.DataFrame) -> str | None:
         except Exception:  # pragma: no cover -- defensive
             continue
         if not (_STRAT_MIN_DISTINCT <= n_distinct <= _STRAT_MAX_DISTINCT):
+            continue
+        # Skip columns where most rows are unique. partition_by on a
+        # near-unique column produces N singleton strata; the inner loop's
+        # `alloc >= stratum.height` branch returns all of them, defeating
+        # the sample cap.
+        if n_distinct / n_rows > 0.5:
             continue
         # Lower preference_rank = better match. -1 = name matched preferences.
         rank = -1 if any(p in col.lower() for p in _STRAT_NAME_PREFERENCE) else 0
