@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent, Tool
 
+from goldenmatch._exclusions_schema import (
+    EXCLUDE_COLUMNS_SCHEMA as _EXCLUDE_COLUMNS_SCHEMA,
+)
+
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
 
@@ -112,6 +116,7 @@ AGENT_TOOLS = [
             "properties": {
                 "file_path": {"type": "string"},
                 "constraints": {"type": "object"},
+                "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
             },
             "required": ["file_path"],
         },
@@ -136,6 +141,7 @@ AGENT_TOOLS = [
             "properties": {
                 "file_path": {"type": "string"},
                 "config": {"type": "object"},
+                "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
             },
             "required": ["file_path"],
         },
@@ -149,6 +155,7 @@ AGENT_TOOLS = [
                 "file_a": {"type": "string"},
                 "file_b": {"type": "string"},
                 "config": {"type": "object"},
+                "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
             },
             "required": ["file_a", "file_b"],
         },
@@ -374,7 +381,17 @@ def _dispatch(
         # `select_strategy` heuristic path is still reachable via
         # `analyze_data` if a caller wants the lighter profile-only view.
         session = session_cls()
-        return session.autoconfigure(args["file_path"])
+        excl = args.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            return session.autoconfigure(args["file_path"])
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
 
     if name == "controller_telemetry":
         # Stateless MCP — each tool call instantiates a fresh AgentSession,
@@ -393,7 +410,17 @@ def _dispatch(
     if name == "agent_deduplicate":
         session = session_cls()
         config_arg = args.get("config")
-        raw = session.deduplicate(args["file_path"], config=config_arg)
+        excl = args.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            raw = session.deduplicate(args["file_path"], config=config_arg)
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         return {
             "reasoning": raw.get("reasoning", {}),
             "confidence_distribution": raw.get("confidence_distribution", {}),
@@ -406,7 +433,17 @@ def _dispatch(
     if name == "agent_match_sources":
         session = session_cls()
         config_arg = args.get("config")
-        raw = session.match_sources(args["file_a"], args["file_b"], config=config_arg)
+        excl = args.get("exclude_columns") or None
+        _excl_token = None
+        if excl:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+            _excl_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(excl))
+        try:
+            raw = session.match_sources(args["file_a"], args["file_b"], config=config_arg)
+        finally:
+            if _excl_token is not None:
+                from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         return {
             "reasoning": raw.get("reasoning", {}),
             "telemetry": session.last_telemetry

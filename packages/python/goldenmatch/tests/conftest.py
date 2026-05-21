@@ -5,6 +5,29 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _reset_runtime_exclude_columns():
+    """Reset the unified-exclusions ContextVar before AND after each test.
+
+    The CLI commands set ``_RUNTIME_EXCLUDE_COLUMNS`` without always
+    resetting in every code path (typer.Exit, downstream raises). Inside
+    pytest workers, all tests share one ContextVar context, so a leaked
+    value pollutes subsequent ``dedupe_df`` / ``match_df`` / auto-config
+    calls. Reset is the cheapest guard.
+    """
+    try:
+        from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+        _RUNTIME_EXCLUDE_COLUMNS.set(None)
+    except ImportError:
+        pass
+    yield
+    try:
+        from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+        _RUNTIME_EXCLUDE_COLUMNS.set(None)
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _disable_autoconfig_memory(monkeypatch):
     """Default-off the cross-run autoconfig memory in every test.
 

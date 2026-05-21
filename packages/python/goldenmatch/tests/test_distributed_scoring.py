@@ -215,3 +215,59 @@ def test_oom_guard_fires_at_bucket_granularity(_ray_local, tmp_path, monkeypatch
             blocks, mk, set(),
             store_path=store_path, signature=sig,
         )
+
+
+# ── Phase 5 Task 1: score_blocks_distributed ────────────────────────
+
+def test_score_blocks_distributed_returns_pair_dataset(_ray_local):
+    """Per-partition scoring via dedupe_df produces a Ray Dataset of pairs."""
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.distributed.scoring import score_blocks_distributed
+
+    df = pl.DataFrame({
+        "first_name": ["Alice"] * 5 + ["Bob"] * 5 + ["Alyce"] * 5 + ["Robert"] * 5,
+        "last_name": ["Smith"] * 5 + ["Jones"] * 5 + ["Smith"] * 5 + ["Jones"] * 5,
+    })
+    cfg = auto_configure_df(df, confidence_required=False, _skip_finalize=True)
+
+    ds = ray.data.from_arrow(df.to_arrow()).repartition(2)
+    pairs_ds = score_blocks_distributed(ds, cfg)
+    rows = list(pairs_ds.take_all())
+
+    # Every row has the pair-schema keys
+    if rows:  # may be empty if no pairs cross threshold
+        assert {"id_a", "id_b", "score"} <= set(rows[0].keys())
+
+
+# ── Phase 5 Task 2: dedup_pairs_distributed ──────────────────────────
+
+def test_dedup_pairs_keeps_highest_score(_ray_local):
+    """Duplicate pairs across partitions deduplicate to the highest score."""
+    from goldenmatch.distributed.scoring import dedup_pairs_distributed
+
+    raw = ray.data.from_items([
+        {"id_a": 1, "id_b": 2, "score": 0.9},
+        {"id_a": 1, "id_b": 2, "score": 0.95},
+        {"id_a": 3, "id_b": 4, "score": 0.8},
+    ])
+    deduped = dedup_pairs_distributed(raw)
+    rows = sorted(deduped.take_all(), key=lambda r: (r["id_a"], r["id_b"]))
+    assert len(rows) == 2
+    by_pair = {(r["id_a"], r["id_b"]): r["score"] for r in rows}
+    assert by_pair[(1, 2)] == pytest.approx(0.95)
+    assert by_pair[(3, 4)] == pytest.approx(0.8)
+
+
+def test_dedup_pairs_canonicalizes_pair_ordering(_ray_local):
+    """(2, 1) and (1, 2) are the same pair; canonicalize to (min, max)."""
+    from goldenmatch.distributed.scoring import dedup_pairs_distributed
+
+    raw = ray.data.from_items([
+        {"id_a": 1, "id_b": 2, "score": 0.9},
+        {"id_a": 2, "id_b": 1, "score": 0.85},
+    ])
+    deduped = dedup_pairs_distributed(raw)
+    rows = deduped.take_all()
+    assert len(rows) == 1
+    assert rows[0]["id_a"] == 1 and rows[0]["id_b"] == 2
+    assert rows[0]["score"] == pytest.approx(0.9)

@@ -198,9 +198,17 @@ def _build_golden_records_polars_native(
         ])
         agg_exprs: list = []
         for col in user_cols:
+            # sort_by(descending=True).first() picks the longest non-null
+            # value, matching the prior top_k_by(by=..., k=1, reverse=False)
+            # intent. top_k_by mis-binds args on newer Polars where
+            # 'reverse' is no longer a kwarg; sort_by is stable across
+            # Polars 0.20+. See #362.
             agg_exprs.append(
                 pl.col(col).filter(pl.col(col).is_not_null())
-                .top_k_by(by=len_col_aliases[col], k=1, reverse=False)
+                .sort_by(
+                    pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
+                    descending=True,
+                )
                 .first().alias(f"__val_{col}__")
             )
             agg_exprs.append(
@@ -283,7 +291,7 @@ def _polars_native_eligible(
 
 
 def build_golden_records_batch(
-    multi_df: pl.DataFrame,
+    multi_df: Any,  # pl.DataFrame | ray.data.Dataset (Phase 4)
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
 ) -> list[dict]:
@@ -302,9 +310,15 @@ def build_golden_records_batch(
     column -- 6.7M merge_field calls collapse to 4. Confidence is
     approximated (see _build_golden_records_polars_native docstring).
 
+    Phase 4: when multi_df is a Ray Dataset, dispatch to the distributed
+    golden path via build_golden_records_smart. If quality_scores are also
+    set, collect to driver first (quality_scores dict cannot round-trip
+    across Ray workers).
+
     Args:
         multi_df: DataFrame containing rows from every multi-member cluster,
             with a ``__cluster_id__`` column. Will be sorted by that column.
+            May also be a ray.data.Dataset (Phase 4 distributed path).
         rules: golden rules configuration.
         quality_scores: optional per-(row_id, col) quality weights.
 
@@ -313,6 +327,29 @@ def build_golden_records_batch(
         in ascending ``__cluster_id__`` order. Each result has its
         ``__cluster_id__`` field set.
     """
+    # Phase 4: distributed path when multi_df is a Ray Dataset.
+    from goldenmatch.distributed import is_ray_dataset
+    if is_ray_dataset(multi_df):
+        if quality_scores:
+            import logging
+
+            import pyarrow as pa
+            logging.getLogger(__name__).info(
+                "build_golden_records_batch: quality_scores set on Ray Dataset "
+                "input; collecting to driver for in-memory build.",
+            )
+            tables = list(multi_df.iter_batches(batch_format="pyarrow"))
+            multi_df = pl.from_arrow(pa.concat_tables(tables)) if tables else pl.DataFrame()
+        else:
+            from goldenmatch.distributed.golden import build_golden_records_smart
+            user_columns = [
+                c for c in multi_df.schema().names
+                if not c.startswith("__")
+            ]
+            return build_golden_records_smart(
+                multi_df, rules, user_columns=user_columns,
+            )
+
     if "__cluster_id__" not in multi_df.columns:
         raise ValueError("multi_df must contain __cluster_id__ column")
     if multi_df.height == 0:

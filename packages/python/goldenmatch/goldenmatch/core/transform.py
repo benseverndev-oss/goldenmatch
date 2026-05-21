@@ -61,13 +61,48 @@ def run_transform(
     if not enabled or mode == "disabled":
         return df, []
 
+    # Unified column exclusions (see spec
+    # docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md):
+    # honor the runtime ContextVar populated by dedupe_df / match_df. Excluded
+    # columns are STRIPPED before _do_transform sees them and re-attached
+    # unchanged after, so a record_hash column with exclude_columns=
+    # ['record_hash'] passes through verbatim even when GoldenFlow has a
+    # lowercase/strip rule for it. Column order is preserved.
+    excluded_set: set[str] = set()
+    try:
+        from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+        runtime_excl = _RUNTIME_EXCLUDE_COLUMNS.get()
+        if runtime_excl:
+            excluded_set = {c for c in runtime_excl if c in df.columns}
+    except Exception:
+        # ContextVar lookup is best-effort; pipeline never blocks on it.
+        excluded_set = set()
+
+    original_columns = df.columns
+    preserved_df: pl.DataFrame | None = None
+    if excluded_set:
+        preserved_df = df.select(list(excluded_set))
+        df = df.drop(list(excluded_set))
+        if preserved_df.width > 0:
+            logger.debug(
+                "GoldenFlow: %d column(s) skipped via exclude_columns: %s",
+                len(excluded_set), sorted(excluded_set),
+            )
+
     try:
         result = _do_transform(df)
     except Exception:
         logger.warning("GoldenFlow: transform failed, skipping", exc_info=True)
         if strict:
             raise
+        # Restore preserved columns to the input df before returning.
+        if preserved_df is not None and preserved_df.width > 0:
+            df = df.hstack(preserved_df).select(original_columns)
         return df, []
+
+    # Re-attach preserved columns and restore the original column order.
+    if preserved_df is not None and preserved_df.width > 0:
+        result.df = result.df.hstack(preserved_df).select(original_columns)
 
     # Convert manifest to autofix-compatible format
     fixes = []

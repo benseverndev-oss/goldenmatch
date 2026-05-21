@@ -6,6 +6,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from typing import Any
 
 import polars as pl
 
@@ -56,7 +57,19 @@ class DatabaseConnector(ABC):
 
 
 class PostgresConnector(DatabaseConnector):
-    """PostgreSQL connector using psycopg2."""
+    """PostgreSQL connector using psycopg3.
+
+    psycopg3 is the supported driver (the [postgres] extra pins
+    `psycopg[binary]>=3.1` since the Phase 6 IdentityStore migration).
+    The default psycopg3 server-side portal cursor streams rows from
+    Postgres instead of buffering the full result set client-side,
+    which is what bit a 16 GB sandbox on a 1.13M-row read (#368).
+    """
+
+    # _conn is typed Any to short-circuit psycopg3's LiteralString-narrowing
+    # on cursor.execute -- the dynamic SQL we build via f-strings would
+    # otherwise need a Composed wrapper at every call site.
+    _conn: Any
 
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
@@ -64,14 +77,15 @@ class PostgresConnector(DatabaseConnector):
 
     def connect(self) -> None:
         try:
-            import psycopg2
-        except ImportError:
+            import psycopg
+        except ImportError as e:
             raise ImportError(
-                "Postgres support requires psycopg2. "
-                "Install with: pip install goldenmatch[postgres]"
-            )
-        self._conn = psycopg2.connect(self.connection_string)
-        self._conn.autocommit = False
+                "Postgres support requires psycopg3. "
+                "Install with: pip install 'goldenmatch[postgres]'"
+            ) from e
+        # autocommit=False matches the prior psycopg2 default; commits are
+        # explicit via self.conn.commit() in write paths.
+        self._conn = psycopg.connect(self.connection_string, autocommit=False)
         logger.info("Connected to PostgreSQL")
 
     def close(self) -> None:
@@ -80,14 +94,23 @@ class PostgresConnector(DatabaseConnector):
             self._conn = None
 
     @property
-    def conn(self):
+    def conn(self) -> Any:
         if self._conn is None:
             raise RuntimeError("Not connected. Call connect() first.")
         return self._conn
 
     def read_table(self, table: str, chunk_size: int = 10000) -> Iterator[pl.DataFrame]:
-        """Read table in chunks."""
-        cursor = self.conn.cursor()
+        """Read table in chunks via a server-side cursor.
+
+        The named cursor (`name="gm_sync_read"`) tells Postgres to declare
+        a server-side portal -- rows stream into the client `chunk_size`
+        at a time instead of materializing the full result set in the
+        psycopg connection buffer. Required to avoid OOM on multi-million
+        row reads (#368). Server-side cursors only work inside a
+        transaction; autocommit=False from connect() satisfies that.
+        """
+        cursor = self.conn.cursor(name="gm_sync_read")
+        cursor.itersize = chunk_size
         try:
             cursor.execute(f"SELECT * FROM {_quote_ident(table)}")
             columns = [desc[0] for desc in cursor.description]
@@ -97,7 +120,7 @@ class PostgresConnector(DatabaseConnector):
                 if not rows:
                     break
                 data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-                yield pl.DataFrame(data)
+                yield _normalize_chunk_schema(pl.DataFrame(data))
         finally:
             cursor.close()
 
@@ -179,10 +202,39 @@ class PostgresConnector(DatabaseConnector):
             cursor.close()
 
 
+def _normalize_chunk_schema(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast Null-dtype columns to Utf8 so vstack across chunks succeeds.
+
+    When a chunked Postgres read hits a chunk where a column is 100%
+    NULL, Polars infers ``Null`` dtype for it. A later chunk with real
+    values infers ``String``, and ``pl.concat`` rejects the mismatch
+    with 'type String is incompatible with expected type Null'.
+
+    Casting all-null ``Null`` columns to ``Utf8`` at the chunk boundary
+    sidesteps the issue. Utf8 is the lowest-cost fallback when we can't
+    know the true Postgres type from the cursor alone -- subsequent
+    chunks carry the real values. See #363.
+    """
+    null_cols = [c for c, dt in df.schema.items() if dt == pl.Null]
+    if not null_cols:
+        return df
+    return df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
+
+
 def _quote_ident(name: str) -> str:
-    """Quote a SQL identifier to prevent injection."""
-    # Simple quoting — replace any double quotes and wrap
-    return '"' + name.replace('"', '""') + '"'
+    """Quote a SQL identifier to prevent injection.
+
+    Splits a single ``schema.table`` arg into ``"schema"."table"`` so
+    callers can pass non-public schemas via ``sync --table gm.foo``.
+    See #365.
+
+    Edge case: tables with literal dots in the name are split on the
+    FIRST dot only -- yielding ``"odd_schema"."weird.name"``. Two-dot
+    identifiers are vanishingly rare in practice and there is no
+    portable escape syntax for them through a CLI flag.
+    """
+    parts = name.split(".", 1)  # max one split: schema.table
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def create_connector(config: dict) -> DatabaseConnector:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -117,6 +116,7 @@ class MemoryStore:
         self._backend = backend
         if backend == "sqlite":
             import os
+            import sqlite3  # noqa: PLC0415 -- lazy, see #364
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             self._conn = sqlite3.connect(path)
             self._conn.row_factory = sqlite3.Row

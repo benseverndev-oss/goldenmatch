@@ -457,6 +457,21 @@ class QualityConfig(BaseModel):
     fix_mode: str = "safe"     # "safe" | "moderate" | "none"
     domain: str | None = None  # "healthcare" | "finance" | "ecommerce"
 
+    # Auto-config column-exclusion overrides (#404). The exclusion
+    # detectors in `core.quality_exclusions` identify columns that are
+    # statistically attractive but counter-productive for matching
+    # (audit timestamps, foreign-system IDs, sentinel values, etc).
+    # These two fields let the user override the auto-detection:
+    #
+    #   - autoconfig_force_exclude: extra columns to always exclude
+    #     regardless of detector output. Useful when you know a column
+    #     is bad for matching but the detectors don't catch it.
+    #   - autoconfig_force_include: columns to RESCUE from any
+    #     auto-detection. Useful for legitimate hash columns used in
+    #     PPRL, etc. force_include wins on conflict.
+    autoconfig_force_exclude: list[str] = Field(default_factory=list)
+    autoconfig_force_include: list[str] = Field(default_factory=list)
+
 
 class TransformConfig(BaseModel):
     """GoldenFlow integration config for data transformation."""
@@ -642,6 +657,22 @@ class GoldenMatchConfig(BaseModel):
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
+    exclude_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Column names to skip across the suite. GoldenMatch "
+            "auto-config never picks these for matchkeys/blocking. "
+            "GoldenFlow transforms skip them entirely (column passes "
+            "through unchanged). Layered ADDITIVELY with GoldenCheck "
+            "detector-derived exclusions (#404) -- the user list is "
+            "OR'd with auto-detection, not a replacement. "
+            "`QualityConfig.autoconfig_force_include` still wins on "
+            "conflict (rescue beats every opt-out path). Column still "
+            "appears in golden record output -- exclusion is about "
+            "matching + transforming, not output. See spec "
+            "docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md."
+        ),
+    )
     prepared_record_store: bool = Field(
         default=False,
         description=(

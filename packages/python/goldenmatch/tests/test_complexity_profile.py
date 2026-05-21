@@ -242,7 +242,8 @@ def test_stop_reason_has_expected_values():
     from goldenmatch.core.complexity_profile import StopReason
     expected = {"GREEN", "CONVERGED", "BUDGET_ITERATIONS", "BUDGET_TIME",
                 "POLICY_SATISFIED", "POLICY_NO_PROGRESS", "OSCILLATING",
-                "CANCELLED"}
+                "CANCELLED",
+                "BLOCKING_DEGENERATE"}  # added in #408
     assert {sr.name for sr in StopReason} == expected
 
 
