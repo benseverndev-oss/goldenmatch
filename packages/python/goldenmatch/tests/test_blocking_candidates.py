@@ -13,6 +13,7 @@ import pytest
 from goldenmatch.core.blocking_candidates import (
     ColumnRole,
     classify_column_role,
+    degenerate_guard_max_avg_block_size,
     degenerate_guard_threshold,
     estimate_avg_block_size,
     find_composite_blocking_keys,
@@ -384,6 +385,51 @@ def test_classify_keeps_unique_column_rejected_even_with_scaling():
     # We pin the behaviour explicitly so anyone tightening Chao1
     # sees this test fail and reads the rationale.
     assert role.is_blocking_candidate is True  # gate false-pass
+
+
+# ---------------------------------------------------------------------------
+# #417: upper-bound guard + composite-search candidate log
+# ---------------------------------------------------------------------------
+
+
+def test_degenerate_guard_max_avg_block_size_default():
+    """Default upper-bound is 10K -- catches the 1.13M-rows-in-1-block
+    case from #417."""
+    assert degenerate_guard_max_avg_block_size() == 10_000.0
+
+
+def test_degenerate_guard_max_avg_block_size_env_override(monkeypatch: pytest.MonkeyPatch):
+    """Env-overridable so users on tiny datasets can lower it."""
+    monkeypatch.setenv("GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE", "100")
+    assert degenerate_guard_max_avg_block_size() == 100.0
+
+
+def test_find_composite_blocking_keys_logs_candidates(caplog: pytest.LogCaptureFixture):
+    """#417 ask 2: emit INFO log lines showing which pairs were
+    evaluated + their joint cardinality + verdict."""
+    import logging
+
+    df = pl.DataFrame({
+        "zip": [f"{i % 80:05d}" for i in range(5000)],
+        "last_name": [f"last_{i % 50}" for i in range(5000)],
+        "first_name": [f"first_{i % 200}" for i in range(5000)],
+        "city": [f"city_{i % 30}" for i in range(5000)],
+    })
+    roles = [
+        ColumnRole(name="zip", is_matchkey_candidate=True, is_blocking_candidate=True, blocking_excluded_reason=None),
+        ColumnRole(name="last_name", is_matchkey_candidate=True, is_blocking_candidate=True, blocking_excluded_reason=None),
+        ColumnRole(name="first_name", is_matchkey_candidate=True, is_blocking_candidate=True, blocking_excluded_reason=None),
+        ColumnRole(name="city", is_matchkey_candidate=True, is_blocking_candidate=True, blocking_excluded_reason=None),
+    ]
+    with caplog.at_level(logging.INFO, logger="goldenmatch.core.blocking_candidates"):
+        find_composite_blocking_keys(df, roles)
+
+    # Assert the "evaluated N pairs" header appears.
+    headers = [r.getMessage() for r in caplog.records if "evaluated" in r.getMessage() and "pairs" in r.getMessage()]
+    assert headers, "no 'evaluated N pairs' header found in INFO logs"
+    # Assert at least one per-pair line appears.
+    pair_lines = [r.getMessage() for r in caplog.records if "joint_cardinality=" in r.getMessage()]
+    assert pair_lines, "no per-pair 'joint_cardinality=...' lines logged"
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -304,5 +304,63 @@ def test_controller_threads_full_n_to_v0(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# #417: BLOCKING_DEGENERATE upper-bound regression test
+# ---------------------------------------------------------------------------
+
+
+def test_guard_fires_on_mega_block_config(monkeypatch: pytest.MonkeyPatch):
+    """#417: a config whose blocking key collapses every row into one
+    block must trip the upper-bound guard. Before #417, the guard only
+    checked the lower bound (singleton blocks); the user's 1.13M-rows-
+    in-1-block case slipped through and wedged in bucket_score."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.autoconfig_controller import (
+        ControllerNotConfidentError,
+    )
+
+    # Lower REFUSE_AT_N so the test fixture (200K rows) trips the gate.
+    # Default is 100K so 200K already trips; explicit for clarity.
+    n = 200_000
+    # Every row gets the SAME blocking key. avg_block_size = N >> 10K.
+    df = pl.DataFrame({
+        "constant_block_key": ["only_value"] * n,
+        "name": [f"name_{i % 1000}" for i in range(n)],
+        "id_a": [f"a{i}" for i in range(n)],
+    })
+
+    # Build a config that pins blocking to the constant column so the
+    # controller can't escape via the composite-search fallback.
+    # Wrap in confidence_required=True (default) so the guard fires.
+    pinned = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="m",
+                type="weighted",
+                threshold=0.5,
+                fields=[MatchkeyField(field="name", scorer="exact", weight=1.0)],
+            ),
+        ],
+        blocking=BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["constant_block_key"])],
+        ),
+    )
+    with pytest.raises(ControllerNotConfidentError) as exc_info:
+        auto_configure_df(
+            df,
+            config=pinned,
+            confidence_required=True,
+            _skip_finalize=True,
+        )
+    assert exc_info.value.failing_sub_profile == "blocking"
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
