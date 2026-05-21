@@ -10,7 +10,6 @@ HIFLD↔ECHO matchkey would see.
 from __future__ import annotations
 
 import polars as pl
-
 from goldenflow.domains.carceral import (
     CARCERAL_BOP_ABBREVIATIONS,
     CARCERAL_OPERATOR_ORGS,
@@ -21,7 +20,6 @@ from goldenflow.domains.carceral import (
     carceral_org_strip,
     latlng_pack,
 )
-
 
 # ── Metadata ────────────────────────────────────────────────────────────
 
