@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from goldenmatch.core._profile_helpers import transitivity_rate
 from goldenmatch.core.complexity_profile import ClusterProfile
@@ -214,7 +214,7 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
 
 
 def build_clusters(
-    pairs,  # list[tuple[int, int, float]] | ray.data.Dataset
+    pairs: Any,  # list[tuple[int, int, float]] | ray.data.Dataset
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
