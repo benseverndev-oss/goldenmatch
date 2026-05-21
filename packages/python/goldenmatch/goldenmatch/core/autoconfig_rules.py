@@ -9,7 +9,11 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 """
 from __future__ import annotations
 
+import logging
+import os
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from goldenmatch.config.schemas import (
     BlockingKeyConfig,
@@ -993,10 +997,12 @@ def rule_sparse_match_expand(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
-    """v1.10 DEVIATION: spec wanted ExpandSample(2.0) which requires
-    controller-level sample expansion (queued for v1.11). v1.10 substitute:
-    fire mark_fired("rule_sparse_match_expand") side-channel + lower
-    threshold by 0.10 as proxy.
+    """v1.13 (#125): real ExpandSample(2.0). Signals the controller to
+    resample with double the sample cap before the next iteration, AND
+    lowers the threshold as a hedge in case re-sample alone doesn't
+    surface enough matches.
+
+    Pre-v1.13 (v1.10-v1.12): only lowered the threshold (proxy).
     """
     if ctx is None:
         return None
@@ -1014,9 +1020,10 @@ def rule_sparse_match_expand(
         rule_name="sparse_match_expand",
         rationale=(
             f"sparse_sample (n_true_pairs={ctx.sparsity_verdict.estimated_n_true_pairs}); "
-            f"{rationale}"
+            f"{rationale}; ExpandSample(2.0)"
         ),
         config_diff={},
+        expand_sample=2.0,  # #125: controller intercepts + resamples
     )
     return new_cfg, decision
 
@@ -1091,6 +1098,20 @@ def rule_demote_clustered_identity(
                 current, identity_col, signal.witness_used,
             )
             if new_cfg != current:
+                # #124: telemetry observation window. Env-gated INFO log
+                # so we can observe whether this rule actually fires in
+                # production -- v1.12 Path Y addressed T3 directly, so
+                # this rule is suspected dead. Users opt into the
+                # telemetry by setting GOLDENMATCH_TELEMETRY_DEMOTE_RULE=1;
+                # we collect firing counts via grep. After 1-2 weeks of
+                # zero firings, the rule + its 5-file collateral chain
+                # gets deleted in Wave C.
+                if os.environ.get("GOLDENMATCH_TELEMETRY_DEMOTE_RULE", "") == "1":
+                    logger.info(
+                        "TELEMETRY rule_demote_clustered_identity FIRED "
+                        "(column=%r, collision_rate=%.3f, witness=%r). See #124.",
+                        identity_col, signal.rate, signal.witness_used,
+                    )
                 return new_cfg, PolicyDecision(
                     rule_name="demote_clustered_identity",
                     rationale=f"collision_rate={signal.rate:.2f}; {rationale}",
