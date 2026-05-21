@@ -49,6 +49,13 @@ class HeuristicRefitPolicy:
       - None = satisfied → controller breaks loop with POLICY_SATISFIED
       - A new config that == current is also treated as satisfied (bug guard)
       - A previously-seen config is allowed; oscillation handled by controller
+
+    #127: per-rule fire-history guard. If a rule fires with the same
+    ``(rule_name, rationale)`` as the immediately-previous call, the
+    policy skips it and advances to the next rule. Prevents
+    iteration-budget exhaustion on rules that oscillate (e.g.
+    ``rule_blocking_too_coarse`` flipping between ``last_name`` and
+    ``email`` indefinitely).
     """
 
     def __init__(self, rules: list[Rule] | None = None) -> None:
@@ -56,6 +63,10 @@ class HeuristicRefitPolicy:
             from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
             rules = DEFAULT_RULES
         self._rules: list[Rule] = rules
+        # #127: track the most recent (rule_name, rationale) that fired
+        # so the next propose call can skip identical fires. None until
+        # the first non-None outcome.
+        self._last_fire: tuple[str, str] | None = None
 
     def propose(
         self,
@@ -75,6 +86,17 @@ class HeuristicRefitPolicy:
                 # Bug guard: rule "decided to do nothing" without saying so.
                 # Logged at WARN by the controller (not here — keep policy pure).
                 return None
+            # #127: oscillation guard. If this rule fired with the same
+            # rationale on the immediately-previous call, skip it.
+            key = (decision.rule_name, decision.rationale)
+            if self._last_fire is not None and key == self._last_fire:
+                _osc_logger = __import__("logging").getLogger(__name__)
+                _osc_logger.info(
+                    "Oscillation guard: skipping %s (same rationale as prev): %r. See #127.",
+                    decision.rule_name, decision.rationale,
+                )
+                continue  # advance to next rule
+            self._last_fire = key
             # Attach decision to the latest history entry, if any
             if history.entries:
                 history.entries[-1].decision = decision
