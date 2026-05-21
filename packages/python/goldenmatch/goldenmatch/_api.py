@@ -319,6 +319,7 @@ def dedupe_df(
     backend: str | None = None,
     source_name: str = "dataframe",
     confidence_required: bool = True,
+    exclude_columns: list[str] | None = None,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -349,52 +350,90 @@ def dedupe_df(
         configs.
     """
     import goldenmatch._api as _self_api
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
     from goldenmatch.core.pipeline import run_dedupe_df
 
-    _used_controller = False
-    if isinstance(config, str):
-        config = load_config(config)
-    elif config is None:
-        if exact or fuzzy:
-            config = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
-        else:
-            # Zero-config: call auto_configure_df *before* the pipeline so the
-            # pipeline never re-invokes auto-config. This eliminates the
-            # double-pipeline-run introduced by Task 5.1 (the controller loop
-            # itself calls dedupe_df on samples; if the pipeline also ran
-            # auto_configure_df we'd recurse). Task 5.2 fix.
-            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
-            _auto_config_provider = _detect_llm_provider() if llm_scorer else None
-            from goldenmatch.core.bench import stage as _bench_stage
-            with _bench_stage("auto_configure"):
-                config = _self_api.auto_configure_df(
-                    df,
-                    llm_provider=_auto_config_provider,
-                    llm_auto=llm_auto,
-                    _skip_finalize=True,
-                    confidence_required=confidence_required,
-                )
-            _used_controller = True
+    # Bind the kwarg-supplied exclude_columns to the runtime ContextVar
+    # BEFORE any pipeline step that reads it (auto_configure_df,
+    # GoldenFlow transforms). The pipeline downstream + the auto-config
+    # exclusion resolver both read this var. config.exclude_columns is
+    # OR'd in by the resolver itself; here we only propagate the kwarg
+    # so it's visible even when the user passes a hand-written config.
+    _kwarg_token = None
+    if exclude_columns:
+        _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
 
-    # All branches above bind config to GoldenMatchConfig (load_config returns
-    # GoldenMatchConfig; _build_config returns GoldenMatchConfig;
-    # auto_configure_df returns GoldenMatchConfig). The Optional in the type
-    # signature is the public input contract, not a runtime state here.
-    assert config is not None, "dedupe_df: config resolution above must bind config"
+    try:
+        _used_controller = False
+        if isinstance(config, str):
+            config = load_config(config)
+        elif config is None:
+            if exact or fuzzy:
+                config = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
+            else:
+                # Zero-config: call auto_configure_df *before* the pipeline so the
+                # pipeline never re-invokes auto-config. This eliminates the
+                # double-pipeline-run introduced by Task 5.1 (the controller loop
+                # itself calls dedupe_df on samples; if the pipeline also ran
+                # auto_configure_df we'd recurse). Task 5.2 fix.
+                # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
+                _auto_config_provider = _detect_llm_provider() if llm_scorer else None
+                from goldenmatch.core.bench import stage as _bench_stage
+                with _bench_stage("auto_configure"):
+                    config = _self_api.auto_configure_df(
+                        df,
+                        llm_provider=_auto_config_provider,
+                        llm_auto=llm_auto,
+                        _skip_finalize=True,
+                        confidence_required=confidence_required,
+                    )
+                _used_controller = True
 
-    # Apply overrides uniformly regardless of config source
-    if backend:
-        config.backend = backend
-    if llm_scorer:
-        from goldenmatch.config.schemas import LLMScorerConfig
-        config.llm_scorer = LLMScorerConfig(enabled=True)
-    if llm_auto:
-        config.llm_auto = llm_auto
+        # All branches above bind config to GoldenMatchConfig (load_config returns
+        # GoldenMatchConfig; _build_config returns GoldenMatchConfig;
+        # auto_configure_df returns GoldenMatchConfig). The Optional in the type
+        # signature is the public input contract, not a runtime state here.
+        assert config is not None, "dedupe_df: config resolution above must bind config"
 
-    result = run_dedupe_df(
-        df, config, source_name=source_name,
-        auto_config=False,
-    )
+        # Apply overrides uniformly regardless of config source
+        if backend:
+            config.backend = backend
+        if llm_scorer:
+            from goldenmatch.config.schemas import LLMScorerConfig
+            config.llm_scorer = LLMScorerConfig(enabled=True)
+        if llm_auto:
+            config.llm_auto = llm_auto
+
+        # Merge kwarg-supplied exclude_columns into config.exclude_columns
+        # so downstream pipeline steps that read off config (rather than
+        # the ContextVar) see them too. Idempotent + order-preserving.
+        if exclude_columns:
+            merged = list(dict.fromkeys(
+                list(getattr(config, "exclude_columns", None) or [])
+                + list(exclude_columns)
+            ))
+            try:
+                config.exclude_columns = merged
+            except Exception:
+                # Defensive: if the config object can't accept the field
+                # (e.g. user passed a non-Pydantic shim), the ContextVar
+                # still carries the kwarg list so behavior is preserved.
+                pass
+
+        # If the user passed a hand-written config with exclude_columns
+        # set, propagate to the ContextVar too so GoldenFlow + the
+        # auto-config exclusion resolver see it on every call path.
+        cfg_excl = getattr(config, "exclude_columns", None) or []
+        if cfg_excl and _kwarg_token is None:
+            _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
+
+        result = run_dedupe_df(
+            df, config, source_name=source_name,
+            auto_config=False,
+        )
+    finally:
+        if _kwarg_token is not None:
+            _RUNTIME_EXCLUDE_COLUMNS.reset(_kwarg_token)
 
     _mem = result.get("memory_stats")
     pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
@@ -407,7 +446,10 @@ def dedupe_df(
     # once pf.signals is a typed ComplexityProfile (currently PostflightSignals
     # TypedDict). For now, drift is left unset on this path.
     if _used_controller:
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        from goldenmatch.core.autoconfig import (
+            _LAST_AUTOCONFIG_EXCLUSIONS,
+            _LAST_CONTROLLER_RUN,
+        )
         _ctrl_state = _LAST_CONTROLLER_RUN.get()
         if _ctrl_state is not None:
             _sample_profile, _history = _ctrl_state
@@ -415,6 +457,12 @@ def dedupe_df(
                 pf = PostflightReport()
             pf.controller_profile = _sample_profile
             pf.controller_history = _history
+        # #404: GoldenCheck auto-config exclusions surface in postflight.
+        _exclusions = _LAST_AUTOCONFIG_EXCLUSIONS.get()
+        if _exclusions:
+            if pf is None:
+                pf = PostflightReport()
+            pf.autoconfig_exclusions = list(_exclusions)
 
     return DedupeResult(
         golden=result.get("golden"),
@@ -440,6 +488,7 @@ def match_df(
     threshold: float | None = None,
     backend: str | None = None,
     confidence_required: bool = True,
+    exclude_columns: list[str] | None = None,
 ) -> MatchResult:
     """Match a target DataFrame against a reference DataFrame (no file I/O).
 
@@ -468,33 +517,63 @@ def match_df(
         configs.
     """
     import goldenmatch._api as _self_api
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
     from goldenmatch.core.pipeline import run_match_df
 
-    _used_controller = False
-    if isinstance(config, str):
-        config = load_config(config)
-    elif config is None:
-        if exact or fuzzy:
-            config = _build_config(exact, fuzzy, blocking, threshold, backend=backend)
-        else:
-            # Zero-config: call auto_configure_df *before* the pipeline so the
-            # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
-            # (Task 5.2 fix — mirrors dedupe_df zero-config refactor).
-            # Pass reference= so auto-config sees both column sets and emits
-            # matchkeys/blocking that apply uniformly across the join.
-            # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
-            config = _self_api.auto_configure_df(
-                target, reference=reference, _skip_finalize=True,
-                confidence_required=confidence_required,
-            )
-            _used_controller = True
+    # Same exclude_columns plumbing as dedupe_df -- ContextVar before any
+    # pipeline step so auto-config + GoldenFlow transforms both see it.
+    _kwarg_token = None
+    if exclude_columns:
+        _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
 
-    assert config is not None, "match_df: config resolution above must bind config"
+    try:
+        _used_controller = False
+        if isinstance(config, str):
+            config = load_config(config)
+        elif config is None:
+            if exact or fuzzy:
+                config = _build_config(exact, fuzzy, blocking, threshold, backend=backend)
+            else:
+                # Zero-config: call auto_configure_df *before* the pipeline so the
+                # pipeline never re-invokes auto-config. Eliminates double-pipeline-run
+                # (Task 5.2 fix — mirrors dedupe_df zero-config refactor).
+                # Pass reference= so auto-config sees both column sets and emits
+                # matchkeys/blocking that apply uniformly across the join.
+                # Access via module attribute so tests can patch goldenmatch._api.auto_configure_df.
+                config = _self_api.auto_configure_df(
+                    target, reference=reference, _skip_finalize=True,
+                    confidence_required=confidence_required,
+                )
+                _used_controller = True
 
-    if backend:
-        config.backend = backend
+        assert config is not None, "match_df: config resolution above must bind config"
 
-    result = run_match_df(target, reference, config, auto_config=False)
+        if backend:
+            config.backend = backend
+
+        # Merge kwarg-supplied exclude_columns into config.exclude_columns
+        # so downstream pipeline steps see them via config too.
+        if exclude_columns:
+            merged = list(dict.fromkeys(
+                list(getattr(config, "exclude_columns", None) or [])
+                + list(exclude_columns)
+            ))
+            try:
+                config.exclude_columns = merged
+            except Exception:
+                pass
+
+        # If user passed a hand-written config with exclude_columns set,
+        # propagate to ContextVar so GoldenFlow + the auto-config exclusion
+        # resolver see it on every call path.
+        cfg_excl = getattr(config, "exclude_columns", None) or []
+        if cfg_excl and _kwarg_token is None:
+            _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
+
+        result = run_match_df(target, reference, config, auto_config=False)
+    finally:
+        if _kwarg_token is not None:
+            _RUNTIME_EXCLUDE_COLUMNS.reset(_kwarg_token)
 
     _mem = result.get("memory_stats")
     pf = _attach_memory_to_postflight(result.get("postflight_report"), _mem)
@@ -503,7 +582,10 @@ def match_df(
     # See dedupe_df for full commentary. Drift unset when _skip_finalize=True
     # (Task 6.1 deferred).
     if _used_controller:
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+        from goldenmatch.core.autoconfig import (
+            _LAST_AUTOCONFIG_EXCLUSIONS,
+            _LAST_CONTROLLER_RUN,
+        )
         _ctrl_state = _LAST_CONTROLLER_RUN.get()
         if _ctrl_state is not None:
             _sample_profile, _history = _ctrl_state
@@ -511,6 +593,12 @@ def match_df(
                 pf = PostflightReport()
             pf.controller_profile = _sample_profile
             pf.controller_history = _history
+        # #404: GoldenCheck auto-config exclusions surface in postflight.
+        _exclusions = _LAST_AUTOCONFIG_EXCLUSIONS.get()
+        if _exclusions:
+            if pf is None:
+                pf = PostflightReport()
+            pf.autoconfig_exclusions = list(_exclusions)
 
     return MatchResult(
         matched=result.get("matched"),

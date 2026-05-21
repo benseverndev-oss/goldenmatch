@@ -20,10 +20,19 @@ def incremental_cmd(
     config: Path = typer.Option(..., "--config", "-c", help="Config YAML path"),
     output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV path"),
     threshold: float | None = typer.Option(None, "--threshold", "-t", help="Override threshold"),
+    exclude_columns: str | None = typer.Option(
+        None, "--exclude-columns",
+        help=(
+            "Comma-separated columns to skip across the suite. "
+            "GoldenMatch never picks these for matchkeys/blocking; "
+            "GoldenFlow transforms skip them entirely."
+        ),
+    ),
 ) -> None:
     """Match new records against an existing base dataset incrementally."""
     import polars as pl
 
+    from goldenmatch._exclusions_schema import merge_exclude_columns_into_config
     from goldenmatch.core.autofix import auto_fix_dataframe
     from goldenmatch.core.ingest import load_file
     from goldenmatch.core.match_one import match_one
@@ -37,6 +46,13 @@ def incremental_cmd(
 
     cfg = load_config(str(config))
     matchkeys = cfg.get_matchkeys()
+
+    _resolved_excludes = merge_exclude_columns_into_config(cfg, exclude_columns)
+    if _resolved_excludes:
+        err_console.print(
+            f"[dim]exclude_columns ({len(_resolved_excludes)}): "
+            f"{', '.join(_resolved_excludes)}[/dim]",
+        )
 
     if threshold is not None:
         for mk in matchkeys:

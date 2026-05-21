@@ -6,6 +6,249 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- `bench-phase5-simulated` workflow job: runs a 4-worker Ray cluster
+  inside one `large-new-64GB` GitHub runner against 50M synthetic rows,
+  exercising the Phase 5 streaming pipeline without provisioning
+  external infrastructure. Workflow_dispatch only (gated on
+  `run_phase5_simulated=true`); optional identity variant via
+  `run_phase5_simulated_identity=true`. Honest scoping (single NIC,
+  single disk, shared OS page cache): this is a regression check, NOT
+  a Splink-Spark parity proof. The real-cluster bench
+  (`bench-phase5-end2end`) is still required for any parity claim.
+- `scripts/bench_phase5_simulated.py`: cluster-agnostic Phase 5 bench
+  driver (works against simulated AND real clusters, only `RAY_ADDRESS`
+  differs). Connects to a pre-started Ray cluster, runs
+  `run_dedupe_pipeline_distributed`, writes a JSON summary with wall
+  + RSS + cluster resources.
+- `scripts/generate_phase5_50m_dataset.py`: one-shot 50M dataset
+  generator wrapper. Outputs `bench-dataset/bench_50000000.parquet`
+  for upload to the `bench-dataset-v1` release. ~8 hr single-node
+  generation cost.
+
+### Fixed
+
+- `goldenmatch sync` cluster: four user-visible bugs that all surfaced
+  from one Postgres sync run against a 1.13M-row table on a slim Python
+  build.
+  - #362: `golden.py` no longer calls `top_k_by(..., reverse=False)`,
+    which mis-binds args on newer Polars versions. Replaced with
+    `sort_by(descending=True).first()`.
+  - #363: chunked Postgres reads now cast `Null`-dtype columns to
+    `Utf8` before `pl.concat`, fixing `type String is incompatible
+    with expected type Null` on sparse-column tables. Defensive
+    `how="diagonal_relaxed"` on the concat call too.
+  - #364: `sqlite3` is now lazy-imported inside `ReviewQueue`,
+    `MemoryStore`, and `IdentityStore`. `import goldenmatch` and the
+    CLI no longer require `_sqlite3` on minimal Python builds (Vercel
+    Sandbox, slim Docker, etc.).
+  - #365: `_quote_ident("schema.table")` now produces
+    `"schema"."table"`, allowing `goldenmatch sync --table gm.foo`
+    against non-public schemas without a search_path workaround.
+
+- `two_phase_wcc` no longer rehydrates a 475 MiB Python `dict[int, int]`
+  in every worker. Phase B's lookup table now travels as a Polars frame
+  via `ray.put`, zero-copy mapped from plasma into worker address space
+  (~80 MiB at 5M nodes, ~6x smaller). Phase B internals use vectorized
+  Polars joins instead of Python row-loops. Resolves the 5M-scale OOM
+  surfaced by run 26166347530.
+
+### Added (Phase 6 — Identity Graph at distributed scale)
+- **psycopg3 migration** of the Postgres backend in `goldenmatch.identity.store`.
+  `psycopg2-binary` replaced by `psycopg[binary]>=3.1`. Adds first-class
+  COPY context manager support and `psycopg_pool` integration.
+- **Bulk COPY writes**: `IdentityStore.bulk_upsert_identities`,
+  `bulk_upsert_records`, `bulk_add_edges`, `bulk_emit_events`. Each
+  COPYs a Polars frame into a staging temp table, then
+  `INSERT ... ON CONFLICT` into the real table. Postgres only;
+  SQLite raises `NotImplementedError` with a helpful message.
+- **Connection pool**: `goldenmatch.identity.pool.get_identity_pool(dsn)`
+  process-singleton `psycopg_pool.ConnectionPool`. `IdentityStore`
+  constructor accepts optional `pool=` kwarg.
+- **Alembic migrations**: `goldenmatch/db/alembic/` with baseline
+  revision `0001_identity_v1` mirroring the existing schema. New CLI
+  `goldenmatch identity migrate --dsn ... [--stamp-existing]` runs
+  upgrades; `--stamp-existing` brings a pre-Alembic schema under
+  version control without touching tables.
+- **Distributed dispatch**: `goldenmatch.distributed.identity.resolve_identities_distributed`
+  polymorphic on `dict[int, dict] | ray.data.Dataset`. Ray Dataset
+  path materializes cluster aggregates driver-side via
+  `materialize_cluster_dict`, then runs the existing resolver against
+  a pooled Postgres connection.
+- `goldenmatch.core.pipeline._resolve_identities` polymorphic on
+  cluster shape; Ray Dataset path requires `identity.backend='postgres'`
+  and `identity.connection` set.
+- `IdentityStore.add_edge` on the Postgres branch now uses
+  `ON CONFLICT (entity_id, record_a_id, record_b_id, kind, run_name) DO NOTHING`
+  matching the SQLite `INSERT OR IGNORE` semantic. Fixes
+  `UniqueViolation` on replayed runs.
+- Tests: `tests/identity/test_pool.py`,
+  `tests/identity/test_alembic_migration.py`,
+  `tests/identity/test_uuid7_concurrent.py`,
+  `tests/identity/test_distributed_identity.py`.
+
+### Added (Phase 5.5)
+- **Two-Phase WCC** (`goldenmatch.distributed.clustering.two_phase_wcc`)
+  replaces label propagation as the default distributed connected-
+  components algorithm. Phase A: per-partition local `UnionFind` via
+  `map_batches` (embarrassingly parallel). Phase B: driver-side super-
+  graph Union-Find on boundary edges between partitions (bounded by
+  O(P^2) max edges).
+- New env var `GOLDENMATCH_DISTRIBUTED_WCC` — default `two_phase`,
+  opt back into `label_propagation` for regression testing.
+- `UnionFind.nodes()` accessor on `goldenmatch.core.cluster.UnionFind`.
+- `scripts/generate_chain_dataset.py` — synthetic chain-heavy graph
+  generator for the adversarial bench (label-prop's worst case).
+- `scripts/bench_phase5_5_wcc.py` — head-to-head bench timing both
+  algorithms on the same input + asserting partition-structure
+  equivalence.
+- `bench-phase5-5-wcc` workflow job (workflow_dispatch only,
+  `run_phase5_5_wcc=true`). Generates 5M-chain dataset on the fly.
+- Motivated by GraphFrames maintainer Sem Sinchenko's recommendation:
+  chains are label-prop's worst case and identity graphs are
+  chain-heavy.
+
+### Added (Phase 5)
+- **Distributed scoring:** `goldenmatch.distributed.scoring`:
+  - `score_blocks_distributed(df_ds, config)` — per-partition fuzzy +
+    exact scoring via `ds.map_batches`. Each worker runs in-memory
+    `dedupe_df` with `backend="bucket"` on its slice; pair tuples emitted
+    as a Ray Dataset.
+  - `dedup_pairs_distributed(pairs_ds)` — cross-partition pair dedup.
+    Canonicalizes `(min, max)` ordering, groupby + max(score) keeps the
+    highest score per canonical pair.
+- **Phase 5 streaming pipeline** in `goldenmatch.distributed.pipeline`:
+  `GOLDENMATCH_DISTRIBUTED_PIPELINE=2` activates `_run_phase5_pipeline`
+  — auto-configure → distributed score → distributed cluster (Phase 3
+  polymorphic) → annotate-with-cluster-id (broadcast dict via `ray.put`)
+  → distributed golden (Phase 4 polymorphic) → write_parquet. No entry-
+  side `take_all` on input. Phase 2 default cheat-line and Phase 4
+  scaffold (`=1`) remain available.
+- `output_path` kwarg on `run_dedupe_pipeline_distributed` writes the
+  golden output to parquet at end of pipeline.
+- **100M dataset generator:** `scripts/generate_phase5_dataset.py` —
+  synthetic 100M rows with ~5-member clusters + 10% typo injection.
+- **Multi-node Ray cluster docs:** `docs/distributed-ray-cluster-setup.md`
+  — sizing recommendations, `ray up` config, KubeRay equivalent, network
+  requirements, object store sizing, cost framing. Splink-posture:
+  documentation, not bootstrap automation.
+- **`bench-phase5-end2end` workflow job:** `workflow_dispatch` only,
+  gated on `run_phase5_bench=true`. Requires `RAY_ADDRESS` secret +
+  pre-uploaded `bench_100000000.parquet`. Runs on `ubuntu-latest`
+  client; Ray work happens on the remote cluster.
+- Kill criterion: 100M end-to-end < 30 min on a 4 × 16c/64GB worker
+  Ray cluster.
+- **Two-Phase WCC swap** (per GraphFrames maintainer advice on label-prop's
+  chain pathology) **deliberately deferred to Phase 5.5** — separate
+  spec/plan after we have real 100M chain-heavy graph data to verify
+  against. Label propagation stays the distributed clustering algorithm
+  with the existing routing threshold.
+
+### Added (Phase 4)
+- **Distributed golden record build:** `goldenmatch.distributed.golden`:
+  - `build_golden_records_distributed(multi_ds, rules, user_columns)` —
+    Ray Dataset `repartition(keys=["__cluster_id__"]) + map_batches`. Hash
+    partitioning co-locates each cluster's rows; no cross-partition splits.
+    `groupby.map_groups` not used — it re-enters Ray's streaming executor
+    and deadlocks in 2.54.
+  - `build_golden_records_smart` — cluster-count routing
+    (default 5M threshold; `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD` override).
+  - `materialize_golden_dataframe(golden_ds)` — adapter to `pl.DataFrame`.
+- `core.golden.build_golden_records_batch` polymorphic on Ray Dataset
+  input. In-memory `pl.DataFrame` callers byte-identical.
+- Custom field rules + `quality_scores` always route to in-memory
+  (closure serialization + N×K dict size considerations).
+- `run_dedupe_pipeline_distributed` env-gated Phase 4 path
+  (`GOLDENMATCH_DISTRIBUTED_PIPELINE=1`). Today the Phase 4 path retains
+  the take_all cheat-line; the polymorphic dispatch in build_clusters
+  (Phase 3) and build_golden_records_batch (Phase 4) handles Dataset
+  callers directly. Phase 5 retires the take_all once scoring distributes.
+- `scripts/bench_phase4_golden.py` + `bench-phase4-golden` workflow job.
+  Kill criterion: golden wall < 180s at 25M.
+
+### Added (Phase 3)
+- **Distributed clustering:** `goldenmatch.distributed.clustering`:
+  - `pairs_list_to_dataset(pairs)` — convert scored pairs to a Ray Dataset.
+  - `label_propagation(pairs_ds, all_ids, convergence_max_iterations=30)`
+    — iterative label-prop; raises `ConvergenceError` on non-convergence.
+  - `build_clusters_distributed(pairs_ds, all_ids, ...)` — returns a Ray
+    Dataset of `{member_id, cluster_id, cluster_size, oversized}` rows.
+    Falls back to driver-side scipy.csgraph on non-convergence with a
+    WARNING log.
+  - `materialize_cluster_dict(clusters_ds, pairs_ds)` — adapter to the
+    existing `dict[int, dict]` shape (Phase 4 removes this).
+- `core.cluster.build_clusters` polymorphic on Ray Dataset input via
+  `is_ray_dataset` dispatch; in-memory callers byte-identical.
+- `scripts/bench_phase3_cluster.py` + `bench-phase3-cluster` workflow job.
+- **Splink-style routing** in `build_clusters_distributed`:
+  pair count < 50M routes to driver-side scipy.csgraph;
+  >= 50M routes to distributed label propagation. Override via
+  `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD` env var or
+  `force_label_propagation=True`. Calibrated against run `26119800863`:
+  at 8.3M pairs, label-prop's per-iter Ray Dataset HashAggregate
+  overhead (10-20s/iter) dominates; scipy.csgraph on the same pair
+  count is seconds. Mirrors Splink's own pattern (DuckDB below scale,
+  Spark above). Label propagation's binding multi-node proof point is
+  Phase 5.
+- The Phase 2 cheat-line in `run_dedupe_pipeline_distributed` stays in
+  place — Phase 4 distributes golden and removes the materialize.
+
+### Added (Phase 2)
+- **Distributed controller:** `AutoConfigController.run` polymorphic on
+  `pl.DataFrame | ray.data.Dataset`. New modules under `goldenmatch.distributed`:
+  - `indicators` — `compute_column_priors_distributed`,
+    `estimate_sparse_match_signal_distributed` (bounded-sample collect).
+  - `sample` — `take_sample_distributed(ds, sample_cap)` returns a
+    Polars DataFrame for the iteration loop.
+  - `pipeline` — `run_dedupe_pipeline_distributed`: materialize-then-call
+    cheat-line for `_finalize` (Phase 3 removes the materialize).
+  - `_utils.is_ray_dataset` — module-name duck-type helper.
+- Dispatch shims in `core.indicators`: `dispatch_compute_column_priors`,
+  `dispatch_estimate_sparse_match_signal`.
+- `scripts/bench_phase2_controller.py` + `bench-phase2-controller`
+  workflow job. **Result, run 26107123459: 25M / 94.2s controller wall /
+  1.08 GB driver peak RSS.** Architectural goal MET (driver does not
+  materialize the full df). Wall budget realigned from < 30s to < 180s
+  after measurement — per-iter `_run_pipeline_sample` on bench-dataset-v1
+  is ~30s, independent of distributed wiring. Phase 3 distributes the
+  per-iteration pipeline to remove that cost.
+
+### Added
+- **Distributed Phase 1: partition-aware data loader on Ray Datasets.**
+  Opt-in via `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` env var combined with
+  `backend="ray"`. New module `goldenmatch.distributed`:
+  - `read_csv_partitioned(path, n_partitions, schema=None)` — returns a
+    lazy `ray.data.Dataset` partitioned into N blocks. Driver never holds
+    the full input frame. Supports single path or list of paths.
+  - `apply_transforms_distributed(ds, transforms)` — runs a list of
+    `TransformPlan`s per-partition via `ds.map_batches(batch_format="pyarrow")`.
+  - `TransformPlan` (in `goldenmatch.distributed.transforms`) — frozen
+    dataclass replacing closure-based transforms from `core/transform.py`.
+    Round-trips cleanly across Ray worker boundaries. Ops: `lower`, `upper`,
+    `strip`, `strip_punctuation`, `nfkc`.
+  - `_load_input_frames(config)` in `core/pipeline.py` — env-gated branch
+    point. Routes to the distributed loader only when both `backend="ray"`
+    AND the env flag are set; otherwise legacy `core.ingest.load_files`.
+- **Phase 1 kill-criterion bench:** `scripts/bench_phase1_loader.py` +
+  `bench-phase1-loader` job in `.github/workflows/bench-distributed-stack.yml`.
+  Kill criterion: driver peak RSS < 8 GB at 25M rows on a 16c/64GB runner.
+- **`core/transform.build_transform(column, op)`** back-compat shim: returns a
+  closure that delegates to `apply_plan(df, TransformPlan(column, op))`.
+  Callers still consuming the callable-style transform get equivalent output.
+
+### Notes
+- Phase 1 is plumbing only — `_load_input_frames` is NOT yet wired into the
+  default pipeline path. Production runs without the env flag continue
+  through `core.ingest.load_files` byte-for-byte. Phases 2-5 (controller
+  iteration on distributed samples, distributed clustering, distributed
+  golden, cluster orchestration) remain TODO. See
+  `docs/superpowers/specs/2026-05-19-ray-splink-spark-parity-roadmap.md`.
+- The 25M-on-bucket single-node path landed in the same window (run
+  26095134836, 6.5 min / 57.7 GB peak RSS) and is the supported
+  recommendation for the 5M-25M lane. Phase 1 is value-add for 50M+
+  workloads, not a prerequisite for 25M.
+
 ## [1.16.0] - 2026-05-18
 
 <!-- README-callout

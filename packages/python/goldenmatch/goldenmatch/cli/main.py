@@ -317,6 +317,12 @@ def profile_cmd(
     files: list[str] = typer.Argument(..., help="File(s) to profile"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed per-column info"),
     suggest_fixes: bool = typer.Option(False, "--suggest-fixes", help="Show what auto-fix would do (dry run)"),
+    exclusions: bool = typer.Option(
+        False, "--exclusions",
+        help="Show GoldenCheck auto-config column exclusions (#404). "
+             "Lists columns auto-config will skip (audit timestamps, "
+             "foreign IDs, sentinel values, etc) and why.",
+    ),
 ) -> None:
     """Scan input files and generate a data quality report."""
     from pathlib import Path
@@ -350,3 +356,31 @@ def profile_cmd(
                     console.print(f"  [green]{fix['fix']}[/green]: {fix['detail']}")
             if not any_fix:
                 console.print("  [dim]No fixes needed.[/dim]")
+
+        if exclusions:
+            from goldenmatch.core.quality_exclusions import (
+                detect_autoconfig_exclusions,
+            )
+
+            excluded = detect_autoconfig_exclusions(df)
+            console.print(
+                "\n[bold yellow]Auto-config exclusions (#404):[/bold yellow]"
+            )
+            if not excluded:
+                console.print(
+                    "  [dim]No columns excluded -- auto-config will use "
+                    "every column.[/dim]"
+                )
+            else:
+                for ec in excluded:
+                    console.print(
+                        f"  [red]{ec.column}[/red] "
+                        f"[dim]({ec.detector})[/dim]: {ec.reason}"
+                    )
+                console.print(
+                    "\n  [dim]Override via "
+                    "GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE=col1,col2 "
+                    "to rescue, or "
+                    "GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE=col1,col2 "
+                    "to add more.[/dim]"
+                )

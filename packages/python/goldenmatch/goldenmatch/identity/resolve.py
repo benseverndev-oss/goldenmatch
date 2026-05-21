@@ -173,6 +173,34 @@ def resolve_clusters(
             continue
         pair_score_by_recpair[canon_record_pair(ra, rb)] = float(s)
 
+    # 2b. Pre-flight bulk lookup: figure out which clusters are entirely
+    # brand-new (no member's record_id has an existing entity_id). Those
+    # clusters can be bulk-flushed via COPY at the end of the loop on
+    # Postgres backends, avoiding ~5-10 round-trips per cluster. The
+    # 500K-cluster bench (#368 Phase 6) drops from a 60-min timeout to
+    # ~minutes with this fast-path.
+    all_record_ids: list[str] = []
+    for info in clusters.values():
+        for m in info.get("members") or []:
+            rid = rowid_to_recid.get(int(m))
+            if rid:
+                all_record_ids.append(rid)
+    preflight_existing: dict[str, str] = (
+        store.lookup_entity_ids(all_record_ids) if all_record_ids else {}
+    )
+
+    # Bulk-path eligibility: postgres-only, no overlap with existing
+    # identities, no weak-conflict edges (the conflict path mutates per
+    # cluster and is rare anyway). Anything ineligible falls through to
+    # the slow per-row loop, which preserves correctness for the
+    # absorb / merge / conflict-detection branches.
+    use_bulk_fast_path = getattr(store, "_backend", None) == "postgres"
+    bulk_node_rows: list[dict[str, Any]] = []
+    bulk_record_rows: list[dict[str, Any]] = []
+    bulk_edge_rows: list[dict[str, Any]] = []
+    bulk_event_rows: list[dict[str, Any]] = []
+    bulk_cluster_ids: set = set()
+
     # 3. Iterate clusters.
     for cluster_id, info in clusters.items():
         members: list[int] = list(info.get("members") or [])
@@ -187,8 +215,90 @@ def resolve_clusters(
             continue
 
         # 3a. Look up existing identities for these records.
-        existing = store.lookup_entity_ids(record_ids)
+        # Use the pre-flight dict instead of per-cluster SELECT.
+        existing = {
+            rid: preflight_existing[rid]
+            for rid in record_ids if rid in preflight_existing
+        }
         unique_entities = list(set(existing.values()))
+
+        # 3a'. Bulk fast-path: brand-new cluster on postgres, no weak
+        # conflict edge -> accumulate rows for bulk flush, skip the
+        # per-row writes for this cluster.
+        cluster_conf_check = _cluster_confidence(info)
+        is_weak = (
+            weak_confidence_threshold > 0
+            and cluster_conf_check is not None
+            and cluster_conf_check < weak_confidence_threshold
+            and info.get("bottleneck_pair") is not None
+        )
+        if (
+            use_bulk_fast_path
+            and not unique_entities
+            and not is_weak
+        ):
+            entity_id = new_entity_id()
+            now = datetime.now()
+            golden = _golden_record_from_members(df, members)
+            bulk_node_rows.append({
+                "entity_id": entity_id,
+                "status": IdentityStatus.ACTIVE.value,
+                "merged_into": None,
+                "golden_record": json.dumps(golden, default=str) if golden else None,
+                "confidence": cluster_conf_check,
+                "dataset": dataset,
+                "created_at": now,
+                "updated_at": now,
+            })
+            for member in members:
+                rid = rowid_to_recid.get(member)
+                if rid is None:
+                    continue
+                bulk_record_rows.append({
+                    "record_id": rid,
+                    "source": rowid_to_source[member],
+                    "source_pk": rowid_to_pk[member],
+                    "record_hash": rowid_to_hash[member],
+                    "entity_id": entity_id,
+                    "dataset": dataset,
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                })
+                summary.records_upserted += 1
+            pair_scores = info.get("pair_scores") or {}
+            for pair_key, score in pair_scores.items():
+                if isinstance(pair_key, tuple) and len(pair_key) == 2:
+                    a, b = pair_key
+                else:
+                    continue
+                ra = rowid_to_recid.get(int(a))
+                rb = rowid_to_recid.get(int(b))
+                if not ra or not rb:
+                    continue
+                bulk_edge_rows.append({
+                    "entity_id": entity_id,
+                    "record_a_id": ra,
+                    "record_b_id": rb,
+                    "kind": EdgeKind.SAME_AS.value,
+                    "score": float(score),
+                    "matchkey_name": matchkey_name,
+                    "run_name": run_name,
+                    "dataset": dataset,
+                    "recorded_at": now,
+                })
+                summary.edges_added += 1
+            bulk_event_rows.append({
+                "entity_id": entity_id,
+                "kind": EventKind.CREATED.value,
+                "run_name": run_name,
+                "dataset": dataset,
+                "recorded_at": now,
+            })
+            summary.events_emitted += 1
+            summary.created += 1
+            bulk_cluster_ids.add(cluster_id)
+            continue
+
 
         if not unique_entities:
             # Brand-new identity.
@@ -413,6 +523,74 @@ def resolve_clusters(
                         dataset=dataset,
                     ))
                     summary.conflicts_flagged += 1
+
+    # 3z. Flush bulk-fast-path accumulators in one COPY each. Order
+    # matters: identities first (so the source_records FK is valid),
+    # then records, then edges, then events.
+    if use_bulk_fast_path and bulk_node_rows:
+        nodes_df = pl.DataFrame(
+            bulk_node_rows,
+            schema={
+                "entity_id": pl.Utf8,
+                "status": pl.Utf8,
+                "merged_into": pl.Utf8,
+                "golden_record": pl.Utf8,
+                "confidence": pl.Float64,
+                "dataset": pl.Utf8,
+                "created_at": pl.Datetime,
+                "updated_at": pl.Datetime,
+            },
+        )
+        store.bulk_upsert_identities(nodes_df)
+        if bulk_record_rows:
+            records_df = pl.DataFrame(
+                bulk_record_rows,
+                schema={
+                    "record_id": pl.Utf8,
+                    "source": pl.Utf8,
+                    "source_pk": pl.Utf8,
+                    "record_hash": pl.Utf8,
+                    "entity_id": pl.Utf8,
+                    "dataset": pl.Utf8,
+                    "first_seen_at": pl.Datetime,
+                    "last_seen_at": pl.Datetime,
+                },
+            )
+            store.bulk_upsert_records(records_df)
+        if bulk_edge_rows:
+            edges_df = pl.DataFrame(
+                bulk_edge_rows,
+                schema={
+                    "entity_id": pl.Utf8,
+                    "record_a_id": pl.Utf8,
+                    "record_b_id": pl.Utf8,
+                    "kind": pl.Utf8,
+                    "score": pl.Float64,
+                    "matchkey_name": pl.Utf8,
+                    "run_name": pl.Utf8,
+                    "dataset": pl.Utf8,
+                    "recorded_at": pl.Datetime,
+                },
+            )
+            store.bulk_add_edges(edges_df)
+        if bulk_event_rows:
+            events_df = pl.DataFrame(
+                bulk_event_rows,
+                schema={
+                    "entity_id": pl.Utf8,
+                    "kind": pl.Utf8,
+                    "run_name": pl.Utf8,
+                    "dataset": pl.Utf8,
+                    "recorded_at": pl.Datetime,
+                },
+            )
+            store.bulk_emit_events(events_df)
+        log.info(
+            "resolve_clusters bulk fast-path: %d clusters / %d nodes / "
+            "%d records / %d edges / %d events flushed in 4 COPY batches",
+            len(bulk_cluster_ids), len(bulk_node_rows), len(bulk_record_rows),
+            len(bulk_edge_rows), len(bulk_event_rows),
+        )
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they

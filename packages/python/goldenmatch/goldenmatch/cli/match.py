@@ -37,6 +37,14 @@ def match_cmd(
     run_name: str | None = typer.Option(None, "--run-name", help="Run name for output files"),
     auto_fix: bool = typer.Option(False, "--auto-fix", help="Run auto-fix before matching"),
     auto_block: bool = typer.Option(False, "--auto-block", help="Auto-suggest blocking keys"),
+    exclude_columns: str | None = typer.Option(
+        None, "--exclude-columns",
+        help=(
+            "Comma-separated columns to skip across the suite. "
+            "GoldenMatch never picks these for matchkeys/blocking; "
+            "GoldenFlow transforms skip them entirely."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ) -> None:
@@ -52,6 +60,18 @@ def match_cmd(
         if not quiet:
             console.print(f"[red]Config error:[/red] {exc}")
         raise typer.Exit(code=1)
+
+    # Merge --exclude-columns into config (additive with YAML field).
+    from goldenmatch._exclusions_schema import merge_exclude_columns_into_config
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+    _resolved_excludes = merge_exclude_columns_into_config(cfg, exclude_columns)
+    if _resolved_excludes and not quiet:
+        console.print(
+            f"[dim]exclude_columns ({len(_resolved_excludes)}): "
+            f"{', '.join(_resolved_excludes)}[/dim]",
+        )
+    if _resolved_excludes:
+        _RUNTIME_EXCLUDE_COLUMNS.set(list(_resolved_excludes))
 
     # ── Preview mode ──
     if preview:

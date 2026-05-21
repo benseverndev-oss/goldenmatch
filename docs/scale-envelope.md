@@ -16,10 +16,11 @@ backend choice does at every scale we have measured.
 | Rows         | Backend             | Notes                                                |
 |--------------|---------------------|------------------------------------------------------|
 | < 500K       | `polars` (default)  | In-memory. Fastest per record. OOM ceiling near 500K.|
-| 500K - 5M (16c / 32+ GB) | **`bucket`** (recommended) | In-process hash-bucketed scorer. **5M dedupe in 9.94 min / 6.4 GB peak RSS** on a 16c/64GB node. Auto-picked by the v3 planner. PRs #310-#326. |
+| 500K - 5M (16c / 32+ GB) | **`bucket`** | In-process hash-bucketed scorer. **5M dedupe in 9.94 min / 6.4 GB peak RSS** on a 16c/64GB node. Auto-picked by the v3 planner. PRs #310-#326. |
 | 500K - 5M (4c / 16GB)    | `chunked` | Streaming `scan_csv().slice()` + Polars-native cross-chunk join. 5M in ~50 min on `ubuntu-latest` (v1.15). |
-| 5M - 50M     | `duckdb`            | Out-of-core. Single machine. No OOM ceiling.         |
-| >= 50M       | `ray` (opt-in)      | Distributed block scoring. v1.16+ requires `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` or explicit `backend="ray"` after the Distributed Plan v1 kill criterion failure (PR #318). |
+| 5M - 25M (16c / 64 GB)   | **`bucket`** (recommended) | Same single-node path scales linearly with memory. **25M dedupe in 6.5 min / 57.7 GB peak RSS** on a 16c/64GB node after the golden-streaming (PR #334) + tracemalloc-drop + UF-state-release (PR #335) fixes. Run 26095134836. |
+| 25M - 50M    | `duckdb`            | Out-of-core. Single machine. No OOM ceiling. Slower per record than bucket — picks up where the 64 GB box runs out of headroom. |
+| >= 50M       | `ray` (opt-in, not Splink-Spark parity) | Distributed block scoring only — data prep + clustering + golden still run single-node on the driver. v1.16+ requires `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` or explicit `backend="ray"` after the Distributed Plan v1 kill criterion failure (PR #318). See `docs/distributed-ray-roadmap.md` for the 5-phase plan to bring this to Splink-Spark equivalence. |
 
 Switching backend changes the storage and parallelism model. It does not
 fix a bad blocking key. See "Block-size failure modes" below.
@@ -32,9 +33,12 @@ fix a bad blocking key. See "Block-size failure modes" below.
 flowchart TD
     A[Start: how many rows?] --> B{rows < 500K?}
     B -->|yes| C[Use polars default]
-    B -->|no| D{rows < 50M?}
+    B -->|no| D2{rows < 25M and >= 64GB RAM?}
+    D2 -->|yes| E2[Use bucket backend]
+    D2 -->|no| D{rows < 50M?}
     D -->|yes| E[Use duckdb backend]
     D -->|no| F[Use ray backend]
+    E2 --> G
     C --> G{auto-config OK?}
     E --> G
     F --> G

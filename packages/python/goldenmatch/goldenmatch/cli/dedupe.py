@@ -98,6 +98,16 @@ def dedupe_cmd(
     llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
     llm_max_labels: int = typer.Option(500, "--llm-max-labels", help="Max pairs to label with LLM"),
     backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    exclude_columns: str | None = typer.Option(
+        None, "--exclude-columns",
+        help=(
+            "Comma-separated columns to skip across the suite. "
+            "GoldenMatch auto-config never picks these for "
+            "matchkeys/blocking; GoldenFlow transforms skip them "
+            "entirely. Layered with config.exclude_columns when "
+            "both are present."
+        ),
+    ),
     show_controller: bool = typer.Option(
         True,
         "--show-controller/--hide-controller",
@@ -247,6 +257,24 @@ def dedupe_cmd(
     # Resolve column maps from config input.files section
     file_specs = _resolve_column_maps(parsed_files, cfg)
 
+    # Merge --exclude-columns into the resolved config. Mutation happens
+    # AFTER auto-config has built the config (if zero-config path) so
+    # detector exclusions are already in place; user CLI exclusions
+    # layer on top additively. See spec
+    # docs/superpowers/specs/2026-05-21-exclude-columns-surfaces-design.md.
+    from goldenmatch._exclusions_schema import merge_exclude_columns_into_config
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+    _resolved_excludes = merge_exclude_columns_into_config(cfg, exclude_columns)
+    if _resolved_excludes and not quiet:
+        console.print(
+            f"[dim]exclude_columns ({len(_resolved_excludes)}): "
+            f"{', '.join(_resolved_excludes)}[/dim]",
+        )
+    _excl_token = (
+        _RUNTIME_EXCLUDE_COLUMNS.set(list(_resolved_excludes))
+        if _resolved_excludes else None
+    )
+
     # Run dedupe
     try:
         from goldenmatch.core.pipeline import run_dedupe
@@ -265,9 +293,13 @@ def dedupe_cmd(
             llm_max_labels=llm_max_labels,
         )
     except Exception as exc:
+        if _excl_token is not None:
+            _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
         if not quiet:
             console.print(f"[red]Runtime error:[/red] {exc}")
         raise typer.Exit(code=3)
+    if _excl_token is not None:
+        _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
 
     # Show AutoConfigController telemetry before the report. We only render
     # when the controller actually ran in this command (i.e., auto-config
