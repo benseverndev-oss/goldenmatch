@@ -694,11 +694,23 @@ class AutoConfigController:
         # NPI blocking key). The downstream sync would scan every row
         # without producing useful candidate pairs.
         #
+        # Gated on n_rows >= REFUSE_AT_N (same threshold as the existing
+        # RED-health guard) so small test fixtures + ad-hoc small dedupes
+        # don't trip the gate. Sub-100K-row runs are inherently
+        # degenerate-shaped (any blocking strategy looks "thin" because
+        # the data is small) but they're also cheap to run regardless,
+        # so we let them through silently as today.
+        #
         # Estimate avg block size on the sample, scale to full population.
         # Trigger only when confidence_required (default True) -- caller
         # opts out via confidence_required=False to keep today's
         # "warn-and-run" behavior on degenerate blocking.
-        if confidence_required and best_entry.config.blocking and best_entry.config.blocking.keys:
+        if (
+            confidence_required
+            and n_rows >= REFUSE_AT_N
+            and best_entry.config.blocking
+            and best_entry.config.blocking.keys
+        ):
             from goldenmatch.core.blocking_candidates import (
                 degenerate_guard_threshold,
                 estimate_avg_block_size,
