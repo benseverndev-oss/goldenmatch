@@ -312,6 +312,19 @@ def _full_scan_pipeline(
     df = df_or_lf.collect() if isinstance(df_or_lf, pl.LazyFrame) else df_or_lf
     logger.info("Pipeline: materialized %d rows x %d cols", df.height, df.width)
 
+    # dedupe_df adds its own __source__ and __row_id__ unconditionally
+    # (core/pipeline.py::run_dedupe_df → _add_row_ids). run_sync attaches
+    # these upstream so the legacy hand-rolled pipeline could correlate
+    # rows; the dispatch path doesn't need them and re-adding via
+    # with_columns raises "duplicate column name __row_id__" (#394).
+    bookkeeping_cols = [c for c in ("__row_id__", "__source__") if c in df.columns]
+    if bookkeeping_cols:
+        df = df.drop(bookkeeping_cols)
+        logger.info(
+            "Pipeline: dropped pre-existing bookkeeping cols %s "
+            "(dedupe_df re-adds internally)", bookkeeping_cols,
+        )
+
     logger.info("Pipeline: dispatching to dedupe_df (routes through v3 planner)...")
     result = dedupe_df(df, config=config, confidence_required=False)
     clusters = result.clusters
