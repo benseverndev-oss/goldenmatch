@@ -892,43 +892,41 @@ class AutoConfigController:
 
             # Keys are present -- run the estimator-based guard. (Or keys
             # absent but profile not RED -- existing trust-the-profile path.)
-            if _blocking is None or not getattr(_blocking, "keys", None):
-                # Empty keys + profile not RED -- skip the rest of the
-                # guard. Pre-existing path (trust the profile).
-                pass
-            else:
-                _block_fields: list[str] = []
+            # #417 v3: when blocking.keys is empty, the downstream
+            # streaming sync derives effective blocking from
+            # matchkeys[0].fields (the user reported this behavior
+            # producing a mega-block when matchkey is a sparse identity
+            # column like NPI). Inspect those fields here too so the
+            # guard sees the real blocking shape, not just the
+            # explicit config.blocking.keys.
+            _block_fields: list[str] = []
+            if _blocking is not None and getattr(_blocking, "keys", None):
                 for _key in _blocking.keys:
                     if _key.fields:
                         _block_fields.extend(_key.fields)
-                if _block_fields:
-                    _avg_block_size = estimate_avg_block_size(
-                        sample, _block_fields, n_rows,
-                    )
-                    _too_small = _avg_block_size < degenerate_guard_threshold()
-                    # #417: mega-block case. When every row hashes to the
-                    # same blocking key, avg_block_size == n_rows. Catch it
-                    # before the downstream sync wedges in O(n^2) scoring.
-                    _too_large = _avg_block_size > degenerate_guard_max_avg_block_size()
-                    if _too_small or _too_large:
-                        logger.warning(
-                            "BLOCKING_DEGENERATE guard fired: avg_block_size=%.1f "
-                            "(too_small=%s, too_large=%s, fields=%s). See #417.",
-                            _avg_block_size, _too_small, _too_large, _block_fields,
-                        )
-                        _LAST_CONTROLLER_RUN.set(history)
-                        raise ControllerNotConfidentError(
-                            n_rows=n_rows,
-                            failing_sub_profile="blocking",
-                            stop_reason=StopReason.BLOCKING_DEGENERATE.name,
-                        )
-                elif _profile_red:
-                    # Keys exist but every key has empty `fields` AND
-                    # profile is RED -- another degenerate shape.
+            elif _profile_red:
+                # No explicit blocking.keys; fall back to matchkeys[0]
+                # so we catch the implicit-blocking degenerate case.
+                _mks = best_entry.config.get_matchkeys() or []
+                if _mks and _mks[0].fields:
+                    _block_fields = [
+                        f.field for f in _mks[0].fields if f.field
+                    ]
+
+            if _block_fields:
+                _avg_block_size = estimate_avg_block_size(
+                    sample, _block_fields, n_rows,
+                )
+                _too_small = _avg_block_size < degenerate_guard_threshold()
+                # #417: mega-block case. When every row hashes to the
+                # same blocking key, avg_block_size == n_rows. Catch it
+                # before the downstream sync wedges in O(n^2) scoring.
+                _too_large = _avg_block_size > degenerate_guard_max_avg_block_size()
+                if _too_small or _too_large:
                     logger.warning(
-                        "BLOCKING_DEGENERATE guard fired: blocking keys present "
-                        "but every key has empty `fields` at n_rows=%d. See #417.",
-                        n_rows,
+                        "BLOCKING_DEGENERATE guard fired: avg_block_size=%.1f "
+                        "(too_small=%s, too_large=%s, fields=%s). See #417.",
+                        _avg_block_size, _too_small, _too_large, _block_fields,
                     )
                     _LAST_CONTROLLER_RUN.set(history)
                     raise ControllerNotConfidentError(
@@ -936,6 +934,20 @@ class AutoConfigController:
                         failing_sub_profile="blocking",
                         stop_reason=StopReason.BLOCKING_DEGENERATE.name,
                     )
+            elif _blocking is not None and _blocking.keys and _profile_red:
+                # Keys exist but every key has empty `fields` AND profile
+                # is RED -- another degenerate shape.
+                logger.warning(
+                    "BLOCKING_DEGENERATE guard fired: blocking keys present "
+                    "but every key has empty `fields` at n_rows=%d. See #417.",
+                    n_rows,
+                )
+                _LAST_CONTROLLER_RUN.set(history)
+                raise ControllerNotConfidentError(
+                    n_rows=n_rows,
+                    failing_sub_profile="blocking",
+                    stop_reason=StopReason.BLOCKING_DEGENERATE.name,
+                )
 
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
