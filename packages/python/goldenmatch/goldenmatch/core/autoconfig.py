@@ -1079,12 +1079,53 @@ def _check_source_overlap(df: pl.DataFrame, col: str) -> float:
 
 # ── Blocking generation ────────────────────────────────────────────────────
 
+def _make_quality_column_profile(
+    autoconfig_profile: ColumnProfile,
+    n_rows: int,
+) -> Any:
+    """Bridge ``autoconfig.ColumnProfile`` -> ``quality_exclusions.ColumnProfile``.
+
+    The two dataclasses share ``cardinality_ratio`` + ``null_rate`` +
+    ``dtype`` but autoconfig's version doesn't carry ``distinct_count``
+    or ``mean_string_length``. Project them from the available fields.
+
+    Used to feed ``classify_column_role`` / ``find_composite_blocking_keys``
+    from inside ``build_blocking`` without a cross-module refactor.
+    """
+    from goldenmatch.core.quality_exclusions import (
+        ColumnProfile as _QualityColumnProfile,
+    )
+    distinct = max(int(autoconfig_profile.cardinality_ratio * max(n_rows, 1)), 1)
+    return _QualityColumnProfile(
+        cardinality_ratio=autoconfig_profile.cardinality_ratio,
+        null_rate=autoconfig_profile.null_rate,
+        distinct_count=distinct,
+        dtype=autoconfig_profile.dtype,
+        mean_string_length=(
+            autoconfig_profile.avg_len if autoconfig_profile.avg_len > 0 else None
+        ),
+    )
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
     llm_provider: str | None = None,
+    *,
+    n_rows_full: int | None = None,
 ) -> BlockingConfig:
-    """Generate blocking config from column profiles."""
+    """Generate blocking config from column profiles.
+
+    Args:
+        profiles: per-column profiles from ``profile_columns``.
+        df: the (typically sample) frame.
+        llm_provider: optional LLM provider for blocking suggestions.
+        n_rows_full: full-population row count for the input data.
+            When set AND larger than ``df.height``, drives Chao1 sample-
+            size correction in the blocking-candidate gate (#410). When
+            None, defaults to ``df.height`` (backward-compat for direct
+            callers like tests that pass a full-table df).
+    """
     # Filter out high-null columns (>20% null) — they create oversized null blocks
     # that cause O(N^2) comparison explosions
     max_null_rate = 0.20
@@ -1105,31 +1146,53 @@ def build_blocking(
     # blocks. The new gate (default 0.5) filters those out; env-overridable
     # via GOLDENMATCH_BLOCKING_MAX_RATIO. NPI keeps being picked as a
     # matchkey upstream — only its blocking role is denied.
-    from goldenmatch.core.blocking_candidates import _blocking_max_ratio
+    from goldenmatch.core.blocking_candidates import (
+        _blocking_max_ratio,
+        scale_cardinality_ratio_to_full_population,
+    )
     blocking_max_ratio = _blocking_max_ratio()
+    # #410: project sample cardinality to full-population. Auto-config
+    # profiles run on a small sample; at sample N=1000, real
+    # mid-cardinality columns (zip) look near-unique. Chao1 correction
+    # uses the sample's distinct count + sample_n vs full_n to project.
+    effective_n_full = n_rows_full if n_rows_full is not None else df.height
+    sample_n = max(df.height, 1)
+
+    def _projected_ratio(p: ColumnProfile) -> float:
+        """Sample-corrected cardinality_ratio for the gate."""
+        if effective_n_full <= sample_n:
+            return p.cardinality_ratio
+        sample_distinct = max(int(p.cardinality_ratio * sample_n), 1)
+        return scale_cardinality_ratio_to_full_population(
+            sample_distinct=sample_distinct,
+            sample_n_rows=sample_n,
+            full_n_rows=effective_n_full,
+        )
+
     exact_cols = [
         p for p in profiles
         if p.col_type in ("email", "phone", "zip", "identifier", "year")
         and _null_rate(p.name) <= NULL_RATE_CEILING  # Tier 2: skip high-null candidates
-        and p.cardinality_ratio <= blocking_max_ratio
+        and _projected_ratio(p) <= blocking_max_ratio
         and _check_source_overlap(df, p.name) > 0.0
     ]
-    # Log columns rejected by the cardinality gate (#408).
+    # Log columns rejected by the cardinality gate (#408 / #410).
     for p in profiles:
-        if (p.col_type in ("email", "phone", "zip", "identifier", "year")
-                and p.cardinality_ratio > blocking_max_ratio
-                and p.cardinality_ratio < 1.0):
+        if p.col_type not in ("email", "phone", "zip", "identifier", "year"):
+            continue
+        projected = _projected_ratio(p)
+        if projected > blocking_max_ratio and projected < 1.0:
             logger.info(
-                "Blocking candidate rejected: %r (cardinality=%.3f > %.2f); "
-                "would produce near-singleton blocks. Kept for matchkey "
-                "consideration. See #408.",
-                p.name, p.cardinality_ratio, blocking_max_ratio,
+                "Blocking candidate rejected: %r (projected_cardinality=%.3f > %.2f, "
+                "sample_n=%d, full_n=%d); would produce near-singleton blocks. "
+                "Kept for matchkey consideration. See #408/#410.",
+                p.name, projected, blocking_max_ratio, sample_n, effective_n_full,
             )
     # Log skipped columns (cross-source overlap).
     for p in profiles:
         if (p.col_type in ("email", "phone", "zip", "identifier", "year")
                 and _null_rate(p.name) <= max_null_rate
-                and p.cardinality_ratio <= blocking_max_ratio
+                and _projected_ratio(p) <= blocking_max_ratio
                 and _check_source_overlap(df, p.name) == 0.0):
             sources = df["__source__"].unique().to_list() if "__source__" in df.columns else []
             logger.warning(
@@ -1269,6 +1332,48 @@ def build_blocking(
                 BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
                 BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
             ],
+            max_block_size=max_safe_block,
+            skip_oversized=True,
+        )
+
+    # #410: composite-blocking fallback. After exact_cols / name_cols
+    # produce no winner, try a 2-column composite from mid-cardinality
+    # blocking candidates (zip + last_name on healthcare data). This
+    # beats the text_cols canopy / first_string fallback for any
+    # structured dataset.
+    import dataclasses as _dc
+
+    from goldenmatch.core.blocking_candidates import (
+        classify_column_role,
+        find_composite_blocking_keys,
+    )
+    column_roles = []
+    for p in profiles:
+        if _check_source_overlap(df, p.name) <= 0.0:
+            continue
+        qcp = _make_quality_column_profile(p, effective_n_full)
+        role = classify_column_role(
+            qcp,
+            sample_n_rows=sample_n,
+            full_n_rows=effective_n_full,
+        )
+        column_roles.append(_dc.replace(role, name=p.name))
+
+    composite = find_composite_blocking_keys(df, column_roles)
+    if composite is not None:
+        try:
+            joint_card = int(df.select(composite).n_unique())
+        except Exception:  # pragma: no cover -- defensive
+            joint_card = 1
+        avg_block = max(effective_n_full // max(joint_card, 1), 1)
+        logger.info(
+            "Composite blocking: %s -> ~%d rows/block (joint cardinality %d). See #410.",
+            composite, avg_block, joint_card,
+        )
+        return BlockingConfig(
+            keys=[BlockingKeyConfig(
+                fields=list(composite), transforms=["lowercase"],
+            )],
             max_block_size=max_safe_block,
             skip_oversized=True,
         )
@@ -1843,9 +1948,16 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
                 cardinality_ratio=cardinality_ratio, avg_len=0,
             ))
 
-    # Build blocking (required for weighted/probabilistic matchkeys)
+    # Build blocking (required for weighted/probabilistic matchkeys).
+    # #410: thread total_rows so the cardinality gate + composite search
+    # can sample-correct via Chao1 when the controller passed us a sub-
+    # sample of a much larger frame.
     has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in matchkeys)
-    blocking = build_blocking(profiles, df, llm_provider=llm_provider) if has_fuzzy else None
+    blocking = build_blocking(
+        profiles, df,
+        llm_provider=llm_provider,
+        n_rows_full=total_rows,
+    ) if has_fuzzy else None
     # At 1M+ rows, swap static blocking for adaptive so blocker.py's
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.

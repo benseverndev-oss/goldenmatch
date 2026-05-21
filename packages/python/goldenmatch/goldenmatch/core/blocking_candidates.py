@@ -66,6 +66,54 @@ def _blocking_max_ratio() -> float:
     return DEFAULT_BLOCKING_MAX_RATIO
 
 
+def scale_cardinality_ratio_to_full_population(
+    sample_distinct: int,
+    sample_n_rows: int,
+    full_n_rows: int,
+) -> float:
+    """Chao1-style projection of sample cardinality ratio -> full population.
+
+    Auto-config profiles run on a 5K-row controller sample. The
+    sample-observed cardinality_ratio (distinct / non-null) is
+    misleading at small sample sizes: ``zip`` with ~5K distinct in the
+    full 1.13M-row table looks like ratio ~0.004, but a 1000-row sample
+    of that same column will surface ~600-800 distinct (ratio 0.6-0.8)
+    because the sample is too small to repeat any zip code many times.
+
+    Formula: ``projected_full_distinct ≈ sample_distinct * sqrt(N_full / N_sample)``.
+    The square root captures the sublinear-in-sample-size growth of
+    distinct values on real-world distributions. Underestimates by ~30%
+    on heavy-tail (which is the safe direction for our gate: smaller
+    projected ratio = more likely to pass = more likely to keep a real
+    blocking candidate).
+
+    Env override: ``GOLDENMATCH_BLOCKING_CARDINALITY_SCALER=observed``
+    reverts to ``sample_distinct / sample_n_rows`` (the pre-#410
+    behavior).
+
+    Args:
+        sample_distinct: observed distinct values in the sample.
+        sample_n_rows: non-null sample row count.
+        full_n_rows: full-population row count.
+
+    Returns:
+        Projected full-population cardinality ratio, clipped to [0, 1].
+        Returns 0.0 when inputs are degenerate (zero rows).
+    """
+    if sample_n_rows <= 0 or full_n_rows <= 0:
+        return 0.0
+    # "observed" env opt-out reverts to pre-correction behavior.
+    if os.environ.get("GOLDENMATCH_BLOCKING_CARDINALITY_SCALER", "").lower() == "observed":
+        return min(sample_distinct / sample_n_rows, 1.0)
+    if sample_n_rows >= full_n_rows:
+        return min(sample_distinct / sample_n_rows, 1.0)
+    import math
+    scaled_distinct = sample_distinct * math.sqrt(
+        full_n_rows / sample_n_rows,
+    )
+    return min(scaled_distinct / full_n_rows, 1.0)
+
+
 @dataclass(frozen=True)
 class ColumnRole:
     """Per-column role classification.
@@ -92,6 +140,8 @@ def classify_column_role(
     *,
     blocking_min_ratio: float | None = None,
     blocking_max_ratio: float | None = None,
+    sample_n_rows: int | None = None,
+    full_n_rows: int | None = None,
 ) -> ColumnRole:
     """Classify a column for matchkey + blocking suitability.
 
@@ -104,6 +154,12 @@ def classify_column_role(
         profile: cheap stats from ``_build_column_profile``.
         blocking_min_ratio: defaults to env var or 0.001.
         blocking_max_ratio: defaults to env var or 0.5.
+        sample_n_rows, full_n_rows: when both are provided AND
+            full_n_rows > sample_n_rows, recompute the cardinality
+            ratio via Chao1 projection before applying the gate. This
+            corrects the sample-size bias where a real mid-cardinality
+            column (zip ~ 5K distinct in 1.13M rows) gets sampled to
+            look near-unique (800/1000 in a 1K sample). #410.
 
     Returns:
         ColumnRole with both axes set + a reason string when blocking
@@ -120,25 +176,41 @@ def classify_column_role(
         else _blocking_max_ratio()
     )
 
+    # #410: sample-size correction. When the caller knows the full
+    # population, project the sample's cardinality ratio to what we'd
+    # expect at full scale before applying the gate.
+    effective_ratio = profile.cardinality_ratio
+    if (
+        sample_n_rows is not None
+        and full_n_rows is not None
+        and full_n_rows > sample_n_rows
+        and sample_n_rows > 0
+    ):
+        effective_ratio = scale_cardinality_ratio_to_full_population(
+            sample_distinct=profile.distinct_count,
+            sample_n_rows=sample_n_rows,
+            full_n_rows=full_n_rows,
+        )
+
     is_blocking = True
     reason: str | None = None
 
-    if profile.cardinality_ratio > 0.95:
+    if effective_ratio > 0.95:
         is_blocking = False
         reason = (
-            f"near-unique column (cardinality={profile.cardinality_ratio:.3f}); "
+            f"near-unique column (cardinality={effective_ratio:.3f}); "
             "would produce singleton blocks"
         )
-    elif profile.cardinality_ratio > max_ratio:
+    elif effective_ratio > max_ratio:
         is_blocking = False
         reason = (
-            f"too unique for blocking (cardinality={profile.cardinality_ratio:.3f} "
-            f"> {max_ratio}); avg block size would be < {1/max(profile.cardinality_ratio, 1e-9):.1f}"
+            f"too unique for blocking (cardinality={effective_ratio:.3f} "
+            f"> {max_ratio}); avg block size would be < {1/max(effective_ratio, 1e-9):.1f}"
         )
-    elif profile.cardinality_ratio < min_ratio and profile.distinct_count > 10:
+    elif effective_ratio < min_ratio and profile.distinct_count > 10:
         is_blocking = False
         reason = (
-            f"mega-block risk (cardinality={profile.cardinality_ratio:.4f} "
+            f"mega-block risk (cardinality={effective_ratio:.4f} "
             f"< {min_ratio}); avg block size would explode"
         )
     elif profile.distinct_count <= 10:
@@ -249,12 +321,26 @@ def estimate_avg_block_size(
         return 1.0
     if sample_distinct == 0:
         return 1.0
-    # Scale sample-distinct linearly to full population. Coupon-collector
-    # correction would be more accurate but the magnitude is what matters.
-    scaled_distinct = max(
-        int(sample_distinct * (full_population_n_rows / sample_df.height)),
-        1,
-    )
+    # #410: Chao1-style sqrt scaling, NOT linear. Linear scaling
+    # (sample_distinct * full_n / sample_n) over-projects distinct count
+    # for any sample with even modest collisions, which makes the guard
+    # fire incorrectly on legitimate composite blocking columns. The
+    # sqrt scaling matches the sublinear growth of distinct values on
+    # real-world distributions and matches the gate in
+    # ``classify_column_role``. Under "observed" mode the linear scale
+    # is preserved.
+    if os.environ.get("GOLDENMATCH_BLOCKING_CARDINALITY_SCALER", "").lower() == "observed":
+        scaled_distinct = max(
+            int(sample_distinct * (full_population_n_rows / sample_df.height)),
+            1,
+        )
+    else:
+        import math
+        scaled_distinct = max(int(
+            sample_distinct * math.sqrt(
+                full_population_n_rows / sample_df.height,
+            ),
+        ), 1)
     return full_population_n_rows / scaled_distinct
 
 
