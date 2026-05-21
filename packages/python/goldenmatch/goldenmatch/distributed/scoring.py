@@ -26,25 +26,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Per-task CPU reservation for the scoring map_batches call. Defaults to 4
-# because each task runs the full in-memory bucket backend over its partition,
-# which allocates ~5 GB peak on a ~3M-row partition (50M dataset / 16
-# partitions). On a 16-vCPU / 64 GB runner that caps concurrency at 4 tasks
-# (~20 GB worker RAM) with headroom for the object store + driver. The
-# 2026-05-20 simulated bench OOM'd with the default num_cpus=1 -- Ray packed
-# 7 concurrent _score_partition tasks at ~5 GB each, exhausting node memory.
-# Override via env var when running on different shapes.
-_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "4"))
+# Per-task CPU reservation for the scoring map_batches call. Defaults to 1
+# now that _score_partition runs the narrow scoring-only kernel
+# (`_score_partition_with_config`) instead of the full `gm.dedupe_df`
+# pipeline. Per-task peak RAM drops from ~5 GB (full pipeline + controller)
+# to ~2 GB (scoring only), so we can run up to 12 concurrent scorers on a
+# 16-vCPU / 64 GB runner (12 * 2 GB = 24 GB worker RAM, plenty of headroom).
+#
+# History: the 2026-05-20 simulated bench OOM'd with num_cpus=1 because
+# _score_partition called gm.dedupe_df per partition (~5 GB peak * ~7
+# concurrent = ~35 GB). PR #395 set num_cpus=4 to cap concurrency at 1
+# (after Ray reserved 4 CPU for HashAggregate), which fixed the OOM but
+# left the bench at 0% progress 52 min in. The narrow-kernel fix
+# (#396) lets us drop concurrency back to fully parallel.
+#
+# Override via GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS for different shapes.
+_SCORE_NUM_CPUS = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS", "1"))
 
 
 def score_blocks_distributed(
     df_ds: Dataset,
     config: GoldenMatchConfig,
 ) -> Dataset:
-    """Per-partition fuzzy + exact scoring via in-memory dedupe_df.
+    """Per-partition fuzzy + exact scoring via the narrow scoring kernel.
 
     Returns a Ray Dataset of {id_a, id_b, score} rows. Cross-partition
     collisions stay; caller invokes dedup_pairs_distributed to canonicalize.
+
+    Each worker runs ``_score_partition_with_config`` -- scoring only,
+    no controller, no clustering, no golden records. The driver auto-
+    configures once on a sample (Phase 2) before dispatch; workers
+    receive the committed config and execute the cheap scoring kernel.
     """
 
     def _score_partition(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
@@ -53,7 +65,7 @@ def score_blocks_distributed(
         import polars as pl
         import pyarrow as pa
 
-        import goldenmatch as gm
+        from goldenmatch.core.pipeline import _score_partition_with_config
 
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
@@ -61,7 +73,7 @@ def score_blocks_distributed(
             return pa.table({"id_a": [], "id_b": [], "score": []})
 
         # Force the in-memory bucket backend so the per-partition scorer
-        # doesn't recursively try to distribute.
+        # doesn't recursively try to distribute. Kernel honors this too.
         if hasattr(config, "model_copy"):
             local_cfg = config.model_copy()
         else:
@@ -69,12 +81,11 @@ def score_blocks_distributed(
         local_cfg.backend = "bucket"
 
         try:
-            result = gm.dedupe_df(df, config=local_cfg, confidence_required=False)
+            pairs = _score_partition_with_config(df, local_cfg)
         except Exception as e:
             logger.warning("partition scoring failed: %s", e)
             return pa.table({"id_a": [], "id_b": [], "score": []})
 
-        pairs = result.scored_pairs
         if not pairs:
             return pa.table({"id_a": [], "id_b": [], "score": []})
         return pa.table({

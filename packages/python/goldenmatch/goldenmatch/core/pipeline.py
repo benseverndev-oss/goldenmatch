@@ -1870,3 +1870,135 @@ def run_match_df(
         auto_config=auto_config,
         auto_config_llm_provider=auto_config_llm_provider,
     )
+
+
+def _score_partition_with_config(
+    df: pl.DataFrame,
+    config: GoldenMatchConfig,
+) -> list[tuple[int, int, float]]:
+    """Narrow scoring-only kernel for distributed per-partition execution.
+
+    Bypasses the controller, clustering, golden, identity, and postflight.
+    The driver auto-configures once on a sample (Phase 2) and ships the
+    committed config to each worker; workers just run the cheap scoring
+    kernel on their partition and return scored pairs.
+
+    Used by ``distributed.scoring.score_blocks_distributed``. NOT a public
+    API -- callers that need a full pipeline (clustering, golden, etc.)
+    must go through ``dedupe_df``/``run_dedupe_df``.
+
+    Skipped steps (vs full ``_run_dedupe_pipeline``):
+      * auto-config (driver already ran it)
+      * memory store (per-partition memory makes no sense)
+      * identity resolution (driver-side post-cluster step)
+      * build_clusters / build_golden_record (driver merges pairs first)
+      * postflight (driver-side report)
+
+    Kept: standardize, domain extraction, compute_matchkeys, precompute
+    matchkey transforms, find_exact_matches, score_buckets OR
+    build_blocks + find_fuzzy_matches. These are required so the partition
+    produces pairs at the same key shape the driver expects.
+
+    Returns list of (id_a, id_b, score) canonicalized as (min, max, score)
+    by the downstream ``dedup_pairs_distributed`` stage; this kernel emits
+    pairs as-is.
+    """
+    from goldenmatch.core.autofix import auto_fix_dataframe
+    from goldenmatch.core.matchkey import (
+        compute_matchkeys,
+        precompute_matchkey_transforms,
+    )
+    from goldenmatch.core.scorer import find_exact_matches
+    from goldenmatch.core.standardize import apply_standardization
+
+    matchkeys = config.get_matchkeys()
+    if not matchkeys or df.height < 2:
+        return []
+
+    # Ensure internal bookkeeping columns exist. Ray-dataset Arrow batches
+    # arrive without them; the full pipeline adds them in run_dedupe_df
+    # before calling _run_dedupe_pipeline, so the kernel mirrors that here.
+    if "__source__" not in df.columns:
+        df = df.with_columns(pl.lit("partition").alias("__source__"))
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(
+            pl.col("__row_id__").cast(pl.Int64),
+        )
+
+    # Prep: cheap auto-fix on the partition (cleanup, no controller).
+    if config.validation and config.validation.auto_fix:
+        df, _ = auto_fix_dataframe(df)
+
+    combined_lf = df.lazy()
+
+    # Standardize (if configured by driver).
+    if config.standardization and config.standardization.rules:
+        combined_lf = apply_standardization(
+            combined_lf, config.standardization.rules,
+        )
+
+    # Domain extraction (if configured by driver).
+    combined_lf = _apply_domain_extraction(combined_lf, config)
+
+    # Compute matchkey columns + precompute transforms (same shape as the
+    # full pipeline so scoring primitives find the columns they expect).
+    combined_lf = compute_matchkeys(combined_lf, matchkeys)
+    collected_df = precompute_matchkey_transforms(
+        combined_lf.collect(), matchkeys,
+    )
+    combined_lf = collected_df.lazy()
+
+    all_pairs: list[tuple[int, int, float]] = []
+    matched_pairs: set[tuple[int, int]] = set()
+
+    # Phase 1: Exact matchkeys.
+    for mk in matchkeys:
+        if mk.type != "exact":
+            continue
+        pairs = find_exact_matches(combined_lf, mk)
+        if mk.negative_evidence:
+            from goldenmatch.core.scorer import (
+                _apply_negative_evidence_to_exact_pairs,
+            )
+            pairs = _apply_negative_evidence_to_exact_pairs(
+                pairs, mk, collected_df,
+            )
+        all_pairs.extend(pairs)
+        for a, b, _s in pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
+
+    # Phase 2: Fuzzy matchkeys. Bucket backend is the only sensible
+    # choice inside a distributed worker (small partition, no per-block
+    # LazyFrame churn). The driver's score_blocks_distributed already
+    # forces backend='bucket' before calling us; we still honor it
+    # explicitly in case a caller skips that step.
+    if config.blocking is not None:
+        for mk in matchkeys:
+            if mk.type != "weighted":
+                continue
+            if config.backend == "bucket":
+                from goldenmatch.backends.score_buckets import score_buckets
+                pairs = score_buckets(
+                    collected_df,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    across_files_only=False,
+                    source_lookup=None,
+                )
+                all_pairs.extend(pairs)
+                continue
+            # Fallback: legacy build_blocks + parallel scorer. Not used by
+            # the distributed path today, but keeps the kernel usable for
+            # callers that hand us a non-bucket config.
+            blocks = build_blocks(combined_lf, config.blocking)
+            block_scorer = _get_block_scorer(config)
+            pairs = block_scorer(
+                blocks, mk, matched_pairs,
+                across_files_only=False,
+                source_lookup=None,
+            )
+            all_pairs.extend(pairs)
+
+    return all_pairs
