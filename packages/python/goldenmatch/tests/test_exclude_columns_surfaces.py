@@ -60,6 +60,20 @@ def test_merge_empty_raw_returns_existing_config_field():
     assert merge_exclude_columns_into_config(cfg, "") == ["a", "b"]
 
 
+def _strip_help_noise(output: str) -> str:
+    """Normalize Typer/Rich help output for substring matching.
+
+    CI terminals are narrow (80 cols default) so Rich wraps long flag
+    names across lines with hyphenation + box-drawing decorations. Strip
+    ANSI escape codes, box-drawing characters, whitespace, and newlines
+    so substring assertions match regardless of terminal width.
+    """
+    import re
+    no_ansi = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    no_boxes = re.sub(r"[─-╿]", "", no_ansi)
+    return re.sub(r"\s+", "", no_boxes)
+
+
 # ---------------------------------------------------------------------------
 # Step 2-4: CLI flags (smoke -- each command parses + threads the flag)
 # ---------------------------------------------------------------------------
@@ -99,7 +113,7 @@ def test_sync_cli_has_exclude_columns_flag():
     runner = CliRunner()
     result = runner.invoke(app, ["sync", "--help"])
     assert result.exit_code == 0
-    assert "--exclude-columns" in result.output
+    assert "exclude-columns" in _strip_help_noise(result.output)
 
 
 def test_match_cli_has_exclude_columns_flag():
@@ -109,7 +123,7 @@ def test_match_cli_has_exclude_columns_flag():
     runner = CliRunner()
     result = runner.invoke(app, ["match", "--help"])
     assert result.exit_code == 0
-    assert "--exclude-columns" in result.output
+    assert "exclude-columns" in _strip_help_noise(result.output)
 
 
 def test_incremental_cli_has_exclude_columns_flag():
@@ -119,7 +133,7 @@ def test_incremental_cli_has_exclude_columns_flag():
     runner = CliRunner()
     result = runner.invoke(app, ["incremental", "--help"])
     assert result.exit_code == 0
-    assert "--exclude-columns" in result.output
+    assert "exclude-columns" in _strip_help_noise(result.output)
 
 
 def test_pprl_link_cli_has_exclude_columns_flag():
@@ -129,7 +143,7 @@ def test_pprl_link_cli_has_exclude_columns_flag():
     runner = CliRunner()
     result = runner.invoke(app, ["pprl", "link", "--help"])
     assert result.exit_code == 0
-    assert "--exclude-columns" in result.output
+    assert "exclude-columns" in _strip_help_noise(result.output)
 
 
 # ---------------------------------------------------------------------------
