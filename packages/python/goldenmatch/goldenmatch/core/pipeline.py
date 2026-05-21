@@ -1908,7 +1908,7 @@ def _score_partition_with_config(
         compute_matchkeys,
         precompute_matchkey_transforms,
     )
-    from goldenmatch.core.scorer import find_exact_matches, find_fuzzy_matches
+    from goldenmatch.core.scorer import find_exact_matches
     from goldenmatch.core.standardize import apply_standardization
 
     matchkeys = config.get_matchkeys()
