@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.quality_exclusions import (
     ColumnProfile,
     ExcludedColumn,
@@ -160,11 +159,9 @@ def test_sentinel_values_passes_clean_column_under_threshold():
     """5% sentinel rate is below the 10% threshold -- emit no
     exclusion (might still be a WARN-level Finding but not an
     auto-config exclusion)."""
-    sampled = ["alice@example.org"] * 95 + ["noemail@example.com"] * 5
     profile = _profile(dtype="Utf8", mean_string_length=20)
-    result = detect_sentinel_values("email", sampled, profile)
-    # @example.com substring matches everyone -- so the test setup
-    # actually has high sentinel rate. Use a different clean fixture.
+    # @example.com substring would match all "alice@example.org" rows
+    # too -- pick a fixture that genuinely has only 5% sentinel rate.
     sampled_clean = [f"alice{i}@company.com" for i in range(95)] + ["test@test.com"] * 5
     result_clean = detect_sentinel_values("email", sampled_clean, profile)
     assert result_clean is None, (
