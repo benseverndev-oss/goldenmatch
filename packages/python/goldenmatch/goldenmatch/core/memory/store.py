@@ -120,8 +120,16 @@ class MemoryStore:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             self._conn = sqlite3.connect(path)
             self._conn.row_factory = sqlite3.Row
+            # #130: enable WAL mode for concurrent-write reliability.
+            # Default journal_mode=delete intermittently raises "database
+            # is locked" when two MemoryStore instances write to the same
+            # file. WAL allows one writer + multiple readers concurrently
+            # and is the right default for shared SQLite memory stores.
+            # `PRAGMA journal_mode=WAL` is per-database, persisted in the
+            # file header, and a no-op on subsequent opens.
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
-            log.debug("MemoryStore opened: %s", path)
+            log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
         else:
             raise NotImplementedError(f"Backend '{backend}' not yet implemented")
 
