@@ -848,19 +848,44 @@ class AutoConfigController:
         # Trigger only when confidence_required (default True) -- caller
         # opts out via confidence_required=False to keep today's
         # "warn-and-run" behavior on degenerate blocking.
-        if (
-            confidence_required
-            and n_rows >= REFUSE_AT_N
-            and best_entry.config.blocking
-            and best_entry.config.blocking.keys
-        ):
+        if confidence_required and n_rows >= REFUSE_AT_N:
             from goldenmatch.core.blocking_candidates import (
                 degenerate_guard_max_avg_block_size,
                 degenerate_guard_threshold,
                 estimate_avg_block_size,
             )
+            _blocking = best_entry.config.blocking
+            # #417 follow-up: ALSO catch the "no blocking configured"
+            # case. An empty blocking.keys or `blocking is None` at
+            # >= REFUSE_AT_N rows ships a config that downstream sync
+            # interprets as a single mega-block (key='1', size=n_rows).
+            # The original guard's precondition required keys to be
+            # non-empty BEFORE running the estimator -- that gate
+            # short-circuited on exactly the case the guard exists for.
+            _no_blocking_keys = (
+                _blocking is None
+                or not getattr(_blocking, "keys", None)
+            )
+            if _no_blocking_keys:
+                logger.warning(
+                    "BLOCKING_DEGENERATE guard fired: committed config has "
+                    "no blocking keys at n_rows=%d (>= REFUSE_AT_N=%d). "
+                    "Downstream sync would scan every row as one block. "
+                    "Pass an explicit GoldenMatchConfig with blocking.keys "
+                    "or re-call with confidence_required=False. See #417.",
+                    n_rows, REFUSE_AT_N,
+                )
+                _LAST_CONTROLLER_RUN.set(history)
+                raise ControllerNotConfidentError(
+                    n_rows=n_rows,
+                    failing_sub_profile="blocking",
+                    stop_reason=StopReason.BLOCKING_DEGENERATE.name,
+                )
+
+            # Keys are present -- run the estimator-based guard.
+            assert _blocking is not None  # narrowed by _no_blocking_keys check above
             _block_fields: list[str] = []
-            for _key in best_entry.config.blocking.keys:
+            for _key in _blocking.keys:
                 if _key.fields:
                     _block_fields.extend(_key.fields)
             if _block_fields:
@@ -884,6 +909,20 @@ class AutoConfigController:
                         failing_sub_profile="blocking",
                         stop_reason=StopReason.BLOCKING_DEGENERATE.name,
                     )
+            else:
+                # Keys exist but every key has empty `fields` -- another
+                # degenerate shape.
+                logger.warning(
+                    "BLOCKING_DEGENERATE guard fired: blocking keys present "
+                    "but every key has empty `fields` at n_rows=%d. See #417.",
+                    n_rows,
+                )
+                _LAST_CONTROLLER_RUN.set(history)
+                raise ControllerNotConfidentError(
+                    n_rows=n_rows,
+                    failing_sub_profile="blocking",
+                    stop_reason=StopReason.BLOCKING_DEGENERATE.name,
+                )
 
         # Task 6.1: stamp committed profile with eager column_priors + indicators.
         import dataclasses
