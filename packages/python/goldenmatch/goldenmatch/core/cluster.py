@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from goldenmatch.core._profile_helpers import transitivity_rate
 from goldenmatch.core.complexity_profile import ClusterProfile
@@ -93,6 +93,10 @@ class UnionFind:
         self._parent[rb] = ra
         if self._rank[ra] == self._rank[rb]:
             self._rank[ra] += 1
+
+    def nodes(self) -> list[int]:
+        """Return all added members. Order is insertion order via dict."""
+        return list(self._parent.keys())
 
     def get_clusters(self) -> list[set[int]]:
         """Return all clusters as a list of sets."""
@@ -210,7 +214,7 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
 
 
 def build_clusters(
-    pairs: list[tuple[int, int, float]],
+    pairs: Any,  # list[tuple[int, int, float]] | ray.data.Dataset
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
@@ -220,7 +224,30 @@ def build_clusters(
 
     Auto-splits oversized clusters via MST (when auto_split=True). Assigns cluster_quality
     ("strong", "weak", "split") and downgrades confidence for weak clusters.
+
+    Phase 3: also accepts a Ray Dataset of pairs (columns: id_a, id_b, score).
+    Dispatches to build_clusters_distributed when the input is a Ray Dataset.
     """
+    # Phase 3: distributed path when pairs is a Ray Dataset.
+    from goldenmatch.distributed import is_ray_dataset
+    if is_ray_dataset(pairs):
+        from goldenmatch.distributed.clustering import (
+            build_clusters_distributed,
+            materialize_cluster_dict,
+        )
+        if all_ids is None:
+            seen: set[int] = set()
+            for row in pairs.take_all():
+                seen.add(row["id_a"])
+                seen.add(row["id_b"])
+            all_ids = list(seen)
+        clusters_ds = build_clusters_distributed(
+            pairs, all_ids=all_ids,
+            max_cluster_size=max_cluster_size,
+            weak_cluster_threshold=weak_cluster_threshold,
+        )
+        return materialize_cluster_dict(clusters_ds, pairs)
+
     # Derive all_ids from pairs when not provided explicitly
     if all_ids is None:
         seen: set[int] = set()

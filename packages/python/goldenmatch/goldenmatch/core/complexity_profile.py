@@ -33,6 +33,11 @@ class StopReason(Enum):
     POLICY_NO_PROGRESS = "policy_no_progress" # policy returned identical config
     OSCILLATING = "oscillating"               # is_oscillating() fired
     CANCELLED = "cancelled"                   # KeyboardInterrupt
+    # #408: committed blocking strategy would produce singleton blocks
+    # (avg block size < threshold). Sync would scan all rows without
+    # producing useful candidate pairs. Raise unless caller opts out via
+    # confidence_required=False.
+    BLOCKING_DEGENERATE = "blocking_degenerate"
 
 
 @dataclass(frozen=True)

@@ -237,6 +237,11 @@ class PostflightReport:
     controller_profile: Any = None
     # RunHistory | None — full iteration history including errors and drift.
     controller_history: Any = None
+    # GoldenCheck auto-config exclusions (#404). List of ExcludedColumn
+    # set by the zero-config API caller after auto_configure_df runs.
+    # Surfaces the audit trail: "auto-config excluded these columns
+    # and here's why." Empty when no detectors fired.
+    autoconfig_exclusions: list = field(default_factory=list)
 
     def __str__(self) -> str:
         """Human-readable rendering used by CLI/postflight summaries.
@@ -258,13 +263,51 @@ class PostflightReport:
             parts.append("  advisories:")
             for adv in self.advisories:
                 parts.append(f"    - {adv}")
+        if self.autoconfig_exclusions:
+            parts.append("  auto-config exclusions:")
+            for ec in self.autoconfig_exclusions:
+                parts.append(
+                    f"    - {ec.column!r}: {ec.detector} -- {ec.reason}"
+                )
         mem_line = _render_memory_line(self.memory_stats)
         if mem_line:
             parts.append(f"  {mem_line}")
         plan_line = _render_plan_line(self.controller_history)
         if plan_line:
             parts.append(f"  {plan_line}")
+        blocking_line = _render_blocking_line(self.controller_history)
+        if blocking_line:
+            parts.append(f"  {blocking_line}")
         return "\n".join(parts)
+
+
+def _render_blocking_line(history: Any) -> str:
+    """Render the committed blocking strategy in one line, or '' when absent.
+
+    Reads the committed entry's BlockingConfig and surfaces the keys.
+    Helps users see at a glance whether auto-config picked a sane
+    blocking strategy vs the degenerate singleton-blocks shape (#408).
+    """
+    if history is None:
+        return ""
+    try:
+        best = history.pick_committed() if hasattr(history, "pick_committed") else None
+    except Exception:
+        return ""
+    if best is None:
+        return ""
+    cfg = getattr(best, "config", None)
+    blocking = getattr(cfg, "blocking", None) if cfg else None
+    keys = getattr(blocking, "keys", None) if blocking else None
+    if not keys:
+        return ""
+    field_names: list[str] = []
+    for key in keys:
+        for f in (getattr(key, "fields", None) or []):
+            field_names.append(f)
+    if not field_names:
+        return ""
+    return f"Blocking: keys=[{', '.join(field_names)}]"
 
 
 def _render_plan_line(history: Any) -> str:

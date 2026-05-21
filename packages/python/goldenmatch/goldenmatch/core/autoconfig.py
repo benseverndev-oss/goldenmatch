@@ -1098,18 +1098,38 @@ def build_blocking(
     # structurally capping recall regardless of how good the scoring is.
     # NOTE: max_null_rate serves as NULL_RATE_CEILING here (value = 0.20).
     NULL_RATE_CEILING = max_null_rate  # 0.20 — explicit alias for Tier 2 intent
+
+    # #408: cardinality-based blocking-candidate gate. The original
+    # `cardinality_ratio < 0.95` let near-unique columns (NPI, federal IDs,
+    # any column with >86% unique per record) through, producing singleton
+    # blocks. The new gate (default 0.5) filters those out; env-overridable
+    # via GOLDENMATCH_BLOCKING_MAX_RATIO. NPI keeps being picked as a
+    # matchkey upstream — only its blocking role is denied.
+    from goldenmatch.core.blocking_candidates import _blocking_max_ratio
+    blocking_max_ratio = _blocking_max_ratio()
     exact_cols = [
         p for p in profiles
         if p.col_type in ("email", "phone", "zip", "identifier", "year")
         and _null_rate(p.name) <= NULL_RATE_CEILING  # Tier 2: skip high-null candidates
-        and p.cardinality_ratio < 0.95
+        and p.cardinality_ratio <= blocking_max_ratio
         and _check_source_overlap(df, p.name) > 0.0
     ]
-    # Log skipped columns
+    # Log columns rejected by the cardinality gate (#408).
+    for p in profiles:
+        if (p.col_type in ("email", "phone", "zip", "identifier", "year")
+                and p.cardinality_ratio > blocking_max_ratio
+                and p.cardinality_ratio < 1.0):
+            logger.info(
+                "Blocking candidate rejected: %r (cardinality=%.3f > %.2f); "
+                "would produce near-singleton blocks. Kept for matchkey "
+                "consideration. See #408.",
+                p.name, p.cardinality_ratio, blocking_max_ratio,
+            )
+    # Log skipped columns (cross-source overlap).
     for p in profiles:
         if (p.col_type in ("email", "phone", "zip", "identifier", "year")
                 and _null_rate(p.name) <= max_null_rate
-                and p.cardinality_ratio < 0.95
+                and p.cardinality_ratio <= blocking_max_ratio
                 and _check_source_overlap(df, p.name) == 0.0):
             sources = df["__source__"].unique().to_list() if "__source__" in df.columns else []
             logger.warning(
@@ -1403,6 +1423,76 @@ def _scale_aware_backend(row_count: int) -> str | None:  # pyright: ignore[repor
 # the profile + history without threading them through every call site.
 _LAST_CONTROLLER_RUN: ContextVar = ContextVar("_LAST_CONTROLLER_RUN", default=None)
 
+# ContextVar populated by auto_configure_df with the GoldenCheck exclusion
+# list (#404). PostflightReport reads this to render the "Auto-config
+# exclusions" section so users see the audit trail without grep-ing logs.
+_LAST_AUTOCONFIG_EXCLUSIONS: ContextVar = ContextVar(
+    "_LAST_AUTOCONFIG_EXCLUSIONS", default=None,
+)
+
+# ContextVar set by dedupe_df / match_df with the kwarg-supplied
+# exclude_columns list (#unified-exclusions). Layered ADDITIVELY with
+# config.exclude_columns and detector-derived exclusions inside
+# auto_configure_df. Cleared after each call via context-bound semantics
+# (callers do `.set(...)` then rely on the ContextVar value living only
+# for the duration of their own frame).
+_RUNTIME_EXCLUDE_COLUMNS: ContextVar = ContextVar(
+    "_RUNTIME_EXCLUDE_COLUMNS", default=None,
+)
+
+
+def _env_force_exclude() -> list[str]:
+    raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _env_force_include() -> list[str]:
+    raw = os.environ.get("GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _resolve_effective_exclusion_overrides(
+    config: Any | None = None,
+) -> tuple[list[str], list[str]]:
+    """Combine every exclusion source into (force_exclude, force_include).
+
+    Sources, layered additively for force_exclude:
+      1. ``config.exclude_columns`` -- new top-level field (this PR).
+      2. ``_RUNTIME_EXCLUDE_COLUMNS`` ContextVar -- kwarg from
+         ``dedupe_df`` / ``match_df``.
+      3. ``config.quality.autoconfig_force_exclude`` -- #404 sub-field.
+      4. ``GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`` env var -- #404 V1 path.
+
+    Sources for force_include (RESCUE -- beats every opt-out path):
+      a. ``config.quality.autoconfig_force_include`` -- #404 sub-field.
+      b. ``GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`` env var -- #404 V1 path.
+
+    Order in the final set is irrelevant (it's a union); ordering here
+    just makes the log line predictable.
+    """
+    fe: list[str] = []
+    fi: list[str] = []
+    if config is not None:
+        # New top-level field.
+        cfg_excl = getattr(config, "exclude_columns", None) or []
+        fe.extend(cfg_excl)
+        # Legacy #404 sub-field on QualityConfig (still supported).
+        qc = getattr(config, "quality", None)
+        if qc is not None:
+            fe.extend(getattr(qc, "autoconfig_force_exclude", None) or [])
+            fi.extend(getattr(qc, "autoconfig_force_include", None) or [])
+    runtime_excl = _RUNTIME_EXCLUDE_COLUMNS.get()
+    if runtime_excl:
+        fe.extend(runtime_excl)
+    fe.extend(_env_force_exclude())
+    fi.extend(_env_force_include())
+    # De-dupe while preserving first-occurrence order for log readability.
+    fe = list(dict.fromkeys(fe))
+    fi = list(dict.fromkeys(fi))
+    return fe, fi
+
+
+
 # Tier 4: cross-run memory.  Set GOLDENMATCH_AUTOCONFIG_MEMORY=0 (or "false"
 # or "disabled") to opt out (useful in CI or when disk I/O should be minimal).
 _AUTOCONFIG_MEMORY_DISABLED: bool = (
@@ -1506,6 +1596,56 @@ def auto_configure_df(
                 f"reference requires pl.DataFrame or pl.LazyFrame, "
                 f"got {type(reference).__name__}"
             )
+
+    # ── GoldenCheck auto-config exclusions (#404) ──
+    # Run the column-exclusion detectors BEFORE the controller starts.
+    # Drop excluded columns from df so v0, sample iterations, and the
+    # committed config never reference them. The user's original df
+    # downstream still has every column (golden records aren't affected);
+    # we only filter the matchkey/blocking candidate pool.
+    #
+    # Skipped when df is a Ray Dataset (distributed path) -- those have
+    # their own column-selection story; exclusions land at the per-
+    # partition kernel layer separately.
+    if not _is_ray_dataset(df) and isinstance(df, pl.DataFrame):
+        from goldenmatch.core.quality_exclusions import (
+            detect_autoconfig_exclusions,
+        )
+        # Combine every exclusion source: top-level config.exclude_columns
+        # (this PR), dedupe_df / match_df kwarg via _RUNTIME_EXCLUDE_COLUMNS
+        # ContextVar, QualityConfig.autoconfig_force_{exclude,include}
+        # (#404 sub-field), env vars. force_include rescues from every
+        # opt-out path. auto_configure_df has no input config -- only
+        # the ContextVar + env vars are visible here; the dedupe_df
+        # shim writes both before calling us.
+        force_exclude_list, force_include_list = (
+            _resolve_effective_exclusion_overrides(config=None)
+        )
+        # Internal bookkeeping columns are invisible to detectors.
+        skip = {"__row_id__", "__source__"}
+        for col in df.columns:
+            if col.startswith("__") and col.endswith("__"):
+                skip.add(col)
+        exclusions = detect_autoconfig_exclusions(
+            df,
+            force_exclude=force_exclude_list,
+            force_include=force_include_list,
+            skip_columns=skip,
+        )
+        if exclusions:
+            cols_to_drop = [
+                ec.column for ec in exclusions if ec.column in df.columns
+            ]
+            for ec in exclusions:
+                logger.info(
+                    "Auto-config exclusion: %r (detector=%s) -- %s",
+                    ec.column, ec.detector, ec.reason,
+                )
+            if cols_to_drop:
+                df = df.drop(cols_to_drop)
+            _LAST_AUTOCONFIG_EXCLUSIONS.set(list(exclusions))
+        else:
+            _LAST_AUTOCONFIG_EXCLUSIONS.set([])
 
     # Lazy import to avoid circular imports (controller imports back here)
     from goldenmatch.core.autoconfig_controller import (
