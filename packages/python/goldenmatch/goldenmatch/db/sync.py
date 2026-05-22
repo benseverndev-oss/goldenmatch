@@ -872,6 +872,37 @@ def _full_scan_streaming(
     # Match-log batching: collect all pairs from a worker, log when
     # the worker returns, so a long run is still visible in
     # gm_matches as blocks complete (mirrors the serial behavior).
+    # #424: buffer pairs across blocks before flushing to gm_match_log.
+    # The per-block log_matches_batch call has connection / commit
+    # overhead; flushing in larger batches amortizes that. Default 10K
+    # pairs per flush, env-overridable.
+    _flush_threshold_env = _os.environ.get("GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS")
+    if _flush_threshold_env:
+        try:
+            flush_threshold = max(int(_flush_threshold_env), 1)
+        except ValueError:
+            flush_threshold = 10_000
+    else:
+        flush_threshold = 10_000
+
+    # Skip-audit env var (#424): for nightly-cron workloads that only
+    # consume gm_clusters / gm_golden_records, opt out of per-pair
+    # logging entirely.
+    _skip_match_log = _os.environ.get("GOLDENMATCH_SKIP_MATCH_LOG") == "1"
+    if _skip_match_log:
+        logger.info(
+            "Streaming pipeline: GOLDENMATCH_SKIP_MATCH_LOG=1; "
+            "skipping gm_match_log writes (#424)",
+        )
+
+    _match_log_buffer: list[tuple[int, int, float, str]] = []
+
+    def _flush_match_log() -> None:
+        if dry_run or _skip_match_log or not _match_log_buffer:
+            return
+        log_matches_batch(connector, _match_log_buffer, run_id)
+        _match_log_buffer.clear()
+
     if max_workers <= 1 or len(work_items) <= 2:
         # Serial fallback path -- same as pre-#422.
         for args in work_items:
@@ -885,12 +916,12 @@ def _full_scan_streaming(
                 staging_dir, block_key, config, _empty_serial,
             )
             all_pairs.extend(pairs)
-            if pairs and not dry_run:
-                log_matches_batch(
-                    connector,
-                    [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
-                    run_id,
+            if pairs:
+                _match_log_buffer.extend(
+                    (int(a), int(b), float(s), "merged") for a, b, s in pairs
                 )
+                if len(_match_log_buffer) >= flush_threshold:
+                    _flush_match_log()
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             for i, block_key, block_n, pairs in pool.map(_score_one, work_items):
@@ -899,12 +930,15 @@ def _full_scan_streaming(
                     i + 1, block_index.height, block_key, block_n, len(pairs),
                 )
                 all_pairs.extend(pairs)
-                if pairs and not dry_run:
-                    log_matches_batch(
-                        connector,
-                        [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
-                        run_id,
+                if pairs:
+                    _match_log_buffer.extend(
+                        (int(a), int(b), float(s), "merged") for a, b, s in pairs
                     )
+                    if len(_match_log_buffer) >= flush_threshold:
+                        _flush_match_log()
+
+    # Final flush of any remaining buffered pairs.
+    _flush_match_log()
 
     # Final cross-block dedup: canonical (min, max) tuple set. Replaces
     # the per-block matched_pairs lookup that was dropped above.
