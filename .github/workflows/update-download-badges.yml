@@ -16,7 +16,11 @@ permissions:
 
 concurrency:
   group: update-download-badges
-  cancel-in-progress: true
+  # 2026-05-22: was `cancel-in-progress: true`. Push events + manual
+  # workflow_dispatch can fire close together; the second one
+  # cancelling the first leaves a red ✗ check-run on the commit
+  # indistinguishable from a real failure. Queue instead.
+  cancel-in-progress: false
 
 jobs:
   update:
