@@ -43,7 +43,11 @@ function makeFieldCorrection(overrides: Partial<Correction> = {}): Correction {
 
 describe("field-level Correction (Phase 5 foundation)", () => {
   it("round-trips via InMemoryStore", async () => {
-    const store = new InMemoryStore({ enabled: true });
+    const store = new InMemoryStore({
+      enabled: true,
+      backend: "memory",
+      learning: { thresholdMinCorrections: 10, weightsMinCorrections: 50 },
+    });
     const correction = makeFieldCorrection();
     await store.addCorrection(correction);
     const out = await store.getCorrections({ dataset: "customers" });
@@ -54,7 +58,11 @@ describe("field-level Correction (Phase 5 foundation)", () => {
   });
 
   it("pair-level Correction still works without field-level fields", async () => {
-    const store = new InMemoryStore({ enabled: true });
+    const store = new InMemoryStore({
+      enabled: true,
+      backend: "memory",
+      learning: { thresholdMinCorrections: 10, weightsMinCorrections: 50 },
+    });
     await store.addCorrection({
       id: "pl-1",
       idA: 5,
