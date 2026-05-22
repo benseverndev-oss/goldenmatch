@@ -138,15 +138,43 @@ Each plugin gets at minimum:
 Plus a discovery test (`tests/plugins/test_builtin_discovery.py`)
 verifying `PluginRegistry.discover()` finds all 10 by name.
 
+## Round 2 (#predefined-plugins-round-2)
+
+12 additional plugins shipped after the initial round:
+
+**Numeric (3 more):**
+- `numeric_median` -- outlier-resilient
+- `numeric_sum` -- aggregate amounts/balances
+- `numeric_weighted_average` -- uses `quality_weights`
+
+**Format (3 more):**
+- `url_canonical` -- lowercase scheme+host, http->https, trim trailing /
+- `whitespace_normalize` -- collapse internal ws + trim, pick mode
+- `boolean_normalize` -- yes/no/Y/N/1/0/true/false/on/off -> Python bool
+
+**Business (3 more):**
+- `enum_canonical` -- alias_map config maps variants to canonical
+- `regex_validated` -- only accept values matching `rule_kwargs.pattern`;
+  configurable fallback (`first_non_null` or `null`)
+- `weighted_by_recency` -- exponential decay on dates; `half_life_days`
+  config (default 30). Soft "newer-but-not-only-newest" picker.
+
+**Aggregation / telemetry (new category, 3):**
+- `count_distinct` -- count of distinct non-null values; synthesized
+- `count_non_null` -- count of non-null values; synthesized
+- `agreement_rate` -- 0.0-1.0 fraction of records agreeing on mode
+
+Total shipped: 10 (round 1) + 12 (round 2) = **22 plugins**.
+
 ## Out of scope (v1.19+)
 
-- `numeric_median` / `numeric_weighted_average` (cheap to add later;
-  starting with the 3 most-asked-for)
-- `url_canonical` (URL canonicalization has edge cases that warrant
-  their own spec)
 - `verified_value_or_null` (KYC-shaped; needs a source-verification
   registry that's bigger than a single plugin)
 - `dnc_safe_phone` (Do Not Call lookup; external service dependency)
+- `address_usps_format` (USPS canonicalization is large; warrants
+  its own spec + library dep)
+- `unicode_normalize` (NFKC + diacritic strip; useful for i18n
+  matching but format-specific)
 
 ## Kill criterion
 

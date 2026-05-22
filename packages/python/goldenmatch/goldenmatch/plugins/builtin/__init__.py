@@ -15,39 +15,66 @@ Spec: ``docs/superpowers/specs/2026-05-22-predefined-merge-plugins-design.md``
 """
 from __future__ import annotations
 
+from goldenmatch.plugins.builtin.aggregation import (
+    AgreementRateStrategy,
+    CountDistinctStrategy,
+    CountNonNullStrategy,
+)
 from goldenmatch.plugins.builtin.business import (
+    EnumCanonicalStrategy,
     FreshnessWithMaxAgeStrategy,
     LifecycleStageStrategy,
+    RegexValidatedStrategy,
     SystemOfRecordStrategy,
+    WeightedByRecencyStrategy,
 )
 from goldenmatch.plugins.builtin.format import (
+    BooleanNormalizeStrategy,
     ConcatUniqueStrategy,
     EmailNormalizeStrategy,
     PhoneDigitsOnlyStrategy,
     ShortestValueStrategy,
+    UrlCanonicalStrategy,
+    WhitespaceNormalizeStrategy,
 )
 from goldenmatch.plugins.builtin.numeric import (
     NumericMaxStrategy,
     NumericMeanStrategy,
+    NumericMedianStrategy,
     NumericMinStrategy,
+    NumericSumStrategy,
+    NumericWeightedAverageStrategy,
 )
 
 # The full list of builtin plugin classes. Order is informational only;
 # registration is by name (last-write-wins for entry-point overrides).
 BUILTIN_PLUGINS = [
-    # Numeric (3)
+    # Numeric (6)
     NumericMaxStrategy,
     NumericMinStrategy,
     NumericMeanStrategy,
-    # Format-canonical (4)
+    NumericMedianStrategy,
+    NumericSumStrategy,
+    NumericWeightedAverageStrategy,
+    # Format-canonical (7)
     ShortestValueStrategy,
     ConcatUniqueStrategy,
     EmailNormalizeStrategy,
     PhoneDigitsOnlyStrategy,
-    # Business-shaped (3)
+    UrlCanonicalStrategy,
+    WhitespaceNormalizeStrategy,
+    BooleanNormalizeStrategy,
+    # Business-shaped (6)
     SystemOfRecordStrategy,
     LifecycleStageStrategy,
     FreshnessWithMaxAgeStrategy,
+    EnumCanonicalStrategy,
+    RegexValidatedStrategy,
+    WeightedByRecencyStrategy,
+    # Aggregation / telemetry (3)
+    CountDistinctStrategy,
+    CountNonNullStrategy,
+    AgreementRateStrategy,
 ]
 
 
@@ -68,15 +95,27 @@ def register_builtins(registry: object) -> None:
 
 __all__ = [
     "BUILTIN_PLUGINS",
+    "AgreementRateStrategy",
+    "BooleanNormalizeStrategy",
     "ConcatUniqueStrategy",
+    "CountDistinctStrategy",
+    "CountNonNullStrategy",
     "EmailNormalizeStrategy",
+    "EnumCanonicalStrategy",
     "FreshnessWithMaxAgeStrategy",
     "LifecycleStageStrategy",
     "NumericMaxStrategy",
     "NumericMeanStrategy",
+    "NumericMedianStrategy",
     "NumericMinStrategy",
+    "NumericSumStrategy",
+    "NumericWeightedAverageStrategy",
     "PhoneDigitsOnlyStrategy",
+    "RegexValidatedStrategy",
     "ShortestValueStrategy",
     "SystemOfRecordStrategy",
+    "UrlCanonicalStrategy",
+    "WeightedByRecencyStrategy",
+    "WhitespaceNormalizeStrategy",
     "register_builtins",
 ]
