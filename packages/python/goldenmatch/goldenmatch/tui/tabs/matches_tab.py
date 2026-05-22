@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import polars as pl
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
@@ -29,6 +30,13 @@ class MatchesTab(Static):
         padding: 2;
     }
     """
+
+    BINDINGS = [
+        # Phase 4 follow-up (#437 surface sync, 2026-05-22): open the
+        # MatchesCorrectionModal on the highlighted detail-table row to
+        # file a pair-level (approve/reject) Correction.
+        Binding("c", "correct_pair", "Correct pair"),
+    ]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -155,3 +163,63 @@ class MatchesTab(Static):
         for row in member_df.iter_rows(named=True):
             values = [str(row.get(c, "")) for c in display_cols]
             detail_table.add_row(*values)
+
+    def action_correct_pair(self) -> None:
+        """Open MatchesCorrectionModal for two members of the currently
+        selected cluster.
+
+        Pair-level corrections take two record IDs. The detail-table
+        shows the cluster's members; we use the two highest-row-id
+        members of the selected cluster as the pair (operator can
+        narrow this later via a follow-up "select pair" UI). When the
+        detail table isn't populated yet (no cluster selected), the
+        action exits silently.
+        """
+        from goldenmatch.tui.screens.matches_correction_modal import (
+            MatchesCorrectionModal,
+        )
+
+        if self._clusters is None or self._data is None:
+            return
+        try:
+            cluster_table = self.query_one("#cluster-table", DataTable)
+        except Exception:
+            return
+        if cluster_table.row_count == 0:
+            return
+        row_idx = cluster_table.cursor_row
+        if row_idx is None:
+            return
+        try:
+            row = cluster_table.get_row_at(row_idx)
+            cluster_id = int(str(row[0]))
+        except (ValueError, TypeError, IndexError):
+            return
+
+        cluster_info = self._clusters.get(cluster_id) if self._clusters else None
+        if cluster_info is None:
+            return
+        members = list(cluster_info.get("members", []))
+        if len(members) < 2:
+            return
+
+        # Pick the first two members as the representative pair. A
+        # later iteration could surface a 2-row selection UI.
+        id_a, id_b = members[0], members[1]
+        # Try to pull the pair's score from the cluster's pair_scores
+        # map for context in the modal title bar.
+        pair_scores = cluster_info.get("pair_scores", {}) or {}
+        score = pair_scores.get((min(id_a, id_b), max(id_a, id_b)))
+
+        dataset = (
+            getattr(self.app, "memory_dataset", None)
+            or getattr(self.app, "current_dataset", None)
+            or "tui"
+        )
+        modal = MatchesCorrectionModal(
+            id_a=int(id_a),
+            id_b=int(id_b),
+            score=float(score) if score is not None else None,
+            dataset=dataset,
+        )
+        self.app.push_screen(modal)
