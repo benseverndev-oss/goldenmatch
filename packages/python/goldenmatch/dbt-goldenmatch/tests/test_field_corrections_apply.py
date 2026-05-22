@@ -20,10 +20,15 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-# dbt-goldenmatch is a separate optional package not installed in the
-# core pytest CI lane. Skip the whole module when it's missing rather
-# than hitting ModuleNotFoundError per test.
-pytest.importorskip("dbt_goldenmatch")
+# dbt-goldenmatch is a sub-directory NOT installed as a Python package
+# in the core goldenmatch pytest lane (lives at
+# packages/python/goldenmatch/dbt-goldenmatch/ without its own
+# editable install). Skip the whole module up-front so pytest's
+# collection doesn't blow up on `from dbt_goldenmatch import ...`.
+try:
+    import dbt_goldenmatch  # noqa: F401
+except ImportError:
+    pytest.skip("dbt-goldenmatch not installed", allow_module_level=True)
 
 
 def _seed_field_correction_store(db_path: str, *, dataset: str) -> None:

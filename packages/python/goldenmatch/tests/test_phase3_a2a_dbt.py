@@ -13,6 +13,18 @@ from pathlib import Path
 
 import pytest
 
+# Skip the whole module up-front when optional extras aren't installed:
+# - aiohttp -- gated by goldenmatch[agent] extra
+# - dbt_goldenmatch -- subpackage not installed in main CI lane
+try:
+    import aiohttp  # noqa: F401
+    import dbt_goldenmatch  # noqa: F401
+except ImportError:
+    pytest.skip(
+        "aiohttp or dbt_goldenmatch not installed",
+        allow_module_level=True,
+    )
+
 # ---------------------------------------------------------------------------
 # 3.1 A2A add_correction skill
 # ---------------------------------------------------------------------------
