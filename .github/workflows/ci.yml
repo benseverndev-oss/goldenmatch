@@ -222,7 +222,10 @@ jobs:
           if [ "${{ matrix.pkg }}" = "goldenmatch" ]; then
             COV_ARGS="--cov=goldenmatch --cov-report=xml:packages/python/goldenmatch/coverage.xml --cov-report=term"
           fi
-          uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread $COV_ARGS $IGNORE
+          # --durations=20 surfaces the slowest tests in the CI log so
+          # we can target wall-time investigation (#433). Negligible
+          # cost; only adds a summary block at the end of the pytest run.
+          uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV_ARGS $IGNORE
       # Per-module coverage gate (goldenmatch only — other packages don't yet
       # have floors defined). Reads the coverage.xml produced by the pytest
       # step above. Fails CI if any tracked module regresses below its floor
