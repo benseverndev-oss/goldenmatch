@@ -141,6 +141,7 @@ def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tu
 
     total = 0
     any_throttled = False
+    throttled_pkgs: list[str] = []
     for pkg in packages:
         try:
             total += fetcher(pkg)
@@ -150,12 +151,21 @@ def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tu
                 file=sys.stderr,
             )
             any_throttled = True
+            throttled_pkgs.append(pkg)
             continue
 
-    # If everything throttled and we have a sane prior, preserve it.
-    if total == 0 and any_throttled and prior_total is not None:
+    # 2026-05-22: when ANY package throttled, the partial sum is an
+    # under-count by construction. Never let a throttled run REGRESS the
+    # badge below the prior known-good total -- if the partial sum is
+    # lower, preserve the prior. (Bit us when goldenmatch + goldencheck
+    # both 429'd and the remaining 4 packages summed to 3.7k vs the
+    # actual ~8k suite total.) When the partial sum somehow exceeds the
+    # prior, the upstream packages genuinely grew faster than the
+    # throttled ones declined -- accept the new total.
+    if any_throttled and prior_total is not None and total < prior_total:
         print(
-            f"warn: {kind} all-throttled; preserving prior total {prior_total}",
+            f"warn: {kind} partial sum {total} < prior {prior_total} "
+            f"(throttled: {','.join(throttled_pkgs)}); preserving prior",
             file=sys.stderr,
         )
         return prior_total, True
