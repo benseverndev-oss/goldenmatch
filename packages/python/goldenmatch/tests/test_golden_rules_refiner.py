@@ -23,6 +23,7 @@ def _signals(**overrides) -> RefinementSignals:
     defaults = {
         "within_cluster_spread": {"f": 1.0},
         "per_source_completeness": {},
+        "per_source_agreement": {},  # v1.18.1
         "date_column_coverage": {},
         "col_type": {"f": "string"},
         "avg_len": {"f": 5.0},
