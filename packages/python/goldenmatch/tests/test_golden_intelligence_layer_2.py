@@ -34,53 +34,56 @@ from goldenmatch.core.golden_rules_refiner import (
 
 def test_compute_refinement_signals_includes_per_source_agreement():
     """compute_refinement_signals populates per_source_agreement when
-    __source__ is present + clusters have enough members."""
-    # Build a 4-cluster fixture: each cluster has 3 sources (a, b, c).
-    # Source A agrees with consensus 100% of the time on `name`.
-    # Source B agrees 50%. Source C agrees 0%.
+    __source__ is present + clusters have enough members.
+
+    Each cluster has 4 members: 2 from source A (both emit consensus),
+    1 from B (agrees 50% of the time), 1 from C (always disagrees).
+    Two members from A guarantee mode() = consensus deterministically.
+    """
     rows = []
     consensus_per_cluster = {0: "Alice", 1: "Bob", 2: "Carol", 3: "Dan"}
     for cid, consensus in consensus_per_cluster.items():
-        # 12 rows per cluster (3 sources × 4 members each), but we'll
-        # use 3 rows per cluster (1 per source) for simplicity.
-        # Source A: agrees
-        rows.append({"__row_id__": cid * 3, "__source__": "a", "name": consensus})
-        # Source B: agrees half the time (cluster 0, 1 yes; 2, 3 no)
+        # Source a: 2 members per cluster, both = consensus (so mode is
+        # deterministic regardless of what b and c emit).
+        rows.append({"__source__": "a", "name": consensus})
+        rows.append({"__source__": "a", "name": consensus})
+        # Source b: 1 member; agrees on cid 0/1, disagrees on cid 2/3.
         rows.append({
-            "__row_id__": cid * 3 + 1, "__source__": "b",
+            "__source__": "b",
             "name": consensus if cid < 2 else "Other",
         })
-        # Source C: always disagrees
-        rows.append({"__row_id__": cid * 3 + 2, "__source__": "c", "name": "Wrong"})
+        # Source c: 1 member; always disagrees.
+        rows.append({"__source__": "c", "name": "Wrong"})
 
     # Need >= 10 attempts per source per field for the agreement signal.
-    # Multiply by 4 to get 16 attempts each.
+    # 4 base clusters × 4 copies = 16 clusters. Source A: 32 attempts
+    # (2 per cluster), B: 16, C: 16 -- all above the threshold.
     full_rows = rows * 4
-    # Re-index __row_id__ so it's unique.
     for i, r in enumerate(full_rows):
         r["__row_id__"] = i
 
     df = pl.DataFrame(full_rows)
 
-    # 16 clusters (4 clusters × 4 copies), each with 3 sources.
+    # 16 clusters, each with 4 members.
     clusters: dict[int, dict] = {}
+    members_per_cluster = 4
     for cluster_idx in range(16):
-        base = cluster_idx * 3
+        base = cluster_idx * members_per_cluster
         clusters[cluster_idx] = {
-            "members": [base, base + 1, base + 2],
-            "size": 3,
+            "members": list(range(base, base + members_per_cluster)),
+            "size": members_per_cluster,
         }
 
-    # No column profiles needed -- compute_refinement_signals only uses
-    # them for col_type/avg_len/null_rate which don't affect per-source-
-    # agreement computation directly.
     signals = compute_refinement_signals(clusters, df, column_profiles=[])
 
     assert "name" in signals.per_source_agreement
     rates = signals.per_source_agreement["name"]
-    # Source A agrees 100%; B agrees ~50%; C agrees 0%.
+    # Source A agrees 100% (both its members emit consensus, which is
+    # the mode by 2-vote majority over b + c).
     assert rates["a"] > 0.95
+    # Source B agrees on half the clusters (cid 0,1 yes; 2,3 no).
     assert 0.4 < rates["b"] < 0.6
+    # Source C never agrees.
     assert rates["c"] < 0.05
 
 
