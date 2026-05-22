@@ -49,27 +49,32 @@ SIBLING_TIMESTAMP_COVERAGE_THRESHOLD = 0.8
 # heuristic value is worse than a missing value for these.
 import re as _re
 
+# Letter-boundary lookarounds so the patterns match `patient_ssn`
+# (underscore is `\w`, which breaks `\b` between underscore + letter).
+# Allows underscore, hyphen, digit, start/end of string as boundaries.
+_LB = r"(?<![a-z])"
+_LA = r"(?![a-z])"
+
 _COMPLIANCE_NAME_PATTERNS = [
     _re.compile(p, _re.IGNORECASE) for p in [
-        r"\bssn\b",
-        r"\bsin\b",                       # Canadian SIN
-        r"\bein\b",                       # employer ID
-        r"\btax[_-]?id\b",
-        r"\bnpi\b",
-        r"\bdea[_-]?number\b",
-        r"\blicense[_-]?(no|num|number)?\b",
-        r"\bpassport[_-]?(no|num|number)?\b",
-        r"\bdriver[_-]?license\b",
-        r"\bdrivers?[_-]?license\b",
-        r"\b(date[_-]?of[_-]?birth|dob|birthdate)\b",
-        r"\bmrn\b",                       # medical record number
-        r"\bhipaa[_-]?id\b",
-        r"\bpatient[_-]?id\b",
-        r"\bmedicaid[_-]?(no|num|number|id)?\b",
-        r"\bmedicare[_-]?(no|num|number|id)?\b",
-        r"\bcusip\b",
-        r"\blei\b",                       # Legal Entity Identifier
-        r"\bisin\b",                      # International Securities ID
+        rf"{_LB}ssn{_LA}",
+        rf"{_LB}sin{_LA}",                # Canadian SIN
+        rf"{_LB}ein{_LA}",                # employer ID
+        rf"{_LB}tax[_-]?id{_LA}",
+        rf"{_LB}npi{_LA}",
+        rf"{_LB}dea[_-]?number{_LA}",
+        rf"{_LB}license[_-]?(no|num|number)?{_LA}",
+        rf"{_LB}passport[_-]?(no|num|number)?{_LA}",
+        rf"{_LB}drivers?[_-]?license{_LA}",
+        rf"{_LB}(date[_-]?of[_-]?birth|dob|birthdate){_LA}",
+        rf"{_LB}mrn{_LA}",                # medical record number
+        rf"{_LB}hipaa[_-]?id{_LA}",
+        rf"{_LB}patient[_-]?id{_LA}",
+        rf"{_LB}medicaid[_-]?(no|num|number|id)?{_LA}",
+        rf"{_LB}medicare[_-]?(no|num|number|id)?{_LA}",
+        rf"{_LB}cusip{_LA}",
+        rf"{_LB}lei{_LA}",                # Legal Entity Identifier
+        rf"{_LB}isin{_LA}",               # International Securities ID
     ]
 ]
 
