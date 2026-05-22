@@ -253,6 +253,103 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
         # Reuse MCP dispatch since the contract is identical (JSON in/out).
         return _identity_dispatch(skill_id, params)
 
+    if skill_id == "add_correction":
+        # v1.19.x Phase 3 (#437 surface sync). Pair-level OR field-level.
+        # Inlined dispatch (rather than delegating to MCP) so this branch is
+        # independent of the Phase 1 PR landing order.
+        import uuid as _uuid
+        from datetime import datetime as _dt
+
+        from goldenmatch.core.memory.store import (
+            Correction as _CorrectionDC,
+        )
+        from goldenmatch.core.memory.store import (
+            MemoryStore as _MemoryStore,
+        )
+        from goldenmatch.core.memory.store import (
+            _canon_pair,
+        )
+
+        dataset = params.get("dataset")
+        if not dataset:
+            return {"error": "dataset is required"}
+        decision = params.get("decision")
+        if decision not in ("approve", "reject", "field_correct"):
+            return {"error": f"Invalid decision: {decision!r}"}
+        path = params.get("path") or ".goldenmatch/memory.db"
+
+        if decision == "field_correct":
+            field_name = params.get("field_name")
+            corrected_value = params.get("corrected_value")
+            if not field_name:
+                return {"error": "field_correct requires field_name"}
+            if corrected_value is None:
+                return {"error": "field_correct requires corrected_value"}
+            cid = params.get("cluster_id", params.get("id_a", 0))
+            try:
+                cid = int(cid)
+            except (TypeError, ValueError) as exc:
+                return {"error": f"cluster_id must be an integer: {exc}"}
+            correction = _CorrectionDC(
+                id=str(_uuid.uuid4()),
+                id_a=cid,
+                id_b=0,
+                decision=decision,
+                source="agent",
+                trust=0.5,
+                field_hash="",
+                record_hash="",
+                original_score=0.0,
+                matchkey_name=params.get("matchkey_name"),
+                reason=params.get("reason"),
+                dataset=dataset,
+                created_at=_dt.now(),
+                field_name=field_name,
+                original_value=params.get("original_value"),
+                corrected_value=corrected_value,
+            )
+        else:
+            try:
+                id_a = int(params["id_a"])
+                id_b = int(params["id_b"])
+            except (KeyError, TypeError, ValueError) as exc:
+                return {"error": f"id_a / id_b must be integers: {exc}"}
+            ca, cb = _canon_pair(id_a, id_b)
+            correction = _CorrectionDC(
+                id=str(_uuid.uuid4()),
+                id_a=ca,
+                id_b=cb,
+                decision=decision,
+                source="agent",
+                trust=0.5,
+                field_hash="",
+                record_hash="",
+                original_score=0.0,
+                matchkey_name=params.get("matchkey_name"),
+                reason=params.get("reason"),
+                dataset=dataset,
+                created_at=_dt.now(),
+            )
+
+        with _MemoryStore(backend="sqlite", path=path) as store:
+            store.add_correction(correction)
+        result: dict = {
+            "status": "ok",
+            "id": correction.id,
+            "decision": decision,
+            "source": "agent",
+            "trust": 0.5,
+            "dataset": dataset,
+        }
+        if decision == "field_correct":
+            result["cluster_id"] = correction.id_a
+            result["field_name"] = correction.field_name
+            result["corrected_value"] = correction.corrected_value
+        else:
+            result["id_a"] = correction.id_a
+            result["id_b"] = correction.id_b
+        return result
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 
