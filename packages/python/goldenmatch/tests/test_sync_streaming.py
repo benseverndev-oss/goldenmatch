@@ -342,9 +342,18 @@ def test_full_scan_streaming_returns_expected_dict_shape(tmp_path, monkeypatch):
 
 
 def test_full_scan_streaming_writes_incrementally(tmp_path, monkeypatch):
-    """Step 3: match log writes fire per-block, not once at the end.
-    Lets a long sync show progress as blocks finish."""
+    """Step 3: match log writes fire as blocks complete, not all at the
+    end. Lets a long sync show progress as blocks finish.
+
+    #424: post-#424, writes batch via GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS
+    (default 10K) so the COPY-based path amortizes commit overhead.
+    Set the env to 1 here to verify the per-block incremental contract
+    still works when buffering is disabled.
+    """
     from goldenmatch.db.sync import _full_scan_streaming
+
+    monkeypatch.setenv("GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS", "1")
+    monkeypatch.setenv("GOLDENMATCH_STREAMING_BLOCK_WORKERS", "1")
 
     # Three distinct blocks of 3 rows each -- 3 calls to log_matches_batch
     # if streaming writes correctly.
@@ -373,11 +382,12 @@ def test_full_scan_streaming_writes_incrementally(tmp_path, monkeypatch):
         total_rows=9,
     )
 
-    # At least 3 calls (one per block with multi-member matches). Could
-    # be exactly 3 or fewer if a block emits zero pairs; just assert
-    # that more than one batch fired -- proves incremental writes.
+    # At least 2 calls -- proves incremental writes when flush threshold
+    # is set low. Could be exactly 3 or fewer if a block emits zero
+    # pairs.
     assert len(fake_conn.match_log_calls) >= 2, (
-        "streaming sync must write match log incrementally per block; "
+        "streaming sync must write match log incrementally per block "
+        "(with GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS=1); "
         f"got {len(fake_conn.match_log_calls)} call(s)"
     )
 
