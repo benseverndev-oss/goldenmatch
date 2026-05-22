@@ -3,7 +3,6 @@ import json
 
 import duckdb
 import pytest
-
 from goldenmatch_duckdb.functions import register
 
 

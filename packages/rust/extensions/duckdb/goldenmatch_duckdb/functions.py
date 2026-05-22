@@ -12,7 +12,6 @@ Registers the same functions available in the Postgres extension:
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import duckdb
 
@@ -134,6 +133,23 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
     )
 
+    # ── Correction CRUD (v2.x Phase 6B of #437 surface sync) ─────────────
+    # Write-side correction filing from SQL. Pair-level + field-level
+    # shapes auto-detected from the args dict. Returns the generated
+    # correction UUID as JSON-encoded string.
+    #
+    # Spec: docs/superpowers/specs/2026-05-22-phase-6-sql-extensions-correction-crud-design.md
+    con.create_function(
+        "goldenmatch_correction_add", _correction_add,
+        # decision, dataset, memory_path, args_json
+        ["VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_correction_list", _correction_list,
+        # dataset, memory_path
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
@@ -192,7 +208,6 @@ def _match_json(target_json: str, ref_json: str, config_json: str) -> str:
 
 
 def _dedupe_table(con: duckdb.DuckDBPyConnection, table_name: str, config_json: str) -> str:
-    import polars as pl
     from goldenmatch import dedupe_df
 
     _validate_table_name(table_name)
@@ -215,7 +230,6 @@ def _match_tables(
     ref_table: str,
     config_json: str,
 ) -> str:
-    import polars as pl
     from goldenmatch import match_df
 
     _validate_table_name(target_table)
@@ -254,7 +268,6 @@ def _gm_configure(con: duckdb.DuckDBPyConnection, job_name: str, config_json: st
 
 
 def _gm_run(con: duckdb.DuckDBPyConnection, job_name: str, table_name: str) -> str:
-    import polars as pl
     from goldenmatch import dedupe_df
 
     state = _get_state(con)
@@ -389,7 +402,7 @@ def _run_autoconfig(con: duckdb.DuckDBPyConnection, table_name: str):
     return auto_configure_df(df)
 
 
-def _capture_telemetry(committed_config) -> Optional[str]:
+def _capture_telemetry(committed_config) -> str | None:
     """Read the AutoConfigController ContextVar and serialise to JSON.
 
     Returns ``None`` when the controller didn't run on the current thread
@@ -507,3 +520,172 @@ _pipeline_state: dict = {"jobs": {}}
 def _get_state(con: duckdb.DuckDBPyConnection) -> dict:
     """Get the global pipeline state."""
     return _pipeline_state
+
+
+# ── Correction CRUD (Phase 6B of #437 surface sync) ─────────────────────
+
+
+def _correction_add(
+    decision: str,
+    dataset: str,
+    memory_path: str,
+    args_json: str,
+) -> str:
+    """File a correction via MemoryStore.
+
+    The `args_json` carries shape-specific args (pair-level OR
+    field-level) so we don't bloat the SQL signature with 10+ optional
+    columns. Returns a JSON object with {status, id, ...} or {error}.
+
+    Args:
+        decision: "approve" | "reject" | "field_correct"
+        dataset: dataset key (required, non-empty)
+        memory_path: SQLite MemoryStore path (empty -> default
+            ".goldenmatch/memory.db")
+        args_json: JSON-encoded dict carrying shape-specific args:
+            - pair-level: {id_a, id_b, [reason, matchkey_name]}
+            - field-level: {cluster_id, field_name, corrected_value,
+                            [original_value, reason]}
+    """
+    import uuid as _uuid
+    from datetime import datetime
+
+    if not dataset:
+        return json.dumps({"error": "dataset is required"})
+    if decision not in ("approve", "reject", "field_correct"):
+        return json.dumps({
+            "error": (
+                f"Invalid decision: {decision!r}. "
+                "Use 'approve', 'reject', or 'field_correct'."
+            ),
+        })
+    try:
+        args = json.loads(args_json) if args_json else {}
+    except (TypeError, ValueError) as exc:
+        return json.dumps({"error": f"args_json must be JSON: {exc}"})
+
+    try:
+        from goldenmatch.core.memory.store import (
+            Correction,
+            MemoryStore,
+            _canon_pair,
+        )
+    except ImportError as exc:  # pragma: no cover -- goldenmatch installed
+        return json.dumps({"error": f"goldenmatch import failed: {exc}"})
+
+    path = memory_path or ".goldenmatch/memory.db"
+
+    if decision == "field_correct":
+        field_name = args.get("field_name")
+        corrected_value = args.get("corrected_value")
+        if not field_name:
+            return json.dumps({"error": "field_correct requires field_name"})
+        if corrected_value is None:
+            return json.dumps({
+                "error": "field_correct requires corrected_value",
+            })
+        try:
+            cluster_id = int(args.get("cluster_id", args.get("id_a", 0)))
+        except (TypeError, ValueError) as exc:
+            return json.dumps({"error": f"cluster_id must be int: {exc}"})
+        correction = Correction(
+            id=str(_uuid.uuid4()),
+            id_a=cluster_id,
+            id_b=0,
+            decision=decision,
+            source="duckdb",
+            trust=0.7,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=args.get("matchkey_name"),
+            reason=args.get("reason"),
+            dataset=dataset,
+            created_at=datetime.now(),
+            field_name=field_name,
+            original_value=args.get("original_value"),
+            corrected_value=corrected_value,
+        )
+        with MemoryStore(backend="sqlite", path=path) as store:
+            store.add_correction(correction)
+        return json.dumps({
+            "status": "ok",
+            "id": correction.id,
+            "cluster_id": cluster_id,
+            "field_name": field_name,
+            "decision": decision,
+            "source": "duckdb",
+            "trust": 0.7,
+            "dataset": dataset,
+        })
+
+    # Pair-level approve / reject.
+    try:
+        id_a = int(args["id_a"])
+        id_b = int(args["id_b"])
+    except (KeyError, TypeError, ValueError) as exc:
+        return json.dumps({"error": f"id_a / id_b must be ints: {exc}"})
+    ca, cb = _canon_pair(id_a, id_b)
+    correction = Correction(
+        id=str(_uuid.uuid4()),
+        id_a=ca,
+        id_b=cb,
+        decision=decision,
+        source="duckdb",
+        trust=0.7,
+        field_hash="",
+        record_hash="",
+        original_score=float(args.get("original_score", 0.0)),
+        matchkey_name=args.get("matchkey_name"),
+        reason=args.get("reason"),
+        dataset=dataset,
+        created_at=datetime.now(),
+    )
+    with MemoryStore(backend="sqlite", path=path) as store:
+        store.add_correction(correction)
+    return json.dumps({
+        "status": "ok",
+        "id": correction.id,
+        "id_a": ca,
+        "id_b": cb,
+        "decision": decision,
+        "source": "duckdb",
+        "trust": 0.7,
+        "dataset": dataset,
+    })
+
+
+def _correction_list(dataset: str, memory_path: str) -> str:
+    """List all corrections for a dataset (or all when empty).
+
+    Returns a JSON array of correction dicts.
+    """
+    try:
+        from goldenmatch.core.memory.store import MemoryStore
+    except ImportError as exc:  # pragma: no cover
+        return json.dumps({"error": f"goldenmatch import failed: {exc}"})
+    path = memory_path or ".goldenmatch/memory.db"
+    ds = dataset or None
+    try:
+        with MemoryStore(backend="sqlite", path=path) as store:
+            corrections = list(store.get_corrections(dataset=ds))
+    except Exception as exc:
+        return json.dumps({"error": f"MemoryStore read failed: {exc}"})
+    out = []
+    for c in corrections:
+        out.append({
+            "id": c.id,
+            "id_a": c.id_a,
+            "id_b": c.id_b,
+            "decision": c.decision,
+            "source": c.source,
+            "trust": c.trust,
+            "reason": c.reason,
+            "dataset": c.dataset,
+            "matchkey_name": c.matchkey_name,
+            "field_name": getattr(c, "field_name", None),
+            "original_value": getattr(c, "original_value", None),
+            "corrected_value": getattr(c, "corrected_value", None),
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+    return json.dumps(out)
