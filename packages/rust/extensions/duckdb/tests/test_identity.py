@@ -11,7 +11,6 @@ from pathlib import Path
 
 import duckdb
 import pytest
-
 from goldenmatch.identity import (
     IdentityNode,
     IdentityStore,
