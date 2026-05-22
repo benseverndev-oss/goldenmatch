@@ -6,22 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-### Added -- Phase 4 of v1.18 surface-sync roadmap (TUI)
+### Added — cluster-decision tuner (RFC from MJH Print Modernization)
 
-- **8th tab: Corrections** -- inspect MemoryStore corrections via
-  DataTable + filter-by-dataset + refresh/delete bindings.
-  `tui/tabs/corrections_tab.py`.
-- **`GoldenEditModal`** captures a field-level Correction
-  (`decision="field_correct"`) for Golden tab cells. Save writes to
-  MemoryStore. `tui/screens/golden_edit_modal.py`.
-- **`MatchesCorrectionModal`** captures a pair-level Correction
-  (`decision="approve"|"reject"`) for Matches tab rows. Save writes
-  to MemoryStore. `tui/screens/matches_correction_modal.py`.
-- **`GoldenMatchApp.memory_db_path: str | None`** -- new attribute
-  set by callers (CLI launcher etc.) when memory is enabled. Empty
-  state shown in Corrections tab when None.
+Third tuner in the Learning Memory family, paralleling the
+pair-level `MemoryLearner` and field-level `tune_field_strategy`.
+Consumes cluster-level approve/reject decisions and proposes an
+updated auto-approve threshold per-dataset.
 
-Spec: `docs/superpowers/specs/2026-05-22-phase-4-tui-corrections-tab-design.md`
+- **`Decision.CLUSTER_DECISION`** enum value (`"cluster_decision"`).
+- **`Correction.cluster_score`** + **`Correction.cluster_outcome`**
+  optional fields. Default None for pair-level + field-level rows.
+- **`MemoryStore.record_cluster_decision(dataset, cluster_id, score,
+  outcome)`** convenience wrapper.
+- **`MemoryStore._migrate_cluster_decision_columns()`** idempotent
+  ALTER TABLE for pre-existing v1.18.2+ DBs.
+- **`tune_decision_threshold(store, dataset, *, target_approve_rate,
+  min_band_n, holdout_frac, max_overfit_drop_pp, seed)`** in
+  `core/autoconfig_cluster_threshold_tuner.py`. Returns
+  `ThresholdSuggestion(threshold, n_total, n_train, n_heldout,
+  train_approve_rate, heldout_approve_rate, reason)`. Same shape as
+  `StrategyTuning` so a single dashboard can render both.
+- Deterministic shuffle seeded by `sha256(dataset)[:8]` (override via
+  `seed` kwarg). Avoids PYTHONHASHSEED non-determinism.
+- 90/10 train/heldout split + 1pp overfit guard (configurable).
+- Reasons: `"ok"`, `"below_minimum"`, `"no_qualifying_band"`,
+  `"overfit"`.
+
+Spec: `docs/superpowers/specs/2026-05-22-cluster-decision-tuner-design.md`
 
 ## [1.19.0] - 2026-05-22
 

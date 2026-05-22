@@ -34,6 +34,11 @@ class Decision(StrEnum):
     # chosen field value). `field_name` + `original_value` +
     # `corrected_value` carry the edit on the Correction row.
     FIELD_CORRECT = "field_correct"
+    # v1.20.x: cluster-level approve/reject decision (RFC from MJH
+    # Print Modernization, 2026-05-22). `cluster_score` +
+    # `cluster_outcome` carry the decision payload. Consumed by
+    # `goldenmatch.core.autoconfig_cluster_threshold_tuner`.
+    CLUSTER_DECISION = "cluster_decision"
 
 
 HIGH_TRUST_SOURCES: frozenset[CorrectionSource] = frozenset({
@@ -98,6 +103,12 @@ class Correction:
     field_name: str | None = None
     original_value: str | None = None
     corrected_value: str | None = None
+    # Cluster-level decisions (v1.20.x, MJH Print Modernization RFC).
+    # Set when `decision == "cluster_decision"`. The tuner consumes
+    # these via `tune_decision_threshold()`. `id_a` carries
+    # `cluster_id`; `id_b` is unused (set to 0).
+    cluster_score: float | None = None
+    cluster_outcome: str | None = None  # "approve" | "reject"
 
 
 @dataclass
@@ -130,6 +141,10 @@ CREATE TABLE IF NOT EXISTS corrections (
     field_name TEXT,
     original_value TEXT,
     corrected_value TEXT,
+    -- v1.20.x: cluster-level decisions (MJH RFC). Set when
+    -- decision='cluster_decision'. `id_a` carries cluster_id.
+    cluster_score REAL,
+    cluster_outcome TEXT,
     UNIQUE(id_a, id_b, dataset)
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_pair ON corrections(id_a, id_b, dataset);
@@ -169,6 +184,7 @@ class MemoryStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
             self._migrate_field_correction_columns()
+            self._migrate_cluster_decision_columns()
             log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
         else:
             raise NotImplementedError(f"Backend '{backend}' not yet implemented")
@@ -200,6 +216,29 @@ class MemoryStore:
         except Exception as exc:  # pragma: no cover -- benign
             log.debug("field-correction index skipped: %s", exc)
 
+    def _migrate_cluster_decision_columns(self) -> None:
+        """v1.20.x: add cluster_score / cluster_outcome columns for
+        pre-existing DBs.
+
+        Idempotent: SQLite raises OperationalError on duplicate column;
+        swallow it. Pattern mirrors `_migrate_field_correction_columns`.
+        Spec: docs/superpowers/specs/2026-05-22-cluster-decision-tuner-design.md
+        """
+        for col, sql_type in (
+            ("cluster_score", "REAL"),
+            ("cluster_outcome", "TEXT"),
+        ):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE corrections ADD COLUMN {col} {sql_type}",
+                )
+            except Exception as exc:  # pragma: no cover -- benign
+                msg = str(exc).lower()
+                if "duplicate" not in msg:
+                    log.debug(
+                        "cluster-decision migration skipped %s: %s", col, exc,
+                    )
+
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
@@ -213,9 +252,19 @@ class MemoryStore:
     def add_correction(self, correction: Correction) -> None:
         """Upsert a correction. Higher trust wins; same trust = latest wins.
 
-        Pairs are canonicalized to (min, max) ordering before storage.
+        Pair-level corrections (decision in {approve, reject}) get
+        canonicalized to (min, max) ordering before storage.
+
+        Field-level and cluster-decision corrections (decision in
+        {field_correct, cluster_decision}) skip canonicalization
+        because `id_a` carries `cluster_id` (semantic) and `id_b=0`
+        is a sentinel (canonicalizing would swap them and lose the
+        cluster_id).
         """
-        ca, cb = _canon_pair(correction.id_a, correction.id_b)
+        if correction.decision in ("field_correct", "cluster_decision"):
+            ca, cb = correction.id_a, correction.id_b
+        else:
+            ca, cb = _canon_pair(correction.id_a, correction.id_b)
         existing = self.get_pair_correction(ca, cb, correction.dataset)
 
         if existing is not None:
@@ -233,8 +282,9 @@ class MemoryStore:
                 "INSERT INTO corrections "
                 "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
                 "original_score, matchkey_name, reason, dataset, created_at, "
-                "field_name, original_value, corrected_value) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "field_name, original_value, corrected_value, "
+                "cluster_score, cluster_outcome) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     correction.id, ca, cb,
                     correction.decision, correction.source, correction.trust,
@@ -244,10 +294,73 @@ class MemoryStore:
                     correction.created_at.isoformat(),
                     correction.field_name, correction.original_value,
                     correction.corrected_value,
+                    correction.cluster_score, correction.cluster_outcome,
                 ),
             )
         log.debug("Correction stored: (%d, %d) %s [%s]", ca, cb,
                    correction.decision, correction.source)
+
+    def record_cluster_decision(
+        self,
+        dataset: str,
+        cluster_id: int,
+        score: float,
+        outcome: str,
+        source: str = "steward",
+        reason: str | None = None,
+    ) -> Correction:
+        """v1.20.x: convenience wrapper for cluster-decision corrections.
+
+        Constructs a ``decision="cluster_decision"`` Correction, sets
+        ``id_a = cluster_id`` and ``id_b = 0`` (unused), and routes
+        through ``add_correction``'s trust-aware upsert.
+
+        Args:
+            dataset: dataset namespace (e.g. ``"pub_48"``).
+            cluster_id: stable cluster id from the dedupe run.
+            score: cluster-level scalar in ``[0, 1]``. Semantics are
+                consumer-defined (bottleneck pair score, avg edge,
+                connectivity, etc.).
+            outcome: ``"approve"`` or ``"reject"``.
+            source: CorrectionSource value; default ``"steward"``
+                (trust=1.0). Use ``"agent"`` (0.5) for non-human signals.
+            reason: optional human-readable note.
+
+        Returns:
+            The stored Correction (with server-generated ``id``).
+
+        Spec: docs/superpowers/specs/2026-05-22-cluster-decision-tuner-design.md
+        """
+        import uuid
+
+        if outcome not in ("approve", "reject"):
+            raise ValueError(
+                f"outcome must be 'approve' or 'reject'; got {outcome!r}",
+            )
+        if not (0.0 <= float(score) <= 1.0):
+            raise ValueError(
+                f"score must be in [0, 1]; got {score!r}",
+            )
+        trust = trust_for_source(source)
+        correction = Correction(
+            id=str(uuid.uuid4()),
+            id_a=int(cluster_id),
+            id_b=0,
+            decision="cluster_decision",
+            source=source,
+            trust=trust,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=None,
+            reason=reason,
+            dataset=dataset,
+            created_at=datetime.now(),
+            cluster_score=float(score),
+            cluster_outcome=outcome,
+        )
+        self.add_correction(correction)
+        return correction
 
     def get_pair_correction(
         self, id_a: int, id_b: int, dataset: str | None = None,
@@ -358,6 +471,9 @@ class MemoryStore:
             field_name=row["field_name"] if "field_name" in keys else None,
             original_value=row["original_value"] if "original_value" in keys else None,
             corrected_value=row["corrected_value"] if "corrected_value" in keys else None,
+            # v1.20.x cluster-decision (RFC, 2026-05-22):
+            cluster_score=row["cluster_score"] if "cluster_score" in keys else None,
+            cluster_outcome=row["cluster_outcome"] if "cluster_outcome" in keys else None,
         )
 
     @staticmethod
