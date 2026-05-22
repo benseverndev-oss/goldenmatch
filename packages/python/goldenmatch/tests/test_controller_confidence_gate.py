@@ -34,6 +34,33 @@ def _disable_autoconfig_memory(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
 
+# #433: gate tests previously built REFUSE_AT_N (100K) row dataframes
+# to exercise the gate. Each test ran the controller iteration loop on
+# 100K rows, costing ~30s/test * 4 tests = ~120s of CI wall time.
+#
+# The gate's behavior depends on the COMPARISON `df.height >= REFUSE_AT_N`,
+# not the absolute scale. Lowering REFUSE_AT_N to SMALL_N via monkeypatch
+# and using SMALL_N-row dataframes exercises the same code path on a
+# fraction of the data.
+#
+# The constant-guardrail test `test_refuse_at_n_constant_is_100k` opts
+# OUT of this fixture (its own monkeypatch fixture below). That keeps
+# the load-bearing 100K value pinned in source.
+SMALL_N = 500
+
+
+@pytest.fixture(autouse=True)
+def _lower_refuse_at_n_for_speed(monkeypatch, request):
+    """Lower REFUSE_AT_N to SMALL_N inside the autoconfig_controller
+    module so gate-mechanism tests don't need 100K-row fixtures.
+
+    Skipped via marker `keep_real_refuse_at_n` for the constant guardrail."""
+    if request.node.get_closest_marker("keep_real_refuse_at_n"):
+        return
+    from goldenmatch.core import autoconfig_controller as ctrl_mod
+    monkeypatch.setattr(ctrl_mod, "REFUSE_AT_N", SMALL_N)
+
+
 def _force_red_history_entry(monkeypatch, n_rows_in_df: int):
     """Replace RunHistory.pick_committed with a callable returning a
     forced-RED HistoryEntry."""
@@ -79,23 +106,27 @@ def _df(n_rows: int) -> pl.DataFrame:
     })
 
 
+@pytest.mark.keep_real_refuse_at_n
 def test_refuse_at_n_constant_is_100k():
+    # Source-of-truth guardrail: REFUSE_AT_N is the documented 100K
+    # threshold. Opts out of the autouse monkeypatch via marker so the
+    # real constant is asserted.
     assert REFUSE_AT_N == 100_000
 
 
 def test_gate_fires_on_red_at_or_above_threshold(monkeypatch):
     """df.height = REFUSE_AT_N exactly + RED -> raise."""
-    _force_red_history_entry(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    df = _df(REFUSE_AT_N)
+    _force_red_history_entry(monkeypatch, n_rows_in_df=SMALL_N)
+    df = _df(SMALL_N)
     with pytest.raises(ControllerNotConfidentError) as exc_info:
         gm.dedupe_df(df)
-    assert exc_info.value.n_rows == REFUSE_AT_N
+    assert exc_info.value.n_rows == SMALL_N
     assert exc_info.value.failing_sub_profile == "data"
 
 
 def test_gate_does_not_fire_below_threshold(monkeypatch):
     """df.height < REFUSE_AT_N + RED -> warn-and-run (current behavior)."""
-    n = REFUSE_AT_N - 1
+    n = SMALL_N - 1
     _force_red_history_entry(monkeypatch, n_rows_in_df=n)
     df = _df(n)
     result = gm.dedupe_df(df)
@@ -107,7 +138,7 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
     from goldenmatch.core.autoconfig_history import HistoryEntry, RunHistory
 
     green_profile = ComplexityProfile(
-        data=DataProfile(n_rows=REFUSE_AT_N, n_cols=3, column_types={
+        data=DataProfile(n_rows=SMALL_N, n_cols=3, column_types={
             "a": "text", "b": "text", "c": "text",
         }),
         blocking=BlockingProfile(
@@ -122,8 +153,8 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
             dip_statistic=0.05,  # avoid RED: health() returns RED when dip<0.005
         ),
         meta=ProfileMeta(
-            iteration=0, is_sample=False, sample_size=REFUSE_AT_N,
-            n_rows_full=REFUSE_AT_N, wall_clock_ms=0, seed=0,
+            iteration=0, is_sample=False, sample_size=SMALL_N,
+            n_rows_full=SMALL_N, wall_clock_ms=0, seed=0,
         ),
     )
 
@@ -137,7 +168,7 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
         )
 
     monkeypatch.setattr(RunHistory, "pick_committed", _picker)
-    df = _df(REFUSE_AT_N)
+    df = _df(SMALL_N)
     result = gm.dedupe_df(df)  # should NOT raise
     assert result is not None
 
@@ -145,7 +176,7 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
 def test_gate_short_circuits_with_confidence_required_false(monkeypatch):
     """Spec §Backward compatibility: kwarg opt-out preserves today's
     warn-and-run behavior. Un-skipped in Phase 4."""
-    _force_red_history_entry(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    df = _df(REFUSE_AT_N)
+    _force_red_history_entry(monkeypatch, n_rows_in_df=SMALL_N)
+    df = _df(SMALL_N)
     result = gm.dedupe_df(df, confidence_required=False)
     assert result is not None

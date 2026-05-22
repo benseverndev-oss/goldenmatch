@@ -609,6 +609,12 @@ class TestCompoundBlockingIntegration:
     """Integration test: auto_configure_df on a wide dataset with oversized single-column blocks."""
 
     def test_wide_dataset_produces_safe_config(self):
+        # #433: was 112s on CI (the dominant test). The full
+        # controller iteration adds ~100s and isn't what this test
+        # verifies -- the assertion is about blocking safety on a
+        # wide dataset, which is computed in the initial v0 config.
+        # confidence_required=False short-circuits past the
+        # iteration loop and returns v0 directly.
         random.seed(42)
         n = 10000
         models = [f"Model{random.choice('ABCDEFGHIJ')}{i}" for i in range(100)]
@@ -624,7 +630,7 @@ class TestCompoundBlockingIntegration:
         })
 
         from goldenmatch.core.autoconfig import auto_configure_df
-        config = auto_configure_df(df)
+        config = auto_configure_df(df, confidence_required=False)
 
         assert config.blocking is not None
         if config.blocking.strategy == "multi_pass":
