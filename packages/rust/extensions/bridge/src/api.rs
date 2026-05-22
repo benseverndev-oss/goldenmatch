@@ -773,6 +773,226 @@ pub fn identity_list(
     })
 }
 
+// ─── Correction CRUD (Phase 6A of #437 surface sync) ────────────────────
+//
+// File pair-level + field-level + cluster-decision corrections into the
+// Python MemoryStore. The pgrx extension wraps these as
+// `goldenmatch.correction_add(...)` etc. Spec:
+// docs/superpowers/specs/2026-05-22-phase-6-sql-extensions-correction-crud-design.md
+
+/// Args for `correction_add` -- supports the three Correction shapes
+/// (pair-level, field-level, cluster-decision) auto-detected from
+/// which fields are populated.
+#[derive(Debug, Default)]
+pub struct CorrectionAddArgs<'a> {
+    pub decision: &'a str,
+    pub dataset: &'a str,
+    pub source: Option<&'a str>,
+    pub memory_path: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub matchkey_name: Option<&'a str>,
+    // Pair-level (decision in {approve, reject}):
+    pub id_a: Option<i64>,
+    pub id_b: Option<i64>,
+    pub original_score: Option<f64>,
+    // Field-level (decision = field_correct):
+    pub cluster_id: Option<i64>,
+    pub field_name: Option<&'a str>,
+    pub original_value: Option<&'a str>,
+    pub corrected_value: Option<&'a str>,
+    // Cluster-decision (decision = cluster_decision):
+    pub cluster_score: Option<f64>,
+    pub cluster_outcome: Option<&'a str>,
+}
+
+/// File a correction into MemoryStore. Returns the generated UUID.
+///
+/// Validates per-shape required fields and raises `BridgeError::Validation`
+/// on missing combos (mirrors Python `_dispatch` in
+/// `goldenmatch/mcp/memory_tools.py`).
+///
+/// Source defaults to "postgres" (trust=0.7, between agent 0.5 and steward
+/// 1.0) when not provided.
+pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError> {
+    crate::init()?;
+
+    if args.dataset.is_empty() {
+        return Err(BridgeError::Validation(
+            "dataset is required and must be non-empty".into(),
+        ));
+    }
+    if !matches!(args.decision, "approve" | "reject" | "field_correct" | "cluster_decision") {
+        return Err(BridgeError::Validation(format!(
+            "invalid decision {:?}; expected approve, reject, field_correct, or cluster_decision",
+            args.decision,
+        )));
+    }
+
+    Python::with_gil(|py| {
+        let store_mod = py.import("goldenmatch.core.memory.store")?;
+        let datetime_mod = py.import("datetime")?;
+        let uuid_mod = py.import("uuid")?;
+
+        let memory_path = args.memory_path.unwrap_or(".goldenmatch/memory.db");
+        let source = args.source.unwrap_or("postgres");
+
+        // trust_for_source dispatch -- module-level helper handles
+        // steward / boost / unmerge -> 1.0; rest -> 0.8; duckdb -> 0.7;
+        // postgres falls through to default 0.5 unless added. Add it here
+        // as 0.7 (matches DuckDB tier) until the Python module bumps.
+        let trust: f64 = if source == "postgres" {
+            0.7
+        } else {
+            let trust_fn = store_mod.getattr("trust_for_source")?;
+            trust_fn.call1((source,))?.extract()?
+        };
+
+        // Build Correction kwargs based on shape.
+        let kwargs = PyDict::new(py);
+        let new_id: String = uuid_mod.call_method0("uuid4")?
+            .call_method0("__str__")?.extract()?;
+        kwargs.set_item("id", &new_id)?;
+        kwargs.set_item("source", source)?;
+        kwargs.set_item("trust", trust)?;
+        kwargs.set_item("field_hash", "")?;
+        kwargs.set_item("record_hash", "")?;
+        kwargs.set_item("dataset", args.dataset)?;
+        kwargs.set_item("reason", args.reason)?;
+        kwargs.set_item("matchkey_name", args.matchkey_name)?;
+        kwargs.set_item("created_at", datetime_mod.call_method0("datetime")?
+            .getattr("now")?.call0()?)?;
+        kwargs.set_item("decision", args.decision)?;
+
+        match args.decision {
+            "field_correct" => {
+                let field_name = args.field_name.ok_or_else(|| {
+                    BridgeError::Validation(
+                        "field_correct requires field_name".into(),
+                    )
+                })?;
+                let corrected_value = args.corrected_value.ok_or_else(|| {
+                    BridgeError::Validation(
+                        "field_correct requires corrected_value".into(),
+                    )
+                })?;
+                let cluster_id = args.cluster_id
+                    .or(args.id_a)
+                    .ok_or_else(|| BridgeError::Validation(
+                        "field_correct requires cluster_id".into(),
+                    ))?;
+                kwargs.set_item("id_a", cluster_id)?;
+                kwargs.set_item("id_b", 0i64)?;
+                kwargs.set_item("original_score", 0.0f64)?;
+                kwargs.set_item("field_name", field_name)?;
+                kwargs.set_item("original_value", args.original_value)?;
+                kwargs.set_item("corrected_value", corrected_value)?;
+            }
+            "cluster_decision" => {
+                let score = args.cluster_score.ok_or_else(|| {
+                    BridgeError::Validation(
+                        "cluster_decision requires cluster_score".into(),
+                    )
+                })?;
+                let outcome = args.cluster_outcome.ok_or_else(|| {
+                    BridgeError::Validation(
+                        "cluster_decision requires cluster_outcome".into(),
+                    )
+                })?;
+                if !matches!(outcome, "approve" | "reject") {
+                    return Err(BridgeError::Validation(format!(
+                        "cluster_outcome must be approve or reject; got {:?}", outcome,
+                    )));
+                }
+                if !(0.0..=1.0).contains(&score) {
+                    return Err(BridgeError::Validation(format!(
+                        "cluster_score must be in [0, 1]; got {}", score,
+                    )));
+                }
+                let cluster_id = args.cluster_id
+                    .or(args.id_a)
+                    .ok_or_else(|| BridgeError::Validation(
+                        "cluster_decision requires cluster_id".into(),
+                    ))?;
+                kwargs.set_item("id_a", cluster_id)?;
+                kwargs.set_item("id_b", 0i64)?;
+                kwargs.set_item("original_score", 0.0f64)?;
+                kwargs.set_item("cluster_score", score)?;
+                kwargs.set_item("cluster_outcome", outcome)?;
+            }
+            "approve" | "reject" => {
+                let id_a = args.id_a.ok_or_else(|| BridgeError::Validation(
+                    format!("{} requires id_a", args.decision),
+                ))?;
+                let id_b = args.id_b.ok_or_else(|| BridgeError::Validation(
+                    format!("{} requires id_b", args.decision),
+                ))?;
+                kwargs.set_item("id_a", id_a)?;
+                kwargs.set_item("id_b", id_b)?;
+                kwargs.set_item("original_score", args.original_score.unwrap_or(0.0))?;
+            }
+            _ => unreachable!("decision validated above"),
+        }
+
+        let correction_cls = store_mod.getattr("Correction")?;
+        let correction = correction_cls.call((), Some(&kwargs))?;
+
+        let store_cls = store_mod.getattr("MemoryStore")?;
+        let store_kwargs = PyDict::new(py);
+        store_kwargs.set_item("backend", "sqlite")?;
+        store_kwargs.set_item("path", memory_path)?;
+        let store = store_cls.call((), Some(&store_kwargs))?;
+        // Best-effort context-manager pattern: call add_correction then close.
+        let result = store.call_method1("add_correction", (correction,));
+        let _ = store.call_method0("close");
+        result?;
+
+        Ok(new_id)
+    })
+}
+
+/// List corrections for a dataset (or all when None). Returns JSON array.
+pub fn correction_list(
+    dataset: Option<&str>,
+    memory_path: Option<&str>,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let store_mod = py.import("goldenmatch.core.memory.store")?;
+        let json_mod = py.import("json")?;
+        let store_cls = store_mod.getattr("MemoryStore")?;
+        let store_kwargs = PyDict::new(py);
+        store_kwargs.set_item("backend", "sqlite")?;
+        store_kwargs.set_item("path", memory_path.unwrap_or(".goldenmatch/memory.db"))?;
+        let store = store_cls.call((), Some(&store_kwargs))?;
+
+        let corrections = store.call_method("get_corrections", (), {
+            let kw = PyDict::new(py);
+            kw.set_item("dataset", dataset)?;
+            Some(&kw)
+        })?;
+
+        // Serialize to JSON. Use a Python helper expression to convert
+        // dataclasses to dicts in one shot.
+        let dataclasses = py.import("dataclasses")?;
+        let items = pyo3::types::PyList::empty(py);
+        for c in corrections.try_iter()? {
+            let c = c?;
+            let d = dataclasses.call_method1("asdict", (c,))?;
+            // Fix the datetime field for JSON serialization.
+            if let Ok(dt) = d.get_item("created_at") {
+                if !dt.is_none() {
+                    let iso: String = dt.call_method0("isoformat")?.extract()?;
+                    d.set_item("created_at", iso)?;
+                }
+            }
+            items.append(d)?;
+        }
+        let _ = store.call_method0("close");
+        let s: String = json_mod.call_method1("dumps", (items,))?.extract()?;
+        Ok(s)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

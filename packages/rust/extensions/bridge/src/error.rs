@@ -15,6 +15,13 @@ pub enum BridgeError {
 
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
+
+    /// v2.x #437 surface sync Phase 6A: validation failure for the
+    /// `correction_add` shape (missing required field per decision shape,
+    /// out-of-range value, etc.). Maps to Postgres ERRCODE_INVALID_PARAMETER_VALUE
+    /// when the pgrx layer wraps this error.
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 impl From<pyo3::PyErr> for BridgeError {
