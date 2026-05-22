@@ -36,6 +36,135 @@ FREE_TEXT_AVG_LEN_THRESHOLD = 20.0
 HIGH_NULL_RATE_THRESHOLD = 0.5
 SOURCE_DOMINANCE_THRESHOLD = 1.5  # top source must be > median * this
 
+# Identity-column threshold for the unanimous_or_null override (#smarter-refiner).
+IDENTITY_CARDINALITY_THRESHOLD = 0.9
+
+# Sibling-timestamp coverage threshold: a candidate timestamp column
+# must have non-null values for >80% of clusters to be considered a
+# reliable date_column for OTHER fields.
+SIBLING_TIMESTAMP_COVERAGE_THRESHOLD = 0.8
+
+# Compliance-shaped column-name patterns. Fields matching these get
+# `unanimous_or_null` regardless of other signals -- a chosen-by-
+# heuristic value is worse than a missing value for these.
+import re as _re
+
+_COMPLIANCE_NAME_PATTERNS = [
+    _re.compile(p, _re.IGNORECASE) for p in [
+        r"\bssn\b",
+        r"\bsin\b",                       # Canadian SIN
+        r"\bein\b",                       # employer ID
+        r"\btax[_-]?id\b",
+        r"\bnpi\b",
+        r"\bdea[_-]?number\b",
+        r"\blicense[_-]?(no|num|number)?\b",
+        r"\bpassport[_-]?(no|num|number)?\b",
+        r"\bdriver[_-]?license\b",
+        r"\bdrivers?[_-]?license\b",
+        r"\b(date[_-]?of[_-]?birth|dob|birthdate)\b",
+        r"\bmrn\b",                       # medical record number
+        r"\bhipaa[_-]?id\b",
+        r"\bpatient[_-]?id\b",
+        r"\bmedicaid[_-]?(no|num|number|id)?\b",
+        r"\bmedicare[_-]?(no|num|number|id)?\b",
+        r"\bcusip\b",
+        r"\blei\b",                       # Legal Entity Identifier
+        r"\bisin\b",                      # International Securities ID
+    ]
+]
+
+# Sibling-timestamp column-name patterns. Used to detect THE dataset's
+# primary timestamp column for cross-field `most_recent` picks.
+# Order matters: more-specific names first; first match wins.
+_TIMESTAMP_NAME_PATTERNS = [
+    _re.compile(p, _re.IGNORECASE) for p in [
+        r"^updated[_-]?at$",
+        r"^modified[_-]?at$",
+        r"^last[_-]?modified$",
+        r"^last[_-]?updated$",
+        r"^update[_-]?(time|date|ts)$",
+        r"^modify[_-]?(time|date|ts)$",
+        r"^created[_-]?at$",
+        r"^create[_-]?(time|date|ts)$",
+        r"^date[_-]?modified$",
+        r"^date[_-]?created$",
+        r"^updated$",
+        r"^created$",
+        r"^timestamp$",
+        r"^last[_-]?seen$",
+    ]
+]
+
+# Mutable-shaped fields (col_type or name hint) that benefit from
+# `most_recent` when a sibling timestamp is present. Things like name,
+# DOB shouldn't change over time; address, phone, email do.
+_MUTABLE_NAME_PATTERNS = [
+    _re.compile(p, _re.IGNORECASE) for p in [
+        r"\baddress\b",
+        r"\bstreet\b",
+        r"\bcity\b",
+        r"\bstate\b",
+        r"\bzip\b",
+        r"\bpostal[_-]?code\b",
+        r"\bphone\b",
+        r"\btelephone\b",
+        r"\bmobile\b",
+        r"\bemail\b",
+        r"\bemployer\b",
+        r"\bjob[_-]?title\b",
+        r"\boccupation\b",
+        r"\bcompany\b",
+        r"\bspecialty\b",
+        r"\bdepartment\b",
+        r"\bsalary\b",
+    ]
+]
+
+
+def _is_compliance_name(field: str) -> bool:
+    return any(p.search(field) for p in _COMPLIANCE_NAME_PATTERNS)
+
+
+def _is_mutable_field_name(field: str, col_type: str) -> bool:
+    if col_type in {"address", "phone", "email"}:
+        return True
+    return any(p.search(field) for p in _MUTABLE_NAME_PATTERNS)
+
+
+def _pick_sibling_timestamp(
+    column_profiles: list[ColumnProfile],
+    date_column_coverage: dict[str, float],
+) -> str | None:
+    """Pick THE dataset's primary timestamp column for cross-field
+    `most_recent` picks. Returns the column name or None.
+
+    Selection order:
+    1. Among columns whose col_type=='date': those matching the
+       _TIMESTAMP_NAME_PATTERNS (more-specific first).
+    2. Tiebreak by coverage descending (more present = more reliable).
+    3. Skip columns with coverage < SIBLING_TIMESTAMP_COVERAGE_THRESHOLD.
+    """
+    date_cols = [p for p in column_profiles if p.col_type == "date"]
+    if not date_cols:
+        return None
+    # Score by (pattern_rank, -coverage). Lower pattern_rank = better.
+    scored: list[tuple[int, float, str]] = []
+    for p in date_cols:
+        coverage = date_column_coverage.get(p.name, 0.0)
+        if coverage < SIBLING_TIMESTAMP_COVERAGE_THRESHOLD:
+            continue
+        # Find best matching pattern rank.
+        best_rank = len(_TIMESTAMP_NAME_PATTERNS)
+        for i, pat in enumerate(_TIMESTAMP_NAME_PATTERNS):
+            if pat.search(p.name):
+                best_rank = i
+                break
+        scored.append((best_rank, -coverage, p.name))
+    if not scored:
+        return None
+    scored.sort()
+    return scored[0][2]
+
 
 @dataclass(frozen=True)
 class RefinementSignals:
@@ -186,12 +315,20 @@ def compute_refinement_signals(
 def _pick_strategy_for_field(
     field: str,
     signals: RefinementSignals,
+    sibling_timestamp: str | None = None,
+    cardinality_ratio: float = 0.0,
 ) -> tuple[str, dict] | None:
     """Apply the rule table to one field; return (strategy_name, kwargs)
     or None to fall through to the base default.
 
     Rule order (first match wins) per
     ``docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md``.
+
+    v1.18 ``smarter-refiner`` additions:
+    - PRE-rules (safety): compliance column names + identity columns
+      get ``unanimous_or_null`` before any spread/source signals fire.
+    - Sibling-timestamp rule: mutable-shaped fields with a dataset-
+      level primary timestamp get ``most_recent`` via that timestamp.
     """
     col_type = signals.col_type.get(field, "unknown")
     avg_len = signals.avg_len.get(field, 0.0)
@@ -199,9 +336,36 @@ def _pick_strategy_for_field(
     spread = signals.within_cluster_spread.get(field, 1.0)
     date_cov = signals.date_column_coverage.get(field, 0.0)
 
-    # Rule 1: date column with full timestamp coverage.
+    # PRE-RULE 1: compliance-shaped column names (ssn, npi, license,
+    # dob, etc) ALWAYS get unanimous_or_null. A chosen-by-heuristic
+    # value is worse than a missing value for compliance-grade fields.
+    if _is_compliance_name(field):
+        return "unanimous_or_null", {}
+
+    # PRE-RULE 2: high-cardinality identity columns also get
+    # unanimous_or_null. Identifier-shaped values where most rows have
+    # a unique value -> trust unanimity over heuristics.
+    if (
+        col_type == "identifier"
+        and cardinality_ratio > IDENTITY_CARDINALITY_THRESHOLD
+    ):
+        return "unanimous_or_null", {}
+
+    # Rule 1: date column with full timestamp coverage -> most_recent
+    # on itself.
     if col_type == "date" and date_cov > 0.5:
         return "most_recent", {"date_column": field}
+
+    # Rule 1b (NEW): mutable-shaped field + dataset has a high-coverage
+    # sibling timestamp column -> most_recent on the sibling. Catches
+    # the common case of `address`, `phone`, `email` columns that
+    # change over time + a dataset-wide `updated_at` / `modified_at`.
+    if (
+        sibling_timestamp is not None
+        and sibling_timestamp != field
+        and _is_mutable_field_name(field, col_type)
+    ):
+        return "most_recent", {"date_column": sibling_timestamp}
 
     # Rule 2: source_priority when one source clearly dominates.
     per_source = signals.per_source_completeness.get(field)
@@ -256,12 +420,41 @@ def refine_golden_rules(
 
     signals = compute_refinement_signals(clusters, prepared_df, column_profiles)
 
+    # #smarter-refiner: detect THE dataset's primary timestamp column
+    # ONCE; reused as date_column for any mutable-shaped field.
+    sibling_timestamp = _pick_sibling_timestamp(
+        column_profiles, signals.date_column_coverage,
+    )
+    if sibling_timestamp:
+        logger.info(
+            "Refiner detected sibling timestamp column: %r "
+            "(used as date_column for mutable fields)",
+            sibling_timestamp,
+        )
+
+    # Build a per-field cardinality_ratio lookup for the identity-column
+    # rule (which can't use within_cluster_spread because high-cardinality
+    # identifiers may not appear in multi-member clusters).
+    cardinality_by_field: dict[str, float] = {
+        p.name: float(p.cardinality_ratio) for p in column_profiles
+    }
+
+    # Consider every column the refiner has signals for AND every column
+    # in the profiles list. Pre-rules (compliance / identity) need to
+    # fire even on fields that don't appear in multi-member clusters.
+    fields_to_consider: set[str] = set(signals.within_cluster_spread.keys())
+    fields_to_consider |= {p.name for p in column_profiles}
+
     new_field_rules: dict[str, GoldenFieldRule] = dict(base_rules.field_rules)
-    for field in signals.within_cluster_spread.keys():
+    for field in fields_to_consider:
         if field in new_field_rules:
             # Caller-provided rule wins; don't override.
             continue
-        result = _pick_strategy_for_field(field, signals)
+        result = _pick_strategy_for_field(
+            field, signals,
+            sibling_timestamp=sibling_timestamp,
+            cardinality_ratio=cardinality_by_field.get(field, 0.0),
+        )
         if result is None:
             continue
         strategy, kwargs = result

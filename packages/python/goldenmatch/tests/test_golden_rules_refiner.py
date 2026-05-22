@@ -125,6 +125,125 @@ def test_picks_confidence_majority_on_high_spread():
     assert kwargs == {}
 
 
+# ---------------------------------------------------------------------------
+# #smarter-refiner: compliance name + identity + sibling-timestamp rules
+# ---------------------------------------------------------------------------
+
+
+def test_picks_unanimous_or_null_for_compliance_named_field():
+    """Compliance-shaped column names ALWAYS get unanimous_or_null,
+    regardless of other signals."""
+    for compliance_name in ["ssn", "patient_ssn", "npi", "tax_id", "dob",
+                             "drivers_license", "passport_number", "mrn"]:
+        s_named = _signals(
+            col_type={compliance_name: "identifier"},
+            null_rate={compliance_name: 0.0},
+        )
+        result = _pick_strategy_for_field(compliance_name, s_named)
+        assert result is not None, f"{compliance_name} did not match compliance pattern"
+        strategy, _ = result
+        assert strategy == "unanimous_or_null", (
+            f"{compliance_name} should get unanimous_or_null; got {strategy}"
+        )
+
+
+def test_picks_unanimous_or_null_for_high_cardinality_identifier():
+    """col_type=identifier + cardinality_ratio > 0.9 -> unanimous_or_null."""
+    s = _signals(col_type={"f": "identifier"})
+    result = _pick_strategy_for_field("f", s, cardinality_ratio=0.95)
+    assert result is not None
+    strategy, kwargs = result
+    assert strategy == "unanimous_or_null"
+    assert kwargs == {}
+
+
+def test_low_cardinality_identifier_does_not_get_unanimous_or_null():
+    """col_type=identifier but cardinality < 0.9 (e.g. status code) -> normal flow."""
+    s = _signals(col_type={"f": "identifier"})
+    result = _pick_strategy_for_field("f", s, cardinality_ratio=0.3)
+    # No other rule fires on these neutral signals.
+    assert result is None
+
+
+def test_picks_most_recent_with_sibling_timestamp_for_address():
+    """A mutable-shaped field with a sibling timestamp gets
+    most_recent on the sibling, not on itself."""
+    s = _signals(col_type={"address": "address"}, avg_len={"address": 25.0})
+    result = _pick_strategy_for_field(
+        "address", s,
+        sibling_timestamp="updated_at",
+        cardinality_ratio=0.5,
+    )
+    assert result is not None
+    strategy, kwargs = result
+    assert strategy == "most_recent"
+    assert kwargs == {"date_column": "updated_at"}
+
+
+def test_sibling_timestamp_does_not_apply_to_non_mutable_fields():
+    """Field like `first_name` is not mutable -> sibling-timestamp rule
+    does NOT fire even when one is present."""
+    s = _signals(col_type={"first_name": "name"})
+    result = _pick_strategy_for_field(
+        "first_name", s,
+        sibling_timestamp="updated_at",
+    )
+    # first_name isn't in _MUTABLE_NAME_PATTERNS; falls through to
+    # other rules (which don't fire either on these signals).
+    assert result is None
+
+
+def test_compliance_pre_rule_overrides_post_cluster_signals():
+    """Even if a compliance field has 0.7 null_rate (would match
+    first_non_null) or 2.5 spread (would match confidence_majority),
+    the pre-rule wins."""
+    s = _signals(
+        null_rate={"ssn": 0.7},
+        within_cluster_spread={"ssn": 2.5},
+    )
+    result = _pick_strategy_for_field("ssn", s)
+    assert result is not None
+    strategy, _ = result
+    assert strategy == "unanimous_or_null"
+
+
+def test_pick_sibling_timestamp_picks_most_specific_match():
+    """`updated_at` should beat `created_at` because updated_at appears
+    earlier in the _TIMESTAMP_NAME_PATTERNS list."""
+    from goldenmatch.core.autoconfig import ColumnProfile
+    from goldenmatch.core.golden_rules_refiner import _pick_sibling_timestamp
+
+    profiles = [
+        ColumnProfile(
+            name="updated_at", dtype="Datetime", col_type="date",
+            confidence=0.9, null_rate=0.0, cardinality_ratio=0.9, avg_len=0,
+        ),
+        ColumnProfile(
+            name="created_at", dtype="Datetime", col_type="date",
+            confidence=0.9, null_rate=0.0, cardinality_ratio=0.9, avg_len=0,
+        ),
+    ]
+    coverage = {"updated_at": 1.0, "created_at": 1.0}
+    pick = _pick_sibling_timestamp(profiles, coverage)
+    assert pick == "updated_at"
+
+
+def test_pick_sibling_timestamp_returns_none_when_coverage_too_low():
+    """Coverage < 80% -> no timestamp picked."""
+    from goldenmatch.core.autoconfig import ColumnProfile
+    from goldenmatch.core.golden_rules_refiner import _pick_sibling_timestamp
+
+    profiles = [
+        ColumnProfile(
+            name="updated_at", dtype="Datetime", col_type="date",
+            confidence=0.9, null_rate=0.0, cardinality_ratio=0.9, avg_len=0,
+        ),
+    ]
+    coverage = {"updated_at": 0.5}  # below threshold
+    pick = _pick_sibling_timestamp(profiles, coverage)
+    assert pick is None
+
+
 def test_picks_none_when_no_rule_applies():
     """Field with no remarkable signals -> defer to base default."""
     s = _signals()  # all defaults: low spread, low null, short string
