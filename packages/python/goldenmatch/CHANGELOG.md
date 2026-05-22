@@ -6,6 +6,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.18.2] - 2026-05-22
+
+### Added
+
+- **Field-level Correction support** (#437). `Correction` dataclass
+  gains three optional fields: `field_name`, `original_value`,
+  `corrected_value`. `Decision.FIELD_CORRECT` enum value identifies
+  the new shape. SQLite migration adds three TEXT columns to
+  pre-existing DBs via idempotent `ALTER TABLE`. Tuner
+  `_strategy_would_match` runs in two regimes -- field-level
+  (predicts strategy fit from edit shape) or pair-level (old
+  heuristic). Two-tier corpus selection: field-specific corrections
+  beat dataset-wide signal when above threshold.
+
+- **22 predefined golden-strategy plugins** auto-registered via
+  `PluginRegistry.discover()` (#442, #443). User opts in via
+  `strategy="custom:<name>"` in YAML/Python config. User
+  entry-point plugins with the same name override builtins.
+
+  - **Numeric (6):** `numeric_max`, `numeric_min`, `numeric_mean`,
+    `numeric_median` (outlier-resilient), `numeric_sum` (aggregate
+    amounts), `numeric_weighted_average` (uses `quality_weights`).
+  - **Format-canonical (7):** `shortest_value`, `concat_unique`
+    (sorted comma-join with configurable separator),
+    `email_normalize` (lowercase + strip plus-addressing),
+    `phone_digits_only`, `url_canonical` (lowercase host, http→https,
+    trim /), `whitespace_normalize`, `boolean_normalize`.
+  - **Business-shaped (6):** `system_of_record` (priority-config),
+    `lifecycle_stage` (most-advanced via `lifecycle_order`),
+    `freshness_with_max_age` (compliance NULL-emit),
+    `enum_canonical` (alias_map → canonical), `regex_validated`
+    (pattern filter; fallback configurable), `weighted_by_recency`
+    (exponential decay).
+  - **Aggregation / telemetry (3):** `count_distinct`,
+    `count_non_null`, `agreement_rate` (0.0-1.0 mode-agreement).
+
+### Spec
+
+- `docs/superpowers/specs/2026-05-22-predefined-merge-plugins-design.md`
+- `docs/superpowers/specs/2026-05-22-golden-strategy-plugin-slot-design.md`
+  (carried from v1.18.0; expanded in v1.18.2 with builtin
+  registration order)
+
 ## [1.18.1] - 2026-05-22
 
 ### Added — golden-rules intelligence layer 2
