@@ -48,6 +48,7 @@ def merge_field(
     sources: list[str] | None = None,
     dates: list | None = None,
     quality_weights: list[float] | None = None,
+    pair_scores: dict[tuple[int, int], float] | None = None,
 ) -> tuple[object, float, int | None]:
     """Merge a list of values using the given rule's strategy.
 
@@ -76,6 +77,13 @@ def merge_field(
         return _most_recent(values, dates)
     elif strategy == "first_non_null":
         return _first_non_null(non_null, quality_weights)
+    # v1.18 strategies (#golden-strategies, 2026-05-22 spec).
+    elif strategy == "longest_value":
+        return _longest_value(non_null, quality_weights)
+    elif strategy == "unanimous_or_null":
+        return _unanimous_or_null(non_null)
+    elif strategy == "confidence_majority":
+        return _confidence_majority(non_null, pair_scores, quality_weights)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -159,6 +167,108 @@ def _first_non_null(non_null: list[tuple[int, object]], quality_weights: list[fl
         best = max(non_null, key=lambda x: quality_weights[x[0]] if x[0] < len(quality_weights) else 1.0)
         return (best[1], 0.6, best[0])
     return (non_null[0][1], 0.6, non_null[0][0])
+
+
+# ─── v1.18 strategies (#golden-strategies, 2026-05-22 spec) ──────────────────
+
+
+def _longest_value(
+    non_null: list[tuple[int, object]],
+    quality_weights: list[float] | None = None,
+) -> tuple:
+    """Pick the longest non-null string value. Quality-weighted tie-break.
+
+    Picks length over completeness — useful for free-text columns where
+    a longer value typically carries more information (full address vs
+    abbreviation, full company name vs ticker).
+
+    Confidence: 1.0 when there's a unique longest value, 0.7 when ties
+    are broken by quality weight, 0.5 when ties are broken by order.
+    """
+    str_vals = [(i, str(v) if v is not None else "", v) for i, v in non_null]
+    max_len = max(len(s) for _, s, _ in str_vals)
+    longest = [(i, s, v) for i, s, v in str_vals if len(s) == max_len]
+    if len(longest) == 1:
+        return (longest[0][2], 1.0, longest[0][0])
+    # Tied on length -- prefer the value with highest quality weight.
+    if quality_weights is not None:
+        best = max(
+            longest,
+            key=lambda x: quality_weights[x[0]] if x[0] < len(quality_weights) else 1.0,
+        )
+        return (best[2], 0.7, best[0])
+    return (longest[0][2], 0.5, longest[0][0])
+
+
+def _unanimous_or_null(non_null: list[tuple[int, object]]) -> tuple:
+    """If every non-null member agrees, emit that value. If any disagrees,
+    emit None. NULL members are ignored (absence is not contradiction).
+
+    Use case: compliance-grade fields where a heuristic-chosen value is
+    worse than a missing value (medical IDs, license numbers, etc).
+
+    Confidence: 1.0 when unanimous, 0.0 when null is emitted.
+    """
+    unique = {v for _, v in non_null}
+    if len(unique) == 1:
+        return (non_null[0][1], 1.0, non_null[0][0])
+    return (None, 0.0, None)
+
+
+def _confidence_majority(
+    non_null: list[tuple[int, object]],
+    pair_scores: dict[tuple[int, int], float] | None,
+    quality_weights: list[float] | None = None,
+) -> tuple:
+    """Majority vote weighted by per-pair confidence inside the cluster.
+
+    For each candidate value, sum the pair_scores of edges where both
+    endpoints have that value; pick the highest-sum value. Falls back
+    to vanilla count-majority when pair_scores is None / empty.
+
+    Better than `majority_vote` on heterogeneous clusters where some
+    edges are weak: a 3-member majority on weak edges (0.55) loses to
+    a 2-member minority on strong edges (0.91).
+
+    Args:
+        non_null: ``[(member_idx, value)]`` from the consolidator.
+            ``member_idx`` indexes into the cluster's member list.
+        pair_scores: ``{(min_member_idx, max_member_idx): score}``
+            for edges within the cluster. ``None`` -> count-majority
+            fallback.
+        quality_weights: per-member weights for the count-majority
+            fallback only.
+
+    Confidence: winner's edge-sum / total edge-sum across all values.
+    """
+    if not pair_scores:
+        # Fallback: count majority.
+        return _majority_vote(non_null, quality_weights)
+
+    # Bucket pair_scores by value: for each pair (a, b), if values agree
+    # on the same candidate, contribute the pair score to that value's
+    # weight.
+    idx_to_value: dict[int, object] = {i: v for i, v in non_null}
+    value_weights: dict[object, float] = {}
+    value_idx: dict[object, int] = {}
+    for (a, b), s in pair_scores.items():
+        if a in idx_to_value and b in idx_to_value:
+            va = idx_to_value[a]
+            vb = idx_to_value[b]
+            if va == vb:
+                value_weights[va] = value_weights.get(va, 0.0) + float(s)
+                if va not in value_idx:
+                    value_idx[va] = a
+
+    if not value_weights:
+        # No agreeing pairs (every pair disagrees on this field) — fall
+        # back to count-majority.
+        return _majority_vote(non_null, quality_weights)
+
+    winner = max(value_weights, key=value_weights.__getitem__)
+    total = sum(value_weights.values())
+    conf = value_weights[winner] / total if total > 0 else 0.5
+    return (winner, conf, value_idx[winner])
 
 
 def _build_golden_records_polars_native(

@@ -1234,6 +1234,30 @@ def _run_dedupe_pipeline(
     golden_records = []
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
+    # v1.18: post-cluster golden-rules refinement. When the user opted
+    # in via `golden_rules.adaptive=True`, refine per-field strategies
+    # using cluster shape + column profiles. Refinement is a NEW config
+    # (immutable mutation); the original golden_rules is unchanged.
+    if golden_rules.adaptive:
+        try:
+            from goldenmatch.core.golden_rules_refiner import refine_golden_rules
+
+            # `profiles` is the ColumnProfile list built in Step 1; reuse
+            # if it's in scope (it is for the dedupe pipeline).
+            _profiles_for_refiner = locals().get("profiles") or []
+            golden_rules = refine_golden_rules(
+                base_rules=golden_rules,
+                clusters=clusters,
+                prepared_df=collected_df,
+                column_profiles=_profiles_for_refiner,
+            )
+        except Exception as exc:
+            # Refinement failure is non-fatal -- fall back to base rules.
+            logger.warning(
+                "Adaptive golden-rules refinement failed: %s. "
+                "Falling back to base rules.", exc,
+            )
+
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
     # the prior loop called `collected_df.filter(__row_id__.is_in(member_ids))`

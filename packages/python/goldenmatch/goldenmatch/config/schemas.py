@@ -26,6 +26,8 @@ VALID_SCORERS = frozenset({
 
 VALID_STRATEGIES = frozenset({
     "most_recent", "source_priority", "most_complete", "majority_vote", "first_non_null",
+    # v1.18 additions (#golden-strategies)
+    "longest_value", "unanimous_or_null", "confidence_majority",
 })
 
 _SUBSTRING_RE = re.compile(r"^substring:\d+:\d+$")
@@ -427,6 +429,13 @@ class GoldenRulesConfig(BaseModel):
     auto_split: bool = True
     quality_weighting: bool = True
     weak_cluster_threshold: float = 0.3
+    # v1.18: post-cluster golden-rules refinement. When True, after
+    # clustering the pipeline runs `refine_golden_rules` against the
+    # cluster output + column profiles to pick per-field strategies
+    # informed by within-cluster spread, per-source completeness, etc.
+    # Default False to preserve existing behavior; opt-in for v1.18 users.
+    # Spec: docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md
+    adaptive: bool = False
 
     @model_validator(mode="after")
     def _validate_default(self) -> GoldenRulesConfig:
