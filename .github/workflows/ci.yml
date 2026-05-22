@@ -81,6 +81,20 @@ jobs:
               - 'scripts/run_benchmarks.py'
               - 'scripts/dqbench_adapters/**'
               - 'docs/reproducing-benchmarks.md'
+              # #435: changes to the library being benchmarked must also
+              # trigger the smoke. Before this, refiner / blocker /
+              # scorer / pipeline / autoconfig changes could silently
+              # regress benchmark recall + escape CI.
+              - 'packages/python/goldenmatch/goldenmatch/core/autoconfig*.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/blocker.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/blocking_candidates.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/pipeline.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/matchkey.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/golden*.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/probabilistic.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/learned_blocking.py'
             rust:
               - 'packages/rust/**'
             rust_pgrx:
