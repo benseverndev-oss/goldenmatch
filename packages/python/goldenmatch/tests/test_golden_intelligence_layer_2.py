@@ -86,13 +86,15 @@ def test_compute_refinement_signals_includes_per_source_agreement():
 
 def test_source_priority_rule_uses_agreement_over_completeness():
     """When agreement signal is present, it overrides completeness
-    for the source_priority ranking."""
-    # Completeness: B > A. Agreement: A > B.
-    # The rule should pick A (better quality), not B (higher completeness).
+    for the source_priority ranking. Uses 3 sources because the
+    existing median calc (rates[len//2]) returns the larger of two
+    sorted values for 2-source cases -- can't satisfy dominance there."""
+    # Completeness: B dominates. Agreement: A dominates.
+    # Refiner should rank by agreement -> A first.
     signals = RefinementSignals(
         within_cluster_spread={"name": 1.5},
-        per_source_completeness={"name": {"a": 0.7, "b": 0.95}},  # B more complete
-        per_source_agreement={"name": {"a": 0.95, "b": 0.50}},     # A more accurate
+        per_source_completeness={"name": {"a": 0.50, "b": 0.95, "c": 0.50}},
+        per_source_agreement={"name": {"a": 0.95, "b": 0.40, "c": 0.30}},
         date_column_coverage={},
         col_type={"name": "name"},
         avg_len={"name": 10.0},
@@ -102,22 +104,21 @@ def test_source_priority_rule_uses_agreement_over_completeness():
     assert result is not None
     strategy, kwargs = result
     assert strategy == "source_priority"
-    # A's agreement is 0.95, B's is 0.50. Median = (0.95 + 0.50) / 2 = 0.725.
-    # Top (A=0.95) / median (0.725) = 1.31 -- NOT > 1.5x, so no dominance.
-    # The test pins the data flow + the rule sees agreement, not completeness.
-    # (We're not asserting "A wins source_priority"; we're asserting that
-    # the rule consults agreement first.)
-    # When dominance threshold is met, A should be first.
+    # Agreement sorted desc: a=0.95, b=0.40, c=0.30. Median=0.40,
+    # top/median=2.375 > 1.5. Dominance met; A wins.
     assert kwargs["source_priority"][0] == "a"
 
 
 def test_source_priority_falls_back_to_completeness_when_no_agreement():
     """When agreement dict is empty (< 10 attempts), fall back to
-    completeness for source_priority ranking."""
+    completeness for source_priority ranking. Uses 3 sources for
+    the same dominance reason."""
     signals = RefinementSignals(
         within_cluster_spread={"name": 1.5},
-        per_source_completeness={"name": {"a": 0.95, "b": 0.30}},  # A dominates
-        per_source_agreement={},                                    # no agreement signal
+        per_source_completeness={
+            "name": {"a": 0.95, "b": 0.30, "c": 0.20},
+        },
+        per_source_agreement={},
         date_column_coverage={},
         col_type={"name": "name"},
         avg_len={"name": 10.0},
@@ -127,7 +128,8 @@ def test_source_priority_falls_back_to_completeness_when_no_agreement():
     assert result is not None
     strategy, kwargs = result
     assert strategy == "source_priority"
-    # A's completeness 0.95, B's 0.30; median = 0.625; top/median = 1.52 > 1.5.
+    # Completeness sorted desc: a=0.95, b=0.30, c=0.20. Median=0.30,
+    # top/median=3.17 > 1.5. Dominance met; A wins.
     assert kwargs["source_priority"][0] == "a"
 
 
