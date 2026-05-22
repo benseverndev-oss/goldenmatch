@@ -150,6 +150,20 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    # v1.19.x Phase 3 (#437 surface sync): file pair-level or field-level
+    # corrections via A2A. Trust=0.5 (agent semantics, lower than steward).
+    {
+        "id": "add_correction",
+        "name": "Add Correction",
+        "description": (
+            "File a Learning Memory correction. Two shapes: pair-level "
+            "(decision=approve|reject + id_a + id_b) or field-level "
+            "(decision=field_correct + cluster_id + field_name + "
+            "corrected_value). Source='agent' with trust=0.5."
+        ),
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
