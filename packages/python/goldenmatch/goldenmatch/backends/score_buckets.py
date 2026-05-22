@@ -207,6 +207,25 @@ def score_buckets(
         _ta = time.perf_counter()
         keyed = prepared_df.with_columns(key_expr)
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
+
+    # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
+    # the hash + partition_by step always collapses to 1 non-empty bucket
+    # (every row hashes into the same bucket-output because most buckets
+    # are empty by pigeonhole). The bookkeeping is pure overhead. Skip
+    # straight to treating `keyed` as the single bucket and scoring.
+    # On the streaming-block sync caller, this hits on every per-block
+    # invocation (block size ~8, n_buckets default 32-128).
+    if prepared_df.height < n_buckets:
+        bucketed = keyed
+        # Wrap in a single-bucket dict to share the scoring path below.
+        buckets_dict: dict[Any, pl.DataFrame] = {0: bucketed}
+        print(
+            f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+            f"small-block fast path (height={prepared_df.height} < n_buckets={n_buckets}); "
+            f"skipping hash+partition_by. See #422.",
+            flush=True,
+        )
+    else:
         _tb = time.perf_counter()
         bucketed = keyed.with_columns(
             (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
@@ -214,15 +233,15 @@ def score_buckets(
         )
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
-    with stage("bucket_partition"):
-        _tp = time.perf_counter()
-        # First-level partition: N eager DataFrames keyed by bucket id.
-        # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
-        # single partition column; unwrap below.
-        buckets_dict: dict[Any, pl.DataFrame] = bucketed.partition_by(
-            "__bucket__", as_dict=True,
-        )
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
+        with stage("bucket_partition"):
+            _tp = time.perf_counter()
+            # First-level partition: N eager DataFrames keyed by bucket id.
+            # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
+            # single partition column; unwrap below.
+            buckets_dict = bucketed.partition_by(
+                "__bucket__", as_dict=True,
+            )
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
     frozen_exclude = frozenset(matched_pairs)
     non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
