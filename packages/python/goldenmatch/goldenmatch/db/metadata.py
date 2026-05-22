@@ -151,23 +151,51 @@ def log_matches_batch(
     matches: list[tuple[int, int, float, str]],
     run_id: str,
 ) -> None:
-    """Batch log match decisions."""
+    """Batch log match decisions.
+
+    #424: psycopg3's ``executemany`` is NOT pipelined unless wrapped in
+    ``with conn.pipeline():`` -- the previous code's comment was wrong.
+    Each row was N round-trips at ~7ms RTT to a managed Postgres,
+    capping throughput at ~125 rows/sec on the user's 1.13M-row run.
+    Use ``cursor.copy()`` instead -- 10-100x faster for bulk loads.
+    """
     if not matches:
         return
-    # psycopg3 dropped psycopg2.extras.execute_values; the documented
-    # replacement is executemany on a parameterized INSERT. psycopg3's
-    # executemany is also pipelined (single round-trip per N rows) so
-    # the throughput is comparable to the old VALUES-batched form.
+
+    # Detect psycopg3 cursor.copy() support. PostgresConnector ships
+    # psycopg3 via the [postgres] extra; SQLite / DuckDB connectors
+    # don't have copy(). Probe for the method on a real cursor.
     cursor = connector.conn.cursor()
     try:
-        cursor.executemany(
-            "INSERT INTO gm_match_log (record_id_a, record_id_b, score, action, run_id) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            [(a, b, s, action, run_id) for a, b, s, action in matches],
-        )
-        connector.conn.commit()
-    except Exception:
-        connector.conn.rollback()
-        raise
+        if hasattr(cursor, "copy"):
+            # psycopg3 COPY path. ~10-100x faster than executemany at the
+            # observed batch sizes. The COPY ... FROM STDIN BINARY form
+            # would be faster still but text is simpler + robust.
+            copy_stmt = (
+                "COPY gm_match_log "
+                "(record_id_a, record_id_b, score, action, run_id) "
+                "FROM STDIN"
+            )
+            try:
+                with cursor.copy(copy_stmt) as copy:
+                    for a, b, s, action in matches:
+                        copy.write_row((a, b, s, action, run_id))
+                connector.conn.commit()
+            except Exception:
+                connector.conn.rollback()
+                raise
+        else:
+            # Fallback for non-psycopg3 connectors (SQLite test paths etc).
+            try:
+                cursor.executemany(
+                    "INSERT INTO gm_match_log "
+                    "(record_id_a, record_id_b, score, action, run_id) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    [(a, b, s, action, run_id) for a, b, s, action in matches],
+                )
+                connector.conn.commit()
+            except Exception:
+                connector.conn.rollback()
+                raise
     finally:
         cursor.close()
