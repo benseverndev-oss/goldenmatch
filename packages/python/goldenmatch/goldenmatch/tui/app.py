@@ -12,6 +12,7 @@ from goldenmatch.tui.sidebar import Sidebar
 from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.config_tab import ConfigTab
 from goldenmatch.tui.tabs.controller_tab import ControllerTab
+from goldenmatch.tui.tabs.corrections_tab import CorrectionsTab
 from goldenmatch.tui.tabs.data_tab import DataTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
@@ -255,6 +256,10 @@ class GoldenMatchApp(App):
         self.engine = None
         self.current_config = None
         self.last_result = None
+        # Phase 4 (#437 surface sync): MemoryStore path consumed by the
+        # Corrections tab + Golden / Matches modals. Set by callers
+        # (e.g. CLI launcher) when memory is enabled in config.
+        self.memory_db_path: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -276,6 +281,11 @@ class GoldenMatchApp(App):
                         yield ExportTab()
                     with TabPane("Controller", id="tab-controller"):
                         yield ControllerTab()
+                    # Phase 4 of v1.18 surface-sync roadmap (#437):
+                    # inspect Learning Memory corrections + delete /
+                    # filter. Writes happen via Golden + Matches modals.
+                    with TabPane("Corrections", id="tab-corrections"):
+                        yield CorrectionsTab()
         yield Footer()
 
     def on_mount(self) -> None:

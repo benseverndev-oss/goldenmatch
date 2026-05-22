@@ -31,12 +31,16 @@ class TestTUIApp:
 
     @pytest.mark.asyncio
     async def test_tabs_exist(self, sample_csv):
-        """All seven tab panes should be present (Controller added in v1.13+)."""
+        """All eight tab panes should be present.
+
+        Tabs: Data, Config, Matches, Golden, Boost, Export, Controller
+        (v1.13+), Corrections (v1.20.0 Phase 4 of #437 surface sync).
+        """
         app = GoldenMatchApp(files=[str(sample_csv)])
         async with app.run_test() as pilot:
             await pilot.pause()
             panes = app.query("TabPane")
-            assert len(panes) == 7
+            assert len(panes) == 8
 
     @pytest.mark.asyncio
     async def test_app_launches_without_files(self):
