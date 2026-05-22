@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-05-22
+
+### Changed — streaming-sync match log throughput (#424, PR #426)
+
+- **`log_matches_batch` uses `cursor.copy()` on psycopg3**. The previous
+  `executemany` path was NOT pipelined without an explicit
+  `with conn.pipeline():` context, capping throughput at ~125 rows/sec
+  on the user's 1.13M-row managed-Postgres workload (~7ms RTT × N
+  round-trips per batch). `cursor.copy("COPY gm_match_log ... FROM STDIN")`
+  is 10-100× faster on bulk loads. Falls back to `executemany` for
+  non-psycopg3 cursors (SQLite / DuckDB test paths).
+- **Buffer pairs across blocks before flushing**. Default
+  `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS=10000`. Final flush at end of
+  streaming loop covers the tail. Set to `1` for per-block flush
+  (preserves the historical incremental-progress behavior + test
+  contract).
+- **Opt-out via `GOLDENMATCH_SKIP_MATCH_LOG=1`**. Nightly-cron pipelines
+  that only consume `gm_clusters` / `gm_golden_records` can skip
+  per-pair audit logging entirely. INFO log line surfaces when set.
+
+### Notes
+
+User-reported impact: 125 rows/sec ceiling → projected 10K+ rows/sec.
+For the user's ~3M-pair workload, ~5 hours of writes → < 5 min.
+
 ## [1.17.0] - 2026-05-22
 
 ### Added — v1.13 autoconfig roadmap (2026-05-21, PRs #415/#416/#418)
