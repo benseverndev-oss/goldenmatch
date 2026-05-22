@@ -1311,7 +1311,24 @@ def build_blocking(
                         best_geo, best_name, candidate_block,
                     )
 
+        # #435: when multiple name columns exist (e.g. Febrl3 has both
+        # given_name + surname), add a soundex pass for the SECOND one.
+        # Without this, ~24pp of recall is lost on synthetic-typo data
+        # where given_name was corrupted but surname stayed intact.
+        secondary_name = None
+        if len(name_cols) >= 2:
+            secondary_candidates = [
+                p for p in name_cols if p.name != best_name
+            ]
+            if secondary_candidates:
+                secondary_name = secondary_candidates[0].name
+
         if best_geo:
+            extra_passes = []
+            if secondary_name:
+                extra_passes.append(BlockingKeyConfig(
+                    fields=[secondary_name], transforms=["lowercase", "soundex"],
+                ))
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"])],
                 strategy="multi_pass",
@@ -1319,11 +1336,17 @@ def build_blocking(
                     BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"]),
                     BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "substring:0:5"]),
                     BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
+                    *extra_passes,
                 ],
                 max_block_size=max_safe_block,
                 skip_oversized=True,
             )
 
+        extra_passes = []
+        if secondary_name:
+            extra_passes.append(BlockingKeyConfig(
+                fields=[secondary_name], transforms=["lowercase", "soundex"],
+            ))
         return BlockingConfig(
             keys=[BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"])],
             strategy="multi_pass",
@@ -1331,6 +1354,7 @@ def build_blocking(
                 BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "substring:0:5"]),
                 BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
                 BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
+                *extra_passes,
             ],
             max_block_size=max_safe_block,
             skip_oversized=True,
