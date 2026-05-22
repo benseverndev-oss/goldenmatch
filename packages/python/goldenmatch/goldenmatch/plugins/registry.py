@@ -45,9 +45,25 @@ class PluginRegistry:
         cls._discovered = False
 
     def discover(self) -> None:
-        """Scan entry points and register all found plugins."""
+        """Scan entry points and register all found plugins.
+
+        Builtins first (#predefined-merge-plugins, v1.18.2), then
+        entry points. Entry-point plugins with the same name OVERRIDE
+        builtins -- consistent with the documented "user wins" pattern
+        (last-write into `_register`).
+        """
         if PluginRegistry._discovered:
             return
+
+        # v1.18.2: auto-register the 10 predefined golden-strategy
+        # plugins (numeric / format / business). Failures here are
+        # bugs in the shipped code, not user config, so they log at
+        # WARNING level. See goldenmatch/plugins/builtin/__init__.py.
+        try:
+            from goldenmatch.plugins.builtin import register_builtins
+            register_builtins(self)
+        except Exception as e:  # pragma: no cover -- shipped-code bug
+            logger.warning("Failed to register builtin plugins: %s", e)
 
         for plugin_type, group_name in _GROUPS.items():
             eps = entry_points(group=group_name)
