@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added -- Phase 4 of v1.18 surface-sync roadmap (TUI)
+
+- **8th tab: Corrections** -- inspect MemoryStore corrections via
+  DataTable + filter-by-dataset + refresh/delete bindings.
+  `tui/tabs/corrections_tab.py`.
+- **`GoldenEditModal`** captures a field-level Correction
+  (`decision="field_correct"`) for Golden tab cells. Save writes to
+  MemoryStore. `tui/screens/golden_edit_modal.py`.
+- **`MatchesCorrectionModal`** captures a pair-level Correction
+  (`decision="approve"|"reject"`) for Matches tab rows. Save writes
+  to MemoryStore. `tui/screens/matches_correction_modal.py`.
+- **`GoldenMatchApp.memory_db_path: str | None`** -- new attribute
+  set by callers (CLI launcher etc.) when memory is enabled. Empty
+  state shown in Corrections tab when None.
+
+Spec: `docs/superpowers/specs/2026-05-22-phase-4-tui-corrections-tab-design.md`
+
 ## [1.19.0] - 2026-05-22
 
 ### Added -- v1.18 surface-sync roadmap (Phases 1 + 2)
