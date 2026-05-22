@@ -6,6 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-05-22
+
+### Added — golden-rules intelligence layer 2
+
+User feedback: "could be more intelligent." Three of four follow-up
+lifts shipped; #4 (LLM-assisted picks) deferred to its own PR.
+
+- **Per-source consensus agreement.** `source_priority` ranking now
+  uses per-source agreement-with-cluster-consensus rate, not just
+  completeness. Catches "complete but wrong" sources. New
+  `RefinementSignals.per_source_agreement` populated from
+  cluster-mode voting; falls back to completeness when < 10 attempts
+  per source.
+- **MemoryStore-learned strategy tuner.**
+  `core/autoconfig_golden_strategy_tuner.py`. 90/10 train/heldout,
+  5pp overfit guard, gated on >= 50 corrections per dataset,
+  env-overridable via `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`.
+  Refiner consults tuner FIRST per field; falls back to heuristics
+  on `no_memory` / `below_minimum` / `overfit_guard`.
+- **Per-cluster strategy overrides.**
+  `GoldenRulesConfig.cluster_overrides: dict[int, dict[str,
+  GoldenFieldRule]] | None`. Refiner sets per-cluster, per-field
+  overrides based on cluster shape:
+  - `cluster_quality='weak'` → `unanimous_or_null`
+  - `oversized` clusters → `confidence_majority`
+  - `size == 2` clusters → `unanimous_or_null`
+
+  `_polars_native_eligible` returns False when overrides are set
+  (fast path can't honor per-cluster picks).
+
+### Deferred to v1.19+
+
+- **LLM-assisted picks for ambiguous fields** (issue #430). Needs
+  prompt design + benchmark measurement before shipping.
+
+Spec: `docs/superpowers/specs/2026-05-22-golden-rules-intelligence-layer-2-design.md`
+
 ## [1.18.0] - 2026-05-22
 
 ### Added — intelligent golden-field consolidation
