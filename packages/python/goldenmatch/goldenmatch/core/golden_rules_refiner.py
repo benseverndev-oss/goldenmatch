@@ -181,7 +181,13 @@ class RefinementSignals:
 
     ``per_source_completeness[field][source]`` is the non-null rate of
     ``field`` in rows tagged with ``source``. Computed only when the
-    ``__source__`` column is present.
+    ``__source__`` column is present. v1.18.1: kept as a fallback; the
+    primary source-priority signal is now ``per_source_agreement``.
+
+    ``per_source_agreement[field][source]`` is the rate at which
+    ``source`` agrees with the within-cluster consensus value for
+    ``field``. Quality > completeness: a "complete but wrong" source
+    has high completeness but low agreement. v1.18.1, #intelligence-2.
 
     ``date_column_coverage[field]`` is the fraction of multi-member
     clusters where every member has a non-null date value in ``field``.
@@ -193,6 +199,7 @@ class RefinementSignals:
 
     within_cluster_spread: dict[str, float]
     per_source_completeness: dict[str, dict[str, float]]
+    per_source_agreement: dict[str, dict[str, float]]
     date_column_coverage: dict[str, float]
     col_type: dict[str, str]
     avg_len: dict[str, float]
@@ -230,6 +237,7 @@ def compute_refinement_signals(
         return RefinementSignals(
             within_cluster_spread=empty_str,
             per_source_completeness=empty_src,
+            per_source_agreement=empty_src,
             date_column_coverage=empty_str,
             col_type={p.name: p.col_type for p in column_profiles},
             avg_len={p.name: float(p.avg_len) for p in column_profiles},
@@ -287,6 +295,50 @@ def compute_refinement_signals(
             if per_source:
                 per_source_completeness[col] = per_source
 
+    # v1.18.1 (#intelligence-2): per-source agreement-with-consensus.
+    # For each multi-member cluster + field, find the consensus value
+    # (mode of non-null values), then count how often each source
+    # agrees with consensus. Rate = agreements / non_null_attempts.
+    # Sources with < 10 attempts fall back to completeness signal
+    # (caller in _pick_strategy_for_field handles the fallback).
+    per_source_agreement: dict[str, dict[str, float]] = {}
+    if "__source__" in multi_df.columns:
+        for col in user_cols:
+            # Compute per-cluster consensus value via mode.
+            consensus = (
+                multi_df.lazy()
+                .filter(pl.col(col).is_not_null())
+                .group_by("__cluster_id__")
+                .agg(pl.col(col).mode().first().alias("__consensus__"))
+                .collect()
+            )
+            if consensus.height == 0:
+                continue
+            # Join consensus back + mark agreement per row.
+            agreement_df = (
+                multi_df.lazy()
+                .join(consensus.lazy(), on="__cluster_id__", how="left")
+                .filter(pl.col(col).is_not_null())
+                .with_columns(
+                    (pl.col(col) == pl.col("__consensus__")).alias("__agrees__"),
+                )
+                .group_by("__source__")
+                .agg(
+                    pl.col("__agrees__").sum().alias("agreements"),
+                    pl.len().alias("attempts"),
+                )
+                .collect()
+            )
+            per_src: dict[str, float] = {}
+            for row in agreement_df.iter_rows(named=True):
+                attempts = int(row["attempts"] or 0)
+                if attempts < 10:  # insufficient signal
+                    continue
+                rate = float(row["agreements"] or 0) / attempts
+                per_src[str(row["__source__"])] = rate
+            if per_src:
+                per_source_agreement[col] = per_src
+
     # Date-column coverage: fraction of multi-member clusters where
     # every member has a non-null value in this field AND the field's
     # dtype is a date/datetime/string-castable-to-date.
@@ -310,6 +362,7 @@ def compute_refinement_signals(
     return RefinementSignals(
         within_cluster_spread=within_cluster_spread,
         per_source_completeness=per_source_completeness,
+        per_source_agreement=per_source_agreement,
         date_column_coverage=date_column_coverage,
         col_type={p.name: p.col_type for p in column_profiles},
         avg_len={p.name: float(p.avg_len) for p in column_profiles},
@@ -373,7 +426,14 @@ def _pick_strategy_for_field(
         return "most_recent", {"date_column": sibling_timestamp}
 
     # Rule 2: source_priority when one source clearly dominates.
-    per_source = signals.per_source_completeness.get(field)
+    # v1.18.1 (#intelligence-2): rank by agreement-with-consensus when
+    # available; fall back to completeness when agreement signal is
+    # insufficient (< 10 attempts per source -> agreement dict empty).
+    # A "complete but wrong" source has high completeness + low
+    # agreement; the agreement signal catches that.
+    per_source_agree = signals.per_source_agreement.get(field)
+    per_source_complete = signals.per_source_completeness.get(field)
+    per_source = per_source_agree if per_source_agree else per_source_complete
     if per_source and len(per_source) >= 2:
         sorted_sources = sorted(
             per_source.items(), key=lambda kv: kv[1], reverse=True,
@@ -411,12 +471,23 @@ def refine_golden_rules(
     clusters: dict[int, dict],
     prepared_df: pl.DataFrame,
     column_profiles: list[ColumnProfile],
+    *,
+    memory_store: object | None = None,
+    dataset: str = "default",
 ) -> GoldenRulesConfig:
     """Refine ``base_rules`` based on cluster + column signals.
 
     Returns a NEW ``GoldenRulesConfig`` with ``field_rules`` populated.
     Does NOT mutate ``base_rules``. When ``base_rules.adaptive`` is
     False (default), returns ``base_rules`` unchanged.
+
+    Args:
+        memory_store: optional MemoryStore handle for tuner consultation
+            (v1.18.1, #intelligence-2). When provided, the tuner is
+            consulted FIRST for each field; falls back to heuristic
+            rules when reason is `below_minimum`, `no_memory`, or
+            `overfit_guard`.
+        dataset: dataset key for tuner scoping. Default 'default'.
     """
     from goldenmatch.config.schemas import GoldenFieldRule
 
@@ -450,11 +521,49 @@ def refine_golden_rules(
     fields_to_consider: set[str] = set(signals.within_cluster_spread.keys())
     fields_to_consider |= {p.name for p in column_profiles}
 
+    # v1.18.1 (#intelligence-2): MemoryStore-learned strategy picks.
+    # Consulted FIRST per field. Falls back to heuristics when the
+    # tuner returns reason in {below_minimum, no_memory, overfit_guard}.
+    tuner_picks: dict[str, str] = {}
+    if memory_store is not None:
+        try:
+            from goldenmatch.core.autoconfig_golden_strategy_tuner import (
+                tune_field_strategy,
+            )
+            for field in fields_to_consider:
+                tuning = tune_field_strategy(
+                    memory_store, dataset=dataset, field=field,
+                )
+                if tuning.reason == "learned" and tuning.strategy:
+                    tuner_picks[field] = tuning.strategy
+            if tuner_picks:
+                logger.info(
+                    "Tuner learned strategies for %d field(s) "
+                    "from MemoryStore corrections",
+                    len(tuner_picks),
+                )
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.warning("Tuner consultation failed: %s", exc)
+
     new_field_rules: dict[str, GoldenFieldRule] = dict(base_rules.field_rules)
     for field in fields_to_consider:
         if field in new_field_rules:
             # Caller-provided rule wins; don't override.
             continue
+        # Tuner pick beats heuristic rules when available.
+        if field in tuner_picks:
+            try:
+                new_field_rules[field] = GoldenFieldRule(strategy=tuner_picks[field])
+                logger.info(
+                    "Refined golden rule (tuner): field=%r -> strategy=%s",
+                    field, tuner_picks[field],
+                )
+                continue
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "Tuner-suggested strategy %r failed for field=%r: %s",
+                    tuner_picks[field], field, exc,
+                )
         result = _pick_strategy_for_field(
             field, signals,
             sibling_timestamp=sibling_timestamp,

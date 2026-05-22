@@ -1245,11 +1245,18 @@ def _run_dedupe_pipeline(
             # `profiles` is the ColumnProfile list built in Step 1; reuse
             # if it's in scope (it is for the dedupe pipeline).
             _profiles_for_refiner = locals().get("profiles") or []
+            # v1.18.1 (#intelligence-2): thread MemoryStore + dataset
+            # into the refiner so the tuner can consult past corrections.
+            _dataset_for_refiner = (
+                config.memory.dataset if config.memory and config.memory.dataset else "default"
+            )
             golden_rules = refine_golden_rules(
                 base_rules=golden_rules,
                 clusters=clusters,
                 prepared_df=collected_df,
                 column_profiles=_profiles_for_refiner,
+                memory_store=memory_store,
+                dataset=_dataset_for_refiner,
             )
         except Exception as exc:
             # Refinement failure is non-fatal -- fall back to base rules.
