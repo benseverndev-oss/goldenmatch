@@ -66,7 +66,40 @@ npm install goldenmatch
 - **35 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
-### What's new in v1.8
+### What's new in v1.17
+
+- **Refuse-on-uncertainty by default** (`confidence_required=True`). At
+  `df.height >= 100_000`, when auto-config commits a RED-health config,
+  `dedupe_df` / `match_df` raise `ControllerNotConfidentError` instead
+  of running a hours-long, low-precision dedupe. Recovery: pass an
+  explicit `GoldenMatchConfig`, lower the matchkey threshold, or
+  opt out with `confidence_required=False`. See ADR-0001.
+- **Matchkey vs blocking pools are orthogonal** (ADR-0003). Pre-v1.13,
+  auto-config picked the same high-cardinality column for both —
+  catastrophic on identity-claim columns like NPI (1 row per block).
+  v1.13 splits the pools: a column may qualify as matchkey, blocking,
+  both, or neither. Composite-pair search (`zip + last_name`) fills
+  the gap when no single column qualifies for blocking.
+- **Chao1 sample-size correction** (ADR-0004). Auto-config profiles a
+  5K sample; sample-observed cardinality is projected to full-population
+  via `sample_distinct × √(N_full / N_sample)`. Universal across
+  connectors. Env-rollback:
+  `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER=observed`.
+- **Unified `exclude_columns` API** (ADR-0002). Single
+  `GoldenMatchConfig.exclude_columns: list[str]` works across the
+  suite — GoldenMatch auto-config skips them for matchkeys + blocking,
+  GoldenFlow transforms skip them, GoldenCheck preflight skips them.
+  CLI: `goldenmatch sync ... --exclude-columns col1,col2`. Layered
+  additively with auto-config detector exclusions (audit, foreign-id,
+  sentinel, lifecycle).
+- **Streaming-block sync as the >500K-row path** (ADR-0005). RSS
+  bounded by largest individual block, not dataset size. Default
+  threshold env-overridable (`GOLDENMATCH_SYNC_STREAMING_THRESHOLD`).
+  v1.17 added: small-block fast path (skip bucket-partition when
+  `height < n_buckets`) + parallel outer block loop
+  (`GOLDENMATCH_STREAMING_BLOCK_WORKERS`).
+
+### What's new in v1.8 (foundation)
 
 - **Introspective auto-config controller** — iterates on block-size distribution, score histogram, transitivity rate, and borderline mass to converge on a config that beats hand-tuned on bibliographic and voter-record benchmarks. Zero user input required.
 - **Cross-run memory** — past committed configs are reused when the data shape signature matches (`~/.goldenmatch/autoconfig_memory.db`). Opt out with `GOLDENMATCH_AUTOCONFIG_MEMORY=0`.

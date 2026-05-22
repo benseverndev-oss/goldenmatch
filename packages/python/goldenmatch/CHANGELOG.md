@@ -6,7 +6,139 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-### Added
+## [1.17.0] - 2026-05-22
+
+### Added — v1.13 autoconfig roadmap (2026-05-21, PRs #415/#416/#418)
+
+- **ADR practice** (`docs/adr/`). 7 foundational records capturing
+  load-bearing architectural decisions:
+  - ADR-0000: Adopt ADR practice
+  - ADR-0001: `confidence_required=True` as the default safety gate
+  - ADR-0002: Unified `exclude_columns` API surface across the suite
+  - ADR-0003: Matchkey vs blocking pools as orthogonal axes
+  - ADR-0004: Chao1 sample-size correction for autoconfig cardinality
+  - ADR-0005: Streaming-block sync as the >500K-row path
+  - ADR-0006: Telemetry-gated rule deprecation
+- **Wave A — stratified autoconfig sampling (#131)**. `_sample_one`
+  picks a mid-cardinality column (prefers `zip` / `state` / `postal`
+  names) and stratifies by it; rare strata get a `min_per_stratum=10`
+  floor. Falls back to uniform-random when no qualifying column.
+  Env-rollback: `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY=random`.
+- **Wave A — iteration-oscillation guard (#127)**.
+  `HeuristicRefitPolicy` tracks the last `(rule_name, rationale)` that
+  fired; identical fire next call → skip, policy advances. Different
+  rationale bypasses; first call never blocks.
+- **Wave B — real `ExpandSample(2.0)` controller action (#125)**.
+  `PolicyDecision` gains `expand_sample: float | None` field.
+  `rule_sparse_match_expand` emits `expand_sample=2.0` instead of
+  proxying via threshold-lowering. `AutoConfigController.run`
+  intercepts and resamples `df` with `sample_size_default *= factor`
+  before the next iteration. Capped at 5× initial.
+- **Wave B — telemetry log for `rule_demote_clustered_identity` (#124)**.
+  Env-gated INFO log (`GOLDENMATCH_TELEMETRY_DEMOTE_RULE=1`) for the
+  1-2 week observation window. Deletion gated on zero firings; see
+  ADR-0006 for the pattern.
+- **Wave D — NE-on-Fellegi-Sunter investigation (#126)**. Concluded
+  document-and-close. Three formulations evaluated; none cleanly
+  preserve LLR additivity without labeled data that Wave E provides
+  downstream. `MatchkeyConfig.negative_evidence` field docstring
+  updated to document the non-goal + the
+  `GOLDENMATCH_NE_FS_ESCAPE_MODE=floor` escape hatch.
+- **Wave E — adaptive NE tuner module (#129)**.
+  `core/autoconfig_ne_tuner.py`. `tune_ne_field(store, dataset, field)`
+  runs grid search over `PENALTY_GRID × THRESHOLD_GRID`, 90/10
+  train/heldout split, overfit guard at 5pp F1 drop. Gated on ≥ 50
+  MemoryStore corrections. Env-overridable
+  `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS`. Integration with
+  `promote_negative_evidence` is the natural follow-up; this lands
+  the tuner module + tests with a stable API.
+- **v1.13 autoconfig roadmap** at
+  `docs/superpowers/specs/2026-05-21-v1-13-autoconfig-roadmap.md`
+  sequencing 6 issues into 5 waves with explicit kill criteria.
+- **Composite-search candidate log (#417)**. Every evaluated pair in
+  `find_composite_blocking_keys` emits an INFO line:
+  `pair (c1, c2) joint_cardinality=K -> in_band|below_band|above_band`.
+  Header + winner-or-no-pair summary. Eliminates the "why didn't it
+  pick X" black-box.
+- **`degenerate_guard_max_avg_block_size()` helper (#417, default 10K)**.
+  Env-overridable
+  `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`.
+
+### Changed — autoconfig safety + correctness (2026-05-21, PRs #411 → #423)
+
+- **Sample-corrected blocking via Chao1 (ADR-0004, PR #411)**.
+  `core/blocking_candidates.py::scale_cardinality_ratio_to_full_population`
+  projects sample-observed distinct values to full-population
+  cardinality using `sample_distinct × √(N_full / N_sample)`. Same
+  scaler reused by `estimate_avg_block_size`. Env-rollback:
+  `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER=observed` reverts to linear.
+- **Controller threads true `n_rows_full` into v0 (#414)**.
+  `AutoConfigController._initial_config` accepts a new
+  `n_rows_full: int | None` kwarg and injects into `v0_kwargs`.
+  `_legacy_auto_configure_v0` reads it as `total_rows`. Without this,
+  v0 saw `df.height` (the sample size) and the Chao1 short-circuit
+  fired, defeating the gate.
+- **Composite-search wired into `build_blocking` (#411)**.
+  `find_composite_blocking_keys` was already implemented + tested but
+  never called from the real path. Now inserted as a fall-through
+  between single-column candidates (`exact_cols` / `name_cols`) and
+  the text-canopy / first-string last resort.
+- **`BLOCKING_DEGENERATE` guard catches mega-block case (#419)**.
+  Existing guard only caught singleton blocks (`avg_block_size < 2`);
+  upper-bound now catches `avg_block_size > 10K` (the
+  every-row-in-one-block scenario that wedges downstream
+  `bucket_score` in O(n²) on one core).
+- **`BLOCKING_DEGENERATE` guard catches empty `blocking.keys` (#420)**.
+  Pre-#420 precondition required `keys` non-empty, which short-circuited
+  exactly the case the guard exists for. Restructured into three RED-
+  gated branches: `blocking is None`/`keys=[]`, `keys` present but
+  `fields=[]`, and the existing estimator-based check.
+- **`--exclude-columns` enforced PRE-autoconfig in `goldenmatch sync` (#421)**.
+  CLI now parses excludes and sets `_RUNTIME_EXCLUDE_COLUMNS` ContextVar
+  before calling `auto_configure`, then resets in `finally`. Previously
+  the merge happened post-hoc, after matchkeys + blocking were already
+  built. Excluded columns no longer slip through as matchkeys.
+- **`BLOCKING_DEGENERATE` guard inspects matchkey-derived blocking (#421)**.
+  When `config.blocking.keys` is empty, the streaming sync derives
+  effective blocking from `matchkeys[0].fields`. Guard now falls back
+  to those fields (gated on profile.health() == RED) so the implicit-
+  blocking degenerate case is caught at the controller level.
+
+### Changed — streaming-sync throughput (2026-05-22, PR #423)
+
+- **`score_buckets` small-block fast path (#422)**. When
+  `prepared_df.height < n_buckets`, the hash + `partition_by(__bucket__)`
+  step always collapses to 1 bucket by pigeonhole. Skip the bookkeeping
+  on small inputs; treat `keyed` directly as the single bucket. Removes
+  3 Polars ops per block on the user's 585K-block 1.13M-row workload.
+- **`_full_scan_streaming` parallel outer loop (#422)**. Per-block
+  scoring dispatched via `ThreadPoolExecutor(max_workers=min(cpu_count, 8))`.
+  Env override: `GOLDENMATCH_STREAMING_BLOCK_WORKERS`. Cross-block
+  dedup deferred to a single canonical `(min, max)` pass over the
+  merged pair list. Serial fallback preserved for ≤ 2 work items.
+- **`MemoryStore` enables SQLite WAL mode by default (#130, PR #413)**.
+  `PRAGMA journal_mode=WAL` on every open. Resolves "database is
+  locked" intermittent failures when two `MemoryStore` instances point
+  at the same file. Allows one writer + multiple readers concurrently.
+
+### Fixed
+
+- `goldenmatch sync` cluster: four user-visible bugs that all surfaced
+  from one Postgres sync run against a 1.13M-row table on a slim Python
+  build.
+- **#410** post-#409 follow-up: composite-search wired but never fired
+  because v0 saw sample-sized `total_rows` (full-pop count wasn't
+  threaded through controller). Fixed in #414. Spec:
+  `docs/superpowers/specs/2026-05-21-blocking-pool-followup-design.md`.
+- **#417** v1-v3: autoconfig wedge on 1.13M-row real-world Postgres
+  table. Resolved across PRs #419 → #420 → #421 → #423. User
+  confirmed correctness fix + 585K small-block run with sub-second
+  match-log lag. See ADR-0003.
+- **#422** throughput: small-block fast path + parallel outer loop.
+  Target acceptance: < 30 min on 8 vCPU / 16 GB for the user's
+  585K-block table.
+
+### Added (Phase 5 — Splink-Spark roadmap, pre-existing)
 
 - `bench-phase5-simulated` workflow job: runs a 4-worker Ray cluster
   inside one `large-new-64GB` GitHub runner against 50M synthetic rows,
