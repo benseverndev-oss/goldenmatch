@@ -452,6 +452,15 @@ class GoldenRulesConfig(BaseModel):
     # Spec: docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md
     adaptive: bool = False
 
+    # v1.20.x (#430): LLM fallback for ambiguous fields. When True and
+    # the heuristic refiner returns None for a field (no rule fires),
+    # dispatch one LLM call per field to pick a strategy. Cached by
+    # (dataset, field). BudgetTracker integration via the existing
+    # `BudgetConfig`-attached scorer config (set on `match_settings`).
+    # Soft-fails: no API key / budget exhausted / invalid response
+    # -> falls back to the base default_strategy.
+    use_llm_for_ambiguous: bool = False
+
     # v1.18.2 (#429): per-cluster strategy overrides. Maps cluster_id
     # -> {field_name -> GoldenFieldRule}. When a cluster_id appears
     # here, those field rules supersede the top-level `field_rules`
