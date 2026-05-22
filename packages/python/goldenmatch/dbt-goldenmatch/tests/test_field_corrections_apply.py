@@ -20,6 +20,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+# dbt-goldenmatch is a separate optional package not installed in the
+# core pytest CI lane. Skip the whole module when it's missing rather
+# than hitting ModuleNotFoundError per test.
+pytest.importorskip("dbt_goldenmatch")
+
 
 def _seed_field_correction_store(db_path: str, *, dataset: str) -> None:
     """Seed a MemoryStore with one field-level correction."""
