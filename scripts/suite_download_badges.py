@@ -103,33 +103,64 @@ def shield(label: str, message: str, color: str, logo: str) -> dict:
     }
 
 
-def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tuple[int, bool]:
-    """Sum downloads across packages with graceful degradation.
-
-    Returns (total, used_fallback). If the upstream registry throttles or
-    errors during the sum, falls back to the prior badge file's message and
-    parses its numeric value out so the badge stays current-ish rather than
-    breaking the run entirely.
-    """
+def _parse_prior(prior_path: Path) -> int | None:
+    """Reverse humanize() on a prior badge JSON file. Returns None when
+    the file is absent / malformed / explicitly 0 (so callers can decide
+    whether 0 is real or a stuck fallback)."""
+    if not prior_path.exists():
+        return None
     try:
-        return sum(fetcher(p) for p in packages), False
-    except _Throttled as exc:
-        print(f"warn: {kind} fetch throttled ({exc}); preserving prior badge value", file=sys.stderr)
-        if not prior_path.exists():
-            # First-ever run got throttled — emit 0 rather than crash.
-            return 0, True
+        prior = json.loads(prior_path.read_text())
+        msg = str(prior.get("message", "")).replace("/month", "").strip()
+        if not msg:
+            return None
+        if msg.endswith("M"):
+            return int(float(msg[:-1]) * 1_000_000)
+        if msg.endswith("k"):
+            return int(float(msg[:-1]) * 1_000)
+        value = int(msg)
+        # A prior value of 0 likely means a previous run got stuck on the
+        # all-throttled fallback path. Don't propagate it forward — return
+        # None so we fall through to "best effort partial sum".
+        return value if value > 0 else None
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def _safe_total(packages: list[str], fetcher, kind: str, prior_path: Path) -> tuple[int, bool]:
+    """Sum downloads across packages with per-package graceful degradation.
+
+    Returns (total, used_fallback). Previous behaviour was all-or-nothing:
+    if any package's fetch threw _Throttled the whole sum was abandoned in
+    favour of the prior badge value. That's brittle — one throttled package
+    out of six shouldn't zero the suite total. Now each package tries
+    independently; throttled packages contribute their prior-individual
+    share (or 0 if we have no per-package prior).
+    """
+    prior_total = _parse_prior(prior_path)
+
+    total = 0
+    any_throttled = False
+    for pkg in packages:
         try:
-            prior = json.loads(prior_path.read_text())
-            msg = str(prior.get("message", "0/month"))
-            # Reverse humanize(): "1.2k/month" → 1200, "5/month" → 5, "1.0M/month" → 1_000_000
-            stripped = msg.replace("/month", "").strip()
-            if stripped.endswith("M"):
-                return int(float(stripped[:-1]) * 1_000_000), True
-            if stripped.endswith("k"):
-                return int(float(stripped[:-1]) * 1_000), True
-            return int(stripped), True
-        except (ValueError, KeyError, json.JSONDecodeError):
-            return 0, True
+            total += fetcher(pkg)
+        except _Throttled as exc:
+            print(
+                f"warn: {kind}:{pkg} fetch throttled ({exc}); contributing 0",
+                file=sys.stderr,
+            )
+            any_throttled = True
+            continue
+
+    # If everything throttled and we have a sane prior, preserve it.
+    if total == 0 and any_throttled and prior_total is not None:
+        print(
+            f"warn: {kind} all-throttled; preserving prior total {prior_total}",
+            file=sys.stderr,
+        )
+        return prior_total, True
+
+    return total, any_throttled
 
 
 def main() -> int:

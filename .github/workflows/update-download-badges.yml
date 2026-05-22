@@ -28,6 +28,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Seed prior badge values from `badges` branch
+        # The script's throttle-fallback path reads --out/*.json to
+        # recover the previous count when pypistats 429s. Without this
+        # seed step the fresh badges-out/ dir is empty, the fallback
+        # short-circuits to 0, and the README badge shows "0/month".
+        run: |
+          set -euo pipefail
+          mkdir -p badges-out
+          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            git fetch origin badges --depth=1
+            for f in pypi-downloads.json npm-downloads.json; do
+              git show origin/badges:"$f" > "badges-out/$f" 2>/dev/null || true
+            done
+          fi
+          ls -la badges-out/ || true
+
       - name: Compute suite-wide download totals
         run: python scripts/suite_download_badges.py --out badges-out
 
