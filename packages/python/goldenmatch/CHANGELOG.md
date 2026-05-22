@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-05-22
+
+### Added -- Phase 2 of v1.18 surface-sync roadmap
+
+REST API parity for v1.18.2's field-level Corrections + 22 plugins.
+Unblocks the #437 Next.js review-queue use case.
+
+- `POST /api/v1/memory/corrections` -- pair AND field-level shapes;
+  source defaults to "rest" with trust=0.8
+- `GET /api/v1/plugins` -- discovery endpoint; category filter;
+  builtin vs user source tagging
+- `GET /api/v1/memory/corrections` response gains field-level fields
+
+Spec: docs/superpowers/specs/2026-05-22-phase-2-rest-api-crud-design.md
+
 ## [1.18.2] - 2026-05-22
 
 ### Added

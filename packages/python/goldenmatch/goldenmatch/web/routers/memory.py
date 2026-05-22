@@ -11,10 +11,12 @@ label → mirror → browse → learn → next run picks up adjustments.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from goldenmatch._api import get_memory, learn, memory_stats
 from goldenmatch.core.memory.store import Correction
@@ -44,7 +46,120 @@ def _serialize_correction(c: Correction) -> dict[str, Any]:
         "reason": c.reason,
         "dataset": c.dataset,
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        # v1.19.0 field-level Correction fields (#437)
+        "field_name": getattr(c, "field_name", None),
+        "original_value": getattr(c, "original_value", None),
+        "corrected_value": getattr(c, "corrected_value", None),
     }
+
+
+# v1.19.0 -- Phase 2: POST /corrections (#437 surface sync)
+
+
+class CorrectionCreate(BaseModel):
+    """Pair-level OR field-level correction request body.
+
+    Pair-level requires `id_a` + `id_b` + `decision in {approve, reject}`.
+    Field-level requires `cluster_id` + `field_name` + `corrected_value`
+    + `decision="field_correct"`.
+
+    `dataset` required for both. `source` defaults to 'rest' (trust 0.8).
+    """
+    decision: str = Field(..., description="approve | reject | field_correct")
+    dataset: str
+    id_a: int | None = None
+    id_b: int | None = None
+    cluster_id: int | None = None
+    field_name: str | None = None
+    original_value: str | None = None
+    corrected_value: str | None = None
+    reason: str | None = None
+    matchkey_name: str | None = None
+    source: str = Field(default="rest", description="Source tag")
+
+
+@router.post("/corrections", status_code=201)
+def create_correction(body: CorrectionCreate) -> dict[str, Any]:
+    """File a pair-level or field-level Correction into Learning Memory."""
+    from goldenmatch.core.memory.store import (
+        HIGH_TRUST_SOURCES,
+        _canon_pair,
+    )
+    from goldenmatch.core.memory.store import (
+        Correction as CorrectionDC,
+    )
+
+    if body.decision not in ("approve", "reject", "field_correct"):
+        raise HTTPException(
+            400,
+            detail=f"Invalid decision: {body.decision!r}",
+        )
+    if not body.dataset:
+        raise HTTPException(400, detail="dataset is required")
+
+    # Trust derived from source: HIGH_TRUST_SOURCES = 1.0, else 0.5.
+    # REST defaults to 0.8 -- between agent (0.5) and human steward (1.0).
+    if body.source == "rest":
+        trust = 0.8
+    elif body.source in {s.value for s in HIGH_TRUST_SOURCES}:
+        trust = 1.0
+    else:
+        trust = 0.5
+
+    if body.decision == "field_correct":
+        if not body.field_name:
+            raise HTTPException(400, detail="field_correct requires field_name")
+        if body.corrected_value is None:
+            raise HTTPException(
+                400, detail="field_correct requires corrected_value",
+            )
+        cid = body.cluster_id if body.cluster_id is not None else (body.id_a or 0)
+        correction = CorrectionDC(
+            id=str(uuid.uuid4()),
+            id_a=cid,
+            id_b=0,
+            decision=body.decision,
+            source=body.source,
+            trust=trust,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=body.matchkey_name,
+            reason=body.reason,
+            dataset=body.dataset,
+            created_at=datetime.now(UTC),
+            field_name=body.field_name,
+            original_value=body.original_value,
+            corrected_value=body.corrected_value,
+        )
+    else:
+        if body.id_a is None or body.id_b is None:
+            raise HTTPException(
+                400, detail=f"{body.decision} requires id_a and id_b",
+            )
+        ca, cb = _canon_pair(body.id_a, body.id_b)
+        correction = CorrectionDC(
+            id=str(uuid.uuid4()),
+            id_a=ca,
+            id_b=cb,
+            decision=body.decision,
+            source=body.source,
+            trust=trust,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=body.matchkey_name,
+            reason=body.reason,
+            dataset=body.dataset,
+            created_at=datetime.now(UTC),
+        )
+
+    store = get_memory()
+    try:
+        store.add_correction(correction)
+    finally:
+        store.close()
+    return _serialize_correction(correction)
 
 
 @router.get("/corrections")
