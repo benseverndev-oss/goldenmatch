@@ -74,27 +74,92 @@ class StrategyTuning:
 def _strategy_would_match(
     correction: Correction,
     strategy: str,
+    *,
+    field: str | None = None,
 ) -> bool:
-    """Approximate whether `strategy` would have produced the same value
-    the user chose, given the data available on `correction`.
+    """Whether `strategy` would have produced the user's chosen value.
 
-    Real ground truth: re-run merge_field on the cluster context with
-    `strategy` and compare to `correction.chosen_value`. That requires
-    the cluster snapshot, which corrections don't carry.
+    Two regimes (#437):
 
-    Heuristic: use the correction's `trust` + `decision` signals:
-    - decision="approve" + trust >= 0.7 → strategy that PRESERVES the
-      candidate (most_complete, longest_value, majority_vote when
-      candidate is the consensus) matches.
-    - decision="reject" + trust >= 0.7 → strategy that DROPS the
-      candidate (unanimous_or_null, confidence_majority on weak edges)
-      matches.
-    - trust < 0.5 → ambiguous; no strategy matches confidently.
+    1. **Field-level correction** (preferred when available).
+       `correction.field_name` is set + `corrected_value` is set.
+       Predict what `strategy` would have picked given the inline-edit
+       evidence on this row, then compare to `corrected_value`.
 
-    This is intentionally approximate. The tuner returns a learned
-    strategy when ONE strategy consistently outperforms others -- the
-    absolute hit rate doesn't matter, only the relative ranking.
+       Without the cluster snapshot we can't exactly replay
+       merge_field, but the original_value vs corrected_value diff
+       lets us infer enough about strategy fit:
+
+       - corrected_value == original_value -> strategy that preserved
+         the original would have been right (most_complete /
+         longest_value / first_non_null all preserve; majority_vote
+         preserves when consensus matches).
+       - corrected_value != original_value AND corrected_value is
+         longer -> longest_value would have been right.
+       - corrected_value != original_value AND corrected_value is
+         shorter -> NOT longest_value; unanimous_or_null /
+         confidence_majority are more likely fits.
+       - corrected_value != original_value, similar length -> ambiguous;
+         most_recent / source_priority might be right (date / source
+         signal) but we can't verify without cluster context.
+
+    2. **Pair-level correction** (the original v1.18.1 heuristic).
+       `correction.field_name` is None. Use coarse trust + decision
+       signals.
+
+    `field` filter: when set, only count this correction if it's a
+    field-level edit on the SAME field. Pair-level corrections (no
+    field_name) are evaluated regardless of `field` -- they carry
+    dataset-wide signal that applies to every field's tuning.
     """
+    # ── Regime 1: field-level correction ────────────────────────────
+    fname = getattr(correction, "field_name", None)
+    if fname is not None:
+        # Field filter: skip corrections on other fields.
+        if field is not None and fname != field:
+            return False
+        orig = getattr(correction, "original_value", None)
+        corrected = getattr(correction, "corrected_value", None)
+        if corrected is None:
+            return False  # malformed field correction; ignore
+        # No-edit case: reviewer reviewed + kept the original. Most
+        # preserving strategies would have matched.
+        if orig == corrected:
+            return strategy in {
+                "most_complete", "longest_value", "majority_vote",
+                "first_non_null",
+            }
+        # Edit case: reviewer changed the value. The strategy that
+        # WOULD have predicted `corrected` is the one that matches.
+        if orig is not None:
+            # longest_value would have been right iff corrected is
+            # longer than original AND non-empty.
+            if strategy == "longest_value":
+                return len(corrected) > len(orig)
+            # unanimous_or_null would have predicted NULL on this
+            # disagreement -- which matches only if corrected is empty.
+            if strategy == "unanimous_or_null":
+                return corrected == "" or corrected is None
+            # confidence_majority requires the cluster's pair_scores;
+            # without them we conservatively credit this strategy when
+            # the reviewer chose a DIFFERENT value (it tends to favor
+            # higher-confidence subsets, which matches reviewer overrides).
+            if strategy == "confidence_majority":
+                return True
+            # most_recent / source_priority need date / source signals
+            # we don't have at this layer -- defer to the heuristic.
+            if strategy in {"most_recent", "source_priority"}:
+                return True  # plausibly fits an edit; tuner reranks
+            # most_complete / majority_vote / first_non_null all
+            # preserve. They would NOT match an edit.
+            if strategy in {"most_complete", "majority_vote", "first_non_null"}:
+                return False
+        # original missing but corrected present -- first_non_null
+        # would have predicted some value; treat as hit.
+        return strategy in {"first_non_null", "most_complete"}
+
+    # ── Regime 2: pair-level correction ─────────────────────────────
+    # Older shape. Fall back to the v1.18.1 heuristic.
     raw_trust = getattr(correction, "trust", None)
     if raw_trust is None:
         return False
@@ -114,10 +179,12 @@ def _strategy_would_match(
 def _hit_rate(
     corrections: list[Correction],
     strategy: str,
+    *,
+    field: str | None = None,
 ) -> float:
     if not corrections:
         return 0.0
-    hits = sum(1 for c in corrections if _strategy_would_match(c, strategy))
+    hits = sum(1 for c in corrections if _strategy_would_match(c, strategy, field=field))
     return hits / len(corrections)
 
 
@@ -146,18 +213,33 @@ def tune_field_strategy(
             reason="no_memory",
         )
 
-    # Filter corrections to this field. Corrections carry field_hash --
-    # we want corrections that touched THIS field. Fall back to "all
-    # corrections for this dataset" when field_hash filtering isn't
-    # available (older corrections).
-    corrections = list(store.get_corrections(dataset=dataset))
-    # Best-effort field filter: corrections carrying `field_hash` that
-    # matches a hash of `field` (the Correction dataclass uses opaque
-    # hashes for privacy). For now, use all corrections -- the tuner
-    # tunes one strategy per field but learns from the whole dataset's
-    # signal. Per-field filtering is a v1.19 refinement.
-    n = len(corrections)
+    # Two-tier filter (#437):
+    # 1. Field-level corrections matching THIS field count toward the
+    #    threshold (precise signal -- worth low gates).
+    # 2. Pair-level corrections (field_name=None) count as dataset-wide
+    #    background signal -- included in the corpus, evaluated by the
+    #    older heuristic in `_strategy_would_match`.
+    all_corrections = list(store.get_corrections(dataset=dataset))
+    field_level = [
+        c for c in all_corrections
+        if getattr(c, "field_name", None) == field
+    ]
+    pair_level = [
+        c for c in all_corrections
+        if getattr(c, "field_name", None) is None
+    ]
+    # Prefer field-level corrections when we have enough of them.
+    # When the field has its own corpus, use ONLY that corpus (precise
+    # signal beats noisy dataset-wide signal); pair-level becomes
+    # fallback only.
     min_n = _min_corrections()
+    if len(field_level) >= min_n:
+        corrections = field_level
+    else:
+        # Combine field-level (if any) with pair-level for a coarser
+        # signal when there aren't enough field-specific corrections.
+        corrections = field_level + pair_level
+    n = len(corrections)
     if n < min_n:
         return StrategyTuning(
             field=field, strategy="",
@@ -178,12 +260,12 @@ def tune_field_strategy(
     best_strategy = "most_complete"  # safe default
     best_train_rate = -1.0
     for strat in candidates:
-        rate = _hit_rate(train, strat)
+        rate = _hit_rate(train, strat, field=field)
         if rate > best_train_rate:
             best_train_rate = rate
             best_strategy = strat
 
-    heldout_rate = _hit_rate(heldout, best_strategy)
+    heldout_rate = _hit_rate(heldout, best_strategy, field=field)
     train_pp = best_train_rate * 100
     heldout_pp = heldout_rate * 100
 
