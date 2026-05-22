@@ -52,13 +52,33 @@ SMALL_N = 500
 @pytest.fixture(autouse=True)
 def _lower_refuse_at_n_for_speed(monkeypatch, request):
     """Lower REFUSE_AT_N to SMALL_N inside the autoconfig_controller
-    module so gate-mechanism tests don't need 100K-row fixtures.
+    module + tighten the iteration budget so gate-mechanism tests
+    don't need 100K-row fixtures OR multiple iteration passes.
 
-    Skipped via marker `keep_real_refuse_at_n` for the constant guardrail."""
+    Skipped via marker `keep_real_refuse_at_n` for the constant guardrail.
+
+    Without the iteration-budget cap, the smaller dataframe runs each
+    pipeline iteration so fast that the controller fits MORE iterations
+    in the wall-budget than it did on 100K -- net slower. Capping
+    max_iterations to 0 keeps the loop minimal (1 iteration via
+    `range(max_iterations + 1)`). The gate fires AFTER the loop based
+    on the mocked pick_committed, so iteration count doesn't change
+    test outcomes -- only wall time.
+    """
     if request.node.get_closest_marker("keep_real_refuse_at_n"):
         return
     from goldenmatch.core import autoconfig_controller as ctrl_mod
     monkeypatch.setattr(ctrl_mod, "REFUSE_AT_N", SMALL_N)
+    # Replace ControllerBudget.for_dataset with a min-iterations stub.
+    # `range(max_iterations + 1)` means max_iterations=0 still runs 1
+    # iteration -- enough for the mocked pick_committed to commit.
+    def _tight_for_dataset(cls, n_rows: int) -> ctrl_mod.ControllerBudget:
+        return cls(max_iterations=0, max_seconds=15.0)
+
+    monkeypatch.setattr(
+        ctrl_mod.ControllerBudget, "for_dataset",
+        classmethod(_tight_for_dataset),
+    )
 
 
 def _force_red_history_entry(monkeypatch, n_rows_in_df: int):
