@@ -965,11 +965,9 @@ pub fn correction_list(
         store_kwargs.set_item("path", memory_path.unwrap_or(".goldenmatch/memory.db"))?;
         let store = store_cls.call((), Some(&store_kwargs))?;
 
-        let corrections = store.call_method("get_corrections", (), {
-            let kw = PyDict::new(py);
-            kw.set_item("dataset", dataset)?;
-            Some(&kw)
-        })?;
+        let kw = PyDict::new(py);
+        kw.set_item("dataset", dataset)?;
+        let corrections = store.call_method("get_corrections", (), Some(&kw))?;
 
         // Serialize to JSON. Use a Python helper expression to convert
         // dataclasses to dicts in one shot.
