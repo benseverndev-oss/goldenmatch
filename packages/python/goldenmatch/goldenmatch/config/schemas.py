@@ -452,6 +452,22 @@ class GoldenRulesConfig(BaseModel):
     # Spec: docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md
     adaptive: bool = False
 
+    # v1.18.2 (#429): per-cluster strategy overrides. Maps cluster_id
+    # -> {field_name -> GoldenFieldRule}. When a cluster_id appears
+    # here, those field rules supersede the top-level `field_rules`
+    # for that cluster ONLY. Default None (no overrides).
+    #
+    # Set by the post-cluster `GoldenRulesRefiner` based on cluster
+    # health (weak clusters get unanimous_or_null; oversized clusters
+    # get confidence_majority; size-2 clusters get unanimous_or_null).
+    # Users can also set this manually for surgical per-cluster control.
+    #
+    # When non-None, the polars-native fast path is disabled (per-
+    # cluster rules force the slow path that calls merge_field per
+    # cluster). Spec:
+    # docs/superpowers/specs/2026-05-22-golden-rules-intelligence-layer-2-design.md §3
+    cluster_overrides: dict[int, dict[str, GoldenFieldRule]] | None = None
+
     @model_validator(mode="after")
     def _validate_default(self) -> GoldenRulesConfig:
         # Resolve default_strategy from either field

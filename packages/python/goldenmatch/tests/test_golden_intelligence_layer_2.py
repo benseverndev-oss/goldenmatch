@@ -247,5 +247,110 @@ def test_default_candidate_strategies_match_expectation():
     assert "unanimous_or_null" not in DEFAULT_CANDIDATE_STRATEGIES  # not auto-picked
 
 
+# ---------------------------------------------------------------------------
+# #3: per-cluster strategy overrides
+# ---------------------------------------------------------------------------
+
+
+def test_cluster_overrides_field_exists_on_golden_rules_config():
+    """GoldenRulesConfig has a cluster_overrides field defaulting to None."""
+    cfg = GoldenRulesConfig(default_strategy="most_complete")
+    assert cfg.cluster_overrides is None
+
+
+def test_polars_native_fast_path_disabled_when_overrides_set():
+    """Setting cluster_overrides forces the slow per-cluster path."""
+    from goldenmatch.config.schemas import GoldenFieldRule
+    from goldenmatch.core.golden import _polars_native_eligible
+
+    cfg_no_overrides = GoldenRulesConfig(default_strategy="most_complete")
+    assert _polars_native_eligible(cfg_no_overrides, quality_scores=None) is True
+
+    cfg_with_overrides = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={
+            42: {"name": GoldenFieldRule(strategy="unanimous_or_null")},
+        },
+    )
+    assert _polars_native_eligible(cfg_with_overrides, quality_scores=None) is False
+
+
+def test_refiner_sets_unanimous_or_null_on_weak_clusters():
+    """A cluster with cluster_quality='weak' gets per-field overrides
+    to unanimous_or_null."""
+    base = GoldenRulesConfig(default_strategy="most_complete", adaptive=True)
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3],
+        "name": ["a", "b", "c", "d"],
+    })
+    clusters = {
+        100: {
+            "members": [0, 1], "size": 2, "cluster_quality": "weak",
+            "oversized": False,
+        },
+    }
+    out = refine_golden_rules(base, clusters, df, column_profiles=[])
+    assert out.cluster_overrides is not None
+    assert 100 in out.cluster_overrides
+    assert out.cluster_overrides[100]["name"].strategy == "unanimous_or_null"
+
+
+def test_refiner_sets_confidence_majority_on_oversized_clusters():
+    """Oversized clusters get per-field confidence_majority overrides."""
+    base = GoldenRulesConfig(default_strategy="most_complete", adaptive=True)
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3, 4, 5],
+        "name": ["a", "b", "c", "d", "e", "f"],
+    })
+    clusters = {
+        200: {
+            "members": [0, 1, 2, 3, 4, 5], "size": 6,
+            "cluster_quality": "strong", "oversized": True,
+        },
+    }
+    out = refine_golden_rules(base, clusters, df, column_profiles=[])
+    assert out.cluster_overrides is not None
+    assert 200 in out.cluster_overrides
+    assert out.cluster_overrides[200]["name"].strategy == "confidence_majority"
+
+
+def test_refiner_sets_unanimous_or_null_on_size_2_clusters():
+    """Size-2 clusters get unanimous_or_null overrides (binary
+    agreement; one disagreement = NULL is safer than picking one)."""
+    base = GoldenRulesConfig(default_strategy="most_complete", adaptive=True)
+    df = pl.DataFrame({
+        "__row_id__": [0, 1],
+        "name": ["a", "b"],
+    })
+    clusters = {
+        300: {
+            "members": [0, 1], "size": 2,
+            "cluster_quality": "strong", "oversized": False,
+        },
+    }
+    out = refine_golden_rules(base, clusters, df, column_profiles=[])
+    assert out.cluster_overrides is not None
+    assert 300 in out.cluster_overrides
+    assert out.cluster_overrides[300]["name"].strategy == "unanimous_or_null"
+
+
+def test_refiner_does_not_set_overrides_on_strong_normal_clusters():
+    """Strong cluster, not oversized, size > 2 -> no per-cluster override."""
+    base = GoldenRulesConfig(default_strategy="most_complete", adaptive=True)
+    df = pl.DataFrame({
+        "__row_id__": list(range(5)),
+        "name": list("abcde"),
+    })
+    clusters = {
+        400: {
+            "members": list(range(5)), "size": 5,
+            "cluster_quality": "strong", "oversized": False,
+        },
+    }
+    out = refine_golden_rules(base, clusters, df, column_profiles=[])
+    if out.cluster_overrides is not None:
+        assert 400 not in out.cluster_overrides
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

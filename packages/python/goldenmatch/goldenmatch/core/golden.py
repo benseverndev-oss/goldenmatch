@@ -499,6 +499,11 @@ def _polars_native_eligible(
         return False
     if rules.field_rules:
         return False
+    # v1.18.2 (#429): per-cluster overrides force the slow path that
+    # calls merge_field per cluster. The fast path applies one
+    # strategy to all clusters and can't honor overrides.
+    if getattr(rules, "cluster_overrides", None):
+        return False
     return True
 
 
@@ -600,12 +605,22 @@ def build_golden_records_batch(
 
     results: list[dict] = []
     offset = 0
+    # v1.18.2 (#429): cache per-cluster override lookup.
+    cluster_overrides = getattr(rules, "cluster_overrides", None)
     for cid, size in zip(cluster_ids, size_list):
         result: dict = {}
         confidences: list[float] = []
+        # Per-cluster override map for this cluster_id; falls through
+        # to rules.field_rules when no override defined.
+        per_cluster = (
+            cluster_overrides.get(int(cid)) if cluster_overrides else None
+        )
         for col in user_cols:
             values = col_arrays[col][offset:offset + size]
-            field_rule = rules.field_rules.get(col, default_rule)
+            if per_cluster and col in per_cluster:
+                field_rule = per_cluster[col]
+            else:
+                field_rule = rules.field_rules.get(col, default_rule)
 
             sources = None
             dates = None

@@ -584,5 +584,71 @@ def refine_golden_rules(
                 field, strategy, exc,
             )
 
-    refined = base_rules.model_copy(update={"field_rules": new_field_rules})
+    # v1.18.2 (#429): per-cluster strategy overrides for weak / oversized
+    # / size-2 clusters. The defensive default is to "trust the
+    # clustering's confidence signal" rather than a one-size-fits-all
+    # field rule. Applied at golden-build time via merge_field.
+    cluster_overrides_out: dict[int, dict[str, GoldenFieldRule]] = {}
+    field_names_in_play = list(new_field_rules.keys())
+    if not field_names_in_play and clusters:
+        # If no per-field rules picked yet, override every user-visible
+        # column in the clusters' rows. Approximate via the prepared_df
+        # columns minus internal.
+        field_names_in_play = [
+            c for c in prepared_df.columns
+            if not c.startswith("__")
+        ]
+
+    for cid, info in clusters.items():
+        size = info.get("size", 0)
+        quality = info.get("cluster_quality", "strong")
+        oversized = bool(info.get("oversized", False))
+
+        # Defensive rule per cluster-shape signal.
+        cluster_strategy: str | None = None
+        if oversized:
+            # Heterogeneous cluster -- trust pair scores.
+            cluster_strategy = "confidence_majority"
+        elif quality == "weak":
+            # Weak clusters: only emit values everyone agrees on.
+            cluster_strategy = "unanimous_or_null"
+        elif size == 2:
+            # Two-member cluster: agreement is binary; unanimous_or_null
+            # gives a NULL when they disagree, which is the safer default
+            # than picking one arbitrarily.
+            cluster_strategy = "unanimous_or_null"
+
+        if cluster_strategy is None:
+            continue
+
+        per_field_overrides: dict[str, GoldenFieldRule] = {}
+        for fname in field_names_in_play:
+            try:
+                per_field_overrides[fname] = GoldenFieldRule(
+                    strategy=cluster_strategy,
+                )
+            except Exception as exc:  # pragma: no cover -- defensive
+                logger.warning(
+                    "Refiner skipped per-cluster override cid=%s field=%r "
+                    "strategy=%s: %s",
+                    cid, fname, cluster_strategy, exc,
+                )
+        if per_field_overrides:
+            cluster_overrides_out[int(cid)] = per_field_overrides
+
+    if cluster_overrides_out:
+        logger.info(
+            "Refiner set per-cluster overrides on %d cluster(s): "
+            "weak/oversized/size-2 get defensive strategies",
+            len(cluster_overrides_out),
+        )
+
+    refined = base_rules.model_copy(
+        update={
+            "field_rules": new_field_rules,
+            "cluster_overrides": (
+                cluster_overrides_out if cluster_overrides_out else None
+            ),
+        },
+    )
     return refined
