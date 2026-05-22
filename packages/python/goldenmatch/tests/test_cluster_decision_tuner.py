@@ -206,7 +206,7 @@ def test_ok_path_returns_valid_suggestion(tmp_path: Path):
     clean threshold proposal."""
     store = MemoryStore(backend="sqlite", path=str(tmp_path / "m.db"))
     try:
-        approve_scores = [0.95 + 0.0005 * i for i in range(100)]
+        approve_scores = [0.90 + 0.0009 * i for i in range(100)]
         reject_scores = [0.20 + 0.0005 * i for i in range(100)]
         _seed_corrections(
             store, dataset="clean",
@@ -222,7 +222,7 @@ def test_ok_path_returns_valid_suggestion(tmp_path: Path):
         store.close()
     assert result.reason == "ok"
     assert result.threshold is not None
-    assert result.threshold >= 0.95  # below all approves; above all rejects
+    assert result.threshold >= 0.90  # below all approves; above all rejects
     assert result.train_approve_rate is not None
     assert result.train_approve_rate >= 0.99
 
@@ -259,7 +259,7 @@ def test_overfit_guard(tmp_path: Path):
         # rejects can land there + drop the heldout rate.
         # Seed deterministically and use a small max_overfit_drop_pp
         # to force the guard.
-        approves = [0.99 - 0.001 * i for i in range(95)]
+        approves = [0.99 - 0.005 * i for i in range(95)]
         rejects = [0.98, 0.96, 0.94, 0.92, 0.90]
         _seed_corrections(
             store, dataset="overfit",
@@ -288,8 +288,8 @@ def test_seed_determinism(tmp_path: Path):
     try:
         _seed_corrections(
             store, dataset="d",
-            scores_approve=[0.97 + 0.001 * i for i in range(80)],
-            scores_reject=[0.50 + 0.001 * i for i in range(80)],
+            scores_approve=[0.90 + 0.001 * i for i in range(80)],
+            scores_reject=[0.20 + 0.001 * i for i in range(80)],
         )
         a = tune_decision_threshold(store, dataset="d", seed=12345)
         b = tune_decision_threshold(store, dataset="d", seed=12345)
@@ -304,8 +304,8 @@ def test_default_seed_is_sha256_of_dataset(tmp_path: Path):
     try:
         _seed_corrections(
             store, dataset="d",
-            scores_approve=[0.97 + 0.001 * i for i in range(80)],
-            scores_reject=[0.50 + 0.001 * i for i in range(80)],
+            scores_approve=[0.90 + 0.001 * i for i in range(80)],
+            scores_reject=[0.20 + 0.001 * i for i in range(80)],
         )
         a = tune_decision_threshold(store, dataset="d")
         b = tune_decision_threshold(store, dataset="d")
@@ -320,7 +320,7 @@ def test_dataset_isolation(tmp_path: Path):
     try:
         _seed_corrections(
             store, dataset="pub_a",
-            scores_approve=[0.95 + 0.001 * i for i in range(60)],
+            scores_approve=[0.90 + 0.001 * i for i in range(60)],
             scores_reject=[0.20 + 0.001 * i for i in range(60)],
         )
         # pub_b has only 10 corrections -- should be below_minimum.

@@ -252,9 +252,19 @@ class MemoryStore:
     def add_correction(self, correction: Correction) -> None:
         """Upsert a correction. Higher trust wins; same trust = latest wins.
 
-        Pairs are canonicalized to (min, max) ordering before storage.
+        Pair-level corrections (decision in {approve, reject}) get
+        canonicalized to (min, max) ordering before storage.
+
+        Field-level and cluster-decision corrections (decision in
+        {field_correct, cluster_decision}) skip canonicalization
+        because `id_a` carries `cluster_id` (semantic) and `id_b=0`
+        is a sentinel (canonicalizing would swap them and lose the
+        cluster_id).
         """
-        ca, cb = _canon_pair(correction.id_a, correction.id_b)
+        if correction.decision in ("field_correct", "cluster_decision"):
+            ca, cb = correction.id_a, correction.id_b
+        else:
+            ca, cb = _canon_pair(correction.id_a, correction.id_b)
         existing = self.get_pair_correction(ca, cb, correction.dataset)
 
         if existing is not None:
