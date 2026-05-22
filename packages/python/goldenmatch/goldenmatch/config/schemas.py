@@ -26,9 +26,13 @@ VALID_SCORERS = frozenset({
 
 VALID_STRATEGIES = frozenset({
     "most_recent", "source_priority", "most_complete", "majority_vote", "first_non_null",
+    # v1.18 additions (#golden-strategies)
+    "longest_value", "unanimous_or_null", "confidence_majority",
 })
 
 _SUBSTRING_RE = re.compile(r"^substring:\d+:\d+$")
+# v1.18.1: custom: prefix for plugin-backed golden strategies.
+_CUSTOM_STRATEGY_RE = re.compile(r"^custom:[a-z_][a-z0-9_]*$")
 _QGRAM_RE = re.compile(r"^qgram:\d+$")
 _BLOOM_FILTER_RE = re.compile(r"^bloom_filter:\d+:\d+:\d+$")
 
@@ -408,9 +412,22 @@ class GoldenFieldRule(BaseModel):
 
     @model_validator(mode="after")
     def _validate_strategy(self) -> GoldenFieldRule:
+        # v1.18.1: accept `custom:<name>` for plugin-backed strategies.
+        # Existence of the plugin is checked at dispatch time
+        # (`core/golden.py::merge_field`), not here -- the rule may load
+        # before plugins are discovered. See spec:
+        # docs/superpowers/specs/2026-05-22-golden-strategy-plugin-slot-design.md
+        if self.strategy.startswith("custom:"):
+            if not _CUSTOM_STRATEGY_RE.match(self.strategy):
+                raise ValueError(
+                    f"Invalid custom strategy name '{self.strategy}'. "
+                    "Must match 'custom:<lowercase_snake_case>'."
+                )
+            return self
         if self.strategy not in VALID_STRATEGIES:
             raise ValueError(
-                f"Invalid strategy '{self.strategy}'. Must be one of {sorted(VALID_STRATEGIES)}."
+                f"Invalid strategy '{self.strategy}'. Must be one of {sorted(VALID_STRATEGIES)} "
+                "or 'custom:<name>' for plugin-backed strategies."
             )
         if self.strategy == "most_recent" and not self.date_column:
             raise ValueError("Strategy 'most_recent' requires 'date_column'.")
@@ -427,6 +444,13 @@ class GoldenRulesConfig(BaseModel):
     auto_split: bool = True
     quality_weighting: bool = True
     weak_cluster_threshold: float = 0.3
+    # v1.18: post-cluster golden-rules refinement. When True, after
+    # clustering the pipeline runs `refine_golden_rules` against the
+    # cluster output + column profiles to pick per-field strategies
+    # informed by within-cluster spread, per-source completeness, etc.
+    # Default False to preserve existing behavior; opt-in for v1.18 users.
+    # Spec: docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md
+    adaptive: bool = False
 
     @model_validator(mode="after")
     def _validate_default(self) -> GoldenRulesConfig:

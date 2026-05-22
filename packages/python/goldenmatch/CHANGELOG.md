@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-05-22
+
+### Added — intelligent golden-field consolidation
+
+Two-phase auto-config: matchkey + blocking stays pre-cluster
+(unchanged); golden-rules picking moves POST-cluster where it
+benefits from real cluster shape signals.
+
+- **Three new strategies** in `VALID_STRATEGIES` and `core/golden.py`:
+  - **`longest_value`** — pick the longest non-null string.
+    Quality-weighted tie-break. For free-text fields where length
+    correlates with completeness (address line, description).
+  - **`unanimous_or_null`** — emit the value only if every non-null
+    member agrees; emit NULL on any disagreement. For compliance-grade
+    fields where a heuristic-chosen value is worse than missing.
+  - **`confidence_majority`** — majority vote weighted by within-cluster
+    pair_scores. Surfaces the consensus the clustering itself trusts;
+    a strong-edge minority can beat a weak-edge majority. Falls back to
+    count-majority when pair_scores absent.
+- **`GoldenRulesRefiner`** (`core/golden_rules_refiner.py`). Runs
+  between `build_clusters` and `build_golden_records` when
+  `golden_rules.adaptive=True`. Computes per-field signals
+  (within-cluster spread, per-source completeness, date-column
+  coverage, col_type, null_rate, avg_len) and emits refined
+  `GoldenRulesConfig.field_rules`. Rule table:
+  - `col_type=date` + > 50% cluster timestamp coverage → `most_recent`
+  - One source > 1.5× median completeness → `source_priority`
+    (ranked by completeness)
+  - Free-text + long + within-cluster disagreement → `longest_value`
+  - `null_rate > 0.5` → `first_non_null` fast path
+  - High within-cluster spread (> 2.0) → `confidence_majority`
+  - Else → defer to base default
+- **`GoldenRulesConfig.adaptive: bool = False`** opt-in flag. Default
+  False to preserve existing behavior on benchmarks; flip-to-True is
+  a v1.19 candidate after benchmark validation.
+
+Spec: `docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md`
+
+### Deferred (v1.19+ candidates)
+
+- **Custom Python plugin slot** (`strategy="custom:my_rule"`). Protocol
+  shape is load-bearing; deserves its own spec + PR.
+- **Default flip** of `adaptive=True` once benchmarks confirm no F1
+  regression.
+
 ## [1.17.1] - 2026-05-22
 
 ### Changed — streaming-sync match log throughput (#424, PR #426)
