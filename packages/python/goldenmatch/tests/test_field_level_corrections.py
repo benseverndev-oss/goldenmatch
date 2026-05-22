@@ -15,7 +15,6 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-
 from goldenmatch.core.autoconfig_golden_strategy_tuner import (
     _strategy_would_match,
     tune_field_strategy,
