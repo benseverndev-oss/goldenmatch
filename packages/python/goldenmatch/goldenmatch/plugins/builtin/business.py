@@ -7,6 +7,8 @@ Spec: ``docs/superpowers/specs/2026-05-22-predefined-merge-plugins-design.md``
 """
 from __future__ import annotations
 
+import math
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -186,5 +188,165 @@ class FreshnessWithMaxAgeStrategy:
         candidates.sort(key=lambda x: x[1], reverse=True)
         top_dt = candidates[0][1]
         tied = [(i, v) for i, dt, v in candidates if dt == top_dt]
+        conf = 1.0 if len(tied) == 1 else 0.7
+        return (tied[0][1], conf, tied[0][0])
+
+
+class EnumCanonicalStrategy:
+    """Map known aliases to a canonical enum value, then pick the mode.
+
+    `rule_kwargs.alias_map` maps any alias (case-insensitive,
+    trimmed) -> canonical value. For example::
+
+       alias_map:
+         "USA": "US"
+         "United States": "US"
+         "U.S.": "US"
+         "U.S.A.": "US"
+
+    Lookup is case-insensitive on KEYS but the VALUE is returned
+    verbatim (preserves intentional casing of the canonical form).
+
+    Values not in the alias_map pass through unchanged (no
+    modification). Then the strategy picks the mode of the resulting
+    set.
+
+    Confidence: `count(winning_value) / count(non_null)`.
+    """
+
+    name = "enum_canonical"
+
+    def merge(
+        self,
+        values: list,
+        *,
+        rule_kwargs: dict | None = None,
+        **_: Any,
+    ) -> Any:
+        from collections import Counter
+
+        non_null = [(i, v) for i, v in enumerate(values) if v is not None]
+        if not non_null:
+            return (None, 0.0)
+        raw_map: dict = (rule_kwargs or {}).get("alias_map") or {}
+        # Build a case-insensitive lookup -- key.lower() -> canonical.
+        alias_map = {str(k).strip().lower(): canonical for k, canonical in raw_map.items()}
+
+        def _canonicalize(v: Any) -> Any:
+            key = str(v).strip().lower()
+            return alias_map.get(key, v)
+
+        normalized = [(i, _canonicalize(v)) for i, v in non_null]
+        counts = Counter(c for _, c in normalized)
+        winner, count = counts.most_common(1)[0]
+        first_idx = next(i for i, c in normalized if c == winner)
+        conf = count / len(non_null)
+        return (winner, conf, first_idx)
+
+
+class RegexValidatedStrategy:
+    """Only accept values matching ``rule_kwargs.pattern``.
+
+    Useful when source data is dirty and you want to filter at the
+    consolidation step (e.g. only accept email-shaped values into the
+    `email` field, only accept SSN-shaped values into `ssn`).
+
+    Behavior:
+    - Filter values to only those matching the regex (`re.fullmatch`).
+    - If at least one matches: pick the most-common one (mode).
+    - If none match: fall back per ``rule_kwargs.fallback``:
+        - "first_non_null" (default): pick the first non-null
+          unmatched value with low confidence (0.3)
+        - "null": emit (None, 0.0)
+
+    Missing ``rule_kwargs.pattern`` -> behaves like `first_non_null`.
+    """
+
+    name = "regex_validated"
+
+    def merge(
+        self,
+        values: list,
+        *,
+        rule_kwargs: dict | None = None,
+        **_: Any,
+    ) -> Any:
+        from collections import Counter
+
+        non_null = [(i, v) for i, v in enumerate(values) if v is not None]
+        if not non_null:
+            return (None, 0.0)
+        pattern = (rule_kwargs or {}).get("pattern")
+        fallback = (rule_kwargs or {}).get("fallback", "first_non_null")
+        if not pattern:
+            # No pattern configured -> first non-null.
+            return (non_null[0][1], 0.5, non_null[0][0])
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            return (non_null[0][1], 0.3, non_null[0][0])
+        matched = [(i, v) for i, v in non_null if compiled.fullmatch(str(v))]
+        if matched:
+            counts = Counter(v for _, v in matched)
+            winner, count = counts.most_common(1)[0]
+            first_idx = next(i for i, v in matched if v == winner)
+            conf = count / len(matched)
+            return (winner, conf, first_idx)
+        # No matches.
+        if fallback == "null":
+            return (None, 0.0)
+        return (non_null[0][1], 0.3, non_null[0][0])
+
+
+class WeightedByRecencyStrategy:
+    """Pick the value with the highest exponential-decayed recency weight.
+
+    Each value's weight = exp(-age_days / half_life_days). The value
+    with the maximum weight is returned. When multiple values share
+    the same date, the first-index wins.
+
+    `rule_kwargs.half_life_days` (default 30) controls decay rate:
+    after `half_life_days` days, weight halves. A value 6 months
+    older has weight ~0.001 of a fresh value (effectively ignored).
+
+    Requires `dates` kwarg. Values without dates are dropped.
+    Confidence: 1.0 when unique winner; 0.7 on date ties.
+
+    Compare to `most_recent` (sharp cutoff at newest) and
+    `freshness_with_max_age` (binary in/out). This strategy is a soft
+    "newer-but-not-only-newest" picker.
+    """
+
+    name = "weighted_by_recency"
+
+    def merge(
+        self,
+        values: list,
+        *,
+        dates: list | None = None,
+        rule_kwargs: dict | None = None,
+        **_: Any,
+    ) -> Any:
+        if dates is None:
+            return (None, 0.0)
+        half_life_days = float((rule_kwargs or {}).get("half_life_days", 30))
+        if half_life_days <= 0:
+            half_life_days = 30.0
+        now = datetime.now(tz=UTC)
+        scored: list[tuple[int, datetime, float, Any]] = []
+        for i, (d, v) in enumerate(zip(dates, values)):
+            if v is None:
+                continue
+            parsed = _parse_date(d)
+            if parsed is None:
+                continue
+            age_days = (now - parsed).total_seconds() / 86400.0
+            weight = math.exp(-age_days / half_life_days)
+            scored.append((i, parsed, weight, v))
+        if not scored:
+            return (None, 0.0)
+        scored.sort(key=lambda x: x[2], reverse=True)
+        top_weight = scored[0][2]
+        tied = [(i, v) for i, _, w, v in scored if w == top_weight]
         conf = 1.0 if len(tied) == 1 else 0.7
         return (tied[0][1], conf, tied[0][0])

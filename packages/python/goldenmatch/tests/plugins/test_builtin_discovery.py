@@ -11,12 +11,17 @@ from goldenmatch.plugins.builtin import BUILTIN_PLUGINS
 from goldenmatch.plugins.registry import PluginRegistry
 
 EXPECTED_BUILTIN_NAMES = {
-    # Numeric
+    # Numeric (6)
     "numeric_max", "numeric_min", "numeric_mean",
-    # Format-canonical
+    "numeric_median", "numeric_sum", "numeric_weighted_average",
+    # Format-canonical (7)
     "shortest_value", "concat_unique", "email_normalize", "phone_digits_only",
-    # Business
+    "url_canonical", "whitespace_normalize", "boolean_normalize",
+    # Business (6)
     "system_of_record", "lifecycle_stage", "freshness_with_max_age",
+    "enum_canonical", "regex_validated", "weighted_by_recency",
+    # Aggregation / telemetry (3)
+    "count_distinct", "count_non_null", "agreement_rate",
 }
 
 

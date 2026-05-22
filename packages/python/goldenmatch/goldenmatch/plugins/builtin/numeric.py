@@ -84,3 +84,104 @@ class NumericMeanStrategy:
         mean = sum(valid) / len(valid)
         conf = len(valid) / len(values)
         return (mean, conf, 0)
+
+
+class NumericMedianStrategy:
+    """Pick the median numeric value -- resilient to outliers vs mean.
+
+    For even counts, returns the lower-of-two-middles (no synthesized
+    interpolation) so the returned value preserves a real source row's
+    index. For odd counts, the unique middle value is returned with
+    its real idx.
+
+    Non-numeric values ignored. All-non-numeric -> (None, 0.0).
+    Confidence: `non_null_count / total_count`.
+    """
+
+    name = "numeric_median"
+
+    def merge(self, values: list, **_: Any) -> Any:
+        candidates = [(i, _to_float(v), v) for i, v in enumerate(values)]
+        candidates = [(i, f, v) for i, f, v in candidates if f is not None]
+        if not candidates:
+            return (None, 0.0)
+        sorted_by_value = sorted(candidates, key=lambda x: x[1])
+        n = len(sorted_by_value)
+        # For even count, pick the lower middle (index n//2 - 1) so
+        # the returned value preserves a real source's idx.
+        mid_idx = (n - 1) // 2
+        i, _f, v = sorted_by_value[mid_idx]
+        conf = len(candidates) / len(values)
+        return (v, conf, i)
+
+
+class NumericSumStrategy:
+    """Sum of numeric values. Useful for aggregating amounts / balances
+    across sources where the golden record should reflect a total.
+
+    Returned idx is 0 (synthesized value, no real provenance).
+    Confidence: 1.0 when at least one non-null exists; 0.0 otherwise.
+    """
+
+    name = "numeric_sum"
+
+    def merge(self, values: list, **_: Any) -> Any:
+        nums = [_to_float(v) for v in values]
+        valid = [f for f in nums if f is not None]
+        if not valid:
+            return (None, 0.0)
+        total = sum(valid)
+        return (total, 1.0, 0)
+
+
+class NumericWeightedAverageStrategy:
+    """Quality-weighted average of numeric values.
+
+    Uses ``quality_weights`` (from the dispatcher; same length as
+    ``values``) when available. Falls back to uniform-weighted
+    average when weights are absent. Non-numeric values are excluded
+    along with their weights.
+
+    Confidence: `sum(non_null_weights) / sum(all_weights)` -- captures
+    how much of the input's total weight was usable. Falls back to
+    `non_null_count / len(values)` when no weights provided.
+
+    Synthesized value; idx=0.
+    """
+
+    name = "numeric_weighted_average"
+
+    def merge(
+        self,
+        values: list,
+        *,
+        quality_weights: list[float] | None = None,
+        **_: Any,
+    ) -> Any:
+        pairs: list[tuple[float, float]] = []
+        for i, v in enumerate(values):
+            f = _to_float(v)
+            if f is None:
+                continue
+            w = (
+                float(quality_weights[i])
+                if quality_weights is not None and i < len(quality_weights)
+                else 1.0
+            )
+            if w <= 0:
+                continue
+            pairs.append((f, w))
+        if not pairs:
+            return (None, 0.0)
+        total_weight = sum(w for _, w in pairs)
+        if total_weight == 0:
+            return (None, 0.0)
+        avg = sum(f * w for f, w in pairs) / total_weight
+        if quality_weights is not None:
+            all_weight = sum(
+                max(float(w), 0.0) for w in quality_weights[: len(values)]
+            )
+            conf = total_weight / all_weight if all_weight > 0 else 1.0
+        else:
+            conf = len(pairs) / len(values)
+        return (avg, conf, 0)
