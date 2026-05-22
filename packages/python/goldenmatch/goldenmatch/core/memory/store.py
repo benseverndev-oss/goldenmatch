@@ -30,6 +30,10 @@ class Decision(StrEnum):
     """Canonical correction decisions."""
     APPROVE = "approve"
     REJECT = "reject"
+    # #437: field-level golden-record correction (inline-edit of a
+    # chosen field value). `field_name` + `original_value` +
+    # `corrected_value` carry the edit on the Correction row.
+    FIELD_CORRECT = "field_correct"
 
 
 HIGH_TRUST_SOURCES: frozenset[CorrectionSource] = frozenset({
@@ -50,7 +54,30 @@ def trust_for_source(source: str | CorrectionSource) -> float:
 
 @dataclass
 class Correction:
-    """A single pair decision stored in memory."""
+    """A single correction stored in memory.
+
+    Two shapes supported:
+
+    1. Pair-level (the original shape): operator decides a candidate
+       merge pair is approve / reject / split. `id_a`, `id_b`,
+       `decision` carry the verdict. `field_hash` is an opaque privacy
+       hash that lets us re-anchor without storing PII. This is what
+       MemoryLearner consumes for threshold tuning.
+
+    2. Field-level (added 2026-05-22 for #437): operator inline-edits
+       a chosen golden-record field. `field_name` + `original_value` +
+       `corrected_value` carry the edit. `id_a` is the cluster_id;
+       `id_b` is unused (set to 0). `decision` is "field_correct".
+
+    `tune_field_strategy` consumes the field-level shape -- given a
+    correction with `field_name="address1"` and `corrected_value="X"`,
+    it can ask "would `most_recent` have predicted X given the cluster's
+    member values?" and tally hit rates per strategy.
+
+    Older pair-level corrections (field_name=None) keep working
+    unchanged. The tuner's `_strategy_would_match` falls back to its
+    coarse decision/trust heuristic for those.
+    """
     id: str
     id_a: int
     id_b: int
@@ -64,6 +91,13 @@ class Correction:
     reason: str | None = None
     dataset: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
+    # Field-level golden corrections (#437, 2026-05-22). All three
+    # default to None to preserve backward compat with pair-level
+    # corrections. When set, the tuner uses them to learn per-field
+    # strategy preferences from real inline-edit feedback.
+    field_name: str | None = None
+    original_value: str | None = None
+    corrected_value: str | None = None
 
 
 @dataclass
@@ -91,9 +125,17 @@ CREATE TABLE IF NOT EXISTS corrections (
     matchkey_name TEXT,
     reason TEXT, dataset TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- #437: field-level golden-record corrections. NULL for pair-level
+    -- (decision in {approve, reject}). Set when decision='field_correct'.
+    field_name TEXT,
+    original_value TEXT,
+    corrected_value TEXT,
     UNIQUE(id_a, id_b, dataset)
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_pair ON corrections(id_a, id_b, dataset);
+-- #437: index by field for `tune_field_strategy` lookup.
+CREATE INDEX IF NOT EXISTS idx_corrections_field
+    ON corrections(dataset, field_name) WHERE field_name IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS adjustments (
     matchkey_name TEXT PRIMARY KEY,
@@ -129,9 +171,29 @@ class MemoryStore:
             # file header, and a no-op on subsequent opens.
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
+            self._migrate_field_correction_columns()
             log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
         else:
             raise NotImplementedError(f"Backend '{backend}' not yet implemented")
+
+    def _migrate_field_correction_columns(self) -> None:
+        """#437: add field_name/original_value/corrected_value to
+        pre-existing DBs that were created before v1.18.2.
+
+        Idempotent: SQLite raises OperationalError when a column
+        already exists; we swallow it. CREATE TABLE IF NOT EXISTS at
+        open time covers fresh DBs.
+        """
+        for col in ("field_name", "original_value", "corrected_value"):
+            try:
+                self._conn.execute(f"ALTER TABLE corrections ADD COLUMN {col} TEXT")
+            except Exception as exc:  # pragma: no cover -- benign idempotency
+                msg = str(exc).lower()
+                if "duplicate" not in msg:
+                    # Not a "column already exists" error -- log and continue
+                    # so callers see a working store even if migration hit
+                    # something unexpected.
+                    log.debug("field-correction migration skipped %s: %s", col, exc)
 
     def close(self) -> None:
         """Close the database connection."""
@@ -165,8 +227,9 @@ class MemoryStore:
             self._conn.execute(
                 "INSERT INTO corrections "
                 "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, "
-                "original_score, matchkey_name, reason, dataset, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "original_score, matchkey_name, reason, dataset, created_at, "
+                "field_name, original_value, corrected_value) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     correction.id, ca, cb,
                     correction.decision, correction.source, correction.trust,
@@ -174,6 +237,8 @@ class MemoryStore:
                     correction.original_score, correction.matchkey_name,
                     correction.reason, correction.dataset,
                     correction.created_at.isoformat(),
+                    correction.field_name, correction.original_value,
+                    correction.corrected_value,
                 ),
             )
         log.debug("Correction stored: (%d, %d) %s [%s]", ca, cb,
@@ -272,6 +337,10 @@ class MemoryStore:
 
     @staticmethod
     def _row_to_correction(row: Any) -> Correction:
+        # #437: field-level columns are nullable for pair-level rows.
+        # `sqlite3.Row` lookup uses `KeyError`-free access via mapping;
+        # `.keys()` reflects ALTER TABLE additions on the open connection.
+        keys = row.keys() if hasattr(row, "keys") else ()
         return Correction(
             id=row["id"], id_a=row["id_a"], id_b=row["id_b"],
             decision=row["decision"], source=row["source"],
@@ -281,6 +350,9 @@ class MemoryStore:
             matchkey_name=row["matchkey_name"],
             reason=row["reason"], dataset=row["dataset"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            field_name=row["field_name"] if "field_name" in keys else None,
+            original_value=row["original_value"] if "original_value" in keys else None,
+            corrected_value=row["corrected_value"] if "corrected_value" in keys else None,
         )
 
     @staticmethod
