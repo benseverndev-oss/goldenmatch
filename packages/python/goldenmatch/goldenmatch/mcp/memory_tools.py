@@ -41,18 +41,43 @@ MEMORY_TOOLS: list[Tool] = [
     Tool(
         name="add_correction",
         description=(
-            "Add a pair correction to Learning Memory. Source is set to 'agent' "
-            "with trust=0.5 (lower than human steward decisions which are 1.0). "
+            "Add a Learning Memory correction. Two shapes:\n"
+            "  - pair-level: decision='approve' or 'reject', requires id_a + id_b\n"
+            "  - field-level (v1.18.2+): decision='field_correct', requires "
+            "cluster_id + field_name + corrected_value\n"
+            "Source is 'agent' with trust=0.5 (lower than human steward 1.0). "
             "Pair (id_a, id_b) is canonicalized to (min, max) before storage."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "id_a": {"type": "integer"},
-                "id_b": {"type": "integer"},
+                "id_a": {
+                    "type": "integer",
+                    "description": "Pair-level: first row id. Field-level: ignored.",
+                },
+                "id_b": {
+                    "type": "integer",
+                    "description": "Pair-level: second row id. Field-level: ignored.",
+                },
+                "cluster_id": {
+                    "type": "integer",
+                    "description": "Field-level: cluster_id the correction targets.",
+                },
                 "decision": {
                     "type": "string",
-                    "enum": ["approve", "reject"],
+                    "enum": ["approve", "reject", "field_correct"],
+                },
+                "field_name": {
+                    "type": "string",
+                    "description": "Field-level: the column being corrected.",
+                },
+                "original_value": {
+                    "type": "string",
+                    "description": "Field-level: the value build_golden_record chose.",
+                },
+                "corrected_value": {
+                    "type": "string",
+                    "description": "Field-level: the value the reviewer changed it to.",
                 },
                 "dataset": {
                     "type": "string",
@@ -65,7 +90,30 @@ MEMORY_TOOLS: list[Tool] = [
                     "description": "SQLite memory DB path. Default: .goldenmatch/memory.db",
                 },
             },
-            "required": ["id_a", "id_b", "decision", "dataset"],
+            "required": ["decision", "dataset"],
+        },
+    ),
+    Tool(
+        name="list_plugins",
+        description=(
+            "List all registered goldenmatch plugins by category. Includes "
+            "the 22 v1.18.2 predefined plugins (numeric/format/business/"
+            "aggregation) plus any user-registered plugins via entry-points "
+            "or PluginRegistry.register_*(). Each entry includes "
+            "name, source (builtin or user), category, and the first line of "
+            "the merge docstring."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "all", "golden_strategy", "scorer", "transform", "connector",
+                    ],
+                    "default": "all",
+                },
+            },
         },
     ),
     Tool(
@@ -201,17 +249,66 @@ def _dispatch(name: str, args: dict) -> dict:
             return {"error": "Missing or empty required parameter: dataset"}
 
         decision = args.get("decision")
-        if decision not in ("approve", "reject"):
-            return {"error": f"Invalid decision: {decision!r}. Use 'approve' or 'reject'."}
+        if decision not in ("approve", "reject", "field_correct"):
+            return {
+                "error": f"Invalid decision: {decision!r}. Use 'approve', "
+                         "'reject', or 'field_correct'.",
+            }
 
+        from goldenmatch.core.memory.store import Correction, _canon_pair
+
+        # Field-level vs pair-level branching (Phase 1 of v1.18.3 surface sync).
+        if decision == "field_correct":
+            field_name = args.get("field_name")
+            corrected_value = args.get("corrected_value")
+            if not field_name:
+                return {"error": "field_correct requires field_name"}
+            if corrected_value is None:
+                return {"error": "field_correct requires corrected_value"}
+            # cluster_id occupies the id_a slot semantically; id_b=0 unused.
+            try:
+                cluster_id = int(args.get("cluster_id", args.get("id_a", 0)))
+            except (TypeError, ValueError) as exc:
+                return {"error": f"cluster_id must be an integer: {exc}"}
+            correction = Correction(
+                id=str(uuid.uuid4()),
+                id_a=cluster_id,
+                id_b=0,
+                decision=decision,
+                source="agent",
+                trust=0.5,
+                field_hash="",
+                record_hash="",
+                original_score=0.0,
+                matchkey_name=args.get("matchkey_name"),
+                reason=args.get("reason"),
+                dataset=dataset,
+                created_at=datetime.now(),
+                field_name=field_name,
+                original_value=args.get("original_value"),
+                corrected_value=corrected_value,
+            )
+            with MemoryStore(backend="sqlite", path=path) as store:
+                store.add_correction(correction)
+            return {
+                "status": "ok",
+                "id": correction.id,
+                "cluster_id": cluster_id,
+                "field_name": field_name,
+                "original_value": args.get("original_value"),
+                "corrected_value": corrected_value,
+                "decision": decision,
+                "source": "agent",
+                "trust": 0.5,
+                "dataset": dataset,
+            }
+
+        # Pair-level (approve / reject).
         try:
             id_a = int(args["id_a"])
             id_b = int(args["id_b"])
         except (KeyError, TypeError, ValueError) as exc:
             return {"error": f"id_a / id_b must be integers: {exc}"}
-
-        from goldenmatch.core.memory.store import Correction, _canon_pair
-
         ca, cb = _canon_pair(id_a, id_b)
         correction = Correction(
             id=str(uuid.uuid4()),
@@ -240,6 +337,45 @@ def _dispatch(name: str, args: dict) -> dict:
             "trust": 0.5,
             "dataset": dataset,
         }
+
+    if name == "list_plugins":
+        from goldenmatch.plugins.builtin import BUILTIN_PLUGINS
+        from goldenmatch.plugins.registry import PluginRegistry
+
+        category = args.get("category", "all")
+        registry = PluginRegistry.instance()
+        registry.discover()
+        builtin_names = {cls().name for cls in BUILTIN_PLUGINS}
+
+        def _serialize(plugin_dict: dict, kind: str) -> list[dict]:
+            out: list[dict] = []
+            for plugin_name, plugin in plugin_dict.items():
+                merge_doc = ""
+                if hasattr(plugin, "merge") and plugin.merge.__doc__:
+                    merge_doc = plugin.merge.__doc__.strip().split("\n")[0][:200]
+                out.append({
+                    "name": plugin_name,
+                    "category": kind,
+                    "source": "builtin" if (
+                        kind == "golden_strategy" and plugin_name in builtin_names
+                    ) else "user",
+                    "doc": merge_doc,
+                })
+            return sorted(out, key=lambda d: (d["source"] != "builtin", d["name"]))
+
+        result: dict[str, list[dict]] = {}
+        kinds = (
+            ("golden_strategy", "_golden_strategies"),
+            ("scorer", "_scorers"),
+            ("transform", "_transforms"),
+            ("connector", "_connectors"),
+        )
+        for kind, attr in kinds:
+            if category not in ("all", kind):
+                continue
+            store_dict = getattr(registry, attr, {})
+            result[kind] = _serialize(store_dict, kind)
+        return result
 
     if name == "learn_thresholds":
         from goldenmatch.core.memory.learner import MemoryLearner

@@ -8,18 +8,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [1.19.0] - 2026-05-22
 
-### Added -- Phase 2 of v1.18 surface-sync roadmap
+### Added -- v1.18 surface-sync roadmap (Phases 1 + 2)
 
-REST API parity for v1.18.2's field-level Corrections + 22 plugins.
-Unblocks the #437 Next.js review-queue use case.
+Brings 6 programmatic surfaces into parity with v1.18.2's field-level
+Corrections + 22 predefined plugins.
+
+**Phase 1** (originally targeted v1.18.3; folded into v1.19.0 since
+Phase 2 merged first):
+
+- **Python API re-exports.** `PluginRegistry`, `BUILTIN_PLUGINS`,
+  `Decision`, `CorrectionSource` are now importable from the
+  top-level `goldenmatch` package.
+- **MCP `add_correction` schema extension.** `decision` enum gains
+  `"field_correct"`. Three new optional properties:
+  `field_name`, `original_value`, `corrected_value`. `cluster_id`
+  property added for field-level shape. Pair-level path unchanged.
+- **MCP `list_plugins` tool.** Lists all registered goldenmatch
+  plugins by category. Each entry includes `name`, `category`,
+  `source` (builtin / user), and the merge-docstring summary.
+- **CLI `goldenmatch memory add` command.** Supports both
+  pair-level (`--id-a` / `--id-b`) and field-level (`--cluster-id`
+  + `--field-name` + `--corrected-value`) shapes via `--decision`.
+  Source defaults to `steward` (trust 1.0); override via `--source`.
+
+**Phase 2:** REST API CRUD.
 
 - `POST /api/v1/memory/corrections` -- pair AND field-level shapes;
-  source defaults to "rest" with trust=0.8
+  source defaults to "rest" with trust=0.8.
 - `GET /api/v1/plugins` -- discovery endpoint; category filter;
-  builtin vs user source tagging
-- `GET /api/v1/memory/corrections` response gains field-level fields
+  builtin vs user source tagging.
+- `GET /api/v1/memory/corrections` response gains field-level fields.
 
-Spec: docs/superpowers/specs/2026-05-22-phase-2-rest-api-crud-design.md
+Specs:
+- `docs/superpowers/specs/2026-05-22-phase-1-discovery-mcp-parity-design.md`
+- `docs/superpowers/specs/2026-05-22-phase-2-rest-api-crud-design.md`
 
 ## [1.18.2] - 2026-05-22
 

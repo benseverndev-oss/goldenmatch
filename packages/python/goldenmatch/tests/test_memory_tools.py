@@ -24,12 +24,14 @@ EXPECTED_NAMES = {
     "learn_thresholds",
     "memory_stats",
     "memory_export",
+    # v1.18.3 (#predefined-merge-plugins): plugin discovery via MCP.
+    "list_plugins",
 }
 
 
 def test_memory_tools_registered():
-    """MEMORY_TOOLS exposes the five tool definitions; names match frozenset."""
-    assert len(MEMORY_TOOLS) == 5
+    """MEMORY_TOOLS exposes the six tool definitions; names match frozenset."""
+    assert len(MEMORY_TOOLS) == 6
     names = {t.name for t in MEMORY_TOOLS}
     assert names == EXPECTED_NAMES
     assert _MEMORY_TOOL_NAMES == frozenset(EXPECTED_NAMES)

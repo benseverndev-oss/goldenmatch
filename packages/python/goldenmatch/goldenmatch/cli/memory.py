@@ -35,6 +35,140 @@ memory_app = typer.Typer(
 )
 
 
+@memory_app.command("add")
+def add_cmd(
+    decision: str = typer.Option(
+        ...,
+        "--decision",
+        help="approve | reject | field_correct",
+    ),
+    dataset: str = typer.Option(..., "--dataset", help="Dataset key (required)"),
+    id_a: int | None = typer.Option(
+        None, "--id-a", help="Pair-level: first row id",
+    ),
+    id_b: int | None = typer.Option(
+        None, "--id-b", help="Pair-level: second row id",
+    ),
+    cluster_id: int | None = typer.Option(
+        None, "--cluster-id",
+        help="Field-level: cluster id the correction targets",
+    ),
+    field_name: str | None = typer.Option(
+        None, "--field-name", help="Field-level: column being corrected",
+    ),
+    original_value: str | None = typer.Option(
+        None, "--original-value", help="Field-level: original chosen value",
+    ),
+    corrected_value: str | None = typer.Option(
+        None, "--corrected-value",
+        help="Field-level: the value the reviewer changed it to",
+    ),
+    reason: str | None = typer.Option(None, "--reason", help="Optional reason"),
+    matchkey_name: str | None = typer.Option(
+        None, "--matchkey-name", help="Optional matchkey scope",
+    ),
+    source: str = typer.Option(
+        "steward", "--source",
+        help="Source: steward (1.0 trust) | agent (0.5) | boost | unmerge",
+    ),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Memory DB path"),
+) -> None:
+    """Add a pair-level (approve/reject) or field-level correction.
+
+    Pair-level shape:
+        goldenmatch memory add --decision approve --id-a 42 --id-b 99 \\
+            --dataset my_run
+
+    Field-level shape (#437, v1.18.2+):
+        goldenmatch memory add --decision field_correct --cluster-id 42 \\
+            --field-name address1 --corrected-value "1 Elm St, Apt 4B" \\
+            --dataset my_run
+    """
+    from goldenmatch.core.memory.store import (
+        HIGH_TRUST_SOURCES,
+        Correction,
+        MemoryStore,
+        _canon_pair,
+    )
+
+    valid_decisions = {"approve", "reject", "field_correct"}
+    if decision not in valid_decisions:
+        err_console.print(
+            f"[red]Invalid decision: {decision!r}. "
+            f"Use one of {sorted(valid_decisions)}.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    trust = 1.0 if source in {s.value for s in HIGH_TRUST_SOURCES} else 0.5
+
+    if decision == "field_correct":
+        if not field_name:
+            err_console.print(
+                "[red]field_correct requires --field-name[/red]"
+            )
+            raise typer.Exit(code=1)
+        if corrected_value is None:
+            err_console.print(
+                "[red]field_correct requires --corrected-value[/red]"
+            )
+            raise typer.Exit(code=1)
+        cid = cluster_id if cluster_id is not None else (id_a or 0)
+        correction = Correction(
+            id=str(uuid.uuid4()),
+            id_a=cid,
+            id_b=0,
+            decision=decision,
+            source=source,
+            trust=trust,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=matchkey_name,
+            reason=reason,
+            dataset=dataset,
+            created_at=datetime.now(),
+            field_name=field_name,
+            original_value=original_value,
+            corrected_value=corrected_value,
+        )
+    else:
+        if id_a is None or id_b is None:
+            err_console.print(
+                f"[red]{decision} requires --id-a and --id-b[/red]"
+            )
+            raise typer.Exit(code=1)
+        ca, cb = _canon_pair(id_a, id_b)
+        correction = Correction(
+            id=str(uuid.uuid4()),
+            id_a=ca,
+            id_b=cb,
+            decision=decision,
+            source=source,
+            trust=trust,
+            field_hash="",
+            record_hash="",
+            original_score=0.0,
+            matchkey_name=matchkey_name,
+            reason=reason,
+            dataset=dataset,
+            created_at=datetime.now(),
+        )
+
+    with MemoryStore(backend="sqlite", path=path) as store:
+        store.add_correction(correction)
+    # Print the generated id so callers can capture it.
+    console.print(f"[green]added[/green] correction id={correction.id}")
+    if decision == "field_correct":
+        console.print(
+            f"  cluster_id={correction.id_a} field={correction.field_name} "
+            f"-> {correction.corrected_value!r}"
+        )
+    else:
+        console.print(
+            f"  ({correction.id_a}, {correction.id_b}) decision={decision}"
+        )
+
+
 @memory_app.command("stats")
 def stats_cmd(
     path: str = typer.Option(DEFAULT_PATH, "--path", help="Memory DB path"),
