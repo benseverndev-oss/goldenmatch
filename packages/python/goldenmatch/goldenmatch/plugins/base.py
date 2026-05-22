@@ -83,10 +83,46 @@ class ConnectorPlugin(Protocol):
 
 @runtime_checkable
 class GoldenStrategyPlugin(Protocol):
-    """Plugin protocol for custom golden record merge strategies."""
+    """Plugin protocol for custom golden record merge strategies.
+
+    Plugins register via entry points::
+
+        [project.entry-points."goldenmatch.plugins.golden_strategy"]
+        legal_priority = "my_pkg.strategies:LegalPriorityStrategy"
+
+    Users opt in via ``GoldenFieldRule(strategy="custom:legal_priority")``.
+    The dispatcher in ``core/golden.py::merge_field`` looks up the
+    plugin by name (after the ``custom:`` prefix), then calls ``merge``
+    with all available signals. Plugins ignore kwargs they don't need.
+
+    Spec: ``docs/superpowers/specs/2026-05-22-golden-strategy-plugin-slot-design.md``
+    """
 
     name: str
 
-    def merge(self, values: list, sources: list[str] | None = None) -> tuple[Any, float]:
-        """Merge field values. Returns (merged_value, confidence)."""
+    def merge(
+        self,
+        values: list,
+        *,
+        sources: list[str] | None = None,
+        dates: list | None = None,
+        quality_weights: list[float] | None = None,
+        pair_scores: dict[tuple[int, int], float] | None = None,
+        rule_kwargs: dict | None = None,
+    ) -> Any:
+        """Merge cluster member values into one survivor.
+
+        Returns either ``(value, confidence)`` -- the dispatcher fills
+        ``idx=0`` -- or ``(value, confidence, idx)`` for plugins that
+        want to surface provenance.
+
+        ``rule_kwargs`` carries the per-field ``GoldenFieldRule``'s
+        configuration (``date_column``, ``source_priority``, or any
+        custom keys the plugin defines) so the plugin can read YAML
+        settings without sniffing global state.
+
+        Exceptions raised here are caught by the dispatcher and
+        fall back to ``most_complete`` with a WARNING log. To opt
+        into strict mode, set ``GOLDENMATCH_GOLDEN_STRATEGY_STRICT=1``.
+        """
         ...

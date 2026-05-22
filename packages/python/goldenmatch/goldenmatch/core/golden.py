@@ -67,6 +67,21 @@ def merge_field(
 
     strategy = rule.strategy
 
+    # v1.18.1: custom plugin strategy. Dispatch + fallback on missing
+    # plugin / plugin exception. See spec
+    # docs/superpowers/specs/2026-05-22-golden-strategy-plugin-slot-design.md
+    if strategy.startswith("custom:"):
+        return _dispatch_custom_strategy(
+            strategy.removeprefix("custom:"),
+            values=values,
+            non_null=non_null,
+            rule=rule,
+            sources=sources,
+            dates=dates,
+            quality_weights=quality_weights,
+            pair_scores=pair_scores,
+        )
+
     if strategy == "most_complete":
         return _most_complete(non_null, quality_weights)
     elif strategy == "majority_vote":
@@ -269,6 +284,93 @@ def _confidence_majority(
     total = sum(value_weights.values())
     conf = value_weights[winner] / total if total > 0 else 0.5
     return (winner, conf, value_idx[winner])
+
+
+# ─── v1.18.1 custom plugin dispatch (#golden-strategy-plugins) ───────────────
+
+
+def _dispatch_custom_strategy(
+    plugin_name: str,
+    *,
+    values: list,
+    non_null: list[tuple[int, object]],
+    rule: GoldenFieldRule,
+    sources: list[str] | None,
+    dates: list | None,
+    quality_weights: list[float] | None,
+    pair_scores: dict[tuple[int, int], float] | None,
+) -> tuple:
+    """Look up and invoke a custom golden-strategy plugin.
+
+    Defensive default: missing plugin OR plugin-raised exception ->
+    WARNING log + fall back to ``most_complete``. Opt into strict
+    mode via env var ``GOLDENMATCH_GOLDEN_STRATEGY_STRICT=1``.
+
+    Result handling: accept both ``(value, confidence)`` and
+    ``(value, confidence, idx)``. Two-tuple results get ``idx=0``
+    synthesized.
+
+    Spec: docs/superpowers/specs/2026-05-22-golden-strategy-plugin-slot-design.md
+    """
+    import logging as _logging
+    import os as _os
+
+    _logger = _logging.getLogger(__name__)
+    _strict = _os.environ.get("GOLDENMATCH_GOLDEN_STRATEGY_STRICT") == "1"
+
+    from goldenmatch.plugins.registry import PluginRegistry
+
+    registry = PluginRegistry.instance()
+    registry.discover()  # idempotent; only the first call scans entry points
+    plugin = registry.get_golden_strategy(plugin_name)
+
+    if plugin is None:
+        msg = (
+            f"custom golden strategy 'custom:{plugin_name}' not found in registry; "
+            f"falling back to most_complete"
+        )
+        if _strict:
+            raise ValueError(msg)
+        _logger.warning(msg)
+        return _most_complete(non_null, quality_weights)
+
+    # Rich kwargs per spec. Plugins ignore what they don't need.
+    rule_kwargs = rule.model_dump(exclude={"strategy"})
+    try:
+        result = plugin.merge(  # type: ignore[attr-defined]
+            values,
+            sources=sources,
+            dates=dates,
+            quality_weights=quality_weights,
+            pair_scores=pair_scores,
+            rule_kwargs=rule_kwargs,
+        )
+    except Exception as exc:
+        msg = (
+            f"custom golden strategy 'custom:{plugin_name}' raised "
+            f"{type(exc).__name__}: {exc}; falling back to most_complete"
+        )
+        if _strict:
+            raise
+        _logger.warning(msg)
+        return _most_complete(non_null, quality_weights)
+
+    # Normalize 2-tuple -> 3-tuple by synthesizing idx=0.
+    if isinstance(result, tuple) and len(result) == 2:
+        value, confidence = result
+        return (value, float(confidence), 0)
+    if isinstance(result, tuple) and len(result) == 3:
+        value, confidence, idx = result
+        return (value, float(confidence), idx)
+    # Bad return shape -> warning + fallback.
+    msg = (
+        f"custom golden strategy 'custom:{plugin_name}' returned "
+        f"unexpected shape {type(result).__name__}; falling back to most_complete"
+    )
+    if _strict:
+        raise TypeError(msg)
+    _logger.warning(msg)
+    return _most_complete(non_null, quality_weights)
 
 
 def _build_golden_records_polars_native(
