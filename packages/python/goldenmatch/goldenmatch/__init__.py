@@ -28,7 +28,7 @@ Quick start:
 All features are accessible via `import goldenmatch as gm`.
 """
 
-__version__ = "1.18.2"
+__version__ = "1.19.0"
 
 # ── High-level API (convenience functions) ────────────────────────────────
 from goldenmatch._api import (
@@ -162,6 +162,10 @@ from goldenmatch.core.memory import (
     apply_corrections,
 )
 
+# Decision + source enums for Correction (Phase 1 of v1.18.3 surface sync).
+# `Decision.FIELD_CORRECT` identifies field-level inline-edit feedback.
+from goldenmatch.core.memory.store import CorrectionSource, Decision
+
 # ── Core pipeline functions ───────────────────────────────────────────────
 from goldenmatch.core.pipeline import run_dedupe, run_match
 
@@ -221,6 +225,12 @@ from goldenmatch.output.report import generate_dedupe_report
 
 # ── Output ───────────────────────────────────────────────────────────────
 from goldenmatch.output.writer import write_output
+
+# Plugin discovery surfaces (Phase 1 of v1.18.3 surface sync). Users can
+# inspect the 22 predefined golden-strategy plugins + any user-registered
+# ones via `PluginRegistry.instance().list_plugins()`.
+from goldenmatch.plugins.builtin import BUILTIN_PLUGINS
+from goldenmatch.plugins.registry import PluginRegistry
 from goldenmatch.pprl.autoconfig import (
     auto_configure_pprl,
     auto_configure_pprl_llm,
@@ -322,6 +332,9 @@ __all__ = [
     # Learning Memory
     "MemoryStore", "Correction", "LearnedAdjustment", "CorrectionStats",
     "MemoryLearner", "apply_corrections",
+    # Phase 1 of v1.18.3 surface sync:
+    "CorrectionSource", "Decision",
+    "PluginRegistry", "BUILTIN_PLUGINS",
     # Learning Memory API
     "get_memory", "add_correction", "learn", "memory_stats",
     # Identity Graph (v2.0)
