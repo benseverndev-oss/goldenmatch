@@ -133,9 +133,6 @@ CREATE TABLE IF NOT EXISTS corrections (
     UNIQUE(id_a, id_b, dataset)
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_pair ON corrections(id_a, id_b, dataset);
--- #437: index by field for `tune_field_strategy` lookup.
-CREATE INDEX IF NOT EXISTS idx_corrections_field
-    ON corrections(dataset, field_name) WHERE field_name IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS adjustments (
     matchkey_name TEXT PRIMARY KEY,
@@ -182,7 +179,9 @@ class MemoryStore:
 
         Idempotent: SQLite raises OperationalError when a column
         already exists; we swallow it. CREATE TABLE IF NOT EXISTS at
-        open time covers fresh DBs.
+        open time covers fresh DBs. The field_name index is created
+        AFTER the columns exist (so this method must run before any
+        DDL that references field_name).
         """
         for col in ("field_name", "original_value", "corrected_value"):
             try:
@@ -190,10 +189,16 @@ class MemoryStore:
             except Exception as exc:  # pragma: no cover -- benign idempotency
                 msg = str(exc).lower()
                 if "duplicate" not in msg:
-                    # Not a "column already exists" error -- log and continue
-                    # so callers see a working store even if migration hit
-                    # something unexpected.
                     log.debug("field-correction migration skipped %s: %s", col, exc)
+        # Now that the columns are guaranteed to exist, create the
+        # field-name lookup index. Idempotent via IF NOT EXISTS.
+        try:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_corrections_field "
+                "ON corrections(dataset, field_name) WHERE field_name IS NOT NULL"
+            )
+        except Exception as exc:  # pragma: no cover -- benign
+            log.debug("field-correction index skipped: %s", exc)
 
     def close(self) -> None:
         """Close the database connection."""
