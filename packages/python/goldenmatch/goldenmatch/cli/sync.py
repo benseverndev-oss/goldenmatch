@@ -68,24 +68,41 @@ def sync_cmd(
             row_count = connector.get_row_count(table)
             console.print(f"Connected. Table [cyan]{table}[/cyan] has [green]{row_count:,}[/green] rows.")
 
-        # Auto-configure if no config
+        # #417: parse --exclude-columns BEFORE autoconfig runs. Previously
+        # auto_configure was called first, then exclusions were merged
+        # into the resulting cfg -- but by then matchkeys + blocking had
+        # already been built from the excluded columns. The user reported
+        # `--exclude-columns dm_npi` still produced `exact_dm_npi` matchkey
+        # because the exclusion arrived too late to filter candidates.
+        from goldenmatch._exclusions_schema import (
+            merge_exclude_columns_into_config,
+            parse_csv_exclude_columns,
+        )
+        _cli_excludes = parse_csv_exclude_columns(exclude_columns)
+
+        # Auto-configure if no config. exclude_columns set via the
+        # ContextVar so the detector chain sees them as user-supplied
+        # exclusions BEFORE matchkey + blocking selection.
         if cfg is None:
-            from goldenmatch.core.autoconfig import auto_configure
-            # Read sample for profiling
-            sample = next(connector.read_table(table, chunk_size=1000))
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
-                sample.write_csv(f.name)
-                cfg = auto_configure([(f.name, table)])
+            from goldenmatch.core.autoconfig import (
+                _RUNTIME_EXCLUDE_COLUMNS,
+                auto_configure,
+            )
+            _ctx_token = _RUNTIME_EXCLUDE_COLUMNS.set(_cli_excludes or None)
+            try:
+                # Read sample for profiling
+                sample = next(connector.read_table(table, chunk_size=1000))
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
+                    sample.write_csv(f.name)
+                    cfg = auto_configure([(f.name, table)])
+            finally:
+                _RUNTIME_EXCLUDE_COLUMNS.reset(_ctx_token)
             if not quiet:
                 console.print("[green]Auto-configured matching rules.[/green]")
 
-        # Merge --exclude-columns into config (additive with YAML field).
-        # Done AFTER auto-configure if zero-config path ran, so detector
-        # exclusions are in place first; user CLI exclusions layer on top.
-        from goldenmatch._exclusions_schema import (
-            merge_exclude_columns_into_config,
-        )
+        # Also merge CLI excludes into the config object so the downstream
+        # sync pipeline + GoldenFlow / GoldenCheck surfaces see them.
         _resolved_excludes = merge_exclude_columns_into_config(
             cfg, exclude_columns,
         )
