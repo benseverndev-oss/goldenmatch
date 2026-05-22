@@ -23,10 +23,20 @@ export type CorrectionSource =
   | "unmerge"
   | "agent"
   | "llm"
-  | "api";
+  | "api"
+  // v1.19.0 (#437 surface sync Phase 2):
+  | "rest"
+  // v2.x (#437 surface sync Phase 6B):
+  | "duckdb";
 
-/** Canonical correction decisions. Mirrors Python's `Decision` StrEnum. */
-export type Decision = "approve" | "reject";
+/** Canonical correction decisions. Mirrors Python's `Decision` StrEnum.
+ *
+ * `"field_correct"` added in v1.18.2 (#437) for inline-edit feedback on
+ * golden-record fields. When `Correction.decision === "field_correct"`,
+ * the row carries `fieldName` + `correctedValue` (see Correction
+ * interface).
+ */
+export type Decision = "approve" | "reject" | "field_correct";
 
 /**
  * Sources that confer human-level trust. Pair decisions originating here are
@@ -47,6 +57,10 @@ export const HIGH_TRUST_SOURCES: ReadonlySet<CorrectionSource> = new Set<Correct
  * fall back to the agent-tier 0.5 trust.
  */
 export function trustForSource(source: CorrectionSource | string): number {
+  // v1.19.0 Phase 2 + v2.x Phase 6B (#437): explicit trust tiers for
+  // the new sources so they don't fall to the agent-tier 0.5 default.
+  if (source === "rest") return 0.8;
+  if (source === "duckdb") return 0.7;
   return HIGH_TRUST_SOURCES.has(source as CorrectionSource) ? 1.0 : 0.5;
 }
 
@@ -76,6 +90,15 @@ export interface Correction {
   readonly reason: string | null;
   readonly dataset: string | null;
   readonly createdAt: Date;
+  // ── v1.18.2 field-level corrections (#437) ──────────────────────────
+  // All three default to null for pair-level (decision in
+  // {approve, reject}). Set when decision === "field_correct":
+  //   - fieldName: the column being corrected (e.g. "address1")
+  //   - originalValue: what build_golden_record chose
+  //   - correctedValue: what the reviewer changed it to
+  readonly fieldName?: string | null;
+  readonly originalValue?: string | null;
+  readonly correctedValue?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS corrections (
     matchkey_name TEXT,
     reason TEXT, dataset TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- v1.18.2 field-level golden corrections (#437). NULL for pair-
+    -- level (decision in {approve, reject}). Set when
+    -- decision='field_correct'.
+    field_name TEXT,
+    original_value TEXT,
+    corrected_value TEXT,
     UNIQUE(id_a, id_b, dataset)
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_pair ON corrections(id_a, id_b, dataset);
@@ -70,6 +76,10 @@ interface CorrectionRow {
   reason: string | null;
   dataset: string | null;
   created_at: string;
+  // v1.18.2 field-level (nullable for pair-level corrections):
+  field_name?: string | null;
+  original_value?: string | null;
+  corrected_value?: string | null;
 }
 
 interface AdjustmentRow {
@@ -95,6 +105,9 @@ function rowToCorrection(row: CorrectionRow): Correction {
     reason: row.reason,
     dataset: row.dataset,
     createdAt: new Date(row.created_at),
+    fieldName: row.field_name ?? null,
+    originalValue: row.original_value ?? null,
+    correctedValue: row.corrected_value ?? null,
   };
 }
 
@@ -169,8 +182,9 @@ export class SqliteMemoryStore implements MemoryStore {
     const ins = this.db.prepare(
       "INSERT INTO corrections " +
         "(id, id_a, id_b, decision, source, trust, field_hash, record_hash, " +
-        "original_score, matchkey_name, reason, dataset, created_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "original_score, matchkey_name, reason, dataset, created_at, " +
+        "field_name, original_value, corrected_value) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     const tx = this.db.transaction((corr: Correction, a: number, b: number) => {
       del.run(a, b, corr.dataset);
@@ -188,6 +202,9 @@ export class SqliteMemoryStore implements MemoryStore {
         corr.reason,
         corr.dataset,
         corr.createdAt.toISOString(),
+        corr.fieldName ?? null,
+        corr.originalValue ?? null,
+        corr.correctedValue ?? null,
       );
     });
     tx(c, ca, cb);
