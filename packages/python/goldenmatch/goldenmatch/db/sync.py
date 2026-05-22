@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -813,27 +814,115 @@ def _full_scan_streaming(
     all_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
-    # Per-block scoring loop. Match log writes incrementally so a long
-    # run is visible in the gm_matches table as blocks complete.
+    # #422 fix 2: parallel per-block scoring. Each block's
+    # _score_block_streaming is independent (rescans the staging parquet
+    # filtered on __block_key__). Originally serial; on 585K small blocks
+    # the per-block orchestration dominated (~10 min overhead at the
+    # observed sub-ms per-block scoring time).
+    #
+    # ThreadPoolExecutor (not Process) because:
+    # - rapidfuzz releases the GIL inside the inner scorer
+    # - polars also releases the GIL during scan-filter-collect work
+    # - shared filesystem cache + parquet scan handle is process-local
+    # - matched_pairs cross-block dedup is dropped to enable parallelism;
+    #   correctness handled by canonical (min, max) tuple dedup at the
+    #   end (one set update across the merged pair list).
+    #
+    # Worker count: min(cpu_count, 8). Bounded to avoid filesystem
+    # thrash on the staging parquet glob. Env override:
+    # GOLDENMATCH_STREAMING_BLOCK_WORKERS.
+    import os as _os
+    from concurrent.futures import ThreadPoolExecutor
+
+    _max_workers_env = _os.environ.get("GOLDENMATCH_STREAMING_BLOCK_WORKERS")
+    if _max_workers_env:
+        try:
+            max_workers = max(int(_max_workers_env), 1)
+        except ValueError:
+            max_workers = min(_os.cpu_count() or 4, 8)
+    else:
+        max_workers = min(_os.cpu_count() or 4, 8)
+
+    work_items: list[tuple[int, Any, int]] = []  # (i, block_key, count)
     for i, row in enumerate(block_index.iter_rows(named=True)):
         block_key = row["__block_key__"]
         block_n = row["count"]
         if block_n < 2:
             continue
-        logger.info(
-            "Streaming pipeline: block %d/%d (key=%r, size=%d)",
-            i + 1, block_index.height, block_key, block_n,
-        )
+        work_items.append((i, block_key, block_n))
+
+    logger.info(
+        "Streaming pipeline: dispatching %d non-singleton blocks "
+        "across %d workers (#422)",
+        len(work_items), max_workers,
+    )
+
+    # No-dedup variant of _score_block_streaming: skip cross-block
+    # dedup against matched_pairs (the shared mutable set isn't
+    # thread-safe and the dedup is just an optimization for skipping
+    # work). Correctness restored at the final dedup pass below.
+    def _score_one(args: tuple[int, Any, int]) -> tuple[int, Any, int, list[tuple[int, int, float]]]:
+        i, block_key, block_n = args
+        _empty: set[tuple[int, int]] = set()  # local empty set; worker-private
         pairs = _score_block_streaming(
-            staging_dir, block_key, config, matched_pairs,
+            staging_dir, block_key, config, _empty,
         )
-        all_pairs.extend(pairs)
-        if pairs and not dry_run:
-            log_matches_batch(
-                connector,
-                [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
-                run_id,
+        return i, block_key, block_n, pairs
+
+    # Match-log batching: collect all pairs from a worker, log when
+    # the worker returns, so a long run is still visible in
+    # gm_matches as blocks complete (mirrors the serial behavior).
+    if max_workers <= 1 or len(work_items) <= 2:
+        # Serial fallback path -- same as pre-#422.
+        for args in work_items:
+            i, block_key, block_n = args
+            logger.info(
+                "Streaming pipeline: block %d/%d (key=%r, size=%d)",
+                i + 1, block_index.height, block_key, block_n,
             )
+            _empty_serial: set[tuple[int, int]] = set()
+            pairs = _score_block_streaming(
+                staging_dir, block_key, config, _empty_serial,
+            )
+            all_pairs.extend(pairs)
+            if pairs and not dry_run:
+                log_matches_batch(
+                    connector,
+                    [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
+                    run_id,
+                )
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for i, block_key, block_n, pairs in pool.map(_score_one, work_items):
+                logger.info(
+                    "Streaming pipeline: block %d/%d (key=%r, size=%d) -> %d pairs",
+                    i + 1, block_index.height, block_key, block_n, len(pairs),
+                )
+                all_pairs.extend(pairs)
+                if pairs and not dry_run:
+                    log_matches_batch(
+                        connector,
+                        [(int(a), int(b), float(s), "merged") for a, b, s in pairs],
+                        run_id,
+                    )
+
+    # Final cross-block dedup: canonical (min, max) tuple set. Replaces
+    # the per-block matched_pairs lookup that was dropped above.
+    _seen: set[tuple[int, int]] = set()
+    _deduped: list[tuple[int, int, float]] = []
+    for a, b, s in all_pairs:
+        canonical = (min(a, b), max(a, b))
+        if canonical in _seen:
+            continue
+        _seen.add(canonical)
+        _deduped.append((a, b, s))
+    if len(_deduped) < len(all_pairs):
+        logger.info(
+            "Streaming pipeline: deduped %d -> %d pairs across blocks",
+            len(all_pairs), len(_deduped),
+        )
+    all_pairs = _deduped
+    matched_pairs.update(_seen)
 
     logger.info(
         "Streaming pipeline: scored %d pairs across %d blocks",
