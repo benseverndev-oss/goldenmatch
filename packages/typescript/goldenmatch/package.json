@@ -1,6 +1,6 @@
 {
   "name": "goldenmatch",
-  "version": "0.10.0",
+  "version": "2.0.0",
   "description": "Entity resolution toolkit — deduplicate, match, and create golden records",
   "type": "module",
   "exports": {

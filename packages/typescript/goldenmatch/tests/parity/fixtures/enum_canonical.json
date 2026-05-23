@@ -1,0 +1,315 @@
+{
+  "name": "enum_canonical",
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "sor_priority_hit",
+      "inputs": {
+        "values": [
+          "sf_val",
+          "hs_val",
+          "ns_val"
+        ],
+        "sources": [
+          "salesforce",
+          "hubspot",
+          "netsuite"
+        ],
+        "rule_kwargs": {
+          "source_priority": [
+            "salesforce",
+            "hubspot"
+          ]
+        }
+      },
+      "expected": {
+        "value": "sf_val",
+        "confidence": 0.3333333333333333,
+        "idx": 0
+      }
+    },
+    {
+      "id": "sor_priority_skip_missing",
+      "inputs": {
+        "values": [
+          null,
+          "hs_val"
+        ],
+        "sources": [
+          "salesforce",
+          "hubspot"
+        ],
+        "rule_kwargs": {
+          "source_priority": [
+            "salesforce",
+            "hubspot"
+          ]
+        }
+      },
+      "expected": {
+        "value": "hs_val",
+        "confidence": 1.0,
+        "idx": 1
+      }
+    },
+    {
+      "id": "sor_no_priority",
+      "inputs": {
+        "values": [
+          "a",
+          "b"
+        ],
+        "sources": [
+          "x",
+          "y"
+        ]
+      },
+      "expected": {
+        "value": "a",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "lifecycle_default_max",
+      "inputs": {
+        "values": [
+          "subscriber",
+          "customer",
+          "lead"
+        ]
+      },
+      "expected": {
+        "value": "subscriber",
+        "confidence": 0.3333333333333333,
+        "idx": 0
+      }
+    },
+    {
+      "id": "lifecycle_tied",
+      "inputs": {
+        "values": [
+          "customer",
+          "customer",
+          "lead"
+        ]
+      },
+      "expected": {
+        "value": "customer",
+        "confidence": 0.6666666666666666,
+        "idx": 0
+      }
+    },
+    {
+      "id": "lifecycle_custom_order",
+      "inputs": {
+        "values": [
+          "bronze",
+          "gold",
+          "silver"
+        ],
+        "rule_kwargs": {
+          "lifecycle_order": [
+            "bronze",
+            "silver",
+            "gold"
+          ]
+        }
+      },
+      "expected": {
+        "value": "bronze",
+        "confidence": 0.3333333333333333,
+        "idx": 0
+      }
+    },
+    {
+      "id": "freshness_within_window",
+      "inputs": {
+        "values": [
+          "v_old",
+          "v_new"
+        ],
+        "dates": [
+          "2025-12-01",
+          "2026-01-10"
+        ],
+        "rule_kwargs": {
+          "max_age_days": 365,
+          "now_iso": "2026-01-15T00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "value": "v_old",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "freshness_all_stale",
+      "inputs": {
+        "values": [
+          "v1",
+          "v2"
+        ],
+        "dates": [
+          "2020-01-01",
+          "2020-06-01"
+        ],
+        "rule_kwargs": {
+          "max_age_days": 365,
+          "now_iso": "2026-01-15T00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "value": "v1",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "freshness_no_dates",
+      "inputs": {
+        "values": [
+          "v1"
+        ],
+        "rule_kwargs": {
+          "now_iso": "2026-01-15T00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "value": "v1",
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "enum_aliases",
+      "inputs": {
+        "values": [
+          "USA",
+          "United States",
+          "US"
+        ],
+        "rule_kwargs": {
+          "alias_map": {
+            "USA": "US",
+            "United States": "US"
+          }
+        }
+      },
+      "expected": {
+        "value": "US",
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "enum_unknown_passthrough",
+      "inputs": {
+        "values": [
+          "XX",
+          "XX",
+          "YY"
+        ],
+        "rule_kwargs": {
+          "alias_map": {
+            "OLD": "NEW"
+          }
+        }
+      },
+      "expected": {
+        "value": "XX",
+        "confidence": 0.6666666666666666,
+        "idx": 0
+      }
+    },
+    {
+      "id": "regex_email_filter",
+      "inputs": {
+        "values": [
+          "bob@x.com",
+          "not-an-email",
+          "alice@y.com"
+        ],
+        "rule_kwargs": {
+          "pattern": "[^@]+@[^@]+\\.[^@]+"
+        }
+      },
+      "expected": {
+        "value": "bob@x.com",
+        "confidence": 0.3333333333333333,
+        "idx": 0
+      }
+    },
+    {
+      "id": "regex_no_matches_fallback_null",
+      "inputs": {
+        "values": [
+          "abc",
+          "def"
+        ],
+        "rule_kwargs": {
+          "pattern": "\\d+",
+          "fallback": "null"
+        }
+      },
+      "expected": {
+        "value": "abc",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "regex_no_pattern",
+      "inputs": {
+        "values": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": {
+        "value": "a",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "wbr_newest_wins",
+      "inputs": {
+        "values": [
+          "v_old",
+          "v_new"
+        ],
+        "dates": [
+          "2024-01-01",
+          "2026-01-10"
+        ],
+        "rule_kwargs": {
+          "half_life_days": 30,
+          "now_iso": "2026-01-15T00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "value": "v_old",
+        "confidence": 0.5,
+        "idx": 0
+      }
+    },
+    {
+      "id": "wbr_no_dates",
+      "inputs": {
+        "values": [
+          "v1"
+        ],
+        "rule_kwargs": {
+          "now_iso": "2026-01-15T00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "value": "v1",
+        "confidence": 1.0,
+        "idx": 0
+      }
+    }
+  ]
+}

@@ -4,6 +4,84 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [2.0.0] - 2026-05-22
+
+Major version: v1.18.2 plugin parity for the TS port (#208).
+
+### Added — predefined golden-strategy plugins
+
+All 22 v1.18.2 builtins from Python's `goldenmatch.plugins.builtin`
+are now byte-identically ported. Validated by 304 vitest parity
+tests that load JSON fixtures emitted from the Python sibling.
+
+**Numeric (6):** `numeric_max`, `numeric_min`, `numeric_mean`,
+`numeric_median`, `numeric_sum`, `numeric_weighted_average`.
+
+**Format (7):** `shortest_value`, `concat_unique`, `email_normalize`,
+`phone_digits_only`, `url_canonical`, `whitespace_normalize`,
+`boolean_normalize`.
+
+**Business (6):** `system_of_record`, `lifecycle_stage`,
+`freshness_with_max_age`, `enum_canonical`, `regex_validated`,
+`weighted_by_recency`. Date-based strategies accept
+`ruleKwargs.now_iso` to pin the reference instant for deterministic
+testing.
+
+**Aggregation (3):** `count_distinct`, `count_non_null`,
+`agreement_rate`.
+
+### Added — PluginRegistry singleton
+
+- `PluginRegistry.instance()` / `reset()` / `discover()` /
+  `registerGoldenStrategy()` / `getGoldenStrategy()` /
+  `hasGoldenStrategy()` / `listPlugins()`
+- `BUILTIN_PLUGINS` const array of all 22 builtins
+- User-registered plugins override builtins on the same name
+  (matches Python's last-write-wins)
+
+### Why v2.0.0 (not v0.11.0)
+
+- Adds a new top-level public-API surface (22 plugins + registry)
+- Goldenmatch-js had been on a 0.x track. The plugin port is the
+  v2.0 milestone called out in
+  `docs/superpowers/specs/2026-05-22-phase-5-typescript-port-design.md`.
+- No breaking changes to existing exports -- all v0.10.0 surfaces
+  still work unchanged.
+
+### Migration from v0.10.0
+
+No code changes required for existing callers. To consume the new
+plugins:
+
+```ts
+import { PluginRegistry, NumericMaxStrategy } from "goldenmatch";
+
+const registry = PluginRegistry.instance();
+registry.discover();
+
+const [value, conf, idx] = new NumericMaxStrategy().merge([10, 50, 25]);
+// -> [50, 1.0, 1]
+
+// Or via registry:
+const strategy = registry.getGoldenStrategy("numeric_max")!;
+const result = strategy.merge([10, 50, 25]);
+```
+
+User plugins:
+
+```ts
+registry.registerGoldenStrategy("my_custom", {
+  name: "my_custom",
+  merge: (values) => [values[0], 1.0, 0] as const,
+});
+```
+
+### Out of scope (v2.1+)
+
+- TS port of scorer / transform / connector plugin types
+- Entry-point-style discovery (npm has no Python-style entry-point
+  system; user plugins always register manually)
+
 ## [0.10.0] - 2026-05-19
 
 Identity Graph on the CLI and REST API surfaces. The v0.9.0 persistent backend lit up the storage layer; v0.10.0 lights up two of the four user-facing surfaces Python ships (`web` UI is Python-only, TUI has no identity tab in Python either).

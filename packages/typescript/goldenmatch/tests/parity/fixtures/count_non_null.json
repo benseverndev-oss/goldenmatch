@@ -1,0 +1,127 @@
+{
+  "name": "count_non_null",
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "count_distinct_unique",
+      "inputs": {
+        "values": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "expected": {
+        "value": 3,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "count_distinct_dup",
+      "inputs": {
+        "values": [
+          "a",
+          "a",
+          "b"
+        ]
+      },
+      "expected": {
+        "value": 3,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "count_distinct_with_nulls",
+      "inputs": {
+        "values": [
+          null,
+          "a",
+          null
+        ]
+      },
+      "expected": {
+        "value": 1,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "all_null",
+      "inputs": {
+        "values": [
+          null,
+          null
+        ]
+      },
+      "expected": {
+        "value": 0,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "count_non_null_mixed",
+      "inputs": {
+        "values": [
+          1,
+          null,
+          2,
+          null,
+          3
+        ]
+      },
+      "expected": {
+        "value": 3,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "agreement_full",
+      "inputs": {
+        "values": [
+          "x",
+          "x",
+          "x"
+        ]
+      },
+      "expected": {
+        "value": 3,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "agreement_split",
+      "inputs": {
+        "values": [
+          "x",
+          "y",
+          "x"
+        ]
+      },
+      "expected": {
+        "value": 3,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "agreement_single_nonnull",
+      "inputs": {
+        "values": [
+          null,
+          "x",
+          null
+        ]
+      },
+      "expected": {
+        "value": 1,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    }
+  ]
+}
