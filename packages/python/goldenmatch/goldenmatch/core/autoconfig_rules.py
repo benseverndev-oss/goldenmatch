@@ -1186,7 +1186,14 @@ DEFAULT_RULES = [
     rule_blocking_too_coarse,              # 5  structural: p99 outlier (skewed distribution)
     rule_uniform_heavy_blocking,           # 6  structural: uniform-large blocks
     rule_corruption_normalize,             # 7  NEW v1.10: normalize on high-corruption blocking col
-    rule_demote_clustered_identity,        # 8  NEW v1.11: demote collision-prone exact matchkeys (before generic refit rules)
+    # v1.20.x #124: rule_demote_clustered_identity removed from rotation.
+    # v1.11 Phase 7 diagnostic showed it never reaches position 8 in
+    # iteration -- rule_blocking_too_coarse exhausts the budget first --
+    # AND v1.12 Path Y (NE on exact matchkeys) addressed T3 directly,
+    # making the rule's mechanism redundant. The function + helper +
+    # indicator are kept as dead code for now so direct-invocation tests
+    # still pass; full surface removal is a follow-up once
+    # telemetry confirms zero invocations from external callers.
     rule_unimodal_scoring,                 # 9  tuning: dip statistic low
     rule_low_reduction_ratio,              # 10 structural: too-tight blocking
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
