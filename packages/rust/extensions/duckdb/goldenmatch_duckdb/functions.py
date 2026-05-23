@@ -150,6 +150,13 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR", "VARCHAR"], "VARCHAR",
     )
 
+    # ── GoldenFlow transforms (v0.5 of dbt-goldensuite, #465 Tier 1.1) ──
+    # 8 UDFs wrapping goldenflow's series-level transforms. Safe to
+    # register even if goldenflow isn't installed -- the UDFs
+    # fail-open + pass through. `pip install goldenflow` to enable.
+    from goldenmatch_duckdb.goldenflow import register_goldenflow_functions
+    register_goldenflow_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 
