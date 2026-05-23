@@ -1,0 +1,195 @@
+{
+  "name": "numeric_max",
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "happy_path_distinct",
+      "inputs": {
+        "values": [
+          10,
+          50,
+          25
+        ]
+      },
+      "expected": {
+        "value": 50,
+        "confidence": 1.0,
+        "idx": 1
+      }
+    },
+    {
+      "id": "tied_max",
+      "inputs": {
+        "values": [
+          50,
+          50,
+          10
+        ]
+      },
+      "expected": {
+        "value": 50,
+        "confidence": 0.7,
+        "idx": 0
+      }
+    },
+    {
+      "id": "negative_numbers",
+      "inputs": {
+        "values": [
+          -10,
+          0,
+          10
+        ]
+      },
+      "expected": {
+        "value": 10,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "single_value",
+      "inputs": {
+        "values": [
+          42
+        ]
+      },
+      "expected": {
+        "value": 42,
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "all_null",
+      "inputs": {
+        "values": [
+          null,
+          null
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "mixed_with_strings",
+      "inputs": {
+        "values": [
+          10,
+          "abc",
+          30,
+          null
+        ]
+      },
+      "expected": {
+        "value": 30,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "string_numbers",
+      "inputs": {
+        "values": [
+          "10",
+          "5",
+          "20"
+        ]
+      },
+      "expected": {
+        "value": "20",
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "boolean_excluded",
+      "inputs": {
+        "values": [
+          true,
+          5,
+          false,
+          10
+        ]
+      },
+      "expected": {
+        "value": 10,
+        "confidence": 1.0,
+        "idx": 3
+      }
+    },
+    {
+      "id": "float_precision",
+      "inputs": {
+        "values": [
+          0.1,
+          0.2,
+          0.3
+        ]
+      },
+      "expected": {
+        "value": 0.3,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "weighted_avg_with_weights",
+      "inputs": {
+        "values": [
+          10,
+          20,
+          30
+        ],
+        "quality_weights": [
+          1.0,
+          2.0,
+          3.0
+        ]
+      },
+      "expected": {
+        "value": 30,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "weighted_avg_uniform",
+      "inputs": {
+        "values": [
+          10,
+          20,
+          30
+        ]
+      },
+      "expected": {
+        "value": 30,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "weighted_avg_zero_weight_excluded",
+      "inputs": {
+        "values": [
+          10,
+          20,
+          30
+        ],
+        "quality_weights": [
+          1.0,
+          0.0,
+          2.0
+        ]
+      },
+      "expected": {
+        "value": 30,
+        "confidence": 1.0,
+        "idx": 2
+      }
+    }
+  ]
+}
