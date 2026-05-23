@@ -1,0 +1,244 @@
+{
+  "name": "phone_digits_only",
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "shortest_unique",
+      "inputs": {
+        "values": [
+          "USA",
+          "United States",
+          "US"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "shortest_tied",
+      "inputs": {
+        "values": [
+          "AB",
+          "CD",
+          "long"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "shortest_with_weights",
+      "inputs": {
+        "values": [
+          "AB",
+          "CD"
+        ],
+        "quality_weights": [
+          0.5,
+          0.9
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "all_null",
+      "inputs": {
+        "values": [
+          null,
+          null
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "concat_dedup",
+      "inputs": {
+        "values": [
+          "red",
+          "blue",
+          "red"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "concat_custom_sep",
+      "inputs": {
+        "values": [
+          "a",
+          "b"
+        ],
+        "rule_kwargs": {
+          "separator": " | "
+        }
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "email_plus_addressing",
+      "inputs": {
+        "values": [
+          "bob+work@example.com",
+          "bob@example.com"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "email_case_insensitive",
+      "inputs": {
+        "values": [
+          "Alice@X.com",
+          "alice@x.com"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "phone_e164_wins",
+      "inputs": {
+        "values": [
+          "+1-555-123-4567",
+          "(555) 123-4567"
+        ]
+      },
+      "expected": {
+        "value": "15551234567",
+        "confidence": 1.0,
+        "idx": 0
+      }
+    },
+    {
+      "id": "phone_empty_strips",
+      "inputs": {
+        "values": [
+          "---",
+          "555-0100"
+        ]
+      },
+      "expected": {
+        "value": "5550100",
+        "confidence": 1.0,
+        "idx": 1
+      }
+    },
+    {
+      "id": "url_https_upgrade",
+      "inputs": {
+        "values": [
+          "http://Example.com/",
+          "https://example.com"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "url_trailing_slash",
+      "inputs": {
+        "values": [
+          "https://x.com/",
+          "https://x.com"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "whitespace_collapse",
+      "inputs": {
+        "values": [
+          "  Acme   Corp  ",
+          "Acme Corp"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "bool_truthy_variants",
+      "inputs": {
+        "values": [
+          "yes",
+          "true",
+          1,
+          "y"
+        ]
+      },
+      "expected": {
+        "value": "1",
+        "confidence": 1.0,
+        "idx": 2
+      }
+    },
+    {
+      "id": "bool_mixed_majority",
+      "inputs": {
+        "values": [
+          "yes",
+          "no",
+          "yes"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    },
+    {
+      "id": "bool_unknown_skipped",
+      "inputs": {
+        "values": [
+          "maybe",
+          "yes",
+          "perhaps"
+        ]
+      },
+      "expected": {
+        "value": null,
+        "confidence": 0.0,
+        "idx": null
+      }
+    }
+  ]
+}

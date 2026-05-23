@@ -108,6 +108,89 @@ def _emit_numeric_fixtures(out_dir: Path) -> None:
         print(f"wrote {out_path} ({len(fixture_cases)} cases)")
 
 
+def _format_cases() -> list[dict]:
+    return [
+        # Shortest value
+        {"id": "shortest_unique", "inputs": {"values": ["USA", "United States", "US"]}},
+        {"id": "shortest_tied", "inputs": {"values": ["AB", "CD", "long"]}},
+        {"id": "shortest_with_weights",
+         "inputs": {"values": ["AB", "CD"], "quality_weights": [0.5, 0.9]}},
+        {"id": "all_null", "inputs": {"values": [None, None]}},
+        # Concat unique
+        {"id": "concat_dedup", "inputs": {"values": ["red", "blue", "red"]}},
+        {"id": "concat_custom_sep",
+         "inputs": {"values": ["a", "b"], "rule_kwargs": {"separator": " | "}}},
+        # Email normalize
+        {"id": "email_plus_addressing",
+         "inputs": {"values": ["bob+work@example.com", "bob@example.com"]}},
+        {"id": "email_case_insensitive",
+         "inputs": {"values": ["Alice@X.com", "alice@x.com"]}},
+        # Phone digits only
+        {"id": "phone_e164_wins",
+         "inputs": {"values": ["+1-555-123-4567", "(555) 123-4567"]}},
+        {"id": "phone_empty_strips",
+         "inputs": {"values": ["---", "555-0100"]}},
+        # URL canonical
+        {"id": "url_https_upgrade",
+         "inputs": {"values": ["http://Example.com/", "https://example.com"]}},
+        {"id": "url_trailing_slash",
+         "inputs": {"values": ["https://x.com/", "https://x.com"]}},
+        # Whitespace normalize
+        {"id": "whitespace_collapse",
+         "inputs": {"values": ["  Acme   Corp  ", "Acme Corp"]}},
+        # Boolean normalize
+        {"id": "bool_truthy_variants",
+         "inputs": {"values": ["yes", "true", 1, "y"]}},
+        {"id": "bool_mixed_majority",
+         "inputs": {"values": ["yes", "no", "yes"]}},
+        {"id": "bool_unknown_skipped",
+         "inputs": {"values": ["maybe", "yes", "perhaps"]}},
+    ]
+
+
+def _emit_format_fixtures(out_dir: Path) -> None:
+    from goldenmatch.plugins.builtin.format import (
+        BooleanNormalizeStrategy,
+        ConcatUniqueStrategy,
+        EmailNormalizeStrategy,
+        PhoneDigitsOnlyStrategy,
+        ShortestValueStrategy,
+        UrlCanonicalStrategy,
+        WhitespaceNormalizeStrategy,
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cases = _format_cases()
+    strategies = [
+        ("shortest_value", ShortestValueStrategy()),
+        ("concat_unique", ConcatUniqueStrategy()),
+        ("email_normalize", EmailNormalizeStrategy()),
+        ("phone_digits_only", PhoneDigitsOnlyStrategy()),
+        ("url_canonical", UrlCanonicalStrategy()),
+        ("whitespace_normalize", WhitespaceNormalizeStrategy()),
+        ("boolean_normalize", BooleanNormalizeStrategy()),
+    ]
+    for name, strategy in strategies:
+        fixture_cases = []
+        for case in cases:
+            inputs = case["inputs"]
+            values = inputs["values"]
+            kwargs = {k: v for k, v in inputs.items() if k != "values"}
+            try:
+                result = strategy.merge(values, **kwargs)
+                expected = _serialize_result(result)
+            except Exception as exc:
+                expected = {"error": str(exc)}
+            fixture_cases.append({
+                "id": case["id"],
+                "inputs": inputs,
+                "expected": expected,
+            })
+        fixture = {"name": name, "schema_version": 1, "cases": fixture_cases}
+        out_path = out_dir / f"{name}.json"
+        out_path.write_text(json.dumps(fixture, indent=2, default=str) + "\n")
+        print(f"wrote {out_path} ({len(fixture_cases)} cases)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -118,6 +201,7 @@ def main() -> int:
     )
     args = ap.parse_args()
     _emit_numeric_fixtures(args.out)
+    _emit_format_fixtures(args.out)
     return 0
 
 
