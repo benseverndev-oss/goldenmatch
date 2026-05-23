@@ -488,7 +488,9 @@ jobs:
           uv run python -c "
           import json
           r = json.load(open('/tmp/febrl3_smoke.json'))['results'][0]
-          assert r['f1'] >= 0.80, f'Febrl3 smoke regressed: {r}'
+          # #438 raised this from 0.80 -> 0.85 after blocking improvements
+          # (DOB pass + surname-substring pass) lifted F1 from 0.83 -> 0.90.
+          assert r['f1'] >= 0.85, f'Febrl3 smoke regressed: {r}'
           print('febrl3 smoke F1=', r['f1'])
           "
       - name: Smoke summary
