@@ -2,6 +2,7 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
 
+mod correction;
 mod pipeline;
 mod quick;
 mod spi;

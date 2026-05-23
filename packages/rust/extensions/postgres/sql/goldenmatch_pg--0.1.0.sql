@@ -291,3 +291,93 @@ CREATE FUNCTION "goldenmatch_identity_list"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_identity_list_wrapper';
+
+-- ─── Correction CRUD (v0.5.0, Phase 6A of #437 surface sync) ──────────
+--
+-- File pair-level / field-level / cluster-decision corrections into
+-- the goldenmatch MemoryStore. Read with `correction_list` or via
+-- the `goldenmatch.corrections` view (no auth required for reads).
+--
+-- Permissions: `correction_add` is REVOKEd from PUBLIC at the bottom
+-- of this file and granted to `goldenmatch_correction_writer`. Roles
+-- needing write access must be GRANTed that role.
+
+CREATE FUNCTION "correction_add"(
+    "decision" TEXT,
+    "dataset" TEXT,
+    "id_a" BIGINT DEFAULT NULL,
+    "id_b" BIGINT DEFAULT NULL,
+    "cluster_id" BIGINT DEFAULT NULL,
+    "field_name" TEXT DEFAULT NULL,
+    "original_value" TEXT DEFAULT NULL,
+    "corrected_value" TEXT DEFAULT NULL,
+    "cluster_score" DOUBLE PRECISION DEFAULT NULL,
+    "cluster_outcome" TEXT DEFAULT NULL,
+    "reason" TEXT DEFAULT NULL,
+    "matchkey_name" TEXT DEFAULT NULL,
+    "source" TEXT DEFAULT NULL,
+    "memory_path" TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'correction_add_wrapper';
+
+CREATE FUNCTION "correction_list"(
+    "dataset" TEXT DEFAULT NULL,
+    "memory_path" TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'correction_list_wrapper';
+
+-- Read-only view over the correction store. Wraps `correction_list`
+-- with `json_array_elements` so callers can write SQL like
+-- `SELECT * FROM goldenmatch.corrections WHERE dataset = 'customers'`.
+-- View access uses the default GRANT chain; no special role required.
+CREATE OR REPLACE VIEW goldenmatch.corrections AS
+SELECT
+    (entry->>'id')::TEXT              AS id,
+    (entry->>'id_a')::BIGINT          AS id_a,
+    (entry->>'id_b')::BIGINT          AS id_b,
+    (entry->>'decision')::TEXT        AS decision,
+    (entry->>'source')::TEXT          AS source,
+    (entry->>'trust')::DOUBLE PRECISION AS trust,
+    (entry->>'reason')::TEXT          AS reason,
+    (entry->>'dataset')::TEXT         AS dataset,
+    (entry->>'matchkey_name')::TEXT   AS matchkey_name,
+    (entry->>'field_name')::TEXT      AS field_name,
+    (entry->>'original_value')::TEXT  AS original_value,
+    (entry->>'corrected_value')::TEXT AS corrected_value,
+    (entry->>'cluster_score')::DOUBLE PRECISION AS cluster_score,
+    (entry->>'cluster_outcome')::TEXT AS cluster_outcome,
+    (entry->>'created_at')::TIMESTAMPTZ AS created_at
+FROM jsonb_array_elements(
+    goldenmatch.correction_list(NULL, NULL)::jsonb
+) AS entry;
+
+-- ─── Permissions ──────────────────────────────────────────────────────
+--
+-- `correction_add` writes into the Learning Memory store; default
+-- REVOKE from PUBLIC so accidental SELECT-from-anywhere can't file
+-- correctness signals. Grant `goldenmatch_correction_writer` to any
+-- role that needs to file corrections.
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'goldenmatch_correction_writer') THEN
+        CREATE ROLE goldenmatch_correction_writer NOLOGIN;
+    END IF;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION goldenmatch.correction_add(
+    TEXT, TEXT, BIGINT, BIGINT, BIGINT, TEXT, TEXT, TEXT,
+    DOUBLE PRECISION, TEXT, TEXT, TEXT, TEXT, TEXT
+) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION goldenmatch.correction_add(
+    TEXT, TEXT, BIGINT, BIGINT, BIGINT, TEXT, TEXT, TEXT,
+    DOUBLE PRECISION, TEXT, TEXT, TEXT, TEXT, TEXT
+) TO goldenmatch_correction_writer;
+
+REVOKE EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) TO goldenmatch_correction_writer;
+GRANT SELECT ON goldenmatch.corrections TO goldenmatch_correction_writer;
