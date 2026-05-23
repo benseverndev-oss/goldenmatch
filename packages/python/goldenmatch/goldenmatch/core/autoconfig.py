@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
