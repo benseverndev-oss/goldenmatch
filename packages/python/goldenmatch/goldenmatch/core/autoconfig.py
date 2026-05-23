@@ -8,6 +8,7 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
@@ -1109,7 +1110,7 @@ def _make_quality_column_profile(
 
 def _pick_date_blocking_col(
     profiles: list[ColumnProfile],
-    null_rate_fn,
+    null_rate_fn: Callable[[str], float],
     *,
     max_null_rate: float = 0.20,
 ) -> str | None:
