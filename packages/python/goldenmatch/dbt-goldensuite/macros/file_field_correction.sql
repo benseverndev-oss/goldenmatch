@@ -33,7 +33,7 @@
 ) %}
     {{ return(adapter.dispatch(
         'goldenmatch_file_field_correction',
-        'dbt_goldenmatch'
+        'dbt_goldensuite'
     )(cluster_id, field_name, original, corrected, dataset, reason, memory_path)) }}
 {% endmacro %}
 

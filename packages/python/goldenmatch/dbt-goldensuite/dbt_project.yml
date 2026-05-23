@@ -1,17 +1,17 @@
-# dbt-goldenmatch dbt package config (Phase 6C of #437 surface sync).
+# dbt-goldensuite dbt package config (Phase 6C of #437 surface sync).
 #
 # Declares this directory as a dbt package so the macros in `macros/`
 # get picked up when consumers add this to their `packages.yml`:
 #
 #   packages:
 #     - git: "https://github.com/benseverndev-oss/goldenmatch.git"
-#       subdirectory: "packages/python/goldenmatch/dbt-goldenmatch"
+#       subdirectory: "packages/python/goldenmatch/dbt-goldensuite"
 #
 # Macros use `adapter.dispatch()` to route between the Postgres
 # (`goldenmatch.correction_add`) and DuckDB (`goldenmatch_correction_add`)
 # function shapes. Other adapters raise a compile-time error.
 
-name: "dbt_goldenmatch"
+name: "dbt_goldensuite"
 version: "0.1.0"
 config-version: 2
 
@@ -22,5 +22,5 @@ macro-paths: ["macros"]
 # implementations live under `macros/<adapter>/`; the generic
 # entry point lives at `macros/<macro_name>.sql`.
 dispatch:
-  - macro_namespace: dbt_goldenmatch
-    search_order: ["dbt_goldenmatch"]
+  - macro_namespace: dbt_goldensuite
+    search_order: ["dbt_goldensuite"]

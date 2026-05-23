@@ -31,7 +31,7 @@
     {%- endif -%}
     {{ return(adapter.dispatch(
         'goldenmatch_file_pair_correction',
-        'dbt_goldenmatch'
+        'dbt_goldensuite'
     )(id_a, id_b, decision, dataset, reason, matchkey_name, memory_path)) }}
 {% endmacro %}
 

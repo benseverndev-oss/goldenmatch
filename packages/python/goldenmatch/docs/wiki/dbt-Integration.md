@@ -12,7 +12,7 @@ models:
   - name: stg_customers
     config:
       post_hook:
-        - "goldenmatch dedupe {{ this }} --config dbt_goldenmatch.yaml --output-all --output-dir ./goldenmatch_output"
+        - "goldenmatch dedupe {{ this }} --config dbt_goldensuite.yaml --output-all --output-dir ./goldenmatch_output"
 ```
 
 This calls the CLI directly after the model builds. Works with any warehouse that materializes to a table accessible from the CLI host.
@@ -23,7 +23,7 @@ Create a reusable macro for deduplication:
 
 ```sql
 -- macros/goldenmatch.sql
-{% macro goldenmatch_dedupe(model_name, config_path='dbt_goldenmatch.yaml', output_dir='./goldenmatch_output') %}
+{% macro goldenmatch_dedupe(model_name, config_path='dbt_goldensuite.yaml', output_dir='./goldenmatch_output') %}
   {% set command %}
     goldenmatch dedupe {{ ref(model_name) }} --config {{ config_path }} --output-all --output-dir {{ output_dir }}
   {% endset %}
@@ -38,7 +38,7 @@ Call from `dbt_project.yml`:
 ```yaml
 # dbt_project.yml
 on-run-end:
-  - "goldenmatch dedupe ./target/stg_customers.csv --config dbt_goldenmatch.yaml --output-all"
+  - "goldenmatch dedupe ./target/stg_customers.csv --config dbt_goldensuite.yaml --output-all"
 ```
 
 Or use `dbt run-operation`:
@@ -67,7 +67,7 @@ dbt run --select stg_customers
 goldenmatch sync \
   --table stg_customers \
   --connection-string "$DATABASE_URL" \
-  --config dbt_goldenmatch.yaml
+  --config dbt_goldensuite.yaml
 
 # 3. Results are in gm_golden_records table
 ```
@@ -86,7 +86,7 @@ goldenmatch sync --table stg_customers --connection-string "$DATABASE_URL"
 ```yaml
 # dbt_project.yml
 on-run-end:
-  - "goldenmatch sync --table stg_customers --connection-string $DATABASE_URL --config dbt_goldenmatch.yaml"
+  - "goldenmatch sync --table stg_customers --connection-string $DATABASE_URL --config dbt_goldensuite.yaml"
 ```
 
 Or schedule with `goldenmatch watch`:
@@ -98,7 +98,7 @@ goldenmatch watch --table stg_customers --connection-string "$DATABASE_URL" --in
 
 ## Example Config
 
-Save as `dbt_goldenmatch.yaml` alongside your `dbt_project.yml`:
+Save as `dbt_goldensuite.yaml` alongside your `dbt_project.yml`:
 
 ```yaml
 matchkeys:
@@ -145,12 +145,12 @@ output:
   format: csv
 ```
 
-## dbt-goldenmatch Package (New in v0.3.1)
+## dbt-goldensuite Package (New in v0.3.1)
 
-A standalone `dbt-goldenmatch` package provides DuckDB-based entity resolution for dbt pipelines:
+A standalone `dbt-goldensuite` package provides DuckDB-based entity resolution for dbt pipelines:
 
 ```python
-from dbt_goldenmatch.materialize import run_goldenmatch_dedupe
+from dbt_goldensuite.materialize import run_goldenmatch_dedupe
 
 result = run_goldenmatch_dedupe(
     input_table="raw_customers",
@@ -197,7 +197,7 @@ bq extract --destination_format=CSV 'project:dataset.stg_customers' gs://bucket/
 gsutil cp gs://bucket/customers.csv ./customers.csv
 
 # Deduplicate
-goldenmatch dedupe customers.csv --config dbt_goldenmatch.yaml --output-all
+goldenmatch dedupe customers.csv --config dbt_goldensuite.yaml --output-all
 
 # Load results back
 bq load --source_format=CSV 'project:dataset.golden_customers' ./goldenmatch_output/golden.csv
@@ -206,7 +206,7 @@ bq load --source_format=CSV 'project:dataset.golden_customers' ./goldenmatch_out
 Or use GoldenMatch's native GCS support:
 
 ```bash
-goldenmatch dedupe gs://bucket/customers.csv --config dbt_goldenmatch.yaml --output-all
+goldenmatch dedupe gs://bucket/customers.csv --config dbt_goldensuite.yaml --output-all
 ```
 
 ## Metadata Tables
@@ -238,7 +238,7 @@ WHERE g.is_current = true
 
 ## Tips
 
-- Store `dbt_goldenmatch.yaml` in your dbt project root alongside `dbt_project.yml`
+- Store `dbt_goldensuite.yaml` in your dbt project root alongside `dbt_project.yml`
 - Use `goldenmatch init` to generate the config interactively
 - Run `goldenmatch profile` on your staging table first to understand data quality
 - For incremental dbt models, pair with `goldenmatch sync` for efficient incremental matching

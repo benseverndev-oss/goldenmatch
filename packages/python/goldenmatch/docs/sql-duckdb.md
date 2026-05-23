@@ -214,10 +214,10 @@ result.write_csv("deduped.csv")
 
 ### Use with dbt
 
-The `dbt-goldenmatch` package provides macros for DuckDB-based entity resolution:
+The `dbt-goldensuite` package provides macros for DuckDB-based entity resolution:
 
 ```bash
-pip install dbt-goldenmatch
+pip install dbt-goldensuite
 ```
 
 {% raw %}

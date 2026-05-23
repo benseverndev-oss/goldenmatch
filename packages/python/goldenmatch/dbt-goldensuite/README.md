@@ -1,11 +1,11 @@
-# dbt-goldenmatch
+# dbt-goldensuite
 
 dbt integration for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch) entity resolution.
 
 ## Installation
 
 ```bash
-pip install dbt-goldenmatch
+pip install dbt-goldensuite
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ pip install dbt-goldenmatch
 Run GoldenMatch deduplication on a DuckDB table:
 
 ```python
-from dbt_goldenmatch.materialize import run_goldenmatch_dedupe
+from dbt_goldensuite.materialize import run_goldenmatch_dedupe
 
 result = run_goldenmatch_dedupe(
     input_table="raw_customers",

@@ -112,7 +112,7 @@ flowchart LR
 | **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python | Orchestrator that wires Check → Flow → Match into one declarative pipeline. | `pip install goldenpipe` |
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
-| **[dbt-goldencheck](packages/dbt/goldencheck/README.md)** | dbt | dbt package — data-quality tests for warehouse models. | dbt deps |
+| **[dbt-goldensuite](packages/python/goldenmatch/dbt-goldensuite/README.md)** | dbt · Python | dbt package — quality-gate tests, correction CRUD macros + GoldenCheck assertions for warehouse models. | `pip install dbt-goldensuite` |
 | **[goldencheck-action](packages/actions/goldencheck/README.md)** | YAML | GitHub Action — fail PRs that introduce data-quality regressions. | Marketplace |
 
 > Headline pitch and the deepest docs live in **[packages/python/goldenmatch/README.md](packages/python/goldenmatch/README.md)** (910 lines, full feature list, CLI, architecture, benchmarks).
@@ -133,7 +133,7 @@ flowchart LR
 | Map columns across schemas | [`packages/python/infermap`](packages/python/infermap/README.md) |
 | Write TypeScript / Node.js / Edge | [`packages/typescript/goldenmatch`](packages/typescript/goldenmatch/README.md) |
 | Match in Postgres / DuckDB SQL | [`packages/rust/extensions`](packages/rust/extensions/README.md) |
-| Add data-quality gates to dbt | [`packages/dbt/goldencheck`](packages/dbt/goldencheck/README.md) |
+| Add data-quality gates to dbt | [`packages/python/goldenmatch/dbt-goldensuite`](packages/python/goldenmatch/dbt-goldensuite/README.md) |
 | Block bad data in GitHub PRs | [`packages/actions/goldencheck`](packages/actions/goldencheck/README.md) |
 | Run as Airflow DAGs | [`examples/airflow/`](examples/airflow/README.md) — 12 drop-in DAGs |
 | Run from a single MCP container | [`docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`](packages/python/goldensuite-mcp/README.md) |
