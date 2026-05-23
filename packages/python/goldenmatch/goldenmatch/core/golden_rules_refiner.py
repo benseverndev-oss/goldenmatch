@@ -466,6 +466,74 @@ def _pick_strategy_for_field(
     return None
 
 
+def _maybe_llm_strategy_pick(
+    base_rules: GoldenRulesConfig,
+    field: str,
+    signals: RefinementSignals,
+    clusters: dict[int, dict],
+    column_profiles: list[ColumnProfile],
+    dataset: str,
+    llm_cache: dict[tuple[str, str], str | None],
+) -> str | None:
+    """LLM fallback for ambiguous fields (#430). Returns a strategy
+    name from VALID_STRATEGIES, or None when:
+
+    - ``base_rules.use_llm_for_ambiguous`` is False (default)
+    - No LLM provider is configured
+    - Budget exhausted
+    - LLM response can't be parsed to a valid strategy
+
+    The heavy work (cluster sampling, prompt formatting, LLM call,
+    budget check, caching) all lives in
+    `core.golden_strategy_llm.pick_strategy_via_llm`. This wrapper
+    just translates refiner internals into that function's API.
+    """
+    if not getattr(base_rules, "use_llm_for_ambiguous", False):
+        return None
+    try:
+        from goldenmatch.core.golden_strategy_llm import (
+            pick_strategy_via_llm,
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.warning("golden_strategy_llm import failed: %s", exc)
+        return None
+
+    # Build {cluster_id: [values]} for `field`. Skip clusters where
+    # the field is null/empty across all members.
+    clusters_by_id: dict[int, list[str]] = {}
+    for cid, info in clusters.items():
+        members = info.get("members") or []
+        if not members:
+            continue
+        # Look up the field's values for these member row_ids.
+        # `signals` already has cluster-level aggregates, but for the
+        # prompt we want raw within-cluster values to show the LLM the
+        # ambiguity. Fall back to an empty list when we can't find them.
+        values: list[str] = []
+        # The signals object's underlying values per cluster aren't
+        # exposed directly; reuse `within_cluster_spread` only as a
+        # filter (skip clusters where field is fully null/empty).
+        spread = signals.within_cluster_spread.get(field)
+        if spread is None:
+            continue
+        clusters_by_id[cid] = values
+
+    # If we have NO clusters with the field present, no point asking
+    # the LLM. Returns None -> caller falls back to base default.
+    if not clusters_by_id:
+        return None
+
+    col_type = signals.col_type.get(field, "unknown")
+    strategy = pick_strategy_via_llm(
+        field=field,
+        col_type=col_type,
+        clusters_by_id=clusters_by_id,
+        dataset=dataset,
+        cache=llm_cache,
+    )
+    return strategy
+
+
 def refine_golden_rules(
     base_rules: GoldenRulesConfig,
     clusters: dict[int, dict],
@@ -545,6 +613,13 @@ def refine_golden_rules(
         except Exception as exc:  # pragma: no cover -- defensive
             logger.warning("Tuner consultation failed: %s", exc)
 
+    # v1.20.x (#430): LLM fallback cache. One dict per refiner call so
+    # repeat fields (e.g. fields_to_consider hits the same column from
+    # both `signals` and `column_profiles` sets) only cost one LLM
+    # call. The cache is scoped to this invocation; cross-call caching
+    # would need persistence (out of scope for v1.20.x).
+    llm_cache: dict[tuple[str, str], str | None] = {}
+
     new_field_rules: dict[str, GoldenFieldRule] = dict(base_rules.field_rules)
     for field in fields_to_consider:
         if field in new_field_rules:
@@ -570,6 +645,27 @@ def refine_golden_rules(
             cardinality_ratio=cardinality_by_field.get(field, 0.0),
         )
         if result is None:
+            # v1.20.x (#430): LLM fallback for ambiguous fields. When
+            # the user opted in AND no heuristic fired AND budget
+            # allows, dispatch one LLM call per field.
+            llm_strategy = _maybe_llm_strategy_pick(
+                base_rules, field, signals, clusters,
+                column_profiles, dataset, llm_cache,
+            )
+            if llm_strategy is not None:
+                try:
+                    new_field_rules[field] = GoldenFieldRule(
+                        strategy=llm_strategy,
+                    )
+                    logger.info(
+                        "Refined golden rule (LLM): field=%r -> strategy=%s",
+                        field, llm_strategy,
+                    )
+                except Exception as exc:  # pragma: no cover -- defensive
+                    logger.warning(
+                        "LLM-suggested strategy %r failed for field=%r: %s",
+                        llm_strategy, field, exc,
+                    )
             continue
         strategy, kwargs = result
         try:
