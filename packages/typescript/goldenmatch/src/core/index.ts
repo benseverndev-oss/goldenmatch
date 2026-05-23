@@ -415,3 +415,47 @@ export type {
   PostflightAdjustment,
   PostflightReport,
 } from "./autoconfigVerify.js";
+
+
+// v2.0.0 (#208): predefined golden-strategy plugin port.
+export type {
+  GoldenStrategyMergeOpts,
+  GoldenStrategyPlugin,
+  GoldenStrategyResult,
+} from "./plugins/base.js";
+export {
+  AGGREGATION_BUILTINS,
+  AgreementRateStrategy,
+  CountDistinctStrategy,
+  CountNonNullStrategy,
+} from "./plugins/builtin/aggregation.js";
+export {
+  BUSINESS_BUILTINS,
+  EnumCanonicalStrategy,
+  FreshnessWithMaxAgeStrategy,
+  LifecycleStageStrategy,
+  RegexValidatedStrategy,
+  SystemOfRecordStrategy,
+  WeightedByRecencyStrategy,
+} from "./plugins/builtin/business.js";
+export {
+  BooleanNormalizeStrategy,
+  ConcatUniqueStrategy,
+  EmailNormalizeStrategy,
+  FORMAT_BUILTINS,
+  PhoneDigitsOnlyStrategy,
+  ShortestValueStrategy,
+  UrlCanonicalStrategy,
+  WhitespaceNormalizeStrategy,
+} from "./plugins/builtin/format.js";
+export {
+  NUMERIC_BUILTINS,
+  NumericMaxStrategy,
+  NumericMeanStrategy,
+  NumericMedianStrategy,
+  NumericMinStrategy,
+  NumericSumStrategy,
+  NumericWeightedAverageStrategy,
+} from "./plugins/builtin/numeric.js";
+export type { PluginType } from "./plugins/registry.js";
+export { BUILTIN_PLUGINS, PluginRegistry } from "./plugins/registry.js";
