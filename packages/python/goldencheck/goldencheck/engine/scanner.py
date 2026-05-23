@@ -26,6 +26,7 @@ from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.profilers.uniqueness import UniquenessProfiler
 from goldencheck.relations.age_validation import AgeValidationProfiler
+from goldencheck.relations.identity_safe_pk import IdentitySafePkProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
 from goldencheck.relations.temporal import TemporalOrderProfiler
@@ -52,6 +53,10 @@ RELATION_PROFILERS = [
     NullCorrelationProfiler(),
     NumericCrossColumnProfiler(),
     AgeValidationProfiler(),
+    # Preflight: warn when no stable PK column exists (goldenmatch #207).
+    # Identity Graph downstreams need source_pk_column to avoid record_id
+    # collisions on duplicate raw rows.
+    IdentitySafePkProfiler(),
 ]
 
 def _post_classification_checks(
