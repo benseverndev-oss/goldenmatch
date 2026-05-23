@@ -191,6 +191,107 @@ def _emit_format_fixtures(out_dir: Path) -> None:
         print(f"wrote {out_path} ({len(fixture_cases)} cases)")
 
 
+def _business_cases() -> list[dict]:
+    """Date-based plugins pin `now_iso` for deterministic parity."""
+    NOW = "2026-01-15T00:00:00+00:00"
+    return [
+        # system_of_record
+        {"id": "sor_priority_hit",
+         "inputs": {"values": ["sf_val", "hs_val", "ns_val"],
+                    "sources": ["salesforce", "hubspot", "netsuite"],
+                    "rule_kwargs": {"source_priority": ["salesforce", "hubspot"]}}},
+        {"id": "sor_priority_skip_missing",
+         "inputs": {"values": [None, "hs_val"],
+                    "sources": ["salesforce", "hubspot"],
+                    "rule_kwargs": {"source_priority": ["salesforce", "hubspot"]}}},
+        {"id": "sor_no_priority",
+         "inputs": {"values": ["a", "b"], "sources": ["x", "y"]}},
+        # lifecycle_stage
+        {"id": "lifecycle_default_max",
+         "inputs": {"values": ["subscriber", "customer", "lead"]}},
+        {"id": "lifecycle_tied",
+         "inputs": {"values": ["customer", "customer", "lead"]}},
+        {"id": "lifecycle_custom_order",
+         "inputs": {"values": ["bronze", "gold", "silver"],
+                    "rule_kwargs": {"lifecycle_order": ["bronze", "silver", "gold"]}}},
+        # freshness_with_max_age (with now_iso pinned)
+        {"id": "freshness_within_window",
+         "inputs": {"values": ["v_old", "v_new"],
+                    "dates": ["2025-12-01", "2026-01-10"],
+                    "rule_kwargs": {"max_age_days": 365, "now_iso": NOW}}},
+        {"id": "freshness_all_stale",
+         "inputs": {"values": ["v1", "v2"],
+                    "dates": ["2020-01-01", "2020-06-01"],
+                    "rule_kwargs": {"max_age_days": 365, "now_iso": NOW}}},
+        {"id": "freshness_no_dates",
+         "inputs": {"values": ["v1"], "rule_kwargs": {"now_iso": NOW}}},
+        # enum_canonical
+        {"id": "enum_aliases",
+         "inputs": {"values": ["USA", "United States", "US"],
+                    "rule_kwargs": {"alias_map": {"USA": "US", "United States": "US"}}}},
+        {"id": "enum_unknown_passthrough",
+         "inputs": {"values": ["XX", "XX", "YY"],
+                    "rule_kwargs": {"alias_map": {"OLD": "NEW"}}}},
+        # regex_validated
+        {"id": "regex_email_filter",
+         "inputs": {"values": ["bob@x.com", "not-an-email", "alice@y.com"],
+                    "rule_kwargs": {"pattern": r"[^@]+@[^@]+\.[^@]+"}}},
+        {"id": "regex_no_matches_fallback_null",
+         "inputs": {"values": ["abc", "def"],
+                    "rule_kwargs": {"pattern": r"\d+", "fallback": "null"}}},
+        {"id": "regex_no_pattern",
+         "inputs": {"values": ["a", "b"]}},
+        # weighted_by_recency
+        {"id": "wbr_newest_wins",
+         "inputs": {"values": ["v_old", "v_new"],
+                    "dates": ["2024-01-01", "2026-01-10"],
+                    "rule_kwargs": {"half_life_days": 30, "now_iso": NOW}}},
+        {"id": "wbr_no_dates",
+         "inputs": {"values": ["v1"], "rule_kwargs": {"now_iso": NOW}}},
+    ]
+
+
+def _emit_business_fixtures(out_dir: Path) -> None:
+    from goldenmatch.plugins.builtin.business import (
+        EnumCanonicalStrategy,
+        FreshnessWithMaxAgeStrategy,
+        LifecycleStageStrategy,
+        RegexValidatedStrategy,
+        SystemOfRecordStrategy,
+        WeightedByRecencyStrategy,
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cases = _business_cases()
+    strategies = [
+        ("system_of_record", SystemOfRecordStrategy()),
+        ("lifecycle_stage", LifecycleStageStrategy()),
+        ("freshness_with_max_age", FreshnessWithMaxAgeStrategy()),
+        ("enum_canonical", EnumCanonicalStrategy()),
+        ("regex_validated", RegexValidatedStrategy()),
+        ("weighted_by_recency", WeightedByRecencyStrategy()),
+    ]
+    for name, strategy in strategies:
+        fixture_cases = []
+        for case in cases:
+            inputs = case["inputs"]
+            values = inputs["values"]
+            kwargs = {k: v for k, v in inputs.items() if k != "values"}
+            try:
+                result = strategy.merge(values, **kwargs)
+                expected = _serialize_result(result)
+            except Exception as exc:
+                expected = {"error": str(exc)}
+            fixture_cases.append({
+                "id": case["id"],
+                "inputs": inputs,
+                "expected": expected,
+            })
+        fixture = {"name": name, "schema_version": 1, "cases": fixture_cases}
+        out_path = out_dir / f"{name}.json"
+        out_path.write_text(json.dumps(fixture, indent=2, default=str) + "\n")
+        print(f"wrote {out_path} ({len(fixture_cases)} cases)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -202,7 +303,57 @@ def main() -> int:
     args = ap.parse_args()
     _emit_numeric_fixtures(args.out)
     _emit_format_fixtures(args.out)
+    _emit_business_fixtures(args.out)
+    _emit_aggregation_fixtures(args.out)
     return 0
+
+
+def _aggregation_cases() -> list[dict]:
+    return [
+        {"id": "count_distinct_unique", "inputs": {"values": ["a", "b", "c"]}},
+        {"id": "count_distinct_dup", "inputs": {"values": ["a", "a", "b"]}},
+        {"id": "count_distinct_with_nulls", "inputs": {"values": [None, "a", None]}},
+        {"id": "all_null", "inputs": {"values": [None, None]}},
+        {"id": "count_non_null_mixed", "inputs": {"values": [1, None, 2, None, 3]}},
+        {"id": "agreement_full", "inputs": {"values": ["x", "x", "x"]}},
+        {"id": "agreement_split", "inputs": {"values": ["x", "y", "x"]}},
+        {"id": "agreement_single_nonnull", "inputs": {"values": [None, "x", None]}},
+    ]
+
+
+def _emit_aggregation_fixtures(out_dir: Path) -> None:
+    from goldenmatch.plugins.builtin.aggregation import (
+        AgreementRateStrategy,
+        CountDistinctStrategy,
+        CountNonNullStrategy,
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cases = _aggregation_cases()
+    strategies = [
+        ("count_distinct", CountDistinctStrategy()),
+        ("count_non_null", CountNonNullStrategy()),
+        ("agreement_rate", AgreementRateStrategy()),
+    ]
+    for name, strategy in strategies:
+        fixture_cases = []
+        for case in cases:
+            inputs = case["inputs"]
+            values = inputs["values"]
+            kwargs = {k: v for k, v in inputs.items() if k != "values"}
+            try:
+                result = strategy.merge(values, **kwargs)
+                expected = _serialize_result(result)
+            except Exception as exc:
+                expected = {"error": str(exc)}
+            fixture_cases.append({
+                "id": case["id"],
+                "inputs": inputs,
+                "expected": expected,
+            })
+        fixture = {"name": name, "schema_version": 1, "cases": fixture_cases}
+        out_path = out_dir / f"{name}.json"
+        out_path.write_text(json.dumps(fixture, indent=2, default=str) + "\n")
+        print(f"wrote {out_path} ({len(fixture_cases)} cases)")
 
 
 if __name__ == "__main__":

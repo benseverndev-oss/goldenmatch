@@ -172,7 +172,13 @@ class FreshnessWithMaxAgeStrategy:
         if dates is None:
             return (None, 0.0)
         max_age_days = float((rule_kwargs or {}).get("max_age_days", 365))
-        now = datetime.now(tz=UTC)
+        # v1.20.x: allow tests to pin `now` for deterministic parity
+        # fixtures (closes goldenmatch #208 part 3 parity gap).
+        now_iso = (rule_kwargs or {}).get("now_iso")
+        if now_iso:
+            now = _parse_date(now_iso) or datetime.now(tz=UTC)
+        else:
+            now = datetime.now(tz=UTC)
         cutoff = now - timedelta(days=max_age_days)
         candidates: list[tuple[int, datetime, Any]] = []
         for i, (d, v) in enumerate(zip(dates, values)):
@@ -332,7 +338,12 @@ class WeightedByRecencyStrategy:
         half_life_days = float((rule_kwargs or {}).get("half_life_days", 30))
         if half_life_days <= 0:
             half_life_days = 30.0
-        now = datetime.now(tz=UTC)
+        # v1.20.x: deterministic `now` injection for parity fixtures.
+        now_iso = (rule_kwargs or {}).get("now_iso")
+        if now_iso:
+            now = _parse_date(now_iso) or datetime.now(tz=UTC)
+        else:
+            now = datetime.now(tz=UTC)
         scored: list[tuple[int, datetime, float, Any]] = []
         for i, (d, v) in enumerate(zip(dates, values)):
             if v is None:
