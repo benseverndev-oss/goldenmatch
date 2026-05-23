@@ -1,2 +1,2 @@
-"""dbt integration for GoldenMatch entity resolution."""
-__version__ = "0.1.0"
+"""dbt integration for the Golden Suite: ER + data quality + transforms."""
+__version__ = "0.3.0"
