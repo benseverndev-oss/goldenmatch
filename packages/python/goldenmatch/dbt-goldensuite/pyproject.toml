@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dbt-goldensuite"
-version = "0.3.0"
+version = "0.4.0"
 description = "dbt integration for the Golden Suite: entity resolution (goldenmatch) + data quality (goldencheck) + transforms (goldenflow)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = "MIT"
 authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "goldenmatch>=0.3.0",
+    "goldenmatch>=0.4.0",
     "dbt-core>=1.7",
     "duckdb>=0.9",
 ]
