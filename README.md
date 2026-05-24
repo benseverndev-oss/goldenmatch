@@ -97,7 +97,8 @@ flowchart LR
 - **Privacy-preserving record linkage** — match across organizations without sharing raw data (PPRL, 92.4% F1 on FEBRL4).
 - **AI-native by design** — every package ships an MCP server, a REST API, and an A2A agent surface. 36+ MCP tools across the suite, including `auto_configure` + `controller_telemetry` for v1.7-v1.12 introspection.
 - **AutoConfigController visible everywhere** (v1.7-v1.12 surface-parity arc) — web `ControllerPanel`, TUI `Ctrl+A`, CLI `goldenmatch autoconfig`, REST `/autoconfig` + `/controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDFs, MCP/A2A telemetry tools. One JSON shape across every interface.
-- **Polyglot parity** — Python and TypeScript implementations track the same scorer outputs to 4-decimal precision via a parity harness.
+- **Polyglot parity** — the full suite ships on **npm** (goldenmatch, goldencheck, goldenflow, infermap, goldenpipe) alongside PyPI; the TypeScript and Python implementations track the same outputs to 4-decimal precision via a cross-language parity harness.
+- **SQL-native, both engines at parity** — the same functions run inside **PostgreSQL** (pgrx extension) and **DuckDB**: dedupe / match / score / auto-config + telemetry / identity graph, plus data profiling, `evaluate`, Fellegi-Sunter probabilistic scoring, and GoldenFlow transforms.
 - **Production paths** — Postgres sync, daemon mode, lineage tracking, review queues, dbt integration, GitHub Actions, and a Rust extension layer for Postgres / DuckDB.
 
 ---
