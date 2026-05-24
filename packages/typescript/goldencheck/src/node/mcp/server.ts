@@ -11,9 +11,10 @@ import { scanData, type ScanOptions } from "../../core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../core/engine/confidence.js";
 import { Severity, type Finding, type DatasetProfile, healthScore } from "../../core/types.js";
 import { listAvailableDomains, getDomainTypes } from "../../core/semantic/domains/index.js";
+import { AGENT_TOOLS, AGENT_TOOL_NAMES, handleAgentTool } from "./agent-tools.js";
 
 // Tool definitions for MCP registration
-export const TOOL_DEFINITIONS = [
+const CORE_TOOL_DEFINITIONS = [
   {
     name: "scan",
     description: "Scan a data file (CSV, Parquet) for data quality issues. Returns findings with severity, confidence, affected rows.",
@@ -84,6 +85,10 @@ export const TOOL_DEFINITIONS = [
   },
 ];
 
+// The full surface = 7 core tools + 10 agent tools (parity with the Python
+// goldencheck MCP server, which merges agent_tools.py into the core server).
+export const TOOL_DEFINITIONS = [...CORE_TOOL_DEFINITIONS, ...AGENT_TOOLS];
+
 // --- Tool handlers ---
 
 function findingsByColumn(findings: readonly Finding[]): Record<string, { errors: number; warnings: number }> {
@@ -112,6 +117,9 @@ function serializeFindings(findings: readonly Finding[]): object[] {
 }
 
 export function handleTool(name: string, args: Record<string, unknown>): object {
+  if (AGENT_TOOL_NAMES.has(name)) {
+    return handleAgentTool(name, args);
+  }
   switch (name) {
     case "scan":
       return toolScan(args);
