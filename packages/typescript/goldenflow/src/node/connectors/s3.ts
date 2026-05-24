@@ -11,8 +11,7 @@
 
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
-import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import type { Row } from "../../core/types.js";
 import { readFile, writeFile } from "./file.js";
 
@@ -86,16 +85,15 @@ export async function readS3(uri: string): Promise<Row[]> {
   const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const content = await streamToString(response.Body);
 
-  const tmpPath = join(tmpdir(), `goldenflow-${randomUUID()}${ext}`);
+  // mkdtempSync creates a uniquely-named, private (0700) directory — avoids
+  // the insecure predictable-name-in-world-readable-tmpdir pattern.
+  const tmpDir = mkdtempSync(join(tmpdir(), "goldenflow-"));
+  const tmpPath = join(tmpDir, `data${ext}`);
   writeFileSync(tmpPath, content);
   try {
     return readFile(tmpPath);
   } finally {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      /* best-effort cleanup */
-    }
+    rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
@@ -105,17 +103,14 @@ export async function writeS3(rows: readonly Row[], uri: string): Promise<void> 
   const [bucket, key] = parseS3Uri(uri);
   const ext = extname(key) || ".csv";
 
-  const tmpPath = join(tmpdir(), `goldenflow-${randomUUID()}${ext}`);
+  const tmpDir = mkdtempSync(join(tmpdir(), "goldenflow-"));
+  const tmpPath = join(tmpDir, `data${ext}`);
   writeFile(rows, tmpPath);
   let body: string;
   try {
     body = readFileSync(tmpPath, "utf-8");
   } finally {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      /* best-effort cleanup */
-    }
+    rmSync(tmpDir, { recursive: true, force: true });
   }
 
   const client = new S3Client();

@@ -241,11 +241,14 @@ export function startA2aServer(
           task.result = result;
           sendJson(res, 200, { id, status: "completed", result });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          // Log detail server-side; don't return exception/stack text to the
+          // client (CodeQL js/stack-trace-exposure).
+          // eslint-disable-next-line no-console
+          console.error("[goldenflow-a2a] skill failed:", err);
           task.status = "failed";
           task.completedAt = new Date().toISOString();
-          task.error = msg;
-          sendJson(res, 200, { id, status: "failed", error: msg });
+          task.error = "skill execution failed";
+          sendJson(res, 200, { id, status: "failed", error: "skill execution failed" });
         }
         return;
       }
@@ -271,8 +274,9 @@ export function startA2aServer(
 
       sendJson(res, 404, { error: `Not found: ${methodName} ${pathname}` });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sendJson(res, 500, { error: msg });
+      // eslint-disable-next-line no-console
+      console.error("[goldenflow-a2a] request error:", err);
+      sendJson(res, 500, { error: "internal server error" });
     }
   });
 
