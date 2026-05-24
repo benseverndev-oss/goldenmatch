@@ -208,6 +208,9 @@ importers:
       goldencheck-types:
         specifier: file:../../../.vendor/goldencheck-types-0.1.0.tgz
         version: file:.vendor/goldencheck-types-0.1.0.tgz
+      goldenmatch:
+        specifier: file:../../../.vendor/goldenmatch-2.0.0.tgz
+        version: file:.vendor/goldenmatch-2.0.0.tgz(better-sqlite3@11.10.0)(yaml@2.8.4)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -1545,6 +1548,50 @@ packages:
     resolution: {integrity: sha512-JscP1PxTyXtHDhay1RnpIp1Lg6mRPLLHi33CNUOr3BFV5Bd9pbzjQc3zOm/ifV00BkxNS2DicgNwXbvdTO9Zlg==, tarball: file:.vendor/goldencheck-types-0.1.0.tgz}
     version: 0.1.0
     engines: {node: '>=20'}
+
+  goldenmatch@file:.vendor/goldenmatch-2.0.0.tgz:
+    resolution: {integrity: sha512-P/WwDuHGrfbKEZYBjGg7jI4tZBXlnH1kpTzhvu05OyTg0d59HdraCeugPZ+Nuvgu8k/latenf2bZ8sJXMdKvuw==, tarball: file:.vendor/goldenmatch-2.0.0.tgz}
+    version: 2.0.0
+    engines: {node: '>=20'}
+    hasBin: true
+    peerDependencies:
+      '@huggingface/transformers': ^3.0.0
+      better-sqlite3: ^11.0.0
+      hnswlib-node: ^3.0.0
+      ink: ^5.0.0
+      ink-gradient: ^3.0.0
+      ink-select-input: ^6.0.0
+      ink-spinner: ^5.0.0
+      ink-table: ^3.1.0
+      ink-text-input: ^6.0.0
+      piscina: ^5.0.0
+      react: ^18.0.0
+      yaml: '*'
+    peerDependenciesMeta:
+      '@huggingface/transformers':
+        optional: true
+      better-sqlite3:
+        optional: true
+      hnswlib-node:
+        optional: true
+      ink:
+        optional: true
+      ink-gradient:
+        optional: true
+      ink-select-input:
+        optional: true
+      ink-spinner:
+        optional: true
+      ink-table:
+        optional: true
+      ink-text-input:
+        optional: true
+      piscina:
+        optional: true
+      react:
+        optional: true
+      yaml:
+        optional: true
 
   hasown@2.0.3:
     resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}
@@ -3721,6 +3768,13 @@ snapshots:
   goldencheck-types@file:.vendor/goldencheck-types-0.1.0.tgz:
     dependencies:
       js-yaml: 4.1.1
+
+  goldenmatch@file:.vendor/goldenmatch-2.0.0.tgz(better-sqlite3@11.10.0)(yaml@2.8.4):
+    dependencies:
+      commander: 13.1.0
+    optionalDependencies:
+      better-sqlite3: 11.10.0
+      yaml: 2.8.4
 
   hasown@2.0.3:
     dependencies:

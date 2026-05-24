@@ -45,7 +45,8 @@
     }
   },
   "bin": {
-    "infermap": "./dist/cli.cjs"
+    "infermap": "./dist/cli.cjs",
+    "infermap-mcp": "./dist/node/mcp/server.cjs"
   },
   "files": [
     "dist",
@@ -75,7 +76,8 @@
     "@duckdb/node-api": { "optional": true }
   },
   "dependencies": {
-    "goldencheck-types": "file:../../../.vendor/goldencheck-types-0.1.0.tgz"
+    "goldencheck-types": "file:../../../.vendor/goldencheck-types-0.1.0.tgz",
+    "goldenmatch": "file:../../../.vendor/goldenmatch-2.0.0.tgz"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

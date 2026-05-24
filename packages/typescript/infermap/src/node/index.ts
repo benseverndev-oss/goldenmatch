@@ -20,3 +20,16 @@ export type {
   DuckdbConnInfo,
   MysqlConnInfo,
 } from "./db/types.js";
+
+// InferMap -> Identity Graph bridge (depends on the goldenmatch IdentityStore).
+export {
+  writeAliasesFromMapping,
+  aliasWriteResultAsDict,
+  DEFAULT_ALIAS_KINDS,
+  DEFAULT_MIN_CONFIDENCE,
+} from "./identity.js";
+export type {
+  AliasWriteResult,
+  EntityIdResolver,
+  WriteAliasesOptions,
+} from "./identity.js";

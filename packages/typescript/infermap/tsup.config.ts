@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     "core/index": "src/core/index.ts",
     "node/index": "src/node/index.ts",
+    "node/mcp/server": "src/node/mcp/server.ts",
     cli: "src/cli.ts",
   },
   format: ["esm", "cjs"],
