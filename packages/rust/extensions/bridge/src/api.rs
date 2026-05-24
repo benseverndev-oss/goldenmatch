@@ -991,6 +991,556 @@ pub fn correction_list(
     })
 }
 
+// ─── Core-API parity (mirrors duckdb/core_apis.py) ───────────────────────
+//
+// Wrappers over goldenmatch's function-shaped core APIs so the Postgres
+// extension reaches parity with the DuckDB UDFs registered in
+// `goldenmatch_duckdb/core_apis.py`. The JSON in / JSON out contract is
+// IDENTICAL to the DuckDB side so the two backends are interchangeable.
+//
+// Fail-soft semantics: like the DuckDB UDFs, optional-dep / bad-input
+// failures return a `{"error": ...}` JSON object instead of raising, so a
+// malformed call doesn't abort a whole SQL query. The bridge converts an
+// internal `PyErr` into that JSON object rather than propagating a
+// `BridgeError` (whereas a true *initialisation* failure -- goldenmatch
+// not importable -- still surfaces as `BridgeError::PythonImport`).
+//
+// Table-input functions take a `rows_json` JSON array of record objects
+// (the Postgres layer reads its table via `row_to_json` SPI, exactly like
+// `goldenmatch_dedupe_table`). The DuckDB side reads the table itself; both
+// converge on the same `json_to_polars_df` path inside goldenmatch.
+
+/// Serialise an arbitrary Python object to a JSON string via `json.dumps`,
+/// using `default=str` so dataclasses-converted dicts / datetimes / Paths
+/// stay JSON-safe (mirrors the `default=str` in core_apis.py).
+fn py_json_dumps<'py>(py: Python<'py>, obj: Bound<'py, PyAny>) -> Result<String, BridgeError> {
+    let json_mod = py.import("json")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+    let s: String = json_mod
+        .call_method("dumps", (obj,), Some(&kwargs))?
+        .extract()?;
+    Ok(s)
+}
+
+/// Build a `{"error": "<msg>"}` JSON string (fail-soft contract).
+fn error_json(msg: &str) -> String {
+    // Re-use serde-free hand assembly with minimal escaping for quotes and
+    // backslashes so we never depend on a JSON lib in the error path.
+    let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("{{\"error\": \"{}\"}}", escaped)
+}
+
+/// Build a Polars DataFrame with the `__row_id__` column the probabilistic
+/// `train_em` / `score_probabilistic` functions index pairs by. Mirrors
+/// `core_apis._build_probabilistic_frame`: respects an existing
+/// `__row_id__`, otherwise adds a 0-based Int64 row index.
+fn build_probabilistic_frame<'py>(
+    py: Python<'py>,
+    rows_json: &str,
+) -> Result<Bound<'py, PyAny>, BridgeError> {
+    let pl = py.import("polars")?;
+    let io = py.import("io")?;
+    let string_io = io.call_method1("StringIO", (rows_json,))?;
+    let df = pl.call_method1("read_json", (string_io,))?;
+    let columns: Vec<String> = df.getattr("columns")?.extract()?;
+    if columns.iter().any(|c| c == "__row_id__") {
+        return Ok(df);
+    }
+    let df = df.call_method1("with_row_index", ("__row_id__",))?;
+    let int64 = pl.getattr("Int64")?;
+    let col = pl.call_method1("col", ("__row_id__",))?;
+    let cast = col.call_method1("cast", (int64,))?;
+    let df = df.call_method1("with_columns", (cast,))?;
+    Ok(df)
+}
+
+/// Wrap `goldenmatch.profile_dataframe` -- comprehensive table profile.
+///
+/// `rows_json` is a JSON array of record objects. Returns the profile report
+/// as a JSON object (or `{"error": ...}` on failure).
+pub fn profile_table(rows_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let report = gm.call_method1("profile_dataframe", (df,))?;
+            py_json_dumps(py, report)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.suggest_threshold` -- Otsu threshold over a JSON list of
+/// scores. Returns `None` (SQL NULL) when the distribution is unimodal or
+/// there are too few scores -- identical semantics to the core function and
+/// the DuckDB `null_handling="special"` registration.
+pub fn suggest_threshold(scores_json: &str) -> Result<Option<f64>, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<Option<f64>, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let json_mod = py.import("json")?;
+            let parsed = if scores_json.is_empty() {
+                py.import("builtins")?.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (scores_json,))?
+            };
+            // Coerce each element to float (mirrors `[float(s) for s in ...]`).
+            let builtins = py.import("builtins")?;
+            let floats = pyo3::types::PyList::empty(py);
+            for item in parsed.try_iter()? {
+                let f = builtins.call_method1("float", (item?,))?;
+                floats.append(f)?;
+            }
+            let out = gm.call_method1("suggest_threshold", (floats,))?;
+            if out.is_none() {
+                Ok(None)
+            } else {
+                Ok(Some(out.extract()?))
+            }
+        })();
+        // Bad input -> NULL (matches core_apis: `except: return None`).
+        Ok(result.unwrap_or(None))
+    })
+}
+
+/// Wrap `goldenmatch.core.domain.detect_domain` -- domain profile for a JSON
+/// list of column names. Returns the dataclass as a JSON object.
+pub fn detect_domain(columns_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let domain = py.import("goldenmatch.core.domain")?;
+            let dataclasses = py.import("dataclasses")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+            let parsed = if columns_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (columns_json,))?
+            };
+            // Coerce each element to str (mirrors `[str(c) for c in ...]`).
+            let columns = pyo3::types::PyList::empty(py);
+            for item in parsed.try_iter()? {
+                let s = builtins.call_method1("str", (item?,))?;
+                columns.append(s)?;
+            }
+            let profile = domain.call_method1("detect_domain", (columns,))?;
+            let dict = dataclasses.call_method1("asdict", (profile,))?;
+            py_json_dumps(py, dict)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap the three `extract_*_features` extractors. `kind` selects the
+/// extractor: `"product"` / `"electronics"` / `""` -> product;
+/// `"software"` -> software; `"biblio"` / `"bibliographic"` -> biblio.
+/// Mirrors `core_apis._extract_features` exactly, including its
+/// unknown-kind / missing-text error JSON.
+pub fn extract_features(text: &str, kind: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let domain = py.import("goldenmatch.core.domain")?;
+            let dataclasses = py.import("dataclasses")?;
+            let k = kind.trim().to_lowercase();
+            match k.as_str() {
+                "product" | "electronics" | "" => {
+                    let feats = domain.call_method1("extract_product_features", (text,))?;
+                    let dict = dataclasses.call_method1("asdict", (feats,))?;
+                    py_json_dumps(py, dict)
+                }
+                "software" => {
+                    let feats = domain.call_method1("extract_software_features", (text,))?;
+                    let dict = dataclasses.call_method1("asdict", (feats,))?;
+                    py_json_dumps(py, dict)
+                }
+                "biblio" | "bibliographic" => {
+                    // extract_biblio_features already returns a plain dict.
+                    let dict = domain.call_method1("extract_biblio_features", (text,))?;
+                    py_json_dumps(py, dict)
+                }
+                _ => Ok(error_json(&format!(
+                    "Unknown kind '{}'. Use 'product'/'electronics', 'software', or 'biblio'/'bibliographic'.",
+                    kind
+                ))),
+            }
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `evaluate_pairs` / `evaluate_clusters`. The first argument
+/// auto-selects by shape: a JSON array -> `evaluate_pairs`; a JSON object
+/// (`{cluster_id: {"members": [...]}}`) -> `evaluate_clusters`.
+/// `ground_truth_json` is a JSON array of `[a, b]` pairs. Returns the
+/// `EvalResult.summary()` dict.
+pub fn evaluate(pairs_json: &str, ground_truth_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+
+            let predicted = if pairs_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (pairs_json,))?
+            };
+            let gt_raw = if ground_truth_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (ground_truth_json,))?
+            };
+            // ground_truth = {(p[0], p[1]) for p in gt_raw}
+            let ground_truth = pyo3::types::PySet::empty(py)?;
+            for p in gt_raw.try_iter()? {
+                let p = p?;
+                let tuple = pyo3::types::PyTuple::new(py, [p.get_item(0)?, p.get_item(1)?])?;
+                ground_truth.add(tuple)?;
+            }
+
+            let is_dict = predicted.is_instance(&builtins.getattr("dict")?)?;
+            let eval_result = if is_dict {
+                // clusters = {int(k): v for k, v in predicted.items()}
+                let clusters = PyDict::new(py);
+                let items = predicted.call_method0("items")?;
+                for kv in items.try_iter()? {
+                    let kv = kv?;
+                    let k = builtins.call_method1("int", (kv.get_item(0)?,))?;
+                    clusters.set_item(k, kv.get_item(1)?)?;
+                }
+                gm.call_method1("evaluate_clusters", (clusters, ground_truth))?
+            } else {
+                // pairs = [(p[0], p[1], float(p[2]) if len(p) > 2 else 1.0) for p in predicted]
+                let pairs = pyo3::types::PyList::empty(py);
+                for p in predicted.try_iter()? {
+                    let p = p?;
+                    let len: usize = builtins.call_method1("len", (&p,))?.extract()?;
+                    let score = if len > 2 {
+                        builtins.call_method1("float", (p.get_item(2)?,))?
+                    } else {
+                        builtins.call_method1("float", (1.0f64,))?
+                    };
+                    let tuple =
+                        pyo3::types::PyTuple::new(py, [p.get_item(0)?, p.get_item(1)?, score])?;
+                    pairs.append(tuple)?;
+                }
+                gm.call_method1("evaluate_pairs", (pairs, ground_truth))?
+            };
+            let summary = eval_result.call_method0("summary")?;
+            py_json_dumps(py, summary)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.compare_clusters` -- CCMS comparison of two clusterings.
+/// Both args are JSON objects of `{cluster_id: {"members": [...]}}`. Returns
+/// the `CompareResult.summary()` dict.
+pub fn compare_clusters(a_json: &str, b_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+
+            let parse_int_keyed = |raw_json: &str| -> Result<Bound<'_, PyAny>, BridgeError> {
+                let parsed = if raw_json.is_empty() {
+                    builtins.call_method0("dict")?
+                } else {
+                    json_mod.call_method1("loads", (raw_json,))?
+                };
+                let out = PyDict::new(py);
+                let items = parsed.call_method0("items")?;
+                for kv in items.try_iter()? {
+                    let kv = kv?;
+                    let k = builtins.call_method1("int", (kv.get_item(0)?,))?;
+                    out.set_item(k, kv.get_item(1)?)?;
+                }
+                Ok(out.into_any())
+            };
+
+            let a = parse_int_keyed(a_json)?;
+            let b = parse_int_keyed(b_json)?;
+            let result = gm.call_method1("compare_clusters", (a, b))?;
+            let summary = result.call_method0("summary")?;
+            py_json_dumps(py, summary)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.core.validate.validate_dataframe` -- run validation
+/// rules over a table. `rows_json` is the table's records; `rules_json` is a
+/// JSON array of rule objects (`{"column", "rule_type", "params", "action"}`).
+/// Returns `{report, valid_rows, quarantine_rows, quarantine}` JSON.
+pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let validate_mod = py.import("goldenmatch.core.validate")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let rules_spec = if rules_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (rules_json,))?
+            };
+            let rule_cls = validate_mod.getattr("ValidationRule")?;
+            let rules = pyo3::types::PyList::empty(py);
+            for r in rules_spec.try_iter()? {
+                let r = r?;
+                let kwargs = PyDict::new(py);
+                kwargs.set_item("column", r.get_item("column")?)?;
+                kwargs.set_item("rule_type", r.get_item("rule_type")?)?;
+                let params = match r.call_method1("get", ("params",)) {
+                    Ok(p) if !p.is_none() => p,
+                    _ => PyDict::new(py).into_any(),
+                };
+                kwargs.set_item("params", params)?;
+                let action = match r.call_method1("get", ("action",)) {
+                    Ok(a) if !a.is_none() => a,
+                    _ => pyo3::types::PyString::new(py, "flag").into_any(),
+                };
+                kwargs.set_item("action", action)?;
+                rules.append(rule_cls.call((), Some(&kwargs))?)?;
+            }
+
+            let out = validate_mod.call_method1("validate_dataframe", (df, rules))?;
+            let valid_df = out.get_item(0)?;
+            let quarantine_df = out.get_item(1)?;
+            let report = out.get_item(2)?;
+
+            let result = PyDict::new(py);
+            result.set_item("report", report)?;
+            result.set_item("valid_rows", valid_df.getattr("height")?)?;
+            result.set_item("quarantine_rows", quarantine_df.getattr("height")?)?;
+            result.set_item("quarantine", quarantine_df.call_method0("to_dicts")?)?;
+            py_json_dumps(py, result.into_any())
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.auto_fix_dataframe` -- apply auto-fixes to a table.
+/// `rows_json` is the table's records. Returns `{fixes, fixed_rows, rows}`
+/// JSON.
+pub fn autofix_table(rows_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let out = gm.call_method1("auto_fix_dataframe", (df,))?;
+            let fixed_df = out.get_item(0)?;
+            let fixes = out.get_item(1)?;
+            let result = PyDict::new(py);
+            result.set_item("fixes", fixes)?;
+            result.set_item("fixed_rows", fixed_df.getattr("height")?)?;
+            result.set_item("rows", fixed_df.call_method0("to_dicts")?)?;
+            py_json_dumps(py, result.into_any())
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.detect_anomalies` -- flag suspicious records in a table.
+/// `rows_json` is the table's records; `sensitivity` is `"low"`/`"medium"`/
+/// `"high"` (empty -> `"medium"`). Returns the JSON array of anomaly dicts.
+pub fn detect_anomalies(rows_json: &str, sensitivity: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let sens = if sensitivity.is_empty() {
+                "medium"
+            } else {
+                sensitivity
+            };
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("sensitivity", sens)?;
+            let anomalies = gm.call_method("detect_anomalies", (df,), Some(&kwargs))?;
+            py_json_dumps(py, anomalies)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.core.autoconfig_verify.preflight` -- validate
+/// `(df, config)` before a run. `rows_json` is the table's records;
+/// `config_json` is a full `GoldenMatchConfig` JSON. Returns
+/// `{has_errors, config_was_modified, findings}` JSON.
+pub fn preflight(rows_json: &str, config_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let verify = py.import("goldenmatch.core.autoconfig_verify")?;
+            let dataclasses = py.import("dataclasses")?;
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let config = build_full_config(py, config_json)?;
+            let report = verify.call_method1("preflight", (df, config))?;
+
+            let findings = pyo3::types::PyList::empty(py);
+            for f in report.getattr("findings")?.try_iter()? {
+                findings.append(dataclasses.call_method1("asdict", (f?,))?)?;
+            }
+            let result = PyDict::new(py);
+            result.set_item("has_errors", report.getattr("has_errors")?)?;
+            result.set_item("config_was_modified", report.getattr("config_was_modified")?)?;
+            result.set_item("findings", findings)?;
+            py_json_dumps(py, result.into_any())
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap `goldenmatch.core.autoconfig_verify.postflight` -- post-run signal
+/// report for `(df, config)`. `postflight` needs `pair_scores`, which aren't
+/// in the table, so we derive them SQL-naturally: run `dedupe_df` on the
+/// table with the given config and feed its `scored_pairs` to `postflight`
+/// (identical to `core_apis._postflight`). Returns
+/// `{signals, adjustments, advisories}` JSON.
+pub fn postflight(rows_json: &str, config_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let gm = py.import("goldenmatch")?;
+            let verify = py.import("goldenmatch.core.autoconfig_verify")?;
+            let dataclasses = py.import("dataclasses")?;
+            let df = convert::json_to_polars_df(py, rows_json)?;
+            let config = build_full_config(py, config_json)?;
+
+            let dedupe_kwargs = PyDict::new(py);
+            dedupe_kwargs.set_item("config", config.clone())?;
+            let dedupe_result =
+                gm.call_method("dedupe_df", (df.clone_ref(py),), Some(&dedupe_kwargs))?;
+            let scored_pairs = dedupe_result.getattr("scored_pairs")?;
+
+            let post_kwargs = PyDict::new(py);
+            post_kwargs.set_item("pair_scores", scored_pairs)?;
+            let report =
+                verify.call_method("postflight", (df, config), Some(&post_kwargs))?;
+
+            let adjustments = pyo3::types::PyList::empty(py);
+            for a in report.getattr("adjustments")?.try_iter()? {
+                adjustments.append(dataclasses.call_method1("asdict", (a?,))?)?;
+            }
+            let result = PyDict::new(py);
+            result.set_item("signals", report.getattr("signals")?)?;
+            result.set_item("adjustments", adjustments)?;
+            result.set_item("advisories", report.getattr("advisories")?)?;
+            py_json_dumps(py, result.into_any())
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap Fellegi-Sunter `train_em`. `rows_json` is a JSON array of record
+/// objects (a small training set); `matchkey_json` is a probabilistic
+/// `MatchkeyConfig` JSON; `params_json` is an optional JSON object of
+/// train_em kwargs (`n_sample_pairs`, `max_iterations`, `convergence`,
+/// `seed`, `blocking_fields`; empty -> defaults). Returns the `EMResult` as
+/// JSON -- pass it straight to `score_probabilistic`.
+pub fn train_em(
+    rows_json: &str,
+    matchkey_json: &str,
+    params_json: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let schemas = py.import("goldenmatch.config.schemas")?;
+            let prob = py.import("goldenmatch.core.probabilistic")?;
+            let dataclasses = py.import("dataclasses")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+
+            let df = build_probabilistic_frame(py, rows_json)?;
+            let mk_cls = schemas.getattr("MatchkeyConfig")?;
+            let mk = mk_cls.call_method1("model_validate_json", (matchkey_json,))?;
+
+            let params = if params_json.is_empty() {
+                builtins.call_method0("dict")?
+            } else {
+                json_mod.call_method1("loads", (params_json,))?
+            };
+            let allowed = [
+                "n_sample_pairs",
+                "max_iterations",
+                "convergence",
+                "seed",
+                "blocking_fields",
+            ];
+            let kwargs = PyDict::new(py);
+            for key in allowed {
+                if let Ok(v) = params.get_item(key) {
+                    if !v.is_none() {
+                        kwargs.set_item(key, v)?;
+                    }
+                }
+            }
+            let em = prob.call_method("train_em", (df, mk), Some(&kwargs))?;
+            let dict = dataclasses.call_method1("asdict", (em,))?;
+            py_json_dumps(py, dict)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Wrap Fellegi-Sunter `score_probabilistic`. `rows_json` is a JSON array of
+/// record objects (the block to score); `matchkey_json` is the same
+/// probabilistic `MatchkeyConfig` used for training; `em_result_json` is the
+/// JSON produced by `train_em`. Returns a JSON array of `[a, b, score]`
+/// triples for pairs above the link threshold.
+pub fn score_probabilistic(
+    rows_json: &str,
+    matchkey_json: &str,
+    em_result_json: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let schemas = py.import("goldenmatch.config.schemas")?;
+            let prob = py.import("goldenmatch.core.probabilistic")?;
+            let json_mod = py.import("json")?;
+
+            let df = build_probabilistic_frame(py, rows_json)?;
+            let mk_cls = schemas.getattr("MatchkeyConfig")?;
+            let mk = mk_cls.call_method1("model_validate_json", (matchkey_json,))?;
+
+            let em_cls = prob.getattr("EMResult")?;
+            let em_dict = json_mod.call_method1("loads", (em_result_json,))?;
+            let em_kwargs = em_dict.downcast::<PyDict>().map_err(|e| {
+                BridgeError::PythonRuntime(format!("em_result_json must be a JSON object: {}", e))
+            })?;
+            let em = em_cls.call((), Some(em_kwargs))?;
+
+            let pairs = prob.call_method1("score_probabilistic", (df, mk, em))?;
+            // pairs is an iterable of (a, b, score) tuples -> JSON array of arrays.
+            let out = pyo3::types::PyList::empty(py);
+            for p in pairs.try_iter()? {
+                let p = p?;
+                let triple = pyo3::types::PyTuple::new(
+                    py,
+                    [p.get_item(0)?, p.get_item(1)?, p.get_item(2)?],
+                )?;
+                out.append(triple)?;
+            }
+            py_json_dumps(py, out.into_any())
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
