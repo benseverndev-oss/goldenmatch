@@ -1541,6 +1541,92 @@ pub fn score_probabilistic(
     })
 }
 
+// ─── GoldenFlow transforms (mirrors duckdb/goldenflow.py) ────────────────
+//
+// Single-value wrappers over `goldenflow.transforms.get_transform`, exposing
+// the same 8 transforms the DuckDB `goldenflow_*` UDFs register. The Postgres
+// extension layers 8 fixed-name scalar functions on top of this one generic
+// bridge fn.
+//
+// Fail-open contract (identical to the DuckDB UDF in
+// `goldenmatch_duckdb/goldenflow.py::_wrap_series_transform`): if goldenflow
+// (or polars) isn't importable, or the named transform is missing, or the
+// transform errors on the value, we return the *input value unchanged*
+// rather than raising. That keeps a `SELECT goldenflow_*(...)` query alive on
+// environments that didn't `pip install goldenflow`.
+
+/// Apply a single goldenflow Series-level transform to one string value.
+///
+/// `transform_name` is the underlying goldenflow registry key (e.g.
+/// `email_normalize`); `value` is the single input. Builds a 1-element
+/// `pl.Series`, dispatches through `goldenflow`'s transform registry, and
+/// unboxes the result -- the cheapest path to byte-equality with the DuckDB
+/// sibling and the Python transform itself.
+///
+/// **Fail-open**: returns `value` unchanged on ImportError / missing transform
+/// / any transform error. Never raises a `BridgeError` for those cases.
+pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        // fail-open closure: on any pyo3 error inside, fall back to the input.
+        let applied: Option<String> = (|| -> Result<Option<String>, BridgeError> {
+            // Lazy import: goldenflow + polars may be absent. Treat as
+            // pass-through (mirror the DuckDB `except ImportError: return value`).
+            let pl = match py.import("polars") {
+                Ok(m) => m,
+                Err(_) => return Ok(None),
+            };
+            let transforms = match py.import("goldenflow.transforms") {
+                Ok(m) => m,
+                Err(_) => return Ok(None),
+            };
+
+            let info = transforms.call_method1("get_transform", (transform_name,))?;
+            if info.is_none() {
+                return Ok(None); // unknown transform -> pass through
+            }
+
+            let mode: String = info.getattr("mode")?.extract()?;
+            let func = info.getattr("func")?;
+
+            // series = pl.Series([value])
+            let values = pyo3::types::PyList::new(py, [value])?;
+            let series = pl.call_method1("Series", (values,))?;
+
+            let out = match mode.as_str() {
+                "series" => func.call1((series,))?,
+                "expr" => {
+                    // expr-mode transforms take a column name; build a tiny
+                    // 1-col frame, apply, extract the column (mirror DuckDB).
+                    let frame_data = PyDict::new(py);
+                    frame_data.set_item("v", series)?;
+                    let df = pl.call_method1("DataFrame", (frame_data,))?;
+                    let expr = func.call1(("v",))?;
+                    let aliased = expr.call_method1("alias", ("v",))?;
+                    let df = df.call_method1("with_columns", (aliased,))?;
+                    df.get_item("v")?
+                }
+                // dataframe-mode -- not applicable to single-value calls.
+                _ => return Ok(None),
+            };
+
+            let result = out.get_item(0)?;
+            if result.is_none() {
+                // goldenflow produced NULL for this value -> pass input through.
+                // (Postgres side is STRICT, so a non-NULL in never maps to a
+                // NULL out via this path; preserve the input to be safe.)
+                return Ok(None);
+            }
+            let s: String = py.import("builtins")?.call_method1("str", (result,))?.extract()?;
+            Ok(Some(s))
+        })()
+        .unwrap_or(None);
+
+        Ok(applied.unwrap_or_else(|| value.to_string()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
