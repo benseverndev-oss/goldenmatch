@@ -56,8 +56,9 @@ npx vitest run tests/parity/        # parity-only suite
 - Memory mirror: `getMemory`, `addCorrection`, `learn`, `memoryStats`.
 - **Identity Graph (v0.8.0, edge-safe core):** `InMemoryIdentityStore`, `newEntityId`, `findByRecord`, `getEntity`, `listEntities`, `manualMerge`, `manualSplit`, `IdentityView`, types (`IdentityNode`, `SourceRecord`, `EvidenceEdge`, `IdentityEvent`, `IdentityAlias`, `IdentityStatus`, `EventKind`, `EdgeKind`, `IdentityStore`).
 - **Identity Graph (v0.9.0, persistent backend):** `SqliteIdentityStore` in `src/node/identity/`. Implements every `IdentityStore` method (19 total) against an SQLite file at `.goldenmatch/identity.db` (configurable). `better-sqlite3` is an optional peer dep. Schema is byte-identical to Python so cross-toolkit DBs round-trip.
-- MCP tool count: 24 (19 base + 5 memory). Description literal at `src/node/mcp/server.ts:7` — keep in sync via the existing regex test. Identity MCP tools will be added in v0.10 alongside the pipeline-driven `resolveClusters` hook.
+- MCP tool count: 30 (19 base + 5 memory + 6 identity). Description literal at `src/node/mcp/server.ts:7`. `tool_count` is derived from `TOOLS.length`, asserted dynamically in `tests/unit/mcp-server.test.ts` (no hardcoded count).
 - **MCP bin (v0.12.0):** `src/node/mcp/server.ts` is exposed as the `goldenmatch-mcp` bin (tsup entry `node/mcp/server`); it already had the JSON-RPC stdio loop (`startMcpServer`) — v0.12.0 added the shebang + `require.main` guard + bin wiring so it's directly runnable.
+- **Identity MCP tools (v0.13.0):** `src/node/mcp/identity-tools.ts` exposes the 6 identity tools (`identity_resolve`/`identity_list`/`identity_history`/`identity_conflicts`/`identity_merge`/`identity_split`) at parity with `goldenmatch/mcp/identity_tools.py`, composed into `TOOLS` and routed via `IDENTITY_TOOL_NAMES` in the server. snake_case wire format; backed by `SqliteIdentityStore` (test seam `__setIdentityStoreFactoryForTests` injects `InMemoryIdentityStore` so tests skip the better-sqlite3 peer dep).
 
 ## Build outputs
 - tsup with 5 entry points: `index`, `core/index`, `node/index`, `cli`, `node/backends/score-worker` (piscina worker).
