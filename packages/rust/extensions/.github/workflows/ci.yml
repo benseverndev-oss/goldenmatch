@@ -79,7 +79,7 @@ jobs:
         working-directory: postgres
         run: |
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
-          cp sql/goldenmatch_pg--0.1.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.5.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
 
       - name: Install goldenmatch for Postgres Python
         run: |

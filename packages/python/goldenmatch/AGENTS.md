@@ -212,7 +212,7 @@ Hosted on Railway, registered on Smithery:
 - Unicode box drawing chars (pipe/dash) crash on Windows cp1252 terminal -- use ASCII in benchmark scripts
 - GitHub release triggers publish workflow -- `twine upload --skip-existing` avoids double-publish errors
 - `discover_rulebooks()` returns all 7 packs -- domain match tests must accept retail alongside electronics (overlapping signals like "brand", "sku")
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must provide handwritten `sql/goldenmatch_pg--0.1.0.sql` manually
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must provide handwritten `sql/goldenmatch_pg--0.5.0.sql` manually
 - pgrx in workspace mode is broken -- postgres crate must be excluded from workspace (`exclude = ["postgres"]` in root Cargo.toml)
 - pgrx extension functions live in `goldenmatch` schema (per .control file) -- must use `goldenmatch.function_name()` or explicit `::TEXT` casts in psql
 - DuckDB UDFs cannot query the same connection they're called on (deadlock) -- use `con.cursor()` for table reads inside UDFs

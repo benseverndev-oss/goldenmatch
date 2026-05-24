@@ -256,5 +256,5 @@ WHERE a.id < b.id
 
 - Extension functions live in the `goldenmatch` schema -- use `goldenmatch.function_name()` or set `search_path`
 - Explicit `::TEXT` casts may be needed for some argument types in psql
-- pgrx does not auto-generate SQL files -- the extension uses handwritten SQL at `sql/goldenmatch_pg--0.1.0.sql`
+- pgrx does not auto-generate SQL files -- the extension uses handwritten SQL at `sql/goldenmatch_pg--0.5.0.sql`
 - See [goldenmatch-extensions](https://github.com/benseverndev-oss/goldenmatch-extensions) for full documentation and CI details

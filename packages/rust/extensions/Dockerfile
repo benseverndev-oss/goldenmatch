@@ -26,7 +26,7 @@ WORKDIR /build
 COPY . .
 WORKDIR /build/postgres
 RUN cargo pgrx install --pg-config=/usr/lib/postgresql/16/bin/pg_config --release
-RUN cp sql/goldenmatch_pg--0.1.0.sql /usr/share/postgresql/16/extension/
+RUN cp sql/goldenmatch_pg--0.5.0.sql /usr/share/postgresql/16/extension/
 
 # ── Final image ──
 FROM postgres:16-bookworm

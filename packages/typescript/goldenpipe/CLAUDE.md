@@ -13,8 +13,8 @@ Reads the edge-safe cores of the three siblings (confirm exported shapes in thei
 ## Layout
 
 - `src/core/**` — edge-safe (NO `node:` imports): `models.ts`, `columnContext.ts`, `decisions.ts`, `engine/{registry,resolver,router,runner,reporter}.ts`, `adapters/{load,check,flow,match,index}.ts`, `pipeline.ts`.
-- `src/node/**` — Node-only: `csv.ts` (hand-rolled CSV reader), `run.ts` (`run(source)` file path), `loadConfig.ts` (YAML via optional `yaml` peer dep).
-- `src/cli.ts` — commander CLI (`run`, `stages`, `validate`, `init`).
+- `src/node/**` — Node-only: `csv.ts` (hand-rolled CSV reader), `run.ts` (`run(source)` file path), `loadConfig.ts` (YAML via optional `yaml` peer dep), `mcp/server.ts` (hand-rolled JSON-RPC 2.0 stdio MCP server, `goldenpipe-mcp` bin), `a2a/server.ts` (node:http A2A agent, port 8250), `api/server.ts` (node:http REST API, port 8000).
+- `src/cli.ts` — commander CLI (`run`, `stages`, `validate`, `init`, `mcp-serve`, `agent-serve`, `serve`).
 
 ## Static registry, not entry points
 
@@ -23,7 +23,8 @@ Python discovers stages via importlib entry points. The TS port uses a STATIC re
 ## Deferred (document, don't silently drop)
 
 - `identity_resolve` stage (GoldenMatch Identity Graph pipeline population) and `infer_schema` stage (InferMap) — not ported.
-- FastAPI / A2A / MCP / TUI servers — not ported.
+- MCP / A2A / REST servers: PORTED (v0.2.0). `src/node/mcp/server.ts` exposes the same 4 tools as the Python sibling (`list_stages`, `validate_pipeline`, `run_pipeline`, `explain_pipeline`) over hand-rolled JSON-RPC stdio (no MCP SDK dep), wired to a `goldenpipe-mcp` bin + `goldenpipe-js mcp-serve`. `a2a/server.ts` (4 skills, `agent-serve`) and `api/server.ts` (`/health`, `/stages`, `/validate`, `/run`, `serve`) mirror the Python `a2a/server.py` + `api/server.py`. All three delegate to the MCP tool handler. MCP Streamable-HTTP transport is not ported (stdio only).
+- Textual TUI — not ported.
 - `severityGate` / `piiRouter` are effectively no-ops vs current GoldenCheck-JS output (no `"critical"` severity, no `"pii_detection"` check). Ported for structural parity only. `rowCountGate` works but is not wired into the default chain.
 
 ## Sibling skew artifacts

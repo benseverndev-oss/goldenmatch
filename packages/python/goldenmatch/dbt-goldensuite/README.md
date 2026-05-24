@@ -24,6 +24,19 @@ result = run_goldenmatch_dedupe(
 print(f"Deduped {result['input_rows']} -> {result['clusters']} clusters")
 ```
 
+## Macros
+
+This package ships macros only (no models/seeds/snapshots). They `adapter.dispatch()`
+between the Postgres and DuckDB extension function shapes:
+
+- **Dedupe materialization** -- `goldenmatch_dedupe` (`macros/materializations/`)
+- **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
+- **Learning memory** -- `file_field_correction`, `file_pair_correction`
+- **Quality gates (GoldenCheck)** -- `quality_assert`, `quality_health_gate`, `quality_not_empty`
+- **Transforms (GoldenFlow)** -- `transforms.sql`
+
 ## Status
 
-Early stage -- API may change. Full dbt materialization plugin coming soon.
+Early stage -- API may change. Covers GoldenMatch (dedupe + identity), GoldenCheck
+(quality gates), and GoldenFlow (transforms); goldenpipe orchestration and infermap
+mapping are not yet exposed as dbt macros.

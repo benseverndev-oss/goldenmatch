@@ -1,6 +1,6 @@
 {
   "name": "goldencheck",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Data validation that discovers rules from your data. TypeScript port of the goldencheck Python library.",
   "keywords": [
     "data-validation",
@@ -45,7 +45,8 @@
     }
   },
   "bin": {
-    "goldencheck-js": "./dist/cli.cjs"
+    "goldencheck-js": "./dist/cli.cjs",
+    "goldencheck-mcp": "./dist/node/mcp/server.cjs"
   },
   "files": [
     "dist",

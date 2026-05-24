@@ -68,7 +68,7 @@ fi
 
 ${NEED_SUDO} cp "${TMPDIR}/${PKG_NAME}/goldenmatch_pg.so" "${LIBDIR}/"
 ${NEED_SUDO} cp "${TMPDIR}/${PKG_NAME}/goldenmatch_pg.control" "${SHAREDIR}/"
-${NEED_SUDO} cp "${TMPDIR}/${PKG_NAME}/goldenmatch_pg--0.1.0.sql" "${SHAREDIR}/"
+${NEED_SUDO} cp "${TMPDIR}/${PKG_NAME}/goldenmatch_pg--0.5.0.sql" "${SHAREDIR}/"
 
 echo ""
 echo "=== Installation complete ==="

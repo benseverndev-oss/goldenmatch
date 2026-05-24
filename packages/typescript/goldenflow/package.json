@@ -1,6 +1,6 @@
 {
   "name": "goldenflow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Data transformation toolkit — standardize, reshape, and normalize messy data. TypeScript port of the goldenflow Python library.",
   "keywords": [
     "data-transformation",
@@ -45,7 +45,8 @@
     }
   },
   "bin": {
-    "goldenflow-js": "./dist/cli.cjs"
+    "goldenflow-js": "./dist/cli.cjs",
+    "goldenflow-mcp": "./dist/node/mcp/server.cjs"
   },
   "files": [
     "dist",

@@ -40,7 +40,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 - `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
-- SQL file at `sql/goldenmatch_pg--0.1.0.sql` -- handwritten (pgrx doesn't auto-generate)
+- SQL file at `sql/goldenmatch_pg--0.5.0.sql` -- handwritten (pgrx doesn't auto-generate)
 - .control file: `schema = goldenmatch` -- all functions in goldenmatch schema
 
 ### duckdb/ (goldenmatch-duckdb)
@@ -65,7 +65,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benzsevern/goldenmatc
 - Release workflow: builds .tar.gz + .deb + .rpm for PG 15/16/17, pushes Docker to ghcr.io + Docker Hub
 
 ## Gotchas
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.1.0.sql` manually
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.5.0.sql` manually
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts
 - `cargo` defaults CARGO_HOME to drive root on Windows when CWD is D: -- always set explicitly
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads
