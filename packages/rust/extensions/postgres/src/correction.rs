@@ -144,3 +144,31 @@ pub fn correction_list(
         Err(e) => pgrx::error!("goldenmatch correction_list: {}", e),
     }
 }
+
+/// Force a MemoryLearner pass over accumulated corrections. Returns a JSON
+/// object `{ "count": N, "adjustments": [...] }`. Needs >= 10 corrections per
+/// matchkey before threshold tuning fires; otherwise the list is empty.
+/// Read-mostly (writes learned adjustments back to the MemoryStore).
+#[pg_extern]
+pub fn memory_learn(
+    matchkey_name: pgrx::default!(Option<String>, "NULL"),
+    memory_path: pgrx::default!(Option<String>, "NULL"),
+) -> String {
+    let matchkey_name_s = matchkey_name.as_deref();
+    let memory_path_s = memory_path.as_deref();
+    match goldenmatch_bridge::api::memory_learn(matchkey_name_s, memory_path_s) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch memory_learn: {}", e),
+    }
+}
+
+/// Learning-memory status: total correction count, last learn time, and the
+/// current learned adjustments, as a JSON object. Cheap; safe for status checks.
+#[pg_extern]
+pub fn memory_stats(memory_path: pgrx::default!(Option<String>, "NULL")) -> String {
+    let memory_path_s = memory_path.as_deref();
+    match goldenmatch_bridge::api::memory_stats(memory_path_s) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch memory_stats: {}", e),
+    }
+}

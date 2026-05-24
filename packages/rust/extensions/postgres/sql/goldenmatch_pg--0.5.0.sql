@@ -462,6 +462,23 @@ CREATE FUNCTION "correction_list"(
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'correction_list_wrapper';
 
+-- Learning Memory: force a MemoryLearner pass; returns JSON
+-- { "count": N, "adjustments": [...] }. Needs >= 10 corrections per matchkey.
+CREATE FUNCTION "memory_learn"(
+    "matchkey_name" TEXT DEFAULT NULL,
+    "memory_path" TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'memory_learn_wrapper';
+
+-- Learning Memory status: JSON
+-- { "total_corrections": N, "last_learn_time": ISO|null, "adjustments": [...] }.
+CREATE FUNCTION "memory_stats"(
+    "memory_path" TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'memory_stats_wrapper';
+
 -- Read-only view over the correction store. Wraps `correction_list`
 -- with `json_array_elements` so callers can write SQL like
 -- `SELECT * FROM goldenmatch.corrections WHERE dataset = 'customers'`.
@@ -514,6 +531,12 @@ GRANT EXECUTE ON FUNCTION goldenmatch.correction_add(
 
 REVOKE EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) TO goldenmatch_correction_writer;
+
+-- memory_learn mutates the store (writes learned adjustments); gate it like
+-- correction_add. memory_stats is read-only status (counts + thresholds, no
+-- correction contents) and stays available to PUBLIC.
+REVOKE EXECUTE ON FUNCTION goldenmatch.memory_learn(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION goldenmatch.memory_learn(TEXT, TEXT) TO goldenmatch_correction_writer;
 GRANT SELECT ON goldenmatch.corrections TO goldenmatch_correction_writer;
 
 -- ─── GoldenFlow transforms (src/goldenflow.rs) ────────────────────────────

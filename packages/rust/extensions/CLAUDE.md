@@ -40,6 +40,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
+- `correction.rs` -- Learning Memory CRUD + tuning: `correction_add`, `correction_list`, plus `memory_learn` (force a MemoryLearner pass) and `memory_stats` (counts + learned adjustments). All wrap the bridge `goldenmatch_bridge::api::*`. `memory_learn` is REVOKEd from PUBLIC like `correction_add`; `memory_stats` is read-only status, left for PUBLIC.
 - SQL file at `sql/goldenmatch_pg--0.5.0.sql` -- handwritten (pgrx doesn't auto-generate)
 - .control file: `schema = goldenmatch` -- all functions in goldenmatch schema
 
@@ -51,7 +52,8 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - Table-reading UDFs use `con.cursor()` to avoid deadlock (UDF can't query same connection)
 - `goldenmatch_suggest_threshold` registers with `null_handling="special"` because it legitimately returns SQL NULL (unimodal / too-few-scores). Other UDFs that may "fail" return a JSON `{"error": ...}` string instead.
 - `functions.py` also registers the `gm_configure`/`gm_run`/`gm_jobs`/`gm_golden`/`gm_drop` job-management UDFs (in-memory dict equivalent of the Postgres `pipeline.rs` set) -- both backends expose these. Only the table-returning `gm_pairs`/`gm_clusters` remain Postgres-only; DuckDB returns JSON via `dedupe`/`dedupe_table` instead.
-- `goldenmatch_postflight` derives `pair_scores` by running `dedupe_df` on the table (postflight needs scored pairs that aren't in the table). PPRL (`pprl_link`, file-path args) and `run_sensitivity` (file_specs) are deferred as not SQL-natural.
+- `goldenmatch_postflight` derives `pair_scores` by running `dedupe_df` on the table (postflight needs scored pairs that aren't in the table).
+- `functions.py` also registers Learning Memory UDFs: `goldenmatch_correction_add`/`_list` (CRUD) + `goldenmatch_memory_learn` (MemoryLearner pass) + `goldenmatch_memory_stats` (status). Both backends expose all four. Tests: `tests/test_memory_learn_stats.py`.
 - Requires `pyarrow` for DuckDB `.pl()` Polars conversion
 
 ## Testing
@@ -96,6 +98,33 @@ DuckDB UDFs + Postgres pg_extern functions implementing the contract at
   tmp_path-seeded SQLite identity DB. Postgres-side is CI-only.
 - **Version bumps**: `goldenmatch-duckdb` 0.2.0 -> 0.3.0; pgrx
   `goldenmatch_pg` 0.3.0 -> 0.4.0.
+
+## SQL surface coverage + deferred-by-design
+
+Both backends expose the same function set (DuckDB UDFs <-> Postgres
+`pg_extern`, JSON in/JSON out): core scoring/dedupe/match, the 13 core-API
+parity functions, 8 `goldenflow_*` transforms, 5 read-only identity functions,
+job-management (`gm_*`), and Learning Memory (`correction_add`/`_list` +
+`memory_learn`/`memory_stats`).
+
+A sizeable slice of the Python `goldenmatch.__all__` is **intentionally not**
+exposed in SQL. These are deferred by design, not gaps -- the rationale:
+
+| Python capability | Why not SQL |
+|---|---|
+| PPRL (`pprl_link`, `run_pprl`, ...) | File-path / multi-party protocol args; not a single-table JSON-in/out shape. |
+| `run_sensitivity` | Takes `file_specs` (sweep over multiple input files). |
+| Streaming (`match_one`, `StreamProcessor`) | Stateful / incremental; SQL UDFs are stateless per call. |
+| LLM family (`llm_score_pairs`, `llm_cluster_pairs`, `llm_extract_features`) | Needs network + API keys; not safe/deterministic inside a SQL engine. |
+| boost / rerank (`boost_accuracy`, `rerank_top_pairs`) | Bootstraps a HuggingFace cross-encoder (model download); too heavy for a UDF. |
+| `run_graph_er` | Multi-table + relationship config; not a single-table call. |
+| Identity **writes** (`manual_merge`, `manual_split`, `resolve_clusters`) | SQL identity surface is read-only by design; writes go through the Python CLI / REST `/api/v1/identities/...` / MCP `identity_merge`/`identity_split`. |
+| `auto_map_columns` | InferMap schema mapping -- a separate package, not goldenmatch core. |
+| lineage / output writers (`build_lineage`, `write_output`, `generate_dedupe_report`) | Run-coupled / file-emitting; SQL callers get the data back directly and persist it themselves. |
+
+If a user genuinely needs one of these in SQL, add it to BOTH backends in
+lockstep (bridge fn + pgrx wrapper + handwritten SQL on the Postgres side;
+`functions.py` UDF on the DuckDB side) so the two stay interchangeable.
 
 ## Gotchas
 - pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.5.0.sql` manually

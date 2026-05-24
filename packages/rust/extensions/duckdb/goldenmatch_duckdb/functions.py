@@ -149,6 +149,18 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
         # dataset, memory_path
         ["VARCHAR", "VARCHAR"], "VARCHAR",
     )
+    # Learning Memory: learn (threshold tuning) + status. Read-mostly
+    # companions to correction_add/list, completing the memory SQL surface.
+    con.create_function(
+        "goldenmatch_memory_learn", _memory_learn,
+        # matchkey_name, memory_path
+        ["VARCHAR", "VARCHAR"], "VARCHAR",
+    )
+    con.create_function(
+        "goldenmatch_memory_stats", _memory_stats,
+        # memory_path
+        ["VARCHAR"], "VARCHAR",
+    )
 
     # ── GoldenFlow transforms (v0.5 of dbt-goldensuite, #465 Tier 1.1) ──
     # 8 UDFs wrapping goldenflow's series-level transforms. Safe to
@@ -705,3 +717,63 @@ def _correction_list(dataset: str, memory_path: str) -> str:
             "created_at": c.created_at.isoformat() if c.created_at else None,
         })
     return json.dumps(out)
+
+
+def _adjustment_to_dict(a: object) -> dict:
+    """Serialize a LearnedAdjustment to a JSON-friendly dict (snake_case)."""
+    learned_at = getattr(a, "learned_at", None)
+    return {
+        "matchkey_name": getattr(a, "matchkey_name", None),
+        "threshold": getattr(a, "threshold", None),
+        "field_weights": getattr(a, "field_weights", None),
+        "sample_size": getattr(a, "sample_size", None),
+        "learned_at": learned_at.isoformat() if learned_at else None,
+    }
+
+
+def _memory_learn(matchkey_name: str, memory_path: str) -> str:
+    """Force a MemoryLearner pass over accumulated corrections.
+
+    Returns JSON ``{"count": N, "adjustments": [...]}``. Needs >= 10
+    corrections per matchkey before threshold tuning fires; otherwise the
+    adjustments list is empty. Mirrors the bridge ``memory_learn``.
+    """
+    try:
+        from goldenmatch.core.memory.learner import MemoryLearner
+        from goldenmatch.core.memory.store import MemoryStore
+    except ImportError as exc:  # pragma: no cover
+        return json.dumps({"error": f"goldenmatch import failed: {exc}"})
+    path = memory_path or ".goldenmatch/memory.db"
+    mk = matchkey_name or None
+    try:
+        with MemoryStore(backend="sqlite", path=path) as store:
+            adjustments = list(MemoryLearner(store).learn(mk))
+    except Exception as exc:
+        return json.dumps({"error": f"MemoryLearner failed: {exc}"})
+    out = [_adjustment_to_dict(a) for a in adjustments]
+    return json.dumps({"count": len(out), "adjustments": out})
+
+
+def _memory_stats(memory_path: str) -> str:
+    """Learning Memory status: total corrections, last learn time, adjustments.
+
+    Returns JSON ``{"total_corrections": N, "last_learn_time": ISO|null,
+    "adjustments": [...]}``. Cheap; safe for status checks.
+    """
+    try:
+        from goldenmatch.core.memory.store import MemoryStore
+    except ImportError as exc:  # pragma: no cover
+        return json.dumps({"error": f"goldenmatch import failed: {exc}"})
+    path = memory_path or ".goldenmatch/memory.db"
+    try:
+        with MemoryStore(backend="sqlite", path=path) as store:
+            total = store.count_corrections()
+            last = store.last_learn_time()
+            adjustments = list(store.get_all_adjustments())
+    except Exception as exc:
+        return json.dumps({"error": f"MemoryStore read failed: {exc}"})
+    return json.dumps({
+        "total_corrections": total,
+        "last_learn_time": last.isoformat() if last else None,
+        "adjustments": [_adjustment_to_dict(a) for a in adjustments],
+    })
