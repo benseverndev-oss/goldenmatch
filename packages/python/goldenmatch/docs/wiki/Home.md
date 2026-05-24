@@ -33,6 +33,7 @@ goldenmatch setup
 | [LLM Boost](LLM-Boost.md) | Claude/GPT-4 labeling + fine-tuning |
 | [Learning Memory](Learning-Memory) | Persistent corrections + threshold learning (v1.6.0) |
 | [dbt Integration](dbt-Integration.md) | Post-hooks, Postgres sync, Snowflake/BigQuery recipes |
+| [SQL Extensions](SQL-Extensions.md) | SQL-native ER for Postgres + DuckDB: 13 core-API functions + 8 GoldenFlow transforms at parity |
 
 ## Reference
 

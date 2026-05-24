@@ -5,12 +5,20 @@
 | `01-quickstart.ts` | 30-second dedupe of a record array | `goldenmatch` |
 | `02-edge-runtime.ts` | Vercel Edge / Cloudflare Workers route. Uses `goldenmatch/core` (no `node:*` imports). | `goldenmatch/core` |
 | `03-mcp-client.ts` | Connect to the `goldensuite-mcp` container from a TS MCP client. | `@modelcontextprotocol/sdk` |
+| `04-goldenpipe-orchestration.ts` | Chain check -> flow -> dedupe through the `goldenpipe` orchestrator via `runDf` (zero-config + custom config). | `goldenpipe` |
 
 ## Run
 
 ```bash
 npm install goldenmatch
 npx tsx examples/typescript/01-quickstart.ts
+```
+
+For 04, install the orchestrator (it pulls the three siblings as deps):
+
+```bash
+npm install goldenpipe
+npx tsx examples/typescript/04-goldenpipe-orchestration.ts
 ```
 
 For 03, spin up the master MCP server first:

@@ -34,11 +34,20 @@ SELECT goldenmatch_explain(
 ```
 goldenmatch-extensions/
 ├── bridge/     # Shared Rust crate: embeds Python via pyo3, calls goldenmatch
-├── postgres/   # PostgreSQL extension via pgrx
-└── duckdb/     # DuckDB extension (planned)
+├── postgres/   # PostgreSQL extension via pgrx  -> postgres/README.md
+└── duckdb/     # DuckDB Python UDF package      -> duckdb/README.md
 ```
 
-The extension embeds a CPython interpreter via [pyo3](https://pyo3.rs/) and calls the GoldenMatch Python package. Data flows through Apache Arrow for efficient interchange.
+The Postgres extension embeds a CPython interpreter via [pyo3](https://pyo3.rs/) and calls the GoldenMatch Python package; data flows through Apache Arrow for efficient interchange. The DuckDB layer is a Python UDF package (`pip install goldenmatch-duckdb`) that registers the same functions via `con.create_function()`.
+
+## Backend parity
+
+Both backends now expose the **same surface**. On top of the original dedupe / match / score / identity functions, each ships:
+
+- **13 core-API functions** (`goldenmatch_profile_table`, `_suggest_threshold`, `_detect_domain`, `_extract_features`, `_evaluate`, `_compare_clusters`, `_validate_table`, `_autofix_table`, `_detect_anomalies`, `_preflight`, `_postflight`, `_train_em`, `_score_probabilistic`) -- thin wrappers over GoldenMatch's public core APIs with an **identical JSON in / JSON out contract**, so a call written for one backend ports to the other.
+- **8 GoldenFlow transforms** (`goldenflow_normalize_email`/`_phone`/`_date`/`_name_proper`, `goldenflow_canonicalize_url`/`_address`, `goldenflow_strip`, `goldenflow_whitespace_normalize`) -- scalar text -> text, byte-equivalent across backends, fail-open when `goldenflow` isn't installed.
+
+See [`postgres/README.md`](postgres/README.md) and [`duckdb/README.md`](duckdb/README.md) for the full per-backend function catalogs and `examples/sql/` (in the monorepo root) for runnable snippets.
 
 ## Installation
 
@@ -147,10 +156,11 @@ Config is a JSON object with optional keys:
 
 ## Roadmap
 
-- **v0.1.0** -- PostgreSQL quick-start functions (current)
+- **v0.1.0** -- PostgreSQL quick-start functions
 - **v0.2.0** -- Pipeline schema (`goldenmatch.configure()`, `goldenmatch.run()`, job management)
-- **v0.3.0** -- DuckDB extension
-- **v0.4.0** -- Distribution: Trunk, Docker, pre-built binaries
+- **v0.3.0** -- DuckDB extension (shipped)
+- **v0.4.0** -- Distribution: Docker, pre-built binaries (`.deb` / `.rpm` / `.tar.gz`)
+- **Now** -- Postgres <-> DuckDB parity: 13 core-API functions + 8 GoldenFlow transforms on both backends
 
 ## License
 
