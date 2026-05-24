@@ -157,6 +157,15 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.goldenflow import register_goldenflow_functions
     register_goldenflow_functions(con)
 
+    # ── Core-API parity UDFs ──────────────────────────────────────────────
+    # 13 UDFs wrapping goldenmatch's function-shaped core APIs that were
+    # already public but not yet exposed in SQL (profiling, threshold,
+    # domain extraction, evaluation, cluster comparison, data-quality,
+    # autoconfig verify, Fellegi-Sunter). Pure-Python wrappers that import
+    # `goldenmatch` directly; see `core_apis.py`.
+    from goldenmatch_duckdb.core_apis import register_core_api_functions
+    register_core_api_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 

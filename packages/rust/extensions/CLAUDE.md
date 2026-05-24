@@ -45,8 +45,12 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 
 ### duckdb/ (goldenmatch-duckdb)
 - Python package: `pip install goldenmatch-duckdb`
-- `functions.py` -- registers 7 DuckDB UDFs via `con.create_function()`
+- `functions.py` -- registers the core DuckDB UDFs via `con.create_function()`, then delegates to `goldenflow.py::register_goldenflow_functions` and `core_apis.py::register_core_api_functions`
+- `goldenflow.py` -- 8 goldenflow series-transform UDFs (fail-open if goldenflow not installed)
+- `core_apis.py` -- 13 parity UDFs wrapping goldenmatch's function-shaped core APIs (`goldenmatch_profile_table`, `goldenmatch_suggest_threshold`, `goldenmatch_detect_domain`, `goldenmatch_extract_features`, `goldenmatch_evaluate`, `goldenmatch_compare_clusters`, `goldenmatch_validate_table`, `goldenmatch_autofix_table`, `goldenmatch_detect_anomalies`, `goldenmatch_preflight`, `goldenmatch_postflight`, `goldenmatch_train_em`, `goldenmatch_score_probabilistic`). Pure-Python wrappers (import `goldenmatch` directly), JSON in/JSON out, fail-soft to `{"error": ...}`. Tests: `tests/test_core_apis.py`
 - Table-reading UDFs use `con.cursor()` to avoid deadlock (UDF can't query same connection)
+- `goldenmatch_suggest_threshold` registers with `null_handling="special"` because it legitimately returns SQL NULL (unimodal / too-few-scores). Other UDFs that may "fail" return a JSON `{"error": ...}` string instead.
+- `goldenmatch_postflight` derives `pair_scores` by running `dedupe_df` on the table (postflight needs scored pairs that aren't in the table). The Postgres-only table-returning `gm_pairs`/`gm_clusters` are NOT ported -- DuckDB returns JSON via `dedupe`/`dedupe_table` instead. PPRL (`pprl_link`, file-path args) and `run_sensitivity` (file_specs) are deferred as not SQL-natural.
 - Requires `pyarrow` for DuckDB `.pl()` Polars conversion
 
 ## Testing
