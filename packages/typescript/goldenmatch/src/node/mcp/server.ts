@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * mcp/server.ts -- GoldenMatch MCP server (stdio transport, JSON-RPC).
  *
@@ -958,3 +959,17 @@ export function startMcpServer(): void {
 // Re-export for callers that want to pre-warm / test
 export { readFileSync, isAbsolute };
 export { writeJson };
+
+// Run as a bin when invoked directly (the `goldenmatch-mcp` entry point).
+// tsup compiles this to dist/node/mcp/server.{js,cjs}; the cjs build is the bin.
+const isMain = (() => {
+  try {
+    return typeof require !== "undefined" && require.main === module;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  startMcpServer();
+}

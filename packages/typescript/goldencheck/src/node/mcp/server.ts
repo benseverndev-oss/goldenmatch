@@ -1,8 +1,11 @@
+#!/usr/bin/env node
 /**
  * MCP server — exposes GoldenCheck tools for Claude Desktop and other MCP clients.
- * Port of goldencheck/mcp/server.py. Node-only (uses MCP SDK).
+ * Port of goldencheck/mcp/server.py. Node-only: hand-rolled JSON-RPC 2.0 over
+ * stdio (node:readline; no MCP SDK dep), mirroring the sibling TS servers.
  */
 
+import { createInterface } from "node:readline";
 import { readFile } from "../reader.js";
 import { scanData, type ScanOptions } from "../../core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../core/engine/confidence.js";
@@ -251,4 +254,106 @@ function toolGetDomainInfo(args: Record<string, unknown>): object {
     typesInfo[name] = { name_hints: def.nameHints, suppress: def.suppress };
   }
   return { name: domain, types: typesInfo };
+}
+
+// ---------------------------------------------------------------------------
+// JSON-RPC over stdio
+// ---------------------------------------------------------------------------
+
+interface JsonRpcRequest {
+  jsonrpc?: string;
+  id?: number | string | null;
+  method?: string;
+  params?: Record<string, unknown>;
+}
+
+function writeMessage(msg: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+/**
+ * Start the MCP server reading JSON-RPC messages one per line from stdin and
+ * writing responses to stdout (stdio transport for Claude Desktop / any MCP
+ * client). `handleTool` returns an object, serialized as the text content.
+ */
+export function startMcpServer(): void {
+  const rl = createInterface({ input: process.stdin, terminal: false });
+
+  rl.on("line", (line: string) => {
+    if (line.trim() === "") return;
+    let req: JsonRpcRequest;
+    try {
+      req = JSON.parse(line) as JsonRpcRequest;
+    } catch (err) {
+      console.warn("MCP parse error:", err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    const id = req.id ?? null;
+    try {
+      if (req.method === "initialize") {
+        writeMessage({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2024-11-05",
+            serverInfo: { name: "goldencheck", version: "0.3.0" },
+            capabilities: { tools: {} },
+          },
+        });
+        return;
+      }
+
+      if (req.method === "tools/list") {
+        writeMessage({ jsonrpc: "2.0", id, result: { tools: TOOL_DEFINITIONS } });
+        return;
+      }
+
+      if (req.method === "tools/call") {
+        const params = req.params ?? {};
+        const toolName = String(params["name"] ?? "");
+        const toolArgs = (params["arguments"] as Record<string, unknown> | undefined) ?? {};
+        const result = handleTool(toolName, toolArgs);
+        writeMessage({
+          jsonrpc: "2.0",
+          id,
+          result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] },
+        });
+        return;
+      }
+
+      if (
+        req.method === "notifications/initialized" ||
+        req.method === "notifications/cancelled"
+      ) {
+        return;
+      }
+
+      writeMessage({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Method not found: ${req.method}` },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeMessage({ jsonrpc: "2.0", id, error: { code: -32603, message: msg } });
+    }
+  });
+
+  rl.on("close", () => {
+    process.exit(0);
+  });
+}
+
+// Run as a bin when invoked directly (the `goldencheck-mcp` entry point).
+const isMain = (() => {
+  try {
+    return typeof require !== "undefined" && require.main === module;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  startMcpServer();
 }

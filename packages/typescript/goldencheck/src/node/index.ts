@@ -13,7 +13,7 @@ export { readFile, readCsv, type ReadOptions } from "./reader.js";
 export { watchDirectory, type WatchOptions } from "./watcher.js";
 
 // Node-only: MCP server
-export { TOOL_DEFINITIONS, handleTool } from "./mcp/server.js";
+export { TOOL_DEFINITIONS, handleTool, startMcpServer } from "./mcp/server.js";
 
 // Node-only: TUI renderer
 export { renderTui } from "./tui/app.js";

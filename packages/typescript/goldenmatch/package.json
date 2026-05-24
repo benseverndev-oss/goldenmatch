@@ -1,6 +1,6 @@
 {
   "name": "goldenmatch",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Entity resolution toolkit — deduplicate, match, and create golden records",
   "type": "module",
   "exports": {
@@ -8,7 +8,7 @@
     "./core": { "types": "./dist/core/index.d.ts", "import": "./dist/core/index.js", "require": "./dist/core/index.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
-  "bin": { "goldenmatch-js": "./dist/cli.cjs" },
+  "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },
   "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
   "engines": { "node": ">=20" },
   "scripts": {

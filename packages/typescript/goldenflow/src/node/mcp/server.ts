@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * GoldenFlow MCP Server — 10 tools for data transformation via stdio transport.
  * Node-only module.
@@ -5,6 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
+import { createInterface } from "node:readline";
 import { readFile } from "../connectors/file.js";
 
 /** Validate a file path to prevent path traversal. Resolves relative to cwd. */
@@ -302,4 +304,107 @@ function _handleToolInner(name: string, arguments_: Record<string, unknown>): st
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
+}
+
+// ---------------------------------------------------------------------------
+// JSON-RPC over stdio
+// ---------------------------------------------------------------------------
+
+interface JsonRpcRequest {
+  jsonrpc?: string;
+  id?: number | string | null;
+  method?: string;
+  params?: Record<string, unknown>;
+}
+
+function writeMessage(msg: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+/**
+ * Start the MCP server reading JSON-RPC messages one per line from stdin and
+ * writing responses to stdout (stdio transport for Claude Desktop / any MCP
+ * client). `handleTool` already returns a JSON string, so it's embedded as the
+ * text content directly.
+ */
+export function startMcpServer(): void {
+  const rl = createInterface({ input: process.stdin, terminal: false });
+
+  rl.on("line", (line: string) => {
+    if (line.trim() === "") return;
+    let req: JsonRpcRequest;
+    try {
+      req = JSON.parse(line) as JsonRpcRequest;
+    } catch (err) {
+      console.warn("MCP parse error:", err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    const id = req.id ?? null;
+    try {
+      if (req.method === "initialize") {
+        writeMessage({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2024-11-05",
+            serverInfo: { name: "goldenflow", version: "0.3.0" },
+            capabilities: { tools: {} },
+          },
+        });
+        return;
+      }
+
+      if (req.method === "tools/list") {
+        writeMessage({ jsonrpc: "2.0", id, result: { tools: TOOL_DEFINITIONS } });
+        return;
+      }
+
+      if (req.method === "tools/call") {
+        const params = req.params ?? {};
+        const toolName = String(params["name"] ?? "");
+        const toolArgs = (params["arguments"] as Record<string, unknown> | undefined) ?? {};
+        const text = handleTool(toolName, toolArgs);
+        writeMessage({
+          jsonrpc: "2.0",
+          id,
+          result: { content: [{ type: "text", text }] },
+        });
+        return;
+      }
+
+      if (
+        req.method === "notifications/initialized" ||
+        req.method === "notifications/cancelled"
+      ) {
+        return;
+      }
+
+      writeMessage({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Method not found: ${req.method}` },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeMessage({ jsonrpc: "2.0", id, error: { code: -32603, message: msg } });
+    }
+  });
+
+  rl.on("close", () => {
+    process.exit(0);
+  });
+}
+
+// Run as a bin when invoked directly (the `goldenflow-mcp` entry point).
+const isMain = (() => {
+  try {
+    return typeof require !== "undefined" && require.main === module;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  startMcpServer();
 }
