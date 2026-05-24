@@ -29,6 +29,7 @@ PYPI_PACKAGES = [
 NPM_PACKAGES = [
     "goldenmatch",
     "goldencheck",
+    "goldenpipe",
     "goldenflow",
     "infermap",
     "goldencheck-types",

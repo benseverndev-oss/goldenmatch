@@ -107,9 +107,9 @@ flowchart LR
 | Package | Lang | What it does | Install |
 |---|---|---|---|
 | **[GoldenMatch](packages/python/goldenmatch/README.md)** 🟡 | Python · TS | Zero-config entity resolution. Fuzzy + exact + probabilistic + LLM. Headline package. | `pip install goldenmatch` · `npm i goldenmatch` |
-| **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS types | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` |
-| **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` |
-| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python | Orchestrator that wires Check → Flow → Match into one declarative pipeline. | `pip install goldenpipe` |
+| **[GoldenCheck](packages/python/goldencheck/README.md)** | Python · TS | Data-quality scanning: encoding, Unicode, format validation, anomaly detection. | `pip install goldencheck` · `npm i goldencheck` |
+| **[GoldenFlow](packages/python/goldenflow/README.md)** | Python · TS | Transforms & standardizers: phone, date, address, categorical normalization. | `pip install goldenflow` · `npm i goldenflow` |
+| **[GoldenPipe](packages/python/goldenpipe/README.md)** | Python · TS | Orchestrator that wires Check → Flow → Match into one declarative pipeline. | `pip install goldenpipe` · `npm i goldenpipe` |
 | **[InferMap](packages/python/infermap/README.md)** | Python · TS | Schema mapping engine — auto-aligns columns across heterogeneous sources. | `pip install infermap` · `npm i infermap` |
 | **[goldenmatch-extensions](packages/rust/extensions/README.md)** | Rust | Postgres extension (pgrx) + DuckDB UDFs. SQL-native fuzzy matching. | source build |
 | **[dbt-goldensuite](packages/python/goldenmatch/dbt-goldensuite/README.md)** | dbt · Python | dbt package — quality-gate tests, correction CRUD macros + GoldenCheck assertions for warehouse models. | `pip install dbt-goldensuite` |
@@ -259,7 +259,7 @@ GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers
 }
 ```
 
-35+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, and manage Learning Memory corrections.
+36+ MCP tools across the suite: deduplicate, match, explain, review, link privately, configure, scan quality, transform, synthesize golden records, and manage Learning Memory corrections.
 
 ---
 
@@ -336,14 +336,15 @@ goldenmatch/
 ├── docs/superpowers/         # design specs and implementation plans
 ├── justfile                  # install / test / lint / build, all languages
 ├── pyproject.toml            # uv workspace (root)
-├── package.json              # per-package npm (Windows-symlink-safe; no root workspace)
+├── pnpm-workspace.yaml       # TypeScript pnpm workspace (Turborepo)
+├── package.json              # root scripts + pnpm workspace root
 └── .github/workflows/ci.yml
 ```
 
-### Why no root Cargo or npm workspace?
+### Workspaces (Cargo vs pnpm)
 
-- **Cargo:** `packages/rust/extensions/` is itself a Cargo workspace (the `postgres` crate is excluded for pgrx-specific build requirements). Cargo doesn't allow nested workspaces sharing members. Cargo commands run from inside `packages/rust/extensions/`.
-- **npm:** A real npm workspace causes Windows symlink issues for some users. Each TypeScript package installs independently. The root `package.json` provides convenience scripts (`install:all`, `test:all`, `build:all`) but isn't a workspace.
+- **Cargo — no root workspace.** `packages/rust/extensions/` is itself a Cargo workspace (the `postgres` crate is excluded for pgrx-specific build requirements). Cargo doesn't allow nested workspaces sharing members, so Cargo commands run from inside `packages/rust/extensions/`.
+- **TypeScript — a single pnpm workspace.** `packages/typescript/*` form one pnpm + Turborepo workspace (see [TypeScript dev setup](#typescript-dev-setup-pnpm--turborepo)). `.npmrc` pins `node-linker=hoisted`, giving a flat `node_modules` that avoids the Windows symlink issues an earlier per-package layout hit.
 
 ### Build / test / lint everything
 
