@@ -1,0 +1,82 @@
+name: Publish goldencheck to npm
+
+on:
+  push:
+    tags:
+      - "goldencheck-js-v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      dry-run:
+        description: "Pack and validate without publishing"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/typescript/goldencheck
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093  # v6.0.8
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - name: Install dependencies
+        working-directory: ${{ github.workspace }}
+        run: pnpm install --frozen-lockfile
+
+      # goldencheck depends on goldencheck-types (workspace:^); it must be built
+      # before goldencheck's typecheck/test/build resolve its dist entrypoint.
+      - name: Build workspace deps
+        working-directory: ${{ github.workspace }}
+        run: pnpm turbo run build --filter=goldencheck^...
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: pnpm exec vitest run
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/goldencheck-js-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/goldencheck-js-v}"
+          PKG_VERSION=$(jq -r .version package.json)
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VERSION"
+
+      - name: Pack (dry-run validation)
+        if: github.event.inputs.dry-run == 'true'
+        # pnpm pack always writes a .tgz; running it in dry-run validates the
+        # package can be packed cleanly (file list, entry points, version)
+        # without publishing. The artifact is discarded on job teardown.
+        run: pnpm pack
+
+      - name: Publish to npm
+        if: github.event.inputs.dry-run != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --access public --provenance --no-git-checks

@@ -102,6 +102,9 @@ importers:
       commander:
         specifier: ^13.0.0
         version: 13.1.0
+      goldencheck-types:
+        specifier: workspace:^
+        version: link:../goldencheck-types
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
