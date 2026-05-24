@@ -4,7 +4,7 @@ Spec: docs/superpowers/specs/2026-05-22-phase-3-a2a-dbt-design.md
 
 Covers:
 - 3.1 A2A add_correction skill (pair + field shapes; validation)
-- 3.2 dbt-goldenmatch apply_field_corrections (overrides golden values
+- 3.2 dbt-goldensuite apply_field_corrections (overrides golden values
       from MemoryStore field-level corrections)
 """
 from __future__ import annotations
@@ -15,13 +15,13 @@ import pytest
 
 # Skip the whole module up-front when optional extras aren't installed:
 # - aiohttp -- gated by goldenmatch[agent] extra
-# - dbt_goldenmatch -- subpackage not installed in main CI lane
+# - dbt_goldensuite -- subpackage not installed in main CI lane
 try:
     import aiohttp  # noqa: F401
-    import dbt_goldenmatch  # noqa: F401
+    import dbt_goldensuite  # noqa: F401
 except ImportError:
     pytest.skip(
-        "aiohttp or dbt_goldenmatch not installed",
+        "aiohttp or dbt_goldensuite not installed",
         allow_module_level=True,
     )
 
@@ -124,14 +124,14 @@ def test_a2a_add_correction_invalid_decision(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 3.2 dbt-goldenmatch apply_field_corrections
+# 3.2 dbt-goldensuite apply_field_corrections
 # ---------------------------------------------------------------------------
 
 
 def test_dbt_apply_field_corrections_no_memory_store(tmp_path: Path):
     """When memory_db_path doesn't exist, macro is a no-op pass-through."""
     import duckdb
-    from dbt_goldenmatch.corrections import apply_field_corrections
+    from dbt_goldensuite.corrections import apply_field_corrections
 
     conn = duckdb.connect(":memory:")
     conn.execute(
@@ -152,7 +152,7 @@ def test_dbt_apply_field_corrections_no_memory_store(tmp_path: Path):
 
 def test_dbt_apply_field_corrections_overrides_field(tmp_path: Path):
     import duckdb
-    from dbt_goldenmatch.corrections import apply_field_corrections
+    from dbt_goldensuite.corrections import apply_field_corrections
     from goldenmatch.core.memory.store import Correction, MemoryStore
 
     # Seed a field-level correction in MemoryStore.
@@ -203,7 +203,7 @@ def test_dbt_apply_field_corrections_unanchorable_cluster_id(tmp_path: Path):
     """Correction with cluster_id not in the golden table -> counted as
     unanchorable, doesn't fail the run."""
     import duckdb
-    from dbt_goldenmatch.corrections import apply_field_corrections
+    from dbt_goldensuite.corrections import apply_field_corrections
     from goldenmatch.core.memory.store import Correction, MemoryStore
 
     db_path = str(tmp_path / "m.db")

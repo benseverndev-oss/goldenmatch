@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbt-goldensuite"
+version = "0.2.0"
+description = "dbt integration for the Golden Suite: entity resolution (goldenmatch) + data quality (goldencheck) + transforms (goldenflow)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+    "goldenmatch>=0.3.0",
+    "dbt-core>=1.7",
+    "duckdb>=0.9",
+]
+
+[project.optional-dependencies]
+# v0.2 (#dbt-suite-expand): goldencheck quality-gate macros call into
+# the goldencheck Python package. Optional dep so dbt-goldensuite
+# consumers who only want correction CRUD don't have to install it.
+quality = ["goldencheck>=0.1.0"]
+
+[project.entry-points."goldenmatch.plugins"]
+dbt = "dbt_goldensuite:DbtPlugin"

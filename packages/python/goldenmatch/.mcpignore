@@ -1,5 +1,5 @@
 # Directories containing private/internal packages — not the published MCP server.
-dbt-goldenmatch/
+dbt-goldensuite/
 tests/
 docs/
 examples/

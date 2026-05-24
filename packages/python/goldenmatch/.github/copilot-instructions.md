@@ -66,7 +66,7 @@
 - `goldenmatch/connectors/` — Data source connectors (Snowflake, Databricks, BigQuery, HubSpot, Salesforce)
 - `goldenmatch/backends/` — Storage backends (DuckDB for out-of-core processing)
 - `goldenmatch/domains/` — Built-in YAML domain packs (electronics, software, healthcare, financial, real_estate, people, retail)
-- `dbt-goldenmatch/` — Separate package for dbt integration via DuckDB
+- `dbt-goldensuite/` — Separate package for dbt integration via DuckDB
 - Core modules: explainer, explain, evaluate, report, dashboard, graph, anomaly, diff, rollback, schema_match, chunked, cloud_ingest, api_connector, scheduler, gpu, vertex_embedder, llm_scorer, llm_budget, lineage, match_one, probabilistic, learned_blocking, streaming, graph_er
 - Config: Pydantic models in `config/schemas.py`, YAML loading in `config/loader.py`
 - `config/schemas.py` has `MemoryConfig` (enabled, backend, path, trust, learning) and `LearningConfig` (threshold_min_corrections, weights_min_corrections). `GoldenMatchConfig.memory` is optional
@@ -149,7 +149,7 @@
 - Incremental CLI: `cli/incremental.py` — match new CSV records against existing base dataset. Handles exact (Polars join) and fuzzy (match_one brute-force) matchkeys separately
 - Domain packs: 7 built-in YAML rulebooks in `goldenmatch/domains/` — electronics, software, healthcare, financial, real_estate, people, retail. Auto-discovered by `discover_rulebooks()`
 - GitHub infrastructure: `.github/workflows/try-it.yml` (workflow_dispatch demo), `.devcontainer/` (Codespaces)
-- dbt integration: `dbt-goldenmatch/` separate package with `run_goldenmatch_dedupe()` for DuckDB tables
+- dbt integration: `dbt-goldensuite/` separate package with `run_goldenmatch_dedupe()` for DuckDB tables
 - Python API: `_api.py` provides `dedupe()`, `match()`, `dedupe_df()`, `match_df()`, `pprl_link()`, `evaluate()`, `score_strings()`, `score_pair_df()`, `explain_pair_df()` convenience functions. `__init__.py` re-exports ~101 symbols. `DedupeResult`/`MatchResult` have `_repr_html_()` for Jupyter.
 - REST client: `client.py` — `Client(base_url)` with `.match()`, `.list_clusters()`, `.explain()`, `.reviews()`. Uses stdlib `urllib` only.
 - CI/CD quality gates: `goldenmatch evaluate --min-f1 0.90 --min-precision 0.80` exits code 1 if thresholds not met

@@ -1,4 +1,4 @@
-"""Unit tests for the dbt-goldenmatch macros (closes #210, Phase 6C).
+"""Unit tests for the dbt-goldensuite macros (closes #210, Phase 6C).
 
 Renders each macro against a stub Jinja environment that mimics the
 dbt context. Avoids a live `dbt-core` import path -- a real dbt
@@ -17,7 +17,7 @@ import pytest
 
 # Jinja2 is a transitive dep of dbt-core but not directly required by
 # the goldenmatch root venv. Skip cleanly when running outside the
-# dbt-goldenmatch lane.
+# dbt-goldensuite lane.
 jinja2 = pytest.importorskip("jinja2")
 
 

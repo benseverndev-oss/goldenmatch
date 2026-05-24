@@ -94,10 +94,10 @@ con.sql("SELECT goldenmatch_score('John', 'Jon', 'jaro_winkler')")
 ## dbt Integration
 
 ```bash
-pip install dbt-goldenmatch
+pip install dbt-goldensuite
 ```
 
-The `dbt-goldenmatch` package provides macros for running entity resolution inside dbt pipelines using DuckDB.
+The `dbt-goldensuite` package provides macros for running entity resolution inside dbt pipelines using DuckDB.
 
 ---
 

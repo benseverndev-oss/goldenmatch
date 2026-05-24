@@ -1,9 +1,9 @@
-"""Tests for dbt-goldenmatch field-correction override (Phase 3 of v1.18
+"""Tests for dbt-goldensuite field-correction override (Phase 3 of v1.18
 surface-sync roadmap).
 
 Spec: docs/superpowers/specs/2026-05-22-phase-3-a2a-dbt-design.md
 
-The dbt-goldenmatch package today is a thin Python wrapper around the
+The dbt-goldensuite package today is a thin Python wrapper around the
 core run_dedupe pipeline. Phase 3 adds optional `memory_db_path` +
 `dataset` params so dbt models can apply field-level corrections from
 MemoryStore on top of the dedupe output.
@@ -20,15 +20,15 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-# dbt-goldenmatch is a sub-directory NOT installed as a Python package
+# dbt-goldensuite is a sub-directory NOT installed as a Python package
 # in the core goldenmatch pytest lane (lives at
-# packages/python/goldenmatch/dbt-goldenmatch/ without its own
+# packages/python/goldenmatch/dbt-goldensuite/ without its own
 # editable install). Skip the whole module up-front so pytest's
-# collection doesn't blow up on `from dbt_goldenmatch import ...`.
+# collection doesn't blow up on `from dbt_goldensuite import ...`.
 try:
-    import dbt_goldenmatch  # noqa: F401
+    import dbt_goldensuite  # noqa: F401
 except ImportError:
-    pytest.skip("dbt-goldenmatch not installed", allow_module_level=True)
+    pytest.skip("dbt-goldensuite not installed", allow_module_level=True)
 
 
 def _seed_field_correction_store(db_path: str, *, dataset: str) -> None:
@@ -62,7 +62,7 @@ def test_dbt_dedupe_applies_field_corrections(
 ):
     """When memory_db_path is set, field-level corrections override the
     golden output rows whose __cluster_id__ matches."""
-    from dbt_goldenmatch import materialize
+    from dbt_goldensuite import materialize
 
     db_path = str(tmp_path / "memory.db")
     _seed_field_correction_store(db_path, dataset="customers")
@@ -118,7 +118,7 @@ def test_dbt_dedupe_without_memory_path_unchanged_behavior(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
     """memory_db_path=None -> existing behavior; applied=0."""
-    from dbt_goldenmatch import materialize
+    from dbt_goldensuite import materialize
 
     golden_df = pl.DataFrame({
         "__cluster_id__": [42],
@@ -152,7 +152,7 @@ def test_dbt_dedupe_stale_correction_when_column_missing(
 ):
     """Correction's field_name not in golden output -> counts as stale,
     not applied."""
-    from dbt_goldenmatch import materialize
+    from dbt_goldensuite import materialize
 
     db_path = str(tmp_path / "memory.db")
     _seed_field_correction_store(db_path, dataset="customers")

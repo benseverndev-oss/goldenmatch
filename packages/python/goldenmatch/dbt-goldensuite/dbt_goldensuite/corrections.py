@@ -1,4 +1,4 @@
-"""dbt-goldenmatch field-correction application (#437 Phase 3 surface sync).
+"""dbt-goldensuite field-correction application (#437 Phase 3 surface sync).
 
 Wraps Learning Memory's field-level Corrections + applies them on
 top of a goldenmatch dedupe output table. Used by the
