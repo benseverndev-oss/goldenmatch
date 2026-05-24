@@ -107,7 +107,7 @@ cargo pgrx init --pg16=$(which pg_config)
 # Build and install
 cd goldenmatch-extensions/postgres
 cargo pgrx install --pg-config=$(which pg_config) --release
-cp sql/goldenmatch_pg--0.1.0.sql $(pg_config --sharedir)/extension/
+cp sql/goldenmatch_pg--0.5.0.sql $(pg_config --sharedir)/extension/
 ```
 
 ### After Installation

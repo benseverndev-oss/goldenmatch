@@ -1,4 +1,4 @@
--- goldenmatch_pg SQL extension schema v0.1.0
+-- goldenmatch_pg SQL extension schema v0.5.0
 
 -- ══════════════════════════════════════════════════════════════════════
 -- Pipeline tables (job management)

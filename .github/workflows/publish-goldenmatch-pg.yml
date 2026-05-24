@@ -101,7 +101,7 @@ jobs:
           # canonical SQL file there. Path layout: <PKG_DIR>/usr/share/postgresql/<N>/extension/
           EXT_DIR="${PKG_DIR}/usr/share/postgresql/${PG_VERSION}/extension"
           mkdir -p "${EXT_DIR}"
-          cp sql/goldenmatch_pg--0.1.0.sql "${EXT_DIR}/"
+          cp sql/goldenmatch_pg--0.5.0.sql "${EXT_DIR}/"
           echo "PKG_DIR=${PKG_DIR}" >> "$GITHUB_ENV"
 
       - name: Tar artifact

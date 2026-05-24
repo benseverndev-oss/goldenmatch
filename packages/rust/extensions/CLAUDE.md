@@ -40,7 +40,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `quick.rs` -- 11 SQL functions: table-based (SPI), table-returning (TableIterator), scalar, JSON-based
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
-- SQL file at `sql/goldenmatch_pg--0.1.0.sql` -- handwritten (pgrx doesn't auto-generate)
+- SQL file at `sql/goldenmatch_pg--0.5.0.sql` -- handwritten (pgrx doesn't auto-generate)
 - .control file: `schema = goldenmatch` -- all functions in goldenmatch schema
 
 ### duckdb/ (goldenmatch-duckdb)
@@ -50,7 +50,8 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `core_apis.py` -- 13 parity UDFs wrapping goldenmatch's function-shaped core APIs (`goldenmatch_profile_table`, `goldenmatch_suggest_threshold`, `goldenmatch_detect_domain`, `goldenmatch_extract_features`, `goldenmatch_evaluate`, `goldenmatch_compare_clusters`, `goldenmatch_validate_table`, `goldenmatch_autofix_table`, `goldenmatch_detect_anomalies`, `goldenmatch_preflight`, `goldenmatch_postflight`, `goldenmatch_train_em`, `goldenmatch_score_probabilistic`). Pure-Python wrappers (import `goldenmatch` directly), JSON in/JSON out, fail-soft to `{"error": ...}`. Tests: `tests/test_core_apis.py`
 - Table-reading UDFs use `con.cursor()` to avoid deadlock (UDF can't query same connection)
 - `goldenmatch_suggest_threshold` registers with `null_handling="special"` because it legitimately returns SQL NULL (unimodal / too-few-scores). Other UDFs that may "fail" return a JSON `{"error": ...}` string instead.
-- `goldenmatch_postflight` derives `pair_scores` by running `dedupe_df` on the table (postflight needs scored pairs that aren't in the table). The Postgres-only table-returning `gm_pairs`/`gm_clusters` are NOT ported -- DuckDB returns JSON via `dedupe`/`dedupe_table` instead. PPRL (`pprl_link`, file-path args) and `run_sensitivity` (file_specs) are deferred as not SQL-natural.
+- `functions.py` also registers the `gm_configure`/`gm_run`/`gm_jobs`/`gm_golden`/`gm_drop` job-management UDFs (in-memory dict equivalent of the Postgres `pipeline.rs` set) -- both backends expose these. Only the table-returning `gm_pairs`/`gm_clusters` remain Postgres-only; DuckDB returns JSON via `dedupe`/`dedupe_table` instead.
+- `goldenmatch_postflight` derives `pair_scores` by running `dedupe_df` on the table (postflight needs scored pairs that aren't in the table). PPRL (`pprl_link`, file-path args) and `run_sensitivity` (file_specs) are deferred as not SQL-natural.
 - Requires `pyarrow` for DuckDB `.pl()` Polars conversion
 
 ## Testing
@@ -97,7 +98,7 @@ DuckDB UDFs + Postgres pg_extern functions implementing the contract at
   `goldenmatch_pg` 0.3.0 -> 0.4.0.
 
 ## Gotchas
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.1.0.sql` manually
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.5.0.sql` manually
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts
 - `cargo` defaults CARGO_HOME to drive root on Windows when CWD is D: -- always set explicitly
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads

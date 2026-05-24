@@ -58,7 +58,7 @@ jobs:
           mkdir -p "${PKG_NAME}"
           cp "/usr/lib/postgresql/${PG_VERSION}/lib/goldenmatch_pg.so" "${PKG_NAME}/"
           cp "/usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg.control" "${PKG_NAME}/"
-          cp postgres/sql/goldenmatch_pg--0.1.0.sql "${PKG_NAME}/"
+          cp postgres/sql/goldenmatch_pg--0.5.0.sql "${PKG_NAME}/"
           cp README.md "${PKG_NAME}/"
           tar czf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
           echo "PKG_NAME=${PKG_NAME}" >> "$GITHUB_ENV"
@@ -90,8 +90,8 @@ jobs:
               dst: /usr/lib/postgresql/${PG_VERSION}/lib/goldenmatch_pg.so
             - src: ${PKG_NAME}/goldenmatch_pg.control
               dst: /usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg.control
-            - src: ${PKG_NAME}/goldenmatch_pg--0.1.0.sql
-              dst: /usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg--0.1.0.sql
+            - src: ${PKG_NAME}/goldenmatch_pg--0.5.0.sql
+              dst: /usr/share/postgresql/${PG_VERSION}/extension/goldenmatch_pg--0.5.0.sql
           EOF
 
           /tmp/nfpm package --config /tmp/nfpm.yaml --packager deb

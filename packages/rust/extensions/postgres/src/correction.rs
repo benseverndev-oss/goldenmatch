@@ -40,7 +40,7 @@
 //! ## Permissions
 //!
 //! `goldenmatch.correction_add` is REVOKEd from PUBLIC by default in
-//! `sql/goldenmatch_pg--0.1.0.sql`. Grant `goldenmatch_correction_writer`
+//! `sql/goldenmatch_pg--0.5.0.sql`. Grant `goldenmatch_correction_writer`
 //! (or any role you wire up) EXECUTE privilege before any caller can
 //! invoke it. The read-only `goldenmatch.correction_list` is also
 //! REVOKEd by default.
