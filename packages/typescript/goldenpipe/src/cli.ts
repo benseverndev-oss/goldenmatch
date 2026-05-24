@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
  * GoldenPipe JS CLI — Commander.js port of the Typer CLI.
- * Commands: run, stages, validate, init, mcp-serve.
+ * Commands: run, stages, validate, init, mcp-serve, agent-serve, serve.
  *
- * The FastAPI / A2A / TUI serve commands from the Python CLI are
- * deferred (see README + CLAUDE.md).
+ * The Textual TUI from the Python CLI is deferred (see README + CLAUDE.md).
  */
 
 import { writeFileSync } from "node:fs";
@@ -19,6 +18,8 @@ import {
 import { run } from "./node/run.js";
 import { loadConfig } from "./node/loadConfig.js";
 import { startMcpServer } from "./node/mcp/server.js";
+import { startA2aServer } from "./node/a2a/server.js";
+import { runServer as runApiServer } from "./node/api/server.js";
 
 const VERSION = "0.2.0";
 
@@ -129,6 +130,24 @@ program
   .description("Run the GoldenPipe MCP server over stdio (JSON-RPC 2.0)")
   .action(() => {
     startMcpServer();
+  });
+
+program
+  .command("agent-serve")
+  .description("Run the GoldenPipe A2A agent server (HTTP)")
+  .option("-p, --port <port>", "Port to listen on", "8250")
+  .option("--host <host>", "Host to bind", "127.0.0.1")
+  .action((opts: { port: string; host: string }) => {
+    startA2aServer({ port: Number(opts.port), host: opts.host });
+  });
+
+program
+  .command("serve")
+  .description("Run the GoldenPipe REST API server (HTTP)")
+  .option("-p, --port <port>", "Port to listen on", "8000")
+  .option("--host <host>", "Host to bind", "0.0.0.0")
+  .action((opts: { port: string; host: string }) => {
+    runApiServer(Number(opts.port), opts.host);
   });
 
 program.parseAsync(process.argv).catch((e: unknown) => {

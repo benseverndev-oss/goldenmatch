@@ -95,14 +95,21 @@ goldenpipe-js stages                                  # list registered stages
 goldenpipe-js validate -c pipeline.yml                # dry-run wiring validation
 goldenpipe-js init [-d .]                             # scaffold a goldenpipe.yml
 goldenpipe-js mcp-serve                               # run the MCP server (stdio)
+goldenpipe-js agent-serve [-p 8250]                   # run the A2A agent server (HTTP)
+goldenpipe-js serve [-p 8000]                         # run the REST API server (HTTP)
 ```
 
-## MCP server
+## Servers (MCP / A2A / REST)
 
-GoldenPipe ships an MCP server (stdio, JSON-RPC 2.0) exposing the same 4 tools as
+GoldenPipe ships three server surfaces, each exposing the same 4 operations as
 the Python sibling — `list_stages`, `validate_pipeline`, `run_pipeline`,
-`explain_pipeline`. Run it via `goldenpipe-js mcp-serve` or the `goldenpipe-mcp`
-bin. Wire it into an MCP client (e.g. Claude Desktop):
+`explain_pipeline`:
+
+- **MCP** (stdio, JSON-RPC 2.0): `goldenpipe-js mcp-serve` or the `goldenpipe-mcp` bin.
+- **A2A** (HTTP, port 8250): `goldenpipe-js agent-serve` — agent card at `/.well-known/agent.json`, skill dispatch at `POST /tasks`.
+- **REST** (HTTP, port 8000): `goldenpipe-js serve` — `GET /stages`, `POST /validate`, `POST /run`.
+
+Wire the MCP server into a client (e.g. Claude Desktop):
 
 ```json
 { "mcpServers": { "goldenpipe": { "command": "goldenpipe-mcp" } } }
@@ -144,7 +151,7 @@ A **column-context pipeline** carries semantic metadata across stages: GoldenChe
 
 - **`identity_resolve` stage** — GoldenMatch-JS Identity Graph wiring through the pipeline. The edge-safe `InMemoryIdentityStore` exists in `goldenmatch`, but the pipeline-driven `resolveClusters` population is not yet exposed.
 - **`infer_schema` stage** — InferMap-based schema inference is not ported.
-- **Servers/TUI** — the FastAPI REST API, A2A agent server, and Textual TUI from the Python CLI are not ported. (The MCP server **is** ported — see above.)
+- **Textual TUI** — the Python Textual TUI is not ported. (The MCP, A2A, and REST servers **are** ported — see above.)
 
 ### Sibling version-skew artifacts
 
