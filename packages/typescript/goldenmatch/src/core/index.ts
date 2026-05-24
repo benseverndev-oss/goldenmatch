@@ -108,7 +108,11 @@ export {
   ensembleScore,
   scoreMatrix,
   asString,
+  setSyncEmbedder,
+  getSyncEmbedder,
+  cosineSimilarity,
 } from "./scorer.js";
+export type { SyncTextEmbedder } from "./scorer.js";
 
 // ---------------------------------------------------------------------------
 // Matchkey
@@ -251,8 +255,16 @@ export type { PairExplanation, ClusterExplanation } from "./explain.js";
 // Probabilistic (Fellegi-Sunter)
 // ---------------------------------------------------------------------------
 
-export { buildComparisonVector, trainEM, scoreProbabilistic } from "./probabilistic.js";
-export type { EMResult } from "./probabilistic.js";
+export {
+  buildComparisonVector,
+  trainEM,
+  scoreProbabilistic,
+  scoreProbabilisticPair,
+  trainEMContinuous,
+  scoreProbabilisticContinuous,
+  continuousScores,
+} from "./probabilistic.js";
+export type { EMResult, EMOptions, ContinuousEMResult } from "./probabilistic.js";
 
 // ---------------------------------------------------------------------------
 // Evaluation
@@ -304,12 +316,46 @@ export {
   ConfigValidationError as ControllerConfigValidationError,
   makeControllerBudget,
   getLastControllerRun,
+  planExecution,
 } from "./autoconfigController.js";
 export type {
   ControllerBudget,
   ControllerOptions,
   ControllerRunResult,
 } from "./autoconfigController.js";
+// ── Controller v3 planner + tuners + memory (gap 4) ───────────────────────
+export { applyPlannerRules } from "./autoconfigPlanner.js";
+export type {
+  PlannerRule,
+  PlannerPredicate,
+  PlannerAction,
+  PlannerContext,
+} from "./autoconfigPlanner.js";
+export {
+  DEFAULT_PLANNER_RULES,
+  autoChunkSize,
+} from "./autoconfigPlannerRules.js";
+export { makeExecutionPlan } from "./executionPlan.js";
+export type {
+  ExecutionPlan,
+  BackendName,
+  ClusteringStrategy,
+  SpillThreshold,
+} from "./executionPlan.js";
+export { makeRuntimeProfile } from "./runtimeProfile.js";
+export type { RuntimeProfile } from "./runtimeProfile.js";
+export {
+  tuneNeField,
+  tuneFieldStrategy,
+  tuneDecisionThreshold,
+} from "./autoconfigTuners.js";
+export type {
+  NETuning,
+  StrategyTuning,
+  ThresholdSuggestion,
+  ThresholdTunerOptions,
+} from "./autoconfigTuners.js";
+export { AutoConfigMemory, profileSignature } from "./autoconfigMemory.js";
 export {
   HeuristicRefitPolicy,
   createDefaultPolicy,
@@ -368,8 +414,18 @@ export {
   ruleNoMatches,
   ruleUnimodalScoring,
 } from "./autoconfigRules.js";
-export { detectDomain, extractFeatures } from "./domain.js";
-export type { DomainProfile } from "./domain.js";
+export {
+  detectDomain,
+  extractFeatures,
+  extractSoftwareFeatures,
+  extractBiblioFeatures,
+  detectProductSubdomain,
+} from "./domain.js";
+export type {
+  DomainProfile,
+  SoftwareExtractionResult,
+  BiblioFeatures,
+} from "./domain.js";
 export { buildLineage, lineageToJson, lineageFromJson } from "./lineage.js";
 export type { LineageEdge, LineageBundle } from "./lineage.js";
 export { learnBlockingRules, applyLearnedBlocks } from "./learned-blocking.js";
@@ -417,7 +473,7 @@ export type {
 } from "./autoconfigVerify.js";
 
 
-// v2.0.0 (#208): predefined golden-strategy plugin port.
+// v0.11.0 (#208): predefined golden-strategy plugin port.
 export type {
   GoldenStrategyMergeOpts,
   GoldenStrategyPlugin,

@@ -36,7 +36,11 @@ export type CorrectionSource =
  * the row carries `fieldName` + `correctedValue` (see Correction
  * interface).
  */
-export type Decision = "approve" | "reject" | "field_correct";
+export type Decision =
+  | "approve"
+  | "reject"
+  | "field_correct"
+  | "cluster_decision";
 
 /**
  * Sources that confer human-level trust. Pair decisions originating here are
@@ -99,6 +103,12 @@ export interface Correction {
   readonly fieldName?: string | null;
   readonly originalValue?: string | null;
   readonly correctedValue?: string | null;
+  // ── v1.20.x cluster-decision corrections (cluster-threshold tuner) ──────
+  // Set when decision === "cluster_decision":
+  //   - clusterScore: the cluster's confidence/score the reviewer judged
+  //   - clusterOutcome: "approve" or "reject"
+  readonly clusterScore?: number | null;
+  readonly clusterOutcome?: "approve" | "reject" | null;
 }
 
 // ---------------------------------------------------------------------------

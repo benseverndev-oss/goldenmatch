@@ -32,6 +32,73 @@ export function asString(v: unknown): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Embedding scorer shim (gap 2 — `embedding` / `record_embedding`)
+// ---------------------------------------------------------------------------
+
+/**
+ * A synchronous text embedder: maps a string to a dense vector. Real
+ * embedders (`src/core/embedder.ts`'s `Embedder`, Vertex/OpenAI/Voyage) are
+ * async network clients and CANNOT be reproduced numerically across
+ * languages — Python uses Vertex/torch embeddings the TS port can't match
+ * bit-for-bit. So the `embedding` / `record_embedding` scorers are an
+ * **API-parity** case, not a golden-value case: they exist, route through a
+ * pluggable embedder, and compute cosine similarity. Tests inject a
+ * deterministic stub embedder (no torch / no Vertex). Without a registered
+ * embedder the scorers throw a clear, actionable error rather than the
+ * generic "Unknown scorer".
+ */
+export type SyncTextEmbedder = (text: string) => readonly number[];
+
+let _embedder: SyncTextEmbedder | null = null;
+
+/** Register the synchronous embedder used by the `embedding` /
+ *  `record_embedding` scorers. Pass `null` to clear (test isolation). */
+export function setSyncEmbedder(embedder: SyncTextEmbedder | null): void {
+  _embedder = embedder;
+}
+
+/** The currently-registered synchronous embedder, or null. */
+export function getSyncEmbedder(): SyncTextEmbedder | null {
+  return _embedder;
+}
+
+/** Cosine similarity of two vectors. Returns 0 when either has zero norm. */
+export function cosineSimilarity(
+  a: readonly number[],
+  b: readonly number[],
+): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const av = a[i]!;
+    const bv = b[i]!;
+    dot += av * bv;
+    na += av * av;
+    nb += bv * bv;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** Score two strings via the registered embedder's cosine similarity.
+ *  Used by both `embedding` and `record_embedding`. */
+function embeddingScore(a: string, b: string): number {
+  if (_embedder === null) {
+    throw new Error(
+      'embedding scorer requires a registered embedder: call ' +
+        'setSyncEmbedder(fn) before scoring (real embeddings via Vertex/' +
+        'OpenAI/Voyage are async and edge-unsafe; the sync shim accepts a ' +
+        'stub for tests). See src/core/scorer.ts.',
+    );
+  }
+  const va = _embedder(a);
+  const vb = _embedder(b);
+  return cosineSimilarity(va, vb);
+}
+
+// ---------------------------------------------------------------------------
 // Scoring algorithms — pure TS
 // ---------------------------------------------------------------------------
 
@@ -349,6 +416,13 @@ export function scoreField(
       return jaccardSimilarity(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
+    case "embedding":
+    case "record_embedding":
+      // API parity (not golden-value): route through the registered embedder
+      // shim and compute cosine similarity. record_embedding embeds the full
+      // record string; at the field level both behave identically (embed the
+      // field value, cosine-compare). See setSyncEmbedder.
+      return embeddingScore(valA, valB);
     default:
       throw new Error(`Unknown scorer: ${JSON.stringify(scorer)}`);
   }

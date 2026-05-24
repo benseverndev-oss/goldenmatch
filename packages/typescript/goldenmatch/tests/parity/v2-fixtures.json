@@ -1,0 +1,1986 @@
+{
+  "blocker": {
+    "blocking": {
+      "keys": [
+        {
+          "fields": [
+            "city"
+          ],
+          "transforms": [
+            "lowercase",
+            "strip"
+          ]
+        }
+      ],
+      "strategy": "static"
+    },
+    "expected_blocks": [
+      {
+        "key": "la",
+        "row_ids": [
+          3,
+          4
+        ]
+      },
+      {
+        "key": "ny",
+        "row_ids": [
+          0,
+          1,
+          2
+        ]
+      }
+    ],
+    "input_rows": [
+      {
+        "__row_id__": 0,
+        "city": "NY",
+        "name": "Alice"
+      },
+      {
+        "__row_id__": 1,
+        "city": "NY",
+        "name": "Bob"
+      },
+      {
+        "__row_id__": 2,
+        "city": "NY",
+        "name": "Carol"
+      },
+      {
+        "__row_id__": 3,
+        "city": "LA",
+        "name": "Dan"
+      },
+      {
+        "__row_id__": 4,
+        "city": "LA",
+        "name": "Eve"
+      },
+      {
+        "__row_id__": 5,
+        "city": "SF",
+        "name": "Frank"
+      }
+    ]
+  },
+  "clustering": {
+    "expected_clusters": [
+      {
+        "cluster_quality": "strong",
+        "confidence": 0.91,
+        "members": [
+          0,
+          1,
+          2
+        ],
+        "oversized": false,
+        "size": 3
+      },
+      {
+        "cluster_quality": "strong",
+        "confidence": 0.944,
+        "members": [
+          3,
+          4
+        ],
+        "oversized": false,
+        "size": 2
+      }
+    ],
+    "input_pairs": [
+      {
+        "a": 0,
+        "b": 1,
+        "score": 0.95
+      },
+      {
+        "a": 1,
+        "b": 2,
+        "score": 0.9
+      },
+      {
+        "a": 0,
+        "b": 2,
+        "score": 0.85
+      },
+      {
+        "a": 3,
+        "b": 4,
+        "score": 0.92
+      }
+    ]
+  },
+  "domain": {
+    "biblio": [
+      {
+        "expected": {
+          "doi": null,
+          "title_key": "theory",
+          "year": "1969"
+        },
+        "input": "A Theory for Record Linkage 1969"
+      },
+      {
+        "expected": {
+          "doi": "10.1145/1234567.890",
+          "title_key": "deep",
+          "year": "2018"
+        },
+        "input": "Deep Learning for NLP 10.1145/1234567.890 (2018)"
+      },
+      {
+        "expected": {
+          "doi": null,
+          "title_key": "art",
+          "year": null
+        },
+        "input": "The Art of Computer Programming"
+      },
+      {
+        "expected": {
+          "doi": null,
+          "title_key": "origin",
+          "year": null
+        },
+        "input": "On the Origin of Species 1859"
+      },
+      {
+        "expected": {
+          "doi": "10.1038/nature12373",
+          "title_key": "doi:10.1038/nature12373",
+          "year": null
+        },
+        "input": "doi:10.1038/nature12373 Genomic analysis"
+      },
+      {
+        "expected": {
+          "doi": null,
+          "title_key": null,
+          "year": null
+        },
+        "input": ""
+      }
+    ],
+    "software": [
+      {
+        "expected": {
+          "confidence": 0.933333,
+          "edition": "pro",
+          "is_upgrade": false,
+          "name_normalized": "adobe photoshop",
+          "part_number": null,
+          "platform": "win",
+          "version": "cs3"
+        },
+        "input": "Adobe Photoshop CS3 Professional for Windows"
+      },
+      {
+        "expected": {
+          "confidence": 0.833333,
+          "edition": "home",
+          "is_upgrade": false,
+          "name_normalized": "microsoft office",
+          "part_number": null,
+          "platform": null,
+          "version": "2007"
+        },
+        "input": "Microsoft Office 2007 Home and Student"
+      },
+      {
+        "expected": {
+          "confidence": 0.833333,
+          "edition": null,
+          "is_upgrade": true,
+          "name_normalized": "norton antivirus",
+          "part_number": null,
+          "platform": "win",
+          "version": "2006"
+        },
+        "input": "Norton AntiVirus 2006 Upgrade (Win/Mac)"
+      },
+      {
+        "expected": {
+          "confidence": 0.833333,
+          "edition": "standard",
+          "is_upgrade": false,
+          "name_normalized": "adobe illustrator",
+          "part_number": null,
+          "platform": null,
+          "version": "cc 2024"
+        },
+        "input": "Adobe Illustrator CC 2024 Standard"
+      },
+      {
+        "expected": {
+          "confidence": 1.0,
+          "edition": "pro",
+          "is_upgrade": false,
+          "name_normalized": "quickbooks",
+          "part_number": "1234567",
+          "platform": null,
+          "version": "2005"
+        },
+        "input": "QuickBooks Pro 2005 1234567"
+      },
+      {
+        "expected": {
+          "confidence": 0.933333,
+          "edition": "lite",
+          "is_upgrade": false,
+          "name_normalized": "macos photo editor",
+          "part_number": null,
+          "platform": "mac",
+          "version": "5.0"
+        },
+        "input": "macOS Photo Editor v5.0 Lite for Mac"
+      },
+      {
+        "expected": {
+          "confidence": 0.766667,
+          "edition": null,
+          "is_upgrade": false,
+          "name_normalized": "server",
+          "part_number": null,
+          "platform": "linux",
+          "version": "18.04"
+        },
+        "input": "Linux Server Edition 18.04"
+      },
+      {
+        "expected": {
+          "confidence": 0.0,
+          "edition": null,
+          "is_upgrade": false,
+          "name_normalized": null,
+          "part_number": null,
+          "platform": null,
+          "version": null
+        },
+        "input": ""
+      },
+      {
+        "expected": {
+          "confidence": 0.0,
+          "edition": null,
+          "is_upgrade": false,
+          "name_normalized": null,
+          "part_number": null,
+          "platform": null,
+          "version": null
+        },
+        "input": "the complete software package"
+      }
+    ]
+  },
+  "golden": {
+    "cases": [
+      {
+        "expected": {
+          "confidence": 1.0,
+          "source_index": 2,
+          "value": "Acme Corporation"
+        },
+        "id": "most_complete",
+        "strategy": "most_complete",
+        "values": [
+          "Acme",
+          "Acme Corp",
+          "Acme Corporation"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 0.7,
+          "source_index": 0,
+          "value": "ABCD"
+        },
+        "id": "most_complete_tie",
+        "strategy": "most_complete",
+        "values": [
+          "ABCD",
+          "WXYZ",
+          "AB"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 0.666667,
+          "source_index": 0,
+          "value": "red"
+        },
+        "id": "majority_vote",
+        "strategy": "majority_vote",
+        "values": [
+          "red",
+          "blue",
+          "red"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 0.333333,
+          "source_index": 0,
+          "value": "red"
+        },
+        "id": "majority_vote_tie",
+        "strategy": "majority_vote",
+        "values": [
+          "red",
+          "blue",
+          "green"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 0.6,
+          "source_index": 1,
+          "value": "x"
+        },
+        "id": "first_non_null",
+        "strategy": "first_non_null",
+        "values": [
+          null,
+          "x",
+          "y"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 1.0,
+          "source_index": 2,
+          "value": "only"
+        },
+        "id": "most_complete_nulls",
+        "strategy": "most_complete",
+        "values": [
+          null,
+          null,
+          "only"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 1.0,
+          "source_index": 0,
+          "value": "same"
+        },
+        "id": "all_identical",
+        "strategy": "majority_vote",
+        "values": [
+          "same",
+          "same",
+          "same"
+        ]
+      },
+      {
+        "expected": {
+          "confidence": 0.0,
+          "source_index": null,
+          "value": null
+        },
+        "id": "all_null",
+        "strategy": "most_complete",
+        "values": [
+          null,
+          null
+        ]
+      }
+    ]
+  },
+  "planner": [
+    {
+      "expected_plan": {
+        "backend": "polars-direct",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 1,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_pathological"
+      },
+      "input": {
+        "cpu_count": 4,
+        "disk_gb": 500.0,
+        "n_rows": 1,
+        "pair_count": 0,
+        "ram_gb": 8.0,
+        "user_backend": null
+      },
+      "name": "pathological_1row"
+    },
+    {
+      "expected_plan": {
+        "backend": "polars-direct",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 4,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_selected_simple"
+      },
+      "input": {
+        "cpu_count": 8,
+        "disk_gb": 500.0,
+        "n_rows": 5000,
+        "pair_count": 1000000,
+        "ram_gb": 16.0,
+        "user_backend": null
+      },
+      "name": "simple_small"
+    },
+    {
+      "expected_plan": {
+        "backend": "polars-direct",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 2,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_selected_simple"
+      },
+      "input": {
+        "cpu_count": 2,
+        "disk_gb": 500.0,
+        "n_rows": 50000,
+        "pair_count": 2000000,
+        "ram_gb": 16.0,
+        "user_backend": null
+      },
+      "name": "simple_cpu_cap2"
+    },
+    {
+      "expected_plan": {
+        "backend": "polars-direct",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 16,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_selected_fast_box"
+      },
+      "input": {
+        "cpu_count": 16,
+        "disk_gb": 500.0,
+        "n_rows": 500000,
+        "pair_count": 10000000,
+        "ram_gb": 64.0,
+        "user_backend": null
+      },
+      "name": "fast_box"
+    },
+    {
+      "expected_plan": {
+        "backend": "polars-direct",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 8,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_selected_fast_box"
+      },
+      "input": {
+        "cpu_count": 8,
+        "disk_gb": 500.0,
+        "n_rows": 500000,
+        "pair_count": 10000000,
+        "ram_gb": 64.0,
+        "user_backend": null
+      },
+      "name": "fast_box_cpu_cap8"
+    },
+    {
+      "expected_plan": {
+        "backend": "chunked",
+        "chunk_size": 1000000,
+        "clustering_strategy": "in_memory",
+        "max_workers": 16,
+        "pair_spill_threshold": "ram",
+        "rule_name": "plan_selected_chunked"
+      },
+      "input": {
+        "cpu_count": 16,
+        "disk_gb": 500.0,
+        "n_rows": 2000000,
+        "pair_count": 100000000,
+        "ram_gb": 32.0,
+        "user_backend": null
+      },
+      "name": "chunked"
+    },
+    {
+      "expected_plan": {
+        "backend": "duckdb",
+        "chunk_size": null,
+        "clustering_strategy": "partitioned_union_find",
+        "max_workers": 8,
+        "pair_spill_threshold": "duckdb",
+        "rule_name": "plan_selected_duckdb"
+      },
+      "input": {
+        "cpu_count": 8,
+        "disk_gb": 500.0,
+        "n_rows": 2000000,
+        "pair_count": 100000000,
+        "ram_gb": 8.0,
+        "user_backend": null
+      },
+      "name": "low_ram_duckdb"
+    },
+    {
+      "expected_plan": {
+        "backend": "duckdb",
+        "chunk_size": null,
+        "clustering_strategy": "partitioned_union_find",
+        "max_workers": 8,
+        "pair_spill_threshold": "duckdb",
+        "rule_name": "plan_selected_duckdb"
+      },
+      "input": {
+        "cpu_count": 16,
+        "disk_gb": 500.0,
+        "n_rows": 10000000,
+        "pair_count": 6000000000,
+        "ram_gb": 64.0,
+        "user_backend": null
+      },
+      "name": "huge_pairs_duckdb"
+    },
+    {
+      "expected_plan": {
+        "backend": "chunked",
+        "chunk_size": 10000,
+        "clustering_strategy": "in_memory",
+        "max_workers": 8,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_user_override"
+      },
+      "input": {
+        "cpu_count": 8,
+        "disk_gb": 500.0,
+        "n_rows": 5000,
+        "pair_count": 1000,
+        "ram_gb": 16.0,
+        "user_backend": "chunked"
+      },
+      "name": "user_override_chunked"
+    },
+    {
+      "expected_plan": {
+        "backend": "duckdb",
+        "chunk_size": null,
+        "clustering_strategy": "in_memory",
+        "max_workers": 8,
+        "pair_spill_threshold": null,
+        "rule_name": "plan_user_override"
+      },
+      "input": {
+        "cpu_count": 8,
+        "disk_gb": 500.0,
+        "n_rows": 5000,
+        "pair_count": 1000,
+        "ram_gb": 16.0,
+        "user_backend": "duckdb"
+      },
+      "name": "user_override_duckdb"
+    }
+  ],
+  "probabilistic": {
+    "continuous_2field": {
+      "expected_em": {
+        "converged": true,
+        "iterations": 2,
+        "m_mean": {
+          "city": 1.0,
+          "name": 0.903669
+        },
+        "m_var": {
+          "city": 1e-06,
+          "name": 0.001616
+        },
+        "proportion_matched": 0.054884,
+        "u_mean": {
+          "city": 1.0,
+          "name": 0.906584
+        },
+        "u_var": {
+          "city": 1e-06,
+          "name": 0.001734
+        }
+      },
+      "expected_pairs": [
+        {
+          "a": 0,
+          "b": 1,
+          "score": 0.4547
+        },
+        {
+          "a": 0,
+          "b": 2,
+          "score": 0.4508
+        },
+        {
+          "a": 0,
+          "b": 3,
+          "score": 0.5081
+        },
+        {
+          "a": 0,
+          "b": 4,
+          "score": 0.5155
+        },
+        {
+          "a": 0,
+          "b": 5,
+          "score": 0.5155
+        },
+        {
+          "a": 1,
+          "b": 2,
+          "score": 0.4816
+        },
+        {
+          "a": 1,
+          "b": 3,
+          "score": 0.5164
+        },
+        {
+          "a": 1,
+          "b": 4,
+          "score": 0.5176
+        },
+        {
+          "a": 1,
+          "b": 5,
+          "score": 0.5176
+        },
+        {
+          "a": 2,
+          "b": 3,
+          "score": 0.5164
+        },
+        {
+          "a": 2,
+          "b": 4,
+          "score": 0.5176
+        },
+        {
+          "a": 2,
+          "b": 5,
+          "score": 0.5037
+        },
+        {
+          "a": 3,
+          "b": 4,
+          "score": 0.4519
+        },
+        {
+          "a": 3,
+          "b": 5,
+          "score": 0.516
+        },
+        {
+          "a": 4,
+          "b": 5,
+          "score": 0.5037
+        }
+      ],
+      "input_rows": [
+        {
+          "__row_id__": 0,
+          "city": "Boston",
+          "name": "Jon Smith"
+        },
+        {
+          "__row_id__": 1,
+          "city": "Boston",
+          "name": "John Smith"
+        },
+        {
+          "__row_id__": 2,
+          "city": "Boston",
+          "name": "Jonn Smith"
+        },
+        {
+          "__row_id__": 3,
+          "city": "Boston",
+          "name": "Jane Smith"
+        },
+        {
+          "__row_id__": 4,
+          "city": "Boston",
+          "name": "Jayne Smith"
+        },
+        {
+          "__row_id__": 5,
+          "city": "Boston",
+          "name": "Jenny Smith"
+        }
+      ],
+      "matchkey": {
+        "fields": [
+          {
+            "field": "name",
+            "levels": 2,
+            "partial_threshold": 0.85,
+            "scorer": "jaro_winkler",
+            "transforms": [
+              "lowercase",
+              "strip"
+            ],
+            "weight": 1.0
+          },
+          {
+            "field": "city",
+            "levels": 2,
+            "partial_threshold": 0.85,
+            "scorer": "jaro_winkler",
+            "transforms": [
+              "lowercase",
+              "strip"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "name": "prob_continuous",
+        "type": "probabilistic"
+      }
+    },
+    "discrete_2level": {
+      "expected_em": {
+        "converged": true,
+        "iterations": 4,
+        "m_probs": {
+          "city": [
+            0.0,
+            1.0
+          ],
+          "name": [
+            0.0,
+            1.0
+          ]
+        },
+        "match_weights": {
+          "city": [
+            -21.707249,
+            2.485426
+          ],
+          "name": [
+            -21.707249,
+            2.485426
+          ]
+        },
+        "proportion_matched": 0.148893,
+        "u_probs": {
+          "city": [
+            0.821429,
+            0.178571
+          ],
+          "name": [
+            0.821429,
+            0.178571
+          ]
+        }
+      },
+      "expected_pairs": [
+        {
+          "a": 0,
+          "b": 1,
+          "score": 1.0
+        },
+        {
+          "a": 0,
+          "b": 2,
+          "score": 1.0
+        },
+        {
+          "a": 0,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 2,
+          "score": 1.0
+        },
+        {
+          "a": 1,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 3,
+          "b": 4,
+          "score": 1.0
+        },
+        {
+          "a": 3,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 3,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 3,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 4,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 4,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 4,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 5,
+          "b": 6,
+          "score": 0.0
+        },
+        {
+          "a": 5,
+          "b": 7,
+          "score": 0.0
+        },
+        {
+          "a": 6,
+          "b": 7,
+          "score": 1.0
+        }
+      ],
+      "input_rows": [
+        {
+          "__row_id__": 0,
+          "city": "New York",
+          "name": "Alice Smith"
+        },
+        {
+          "__row_id__": 1,
+          "city": "New York",
+          "name": "Alice Smith"
+        },
+        {
+          "__row_id__": 2,
+          "city": "New York",
+          "name": "Alise Smith"
+        },
+        {
+          "__row_id__": 3,
+          "city": "Los Angeles",
+          "name": "Bob Jones"
+        },
+        {
+          "__row_id__": 4,
+          "city": "Los Angeles",
+          "name": "Bob Jones"
+        },
+        {
+          "__row_id__": 5,
+          "city": "LA",
+          "name": "Robert Jones"
+        },
+        {
+          "__row_id__": 6,
+          "city": "Chicago",
+          "name": "Carol Davis"
+        },
+        {
+          "__row_id__": 7,
+          "city": "Chicago",
+          "name": "Karol Davis"
+        }
+      ],
+      "matchkey": {
+        "fields": [
+          {
+            "field": "name",
+            "levels": 2,
+            "partial_threshold": 0.85,
+            "scorer": "jaro_winkler",
+            "transforms": [
+              "lowercase",
+              "strip"
+            ],
+            "weight": 1.0
+          },
+          {
+            "field": "city",
+            "levels": 2,
+            "partial_threshold": 0.7,
+            "scorer": "exact",
+            "transforms": [
+              "lowercase",
+              "strip"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "name": "prob_2level",
+        "type": "probabilistic"
+      }
+    },
+    "discrete_3level": {
+      "expected_em": {
+        "converged": true,
+        "iterations": 8,
+        "m_probs": {
+          "title": [
+            1e-06,
+            1e-06,
+            0.999999
+          ],
+          "year": [
+            0.001269,
+            0.998731
+          ]
+        },
+        "match_weights": {
+          "title": [
+            -20.0867,
+            3.300626,
+            1.906889
+          ],
+          "year": [
+            -9.415348,
+            2.905058
+          ]
+        },
+        "proportion_matched": 0.101487,
+        "u_probs": {
+          "title": [
+            0.733333,
+            0.0,
+            0.266667
+          ],
+          "year": [
+            0.866667,
+            0.133333
+          ]
+        }
+      },
+      "expected_pairs": [
+        {
+          "a": 0,
+          "b": 1,
+          "score": 0.961
+        },
+        {
+          "a": 0,
+          "b": 2,
+          "score": 0.6159
+        },
+        {
+          "a": 0,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 0,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 2,
+          "score": 0.6159
+        },
+        {
+          "a": 1,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 1,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 3,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 4,
+          "score": 0.0
+        },
+        {
+          "a": 2,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 3,
+          "b": 4,
+          "score": 0.961
+        },
+        {
+          "a": 3,
+          "b": 5,
+          "score": 0.0
+        },
+        {
+          "a": 4,
+          "b": 5,
+          "score": 0.0
+        }
+      ],
+      "input_rows": [
+        {
+          "__row_id__": 0,
+          "title": "Database Systems",
+          "year": "2001"
+        },
+        {
+          "__row_id__": 1,
+          "title": "Database Systems",
+          "year": "2001"
+        },
+        {
+          "__row_id__": 2,
+          "title": "Database System",
+          "year": "2002"
+        },
+        {
+          "__row_id__": 3,
+          "title": "Operating Systems",
+          "year": "1999"
+        },
+        {
+          "__row_id__": 4,
+          "title": "Operating System",
+          "year": "1999"
+        },
+        {
+          "__row_id__": 5,
+          "title": "Networks",
+          "year": "2010"
+        }
+      ],
+      "matchkey": {
+        "fields": [
+          {
+            "field": "title",
+            "levels": 3,
+            "partial_threshold": 0.7,
+            "scorer": "jaro_winkler",
+            "transforms": [
+              "lowercase",
+              "strip"
+            ],
+            "weight": 1.0
+          },
+          {
+            "field": "year",
+            "levels": 2,
+            "partial_threshold": 0.7,
+            "scorer": "exact",
+            "transforms": [
+              "strip"
+            ],
+            "weight": 1.0
+          }
+        ],
+        "name": "prob_3level",
+        "type": "probabilistic"
+      }
+    }
+  },
+  "tuners": {
+    "golden_strategy_tuner": {
+      "candidates": [
+        "most_complete",
+        "majority_vote",
+        "first_non_null",
+        "longest_value",
+        "confidence_majority"
+      ],
+      "corrections": [
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k000",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k001",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k002",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k003",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k004",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k005",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k006",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k007",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k008",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k009",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k010",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k011",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k012",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k013",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k014",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k015",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k016",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k017",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k018",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k019",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k020",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k021",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k022",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k023",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k024",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k025",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k026",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k027",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k028",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k029",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k030",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k031",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k032",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k033",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k034",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k035",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k036",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k037",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k038",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k039",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k040",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k041",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k042",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k043",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k044",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e000",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e001",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e002",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e003",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e004",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e005",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e006",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e007",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e008",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e009",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e010",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e011",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e012",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e013",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e014",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        }
+      ],
+      "expected": {
+        "field": "address1",
+        "heldout_hit_rate": 1.0,
+        "n_corrections": 60,
+        "reason": "learned",
+        "strategy": "longest_value",
+        "train_hit_rate": 1.0
+      },
+      "field": "address1",
+      "min_corrections": 50
+    },
+    "ne_tuner": {
+      "corrections": [
+        {
+          "id": "c000",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c001",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c002",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c003",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c004",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c005",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c006",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c007",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c008",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c009",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c010",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c011",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c012",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c013",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c014",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c015",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c016",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c017",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c018",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c019",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c020",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c021",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c022",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c023",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c024",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c025",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c026",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c027",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c028",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c029",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c030",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c031",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c032",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c033",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c034",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c035",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c036",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c037",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c038",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c039",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c040",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c041",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c042",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c043",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c044",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c045",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c046",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c047",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c048",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c049",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c050",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c051",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c052",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c053",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c054",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c055",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c056",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c057",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c058",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c059",
+          "is_match": true,
+          "trust": 0.9
+        }
+      ],
+      "expected": {
+        "heldout_f1": 1.0,
+        "n_corrections": 60,
+        "penalty": 0.1,
+        "reason": "tuned",
+        "threshold": 0.2,
+        "train_f1": 1.0
+      },
+      "min_corrections": 50
+    }
+  }
+}

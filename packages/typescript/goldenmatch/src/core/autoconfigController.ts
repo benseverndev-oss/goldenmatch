@@ -38,6 +38,11 @@ import {
   type HistoryEntry,
 } from "./autoconfigHistory.js";
 import type { RefitPolicy } from "./autoconfigPolicy.js";
+import type { ExecutionPlan } from "./executionPlan.js";
+import type { RuntimeProfile } from "./runtimeProfile.js";
+import { makeRuntimeProfile } from "./runtimeProfile.js";
+import { applyPlannerRules, type PlannerContext } from "./autoconfigPlanner.js";
+import { DEFAULT_PLANNER_RULES } from "./autoconfigPlannerRules.js";
 import { autoConfigureRows } from "./autoconfig.js";
 import { runDedupePipeline } from "./pipeline.js";
 import { IndicatorContext } from "./indicators.js";
@@ -71,6 +76,12 @@ export function makeControllerBudget(p: Partial<ControllerBudget> = {}): Control
 export interface ControllerOptions {
   readonly policy: RefitPolicy;
   readonly budget?: ControllerBudget;
+  /** Runtime introspection for the v3 planner. Edge-safe core can't read
+   *  psutil; pass a real capture from Node entry points. Defaults to a
+   *  conservative 8 GB / 1 CPU profile. */
+  readonly runtimeProfile?: RuntimeProfile;
+  /** Explicit user backend override (planner Rule 7). */
+  readonly userBackend?: string | null;
 }
 
 export interface ControllerRunResult {
@@ -99,6 +110,43 @@ export function _resetLastControllerRun(): void {
   _lastControllerRun = null;
 }
 
+/**
+ * Run the controller-v3 planner over a committed profile. Extrapolates the
+ * committed (possibly sample) blocking pair count to full-row scale, then
+ * applies DEFAULT_PLANNER_RULES. Mirrors the planner block in Python's
+ * AutoConfigController.run.
+ */
+export function planExecution(
+  committedProfile: ComplexityProfile,
+  nRowsFull: number,
+  runtime: RuntimeProfile,
+  context: PlannerContext = {},
+): ExecutionPlan {
+  let profileForPlanner = committedProfile;
+  const meta = committedProfile.meta;
+  if (meta.isSample && meta.sampleSize > 0 && nRowsFull > 0) {
+    const ratio = nRowsFull / meta.sampleSize;
+    profileForPlanner = {
+      ...committedProfile,
+      blocking: {
+        ...committedProfile.blocking,
+        nBlocks: Math.trunc(committedProfile.blocking.nBlocks * ratio),
+        totalComparisons: Math.trunc(committedProfile.blocking.totalComparisons * ratio),
+        singletonBlockCount: Math.trunc(
+          committedProfile.blocking.singletonBlockCount * ratio,
+        ),
+      },
+    };
+  }
+  return applyPlannerRules(
+    profileForPlanner,
+    runtime,
+    nRowsFull,
+    DEFAULT_PLANNER_RULES,
+    context,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------
@@ -106,10 +154,14 @@ export function _resetLastControllerRun(): void {
 export class AutoConfigController {
   readonly policy: RefitPolicy;
   readonly budget: ControllerBudget;
+  readonly runtimeProfile: RuntimeProfile;
+  readonly userBackend: string | null;
 
   constructor(options: ControllerOptions) {
     this.policy = options.policy;
     this.budget = options.budget ?? makeControllerBudget();
+    this.runtimeProfile = options.runtimeProfile ?? makeRuntimeProfile();
+    this.userBackend = options.userBackend ?? null;
   }
 
   async run(rows: readonly Row[]): Promise<ControllerRunResult> {
@@ -252,6 +304,21 @@ export class AutoConfigController {
       _lastControllerRun = history;
       return { committedConfig: configV0, profile: RED_PROFILE, history };
     }
+
+    // ── Controller v3 planner: pick an execution plan from the committed
+    // profile + runtime introspection, mirroring Python's wiring in
+    // AutoConfigController.run (after pickCommitted, before finalize). The
+    // edge-safe core can't read real RAM/CPU (psutil is Node-only), so it
+    // captures a conservative default RuntimeProfile; Node entry points may
+    // override by setting history.executionPlan with a real capture. The
+    // committed sample blocking signal is extrapolated to full rows.
+    history.executionPlan = planExecution(
+      bestEntry.profile,
+      rows.length,
+      this.runtimeProfile,
+      { userBackend: this.userBackend },
+    );
+
     _lastControllerRun = history;
     return {
       committedConfig: bestEntry.config,

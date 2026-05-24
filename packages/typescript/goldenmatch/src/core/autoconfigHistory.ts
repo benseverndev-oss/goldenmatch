@@ -6,6 +6,7 @@
  */
 
 import type { GoldenMatchConfig } from "./types.js";
+import type { ExecutionPlan } from "./executionPlan.js";
 import {
   type ComplexityProfile,
   type StopReason,
@@ -61,6 +62,9 @@ export class RunHistory {
   fullVsSampleDrift: number | null = null;
   elapsedMs = 0;
   stopReason: StopReason | null = null;
+  /** Controller-v3 planner output (set after pickCommitted). Null until the
+   *  planner runs. Mirrors Python ``RunHistory.execution_plan``. */
+  executionPlan: ExecutionPlan | null = null;
 
   get iteration(): number {
     return this.entries.length;
