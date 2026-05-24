@@ -85,6 +85,35 @@ con.sql("""
 """)
 ```
 
+### GoldenFlow transforms
+
+8 scalar `VARCHAR -> VARCHAR` UDFs wrapping GoldenFlow's transform registry --
+normalize / canonicalize a column before matching. Byte-equivalent to the
+Postgres `goldenflow_*` functions, so a transform written for one backend
+ports to the other. They fail open (pass the input through unchanged) when
+`goldenflow` isn't installed -- `pip install goldenflow` to enable.
+
+| Function | GoldenFlow transform | Description |
+|----------|----------------------|-------------|
+| `goldenflow_normalize_email(value)` | `email_normalize` | Normalize an email address |
+| `goldenflow_normalize_phone(value)` | `phone_e164` | Normalize a phone number to E.164 |
+| `goldenflow_normalize_date(value)` | `date_iso8601` | Normalize a date to ISO-8601 |
+| `goldenflow_normalize_name_proper(value)` | `name_proper` | Proper-case a personal name |
+| `goldenflow_canonicalize_url(value)` | `url_normalize` | Canonicalize a URL |
+| `goldenflow_canonicalize_address(value)` | `address_standardize` | Standardize a postal address |
+| `goldenflow_strip(value)` | `strip` | Strip leading/trailing whitespace |
+| `goldenflow_whitespace_normalize(value)` | `collapse_whitespace` | Collapse internal whitespace runs |
+
+```python
+# Normalize columns inline before matching
+con.sql("""
+    SELECT
+        goldenflow_normalize_email(email)  AS email_norm,
+        goldenflow_normalize_phone(phone)  AS phone_e164
+    FROM customers
+""").show()
+```
+
 ## Requirements
 
 - Python 3.11+
