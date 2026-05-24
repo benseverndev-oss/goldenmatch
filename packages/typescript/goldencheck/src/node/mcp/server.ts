@@ -13,8 +13,17 @@ import { Severity, type Finding, type DatasetProfile, healthScore } from "../../
 import { listAvailableDomains, getDomainTypes } from "../../core/semantic/domains/index.js";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES, handleAgentTool } from "./agent-tools.js";
 
+// Local Tool shape. Annotating the arrays with this (rather than letting the
+// type flow in from agent-tools) keeps the dts bundler from namespace-importing
+// agent-tools above the shebang (rollup-plugin-dts: "Syntax not yet supported").
+interface Tool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+}
+
 // Tool definitions for MCP registration
-const CORE_TOOL_DEFINITIONS = [
+const CORE_TOOL_DEFINITIONS: readonly Tool[] = [
   {
     name: "scan",
     description: "Scan a data file (CSV, Parquet) for data quality issues. Returns findings with severity, confidence, affected rows.",
@@ -87,7 +96,7 @@ const CORE_TOOL_DEFINITIONS = [
 
 // The full surface = 7 core tools + 10 agent tools (parity with the Python
 // goldencheck MCP server, which merges agent_tools.py into the core server).
-export const TOOL_DEFINITIONS = [...CORE_TOOL_DEFINITIONS, ...AGENT_TOOLS];
+export const TOOL_DEFINITIONS: readonly Tool[] = [...CORE_TOOL_DEFINITIONS, ...AGENT_TOOLS];
 
 // --- Tool handlers ---
 
