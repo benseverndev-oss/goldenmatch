@@ -292,6 +292,140 @@ STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_identity_list_wrapper';
 
+-- ══════════════════════════════════════════════════════════════════════
+-- Core-API parity (mirrors duckdb/core_apis.py -- 13 UDFs)
+-- ══════════════════════════════════════════════════════════════════════
+-- Wrappers over goldenmatch's function-shaped core APIs. IDENTICAL JSON
+-- in / JSON out contract to the DuckDB `goldenmatch_*` core-API UDFs so the
+-- two backends are interchangeable. Table-input functions read the table via
+-- SPI (`row_to_json`, like goldenmatch_dedupe_table); JSON-in functions take
+-- the payloads directly. All read-only -- no REVOKE.
+
+-- Profile a table (column stats, types, quality signals) as JSON.
+CREATE FUNCTION "goldenmatch_profile_table"(
+    "table_name" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_profile_table_wrapper';
+
+-- Otsu threshold over a JSON array of scores. Returns SQL NULL when the
+-- distribution is unimodal / too few scores.
+CREATE FUNCTION "goldenmatch_suggest_threshold"(
+    "scores_json" TEXT
+) RETURNS DOUBLE PRECISION
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_suggest_threshold_wrapper';
+
+-- Domain profile for a JSON array of column names, as JSON.
+CREATE FUNCTION "goldenmatch_detect_domain"(
+    "columns_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_detect_domain_wrapper';
+
+-- Extract structured features from text. kind: product/electronics (default),
+-- software, biblio/bibliographic. Returns the features as JSON.
+CREATE FUNCTION "goldenmatch_extract_features"(
+    "text" TEXT,
+    "kind" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_extract_features_wrapper';
+
+-- Evaluate predicted pairs (JSON array) or clusters (JSON object) against a
+-- ground-truth JSON array of [a, b] pairs. Returns EvalResult.summary() JSON.
+CREATE FUNCTION "goldenmatch_evaluate"(
+    "pairs_json" TEXT,
+    "ground_truth_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_evaluate_wrapper';
+
+-- CCMS comparison of two clusterings (JSON objects). Returns
+-- CompareResult.summary() JSON.
+CREATE FUNCTION "goldenmatch_compare_clusters"(
+    "a_json" TEXT,
+    "b_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_compare_clusters_wrapper';
+
+-- Run validation rules (JSON array of ValidationRule) over a table. Returns
+-- {report, valid_rows, quarantine_rows, quarantine} JSON.
+CREATE FUNCTION "goldenmatch_validate_table"(
+    "table_name" TEXT,
+    "rules_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_validate_table_wrapper';
+
+-- Apply auto-fixes to a table. Returns {fixes, fixed_rows, rows} JSON.
+CREATE FUNCTION "goldenmatch_autofix_table"(
+    "table_name" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_autofix_table_wrapper';
+
+-- Flag suspicious records in a table. sensitivity: low/medium/high. Returns
+-- a JSON array of anomaly dicts.
+CREATE FUNCTION "goldenmatch_detect_anomalies"(
+    "table_name" TEXT,
+    "sensitivity" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_detect_anomalies_wrapper';
+
+-- Validate (table, full GoldenMatchConfig JSON) before a run. Returns
+-- {has_errors, config_was_modified, findings} JSON.
+CREATE FUNCTION "goldenmatch_preflight"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_preflight_wrapper';
+
+-- Post-run signal report for (table, config). Derives pair_scores by running
+-- dedupe_df on the table. Returns {signals, adjustments, advisories} JSON.
+CREATE FUNCTION "goldenmatch_postflight"(
+    "table_name" TEXT,
+    "config_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_postflight_wrapper';
+
+-- Train Fellegi-Sunter m/u probabilities via EM. Returns the EMResult JSON;
+-- pass it straight to goldenmatch_score_probabilistic.
+CREATE FUNCTION "goldenmatch_train_em"(
+    "rows_json" TEXT,
+    "matchkey_json" TEXT,
+    "params_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_train_em_wrapper';
+
+-- Score record pairs with trained Fellegi-Sunter probabilities. Returns a
+-- JSON array of [a, b, score] triples above the link threshold.
+CREATE FUNCTION "goldenmatch_score_probabilistic"(
+    "rows_json" TEXT,
+    "matchkey_json" TEXT,
+    "em_result_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_score_probabilistic_wrapper';
+
 -- ─── Correction CRUD (v0.5.0, Phase 6A of #437 surface sync) ──────────
 --
 -- File pair-level / field-level / cluster-decision corrections into
