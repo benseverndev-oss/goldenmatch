@@ -316,12 +316,46 @@ export {
   ConfigValidationError as ControllerConfigValidationError,
   makeControllerBudget,
   getLastControllerRun,
+  planExecution,
 } from "./autoconfigController.js";
 export type {
   ControllerBudget,
   ControllerOptions,
   ControllerRunResult,
 } from "./autoconfigController.js";
+// ── Controller v3 planner + tuners + memory (gap 4) ───────────────────────
+export { applyPlannerRules } from "./autoconfigPlanner.js";
+export type {
+  PlannerRule,
+  PlannerPredicate,
+  PlannerAction,
+  PlannerContext,
+} from "./autoconfigPlanner.js";
+export {
+  DEFAULT_PLANNER_RULES,
+  autoChunkSize,
+} from "./autoconfigPlannerRules.js";
+export { makeExecutionPlan } from "./executionPlan.js";
+export type {
+  ExecutionPlan,
+  BackendName,
+  ClusteringStrategy,
+  SpillThreshold,
+} from "./executionPlan.js";
+export { makeRuntimeProfile } from "./runtimeProfile.js";
+export type { RuntimeProfile } from "./runtimeProfile.js";
+export {
+  tuneNeField,
+  tuneFieldStrategy,
+  tuneDecisionThreshold,
+} from "./autoconfigTuners.js";
+export type {
+  NETuning,
+  StrategyTuning,
+  ThresholdSuggestion,
+  ThresholdTunerOptions,
+} from "./autoconfigTuners.js";
+export { AutoConfigMemory, profileSignature } from "./autoconfigMemory.js";
 export {
   HeuristicRefitPolicy,
   createDefaultPolicy,

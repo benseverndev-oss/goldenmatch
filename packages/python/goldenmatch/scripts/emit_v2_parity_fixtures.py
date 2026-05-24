@@ -490,6 +490,143 @@ def _run_golden() -> dict[str, Any]:
 # Main
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Gap 4: memory-backed tuners (ne_tuner + golden_strategy_tuner)
+# ---------------------------------------------------------------------------
+
+def _make_correction(
+    *,
+    cid: str,
+    id_a: int,
+    id_b: int,
+    decision: str,
+    trust: float,
+    dataset: str,
+    field_name: str | None = None,
+    original_value: str | None = None,
+    corrected_value: str | None = None,
+):
+    from goldenmatch.core.memory.store import Correction
+
+    return Correction(
+        id=cid,
+        id_a=id_a,
+        id_b=id_b,
+        decision=decision,
+        source="steward",
+        trust=trust,
+        field_hash="",
+        record_hash="",
+        original_score=trust,
+        dataset=dataset,
+        field_name=field_name,
+        original_value=original_value,
+        corrected_value=corrected_value,
+    )
+
+
+def _run_tuners() -> dict[str, Any]:
+    from goldenmatch.core.autoconfig_golden_strategy_tuner import tune_field_strategy
+    from goldenmatch.core.autoconfig_ne_tuner import tune_ne_field
+    from goldenmatch.core.memory.store import MemoryStore
+
+    out: dict[str, Any] = {}
+
+    # ── NE tuner ── Python keys "match" via decision == "match" (the Decision
+    # enum never produces "match", so we store the string literal directly; the
+    # TS port maps its own "approve" decision to the same truth). 60 corrections
+    # (>= MIN_CORRECTIONS=50): 40 matches with high trust, 20 non-matches low.
+    store_ne = MemoryStore(backend="sqlite", path=":memory:")
+    # Interleave labels in id order (cNNN) so the deterministic id-sorted 90/10
+    # split lands both matches and rejects in the held-out tail -> exercises the
+    # "tuned" branch (heldout F1 tracks train F1) rather than overfit_guard.
+    ne_corrections = []
+    for i in range(60):
+        if i % 3 == 0:
+            ne_corrections.append(_make_correction(
+                cid=f"c{i:03d}", id_a=1000 + 2 * i, id_b=1001 + 2 * i,
+                decision="reject", trust=0.2, dataset="ds_ne",
+            ))
+        else:
+            ne_corrections.append(_make_correction(
+                cid=f"c{i:03d}", id_a=2 * i, id_b=2 * i + 1,
+                decision="match", trust=0.9, dataset="ds_ne",
+            ))
+    for c in ne_corrections:
+        store_ne.add_correction(c)
+    ne = tune_ne_field(store_ne, "ds_ne", "email")
+    store_ne.close()
+    out["ne_tuner"] = {
+        # is_match abstracts the Python "match" / TS "approve" split.
+        "corrections": [
+            {"id": c.id, "is_match": c.decision == "match", "trust": c.trust}
+            for c in ne_corrections
+        ],
+        "min_corrections": 50,
+        "expected": {
+            "penalty": ne.penalty,
+            "threshold": ne.threshold,
+            "n_corrections": ne.n_corrections,
+            "train_f1": ne.train_f1,
+            "heldout_f1": ne.heldout_f1,
+            "reason": ne.reason,
+        },
+    }
+
+    # ── Golden-strategy tuner ── 60 field-level corrections on "address1":
+    # 45 no-edits (reviewer kept original) + 15 edits to a LONGER value
+    # (favors longest_value). Deterministic id-sorted 90/10 split.
+    store_gs = MemoryStore(backend="sqlite", path=":memory:")
+    gs_corrections = []
+    for i in range(45):
+        gs_corrections.append(_make_correction(
+            cid=f"k{i:03d}", id_a=i, id_b=0,
+            decision="field_correct", trust=1.0, dataset="ds_gs",
+            field_name="address1", original_value="123 Main St",
+            corrected_value="123 Main St",
+        ))
+    for i in range(15):
+        gs_corrections.append(_make_correction(
+            cid=f"e{i:03d}", id_a=100 + i, id_b=0,
+            decision="field_correct", trust=1.0, dataset="ds_gs",
+            field_name="address1", original_value="Apt 1",
+            corrected_value="Apartment Number 1 Long",
+        ))
+    for c in gs_corrections:
+        store_gs.add_correction(c)
+    gs = tune_field_strategy(store_gs, "ds_gs", "address1")
+    store_gs.close()
+    out["golden_strategy_tuner"] = {
+        "field": "address1",
+        "corrections": [
+            {
+                "id": c.id,
+                "decision": c.decision,
+                "trust": c.trust,
+                "field_name": c.field_name,
+                "original_value": c.original_value,
+                "corrected_value": c.corrected_value,
+            }
+            for c in gs_corrections
+        ],
+        "candidates": list(
+            __import__("goldenmatch.core.autoconfig_golden_strategy_tuner",
+                       fromlist=["DEFAULT_CANDIDATE_STRATEGIES"]).DEFAULT_CANDIDATE_STRATEGIES
+        ),
+        "min_corrections": 50,
+        "expected": {
+            "field": gs.field,
+            "strategy": gs.strategy,
+            "n_corrections": gs.n_corrections,
+            "train_hit_rate": gs.train_hit_rate,
+            "heldout_hit_rate": gs.heldout_hit_rate,
+            "reason": gs.reason,
+        },
+    }
+
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, required=True)
@@ -499,6 +636,7 @@ def main() -> int:
         "probabilistic": _run_probabilistic(),
         "domain": _run_domain(),
         "planner": _run_planner(),
+        "tuners": _run_tuners(),
         "blocker": _run_blocker(),
         "clustering": _run_clustering(),
         "golden": _run_golden(),

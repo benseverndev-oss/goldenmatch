@@ -1166,5 +1166,821 @@
         "type": "probabilistic"
       }
     }
+  },
+  "tuners": {
+    "golden_strategy_tuner": {
+      "candidates": [
+        "most_complete",
+        "majority_vote",
+        "first_non_null",
+        "longest_value",
+        "confidence_majority"
+      ],
+      "corrections": [
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k000",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k001",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k002",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k003",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k004",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k005",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k006",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k007",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k008",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k009",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k010",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k011",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k012",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k013",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k014",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k015",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k016",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k017",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k018",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k019",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k020",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k021",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k022",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k023",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k024",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k025",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k026",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k027",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k028",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k029",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k030",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k031",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k032",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k033",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k034",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k035",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k036",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k037",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k038",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k039",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k040",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k041",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k042",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k043",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "123 Main St",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "k044",
+          "original_value": "123 Main St",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e000",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e001",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e002",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e003",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e004",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e005",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e006",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e007",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e008",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e009",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e010",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e011",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e012",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e013",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        },
+        {
+          "corrected_value": "Apartment Number 1 Long",
+          "decision": "field_correct",
+          "field_name": "address1",
+          "id": "e014",
+          "original_value": "Apt 1",
+          "trust": 1.0
+        }
+      ],
+      "expected": {
+        "field": "address1",
+        "heldout_hit_rate": 1.0,
+        "n_corrections": 60,
+        "reason": "learned",
+        "strategy": "longest_value",
+        "train_hit_rate": 1.0
+      },
+      "field": "address1",
+      "min_corrections": 50
+    },
+    "ne_tuner": {
+      "corrections": [
+        {
+          "id": "c000",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c001",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c002",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c003",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c004",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c005",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c006",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c007",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c008",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c009",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c010",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c011",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c012",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c013",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c014",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c015",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c016",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c017",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c018",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c019",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c020",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c021",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c022",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c023",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c024",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c025",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c026",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c027",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c028",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c029",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c030",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c031",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c032",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c033",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c034",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c035",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c036",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c037",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c038",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c039",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c040",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c041",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c042",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c043",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c044",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c045",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c046",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c047",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c048",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c049",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c050",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c051",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c052",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c053",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c054",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c055",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c056",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c057",
+          "is_match": false,
+          "trust": 0.2
+        },
+        {
+          "id": "c058",
+          "is_match": true,
+          "trust": 0.9
+        },
+        {
+          "id": "c059",
+          "is_match": true,
+          "trust": 0.9
+        }
+      ],
+      "expected": {
+        "heldout_f1": 1.0,
+        "n_corrections": 60,
+        "penalty": 0.1,
+        "reason": "tuned",
+        "threshold": 0.2,
+        "train_f1": 1.0
+      },
+      "min_corrections": 50
+    }
   }
 }
