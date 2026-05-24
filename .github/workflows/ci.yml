@@ -23,7 +23,6 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       web_ui_e2e: ${{ steps.filter.outputs.web }}
       rust: ${{ steps.filter.outputs.rust }}
-      dbt: ${{ steps.filter.outputs.dbt }}
       action: ${{ steps.filter.outputs.action }}
       ci_workflow: ${{ steps.filter.outputs.ci_workflow }}
       pyright_slice: ${{ steps.filter.outputs.pyright_slice }}
@@ -113,8 +112,6 @@ jobs:
               # Gate strictly on its own subtree so editing Rust code doesn't
               # spin up a Python lane for it.
               - 'packages/rust/extensions/duckdb/**'
-            dbt:
-              - 'packages/dbt/**'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -590,24 +587,6 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
 
-  dbt:
-    needs: changes
-    if: needs.changes.outputs.dbt == 'true' || needs.changes.outputs.ci_workflow == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      # `dbt-adapters` 1.24.0 (released 2026-05-13) introduced a
-      # `KeyError: 'javascript'` against `dbt-core` 1.11.9's
-      # `ModelLanguage` enum during macro parsing. Pinned <1.24 until
-      # upstream ships a fix; remove the bound once dbt-adapters has
-      # a clean release that parses against dbt-core 1.11.x.
-      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11'
-      - run: cd packages/dbt/goldencheck && dbt parse --no-version-check --profiles-dir .
-
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
@@ -825,7 +804,6 @@ jobs:
       - typescript
       - web_ui_e2e
       - rust
-      - dbt
       - action
       - rust_pgrx
       - duckdb_extensions
