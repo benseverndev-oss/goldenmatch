@@ -43,6 +43,11 @@ labels.jsonl
 # Turborepo
 .turbo/
 
+# Claude Code agent worktrees (transient isolated checkouts created by
+# background subagents). Never tracked; project-level .claude settings can
+# still be committed since only the worktrees subdir is ignored.
+.claude/worktrees/
+
 # Local profiling artifacts (per CLAUDE.md convention — cProfile dumps,
 # scale-audit JSON outputs, synthetic fixtures). Documented as gitignored
 # in CLAUDE.md; this entry makes that real.

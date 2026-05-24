@@ -6,6 +6,7 @@ const DOMAIN_LOADERS: Readonly<Record<string, () => Promise<{ PACK: DomainPack }
   finance: () => import("./finance.js"),
   ecommerce: () => import("./ecommerce.js"),
   real_estate: () => import("./real-estate.js"),
+  carceral: () => import("./carceral.js"),
 };
 
 export async function loadDomain(name: string): Promise<DomainPack | null> {
