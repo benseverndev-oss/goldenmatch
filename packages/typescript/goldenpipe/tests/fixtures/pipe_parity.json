@@ -1,0 +1,87 @@
+{
+  "_comment": "Cross-language parity goldens emitted by scripts/emit_ts_parity_fixtures.py. Only skew-robust invariants are asserted by the TS parity test.",
+  "python_version": "1.2.0",
+  "cases": [
+    {
+      "id": "people_dupes",
+      "input_csv": "first_name,last_name,email,city,state\nJohn,Smith,john@example.com,Boston,MA\nJon,Smith,john@example.com,Boston,MA\nJane,Doe,jane@example.com,Austin,TX\nJane,Doe,jane@example.com,Austin,TX\nRobert,Jones,bob@example.com,Denver,CO\n",
+      "status": "success",
+      "input_rows": 5,
+      "stages": [
+        {
+          "name": "load",
+          "status": "success"
+        },
+        {
+          "name": "goldencheck.scan",
+          "status": "success"
+        },
+        {
+          "name": "goldenflow.transform",
+          "status": "success"
+        },
+        {
+          "name": "goldenmatch.dedupe",
+          "status": "success"
+        }
+      ],
+      "skipped": [],
+      "golden_count": 2,
+      "unique_count": 1
+    },
+    {
+      "id": "single_row",
+      "input_csv": "first_name,last_name,email,city,state\nSolo,Person,solo@example.com,Reno,NV\n",
+      "status": "success",
+      "input_rows": 1,
+      "stages": [
+        {
+          "name": "load",
+          "status": "success"
+        },
+        {
+          "name": "goldencheck.scan",
+          "status": "success"
+        },
+        {
+          "name": "goldenflow.transform",
+          "status": "success"
+        },
+        {
+          "name": "goldenmatch.dedupe",
+          "status": "success"
+        }
+      ],
+      "skipped": [],
+      "golden_count": null,
+      "unique_count": 1
+    },
+    {
+      "id": "all_unique",
+      "input_csv": "first_name,last_name,email,city,state\nAlice,Adams,alice@example.com,Miami,FL\nBob,Brown,bob@example.com,Tulsa,OK\nCarol,Clark,carol@example.com,Akron,OH\n",
+      "status": "success",
+      "input_rows": 3,
+      "stages": [
+        {
+          "name": "load",
+          "status": "success"
+        },
+        {
+          "name": "goldencheck.scan",
+          "status": "success"
+        },
+        {
+          "name": "goldenflow.transform",
+          "status": "success"
+        },
+        {
+          "name": "goldenmatch.dedupe",
+          "status": "success"
+        }
+      ],
+      "skipped": [],
+      "golden_count": null,
+      "unique_count": 3
+    }
+  ]
+}
