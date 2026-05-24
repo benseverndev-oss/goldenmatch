@@ -206,12 +206,15 @@ importers:
   packages/typescript/infermap:
     dependencies:
       goldencheck-types:
-        specifier: file:../../../.vendor/goldencheck-types-0.1.0.tgz
-        version: file:.vendor/goldencheck-types-0.1.0.tgz
+        specifier: workspace:^
+        version: link:../goldencheck-types
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.39
+      goldenmatch:
+        specifier: workspace:*
+        version: link:../goldenmatch
       rimraf:
         specifier: ^5.0.0
         version: 5.0.10
@@ -1540,11 +1543,6 @@ packages:
   globals@17.6.0:
     resolution: {integrity: sha512-sepffkT8stwnIYbsMBpoCHJuJM5l98FUF2AnE07hfvE0m/qp3R586hw4jF4uadbhvg1ooIdzuu7CsfD2jzCaNA==}
     engines: {node: '>=18'}
-
-  goldencheck-types@file:.vendor/goldencheck-types-0.1.0.tgz:
-    resolution: {integrity: sha512-JscP1PxTyXtHDhay1RnpIp1Lg6mRPLLHi33CNUOr3BFV5Bd9pbzjQc3zOm/ifV00BkxNS2DicgNwXbvdTO9Zlg==, tarball: file:.vendor/goldencheck-types-0.1.0.tgz}
-    version: 0.1.0
-    engines: {node: '>=20'}
 
   hasown@2.0.3:
     resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}
@@ -3717,10 +3715,6 @@ snapshots:
       path-scurry: 1.11.1
 
   globals@17.6.0: {}
-
-  goldencheck-types@file:.vendor/goldencheck-types-0.1.0.tgz:
-    dependencies:
-      js-yaml: 4.1.1
 
   hasown@2.0.3:
     dependencies:
