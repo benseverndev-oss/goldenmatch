@@ -1,0 +1,94 @@
+name: "GoldenMatch"
+description: "Entity resolution — deduplicate data files in CI, report duplicate/cluster counts, and gate on a duplicate threshold."
+author: "Ben Severn"
+
+branding:
+  icon: "layers"
+  color: "yellow"
+
+inputs:
+  files:
+    description: "Glob pattern for data files to deduplicate"
+    required: true
+  config:
+    description: "Path to a goldenmatch YAML config (recommended)"
+    required: false
+    default: ""
+  exact:
+    description: "Comma-separated columns for exact-match keys (when no config)"
+    required: false
+    default: ""
+  fuzzy:
+    description: "Comma-separated field:threshold pairs for fuzzy keys, e.g. 'name:0.85,address:0.8'"
+    required: false
+    default: ""
+  max-duplicates:
+    description: "Fail if total duplicate rows exceed this (-1 disables the gate)"
+    required: false
+    default: "-1"
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.12"
+  version:
+    description: "GoldenMatch version to install (default: latest)"
+    required: false
+    default: ""
+
+outputs:
+  clusters:
+    description: "Total clusters across all files"
+    value: ${{ steps.run.outputs.clusters }}
+  duplicates:
+    description: "Total duplicate rows across all files"
+    value: ${{ steps.run.outputs.duplicates }}
+  files-processed:
+    description: "Number of files deduped"
+    value: ${{ steps.run.outputs.files_processed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: goldenmatch-pip-${{ inputs.python-version }}-${{ inputs.version || 'latest' }}
+
+    - name: Install GoldenMatch
+      shell: bash
+      env:
+        GM_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$GM_VERSION" ]; then
+          pip install -q "goldenmatch==${GM_VERSION}"
+        else
+          pip install -q "goldenmatch"
+        fi
+
+    - name: Run dedupe
+      id: run
+      shell: bash
+      env:
+        GM_FILES: ${{ inputs.files }}
+        GM_CONFIG: ${{ inputs.config }}
+        GM_EXACT: ${{ inputs.exact }}
+        GM_FUZZY: ${{ inputs.fuzzy }}
+        GM_MAX_DUPLICATES: ${{ inputs.max-duplicates }}
+      run: |
+        python "${{ github.action_path }}/scripts/run.py"
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        python "${{ github.action_path }}/scripts/comment.py"
