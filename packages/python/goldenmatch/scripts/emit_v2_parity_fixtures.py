@@ -70,7 +70,6 @@ from goldenmatch.core.probabilistic import (  # noqa: E402
 )
 from goldenmatch.core.runtime_profile import RuntimeProfile  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Gap 1 + discrete EM: probabilistic fixtures
 # ---------------------------------------------------------------------------
