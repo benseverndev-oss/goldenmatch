@@ -27,4 +27,7 @@ export { shouldNotify, sendWebhook } from "../core/engine/notifier.js";
 export { runSchedule } from "../core/engine/scheduler.js";
 
 // Node-only: A2A server
-export { runA2aServer } from "./a2a/server.js";
+export { runA2aServer, dispatchSkill, extractParams } from "./a2a/server.js";
+
+// Node-only: demo CSV writer
+export { generateDemoCsv } from "./demo-data.js";

@@ -1,0 +1,157 @@
+{
+  "cases": [
+    {
+      "name": "simple_mixed",
+      "description": "Basic mixed-type data with common quality issues",
+      "input": {
+        "kind": "records",
+        "records": [
+          {
+            "id": 0,
+            "name": "Person_0",
+            "email": "user0@test.com",
+            "age": 20,
+            "status": "active"
+          },
+          {
+            "id": 1,
+            "name": "Person_1",
+            "email": "user1@test.com",
+            "age": 21,
+            "status": "inactive"
+          },
+          {
+            "id": 2,
+            "name": "Person_2",
+            "email": "user2@test.com",
+            "age": 22,
+            "status": "pending"
+          },
+          {
+            "id": 3,
+            "name": "Person_3",
+            "email": "user3@test.com",
+            "age": 23,
+            "status": "active"
+          },
+          {
+            "id": 4,
+            "name": "Person_4",
+            "email": "user4@test.com",
+            "age": 24,
+            "status": "inactive"
+          },
+          {
+            "id": 5,
+            "name": "Person_5",
+            "email": "user5@test.com",
+            "age": 25,
+            "status": "pending"
+          },
+          {
+            "id": 6,
+            "name": "Person_6",
+            "email": "user6@test.com",
+            "age": 26,
+            "status": "active"
+          },
+          {
+            "id": 7,
+            "name": "Person_7",
+            "email": "user7@test.com",
+            "age": 27,
+            "status": "inactive"
+          },
+          {
+            "id": 8,
+            "name": "Person_8",
+            "email": "user8@test.com",
+            "age": 28,
+            "status": "pending"
+          },
+          {
+            "id": 9,
+            "name": "Person_9",
+            "email": "user9@test.com",
+            "age": 29,
+            "status": "active"
+          },
+          {
+            "id": 10,
+            "name": "Person_10",
+            "email": "user10@test.com",
+            "age": 30,
+            "status": "inactive"
+          },
+          {
+            "id": 11,
+            "name": "Person_11",
+            "email": "user11@test.com",
+            "age": 31,
+            "status": "pending"
+          },
+          {
+            "id": 12,
+            "name": "Person_12",
+            "email": "user12@test.com",
+            "age": 32,
+            "status": "active"
+          },
+          {
+            "id": 13,
+            "name": "Person_13",
+            "email": "user13@test.com",
+            "age": 33,
+            "status": "inactive"
+          },
+          {
+            "id": 14,
+            "name": "Person_14",
+            "email": "user14@test.com",
+            "age": 34,
+            "status": "pending"
+          },
+          {
+            "id": 15,
+            "name": "Person_15",
+            "email": "user15@test.com",
+            "age": 35,
+            "status": "active"
+          },
+          {
+            "id": 16,
+            "name": "Person_16",
+            "email": "user16@test.com",
+            "age": 36,
+            "status": "inactive"
+          },
+          {
+            "id": 17,
+            "name": "Person_17",
+            "email": "user17@test.com",
+            "age": 37,
+            "status": "pending"
+          },
+          {
+            "id": 18,
+            "name": "Person_18",
+            "email": "bad",
+            "age": 38,
+            "status": "active"
+          },
+          {
+            "id": 19,
+            "name": "Person_19",
+            "email": "bad",
+            "age": -5,
+            "status": "inactive"
+          }
+        ]
+      },
+      "options": {
+        "sampleSize": 100000,
+        "domain": null
+      }
+    }
+  ]
+}

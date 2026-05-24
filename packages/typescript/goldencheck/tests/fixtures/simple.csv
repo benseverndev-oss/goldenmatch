@@ -1,0 +1,6 @@
+id,name,email,age,status
+1,Alice,alice@example.com,30,active
+2,Bob,bob@test.com,25,inactive
+3,Charlie,,45,active
+4,Diana,diana@example.com,28,pending
+5,Eve,not-an-email,33,active
