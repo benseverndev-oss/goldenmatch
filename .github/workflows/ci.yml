@@ -644,9 +644,10 @@ jobs:
 
       - name: Install goldenmatch (Python bridge target)
         # The pgrx extension embeds Python via pyo3 and imports goldenmatch
-        # at runtime. The package install here is what `init()` in the
+        # (and goldenflow, for the goldenflow_* transform functions) at
+        # runtime. The package install here is what `init()` in the
         # bridge will find when Postgres starts.
-        run: pip install --break-system-packages goldenmatch>=1.1.0 pyarrow
+        run: pip install --break-system-packages goldenmatch>=1.1.0 goldenflow pyarrow
 
       - name: Install cargo-pgrx
         # 0.12.9 pin matches the pgrx version in
@@ -675,7 +676,7 @@ jobs:
         run: |
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
-          sudo pip install --break-system-packages goldenmatch>=1.1.0 2>/dev/null || true
+          sudo pip install --break-system-packages goldenmatch>=1.1.0 goldenflow 2>/dev/null || true
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
       - name: psql smoke (scalar scorer, dedupe, autoconfig)
@@ -692,6 +693,8 @@ jobs:
           # Confirm new v1.7-v1.12 functions registered alongside the originals.
           sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          # goldenflow_* transforms (fail-open: pass input through if goldenflow absent).
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenflow_normalize_email('  John@Example.COM '::TEXT), goldenmatch.goldenflow_whitespace_normalize('a   b'::TEXT);"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
             CREATE TABLE test_customers (name TEXT, email TEXT);
             INSERT INTO test_customers VALUES
