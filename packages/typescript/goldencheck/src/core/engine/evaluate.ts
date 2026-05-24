@@ -1,0 +1,90 @@
+/**
+ * Evaluate scan results against expected findings (ground truth).
+ * Port of goldencheck/engine/evaluate.py.
+ * Edge-safe: no Node.js dependencies.
+ */
+
+import type { Finding } from "../types.js";
+
+export interface ExpectedFinding {
+  readonly column: string;
+  readonly check: string;
+}
+
+export interface EvaluationResult {
+  readonly precision: number;
+  readonly recall: number;
+  readonly f1: number;
+  readonly truePositives: number;
+  readonly falsePositives: number;
+  readonly falseNegatives: number;
+  /** Sorted (column, check) tuples present in both sets. */
+  readonly tpDetails: ReadonlyArray<readonly [string, string]>;
+  /** Sorted (column, check) tuples only in actual findings. */
+  readonly fpDetails: ReadonlyArray<readonly [string, string]>;
+  /** Sorted (column, check) tuples only in expected findings. */
+  readonly fnDetails: ReadonlyArray<readonly [string, string]>;
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+function keyOf(column: string, check: string): string {
+  return `${column}\0${check}`;
+}
+
+function sortPairs(keys: Iterable<string>): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (const k of keys) {
+    const idx = k.indexOf("\0");
+    pairs.push([k.slice(0, idx), k.slice(idx + 1)]);
+  }
+  pairs.sort((a, b) => {
+    if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+    return 0;
+  });
+  return pairs;
+}
+
+/**
+ * Compare scan findings against ground-truth expected findings.
+ *
+ * Finding identity is the `(column, check)` pair. Matches Python's
+ * convention where empty/empty scores a perfect 1.0/1.0/1.0.
+ */
+export function evaluateScan(
+  findings: readonly Finding[],
+  expected: readonly ExpectedFinding[],
+): EvaluationResult {
+  const actualKeys = new Set(findings.map((f) => keyOf(f.column, f.check)));
+  const expectedKeys = new Set(expected.map((e) => keyOf(e.column, e.check)));
+
+  const tp = new Set<string>();
+  const fp = new Set<string>();
+  for (const k of actualKeys) {
+    if (expectedKeys.has(k)) tp.add(k);
+    else fp.add(k);
+  }
+  const fn = new Set<string>();
+  for (const k of expectedKeys) {
+    if (!actualKeys.has(k)) fn.add(k);
+  }
+
+  const precision = tp.size + fp.size > 0 ? tp.size / (tp.size + fp.size) : 1.0;
+  const recall = tp.size + fn.size > 0 ? tp.size / (tp.size + fn.size) : 1.0;
+  const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0.0;
+
+  return {
+    precision: round4(precision),
+    recall: round4(recall),
+    f1: round4(f1),
+    truePositives: tp.size,
+    falsePositives: fp.size,
+    falseNegatives: fn.size,
+    tpDetails: sortPairs(tp),
+    fpDetails: sortPairs(fp),
+    fnDetails: sortPairs(fn),
+  };
+}

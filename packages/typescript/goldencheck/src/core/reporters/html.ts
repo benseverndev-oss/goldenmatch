@@ -1,0 +1,126 @@
+/**
+ * HTML report generator — shareable, self-contained data quality report.
+ * Port of goldencheck/reporters/html_reporter.py.
+ *
+ * Edge-safe: returns the HTML string (no file I/O). The Node layer / CLI
+ * is responsible for writing it to disk.
+ */
+
+import type { Finding, DatasetProfile } from "../types.js";
+import { Severity, severityLabel, healthScore } from "../types.js";
+
+const SEVERITY_COLORS: Record<number, string> = {
+  [Severity.ERROR]: "#ff4444",
+  [Severity.WARNING]: "#ffbb33",
+  [Severity.INFO]: "#33b5e5",
+};
+
+const GRADE_COLORS: Record<string, string> = {
+  A: "#00ff00",
+  B: "#7fff00",
+  C: "#ffff00",
+  D: "#ff7f00",
+  F: "#ff0000",
+};
+
+/** Group WARNING/ERROR findings by column for the capped health score. */
+function findingsByColumn(
+  findings: readonly Finding[],
+): Record<string, { errors: number; warnings: number }> {
+  const byCol: Record<string, { errors: number; warnings: number }> = {};
+  for (const f of findings) {
+    if (f.severity >= Severity.WARNING) {
+      if (!byCol[f.column]) byCol[f.column] = { errors: 0, warnings: 0 };
+      if (f.severity === Severity.ERROR) byCol[f.column]!.errors += 1;
+      else byCol[f.column]!.warnings += 1;
+    }
+  }
+  return byCol;
+}
+
+/**
+ * Generate a self-contained HTML report string.
+ * Mirrors `report_html()` in the Python sibling byte-for-byte where practical.
+ */
+export function reportHtml(findings: readonly Finding[], profile: DatasetProfile): string {
+  const errors = findings.filter((f) => f.severity === Severity.ERROR).length;
+  const warnings = findings.filter((f) => f.severity === Severity.WARNING).length;
+
+  const byCol = findingsByColumn(findings);
+  const { grade, points: score } = healthScore(byCol);
+  const gradeColor = GRADE_COLORS[grade] ?? "#888";
+
+  const findingRows = findings
+    .map((f) => {
+      const color = SEVERITY_COLORS[f.severity] ?? "#888";
+      const conf = f.confidence >= 0.8 ? "H" : f.confidence >= 0.5 ? "M" : "L";
+      const source = f.source === "llm" ? " [LLM]" : "";
+      const samples = f.sampleValues.length > 0 ? f.sampleValues.slice(0, 3).join(", ") : "";
+      return (
+        `<tr><td style="color:${color};font-weight:bold">${severityLabel(f.severity)}</td>` +
+        `<td>${f.column}</td><td>${f.check}</td>` +
+        `<td>${f.message}</td><td>${f.affectedRows}</td>` +
+        `<td>${conf}${source}</td><td style="color:#888">${samples}</td></tr>`
+      );
+    })
+    .join("");
+
+  const colRows = profile.columns
+    .map((c) => {
+      const top =
+        c.topValues.length > 0
+          ? c.topValues
+              .slice(0, 3)
+              .map(([v, n]) => `${v}(${n})`)
+              .join(", ")
+          : "";
+      return (
+        `<tr><td><b>${c.name}</b></td><td>${c.inferredType}</td>` +
+        `<td>${c.nullPct.toFixed(1)}%</td><td>${c.uniquePct.toFixed(1)}%</td>` +
+        `<td style="color:#888">${top}</td></tr>`
+      );
+    })
+    .join("");
+
+  const rowsFmt = profile.rowCount.toLocaleString("en-US");
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>GoldenCheck Report — ${profile.filePath}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; background: #1a1a2e; color: #eee; }
+h1 { color: #FFD700; }
+h2 { color: #ccc; border-bottom: 1px solid #333; padding-bottom: 8px; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th { text-align: left; padding: 8px; border-bottom: 2px solid #444; color: #aaa; }
+td { padding: 6px 8px; border-bottom: 1px solid #333; }
+.badge { display: inline-block; padding: 4px 16px; border-radius: 6px; font-weight: bold; font-size: 1.2em; color: #000; }
+.summary { display: flex; gap: 32px; margin: 16px 0; }
+.stat { text-align: center; }
+.stat-value { font-size: 2em; font-weight: bold; color: #FFD700; }
+.stat-label { color: #888; }
+</style></head><body>
+<h1>GoldenCheck Report</h1>
+<p>${profile.filePath} &mdash; ${rowsFmt} rows, ${profile.columnCount} columns</p>
+
+<div class="summary">
+<div class="stat"><div class="stat-value"><span class="badge" style="background:${gradeColor}">${grade}</span></div><div class="stat-label">Health (${score})</div></div>
+<div class="stat"><div class="stat-value" style="color:#ff4444">${errors}</div><div class="stat-label">Errors</div></div>
+<div class="stat"><div class="stat-value" style="color:#ffbb33">${warnings}</div><div class="stat-label">Warnings</div></div>
+<div class="stat"><div class="stat-value">${findings.length}</div><div class="stat-label">Total Findings</div></div>
+</div>
+
+<h2>Findings</h2>
+<table>
+<thead><tr><th>Severity</th><th>Column</th><th>Check</th><th>Message</th><th>Rows</th><th>Conf</th><th>Samples</th></tr></thead>
+<tbody>${findingRows}</tbody>
+</table>
+
+<h2>Column Profile</h2>
+<table>
+<thead><tr><th>Column</th><th>Type</th><th>Null%</th><th>Unique%</th><th>Top Values</th></tr></thead>
+<tbody>${colRows}</tbody>
+</table>
+
+<p style="color:#666;margin-top:32px">Generated by <a href="https://github.com/benseverndev-oss/goldencheck" style="color:#FFD700">GoldenCheck</a></p>
+</body></html>`;
+}

@@ -57,6 +57,11 @@ export { applyCorroborationBoost, applyConfidenceDowngrade } from "./engine/conf
 export { applyFixes, type FixEntry, type FixReport } from "./engine/fixer.js";
 export { diffData, formatDiffReport, type DiffReport, type SchemaChange, type FindingChange, type StatChange } from "./engine/differ.js";
 export { autoTriage, type TriageResult } from "./engine/triage.js";
+export {
+  evaluateScan,
+  type ExpectedFinding,
+  type EvaluationResult,
+} from "./engine/evaluate.js";
 // NOTE: history.ts, scheduler.ts, notifier.ts are in core/engine/ but use node:fs —
 // they export types (ScanRecord, ScheduleOptions) that are edge-safe,
 // but the functions (recordScan, loadHistory, runSchedule) require Node.
@@ -87,6 +92,7 @@ export { validateConfig } from "./config/schema.js";
 // Reporters
 export { reportJson } from "./reporters/json.js";
 export { ciCheck } from "./reporters/ci.js";
+export { reportHtml } from "./reporters/html.js";
 
 // LLM
 export { callLlm, checkLlmAvailable } from "./llm/providers.js";
@@ -95,6 +101,15 @@ export { mergeLlmFindings } from "./llm/merger.js";
 export { buildSampleBlocks } from "./llm/sample-block.js";
 export { estimateCost, checkBudget, CostReport } from "./llm/budget.js";
 export type { LLMResponse, LLMColumnAssessment, LLMRelation } from "./llm/prompts.js";
+export {
+  RULE_GENERATION_PROMPT,
+  generateRules,
+  applyRules,
+  serializeRules,
+  deserializeRules,
+  type GeneratedRule,
+  type RuleParams,
+} from "./llm/rule-generator.js";
 
 // Baseline
 export { createBaseline } from "./baseline/index.js";
@@ -116,7 +131,10 @@ export { validateData } from "./engine/validator.js";
 export { COLUMN_PROFILERS, type Profiler, type RelationProfiler, generalize } from "./profilers/index.js";
 
 // Relations
-export { RELATION_PROFILERS } from "./relations/index.js";
+export { RELATION_PROFILERS, IdentitySafePkProfiler } from "./relations/index.js";
+
+// Demo data generator
+export { generateDemoRecords, type DemoOptions } from "./cli/demo-data.js";
 
 // Semantic
 export { classifyColumns, loadTypeDefs, matchByName } from "./semantic/classifier.js";

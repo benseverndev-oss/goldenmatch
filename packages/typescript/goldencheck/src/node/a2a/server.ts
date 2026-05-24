@@ -6,12 +6,24 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "../reader.js";
 import { scanData } from "../../core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../core/engine/confidence.js";
 import { autoTriage } from "../../core/engine/triage.js";
-import { Severity, type Finding, type DatasetProfile, healthScore } from "../../core/types.js";
+import { validateData } from "../../core/engine/validator.js";
+import { applyFixes } from "../../core/engine/fixer.js";
+import { Severity, type Finding, healthScore } from "../../core/types.js";
+import { validateConfig } from "../../core/config/schema.js";
 import { listAvailableDomains } from "../../core/semantic/domains/index.js";
+import {
+  selectStrategy,
+  buildAlternatives,
+  explainFinding,
+  findingsToFbc,
+} from "../../core/agent/intelligence.js";
+import { generateHandoff } from "../../core/agent/handoff.js";
+import { ReviewQueue, type ReviewItem } from "../../core/agent/review-queue.js";
 
 // --- Agent Card ---
 
@@ -68,79 +80,259 @@ function serializeFinding(f: Finding): object {
     check: f.check,
     message: f.message,
     affected_rows: f.affectedRows,
-    sample_values: f.sampleValues,
-    confidence: f.confidence,
+    sample_values: f.sampleValues.slice(0, 5),
+    suggestion: f.suggestion,
+    confidence: Math.round(f.confidence * 10000) / 10000,
     source: f.source,
   };
+}
+
+function serializeReviewItem(item: ReviewItem): object {
+  return {
+    item_id: item.itemId,
+    column: item.column,
+    check: item.check,
+    severity: item.severity,
+    confidence: Math.round(item.confidence * 10000) / 10000,
+    message: item.message,
+    explanation: item.explanation,
+    status: item.status,
+  };
+}
+
+// Shared review queue (memory backend for the server lifetime). Mirrors the
+// module-level `_review_queue` in goldencheck/a2a/skills.py.
+const reviewQueue = new ReviewQueue();
+
+let _jobCounter = 0;
+function autoJobName(): string {
+  _jobCounter += 1;
+  return `a2a-${Date.now().toString(36)}${_jobCounter.toString(36)}`;
 }
 
 // --- Skill Handlers ---
 
 function handleScan(params: Record<string, unknown>): object {
   const filePath = params["file_path"] as string;
-  if (!filePath) return { error: "file_path required" };
+  if (!filePath) return { error: "file_path is required" };
 
   const data = readFile(filePath);
   const domain = params["domain"] as string | undefined;
+  const jobName = (params["job_name"] as string) || autoJobName();
+
   const result = scanData(data, { domain });
   const findings = applyConfidenceDowngrade(result.findings, false);
-  const triage = autoTriage(findings);
-  const { grade, points } = healthScore(findingsByColumn(findings));
+
+  // Classify into the shared review queue.
+  const classified = reviewQueue.classifyFindings(findings, jobName);
+
+  const fbc = findingsToFbc(findings);
+  const { grade, points } = healthScore(fbc);
 
   return {
-    file: filePath,
-    rows: result.profile.rowCount,
-    columns: result.profile.columnCount,
-    health_grade: grade,
-    health_score: points,
+    job_name: jobName,
+    row_count: result.profile.rowCount,
+    column_count: result.profile.columnCount,
+    health: { grade, score: points },
+    total_findings: findings.length,
+    errors: findings.filter((f) => f.severity === Severity.ERROR).length,
+    warnings: findings.filter((f) => f.severity === Severity.WARNING).length,
+    infos: findings.filter((f) => f.severity === Severity.INFO).length,
+    auto_pinned: classified.pinned.length,
+    review_queue: classified.review.length,
+    auto_dismissed: classified.dismissed.length,
     findings: findings.map(serializeFinding),
-    triage: {
-      pinned: triage.pin.length,
-      review: triage.review.length,
-      dismissed: triage.dismiss.length,
-    },
   };
 }
 
 function handleAnalyzeData(params: Record<string, unknown>): object {
   const filePath = params["file_path"] as string;
-  if (!filePath) return { error: "file_path required" };
+  if (!filePath) return { error: "file_path is required" };
 
   const data = readFile(filePath);
-
-  // Simple domain detection — score each domain's name hints
-  const domains = listAvailableDomains();
-  const colNames = data.columns.map((c) => c.toLowerCase());
-  const scores: Record<string, number> = {};
-
-  for (const domain of domains) {
-    const { getDomainTypes } = require("../../core/semantic/domains/index.js");
-    const types = getDomainTypes(domain);
-    if (!types) continue;
-    let hits = 0;
-    for (const def of Object.values(types) as Array<{ nameHints: string[] }>) {
-      for (const hint of def.nameHints) {
-        if (colNames.some((c) => c.includes(hint.toLowerCase()))) hits++;
-      }
-    }
-    scores[domain] = data.columns.length > 0 ? hits / data.columns.length : 0;
-  }
-
-  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  const decision = selectStrategy(data);
+  const domainScores = (decision.why["domain_scores"] as Record<string, number>) ?? {};
+  const alternatives = buildAlternatives(decision, domainScores);
 
   return {
-    file: filePath,
-    rows: data.rowCount,
-    columns: data.columns.length,
-    column_names: data.columns,
-    strategy: {
-      domain: best && best[1] > 0.2 ? best[0] : null,
-      domain_confidence: best ? best[1] : 0,
-      sample_strategy: data.rowCount <= 50000 ? "full" : "sample_100k",
-      profiler_strategy: data.columns.length <= 20 ? "standard" : data.columns.length <= 80 ? "parallel_batched" : "wide_table",
-    },
-    domain_scores: scores,
+    domain: decision.domain,
+    domain_confidence: Math.round(decision.domainConfidence * 10000) / 10000,
+    sample_strategy: decision.sampleStrategy,
+    profiler_strategy: decision.profilerStrategy,
+    llm_boost: decision.llmBoost,
+    why: decision.why,
+    alternatives,
   };
+}
+
+function handleValidate(params: Record<string, unknown>): object {
+  const filePath = params["file_path"] as string;
+  const configPath = (params["config_path"] as string) || "goldencheck.yml";
+  if (!filePath) return { error: "file_path is required" };
+
+  if (!existsSync(configPath)) {
+    return { error: `Config not found at ${configPath}` };
+  }
+  let config;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const yaml = require("yaml") as { parse(s: string): unknown };
+    config = validateConfig(yaml.parse(readFileSync(configPath, "utf-8")));
+  } catch (e) {
+    return { error: `Failed to load config: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const data = readFile(filePath);
+  const findings = validateData(data, config);
+  return {
+    total_findings: findings.length,
+    errors: findings.filter((f) => f.severity === Severity.ERROR).length,
+    warnings: findings.filter((f) => f.severity === Severity.WARNING).length,
+    findings: findings.map(serializeFinding),
+  };
+}
+
+function handleExplain(params: Record<string, unknown>): object {
+  const filePath = params["file_path"] as string;
+  const column = params["column"] as string;
+  const check = params["check"] as string;
+  if (!filePath || !column || !check) {
+    return { error: "file_path, column, and check are required" };
+  }
+
+  const data = readFile(filePath);
+  const result = scanData(data);
+  const findings = applyConfidenceDowngrade(result.findings, false);
+  const target = findings.find((f) => f.column === column && f.check === check);
+  if (!target) {
+    return { error: `No finding for column=${JSON.stringify(column)}, check=${JSON.stringify(check)}` };
+  }
+  return explainFinding(target, result.profile);
+}
+
+function handleReview(params: Record<string, unknown>): object {
+  const jobName = (params["job_name"] as string) || "";
+  const action = (params["action"] as string) || "list";
+
+  if (action === "list") {
+    if (!jobName) return { error: "job_name is required for listing review items" };
+    const pending = reviewQueue.pending(jobName);
+    const stats = reviewQueue.stats(jobName);
+    return {
+      job_name: jobName,
+      stats,
+      pending: pending.map(serializeReviewItem),
+    };
+  }
+
+  if (action === "approve" || action === "reject") {
+    const itemId = (params["item_id"] as string) || "";
+    const decidedBy = (params["decided_by"] as string) || "a2a-agent";
+    const reason = (params["reason"] as string) || "";
+    if (!itemId) return { error: "item_id is required for approve/reject" };
+    try {
+      if (action === "approve") reviewQueue.approve(itemId, decidedBy, reason);
+      else reviewQueue.reject(itemId, decidedBy, reason);
+      return { item_id: itemId, action, status: "ok" };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  return { error: `Unknown review action: ${JSON.stringify(action)}` };
+}
+
+function handleConfigure(params: Record<string, unknown>): object {
+  const filePath = params["file_path"] as string;
+  if (!filePath) return { error: "file_path is required" };
+
+  const domain = params["domain"] as string | undefined;
+  const data = readFile(filePath);
+  const result = scanData(data, { domain });
+  const findings = applyConfidenceDowngrade(result.findings, false);
+  const triage = autoTriage(findings);
+
+  const columns: Record<string, Record<string, unknown>> = {};
+  for (const f of triage.pin) {
+    const colCfg = (columns[f.column] ??= {});
+    if (f.check === "nullability" && !("required" in colCfg)) {
+      colCfg.required = true;
+    } else if (f.check === "uniqueness" && !("unique" in colCfg)) {
+      colCfg.unique = true;
+    } else if (f.check === "range_distribution" && Object.keys(f.metadata).length > 0) {
+      const lo = f.metadata["expected_min"];
+      const hi = f.metadata["expected_max"];
+      if (lo != null || hi != null) {
+        colCfg.range = [lo ?? null, hi ?? null];
+      }
+    }
+  }
+
+  const configDict: Record<string, unknown> = { version: 1, columns };
+  if (domain) configDict.domain = domain;
+
+  return {
+    config: configDict,
+    pinned_count: triage.pin.length,
+    review_count: triage.review.length,
+    dismissed_count: triage.dismiss.length,
+  };
+}
+
+function handleFix(params: Record<string, unknown>): object {
+  const filePath = params["file_path"] as string;
+  const mode = (params["mode"] as "safe" | "moderate" | "aggressive") || "safe";
+  if (!filePath) return { error: "file_path is required" };
+
+  const data = readFile(filePath);
+  const result = scanData(data);
+  const findings = applyConfidenceDowngrade(result.findings, false);
+
+  let report;
+  try {
+    ({ report } = applyFixes(data, findings, mode));
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+
+  return {
+    mode,
+    total_rows_fixed: report.totalRowsFixed,
+    fixes: report.entries.map((e) => ({
+      column: e.column,
+      fix_type: e.fixType,
+      rows_affected: e.rowsAffected,
+      sample_before: e.sampleBefore.slice(0, 3),
+      sample_after: e.sampleAfter.slice(0, 3),
+    })),
+  };
+}
+
+function handleHandoff(params: Record<string, unknown>): object {
+  const filePath = params["file_path"] as string;
+  const jobName = (params["job_name"] as string) || autoJobName();
+  if (!filePath) return { error: "file_path is required" };
+
+  const data = readFile(filePath);
+  const result = scanData(data);
+  const findings = applyConfidenceDowngrade(result.findings, false);
+  const triage = autoTriage(findings);
+
+  const pinnedRules = triage.pin.map((f) => ({
+    column: f.column,
+    check: f.check,
+    message: f.message,
+  }));
+
+  return generateHandoff({
+    filePath,
+    findings,
+    profile: result.profile,
+    pinnedRules,
+    reviewPending: triage.review.length,
+    dismissed: triage.dismiss.length,
+    jobName,
+  });
 }
 
 function handleCompareDomains(params: Record<string, unknown>): object {
@@ -168,13 +360,36 @@ function handleCompareDomains(params: Record<string, unknown>): object {
   return { results, recommendation: results[0]?.domain ?? null };
 }
 
-function dispatchSkill(skillId: string, params: Record<string, unknown>): object {
+/**
+ * Route a skill request to the appropriate handler. Mirrors the dispatch
+ * table in goldencheck/a2a/skills.py.
+ */
+export function dispatchSkill(skillId: string, params: Record<string, unknown>): object {
   switch (skillId) {
-    case "scan": return handleScan(params);
     case "analyze_data": return handleAnalyzeData(params);
+    case "scan": return handleScan(params);
+    case "validate": return handleValidate(params);
+    case "explain": return handleExplain(params);
+    case "review": return handleReview(params);
+    case "configure": return handleConfigure(params);
+    case "fix": return handleFix(params);
     case "compare_domains": return handleCompareDomains(params);
+    case "handoff": return handleHandoff(params);
     default: return { error: `Unknown skill: ${skillId}` };
   }
+}
+
+/** Extract structured params from an A2A message's first data part. */
+export function extractParams(message: Record<string, unknown>): Record<string, unknown> {
+  const parts = (message["parts"] as unknown[]) ?? [];
+  for (const part of parts) {
+    if (part && typeof part === "object") {
+      const p = part as Record<string, unknown>;
+      if (p["type"] === "data") return (p["data"] as Record<string, unknown>) ?? {};
+      if (!("type" in p)) return p;
+    }
+  }
+  return {};
 }
 
 // --- HTTP Server ---
@@ -225,7 +440,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
     const skillId = body.skill ?? body.skill_id;
-    const params = body.params ?? body.message?.parts?.[0]?.content ?? {};
+    const params = body.params ?? (body.message ? extractParams(body.message) : {});
 
     const taskId = String(nextTaskId++);
     taskRegistry.set(taskId, { id: taskId, state: "working", skill: skillId, result: null, error: null });
@@ -251,7 +466,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
     const skillId = body.skill ?? body.skill_id;
-    const params = body.params ?? {};
+    const params = body.params ?? (body.message ? extractParams(body.message) : {});
 
     const taskId = String(nextTaskId++);
     res.writeHead(200, {

@@ -12,7 +12,8 @@ import { scanData } from "../../src/core/engine/scanner.js";
 import { applyConfidenceDowngrade } from "../../src/core/engine/confidence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FIXTURES_DIR = join(__dirname, "..", "..", "..", "tests", "fixtures");
+// __dirname = <pkg>/tests/parity → up two levels to <pkg>, then tests/fixtures.
+const FIXTURES_DIR = join(__dirname, "..", "fixtures");
 const GOLDENS_DIR = join(FIXTURES_DIR, "_goldens_js");
 const MANIFEST_PATH = join(FIXTURES_DIR, "parity_cases.json");
 

@@ -1,0 +1,102 @@
+{
+  "findings": [
+    {
+      "severity": "WARNING",
+      "column": "id",
+      "check": "type_inference",
+      "confidence": 0.6
+    },
+    {
+      "severity": "WARNING",
+      "column": "email",
+      "check": "format_detection",
+      "confidence": 0.6
+    },
+    {
+      "severity": "WARNING",
+      "column": "age",
+      "check": "range_distribution",
+      "confidence": 0.8
+    },
+    {
+      "severity": "WARNING",
+      "column": "age",
+      "check": "sequence_detection",
+      "confidence": 0.8
+    },
+    {
+      "severity": "INFO",
+      "column": "id",
+      "check": "nullability",
+      "confidence": 0.5
+    },
+    {
+      "severity": "INFO",
+      "column": "id",
+      "check": "uniqueness",
+      "confidence": 0.7
+    },
+    {
+      "severity": "INFO",
+      "column": "id",
+      "check": "range_distribution",
+      "confidence": 1.0
+    },
+    {
+      "severity": "INFO",
+      "column": "name",
+      "check": "nullability",
+      "confidence": 0.5
+    },
+    {
+      "severity": "INFO",
+      "column": "name",
+      "check": "uniqueness",
+      "confidence": 0.7
+    },
+    {
+      "severity": "INFO",
+      "column": "email",
+      "check": "nullability",
+      "confidence": 0.5
+    },
+    {
+      "severity": "INFO",
+      "column": "email",
+      "check": "format_detection",
+      "confidence": 0.6
+    },
+    {
+      "severity": "INFO",
+      "column": "email",
+      "check": "pattern_consistency",
+      "confidence": 0.5
+    },
+    {
+      "severity": "INFO",
+      "column": "age",
+      "check": "nullability",
+      "confidence": 0.5
+    },
+    {
+      "severity": "INFO",
+      "column": "age",
+      "check": "uniqueness",
+      "confidence": 0.7
+    },
+    {
+      "severity": "INFO",
+      "column": "age",
+      "check": "range_distribution",
+      "confidence": 1.0
+    },
+    {
+      "severity": "INFO",
+      "column": "status",
+      "check": "nullability",
+      "confidence": 0.5
+    }
+  ],
+  "health_grade": "B",
+  "health_score": 88
+}
