@@ -10,3 +10,4 @@ export { run } from "./run.js";
 export type { RunOptions } from "./run.js";
 export { readCsv, parseCsv } from "./csv.js";
 export { loadConfig, normalizeConfig } from "./loadConfig.js";
+export { TOOLS as MCP_TOOLS, handleTool as mcpHandleTool, startMcpServer } from "./mcp/server.js";

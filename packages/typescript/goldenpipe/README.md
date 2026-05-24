@@ -94,6 +94,18 @@ goldenpipe-js run people.csv [-c pipeline.yml] [-v]   # run the chain on a CSV
 goldenpipe-js stages                                  # list registered stages
 goldenpipe-js validate -c pipeline.yml                # dry-run wiring validation
 goldenpipe-js init [-d .]                             # scaffold a goldenpipe.yml
+goldenpipe-js mcp-serve                               # run the MCP server (stdio)
+```
+
+## MCP server
+
+GoldenPipe ships an MCP server (stdio, JSON-RPC 2.0) exposing the same 4 tools as
+the Python sibling — `list_stages`, `validate_pipeline`, `run_pipeline`,
+`explain_pipeline`. Run it via `goldenpipe-js mcp-serve` or the `goldenpipe-mcp`
+bin. Wire it into an MCP client (e.g. Claude Desktop):
+
+```json
+{ "mcpServers": { "goldenpipe": { "command": "goldenpipe-mcp" } } }
 ```
 
 ## Architecture
@@ -132,7 +144,7 @@ A **column-context pipeline** carries semantic metadata across stages: GoldenChe
 
 - **`identity_resolve` stage** — GoldenMatch-JS Identity Graph wiring through the pipeline. The edge-safe `InMemoryIdentityStore` exists in `goldenmatch`, but the pipeline-driven `resolveClusters` population is not yet exposed.
 - **`infer_schema` stage** — InferMap-based schema inference is not ported.
-- **Servers/TUI** — the FastAPI REST API, A2A agent server, MCP server, and Textual TUI from the Python CLI are not ported.
+- **Servers/TUI** — the FastAPI REST API, A2A agent server, and Textual TUI from the Python CLI are not ported. (The MCP server **is** ported — see above.)
 
 ### Sibling version-skew artifacts
 

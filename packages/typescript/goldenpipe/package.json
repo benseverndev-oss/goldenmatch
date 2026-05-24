@@ -1,6 +1,6 @@
 {
   "name": "goldenpipe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Golden Suite orchestrator — chains GoldenCheck, GoldenFlow, and GoldenMatch into one adaptive pipeline. TypeScript port of the goldenpipe Python library.",
   "keywords": [
     "pipeline",
@@ -46,7 +46,8 @@
     }
   },
   "bin": {
-    "goldenpipe-js": "./dist/cli.cjs"
+    "goldenpipe-js": "./dist/cli.cjs",
+    "goldenpipe-mcp": "./dist/node/mcp/server.cjs"
   },
   "files": [
     "dist",

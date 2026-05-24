@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * GoldenPipe JS CLI — Commander.js port of the Typer CLI.
- * Commands: run, stages, validate, init.
+ * Commands: run, stages, validate, init, mcp-serve.
  *
- * The FastAPI / A2A / MCP / TUI serve commands from the Python CLI are
+ * The FastAPI / A2A / TUI serve commands from the Python CLI are
  * deferred (see README + CLAUDE.md).
  */
 
@@ -18,8 +18,9 @@ import {
 } from "./core/index.js";
 import { run } from "./node/run.js";
 import { loadConfig } from "./node/loadConfig.js";
+import { startMcpServer } from "./node/mcp/server.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 function printResult(result: PipeResult, verbose: boolean): void {
   process.stdout.write(`GoldenPipe: ${result.source}\n`);
@@ -121,6 +122,13 @@ program
     const out = join(opts.dir, "goldenpipe.yml");
     writeFileSync(out, lines.join("\n") + "\n");
     process.stdout.write(`Created ${out}\n`);
+  });
+
+program
+  .command("mcp-serve")
+  .description("Run the GoldenPipe MCP server over stdio (JSON-RPC 2.0)")
+  .action(() => {
+    startMcpServer();
   });
 
 program.parseAsync(process.argv).catch((e: unknown) => {
