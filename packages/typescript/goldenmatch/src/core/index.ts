@@ -251,8 +251,16 @@ export type { PairExplanation, ClusterExplanation } from "./explain.js";
 // Probabilistic (Fellegi-Sunter)
 // ---------------------------------------------------------------------------
 
-export { buildComparisonVector, trainEM, scoreProbabilistic } from "./probabilistic.js";
-export type { EMResult } from "./probabilistic.js";
+export {
+  buildComparisonVector,
+  trainEM,
+  scoreProbabilistic,
+  scoreProbabilisticPair,
+  trainEMContinuous,
+  scoreProbabilisticContinuous,
+  continuousScores,
+} from "./probabilistic.js";
+export type { EMResult, EMOptions, ContinuousEMResult } from "./probabilistic.js";
 
 // ---------------------------------------------------------------------------
 // Evaluation

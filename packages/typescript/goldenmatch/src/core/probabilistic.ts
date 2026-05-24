@@ -178,6 +178,314 @@ function buildComparisonMatrix(
   return out;
 }
 
+/**
+ * Continuous (Winkler-extension) field scores for a pair: raw scorer output
+ * per field in [0,1], preserving the continuous signal instead of
+ * discretizing into levels. Null scores become 0.0. Mirrors Python
+ * ``probabilistic.continuous_scores``.
+ */
+export function continuousScores(
+  rowA: Row,
+  rowB: Row,
+  fields: readonly MatchkeyField[],
+): readonly number[] {
+  const out: number[] = [];
+  for (const f of fields) {
+    let valA = asString(rowA[f.field]);
+    let valB = asString(rowB[f.field]);
+    if (f.transforms.length > 0) {
+      valA = applyTransforms(valA, f.transforms);
+      valB = applyTransforms(valB, f.transforms);
+    }
+    const s = scoreField(valA, valB, f.scorer);
+    out.push(s ?? 0.0);
+  }
+  return out;
+}
+
+function buildContinuousMatrix(
+  pairs: ReadonlyArray<readonly [number, number]>,
+  rowById: ReadonlyMap<number, Row>,
+  fields: readonly MatchkeyField[],
+): number[][] {
+  const out: number[][] = [];
+  for (const [a, b] of pairs) {
+    const rowA = rowById.get(a) ?? {};
+    const rowB = rowById.get(b) ?? {};
+    out.push([...continuousScores(rowA, rowB, fields)]);
+  }
+  return out;
+}
+
+/** Median of a numeric array (matches numpy.median: average of the two
+ *  middle elements on even length). */
+function median(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid]!;
+  return (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** Weighted average: sum(w_i * x_i) / sum(w_i). Mirrors numpy.average. */
+function weightedAverage(
+  values: readonly number[],
+  weights: readonly number[],
+): number {
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < values.length; i++) {
+    num += values[i]! * weights[i]!;
+    den += weights[i]!;
+  }
+  return den === 0 ? 0 : num / den;
+}
+
+// ---------------------------------------------------------------------------
+// Public: ContinuousEMResult + trainEMContinuous (Winkler extension)
+// ---------------------------------------------------------------------------
+
+export interface ContinuousEMResult {
+  /** field -> mean score for matches. */
+  readonly mMean: Readonly<Record<string, number>>;
+  /** field -> variance for matches. */
+  readonly mVar: Readonly<Record<string, number>>;
+  /** field -> mean score for non-matches. */
+  readonly uMean: Readonly<Record<string, number>>;
+  /** field -> variance for non-matches. */
+  readonly uVar: Readonly<Record<string, number>>;
+  readonly converged: boolean;
+  readonly iterations: number;
+  readonly proportionMatched: number;
+}
+
+/**
+ * Train Fellegi-Sunter with continuous scores (Winkler extension). Models
+ * P(score|match) and P(score|non-match) as per-field Gaussians instead of
+ * discretizing into levels. Ports Python ``train_em_continuous``.
+ */
+export function trainEMContinuous(
+  rows: readonly Row[],
+  mk: MatchkeyConfig,
+  options?: EMOptions,
+): ContinuousEMResult {
+  const emIterations =
+    mk.type === "probabilistic" ? mk.emIterations : undefined;
+  const convergenceThreshold =
+    mk.type === "probabilistic" ? mk.convergenceThreshold : undefined;
+  const maxIterations = options?.maxIterations ?? emIterations ?? 20;
+  const convergence = options?.convergence ?? convergenceThreshold ?? 0.001;
+  const blockingFields = new Set(options?.blockingFields ?? []);
+  const seed = options?.seed ?? 42;
+  const nSamplePairs = options?.nSamplePairs ?? 10000;
+
+  const fields = mk.fields;
+
+  const rand = makeRng(seed);
+  const rowById = new Map<number, Row>();
+  for (const r of rows) {
+    const id = r["__row_id__"];
+    if (typeof id === "number") rowById.set(id, r);
+  }
+
+  const pairs = samplePairs(rows, nSamplePairs, rand);
+
+  if (pairs.length < 10) {
+    const mMean: Record<string, number> = {};
+    const mVar: Record<string, number> = {};
+    const uMean: Record<string, number> = {};
+    const uVar: Record<string, number> = {};
+    for (const f of fields) {
+      mMean[f.field] = 0.9;
+      mVar[f.field] = 0.01;
+      uMean[f.field] = 0.2;
+      uVar[f.field] = 0.04;
+    }
+    return {
+      mMean,
+      mVar,
+      uMean,
+      uVar,
+      converged: false,
+      iterations: 0,
+      proportionMatched: 0.05,
+    };
+  }
+
+  const scoreMatrix = buildContinuousMatrix(pairs, rowById, fields);
+  const nPairs = pairs.length;
+
+  let pMatch = 0.02;
+
+  // Initialize: matches score high (tight), non-matches at the per-field median.
+  const mMean: Record<string, number> = {};
+  const mVar: Record<string, number> = {};
+  const uMean: Record<string, number> = {};
+  const uVar: Record<string, number> = {};
+  for (let j = 0; j < fields.length; j++) {
+    const f = fields[j]!;
+    const col = scoreMatrix.map((row) => row[j]!);
+    const med = blockingFields.has(f.field) ? 0.3 : median(col);
+    mMean[f.field] = 0.9;
+    mVar[f.field] = 0.01;
+    uMean[f.field] = med;
+    uVar[f.field] = 0.05;
+  }
+  // Override blocking fields.
+  for (const f of fields) {
+    if (blockingFields.has(f.field)) {
+      mMean[f.field] = 0.99;
+      mVar[f.field] = 0.001;
+      uMean[f.field] = 0.99;
+      uVar[f.field] = 0.001;
+    }
+  }
+
+  let converged = false;
+  let iterations = 0;
+  for (let iter = 0; iter < maxIterations; iter++) {
+    iterations = iter + 1;
+    const oldMMean: Record<string, number> = { ...mMean };
+    const oldUMean: Record<string, number> = { ...uMean };
+
+    // E-step: Gaussian log-likelihoods.
+    const posteriors = new Float64Array(nPairs);
+    for (let i = 0; i < nPairs; i++) {
+      let logM = Math.log(Math.max(pMatch, 1e-10));
+      let logU = Math.log(Math.max(1 - pMatch, 1e-10));
+      for (let j = 0; j < fields.length; j++) {
+        const f = fields[j]!;
+        if (blockingFields.has(f.field)) continue;
+        const s = scoreMatrix[i]![j]!;
+        const varM = Math.max(mVar[f.field]!, 1e-6);
+        const varU = Math.max(uVar[f.field]!, 1e-6);
+        logM +=
+          (-0.5 * (s - mMean[f.field]!) ** 2) / varM - 0.5 * Math.log(varM);
+        logU +=
+          (-0.5 * (s - uMean[f.field]!) ** 2) / varU - 0.5 * Math.log(varU);
+      }
+      const maxLog = Math.max(logM, logU);
+      const em = Math.exp(logM - maxLog);
+      const eu = Math.exp(logU - maxLog);
+      posteriors[i] = em / (em + eu);
+    }
+
+    // M-step.
+    let totalMatch = 0;
+    for (let i = 0; i < nPairs; i++) totalMatch += posteriors[i]!;
+    const totalNonmatch = nPairs - totalMatch;
+    pMatch = Math.max(totalMatch / nPairs, 1e-6);
+
+    for (let j = 0; j < fields.length; j++) {
+      const f = fields[j]!;
+      if (blockingFields.has(f.field)) continue;
+      const scores = scoreMatrix.map((row) => row[j]!);
+      if (totalMatch > 1e-6) {
+        const wMatch = Array.from(posteriors);
+        const mm = weightedAverage(scores, wMatch);
+        mMean[f.field] = mm;
+        const sqDiff = scores.map((s) => (s - mm) ** 2);
+        mVar[f.field] = weightedAverage(sqDiff, wMatch) + 1e-6;
+      }
+      if (totalNonmatch > 1e-6) {
+        const wNon = Array.from(posteriors, (p) => 1 - p);
+        const um = weightedAverage(scores, wNon);
+        uMean[f.field] = um;
+        const sqDiff = scores.map((s) => (s - um) ** 2);
+        uVar[f.field] = weightedAverage(sqDiff, wNon) + 1e-6;
+      }
+    }
+
+    // Convergence on means.
+    let maxDelta = 0;
+    for (const f of fields) {
+      if (blockingFields.has(f.field)) continue;
+      maxDelta = Math.max(maxDelta, Math.abs(mMean[f.field]! - oldMMean[f.field]!));
+      maxDelta = Math.max(maxDelta, Math.abs(uMean[f.field]! - oldUMean[f.field]!));
+    }
+    if (maxDelta < convergence) {
+      converged = true;
+      break;
+    }
+  }
+
+  return {
+    mMean,
+    mVar,
+    uMean,
+    uVar,
+    converged,
+    iterations,
+    proportionMatched: pMatch,
+  };
+}
+
+/**
+ * Score pairs using continuous Fellegi-Sunter (Winkler extension). Computes
+ * Gaussian log-likelihood ratios and maps to [0,1] via sigmoid. Ports Python
+ * ``score_probabilistic_continuous``.
+ *
+ * Numeric note: Python's ``math.exp`` raises OverflowError on extreme
+ * negative log-ratios; JS ``Math.exp`` returns Infinity (sigmoid -> 0) with
+ * no error. The committed parity fixtures use score-compressed datasets that
+ * never reach that branch, so both sides agree. With raw production data a
+ * non-match pair can drive the ratio past Python's overflow point — the TS
+ * port degrades gracefully to 0 where Python would raise.
+ */
+export function scoreProbabilisticContinuous(
+  rows: readonly Row[],
+  mk: MatchkeyConfig,
+  em: ContinuousEMResult,
+  options?: ProbScoreOptions,
+): ScoredPair[] {
+  const fields = mk.fields;
+  if (fields.length === 0) return [];
+
+  const excludePairs = options?.excludePairs ?? new Set<string>();
+  const threshold = options?.threshold ?? 0.5;
+
+  const rowIds: number[] = [];
+  const rowLookup: Row[] = [];
+  for (const r of rows) {
+    const id = r["__row_id__"];
+    if (typeof id === "number") {
+      rowIds.push(id);
+      rowLookup.push(r);
+    }
+  }
+
+  const results: ScoredPair[] = [];
+  for (let i = 0; i < rowIds.length; i++) {
+    for (let j = i + 1; j < rowIds.length; j++) {
+      const a = Math.min(rowIds[i]!, rowIds[j]!);
+      const b = Math.max(rowIds[i]!, rowIds[j]!);
+      const key = `${a}:${b}`;
+      if (excludePairs.has(key)) continue;
+
+      const scores = continuousScores(rowLookup[i]!, rowLookup[j]!, fields);
+
+      let logRatio = 0;
+      for (let k = 0; k < fields.length; k++) {
+        const f = fields[k]!;
+        const s = scores[k]!;
+        const varM = Math.max(em.mVar[f.field]!, 1e-6);
+        const varU = Math.max(em.uVar[f.field]!, 1e-6);
+        const logM =
+          (-0.5 * (s - em.mMean[f.field]!) ** 2) / varM - 0.5 * Math.log(varM);
+        const logU =
+          (-0.5 * (s - em.uMean[f.field]!) ** 2) / varU - 0.5 * Math.log(varU);
+        logRatio += logM - logU;
+      }
+
+      const normalized = 1.0 / (1.0 + Math.exp(-logRatio));
+      if (normalized >= threshold) {
+        results.push(makeScoredPair(a, b, Math.round(normalized * 10000) / 10000));
+      }
+    }
+  }
+  return results;
+}
+
 // ---------------------------------------------------------------------------
 // Public: trainEM
 // ---------------------------------------------------------------------------
