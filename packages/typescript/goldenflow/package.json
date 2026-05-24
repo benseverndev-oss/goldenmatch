@@ -68,10 +68,16 @@
     "commander": "^13.0.0"
   },
   "peerDependencies": {
-    "yaml": "*"
+    "yaml": "*",
+    "@aws-sdk/client-s3": "*",
+    "@google-cloud/storage": "*",
+    "pg": "*"
   },
   "peerDependenciesMeta": {
-    "yaml": { "optional": true }
+    "yaml": { "optional": true },
+    "@aws-sdk/client-s3": { "optional": true },
+    "@google-cloud/storage": { "optional": true },
+    "pg": { "optional": true }
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
