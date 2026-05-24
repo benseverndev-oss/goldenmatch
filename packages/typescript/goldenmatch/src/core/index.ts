@@ -380,8 +380,18 @@ export {
   ruleNoMatches,
   ruleUnimodalScoring,
 } from "./autoconfigRules.js";
-export { detectDomain, extractFeatures } from "./domain.js";
-export type { DomainProfile } from "./domain.js";
+export {
+  detectDomain,
+  extractFeatures,
+  extractSoftwareFeatures,
+  extractBiblioFeatures,
+  detectProductSubdomain,
+} from "./domain.js";
+export type {
+  DomainProfile,
+  SoftwareExtractionResult,
+  BiblioFeatures,
+} from "./domain.js";
 export { buildLineage, lineageToJson, lineageFromJson } from "./lineage.js";
 export type { LineageEdge, LineageBundle } from "./lineage.js";
 export { learnBlockingRules, applyLearnedBlocks } from "./learned-blocking.js";
