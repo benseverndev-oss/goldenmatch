@@ -4,9 +4,10 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 24 tools covering dedupe, match, scoring, explanation,
- * profiling, auto-config (shorthand), evaluation, listings, and Learning
- * Memory (5 memory tools wired in via MEMORY_TOOLS).
+ * Exposes 30 tools covering dedupe, match, scoring, explanation,
+ * profiling, auto-config (shorthand), evaluation, listings, Learning
+ * Memory (5 memory tools via MEMORY_TOOLS), and the Identity Graph
+ * (6 identity tools via IDENTITY_TOOLS).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -45,6 +46,11 @@ import {
   MEMORY_TOOL_NAMES,
   handleMemoryTool,
 } from "./memory-tools.js";
+import {
+  IDENTITY_TOOLS,
+  IDENTITY_TOOL_NAMES,
+  handleIdentityTool,
+} from "./identity-tools.js";
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -354,7 +360,7 @@ const EXISTING_TOOLS: readonly Tool[] = [
   },
 ];
 
-export const TOOLS: readonly Tool[] = [...EXISTING_TOOLS, ...MEMORY_TOOLS];
+export const TOOLS: readonly Tool[] = [...EXISTING_TOOLS, ...MEMORY_TOOLS, ...IDENTITY_TOOLS];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -473,6 +479,15 @@ export async function handleTool(
         return JSON.parse(text);
       } catch {
         return { error: "memory tool returned non-JSON" };
+      }
+    }
+    if (IDENTITY_TOOL_NAMES.has(name)) {
+      const content = await handleIdentityTool(name, args);
+      const text = content[0]?.text ?? "{}";
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { error: "identity tool returned non-JSON" };
       }
     }
     switch (name) {

@@ -214,6 +214,7 @@ npm run dev                      # tsup --watch
 - Profiler interface: `profile(data: TabularData, column: string, context?: Record<string, unknown>): Finding[]`
 - Findings are immutable — use `replaceFinding()` (spread), never mutate
 - Mulberry32 PRNG (not Mersenne Twister) — deterministic but NOT matching Python's `random.Random(seed)`
+- **MCP tools (v0.4.0): 17 = 7 core + 10 agent.** `src/node/mcp/agent-tools.ts` ports `goldencheck/mcp/agent_tools.py` (analyze_data, auto_configure, explain_finding, explain_column, review_queue, approve_reject, compare_domains, suggest_fix, pipeline_handoff, review_stats), wiring the existing TS agent + engine primitives. Composed into `TOOL_DEFINITIONS` (`CORE_TOOL_DEFINITIONS` + `AGENT_TOOLS`) and routed via `AGENT_TOOL_NAMES` in the server. Handlers are synchronous and return plain objects (the server's `handleTool` convention). `auto_configure` hand-emits the small `goldencheck.yml` (no runtime `yaml` dep). Shared `ReviewQueue` singleton with `__resetReviewQueueForTests`.
 
 ### Publishing
 - npm publish: push tag `goldencheck-js-v*` triggers `.github/workflows/npm-publish.yml`
