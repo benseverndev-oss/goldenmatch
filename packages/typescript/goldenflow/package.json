@@ -1,6 +1,6 @@
 {
   "name": "goldenflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Data transformation toolkit — standardize, reshape, and normalize messy data. TypeScript port of the goldenflow Python library.",
   "keywords": [
     "data-transformation",
