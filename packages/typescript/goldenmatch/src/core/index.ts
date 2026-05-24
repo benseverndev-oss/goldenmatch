@@ -108,7 +108,11 @@ export {
   ensembleScore,
   scoreMatrix,
   asString,
+  setSyncEmbedder,
+  getSyncEmbedder,
+  cosineSimilarity,
 } from "./scorer.js";
+export type { SyncTextEmbedder } from "./scorer.js";
 
 // ---------------------------------------------------------------------------
 // Matchkey
