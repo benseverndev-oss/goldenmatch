@@ -4,6 +4,7 @@ pgrx::pg_module_magic!();
 
 mod core_apis;
 mod correction;
+mod goldenflow;
 mod pipeline;
 mod quick;
 mod spi;

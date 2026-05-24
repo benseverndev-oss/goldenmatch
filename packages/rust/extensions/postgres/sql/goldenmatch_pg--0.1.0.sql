@@ -515,3 +515,76 @@ GRANT EXECUTE ON FUNCTION goldenmatch.correction_add(
 REVOKE EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION goldenmatch.correction_list(TEXT, TEXT) TO goldenmatch_correction_writer;
 GRANT SELECT ON goldenmatch.corrections TO goldenmatch_correction_writer;
+
+-- ─── GoldenFlow transforms (src/goldenflow.rs) ────────────────────────────
+--
+-- 8 scalar text -> text wrappers over goldenflow's transform registry,
+-- mirroring the DuckDB goldenflow_* UDFs (goldenmatch_duckdb/goldenflow.py).
+-- Closes the last DuckDB <-> Postgres parity gap. All STRICT (NULL in -> NULL
+-- out); the bridge fails open (passes the input through unchanged when
+-- goldenflow isn't installed / the transform errors), so these are read-only
+-- and safe for PUBLIC -- no REVOKE.
+
+-- Normalize an email address. Wraps goldenflow `email_normalize`.
+CREATE FUNCTION "goldenflow_normalize_email"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_normalize_email_wrapper';
+
+-- Normalize a phone number to E.164. Wraps goldenflow `phone_e164`.
+CREATE FUNCTION "goldenflow_normalize_phone"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_normalize_phone_wrapper';
+
+-- Normalize a date to ISO-8601. Wraps goldenflow `date_iso8601`.
+CREATE FUNCTION "goldenflow_normalize_date"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_normalize_date_wrapper';
+
+-- Proper-case a personal name. Wraps goldenflow `name_proper`.
+CREATE FUNCTION "goldenflow_normalize_name_proper"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_normalize_name_proper_wrapper';
+
+-- Canonicalize a URL. Wraps goldenflow `url_normalize`.
+CREATE FUNCTION "goldenflow_canonicalize_url"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_canonicalize_url_wrapper';
+
+-- Standardize a postal address. Wraps goldenflow `address_standardize`.
+CREATE FUNCTION "goldenflow_canonicalize_address"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_canonicalize_address_wrapper';
+
+-- Strip leading/trailing whitespace. Wraps goldenflow `strip`.
+CREATE FUNCTION "goldenflow_strip"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_strip_wrapper';
+
+-- Collapse internal whitespace runs. Wraps goldenflow `collapse_whitespace`.
+CREATE FUNCTION "goldenflow_whitespace_normalize"(
+    "value" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenflow_whitespace_normalize_wrapper';
