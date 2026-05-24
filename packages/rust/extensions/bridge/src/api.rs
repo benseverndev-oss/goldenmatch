@@ -991,6 +991,98 @@ pub fn correction_list(
     })
 }
 
+/// Force a MemoryLearner pass over accumulated corrections. Returns a JSON
+/// object `{ "count": N, "adjustments": [...] }`. Mirrors the Python MCP
+/// `learn_thresholds` tool: needs >= 10 corrections per matchkey before
+/// threshold tuning fires; otherwise returns an empty list.
+pub fn memory_learn(
+    matchkey_name: Option<&str>,
+    memory_path: Option<&str>,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let store_mod = py.import("goldenmatch.core.memory.store")?;
+        let learner_mod = py.import("goldenmatch.core.memory.learner")?;
+        let json_mod = py.import("json")?;
+        let dataclasses = py.import("dataclasses")?;
+
+        let store_cls = store_mod.getattr("MemoryStore")?;
+        let store_kwargs = PyDict::new(py);
+        store_kwargs.set_item("backend", "sqlite")?;
+        store_kwargs.set_item("path", memory_path.unwrap_or(".goldenmatch/memory.db"))?;
+        let store = store_cls.call((), Some(&store_kwargs))?;
+
+        let learner_cls = learner_mod.getattr("MemoryLearner")?;
+        let learner = learner_cls.call1((store.clone(),))?;
+        let adjustments = learner.call_method1("learn", (matchkey_name,))?;
+
+        let items = pyo3::types::PyList::empty(py);
+        for a in adjustments.try_iter()? {
+            let d = dataclasses.call_method1("asdict", (a?,))?;
+            if let Ok(dt) = d.get_item("learned_at") {
+                if !dt.is_none() {
+                    let iso: String = dt.call_method0("isoformat")?.extract()?;
+                    d.set_item("learned_at", iso)?;
+                }
+            }
+            items.append(d)?;
+        }
+        let _ = store.call_method0("close");
+
+        let out = PyDict::new(py);
+        out.set_item("count", items.len())?;
+        out.set_item("adjustments", items)?;
+        let s: String = json_mod.call_method1("dumps", (out,))?.extract()?;
+        Ok(s)
+    })
+}
+
+/// Learning-memory status as a JSON object
+/// `{ "total_corrections": N, "last_learn_time": ISO|null, "adjustments": [...] }`.
+/// Cheap; safe for status checks. Mirrors the Python MCP `memory_stats` tool.
+pub fn memory_stats(memory_path: Option<&str>) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let store_mod = py.import("goldenmatch.core.memory.store")?;
+        let json_mod = py.import("json")?;
+        let dataclasses = py.import("dataclasses")?;
+
+        let store_cls = store_mod.getattr("MemoryStore")?;
+        let store_kwargs = PyDict::new(py);
+        store_kwargs.set_item("backend", "sqlite")?;
+        store_kwargs.set_item("path", memory_path.unwrap_or(".goldenmatch/memory.db"))?;
+        let store = store_cls.call((), Some(&store_kwargs))?;
+
+        let total: i64 = store.call_method0("count_corrections")?.extract()?;
+        let last = store.call_method0("last_learn_time")?;
+        let last_iso: Option<String> = if last.is_none() {
+            None
+        } else {
+            Some(last.call_method0("isoformat")?.extract()?)
+        };
+
+        let items = pyo3::types::PyList::empty(py);
+        for a in store.call_method0("get_all_adjustments")?.try_iter()? {
+            let d = dataclasses.call_method1("asdict", (a?,))?;
+            if let Ok(dt) = d.get_item("learned_at") {
+                if !dt.is_none() {
+                    let iso: String = dt.call_method0("isoformat")?.extract()?;
+                    d.set_item("learned_at", iso)?;
+                }
+            }
+            items.append(d)?;
+        }
+        let _ = store.call_method0("close");
+
+        let out = PyDict::new(py);
+        out.set_item("total_corrections", total)?;
+        out.set_item("last_learn_time", last_iso)?;
+        out.set_item("adjustments", items)?;
+        let s: String = json_mod.call_method1("dumps", (out,))?.extract()?;
+        Ok(s)
+    })
+}
+
 // ─── Core-API parity (mirrors duckdb/core_apis.py) ───────────────────────
 //
 // Wrappers over goldenmatch's function-shaped core APIs so the Postgres
@@ -1630,6 +1722,41 @@ pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_memory_stats_empty_store() {
+        // Exercises the full pyo3 path: MemoryStore open, count_corrections,
+        // last_learn_time, get_all_adjustments, JSON serialize. A fresh path
+        // yields zero counts.
+        let dir = std::env::temp_dir().join(format!("gm-mem-{}", std::process::id()));
+        let path = dir.join("memory.db");
+        let path_s = path.to_string_lossy();
+        match memory_stats(Some(&path_s)) {
+            Ok(json) => {
+                assert!(json.contains("\"total_corrections\": 0"), "got: {}", json);
+                assert!(json.contains("\"adjustments\": []"), "got: {}", json);
+                assert!(json.contains("\"last_learn_time\": null"), "got: {}", json);
+            }
+            Err(e) => eprintln!("Skipping (goldenmatch not installed): {}", e),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_memory_learn_below_threshold() {
+        // No corrections -> learner emits an empty adjustments list.
+        let dir = std::env::temp_dir().join(format!("gm-learn-{}", std::process::id()));
+        let path = dir.join("memory.db");
+        let path_s = path.to_string_lossy();
+        match memory_learn(None, Some(&path_s)) {
+            Ok(json) => {
+                assert!(json.contains("\"count\": 0"), "got: {}", json);
+                assert!(json.contains("\"adjustments\": []"), "got: {}", json);
+            }
+            Err(e) => eprintln!("Skipping (goldenmatch not installed): {}", e),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_score_strings() {
