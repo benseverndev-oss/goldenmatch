@@ -39,7 +39,7 @@ pnpm turbo run build --filter=goldenpipe
 cd packages/typescript/goldenpipe && npx tsc --noEmit && npx vitest run
 ```
 
-The CLI smoke test (`tests/unit/cli.test.ts`) runs `dist/cli.cjs` via subprocess — build before running vitest.
+The CLI smoke test (`tests/unit/cli.test.ts`) runs `dist/cli.cjs` via subprocess. It `describe.skipIf`s itself when the CLI isn't built, so the publish workflow (which runs vitest before `pnpm run build`) doesn't fail; it runs wherever the build precedes vitest (local dev, and the regular CI TS lane).
 
 ## Parity
 
