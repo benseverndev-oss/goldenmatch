@@ -473,7 +473,7 @@ export type {
 } from "./autoconfigVerify.js";
 
 
-// v2.0.0 (#208): predefined golden-strategy plugin port.
+// v0.11.0 (#208): predefined golden-strategy plugin port.
 export type {
   GoldenStrategyMergeOpts,
   GoldenStrategyPlugin,
