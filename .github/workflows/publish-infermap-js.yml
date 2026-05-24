@@ -42,6 +42,13 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: pnpm install --frozen-lockfile
 
+      # infermap imports goldencheck-types at runtime and goldenmatch in tests;
+      # both are workspace deps (workspace:^ / workspace:*) that must be built
+      # before infermap's typecheck/test/build resolve their dist entrypoints.
+      - name: Build workspace deps
+        working-directory: ${{ github.workspace }}
+        run: pnpm turbo run build --filter=infermap^...
+
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 

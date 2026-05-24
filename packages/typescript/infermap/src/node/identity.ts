@@ -13,22 +13,45 @@
  * context is intentionally **not** modeled -- the alias table is keyed on the
  * alias *value*, not the column name.
  *
- * Node-only: it depends on the `goldenmatch` Identity Graph (`IdentityStore` /
- * `IdentityAlias`). The edge-safe core never imports this module.
+ * Node-only: callers pass a goldenmatch Identity Graph `IdentityStore`. The
+ * edge-safe core never imports this module. To keep the published package free
+ * of a goldenmatch runtime dependency, the store/alias shapes are modelled by
+ * the local {@link AliasStore} / {@link IdentityAliasRow} structural
+ * interfaces; a real goldenmatch `IdentityStore` satisfies `AliasStore`.
  *
  * TS parity with `packages/python/infermap/infermap/identity.py`. The Python
- * sibling lazily imports `goldenmatch.identity` and raises a clean ImportError
- * if it isn't installed; in TS the dependency is declared in package.json so
- * the type-only import never fails at runtime. `store.addAlias` is async on the
- * TS `IdentityStore` interface, so this function is async too and the
- * `entityIdResolver` may return a value or a Promise.
+ * sibling lazily imports `goldenmatch.identity`; here the caller supplies the
+ * store, so there is no import to fail. `store.addAlias` may be async, so this
+ * function is async too and the `entityIdResolver` may return a value or a
+ * Promise.
  *
  * See issue #206 for the design discussion.
  */
 
-import type { IdentityAlias, IdentityStore } from "goldenmatch/core";
-
 import type { MapResult } from "../core/types.js";
+
+/**
+ * Minimal structural shape of a goldenmatch `IdentityAlias` row. Declared
+ * locally so the *published* infermap package takes no dependency on
+ * goldenmatch — callers pass a real goldenmatch `IdentityStore`, which is
+ * structurally compatible. (The integration test exercises the real store
+ * via a dev-only dependency.)
+ */
+export interface IdentityAliasRow {
+  alias: string;
+  entityId: string;
+  kind: string;
+  dataset?: string | null;
+  recordedAt?: Date;
+}
+
+/**
+ * Minimal structural shape of a goldenmatch `IdentityStore`. Only `addAlias`
+ * is used by this bridge; a real `IdentityStore` satisfies it.
+ */
+export interface AliasStore {
+  addAlias(alias: IdentityAliasRow): unknown | Promise<unknown>;
+}
 
 /** Summary of one `writeAliasesFromMapping` invocation. */
 export interface AliasWriteResult {
@@ -133,7 +156,7 @@ export interface WriteAliasesOptions {
 export async function writeAliasesFromMapping(
   mapping: MapResult,
   records: Iterable<Record<string, unknown>>,
-  store: IdentityStore,
+  store: AliasStore,
   entityIdResolver: EntityIdResolver,
   options: WriteAliasesOptions,
 ): Promise<AliasWriteResult> {
@@ -208,7 +231,7 @@ export async function writeAliasesFromMapping(
         continue;
       }
       const aliasValue = `${sourceName}:${value}`;
-      const aliasRow: IdentityAlias = {
+      const aliasRow: IdentityAliasRow = {
         alias: aliasValue,
         entityId,
         kind,
