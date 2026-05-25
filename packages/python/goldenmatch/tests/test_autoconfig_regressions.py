@@ -148,7 +148,11 @@ def test_learned_blocking_sample_size_capped_at_quarter():
     can legitimately return ``cfg.blocking is None``. The test's real
     invariant is the sample-size cap conditional on learned blocking;
     guarding the precondition correctly expresses that intent."""
-    cfg = auto_configure_df(_gate_test_df(60_000))
+    # v0 builder: the learned-blocking gate + sample-size cap are decided in
+    # build_blocking (iteration-independent). On this sparse near-unique fixture
+    # the full controller fires ExpandSample -> O(N^2) fuzzy on no blocking key
+    # (~74s/iter), which times out the 120s CI lane under -n auto.
+    cfg = _legacy_auto_configure_v0(_gate_test_df(60_000))
     if cfg.blocking is None or cfg.blocking.strategy != "learned":
         pytest.skip(
             f"fixture didn't trigger learned blocking "
@@ -338,7 +342,8 @@ def test_learned_blocking_exact_50k_boundary_triggers():
     5000, and a regression flipping `// 4` to `// 5` would silently shrink
     the sample to 4000 without this assertion failing.
     """
-    cfg = auto_configure_df(_gate_test_df(50_000))
+    # v0 builder (see ExpandSample timeout note on the 60k/49999 boundary tests).
+    cfg = _legacy_auto_configure_v0(_gate_test_df(50_000))
     if cfg.blocking is None:
         pytest.skip(
             "fixture didn't produce a viable blocking config "
@@ -373,7 +378,9 @@ def test_learned_blocking_just_below_50k_does_not_trigger():
     ``cfg.blocking is None`` (no blocking strategy at all) trivially
     satisfies \"strategy is not learned\". Only the explicit \"learned\"
     case is a regression."""
-    cfg = auto_configure_df(_gate_test_df(49_999))
+    # v0 builder (see ExpandSample timeout note on the 60k boundary test).
+    # This test was the lone remaining CI timeout after the first flake-fix pass.
+    cfg = _legacy_auto_configure_v0(_gate_test_df(49_999))
     strategy = cfg.blocking.strategy if cfg.blocking else None
     assert strategy != "learned", (
         f"total_rows=49_999 triggered learned blocking: strategy={strategy}"
