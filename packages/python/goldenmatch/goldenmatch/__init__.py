@@ -109,6 +109,11 @@ from goldenmatch.core.cluster import (
 
 # ── Cluster comparison (CCMS) ──────────────────────────────────────────
 from goldenmatch.core.compare_clusters import CompareResult, compare_clusters
+from goldenmatch.core.config_optimizer import (
+    OptimizeResult,
+    OptimizerTrial,
+    optimize_config,
+)
 
 # ── Diff / Rollback ─────────────────────────────────────────────────────
 from goldenmatch.core.diff import generate_diff
@@ -311,6 +316,7 @@ __all__ = [
     "boost_accuracy",
     # Auto-configuration
     "auto_configure", "auto_configure_df", "auto_configure_probabilistic_df",
+    "optimize_config", "OptimizeResult", "OptimizerTrial",
     "suggest_threshold",
     # Auto-config verification
     "preflight", "postflight",
