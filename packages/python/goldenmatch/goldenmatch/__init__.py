@@ -75,7 +75,11 @@ from goldenmatch.core.agent import AgentSession
 from goldenmatch.core.anomaly import detect_anomalies
 
 # ── Auto-configuration ──────────────────────────────────────────────────
-from goldenmatch.core.autoconfig import auto_configure, auto_configure_df
+from goldenmatch.core.autoconfig import (
+    auto_configure,
+    auto_configure_df,
+    auto_configure_probabilistic_df,
+)
 
 # ── Auto-config verification ────────────────────────────────────────────
 # See PR #44 for design notes.
@@ -306,7 +310,8 @@ __all__ = [
     # Active learning / boost
     "boost_accuracy",
     # Auto-configuration
-    "auto_configure", "auto_configure_df", "suggest_threshold",
+    "auto_configure", "auto_configure_df", "auto_configure_probabilistic_df",
+    "suggest_threshold",
     # Auto-config verification
     "preflight", "postflight",
     "PreflightReport", "PreflightFinding",
