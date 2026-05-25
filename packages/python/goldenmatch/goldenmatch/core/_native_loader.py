@@ -17,9 +17,10 @@ Spec: ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 try:
-    import goldenmatch._native as _native  # type: ignore[import-not-found]
+    import goldenmatch._native as _native  # pyright: ignore[reportMissingImports]
 except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
     _native = None
 
@@ -29,8 +30,10 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 _GATED_ON: frozenset[str] = frozenset()
 
 
-def native_module():
-    """The imported ``goldenmatch._native`` module, or ``None`` if unavailable."""
+def native_module() -> Any:
+    """The imported ``goldenmatch._native`` module (typed ``Any`` — its kernels
+    are dynamically loaded), or ``None`` if unavailable. Call sites must guard
+    with ``native_enabled(...)`` first."""
     return _native
 
 

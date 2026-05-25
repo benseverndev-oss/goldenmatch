@@ -19,14 +19,17 @@ All `file:line` anchors are against the tree at the time of writing.
   script, **not** a registered hatch hook — registering a hook runs on every
   build of the live PyPI package, so it's deferred until validated in CI to avoid
   risking `pip install goldenmatch`.
-- **Phase 1 — done (2 of 5 kernels), parity-green.** `connected_components`
-  (Union-Find) and `severe_bridge_count` are implemented in Rust
-  (`native/src/cluster.rs`) and wired into `core/cluster.py::build_clusters` and
-  `_severe_bridge_count` behind the gate. `tests/test_native_parity.py` asserts
-  identical output Python-vs-native across chain/clique/bridge/oversized/singleton
-  fixtures (12 cases). Remaining Phase-1 kernels (`mst_split`,
-  `cluster_confidence`, `transitivity_rate`) stay Python for now — additive, same
-  pattern. Default stays Python (`_GATED_ON` empty) pending a DQbench run.
+- **Phase 1 — done (3 per-cluster/per-edge hot kernels), parity-green.**
+  `connected_components` (Union-Find), `severe_bridge_count`, and
+  `cluster_confidence` are implemented in Rust (`native/src/cluster.rs`) and wired
+  into `core/cluster.py` (`build_clusters`, `_severe_bridge_count`,
+  `compute_cluster_confidence`) behind the gate. `tests/test_native_parity.py`
+  asserts identical output Python-vs-native (18 cases incl. float parity within
+  1e-12 + bottleneck-pair tie-break). **`transitivity_rate` (once-per-profile, not
+  a per-cluster loop) and `mst_split` (rare oversized-split exception path with an
+  entangled dict rebuild) are deliberately kept in Python** — the three hot
+  per-cluster/per-edge loops are the value; those two are not worth the parity
+  risk. Default stays Python (`_GATED_ON` empty) pending a DQbench run.
 - **Phase 2 — blocked in this environment.** `rapidfuzz`/`rayon` crates aren't in
   the offline cargo cache and there's no crates.io network here, so the
   block-scorer kernel can't be built/validated. Design below stands; needs a

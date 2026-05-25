@@ -427,6 +427,18 @@ def compute_cluster_confidence(
     Returns:
         Dict with: min_edge, avg_edge, connectivity, bottleneck_pair, confidence.
     """
+    if native_enabled("clustering"):
+        edges = [(k[0], k[1], v) for k, v in pair_scores.items()
+                 if isinstance(k, tuple) and len(k) == 2]
+        min_e, avg_e, conn, bn, conf = native_module().cluster_confidence(edges, size)
+        return {
+            "min_edge": min_e,
+            "avg_edge": avg_e,
+            "connectivity": conn,
+            "bottleneck_pair": tuple(bn) if bn is not None else None,
+            "confidence": conf,
+        }
+
     if size <= 1 or not pair_scores:
         return {
             "min_edge": None,

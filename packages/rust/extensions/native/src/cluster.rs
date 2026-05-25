@@ -104,3 +104,39 @@ pub fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> us
     }
     count
 }
+
+/// Confidence metrics for one cluster. Behavior-exact mirror of
+/// `compute_cluster_confidence` (cluster.py:413-455). `edges` MUST be passed in
+/// `pair_scores` iteration order so the bottleneck-pair tie-break and the
+/// average's float-summation order match Python bit-for-bit. Returns
+/// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)`.
+#[pyfunction]
+pub fn cluster_confidence(
+    edges: Vec<(i64, i64, f64)>,
+    size: usize,
+) -> (Option<f64>, Option<f64>, f64, Option<(i64, i64)>, f64) {
+    if size <= 1 || edges.is_empty() {
+        let c = if size <= 1 { 1.0 } else { 0.0 };
+        return (None, None, c, None, c);
+    }
+    let mut min_edge = f64::INFINITY;
+    let mut sum = 0.0_f64;
+    let mut bottleneck: Option<(i64, i64)> = None;
+    for (a, b, s) in &edges {
+        sum += *s; // same order as Python sum(scores) -> identical avg
+        if *s < min_edge {
+            min_edge = *s; // strict < keeps the FIRST min, matching Python min()
+            bottleneck = Some((*a, *b));
+        }
+    }
+    let n = edges.len();
+    let avg_edge = sum / n as f64;
+    let max_possible = (size * (size - 1)) as f64 / 2.0;
+    let connectivity = if max_possible > 0.0 {
+        n as f64 / max_possible
+    } else {
+        0.0
+    };
+    let confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity;
+    (Some(min_edge), Some(avg_edge), connectivity, bottleneck, confidence)
+}

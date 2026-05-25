@@ -14,5 +14,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
+    m.add_function(wrap_pyfunction!(cluster::cluster_confidence, m)?)?;
     Ok(())
 }

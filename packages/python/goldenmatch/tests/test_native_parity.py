@@ -69,6 +69,31 @@ def test_severe_bridge_count_parity(monkeypatch, members, pair_scores, expected)
     assert py == native == expected
 
 
+_CONF_FIXTURES = [
+    ({}, 1),                                                       # singleton
+    ({}, 3),                                                       # size>1, no edges
+    ({(1, 2): 0.9}, 2),                                            # single edge
+    ({(1, 2): 0.9, (2, 3): 0.3, (1, 3): 0.95}, 3),                 # full triangle
+    ({(1, 2): 0.5, (3, 4): 0.5, (2, 3): 0.5}, 4),                  # tie on min -> first wins
+    ({(1, 2): 0.8, (2, 3): 0.6}, 3),                               # partial connectivity
+]
+
+
+@pytest.mark.parametrize("pair_scores,size", _CONF_FIXTURES)
+def test_cluster_confidence_parity(monkeypatch, pair_scores, size):
+    from goldenmatch.core.cluster import compute_cluster_confidence
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = compute_cluster_confidence(dict(pair_scores), size)
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = compute_cluster_confidence(dict(pair_scores), size)
+    assert py["bottleneck_pair"] == native["bottleneck_pair"]
+    for key in ("min_edge", "avg_edge", "connectivity", "confidence"):
+        if py[key] is None:
+            assert native[key] is None
+        else:
+            assert native[key] == pytest.approx(py[key], abs=1e-12)
+
+
 def test_native_off_by_default(monkeypatch):
     # Unset env -> "auto" -> Python (no component gated on yet): default-safe.
     monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
