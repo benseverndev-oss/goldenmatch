@@ -4,6 +4,10 @@ use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
 
+/// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)` — mirrors
+/// the dict `compute_cluster_confidence` returns.
+type ConfidenceResult = (Option<f64>, Option<f64>, f64, Option<(i64, i64)>, f64);
+
 /// Iterative find with path compression over a `HashMap` parent table.
 fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
     let mut root = x;
@@ -111,10 +115,7 @@ pub fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> us
 /// average's float-summation order match Python bit-for-bit. Returns
 /// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)`.
 #[pyfunction]
-pub fn cluster_confidence(
-    edges: Vec<(i64, i64, f64)>,
-    size: usize,
-) -> (Option<f64>, Option<f64>, f64, Option<(i64, i64)>, f64) {
+pub fn cluster_confidence(edges: Vec<(i64, i64, f64)>, size: usize) -> ConfidenceResult {
     if size <= 1 || edges.is_empty() {
         let c = if size <= 1 { 1.0 } else { 0.0 };
         return (None, None, c, None, c);

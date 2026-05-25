@@ -41,8 +41,11 @@ def main() -> int:
     env["PYO3_PYTHON"] = sys.executable
 
     cmd = ["cargo", "build", "--release"]
-    # Use cached deps when offline; harmless when online.
-    cmd.append("--offline")
+    # `--offline` only when explicitly requested (e.g. a sandbox with a warm
+    # cargo cache but no crates.io network). CI has network + a cold cache on
+    # first run, so it must be allowed to fetch — default is online.
+    if "--offline" in sys.argv:
+        cmd.append("--offline")
     print(f"building: {' '.join(cmd)}  (PYO3_PYTHON={sys.executable})")
     proc = subprocess.run(cmd, cwd=CRATE, env=env)
     if proc.returncode != 0:
