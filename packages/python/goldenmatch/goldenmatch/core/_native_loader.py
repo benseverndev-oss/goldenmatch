@@ -8,9 +8,10 @@ unchanged. Selection is centralised here so every call site reads one gate.
 - ``"0"``    -> force the Python path (never use native).
 - ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
 - ``"auto"`` / unset -> use native iff it's importable AND the component has been
-  signed off (is in ``_GATED_ON``). Empty today, so the **default is Python** for
-  every component until its parity + DQbench gate passes — we ship the ext able to
-  run and flip the default per phase, per the spec.
+  signed off (is in ``_GATED_ON``). ``clustering`` and ``block_scoring`` have
+  cleared the gate (DQbench ER composite unchanged vs the pure-Python baseline),
+  so under ``auto`` they run native whenever the ext is importable — we ship the
+  ext able to run and flip the default per phase, per the spec.
 
 Spec: ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3.
 """
@@ -27,7 +28,15 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 
 # Components whose native path has cleared parity + DQbench and may run under
 # ``GOLDENMATCH_NATIVE=auto``. Add a name here only after sign-off.
-_GATED_ON: frozenset[str] = frozenset()
+#
+# Signed off 2026-05-25 (DQbench ER native-parity validation):
+#   - clustering: exercised end-to-end across DQbench ER T1-T4 (polars-direct
+#     backend); composite identical native-vs-python (92.03), all per-tier
+#     P/R/F1/TP/FP/FN equal.
+#   - block_scoring: not reached by DQbench (controller picks polars-direct at
+#     these sizes); validated separately on a forced bucket-backend workload —
+#     emitted pair set identical, scores within 1 ULP (no threshold crossings).
+_GATED_ON: frozenset[str] = frozenset({"clustering", "block_scoring"})
 
 
 def native_module() -> Any:

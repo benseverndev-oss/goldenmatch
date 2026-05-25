@@ -105,8 +105,6 @@ fn build_full_config<'py>(
 pub struct DedupeResult {
     /// Golden records as JSON array of objects
     pub golden_json: Option<String>,
-    /// Cluster assignments as JSON
-    pub clusters_json: String,
     /// Stats as JSON object
     pub stats_json: String,
     /// AutoConfigController telemetry (stop_reason, decisions, health verdict,
@@ -220,16 +218,10 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         let stats = result.getattr("stats")?;
         let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
 
-        // Extract clusters -- convert to JSON-safe dict (pair_scores has tuple keys)
-        let clusters = result.getattr("clusters")?;
-        let clusters_json: String = {
-            let str_repr: String = clusters.call_method0("__str__")?.extract()?;
-            // Use str() representation as fallback since json.dumps fails on tuple keys
-            match json_mod.call_method1("dumps", (clusters,)) {
-                Ok(j) => j.extract()?,
-                Err(_) => str_repr,
-            }
-        };
+        // Structured cluster output is served via `dedupe_clusters` (and the
+        // pgrx `goldenmatch_dedupe_clusters` TableIterator); no JSON clusters
+        // blob is carried here — the prior `clusters_json` field fell back to a
+        // non-JSON `str()` repr whenever `pair_scores` had tuple keys.
 
         // If the slim-kwargs path ended up triggering auto-config (i.e. the
         // caller didn't pass enough kwargs to bypass it), `_LAST_CONTROLLER_RUN`
@@ -245,7 +237,6 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
 
         Ok(DedupeResult {
             golden_json,
-            clusters_json,
             stats_json,
             telemetry_json,
         })
@@ -289,14 +280,8 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
         let stats = result.getattr("stats")?;
         let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
 
-        let clusters = result.getattr("clusters")?;
-        let clusters_json: String = {
-            let str_repr: String = clusters.call_method0("__str__")?.extract()?;
-            match json_mod.call_method1("dumps", (clusters,)) {
-                Ok(j) => j.extract()?,
-                Err(_) => str_repr,
-            }
-        };
+        // Structured clusters are served via `dedupe_clusters`; no tuple-keyed
+        // JSON clusters blob is carried here (see `dedupe`).
 
         // dedupe_full passes its own config in, so re-use it for NE display.
         // Re-fetch from result.config in case the engine swapped in an
@@ -311,7 +296,6 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
 
         Ok(DedupeResult {
             golden_json,
-            clusters_json,
             stats_json,
             telemetry_json,
         })
@@ -1791,8 +1775,8 @@ mod tests {
 
         match dedupe(rows, config) {
             Ok(result) => {
-                assert!(!result.clusters_json.is_empty());
                 assert!(!result.stats_json.is_empty());
+                // Structured clusters come from `dedupe_clusters`, not a JSON blob here.
             }
             Err(e) => eprintln!("Skipping: {}", e),
         }
