@@ -23,6 +23,29 @@ Each wave's spec/plan: `docs/superpowers/specs/2026-05-10-ts-parity-arc-design.m
 - **Python v1.14 (controller surface-parity arc).** Threaded telemetry through TUI / CLI / Postgres / DuckDB surfaces that TS doesn't expose. TS already surfaces telemetry on its MCP server via the same `serialize_telemetry` JSON shape.
 - **Python v1.16 (`backend="bucket"` 5M-on-one-node).** Polars-only Python path. TS runs edge-safe in Web Crypto and doesn't ship Polars — no TS analogue planned.
 
+### Python-only by design (cross-surface parity audit, Wave 4 — declared, not a gap)
+The 2026-05 parity audit flagged two large goldenmatch subsystems absent from the
+TS port. After review these are **intentionally Python-only** — the cleaner close
+than a multi-month port, mirroring the SQL "deferred-by-design" boundary in
+`packages/rust/extensions/CLAUDE.md`:
+
+- **Distributed engine / Ray / GPU** — the entire `goldenmatch/distributed/`
+  (Ray-based loader, controller, clustering, golden, identity), `backends/ray_backend.py`,
+  `core/gpu.py`, and `core/vertex_embedder.py`. No JS-ecosystem equivalent for Ray,
+  Vertex embeddings, or GPU; the whole stack also assumes Polars. The TS package is
+  edge-safe (Web Crypto, no Polars/Ray) and targets single-node / library / Workers
+  use. **No TS port planned.** Users needing distributed ER use the Python package.
+- **REST API + React web UI** — `goldenmatch/web/` (20 FastAPI routers + a React/Vite
+  SPA) and the standalone `api/server.py`. The web UI is a full single-page app whose
+  natural home is the Python package. TS already ships a thin programmatic
+  `node/api/server.ts` for embedding in a Node service; the full browser UI is **not**
+  ported and not planned. Run `goldenmatch serve-ui` (Python) for the UI.
+
+Everything else (core scoring/blocking/clustering/golden, auto-config controller,
+identity graph, PPRL, memory, MCP/A2A, CLI, connectors) IS ported — see the wave
+history above. This closes the cross-surface parity roadmap (Waves 0–3, 5 shipped;
+Wave 4 = this declaration).
+
 ## Commands
 ```bash
 cd packages/typescript/goldenmatch

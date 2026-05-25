@@ -26,17 +26,31 @@ print(f"Deduped {result['input_rows']} -> {result['clusters']} clusters")
 
 ## Macros
 
-This package ships macros only (no models/seeds/snapshots). They `adapter.dispatch()`
-between the Postgres and DuckDB extension function shapes:
+This package ships macros only (no models/seeds/snapshots). The
+goldenmatch/goldencheck/goldenflow macros `adapter.dispatch()` between the
+Postgres and DuckDB extension function shapes; `infermap_apply` is pure SQL
+(works on every adapter):
 
 - **Dedupe materialization** -- `goldenmatch_dedupe` (`macros/materializations/`)
 - **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
 - **Learning memory** -- `file_field_correction`, `file_pair_correction`
 - **Quality gates (GoldenCheck)** -- `quality_assert`, `quality_health_gate`, `quality_not_empty`
 - **Transforms (GoldenFlow)** -- `transforms.sql`
+- **Schema mapping (InferMap)** -- `infermap_apply(relation, column_map)` applies a
+  Python-computed `infermap` column mapping as a plain projecting SELECT.
+
+### GoldenPipe orchestration in dbt
+
+GoldenPipe's value is *adaptive* orchestration (profile the data, then decide
+whether to clean / dedupe) — that decisioning is Python-side and not
+SQL-expressible, so there is no `goldenpipe` dispatch macro. The explicit
+pipeline composes the macros above: apply `transforms.sql` in one model, then
+materialize the result with `goldenmatch_dedupe`. Run the adaptive pipeline via
+the `goldenpipe` Python package / CLI / MCP when you need the decisioning.
 
 ## Status
 
 Early stage -- API may change. Covers GoldenMatch (dedupe + identity), GoldenCheck
-(quality gates), and GoldenFlow (transforms); goldenpipe orchestration and infermap
-mapping are not yet exposed as dbt macros.
+(quality gates), GoldenFlow (transforms), and InferMap (`infermap_apply`).
+GoldenPipe's adaptive orchestration stays Python-side (compose the macros above
+for the explicit pipeline).

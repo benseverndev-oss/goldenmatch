@@ -1,0 +1,89 @@
+name: "GoldenFlow"
+description: "Data transformation — standardize, clean, and normalize data files. Reports transforms applied and posts PR comments."
+author: "Ben Severn"
+
+branding:
+  icon: "shuffle"
+  color: "blue"
+
+inputs:
+  files:
+    description: "Glob pattern for data files to transform"
+    required: true
+  config:
+    description: "Path to a goldenflow YAML config (zero-config when omitted)"
+    required: false
+    default: ""
+  domain:
+    description: "Domain pack to use (e.g. people_hr, healthcare)"
+    required: false
+    default: ""
+  strict:
+    description: "Fail the check if any transform errors occur"
+    required: false
+    default: "false"
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.12"
+  version:
+    description: "GoldenFlow version to install (default: latest)"
+    required: false
+    default: ""
+
+outputs:
+  transforms-applied:
+    description: "Total transforms applied across all files"
+    value: ${{ steps.run.outputs.transforms_applied }}
+  files-processed:
+    description: "Number of files transformed"
+    value: ${{ steps.run.outputs.files_processed }}
+  errors:
+    description: "Total transform errors across all files"
+    value: ${{ steps.run.outputs.errors }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: goldenflow-pip-${{ inputs.python-version }}-${{ inputs.version || 'latest' }}
+
+    - name: Install GoldenFlow
+      shell: bash
+      env:
+        GF_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$GF_VERSION" ]; then
+          pip install -q "goldenflow==${GF_VERSION}"
+        else
+          pip install -q "goldenflow"
+        fi
+
+    - name: Run transforms
+      id: run
+      shell: bash
+      env:
+        GF_FILES: ${{ inputs.files }}
+        GF_CONFIG: ${{ inputs.config }}
+        GF_DOMAIN: ${{ inputs.domain }}
+        GF_STRICT: ${{ inputs.strict }}
+      run: |
+        python "${{ github.action_path }}/scripts/run.py"
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        python "${{ github.action_path }}/scripts/comment.py"
