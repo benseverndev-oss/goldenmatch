@@ -153,18 +153,22 @@ def test_dedupe_df_zero_config_postflight_has_controller_fields():
         "name": ["alice", "alyce", "bob", "bobby"] * 4,
         "city": ["nyc", "la", "sf", "nyc"] * 4,
     })
-    with patch("goldenmatch._api.auto_configure_df") as mock_auto:
-        mock_auto.return_value = GoldenMatchConfig(matchkeys=[])
-        # Seed the ContextVar with a fake (profile, history) so the _api wiring
-        # can pick it up without running the real controller.
-        from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
-        fake_profile = ComplexityProfile()
-        fake_history = RunHistory()
-        _LAST_CONTROLLER_RUN.set((fake_profile, fake_history))
-
-        with patch("goldenmatch.core.pipeline.run_dedupe_df") as mock_pipeline:
-            mock_pipeline.return_value = _trivial_dedupe_pipeline_return(df)
-            result = gm.dedupe_df(df)
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+    fake_profile = ComplexityProfile()
+    fake_history = RunHistory()
+    # Seed the ContextVar with a fake (profile, history) so the _api wiring can
+    # pick it up without running the real controller. Capture the token and reset
+    # it afterward so this fake value can't leak into later tests' reads of
+    # _LAST_CONTROLLER_RUN (#492 — ContextVar set without reset is a cross-test leak).
+    token = _LAST_CONTROLLER_RUN.set((fake_profile, fake_history))
+    try:
+        with patch("goldenmatch._api.auto_configure_df") as mock_auto:
+            mock_auto.return_value = GoldenMatchConfig(matchkeys=[])
+            with patch("goldenmatch.core.pipeline.run_dedupe_df") as mock_pipeline:
+                mock_pipeline.return_value = _trivial_dedupe_pipeline_return(df)
+                result = gm.dedupe_df(df)
+    finally:
+        _LAST_CONTROLLER_RUN.reset(token)
 
     pf = result.postflight_report
     assert pf is not None, "postflight_report should not be None in zero-config path"

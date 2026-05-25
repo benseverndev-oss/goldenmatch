@@ -17,8 +17,21 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_autoconfig_memory(monkeypatch):
+def _isolated_controller_state(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    # #492: make every test here self-contained against predecessor global state.
+    # A prior test may have left the prepared-record-store env vars set or the
+    # _LAST_CONTROLLER_RUN ContextVar pointing at a stale (profile, history);
+    # start each test from a clean slate so collection order can't change outcomes.
+    for var in (
+        "GOLDENMATCH_PREPARED_RECORD_STORE_DIR",
+        "GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
+    token = _LAST_CONTROLLER_RUN.set(None)
+    yield
+    _LAST_CONTROLLER_RUN.reset(token)
 
 
 def _df() -> pl.DataFrame:
