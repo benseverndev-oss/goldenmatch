@@ -334,59 +334,65 @@ Your response MUST be valid JSON, nothing else.
 """
 
     def _apply_diff(self, current: Any, diff: dict) -> Any | None:
-        """Apply a JSON diff to the current GoldenMatchConfig.
+        return apply_config_diff(current, diff)
 
-        Supports a focused subset: matchkey threshold change, blocking key
-        replacement, matchkey drop-by-name. Returns None if the diff doesn't
-        produce a valid config or doesn't actually change anything.
-        """
-        from goldenmatch.config.schemas import GoldenMatchConfig
-        if not isinstance(current, GoldenMatchConfig):
-            return None
 
-        new_cfg = current
+def apply_config_diff(current: Any, diff: dict) -> Any | None:
+    """Apply a JSON diff to a GoldenMatchConfig.
 
-        # Drop matchkeys by name
-        if "drop_matchkeys" in diff:
-            drop = set(diff["drop_matchkeys"] or [])
-            kept = [mk for mk in (new_cfg.matchkeys or []) if mk.name not in drop]
-            if len(kept) != len(new_cfg.matchkeys or []):
-                new_cfg = new_cfg.model_copy(update={"matchkeys": kept})
+    Supports a focused subset: matchkey threshold change, blocking key
+    replacement, matchkey drop-by-name. Returns None if the diff doesn't
+    produce a valid config or doesn't actually change anything. Shared by
+    ``LLMRefitPolicy`` (controller repair) and the agentic config optimizer's
+    ``LLMProposer`` (search) so both speak one diff language.
+    """
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    if not isinstance(current, GoldenMatchConfig):
+        return None
 
-        # Threshold tweaks: a list of {name, threshold} entries
-        if "matchkeys" in diff and diff["matchkeys"]:
-            new_mks = []
-            for mk in (new_cfg.matchkeys or []):
-                update_for_this = next(
-                    (m for m in diff["matchkeys"] if m.get("name") == mk.name),
-                    None,
-                )
-                if update_for_this is not None and "threshold" in update_for_this:
-                    new_mks.append(mk.model_copy(update={
-                        "threshold": update_for_this["threshold"],
-                    }))
-                else:
-                    new_mks.append(mk)
-            new_cfg = new_cfg.model_copy(update={"matchkeys": new_mks})
+    new_cfg = current
 
-        # Blocking key swap
-        if "blocking" in diff and diff["blocking"] and "keys" in diff["blocking"]:
-            from goldenmatch.config.schemas import BlockingKeyConfig
-            new_keys = [
-                BlockingKeyConfig(
-                    fields=k["fields"],
-                    transforms=k.get("transforms", ["lowercase"]),
-                )
-                for k in diff["blocking"]["keys"]
-            ]
-            if new_cfg.blocking is not None:
-                new_cfg = new_cfg.model_copy(update={
-                    "blocking": new_cfg.blocking.model_copy(update={"keys": new_keys}),
-                })
+    # Drop matchkeys by name
+    if "drop_matchkeys" in diff:
+        drop = set(diff["drop_matchkeys"] or [])
+        kept = [mk for mk in (new_cfg.matchkeys or []) if mk.name not in drop]
+        if len(kept) != len(new_cfg.matchkeys or []):
+            new_cfg = new_cfg.model_copy(update={"matchkeys": kept})
 
-        if new_cfg == current:
-            return None
-        return new_cfg
+    # Threshold tweaks: a list of {name, threshold} entries
+    if "matchkeys" in diff and diff["matchkeys"]:
+        new_mks = []
+        for mk in (new_cfg.matchkeys or []):
+            update_for_this = next(
+                (m for m in diff["matchkeys"] if m.get("name") == mk.name),
+                None,
+            )
+            if update_for_this is not None and "threshold" in update_for_this:
+                new_mks.append(mk.model_copy(update={
+                    "threshold": update_for_this["threshold"],
+                }))
+            else:
+                new_mks.append(mk)
+        new_cfg = new_cfg.model_copy(update={"matchkeys": new_mks})
+
+    # Blocking key swap
+    if "blocking" in diff and diff["blocking"] and "keys" in diff["blocking"]:
+        from goldenmatch.config.schemas import BlockingKeyConfig
+        new_keys = [
+            BlockingKeyConfig(
+                fields=k["fields"],
+                transforms=k.get("transforms", ["lowercase"]),
+            )
+            for k in diff["blocking"]["keys"]
+        ]
+        if new_cfg.blocking is not None:
+            new_cfg = new_cfg.model_copy(update={
+                "blocking": new_cfg.blocking.model_copy(update={"keys": new_keys}),
+            })
+
+    if new_cfg == current:
+        return None
+    return new_cfg
 
 
 _SYSTEM_PROMPT = (

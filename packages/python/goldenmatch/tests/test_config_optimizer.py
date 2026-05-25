@@ -17,6 +17,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.config_optimizer import (
+    LLMProposer,
     OptimizeResult,
     _threshold_variants,
     optimize_config,
@@ -142,3 +143,63 @@ def test_invalid_objective_raises():
 def test_lazyframe_accepted():
     result = optimize_config(_df().lazy(), base_config=_weighted_config(0.8))
     assert isinstance(result, OptimizeResult)
+
+
+# --- AI-driven iteration (LLM proposer) ---
+
+def test_grid_default_is_single_round():
+    result = optimize_config(_df(), base_config=_weighted_config(0.8))
+    assert result.proposer == "grid"
+    assert result.rounds == 1
+
+
+def test_max_trials_caps_search():
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), max_trials=2)
+    assert len(result.trials) == 2
+
+
+def test_llm_proposer_iterates_with_injected_diff():
+    # Inject a fake LLM that proposes a progressively lower threshold each round,
+    # so the search runs multiple rounds with unique candidates (no network).
+    calls = {"n": 0}
+
+    def fake_diff(state):
+        calls["n"] += 1
+        return {"matchkeys": [{"name": "mk", "threshold": round(0.60 - 0.02 * state.round, 4)}]}
+
+    prop = LLMProposer(propose_fn=fake_diff, max_llm_calls=3)
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
+    assert result.proposer == "LLMProposer"
+    llm_trials = [t for t in result.trials if t.label.startswith("llm-r")]
+    assert len(llm_trials) == 3
+    assert calls["n"] >= 3
+    assert result.rounds >= 2
+
+
+def test_llm_proposer_stops_when_diff_none():
+    prop = LLMProposer(propose_fn=lambda state: None)
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
+    # Only the grid seed ran; no LLM-driven trials.
+    assert all(not t.label.startswith("llm-r") for t in result.trials)
+    assert result.rounds == 1
+
+
+def test_llm_string_without_env_falls_back_to_grid(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_LLM", raising=False)
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer="llm")
+    assert result.proposer == "llm"
+    assert all(not t.label.startswith("llm-r") for t in result.trials)
+
+
+def test_unknown_proposer_raises():
+    with pytest.raises(ValueError, match="proposer"):
+        optimize_config(_df(), base_config=_weighted_config(0.8), proposer="nonsense")
+
+
+def test_apply_config_diff_shared_helper():
+    from goldenmatch.core.autoconfig_policy import apply_config_diff
+    cfg = _weighted_config(0.8)
+    new = apply_config_diff(cfg, {"matchkeys": [{"name": "mk", "threshold": 0.6}]})
+    assert new is not None
+    assert new.get_matchkeys()[0].threshold == 0.6
+    assert apply_config_diff(cfg, {}) is None  # no-op diff

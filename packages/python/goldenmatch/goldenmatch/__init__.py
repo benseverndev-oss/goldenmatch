@@ -110,6 +110,8 @@ from goldenmatch.core.cluster import (
 # ── Cluster comparison (CCMS) ──────────────────────────────────────────
 from goldenmatch.core.compare_clusters import CompareResult, compare_clusters
 from goldenmatch.core.config_optimizer import (
+    GridProposer,
+    LLMProposer,
     OptimizeResult,
     OptimizerTrial,
     optimize_config,
@@ -317,6 +319,7 @@ __all__ = [
     # Auto-configuration
     "auto_configure", "auto_configure_df", "auto_configure_probabilistic_df",
     "optimize_config", "OptimizeResult", "OptimizerTrial",
+    "GridProposer", "LLMProposer",
     "suggest_threshold",
     # Auto-config verification
     "preflight", "postflight",
