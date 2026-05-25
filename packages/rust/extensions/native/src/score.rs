@@ -165,3 +165,89 @@ pub fn levenshtein_similarity(a: &str, b: &str) -> f64 {
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     ratio(&token_sort(a), &token_sort(b))
 }
+
+/// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
+/// fast-path scale (jaro_winkler/levenshtein on 0-1, token_sort/100, exact 0/1).
+/// ids: 0=jaro_winkler, 1=levenshtein, 2=token_sort, 3=exact.
+fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
+    match scorer_id {
+        0 => {
+            let s1: Vec<char> = a.chars().collect();
+            let s2: Vec<char> = b.chars().collect();
+            jaro_winkler(&s1, &s2, 0.1)
+        }
+        1 => {
+            let s1: Vec<char> = a.chars().collect();
+            let s2: Vec<char> = b.chars().collect();
+            levenshtein_normalized_similarity(&s1, &s2)
+        }
+        2 => ratio(&token_sort(a), &token_sort(b)) / 100.0,
+        3 => {
+            if a == b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+/// Native port of `score_buckets._score_one_bucket_fast`'s per-pair loop.
+///
+/// `field_values[f][r]` is the (already transform-applied) value of field `f`
+/// for row `r`, in the bucket's block-sorted order. `block_sizes` are the
+/// consecutive block lengths in that same order. Emits canonical (min,max)
+/// pairs whose weighted score (sum(score*weight) / total_weight, with None
+/// values skipped) meets `threshold`, excluding `exclude`. The arithmetic and
+/// field order mirror the Python loop exactly for bit-identical output.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+pub fn score_block_pairs(
+    row_ids: Vec<i64>,
+    block_sizes: Vec<usize>,
+    field_values: Vec<Vec<Option<String>>>,
+    scorer_ids: Vec<u8>,
+    weights: Vec<f64>,
+    total_weight: f64,
+    threshold: f64,
+    exclude: Vec<(i64, i64)>,
+) -> Vec<(i64, i64, f64)> {
+    let exclude: std::collections::HashSet<(i64, i64)> = exclude.into_iter().collect();
+    let n_fields = scorer_ids.len();
+    let mut out: Vec<(i64, i64, f64)> = Vec::new();
+    let mut offset = 0usize;
+    for &size in &block_sizes {
+        if size >= 2 {
+            let end = offset + size;
+            for i in offset..end - 1 {
+                let ri = row_ids[i];
+                for j in (i + 1)..end {
+                    let rj = row_ids[j];
+                    let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                    if exclude.contains(&pair_key) {
+                        continue;
+                    }
+                    let mut score_sum = 0.0_f64;
+                    let mut weight_sum = 0.0_f64;
+                    for f in 0..n_fields {
+                        if let (Some(a), Some(b)) =
+                            (&field_values[f][i], &field_values[f][j])
+                        {
+                            score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                            weight_sum += weights[f];
+                        }
+                    }
+                    if weight_sum > 0.0 {
+                        let combined = score_sum / total_weight;
+                        if combined >= threshold {
+                            out.push((pair_key.0, pair_key.1, combined));
+                        }
+                    }
+                }
+            }
+        }
+        offset += size;
+    }
+    out
+}

@@ -128,6 +128,116 @@ def test_scorers_match_rapidfuzz():
             rf_token_sort_ratio(a, b), abs=1e-9), f"token_sort {a!r} {b!r}"
 
 
+def test_score_block_pairs_kernel_parity():
+    """Phase 2: the native per-pair kernel must match a faithful Python replica
+    of score_buckets._score_one_bucket_fast's loop (using real score_field)."""
+    import random
+    import string
+
+    from goldenmatch.core.scorer import score_field
+
+    n = _native_loader.native_module()
+    scorer_ids = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3}
+    names = ["jaro_winkler", "token_sort"]
+    ids = [scorer_ids[x] for x in names]
+    fns = [(lambda nm: (lambda a, b: score_field(a, b, nm)))(nm) for nm in names]
+    rng = random.Random(99)
+
+    def rand_val():
+        if rng.random() < 0.1:
+            return None
+        return "".join(rng.choice(string.ascii_letters + " ") for _ in range(rng.randint(2, 8)))
+
+    def reference(row_ids, sizes, fa, weights, total_weight, threshold, exclude):
+        out = []
+        offset = 0
+        for size in sizes:
+            if size >= 2:
+                end = offset + size
+                for i in range(offset, end - 1):
+                    ri = row_ids[i]
+                    for j in range(i + 1, end):
+                        rj = row_ids[j]
+                        pk = (ri, rj) if ri < rj else (rj, ri)
+                        if pk in exclude:
+                            continue
+                        ss = ws = 0.0
+                        for f in range(len(fns)):
+                            va, vb = fa[f][i], fa[f][j]
+                            if va is None or vb is None:
+                                continue
+                            ss += fns[f](va, vb) * weights[f]
+                            ws += weights[f]
+                        if ws > 0:
+                            c = ss / total_weight
+                            if c >= threshold:
+                                out.append((pk[0], pk[1], float(c)))
+            offset += size
+        return out
+
+    for _ in range(300):
+        nrows = rng.randint(0, 12)
+        row_ids = rng.sample(range(1000), nrows)
+        sizes, rem = [], nrows
+        while rem > 0:
+            s = rng.randint(1, min(4, rem))
+            sizes.append(s)
+            rem -= s
+        fa = [[rand_val() for _ in range(nrows)] for _ in names]
+        weights = [rng.choice([0.5, 1.0, 2.0]) for _ in names]
+        tw = sum(weights)
+        threshold = rng.choice([0.0, 0.5, 0.8])
+        exclude = set()
+        if nrows >= 2 and rng.random() < 0.3:
+            a, b = rng.sample(row_ids, 2)
+            exclude.add((min(a, b), max(a, b)))
+        ref = reference(row_ids, sizes, fa, weights, tw, threshold, exclude)
+        got = n.score_block_pairs(row_ids, sizes, fa, ids, weights, tw, threshold, list(exclude))
+        assert len(ref) == len(got)
+        for (ra, rb, rs), (ga, gb, gs) in zip(ref, got):
+            assert (ra, rb) == (ga, gb)
+            assert gs == pytest.approx(rs, abs=1e-12)
+
+
+def test_score_buckets_end_to_end_parity(monkeypatch):
+    """Phase 2: score_buckets() must emit identical pairs with the native kernel
+    on (GOLDENMATCH_NATIVE=1) vs off (=0)."""
+    import polars as pl
+    from goldenmatch.backends.score_buckets import score_buckets
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.matchkey import _xform_sig
+
+    f1 = MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)
+    f2 = MatchkeyField(field="city", scorer="token_sort", weight=2.0)
+    mk = MatchkeyConfig(name="m", type="weighted", threshold=0.6, fields=[f1, f2])
+    bc = BlockingConfig(keys=[BlockingKeyConfig(fields=["blk"])])
+
+    names = ["John Smith", "Jon Smith", "Jane Doe", "Jayne Doe", "Bob Roe",
+             "John Smyth", "Jane Doe", "Robert Roe"]
+    cities = ["London", "London", "Leeds", "Leeds", "York",
+              "London", "Leeds", "York"]
+    blk = ["a", "a", "b", "b", "c", "a", "b", "c"]
+    df = pl.DataFrame({
+        "__row_id__": list(range(len(names))),
+        "blk": blk,
+        _xform_sig(f1): names,
+        _xform_sig(f2): cities,
+    })
+
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = score_buckets(df, bc, mk, set())
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = score_buckets(df, bc, mk, set())
+
+    assert len(py) > 0  # not vacuous
+    assert sorted(py) == sorted(native)
+
+
 def test_native_off_by_default(monkeypatch):
     # Unset env -> "auto" -> Python (no component gated on yet): default-safe.
     monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
