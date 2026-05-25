@@ -15,10 +15,14 @@ engage: a weighted matchkey on names+email with native-eligible scorers
 precomputed columns). Auto-config may add negative-evidence, which disqualifies
 the fast path — fine in production, wrong for a controlled kernel bench.
 
+Accepts a `.parquet` (e.g. the reusable `bench_<rows>.parquet` from the
+`bench-dataset-v1` release) or a `.csv` fixture; the columns it needs are
+`first_name`, `last_name`, `email` (the person shape both generators emit).
+
 Run (after building the ext):
     uv run python scripts/build_native.py
     uv run python scripts/bench_native_bucket.py \
-        --fixture .profile_tmp/synthetic_audit.csv \
+        --fixture bench-dataset/bench_5000000.parquet \
         --output .profile_tmp/native_bucket_result.json \
         --summary-md "$GITHUB_STEP_SUMMARY"
 """
@@ -120,7 +124,11 @@ def main() -> int:
     from goldenmatch.core.matchkey import precompute_matchkey_transforms
 
     print(f"[bench] loading {args.fixture}", flush=True)
-    df = pl.read_csv(args.fixture)
+    df = (
+        pl.read_parquet(args.fixture)
+        if args.fixture.suffix == ".parquet"
+        else pl.read_csv(args.fixture)
+    )
     df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     print(f"[bench] rows={df.height:,} cols={df.width}", flush=True)
 
