@@ -1,8 +1,12 @@
 # Agentic config optimizer for auto-config — design
 
 Date: 2026-05-25
-Status: draft. Phase 1 (deterministic search) shipped in PR #486; Phases 2-3
-(AI-driven iteration) are design-only here.
+Status: implemented (PR #486). Phase 1 (threshold sweep), the proposer/scorer/loop
+split, and Phase 3's `LLMProposer` (AI-driven iteration) all shipped. Deviation:
+the shipped proposer returns candidate configs and the `LLMProposer` applies its
+own diff via the shared `apply_config_diff` helper, rather than the `ConfigEdit`
+class hierarchy described in §4 — that hierarchy + the deterministic
+`CoordinateDescentProposer` (§5.2) remain the open follow-up (#488).
 Relationship: this is the **search** layer. Its objective is the
 **shared unsupervised score** defined in
 `2026-05-25-zero-label-confidence-autoconfig-design.md`. One signal, two
@@ -174,11 +178,12 @@ moves off the default when a candidate is strictly better.
 ## 9. Phasing / migration
 
 1. **Phase 1 (done):** `optimize_config` + threshold sweep + zero-label/F1 scoring.
-2. **Phase 2:** factor the loop/proposer/scorer split; add `ConfigEdit` vocabulary +
-   `GridProposer`/`CoordinateDescentProposer`. Closes #488/#491 deterministically.
-   No default behavior change (default proposer == today's sweep).
-3. **Phase 3:** `LLMProposer` reusing `LLMRefitPolicy` + `BudgetTracker`. Env-gated,
-   default off. The AI-driven iteration.
+2. **Phase 2 (partial):** the loop/proposer/scorer split + `GridProposer` shipped.
+   The `ConfigEdit` vocabulary + deterministic `CoordinateDescentProposer` remain
+   open (#488). No default behavior change (default proposer == today's sweep).
+3. **Phase 3 (done):** `LLMProposer` — env-gated, default off — the AI-driven
+   iteration. Reuses the controller's diff applier (`apply_config_diff`, shared with
+   `LLMRefitPolicy`); a `propose_fn` injection makes it testable without a network.
 4. **Phase 4:** consolidate `LLMRefitPolicy` onto the shared `ConfigEdit` vocabulary
    so the controller and optimizer share one lever language; expose surfaces.
 
