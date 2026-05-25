@@ -36,7 +36,13 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 #   - block_scoring: not reached by DQbench (controller picks polars-direct at
 #     these sizes); validated separately on a forced bucket-backend workload —
 #     emitted pair set identical, scores within 1 ULP (no threshold crossings).
-_GATED_ON: frozenset[str] = frozenset({"clustering", "block_scoring"})
+#   - pairs: the Native Core primitives (canonicalize_pairs,
+#     dedup_pairs_max_score, candidate_pair_count, block_histogram,
+#     connected_components). Bit-exact with the Python reference — integer
+#     arithmetic plus a strict-`>` max reduction, no float tolerance — so there
+#     is no threshold-crossing risk and no DQbench surface to clear; parity is
+#     asserted directly in tests/test_native_parity.py.
+_GATED_ON: frozenset[str] = frozenset({"clustering", "block_scoring", "pairs"})
 
 
 def native_module() -> Any:

@@ -245,6 +245,78 @@ def test_score_buckets_end_to_end_parity(monkeypatch):
         assert native_scores[pair] == pytest.approx(s, abs=1e-9)
 
 
+# ── Native Core pair primitives (component "pairs") ──
+
+# Mixed orientations, duplicate canonical pairs with differing scores (exercises
+# the max reduction + tie handling), a self-pair, and an empty case.
+_PAIRS_FIXTURES = [
+    [],
+    [(2, 1, 0.5)],
+    [(1, 2, 0.9), (2, 1, 0.3), (3, 4, 0.7), (4, 3, 0.7)],
+    [(5, 5, 1.0), (1, 2, 0.1), (1, 2, 0.1), (2, 1, 0.8)],
+    [(i % 7, (i + 3) % 7, (i % 5) / 5.0) for i in range(50)],
+]
+
+
+@pytest.mark.parametrize("pairs", _PAIRS_FIXTURES)
+def test_canonicalize_pairs_parity(monkeypatch, pairs):
+    from goldenmatch.core.pairs import canonicalize_pairs
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = canonicalize_pairs(list(pairs))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = canonicalize_pairs(list(pairs))
+    assert py == native
+
+
+@pytest.mark.parametrize("pairs", _PAIRS_FIXTURES)
+def test_dedup_pairs_max_score_parity(monkeypatch, pairs):
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = dedup_pairs_max_score(list(pairs))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = dedup_pairs_max_score(list(pairs))
+    assert py == native  # bit-exact: integer keys + strict-> max, sorted output
+
+
+_BLOCK_SIZE_FIXTURES = [
+    [],
+    [1],
+    [1, 1, 1],
+    [3, 1, 4, 1, 5, 9, 2, 6],
+    [1000, 500, 2, 1, 1, 1, 7],
+]
+
+
+@pytest.mark.parametrize("sizes", _BLOCK_SIZE_FIXTURES)
+def test_candidate_pair_count_parity(monkeypatch, sizes):
+    from goldenmatch.core.pairs import candidate_pair_count
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = candidate_pair_count(list(sizes))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = candidate_pair_count(list(sizes))
+    assert py == native
+
+
+@pytest.mark.parametrize("sizes", _BLOCK_SIZE_FIXTURES)
+def test_block_histogram_parity(monkeypatch, sizes):
+    from goldenmatch.core.pairs import block_histogram
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = block_histogram(list(sizes))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = block_histogram(list(sizes))
+    assert py == native
+
+
+@pytest.mark.parametrize("pairs,all_ids", _PAIR_FIXTURES)
+def test_connected_components_parity(monkeypatch, pairs, all_ids):
+    from goldenmatch.core.pairs import connected_components
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = connected_components(list(pairs), list(all_ids))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = connected_components(list(pairs), list(all_ids))
+    assert {frozenset(c) for c in py} == {frozenset(c) for c in native}
+
+
 def test_native_off_when_forced(monkeypatch):
     # GOLDENMATCH_NATIVE=0 is the kill switch: forces the Python path even for
     # gated-on components.
@@ -260,6 +332,7 @@ def test_auto_uses_native_only_for_gated_components(monkeypatch):
     available = _native_loader.native_available()
     assert _native_loader.native_enabled("clustering") is available
     assert _native_loader.native_enabled("block_scoring") is available
+    assert _native_loader.native_enabled("pairs") is available
     assert _native_loader.native_enabled("not_a_real_component") is False
 
 
