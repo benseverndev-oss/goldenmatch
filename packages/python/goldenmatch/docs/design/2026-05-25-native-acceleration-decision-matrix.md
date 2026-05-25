@@ -34,7 +34,10 @@ object churn) — not where it re-implements a tuned native lib.
 
 **Gate 2 — Can you cross the FFI boundary in bulk?**
 One call over all the data, not per-item. Per-item Python↔Rust marshalling eats
-the win. A "Yes" is really "Yes, as a single bulk call."
+the win. A "Yes" is really "Yes, as a single bulk call." (A clustering kernel
+that called across FFI once per cluster would lose to a single bulk call; the
+shipped `connected_components` correctly does one bulk call and measures on
+par — see Evidence.)
 
 ## Revised matrix
 
@@ -48,7 +51,7 @@ C++-only lib is required" per the Rust-not-C++ stance.
 | DuckDB extension wrappers | Maybe | Medium | Python UDF path works. Native only if you need DuckDB-native/vectorized perf — and that's the one place a C++-only dep might be justified. Measure the UDF overhead first. |
 | **Pair canonicalization** `(min,max)` + score normalize | **Measure first** | ~~High~~ Low/Med | **Gate 1 risk.** It's an O(1) tuple op; the distributed path already dedups via Polars `groupby(max)` (Rust). The in-memory Python `set` loop is Polars-vectorizable *without* a kernel. Vectorize in Polars before considering Rust. |
 | **Pair dedup max-score** (50M/100M streams) | **Measure first** | ~~High~~ Med | **Gate 1 risk.** Already a Polars `groupby` in the distributed path. At 50–100M the real cost is almost certainly Ray shuffle/serialization, which a Rust dedup kernel does **not** touch. Profile the shuffle before writing Rust. |
-| **Union-Find / connected components** | **Rust** | High *(conditional)* | **Gate 2 critical.** Real Python-loop hot path at scale → genuine win, **but only as one bulk call over all edges/clusters**. Measured 1.6× *slower* today because it crosses FFI ~66K times (once per cluster). The fix is batching the boundary, not the algorithm. |
+| **Union-Find / connected components** | **Rust** | Med *(already bulk)* | `connected_components` is already one bulk call and measures **≈ on par** with Python (per-cluster confidence loop is cheap, slightly faster native). Gate 2 satisfied; no rewrite needed for current workloads. Revisit only if a 25M+ profile shows the confidence loop dominating. |
 | Two-Phase WCC boundary merge | Rust | Med/High | Same as Union-Find: stable, perf-sensitive, but pass it the whole boundary super-graph in one call. Today it's columnar-Polars (already Rust) — Gate 1 says confirm Polars isn't already sufficient. |
 | Block histogram / candidate-pair count | Rust | Med | Simple, stable, easy to bench. But check Gate 1 — Polars `group_by().len()` may already do this fast enough; reach for Rust only if the planner needs it at a scale Polars can't hit. |
 | **Stable record hashing / ID generation** | **Rust** | High | **Exempt from the gates** — the rationale is *correctness + cross-surface portability*, not raw speed. One canonical impl that Python/pgrx/DuckDB/Node all call (via a C ABI later) is worth it on determinism grounds alone. |
@@ -69,7 +72,14 @@ C++-only lib is required" per the Rust-not-C++ stance.
 |---|---|---|---|
 | block_scoring | hand-rolled Rust scorers | **2.2–2.3× slower** than Python+rapidfuzz | Gate 1 violated (reimplemented rapidfuzz) |
 | block_scoring | rapidfuzz-rs + rayon + `allow_threads` | **5.1× faster** (big blocks); **~9.5×** on real `score_buckets` (tier3); 1.5× (tiny blocks) | passes both gates |
-| clustering | hand-rolled, per-cluster FFI (~66K calls) | **1.6× slower** (many small clusters); ~on-par (few large) | Gate 2 violated (per-item FFI) |
+| clustering | bulk `connected_components` + per-cluster confidence loop | **≈ on par** (3-run median ~0.73s native vs ~0.75s Python, 66K clusters) | passes both gates |
+
+An earlier *single-run* clustering measurement read 1.6× slower; it did not
+reproduce over 3-run medians (run-to-run variance on this shared box was
+~0.66–1.25s). Decomposed: `connected_components` 0.13s (one bulk call), the
+~66K-call per-cluster confidence loop 0.165s native vs 0.178s Python. So
+clustering is neither a regression nor a clear win — leave it as-is. The
+correction itself is the lesson: trust 3-run medians, not single runs.
 
 Parity held throughout (rapidfuzz-rs matches Python rapidfuzz within the existing
 `abs=1e-9`/`1e-12` test tolerances); DQbench ER composite unchanged at 92.03.
@@ -95,8 +105,10 @@ to justify in a design doc, not a default.
    bucket path: thread-pool+rayon 0.37s vs forced-sequential 0.97s — 2.6x
    faster. No integration change needed; the worker dispatch stays as-is. A
    self-applied instance of the "measure, don't assume" gate.)
-2. **Clustering, done right** — convert the current per-cluster FFI (Gate 2
-   violation, 1.6× slower) into a single bulk rayon-backed call; re-measure.
+2. **Clustering** — measured ≈ on par with Python (the earlier 1.6×-slower
+   figure was single-run noise, not reproduced over 3-run medians). No rewrite
+   needed now; revisit only if a 25M+ profile shows the per-cluster confidence
+   loop dominating.
 3. **Measure-first** on pair canonicalization / dedup — Polars-vectorize the
    in-memory canonicalization; profile the Ray shuffle at 50–100M before writing
    any dedup kernel. Likely no kernel needed.
