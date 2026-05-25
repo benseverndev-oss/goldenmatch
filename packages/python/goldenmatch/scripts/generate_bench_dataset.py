@@ -39,18 +39,6 @@ import polars as pl
 # ── Fixture construction ────────────────────────────────────────────
 
 
-_BASE_FIRSTS = [
-    "Alice", "Bob", "Charlie", "Dana", "Eve", "Frank",
-    "Grace", "Henry", "Iris", "Jack",
-]
-_BASE_LASTS = [
-    "Smith", "Johnson", "Williams", "Brown", "Jones",
-    "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
-    "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
-    "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-]
-
-
 def _variant(s: str, kind: int) -> str:
     """Three typo variants per (first, last) base identity.
 
@@ -78,13 +66,35 @@ def build_df(n: int) -> pl.DataFrame:
 
     Yields ~n/3 multi-member clusters at the dedupe stage. Each cluster
     has size 3.
+
+    Each group draws its surname from the **rank-ordered** census pool by
+    `last[g % L]`. Rank-adjacent surnames are dissimilar (jaro(Smith,
+    Johnson) ~= 0.45), and the pool has 10k entries, so co-blocked groups
+    (e.g. a `zip = g % 100` block) get distinct, dissimilar last names. That
+    keeps the fuzzy name matchkey discriminative — it links only the 3
+    intra-group typo-variants, never unrelated groups. (The earlier tiny
+    10/20-name pools correlated with `zip = g % 100`, so every row in a zip
+    block shared a name base and a zip-blocked dedup collapsed the whole
+    block into one cluster — see the e2e validation gate below. The given-name
+    pool is kept on a separate cycle; the surname alone carries the
+    discriminating signal because adjacent given names ("Abbie"/"Abby") are
+    similar.)
     """
+    from goldenmatch.refdata import given_names, surnames
+
+    surnames._load()
+    given_names._load()
+    first_pool = [g.title() for g in sorted(given_names._state.canonicals)]
+    last_pool = [s.title() for s in surnames._state.ranks.keys()]
+    n_first = len(first_pool)
+    n_last = len(last_pool)
+
     rows = []
     for i in range(n):
         group_id = i // 3
         within = i % 3
-        first_base = _BASE_FIRSTS[group_id % len(_BASE_FIRSTS)]
-        last_base = _BASE_LASTS[group_id % len(_BASE_LASTS)]
+        first_base = first_pool[group_id % n_first]
+        last_base = last_pool[group_id % n_last]
         rows.append({
             "first_name": _variant(first_base, within),
             "last_name":  _variant(last_base, within),
