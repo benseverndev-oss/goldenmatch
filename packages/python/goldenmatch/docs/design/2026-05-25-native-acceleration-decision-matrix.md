@@ -87,9 +87,14 @@ to justify in a design doc, not a default.
 
 ## Recommended execution order
 
-1. **Bank the block-scoring win** — `score_buckets` integration so the
-   per-bucket thread pool doesn't oversubscribe against the kernel's internal
-   rayon, then a large-runner 5M confirmation. (In flight.)
+1. **Bank the block-scoring win** — a large-runner 5M confirmation. (The
+   suspected thread-pool-vs-rayon oversubscription turned out to be a
+   non-issue: rayon uses a *shared global pool*, so thread-pool workers feeding
+   it don't multiply threads, and processing buckets concurrently beats
+   sequential when pairs concentrate in a few buckets. Measured on the tier3
+   bucket path: thread-pool+rayon 0.37s vs forced-sequential 0.97s — 2.6x
+   faster. No integration change needed; the worker dispatch stays as-is. A
+   self-applied instance of the "measure, don't assume" gate.)
 2. **Clustering, done right** — convert the current per-cluster FFI (Gate 2
    violation, 1.6× slower) into a single bulk rayon-backed call; re-measure.
 3. **Measure-first** on pair canonicalization / dedup — Polars-vectorize the
