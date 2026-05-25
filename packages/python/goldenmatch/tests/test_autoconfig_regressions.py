@@ -28,6 +28,7 @@ from goldenmatch import dedupe_df
 from goldenmatch._api import _extract_stats
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
+    _legacy_auto_configure_v0,
     auto_configure_df,
     build_matchkeys,
 )
@@ -121,7 +122,14 @@ def test_learned_blocking_not_triggered_below_50k():
     learner trained on 100% of its own input, producing multi-minute
     runtimes. Small datasets should use static/multi_pass blocking.
     """
-    cfg = auto_configure_df(_person_df(5_000))
+    # Assert on the v0 (config-build) layer, not the full controller. The
+    # learned-vs-static decision is made in build_blocking and is identical
+    # at every controller iteration (the committed config for this no-dup
+    # RED fixture is v0). Running the full controller here executes the
+    # pipeline 3-4x (~115s) and blew the 120s CI timeout under `-n auto`
+    # contention -- a worker-crash flake, not an assertion failure. Same
+    # pattern as test_reranking_enabled_three_plus_fields.
+    cfg = _legacy_auto_configure_v0(_person_df(5_000))
     assert cfg.blocking is not None
     assert cfg.blocking.strategy != "learned", (
         f"5K rows triggered learned blocking: strategy={cfg.blocking.strategy}"
@@ -140,7 +148,11 @@ def test_learned_blocking_sample_size_capped_at_quarter():
     can legitimately return ``cfg.blocking is None``. The test's real
     invariant is the sample-size cap conditional on learned blocking;
     guarding the precondition correctly expresses that intent."""
-    cfg = auto_configure_df(_gate_test_df(60_000))
+    # v0 builder: the learned-blocking gate + sample-size cap are decided in
+    # build_blocking (iteration-independent). On this sparse near-unique fixture
+    # the full controller fires ExpandSample -> O(N^2) fuzzy on no blocking key
+    # (~74s/iter), which times out the 120s CI lane under -n auto.
+    cfg = _legacy_auto_configure_v0(_gate_test_df(60_000))
     if cfg.blocking is None or cfg.blocking.strategy != "learned":
         pytest.skip(
             f"fixture didn't trigger learned blocking "
@@ -193,7 +205,11 @@ def test_low_cardinality_not_promoted_to_exact_matchkey():
     the phone classifier accepts it, and with ~80 distinct values in 5K
     rows each 'exact birth_year' match collapses ~60 unrelated people.
     """
-    cfg = auto_configure_df(_person_df(5_000))
+    # v0 (config-build) layer: the exact-matchkey cardinality guard fires in
+    # build_matchkeys and is iteration-independent (committed config == v0 for
+    # this RED no-dup fixture). The full controller would execute the pipeline
+    # 3-4x (~110s) and time out under `-n auto` CI contention.
+    cfg = _legacy_auto_configure_v0(_person_df(5_000))
     for mk in cfg.get_matchkeys():
         if mk.type != "exact":
             continue
@@ -326,7 +342,8 @@ def test_learned_blocking_exact_50k_boundary_triggers():
     5000, and a regression flipping `// 4` to `// 5` would silently shrink
     the sample to 4000 without this assertion failing.
     """
-    cfg = auto_configure_df(_gate_test_df(50_000))
+    # v0 builder (see ExpandSample timeout note on the 60k/49999 boundary tests).
+    cfg = _legacy_auto_configure_v0(_gate_test_df(50_000))
     if cfg.blocking is None:
         pytest.skip(
             "fixture didn't produce a viable blocking config "
@@ -361,7 +378,9 @@ def test_learned_blocking_just_below_50k_does_not_trigger():
     ``cfg.blocking is None`` (no blocking strategy at all) trivially
     satisfies \"strategy is not learned\". Only the explicit \"learned\"
     case is a regression."""
-    cfg = auto_configure_df(_gate_test_df(49_999))
+    # v0 builder (see ExpandSample timeout note on the 60k boundary test).
+    # This test was the lone remaining CI timeout after the first flake-fix pass.
+    cfg = _legacy_auto_configure_v0(_gate_test_df(49_999))
     strategy = cfg.blocking.strategy if cfg.blocking else None
     assert strategy != "learned", (
         f"total_rows=49_999 triggered learned blocking: strategy={strategy}"

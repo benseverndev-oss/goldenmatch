@@ -771,8 +771,16 @@ class AutoConfigController:
         if v0_entry is not None:
             history.entries.append(v0_entry)
 
-        # Pick committed config
-        best_entry = history.pick_committed(precision_collapse_floor=0.9)
+        # Pick committed config. Zero-label Phase 2: when
+        # GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=1, commit by zero-label
+        # confidence instead of the -mass_separation tiebreaker (default off).
+        _use_zero_label = (
+            os.environ.get("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "0") == "1"
+        )
+        best_entry = history.pick_committed(
+            precision_collapse_floor=0.9,
+            use_zero_label_confidence=_use_zero_label,
+        )
         if best_entry is None:
             # Every iteration errored — no usable profile produced. Fall back to v0.
             n_errored = sum(1 for e in history.entries if e.error is not None)
@@ -985,6 +993,22 @@ class AutoConfigController:
             data=_stamped_data,
             indicators=_stamped_indicators,
         )
+        # Zero-label Phase 2 (env-gated, optional): measure perturbation
+        # stability of the committed config on the sample and attach it to the
+        # zero_label profile. Adds compute (extra sample re-runs), so off by
+        # default; fail-soft (None when not perturbable / errored).
+        if (os.environ.get("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY", "0") == "1"
+                and _stamped_profile.zero_label is not None):
+            _stab = self._perturbation_stability(
+                best_entry.config, sample, sample_ref, _stamped_profile,
+            )
+            if _stab is not None:
+                _stamped_profile = dataclasses.replace(
+                    _stamped_profile,
+                    zero_label=dataclasses.replace(
+                        _stamped_profile.zero_label, perturbation_stability=_stab,
+                    ),
+                )
         best_entry = dataclasses.replace(best_entry, profile=_stamped_profile)
         if best_entry.iteration >= 0 and best_entry.iteration < len(history.entries):
             history.entries[best_entry.iteration] = best_entry
@@ -1092,6 +1116,20 @@ class AutoConfigController:
             data=_full_stamped_data,
             indicators=_stamped_indicators,
         )
+        # Carry the sample-measured zero-label perturbation_stability (set on the
+        # committed sample profile under the env flag) onto the full-data profile
+        # so it survives on the returned profile. No-op when not measured.
+        _committed_zl = best_entry.profile.zero_label
+        if (_committed_zl is not None
+                and _committed_zl.perturbation_stability is not None
+                and profile_full.zero_label is not None):
+            profile_full = dataclasses.replace(
+                profile_full,
+                zero_label=dataclasses.replace(
+                    profile_full.zero_label,
+                    perturbation_stability=_committed_zl.perturbation_stability,
+                ),
+            )
         # Drift detection
         sample_vec = best_entry.profile.normalized_signal_vector()
         full_vec = profile_full.normalized_signal_vector()
@@ -1281,6 +1319,41 @@ class AutoConfigController:
         else:
             run_match_df(sample, reference, config=config)
 
+    def _perturbation_stability(
+        self,
+        config: GoldenMatchConfig,
+        sample: pl.DataFrame,
+        reference: pl.DataFrame | None,
+        base_profile: ComplexityProfile,
+    ) -> float | None:
+        """Zero-label Phase 2 (env-gated, optional): re-run threshold ±0.05
+        perturbations on the sample and measure profile drift -> stability in
+        [0, 1]. Fail-soft (skips an erroring perturbation; returns None when
+        nothing is perturbable). Adds compute, so the caller only invokes this
+        under GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY=1. Uses iteration=-2
+        so the random-pair probe (iteration >= 0) is skipped.
+        """
+        from goldenmatch.core.profile_emitter import profile_capture
+        from goldenmatch.core.zero_label_confidence import (
+            perturbation_stability,
+            threshold_perturbations,
+        )
+
+        variants = threshold_perturbations(config)
+        if not variants:
+            return None
+        profiles: list[ComplexityProfile] = []
+        for pconf in variants:
+            try:
+                with profile_capture() as emitter:
+                    self._run_pipeline_sample(sample, reference, pconf)
+                profiles.append(self._assemble_profile(
+                    emitter, df=sample, iteration=-2, reference=reference, config=pconf,
+                ))
+            except Exception:  # noqa: BLE001 - fail-soft diagnostic
+                continue
+        return perturbation_stability(base_profile, profiles)
+
     def _compute_recall_probe(
         self,
         sample: pl.DataFrame,
@@ -1395,7 +1468,7 @@ class AutoConfigController:
             probe_rate = self._compute_recall_probe(df, config)
             scoring = dataclasses.replace(scoring, random_pair_above_threshold_rate=probe_rate)
 
-        return ComplexityProfile(
+        profile = ComplexityProfile(
             data=data,
             domain=emitter.domain or DomainProfile(),
             matchkey=emitter.matchkey or MatchkeyProfile(),
@@ -1406,6 +1479,15 @@ class AutoConfigController:
                 iteration=iteration, is_sample=is_sample,
                 sample_size=df.height, n_rows_full=df.height,
             ),
+        )
+        # Zero-label (ZeroER-inspired) confidence. Phase 1: observational only —
+        # attached for reports/telemetry; NOT consumed by health() or
+        # pick_committed() (commit selection is unchanged). See
+        # docs/design/2026-05-25-zero-label-confidence-autoconfig-design.md.
+        from goldenmatch.core.zero_label_confidence import compute_zero_label_confidence
+
+        return dataclasses.replace(
+            profile, zero_label=compute_zero_label_confidence(profile, config),
         )
 
     def _compute_data_profile(

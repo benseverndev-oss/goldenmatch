@@ -609,12 +609,15 @@ class TestCompoundBlockingIntegration:
     """Integration test: auto_configure_df on a wide dataset with oversized single-column blocks."""
 
     def test_wide_dataset_produces_safe_config(self):
-        # #433: was 112s on CI (the dominant test). The full
-        # controller iteration adds ~100s and isn't what this test
-        # verifies -- the assertion is about blocking safety on a
-        # wide dataset, which is computed in the initial v0 config.
-        # confidence_required=False short-circuits past the
-        # iteration loop and returns v0 directly.
+        # #433: the blocking-safety assertion is computed in the initial v0
+        # config (build_blocking), not refined by controller iteration.
+        # The previous `auto_configure_df(df, confidence_required=False)`
+        # call did NOT skip the loop (confidence_required only gates the
+        # RED-raise), so this ran the full pipeline 3-4x (~150-200s) and
+        # blew the 120s CI timeout under `-n auto` -- the dominant cause of
+        # the intermittent `python (goldenmatch)` worker-crash flake.
+        # Call the v0 builder directly (same as
+        # test_reranking_enabled_three_plus_fields).
         random.seed(42)
         n = 10000
         models = [f"Model{random.choice('ABCDEFGHIJ')}{i}" for i in range(100)]
@@ -629,8 +632,8 @@ class TestCompoundBlockingIntegration:
             "serial": [str(i) for i in range(n)],
         })
 
-        from goldenmatch.core.autoconfig import auto_configure_df
-        config = auto_configure_df(df, confidence_required=False)
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+        config = _legacy_auto_configure_v0(df)
 
         assert config.blocking is not None
         if config.blocking.strategy == "multi_pass":
@@ -1127,14 +1130,18 @@ class TestDataDrivenStrategy:
 
     def test_medium_dataset_not_upgraded_to_learned(self):
         """5K-49K row datasets must stay on static/multi_pass blocking."""
-        from goldenmatch.core.autoconfig import auto_configure_df
+        # v0 (config-build) layer: the learned-blocking gate fires in
+        # build_blocking on the full row count and is iteration-independent.
+        # The full controller executes the pipeline 3-4x (~23s) and inflates
+        # past the 120s CI timeout under `-n auto` contention.
+        from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
 
         df = pl.DataFrame({
             "name": [f"Person {i}" for i in range(5_000)],
             "city": [f"City {i % 100}" for i in range(5_000)],
         })
 
-        config = auto_configure_df(df)
+        config = _legacy_auto_configure_v0(df)
         assert config.blocking is not None
         assert config.blocking.strategy != "learned"
 

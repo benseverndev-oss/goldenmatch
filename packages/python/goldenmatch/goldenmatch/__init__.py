@@ -75,7 +75,11 @@ from goldenmatch.core.agent import AgentSession
 from goldenmatch.core.anomaly import detect_anomalies
 
 # ── Auto-configuration ──────────────────────────────────────────────────
-from goldenmatch.core.autoconfig import auto_configure, auto_configure_df
+from goldenmatch.core.autoconfig import (
+    auto_configure,
+    auto_configure_df,
+    auto_configure_probabilistic_df,
+)
 
 # ── Auto-config verification ────────────────────────────────────────────
 # See PR #44 for design notes.
@@ -105,6 +109,22 @@ from goldenmatch.core.cluster import (
 
 # ── Cluster comparison (CCMS) ──────────────────────────────────────────
 from goldenmatch.core.compare_clusters import CompareResult, compare_clusters
+from goldenmatch.core.config_edits import (
+    BlockingKeyEdit,
+    BlockingStrategyEdit,
+    MatchkeyTypeSwap,
+    ScorerSwap,
+    ThresholdShift,
+    WeightShift,
+)
+from goldenmatch.core.config_optimizer import (
+    CoordinateDescentProposer,
+    GridProposer,
+    LLMProposer,
+    OptimizeResult,
+    OptimizerTrial,
+    optimize_config,
+)
 
 # ── Diff / Rollback ─────────────────────────────────────────────────────
 from goldenmatch.core.diff import generate_diff
@@ -306,7 +326,12 @@ __all__ = [
     # Active learning / boost
     "boost_accuracy",
     # Auto-configuration
-    "auto_configure", "auto_configure_df", "suggest_threshold",
+    "auto_configure", "auto_configure_df", "auto_configure_probabilistic_df",
+    "optimize_config", "OptimizeResult", "OptimizerTrial",
+    "GridProposer", "LLMProposer", "CoordinateDescentProposer",
+    "ThresholdShift", "ScorerSwap", "BlockingStrategyEdit",
+    "WeightShift", "MatchkeyTypeSwap", "BlockingKeyEdit",
+    "suggest_threshold",
     # Auto-config verification
     "preflight", "postflight",
     "PreflightReport", "PreflightFinding",

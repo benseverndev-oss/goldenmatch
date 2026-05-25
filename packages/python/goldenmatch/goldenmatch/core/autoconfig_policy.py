@@ -233,14 +233,23 @@ class LLMRefitPolicy:
         except json.JSONDecodeError:
             return None
 
-        action = payload.get("action")
-        if action == "satisfied":
-            return None
-        if action != "modify":
-            return None
+        return self._config_from_edits(current, payload)
 
-        # Apply the proposed diff to current config
-        return self._apply_diff(current, payload.get("diff", {}))
+    def _config_from_edits(self, current: Any, payload: dict) -> Any | None:
+        """Fold the LLM-proposed edits (shared closed ConfigEdit vocabulary, the
+        same lever language the optimizer's LLMProposer uses) onto ``current``.
+        Returns ``None`` for ``satisfied``, no edits, or a non-config input."""
+        from goldenmatch.config.schemas import GoldenMatchConfig
+        from goldenmatch.core.config_edits import fold_edits, parse_llm_edits
+
+        if payload.get("action") == "satisfied":
+            return None
+        if not isinstance(current, GoldenMatchConfig):
+            return None
+        edits = parse_llm_edits(payload)
+        if not edits:
+            return None
+        return fold_edits(current, edits)
 
     def _build_prompt(
         self,
@@ -273,7 +282,7 @@ You are an expert in entity-resolution configuration. The auto-config
 controller has run {history.iteration} iteration(s) and the heuristic rule
 table can't propose any further improvements, but the current profile is
 {profile.health().value.upper()} (not green). Inspect the signals below
-and propose a config diff that would address the most likely problem.
+and propose config edits that would address the most likely problem.
 
 ## Profile signals
 
@@ -305,94 +314,92 @@ ClusterProfile: n_clusters={cp.n_clusters} max_size={cp.cluster_size_max}
 
 ## Task
 
-Return a JSON object with one of two actions:
+Return a JSON object with one of two shapes:
 
   {{"action": "satisfied"}}
     -- the current config is acceptable; no change needed.
 
-  {{"action": "modify", "diff": {{...}}}}
-    -- propose a diff. The diff is a partial GoldenMatchConfig with only
-    the fields you want to change. Keep changes minimal and focused on
+  {{"edits": [ ...edit objects... ]}}
+    -- 1-3 minimal edits, applied in order to the current config, focused on
     the most likely cause of the non-green status.
 
-Examples of useful diffs:
-
-  Lower threshold:
-    {{"action": "modify",
-      "diff": {{"matchkeys": [{{"name": "...", "threshold": 0.6}}]}}}}
-
-  Switch blocking key:
-    {{"action": "modify",
-      "diff": {{"blocking": {{"keys": [{{"fields": ["surname"],
-                                          "transforms": ["soundex"]}}]}}}}}}
-
-  Drop a problematic matchkey by name:
-    {{"action": "modify",
-      "diff": {{"drop_matchkeys": ["domain_exact_title_key"]}}}}
+Each edit object is one of (drawn from the closed lever vocabulary):
+  {{"op": "threshold_shift", "delta": -0.1}}
+  {{"op": "scorer_swap", "matchkey": "...", "field": "...", "scorer": "token_sort"}}
+  {{"op": "blocking_strategy", "strategy": "multi_pass"}}
+  {{"op": "blocking_key", "action": "add", "fields": ["surname"], "transforms": ["soundex"]}}
+  {{"op": "weight_shift", "matchkey": "...", "field": "...", "delta": 0.5}}
+  {{"op": "matchkey_type", "matchkey": "...", "target_type": "probabilistic"}}
 
 Your response MUST be valid JSON, nothing else.
 """
 
     def _apply_diff(self, current: Any, diff: dict) -> Any | None:
-        """Apply a JSON diff to the current GoldenMatchConfig.
+        return apply_config_diff(current, diff)
 
-        Supports a focused subset: matchkey threshold change, blocking key
-        replacement, matchkey drop-by-name. Returns None if the diff doesn't
-        produce a valid config or doesn't actually change anything.
-        """
-        from goldenmatch.config.schemas import GoldenMatchConfig
-        if not isinstance(current, GoldenMatchConfig):
-            return None
 
-        new_cfg = current
+def apply_config_diff(current: Any, diff: dict) -> Any | None:
+    """Apply a JSON diff to a GoldenMatchConfig.
 
-        # Drop matchkeys by name
-        if "drop_matchkeys" in diff:
-            drop = set(diff["drop_matchkeys"] or [])
-            kept = [mk for mk in (new_cfg.matchkeys or []) if mk.name not in drop]
-            if len(kept) != len(new_cfg.matchkeys or []):
-                new_cfg = new_cfg.model_copy(update={"matchkeys": kept})
+    Supports a focused subset: matchkey threshold change, blocking key
+    replacement, matchkey drop-by-name. Returns None if the diff doesn't
+    produce a valid config or doesn't actually change anything. Shared by
+    ``LLMRefitPolicy`` (controller repair) and the agentic config optimizer's
+    ``LLMProposer`` (search) so both speak one diff language.
+    """
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    if not isinstance(current, GoldenMatchConfig):
+        return None
 
-        # Threshold tweaks: a list of {name, threshold} entries
-        if "matchkeys" in diff and diff["matchkeys"]:
-            new_mks = []
-            for mk in (new_cfg.matchkeys or []):
-                update_for_this = next(
-                    (m for m in diff["matchkeys"] if m.get("name") == mk.name),
-                    None,
-                )
-                if update_for_this is not None and "threshold" in update_for_this:
-                    new_mks.append(mk.model_copy(update={
-                        "threshold": update_for_this["threshold"],
-                    }))
-                else:
-                    new_mks.append(mk)
-            new_cfg = new_cfg.model_copy(update={"matchkeys": new_mks})
+    new_cfg = current
 
-        # Blocking key swap
-        if "blocking" in diff and diff["blocking"] and "keys" in diff["blocking"]:
-            from goldenmatch.config.schemas import BlockingKeyConfig
-            new_keys = [
-                BlockingKeyConfig(
-                    fields=k["fields"],
-                    transforms=k.get("transforms", ["lowercase"]),
-                )
-                for k in diff["blocking"]["keys"]
-            ]
-            if new_cfg.blocking is not None:
-                new_cfg = new_cfg.model_copy(update={
-                    "blocking": new_cfg.blocking.model_copy(update={"keys": new_keys}),
-                })
+    # Drop matchkeys by name
+    if "drop_matchkeys" in diff:
+        drop = set(diff["drop_matchkeys"] or [])
+        kept = [mk for mk in (new_cfg.matchkeys or []) if mk.name not in drop]
+        if len(kept) != len(new_cfg.matchkeys or []):
+            new_cfg = new_cfg.model_copy(update={"matchkeys": kept})
 
-        if new_cfg == current:
-            return None
-        return new_cfg
+    # Threshold tweaks: a list of {name, threshold} entries
+    if "matchkeys" in diff and diff["matchkeys"]:
+        new_mks = []
+        for mk in (new_cfg.matchkeys or []):
+            update_for_this = next(
+                (m for m in diff["matchkeys"] if m.get("name") == mk.name),
+                None,
+            )
+            if update_for_this is not None and "threshold" in update_for_this:
+                new_mks.append(mk.model_copy(update={
+                    "threshold": update_for_this["threshold"],
+                }))
+            else:
+                new_mks.append(mk)
+        new_cfg = new_cfg.model_copy(update={"matchkeys": new_mks})
+
+    # Blocking key swap
+    if "blocking" in diff and diff["blocking"] and "keys" in diff["blocking"]:
+        from goldenmatch.config.schemas import BlockingKeyConfig
+        new_keys = [
+            BlockingKeyConfig(
+                fields=k["fields"],
+                transforms=k.get("transforms", ["lowercase"]),
+            )
+            for k in diff["blocking"]["keys"]
+        ]
+        if new_cfg.blocking is not None:
+            new_cfg = new_cfg.model_copy(update={
+                "blocking": new_cfg.blocking.model_copy(update={"keys": new_keys}),
+            })
+
+    if new_cfg == current:
+        return None
+    return new_cfg
 
 
 _SYSTEM_PROMPT = (
     "You are an expert in entity resolution. You inspect runtime profile "
-    "signals from a deduplication pipeline and propose minimal config diffs "
-    "that improve precision/recall without overfitting to the specific data. "
-    "Always respond with valid JSON matching the schema described in the user "
-    "message."
+    "signals from a deduplication pipeline and propose minimal config edits "
+    "(from a closed lever vocabulary) that improve precision/recall without "
+    "overfitting to the specific data. Always respond with valid JSON matching "
+    "the schema described in the user message."
 )

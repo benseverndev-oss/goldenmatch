@@ -272,3 +272,29 @@ def test_apply_diff_returns_none_for_non_goldenmatconfig():
     policy = LLMRefitPolicy()
     result = policy._apply_diff({"some": "dict"}, {"matchkeys": [{"name": "m", "threshold": 0.5}]})
     assert result is None
+
+
+# --- shared ConfigEdit vocabulary (consolidation with the optimizer) ---
+
+def test_config_from_edits_folds_shared_vocabulary():
+    """The LLM repair now speaks the shared closed ConfigEdit vocabulary:
+    a list of edits folds onto the current config."""
+    policy = LLMRefitPolicy()
+    cfg = _config()  # threshold 0.7, blocking strategy static
+    out = policy._config_from_edits(cfg, {"edits": [
+        {"op": "threshold_shift", "delta": -0.2},
+        {"op": "blocking_strategy", "strategy": "multi_pass"},
+    ]})
+    assert out is not None
+    assert abs(out.matchkeys[0].threshold - 0.5) < 1e-9
+    assert out.blocking.strategy == "multi_pass"
+
+
+def test_config_from_edits_satisfied_and_empty_return_none():
+    policy = LLMRefitPolicy()
+    cfg = _config()
+    assert policy._config_from_edits(cfg, {"action": "satisfied"}) is None
+    assert policy._config_from_edits(cfg, {"edits": []}) is None
+    assert policy._config_from_edits(cfg, {"edits": [{"op": "junk"}]}) is None
+    # non-config input is a no-op
+    assert policy._config_from_edits({"x": 1}, {"edits": [{"op": "threshold_shift", "delta": -0.1}]}) is None

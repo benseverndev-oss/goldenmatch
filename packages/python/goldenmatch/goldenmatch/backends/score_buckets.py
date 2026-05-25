@@ -38,10 +38,18 @@ from typing import Any
 import polars as pl
 
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
+from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
 from goldenmatch.core.blocker import _build_block_key_expr
 
 logger = logging.getLogger(__name__)
+
+# Scorers the native fast-path kernel (goldenmatch._native.score_block_pairs)
+# implements, with the ids it expects. A field whose scorer isn't here forces
+# the Python per-pair loop for that bucket.
+_NATIVE_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+}
 
 
 BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
@@ -99,7 +107,7 @@ def _resolve_fast_path(
     across_files_only: bool,
     source_lookup: dict[int, str] | None,
     target_ids: set[int] | None,
-) -> tuple[float, float, list[tuple[str, float, Any]]] | None:
+) -> tuple[float, float, list[tuple[str, float, Any, str]]] | None:
     """Decide whether mk is fast-path eligible and pre-resolve field specs.
 
     Returns (threshold, total_weight, [(xform_col, weight, score_fn), ...])
@@ -134,7 +142,7 @@ def _resolve_fast_path(
     if not mk.fields:
         return None
 
-    field_specs: list[tuple[str, float, Any]] = []
+    field_specs: list[tuple[str, float, Any, str]] = []
     total_weight = 0.0
     for f in mk.fields:
         scorer = getattr(f, "scorer", None)
@@ -147,7 +155,7 @@ def _resolve_fast_path(
         xform_col = _xform_sig(f)
         if xform_col not in prepared_df.columns:
             return None
-        field_specs.append((xform_col, float(weight), fn))
+        field_specs.append((xform_col, float(weight), fn, scorer))
         total_weight += float(weight)
     if total_weight <= 0:
         return None
@@ -265,6 +273,14 @@ def score_buckets(
         target_ids=target_ids,
     )
 
+    # Native fast-path eligibility resolved ONCE: gated on, and every field's
+    # scorer implemented by the native kernel. None -> Python per-pair loop.
+    native_scorer_ids: list[int] | None = None
+    if fast_path_specs is not None and native_enabled("block_scoring"):
+        ids = [_NATIVE_SCORER_IDS.get(spec[3]) for spec in fast_path_specs[2]]
+        if all(i is not None for i in ids):
+            native_scorer_ids = ids  # type: ignore[assignment]
+
     def _score_one_bucket_fast(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
         # Fast path for tiny-block workloads. Pre-extracts each transformed
         # field as a Python list ONCE per bucket, then iterates pairs within
@@ -285,12 +301,24 @@ def score_buckets(
             return [], 0
         size_list = sizes["__size__"].to_list()
         row_ids = sorted_df["__row_id__"].to_list()
-        # field_specs: list of (xform_col, weight, score_fn).
+        # field_specs: list of (xform_col, weight, score_fn, scorer_name).
         field_arrays = [
-            sorted_df[col].to_list() for col, _w, _fn in field_specs
+            sorted_df[col].to_list() for col, _w, _fn, _name in field_specs
         ]
-        weights = [w for _col, w, _fn in field_specs]
-        score_fns = [fn for _col, _w, fn in field_specs]
+        weights = [w for _col, w, _fn, _name in field_specs]
+
+        # Native kernel: identical per-pair loop in Rust (gated + scorers
+        # supported). Returns the same canonical (min,max) pairs in the same
+        # order; local_blocks = count of scoreable blocks.
+        if native_scorer_ids is not None:
+            pairs = native_module().score_block_pairs(
+                row_ids, size_list, field_arrays, native_scorer_ids,
+                weights, total_weight, threshold, list(frozen_exclude),
+            )
+            local_blocks = sum(1 for s in size_list if s >= 2)
+            return pairs, local_blocks
+
+        score_fns = [fn for _col, _w, fn, _name in field_specs]
         n_fields = len(field_specs)
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0

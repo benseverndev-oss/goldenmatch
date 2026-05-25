@@ -30,6 +30,7 @@ jobs:
       benchmark_runner: ${{ steps.filter.outputs.benchmark_runner }}
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
+      native: ${{ steps.filter.outputs.native }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -112,6 +113,17 @@ jobs:
               # Gate strictly on its own subtree so editing Rust code doesn't
               # spin up a Python lane for it.
               - 'packages/rust/extensions/duckdb/**'
+            native:
+              # The native acceleration ext (PyO3) is a standalone workspace,
+              # so the `rust` job's `cargo test --workspace` never builds it.
+              # This lane builds the .so and runs the Python parity suite
+              # (which SKIPS when the ext is absent). Trigger on the crate plus
+              # the Python files it's wired into + the build script.
+              - 'packages/rust/extensions/native/**'
+              - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+              - 'packages/python/goldenmatch/tests/test_native_parity.py'
+              - 'scripts/build_native.py'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -587,6 +599,45 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
 
+  # Native acceleration extension (PyO3). The crate is a standalone workspace
+  # (its `extension-module` pyo3 feature is incompatible with the bridge's
+  # `auto-initialize`), so the `rust` job above never builds it. This lane
+  # builds the .so into the goldenmatch package and runs the Python parity
+  # suite — which `skipif`s when the ext is absent, so without this lane the
+  # native kernels would be UNTESTED in CI. The parity tests assert the native
+  # path matches the pure-Python path bit-for-bit (GOLDENMATCH_NATIVE 0 vs 1).
+  native:
+    needs: changes
+    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Diagnostics (toolchain + dep versions)
+        run: |
+          (cd packages/rust/extensions/native && rustc --version && cargo clippy --version)
+          uv run python -c "import sys, rapidfuzz, polars; print('python', sys.version.split()[0], 'rapidfuzz', rapidfuzz.__version__, 'polars', polars.__version__)"
+      - name: clippy (native crate)
+        working-directory: packages/rust/extensions/native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_native.py
+      - name: Parity suite (ext present -> tests run instead of skipping)
+        run: uv run pytest packages/python/goldenmatch/tests/test_native_parity.py -v
+
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
@@ -810,6 +861,7 @@ jobs:
       - action
       - rust_pgrx
       - duckdb_extensions
+      - native
       - pyright
       - readme_callouts
     if: always()

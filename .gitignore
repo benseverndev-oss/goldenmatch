@@ -53,3 +53,14 @@ labels.jsonl
 # in CLAUDE.md; this entry makes that real.
 .profile_tmp/
 packages/python/goldenmatch/bench-dataset-v1/
+
+# Local runtime state: Learning Memory DB, review queue, identity graph,
+# cross-run autoconfig memory. The engine (and the test suite) rewrites these
+# on every run, so they are never source. `.goldenmatch/memory.db` used to be
+# tracked at the repo root and re-dirtied the working tree on each run; it was
+# `git rm --cached`'d alongside this entry.
+.goldenmatch/
+
+# Compiled native acceleration ext (built from packages/rust/extensions/native
+# via scripts/build_native.py). Platform-specific abi3 artifact, never source.
+packages/python/goldenmatch/goldenmatch/_native*.so

@@ -2359,3 +2359,44 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         type="probabilistic",
         fields=fields,
     )]
+
+
+def auto_configure_probabilistic_df(
+    df: pl.DataFrame | pl.LazyFrame,
+    llm_provider: str | None = None,
+) -> GoldenMatchConfig:
+    """Build a Fellegi-Sunter *probabilistic* config straight from a DataFrame.
+
+    A reachable auto-config entry point for the probabilistic matchkey type.
+    The heuristic / iterative ``auto_configure_df`` only emits exact + weighted
+    matchkeys (its controller refit rules are weighted-specific), so the
+    probabilistic lever was previously unreachable from the auto surface. This
+    profiles the columns, builds blocking, and emits a single
+    ``type="probabilistic"`` matchkey via ``build_probabilistic_matchkeys``.
+    The m/u probabilities are EM-trained at dedupe time (``core/probabilistic.py``);
+    this only produces the config.
+
+    Non-iterative by design: it does NOT run the ``AutoConfigController`` (the
+    EM training is the "fit", not the heuristic refit loop). Use
+    ``auto_configure_df`` for the weighted/iterative path. The agentic config
+    optimizer (spec ``2026-05-25-agentic-config-optimizer-design``) is the
+    intended place to *search* weighted-vs-probabilistic empirically.
+    """
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    profiles = profile_columns(df, llm_provider=llm_provider)
+    matchkeys = build_probabilistic_matchkeys(profiles)
+    if not matchkeys:
+        raise ValueError(
+            "No probabilistic matchkeys could be built: no matchable columns "
+            "found (probabilistic skips numeric/date/identifier/description "
+            "columns; provide name/address/email/phone-like fields)."
+        )
+    blocking = build_blocking(profiles, df, llm_provider=llm_provider)
+    return GoldenMatchConfig(
+        matchkeys=matchkeys,
+        blocking=blocking,
+        golden_rules=GoldenRulesConfig(default_strategy="most_complete"),
+        output=OutputConfig(),
+    )
