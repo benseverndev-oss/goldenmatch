@@ -33,6 +33,8 @@ def _profile(
     cluster_size_max: int = 3,
     oversized: int = 0,
     transitivity: float = 0.95,
+    edge_p50: float = 0.0,
+    edge_min: float = 0.0,
     n_rows: int = 100,
 ) -> ComplexityProfile:
     if histogram is None:
@@ -54,6 +56,8 @@ def _profile(
             cluster_size_max=cluster_size_max,
             transitivity_rate=transitivity,
             oversized_cluster_count=oversized,
+            edge_confidence_p50=edge_p50,
+            edge_confidence_min=edge_min,
         ),
     )
 
@@ -82,6 +86,28 @@ def test_cluster_collapse_guard():
     z = compute_zero_label_confidence(_profile(n_clusters=1, cluster_size_max=99, n_rows=100))
     assert z.overall_confidence <= 0.2
     assert any("cluster collapse" in r for r in z.confidence_reasons)
+
+
+def test_singleton_clusters_have_zero_bridge_risk():
+    z = compute_zero_label_confidence(_profile(cluster_size_max=1))
+    assert z.cluster_bridge_risk == 0.0
+
+
+def test_weak_bridge_raises_bridge_risk():
+    # Wide edge-confidence spread (strong median, weak weakest edge) + low
+    # transitivity -> chain-like cluster held by a weak bridge.
+    z = compute_zero_label_confidence(
+        _profile(cluster_size_max=5, edge_p50=0.9, edge_min=0.1, transitivity=0.3)
+    )
+    assert z.cluster_bridge_risk > 0.3
+    assert any("weak-bridge" in r for r in z.confidence_reasons)
+
+
+def test_tight_cluster_has_low_bridge_risk():
+    z = compute_zero_label_confidence(
+        _profile(cluster_size_max=5, edge_p50=0.92, edge_min=0.9, transitivity=0.98)
+    )
+    assert z.cluster_bridge_risk < 0.1
 
 
 def test_low_transitivity_lowers_confidence():

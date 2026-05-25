@@ -112,11 +112,29 @@ def score_cluster_confidence(cluster: ClusterProfile, n_rows: int) -> float:
     return _clamp(0.5 * giant + 0.5 * oversized)
 
 
+def score_cluster_bridge_risk(cluster: ClusterProfile) -> float:
+    """``cluster_bridge_risk`` — bridge-like cluster risk (higher = worse).
+
+    Heuristic proxy from existing cluster signals (NO new instrumentation): a
+    large drop from the median edge confidence to the weakest edge suggests a
+    cluster held together by a weak bridge, and low transitivity suggests
+    chain-like clusters (bridges between sub-groups). 0 when every cluster is a
+    singleton (no bridges possible). True articulation-point / bridge detection
+    on the per-cluster pair graph is a future refinement (tracked separately).
+    """
+    if cluster.cluster_size_max <= 1:
+        return 0.0
+    edge_spread = _clamp(cluster.edge_confidence_p50 - cluster.edge_confidence_min)
+    chain_signal = _clamp(1.0 - cluster.transitivity_rate)
+    return _clamp(0.6 * edge_spread + 0.4 * chain_signal)
+
+
 def combine_zero_label_scores(
     dist: dict[str, float],
     contamination: float,
     transitive_coherence: float,
     cluster_size_risk: float,
+    cluster_bridge_risk: float,
     scoring: ScoringProfile,
     cluster: ClusterProfile,
     n_rows: int,
@@ -130,7 +148,8 @@ def combine_zero_label_scores(
         + 0.15 * (1.0 - dist["distribution_overlap"])
         + 0.15 * (1.0 - contamination)
         + 0.10 * transitive_coherence
-        + 0.10 * (1.0 - cluster_size_risk)
+        + 0.05 * (1.0 - cluster_size_risk)
+        + 0.05 * (1.0 - cluster_bridge_risk)
     )
 
     if dist["latent_separation"] >= 0.6:
@@ -141,6 +160,8 @@ def combine_zero_label_scores(
         reasons.append(f"random-pair contamination ({contamination:.2f})")
     if cluster_size_risk > 0.3:
         reasons.append(f"oversized/giant clusters (risk {cluster_size_risk:.2f})")
+    if cluster_bridge_risk > 0.3:
+        reasons.append(f"weak-bridge cluster risk ({cluster_bridge_risk:.2f})")
     if transitive_coherence < 0.7:
         reasons.append(f"low transitivity ({transitive_coherence:.2f})")
 
@@ -184,9 +205,11 @@ def compute_zero_label_confidence(
         reasons.append(contam_reason)
     transitive = score_transitivity(cluster)
     size_risk = score_cluster_confidence(cluster, n_rows)
+    bridge_risk = score_cluster_bridge_risk(cluster)
 
     overall, reasons = combine_zero_label_scores(
-        dist, contamination, transitive, size_risk, scoring, cluster, n_rows, reasons,
+        dist, contamination, transitive, size_risk, bridge_risk,
+        scoring, cluster, n_rows, reasons,
     )
     return ZeroLabelConfidenceProfile(
         latent_separation=dist["latent_separation"],
@@ -196,6 +219,7 @@ def compute_zero_label_confidence(
         random_pair_contamination=contamination,
         transitive_coherence=transitive,
         cluster_size_risk=size_risk,
+        cluster_bridge_risk=bridge_risk,
         overall_confidence=overall,
         confidence_reasons=tuple(reasons),
     )
