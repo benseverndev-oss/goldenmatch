@@ -1,0 +1,125 @@
+"""Tests for the zero-label (ZeroER-inspired) confidence layer (Phase 1).
+
+Design: docs/design/2026-05-25-zero-label-confidence-autoconfig-design.md.
+Phase 1 is observational: these test the computed signals + guards directly,
+not commit selection (pick_committed is unchanged in Phase 1).
+"""
+from __future__ import annotations
+
+from goldenmatch.core.complexity_profile import (
+    ClusterProfile,
+    ComplexityProfile,
+    DataProfile,
+    ScoringProfile,
+    ZeroLabelConfidenceProfile,
+)
+from goldenmatch.core.zero_label_confidence import compute_zero_label_confidence
+
+
+def _profile(
+    *,
+    histogram: list[int] | None = None,
+    dip: float = 0.08,
+    mass_above: float = 0.4,
+    mass_borderline: float = 0.05,
+    random_pair: float | None = 0.01,
+    n_pairs: int = 1000,
+    n_clusters: int = 10,
+    cluster_size_max: int = 3,
+    oversized: int = 0,
+    transitivity: float = 0.95,
+    n_rows: int = 100,
+) -> ComplexityProfile:
+    if histogram is None:
+        # clean bimodal: low-score mass, empty middle, high-score mass
+        histogram = [50] * 5 + [0] * 10 + [50] * 5
+    return ComplexityProfile(
+        data=DataProfile(n_rows=n_rows),
+        scoring=ScoringProfile(
+            n_pairs_scored=n_pairs,
+            candidates_compared=n_pairs,
+            score_histogram=histogram,
+            dip_statistic=dip,
+            mass_above_threshold=mass_above,
+            mass_in_borderline=mass_borderline,
+            random_pair_above_threshold_rate=random_pair,
+        ),
+        cluster=ClusterProfile(
+            n_clusters=n_clusters,
+            cluster_size_max=cluster_size_max,
+            transitivity_rate=transitivity,
+            oversized_cluster_count=oversized,
+        ),
+    )
+
+
+def test_clean_bimodal_is_high_confidence():
+    z = compute_zero_label_confidence(_profile())
+    assert isinstance(z, ZeroLabelConfidenceProfile)
+    assert z.latent_separation > 0.6
+    assert z.overall_confidence > 0.6
+    assert z.distribution_overlap == 0.05
+
+
+def test_everything_matches_guard_caps_confidence():
+    z = compute_zero_label_confidence(_profile(mass_above=0.95))
+    assert z.overall_confidence <= 0.2
+    assert any("everything-matches" in r for r in z.confidence_reasons)
+
+
+def test_no_matches_is_low_confidence():
+    z = compute_zero_label_confidence(_profile(mass_above=0.0, n_pairs=1000))
+    assert z.overall_confidence <= 0.1
+    assert any("no-matches" in r for r in z.confidence_reasons)
+
+
+def test_cluster_collapse_guard():
+    z = compute_zero_label_confidence(_profile(n_clusters=1, cluster_size_max=99, n_rows=100))
+    assert z.overall_confidence <= 0.2
+    assert any("cluster collapse" in r for r in z.confidence_reasons)
+
+
+def test_low_transitivity_lowers_confidence():
+    high = compute_zero_label_confidence(_profile(transitivity=0.98)).overall_confidence
+    low = compute_zero_label_confidence(_profile(transitivity=0.3)).overall_confidence
+    assert low < high
+    z = compute_zero_label_confidence(_profile(transitivity=0.3))
+    assert any("low transitivity" in r for r in z.confidence_reasons)
+
+
+def test_random_pair_none_is_neutral_with_reason():
+    z = compute_zero_label_confidence(_profile(random_pair=None))
+    assert z.random_pair_contamination == 0.0
+    assert any("random-pair contamination signal unavailable" in r for r in z.confidence_reasons)
+
+
+def test_high_contamination_lowers_confidence():
+    clean = compute_zero_label_confidence(_profile(random_pair=0.0)).overall_confidence
+    dirty = compute_zero_label_confidence(_profile(random_pair=0.6)).overall_confidence
+    assert dirty < clean
+
+
+def test_deterministic():
+    p = _profile()
+    a = compute_zero_label_confidence(p)
+    b = compute_zero_label_confidence(p)
+    assert a == b
+
+
+def test_empty_histogram_no_crash():
+    z = compute_zero_label_confidence(_profile(histogram=[0] * 20, n_pairs=0))
+    assert z.latent_separation == 0.0
+    assert any("no pairs scored" in r for r in z.confidence_reasons)
+
+
+def test_attached_to_legacy_dict():
+    p = _profile()
+    z = compute_zero_label_confidence(p)
+    import dataclasses
+
+    p2 = dataclasses.replace(p, zero_label=z)
+    legacy = p2.to_legacy_dict()
+    assert legacy["zero_label"] is not None
+    assert "overall_confidence" in legacy["zero_label"]
+    # absent -> None (back-compat)
+    assert p.to_legacy_dict()["zero_label"] is None

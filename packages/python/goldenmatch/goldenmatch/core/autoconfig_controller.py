@@ -1395,7 +1395,7 @@ class AutoConfigController:
             probe_rate = self._compute_recall_probe(df, config)
             scoring = dataclasses.replace(scoring, random_pair_above_threshold_rate=probe_rate)
 
-        return ComplexityProfile(
+        profile = ComplexityProfile(
             data=data,
             domain=emitter.domain or DomainProfile(),
             matchkey=emitter.matchkey or MatchkeyProfile(),
@@ -1406,6 +1406,15 @@ class AutoConfigController:
                 iteration=iteration, is_sample=is_sample,
                 sample_size=df.height, n_rows_full=df.height,
             ),
+        )
+        # Zero-label (ZeroER-inspired) confidence. Phase 1: observational only —
+        # attached for reports/telemetry; NOT consumed by health() or
+        # pick_committed() (commit selection is unchanged). See
+        # docs/design/2026-05-25-zero-label-confidence-autoconfig-design.md.
+        from goldenmatch.core.zero_label_confidence import compute_zero_label_confidence
+
+        return dataclasses.replace(
+            profile, zero_label=compute_zero_label_confidence(profile, config),
         )
 
     def _compute_data_profile(

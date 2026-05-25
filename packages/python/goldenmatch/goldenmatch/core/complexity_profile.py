@@ -5,7 +5,7 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Literal
 
@@ -283,6 +283,34 @@ class ProfileMeta:
 
 
 @dataclass(frozen=True)
+class ZeroLabelConfidenceProfile:
+    """ZeroER-inspired, label-free plausibility of an ER config.
+
+    Computed deterministically from already-emitted ComplexityProfile
+    aggregates — no labels, no extra data scans. Design:
+    ``docs/design/2026-05-25-zero-label-confidence-autoconfig-design.md``.
+    Phase-1 fields derive from current signals; Phase-2 fields stay ``None``
+    until their instrumentation / extra-run machinery lands.
+    """
+    _version: int = 1
+    # Phase 1 — derived from emitted signals today.
+    latent_separation: float = 0.0
+    distribution_overlap: float = 0.0
+    score_entropy: float = 0.0
+    bimodality_or_dip_score: float = 0.0
+    random_pair_contamination: float = 0.0
+    transitive_coherence: float = 1.0
+    cluster_size_risk: float = 0.0
+    overall_confidence: float = 0.0
+    confidence_reasons: tuple[str, ...] = ()
+    # Phase 2 — None until instrumented / env-gated.
+    cluster_bridge_risk: float | None = None
+    perturbation_stability: float | None = None
+    expected_precision_proxy: float | None = None
+    expected_recall_proxy: float | None = None
+
+
+@dataclass(frozen=True)
 class ComplexityProfile:
     _version: int = 1
     data: DataProfile = field(default_factory=DataProfile)
@@ -293,6 +321,10 @@ class ComplexityProfile:
     cluster: ClusterProfile = field(default_factory=ClusterProfile)
     meta: ProfileMeta = field(default_factory=ProfileMeta)
     indicators: IndicatorsProfile | None = None
+    # Zero-label (ZeroER-inspired) confidence. None until computed by the
+    # controller; additive — does NOT participate in health() or
+    # normalized_signal_vector() in Phase 1 (no behavioral change).
+    zero_label: ZeroLabelConfidenceProfile | None = None
 
     def health(self) -> HealthVerdict:
         return _max_severity(
@@ -374,4 +406,6 @@ class ComplexityProfile:
             "preliminary_cluster_sizes": cluster_pct,
             "oversized_clusters": oversized,
             "random_pair_above_threshold_rate": self.scoring.random_pair_above_threshold_rate,
+            # Additive: zero-label confidence sub-dict (None until computed).
+            "zero_label": asdict(self.zero_label) if self.zero_label is not None else None,
         }
