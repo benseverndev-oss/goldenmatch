@@ -200,7 +200,12 @@ fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
 /// consecutive block lengths in that same order. Emits canonical (min,max)
 /// pairs whose weighted score (sum(score*weight) / total_weight, with None
 /// values skipped) meets `threshold`, excluding `exclude`. The arithmetic and
-/// field order mirror the Python loop exactly for bit-identical output.
+/// field order mirror the Python loop, but the per-field scorers here are
+/// independent reimplementations of rapidfuzz (not rapidfuzz-rs), so scores
+/// match the Python path to within float tolerance (~1e-9 per field; see the
+/// `abs=1e-9` scorer parity tests), not bit-for-bit. The emitted pair set is
+/// identical in practice; it could differ only for a pair whose weighted score
+/// sits within that tolerance of `threshold`.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn score_block_pairs(

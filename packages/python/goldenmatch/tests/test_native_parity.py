@@ -235,7 +235,14 @@ def test_score_buckets_end_to_end_parity(monkeypatch):
     native = score_buckets(df, bc, mk, set())
 
     assert len(py) > 0  # not vacuous
-    assert sorted(py) == sorted(native)
+    # The native scorers are independent rapidfuzz reimplementations, so scores
+    # match within float tolerance (~1e-9), not bit-for-bit. Assert the emitted
+    # pair set is identical and per-pair scores agree to tolerance.
+    py_scores = {(a, b): s for a, b, s in py}
+    native_scores = {(a, b): s for a, b, s in native}
+    assert py_scores.keys() == native_scores.keys()
+    for pair, s in py_scores.items():
+        assert native_scores[pair] == pytest.approx(s, abs=1e-9)
 
 
 def test_native_off_when_forced(monkeypatch):
