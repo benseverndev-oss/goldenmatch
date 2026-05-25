@@ -1,0 +1,8 @@
+# Pin the native crate's toolchain so CI reproduces the environment its code was
+# clippy-clean + parity-verified against locally. The CI `native` lane installs
+# @stable (latest at run time); without this pin, a newer stable's clippy can
+# flag this crate's code under `-D warnings` even though it passed on the
+# verified version. Bump deliberately (and re-verify) rather than floating.
+[toolchain]
+channel = "1.94.1"
+components = ["clippy"]

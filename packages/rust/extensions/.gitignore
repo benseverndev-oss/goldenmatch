@@ -1,6 +1,10 @@
 /target
 **/*.rs.bk
 Cargo.lock
+# ...but DO commit the native crate's lock: the `native` CI lane builds it as a
+# verified artifact, so it must resolve the exact deps (pyo3 patch) it was
+# verified against, not float on every CI run.
+!native/Cargo.lock
 *.so
 *.dylib
 *.dll

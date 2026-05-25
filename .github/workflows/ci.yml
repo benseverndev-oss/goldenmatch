@@ -625,6 +625,10 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
+      - name: Diagnostics (toolchain + dep versions)
+        run: |
+          (cd packages/rust/extensions/native && rustc --version && cargo clippy --version)
+          uv run python -c "import sys, rapidfuzz, polars; print('python', sys.version.split()[0], 'rapidfuzz', rapidfuzz.__version__, 'polars', polars.__version__)"
       - name: clippy (native crate)
         working-directory: packages/rust/extensions/native
         run: cargo clippy --release -- -D warnings
