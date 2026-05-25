@@ -16,18 +16,21 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
 )
-from goldenmatch.core.config_optimizer import (
+from goldenmatch.core.config_edits import (
     BlockingKeyEdit,
     BlockingStrategyEdit,
-    CoordinateDescentProposer,
-    LLMProposer,
     MatchkeyTypeSwap,
-    OptimizeResult,
     ScorerSwap,
     ThresholdShift,
     WeightShift,
-    _edit_from_spec,
-    _parse_llm_edits,
+    edit_from_spec,
+    fold_edits,
+    parse_llm_edits,
+)
+from goldenmatch.core.config_optimizer import (
+    CoordinateDescentProposer,
+    LLMProposer,
+    OptimizeResult,
     _threshold_variants,
     optimize_config,
 )
@@ -333,37 +336,53 @@ def test_blocking_key_edit():
 
 
 def test_edit_from_spec_parses_each_op():
-    assert isinstance(_edit_from_spec({"op": "threshold_shift", "delta": -0.05}), ThresholdShift)
+    assert isinstance(edit_from_spec({"op": "threshold_shift", "delta": -0.05}), ThresholdShift)
     assert isinstance(
-        _edit_from_spec({"op": "scorer_swap", "matchkey": "mk", "field": "f", "scorer": "token_sort"}),
+        edit_from_spec({"op": "scorer_swap", "matchkey": "mk", "field": "f", "scorer": "token_sort"}),
         ScorerSwap,
     )
-    assert isinstance(_edit_from_spec({"op": "blocking_strategy", "strategy": "multi_pass"}), BlockingStrategyEdit)
+    assert isinstance(edit_from_spec({"op": "blocking_strategy", "strategy": "multi_pass"}), BlockingStrategyEdit)
     assert isinstance(
-        _edit_from_spec({"op": "weight_shift", "matchkey": "mk", "field": "f", "delta": 0.5}), WeightShift
+        edit_from_spec({"op": "weight_shift", "matchkey": "mk", "field": "f", "delta": 0.5}), WeightShift
     )
     assert isinstance(
-        _edit_from_spec({"op": "matchkey_type", "matchkey": "mk", "target_type": "probabilistic"}),
+        edit_from_spec({"op": "matchkey_type", "matchkey": "mk", "target_type": "probabilistic"}),
         MatchkeyTypeSwap,
     )
     assert isinstance(
-        _edit_from_spec({"op": "blocking_key", "action": "add", "fields": ["surname"]}), BlockingKeyEdit
+        edit_from_spec({"op": "blocking_key", "action": "add", "fields": ["surname"]}), BlockingKeyEdit
     )
     # unknown op / malformed -> None
-    assert _edit_from_spec({"op": "nope"}) is None
-    assert _edit_from_spec({"op": "threshold_shift"}) is None  # missing delta
-    assert _edit_from_spec("not a dict") is None
+    assert edit_from_spec({"op": "nope"}) is None
+    assert edit_from_spec({"op": "threshold_shift"}) is None  # missing delta
+    assert edit_from_spec("not a dict") is None
 
 
 def test_parse_llm_edits_handles_stop_and_lists():
-    assert _parse_llm_edits({"action": "stop"}) == []
-    assert _parse_llm_edits({}) == []
-    edits = _parse_llm_edits({"edits": [
+    assert parse_llm_edits({"action": "stop"}) == []
+    assert parse_llm_edits({"action": "satisfied"}) == []  # controller's no-op signal
+    assert parse_llm_edits({}) == []
+    edits = parse_llm_edits({"edits": [
         {"op": "threshold_shift", "delta": -0.05},
         {"op": "garbage"},
         {"op": "blocking_strategy", "strategy": "multi_pass"},
     ]})
     assert len(edits) == 2  # garbage dropped
+
+
+def test_fold_edits_composes_sequentially():
+    # The controller's LLM repair folds a list of edits into one config.
+    cfg = _weighted_config(0.8)
+    folded = fold_edits(cfg, [
+        ThresholdShift(-0.2),
+        BlockingStrategyEdit("multi_pass"),
+        ScorerSwap("mk", "first_name", "token_sort"),
+    ])
+    assert abs(folded.get_matchkeys()[0].threshold - 0.6) < 1e-9
+    assert folded.blocking.strategy == "multi_pass"
+    assert folded.get_matchkeys()[0].fields[0].scorer == "token_sort"
+    # a no-op edit list leaves the config unchanged (identity by value)
+    assert fold_edits(cfg, [BlockingStrategyEdit("static")]).blocking.strategy == "static"
 
 
 def test_coordinate_descent_includes_weight_family():

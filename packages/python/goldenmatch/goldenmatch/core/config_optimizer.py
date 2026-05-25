@@ -33,7 +33,19 @@ from typing import TYPE_CHECKING, Protocol
 
 import polars as pl
 
-from goldenmatch.config.schemas import BlockingKeyConfig, GoldenMatchConfig
+from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.core.config_edits import (
+    _PERTURBABLE_TYPES,
+    BlockingKeyEdit,
+    BlockingStrategyEdit,
+    ConfigEdit,
+    ScorerSwap,
+    ThresholdShift,
+    WeightShift,
+    _clamp,
+    _perturbable_matchkeys,
+    parse_llm_edits,
+)
 
 if TYPE_CHECKING:
     from goldenmatch.core.complexity_profile import ComplexityProfile
@@ -44,8 +56,6 @@ logger = logging.getLogger(__name__)
 # [0, 1]). 0.0 is the warm-start baseline and is always included.
 _DEFAULT_THRESHOLD_OFFSETS: tuple[float, ...] = (-0.10, -0.05, 0.0, 0.05, 0.10)
 
-_PERTURBABLE_TYPES = ("weighted", "probabilistic")
-
 _LLM_PROPOSER_SYSTEM = (
     "You are an expert in entity-resolution configuration driving an empirical "
     "config search. Each round you see the best config so far, its label-free "
@@ -55,10 +65,6 @@ _LLM_PROPOSER_SYSTEM = (
     "confidence score, without repeating a trial already tried. Respond with "
     "valid JSON only."
 )
-
-
-def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, x))
 
 
 @dataclass(frozen=True)
@@ -121,13 +127,6 @@ class SearchState:
         return max(valid, key=lambda t: (t.score, t.label == "baseline"))
 
 
-def _perturbable_matchkeys(config: GoldenMatchConfig) -> list:
-    return [
-        mk for mk in config.get_matchkeys()
-        if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.threshold is not None
-    ]
-
-
 def _threshold_variants(
     base: GoldenMatchConfig, offsets: tuple[float, ...]
 ) -> list[tuple[str, GoldenMatchConfig]]:
@@ -154,239 +153,6 @@ def _threshold_variants(
         label = "baseline" if off == 0.0 else f"threshold{off:+.2f}"
         variants.append((label, cfg))
     return variants
-
-
-# --------------------------------------------------------------------------- #
-# ConfigEdit lever vocabulary
-# --------------------------------------------------------------------------- #
-# A small, closed edit language: each edit is a validated mutation of a
-# GoldenMatchConfig with a human label. Deterministic proposers and (future) LLM
-# proposers share this vocabulary so a search is explainable regardless of who
-# drove it. apply() returns None for a no-op or invalid edit (caller skips it).
-
-class ConfigEdit(Protocol):
-    @property
-    def label(self) -> str: ...
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None: ...
-
-
-def _revalidate(cfg: GoldenMatchConfig) -> GoldenMatchConfig | None:
-    try:
-        return GoldenMatchConfig.model_validate(cfg.model_dump())
-    except Exception:  # noqa: BLE001 - invalid edit -> skip
-        return None
-
-
-@dataclass(frozen=True)
-class ThresholdShift:
-    """Shift every perturbable matchkey threshold by ``delta`` (clamped)."""
-
-    delta: float
-
-    @property
-    def label(self) -> str:
-        return "baseline" if self.delta == 0.0 else f"threshold{self.delta:+.2f}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        if not _perturbable_matchkeys(config):
-            return config if self.delta == 0.0 else None
-        cfg = config.model_copy(deep=True)
-        changed = False
-        for mk in cfg.get_matchkeys():
-            if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.threshold is not None:
-                new_t = _clamp(mk.threshold + self.delta)
-                if new_t != mk.threshold:
-                    mk.threshold = new_t
-                    changed = True
-        if self.delta == 0.0:
-            return cfg  # baseline: valid, no change
-        return cfg if changed else None
-
-
-@dataclass(frozen=True)
-class ScorerSwap:
-    """Swap one matchkey field's scorer."""
-
-    matchkey: str
-    field: str
-    scorer: str
-
-    @property
-    def label(self) -> str:
-        return f"scorer:{self.field}={self.scorer}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        cfg = config.model_copy(deep=True)
-        changed = False
-        for mk in cfg.get_matchkeys():
-            if mk.name != self.matchkey:
-                continue
-            for f in (mk.fields or []):
-                if f.field == self.field and f.scorer != self.scorer:
-                    f.scorer = self.scorer
-                    changed = True
-        if not changed:
-            return None
-        return _revalidate(cfg)
-
-
-@dataclass(frozen=True)
-class BlockingStrategyEdit:
-    """Change the blocking strategy (keys preserved)."""
-
-    strategy: str
-
-    @property
-    def label(self) -> str:
-        return f"blocking:{self.strategy}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        if config.blocking is None or config.blocking.strategy == self.strategy:
-            return None
-        cfg = config.model_copy(update={
-            "blocking": config.blocking.model_copy(update={"strategy": self.strategy}),
-        })
-        return _revalidate(cfg)
-
-
-@dataclass(frozen=True)
-class WeightShift:
-    """Reweight one field of a weighted matchkey (floor 0.0)."""
-
-    matchkey: str
-    field: str
-    delta: float
-
-    @property
-    def label(self) -> str:
-        return f"weight:{self.field}{self.delta:+.2f}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        cfg = config.model_copy(deep=True)
-        changed = False
-        for mk in cfg.get_matchkeys():
-            if mk.name != self.matchkey or getattr(mk, "type", None) != "weighted":
-                continue
-            for f in (mk.fields or []):
-                if f.field == self.field and f.weight is not None:
-                    new_w = max(0.0, f.weight + self.delta)
-                    if new_w != f.weight:
-                        f.weight = new_w
-                        changed = True
-        if not changed:
-            return None
-        return _revalidate(cfg)
-
-
-@dataclass(frozen=True)
-class MatchkeyTypeSwap:
-    """Swap a matchkey between ``weighted`` and ``probabilistic``.
-
-    A weighted matchkey already carries everything probabilistic needs (each
-    field has a scorer); going the other way we backfill a threshold and uniform
-    per-field weights so the weighted invariant holds.
-    """
-
-    matchkey: str
-    target_type: str  # "weighted" | "probabilistic"
-
-    @property
-    def label(self) -> str:
-        return f"mktype:{self.matchkey}={self.target_type}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        if self.target_type not in _PERTURBABLE_TYPES:
-            return None
-        cfg = config.model_copy(deep=True)
-        changed = False
-        for mk in cfg.get_matchkeys():
-            cur = getattr(mk, "type", None)
-            if mk.name != self.matchkey or cur == self.target_type or cur not in _PERTURBABLE_TYPES:
-                continue
-            mk.type = self.target_type
-            mk.comparison = None
-            if self.target_type == "weighted":
-                if mk.threshold is None:
-                    mk.threshold = mk.link_threshold if mk.link_threshold is not None else 0.5
-                for f in (mk.fields or []):
-                    if f.weight is None:
-                        f.weight = 1.0
-            changed = True
-        if not changed:
-            return None
-        return _revalidate(cfg)
-
-
-@dataclass(frozen=True)
-class BlockingKeyEdit:
-    """Add or remove a blocking key, identified by its field set + transforms."""
-
-    action: str  # "add" | "remove"
-    fields: tuple[str, ...]
-    transforms: tuple[str, ...] = ()
-
-    @property
-    def label(self) -> str:
-        return f"block-{self.action}:{'+'.join(self.fields)}"
-
-    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
-        if config.blocking is None or self.action not in ("add", "remove") or not self.fields:
-            return None
-        target, ttx = list(self.fields), list(self.transforms)
-        keys = list(config.blocking.keys or [])
-        exists = any(k.fields == target and (k.transforms or []) == ttx for k in keys)
-        if self.action == "add":
-            if exists:
-                return None
-            keys = [*keys, BlockingKeyConfig(fields=target, transforms=ttx)]
-        else:
-            if not exists:
-                return None
-            keys = [k for k in keys if not (k.fields == target and (k.transforms or []) == ttx)]
-        cfg = config.model_copy(update={"blocking": config.blocking.model_copy(update={"keys": keys})})
-        return _revalidate(cfg)
-
-
-def _edit_from_spec(spec: object) -> ConfigEdit | None:
-    """Map one LLM-emitted edit spec (a JSON object) to a ``ConfigEdit``.
-
-    Returns ``None`` for an unknown op or a malformed spec — the closed
-    vocabulary is the only thing the LLM can drive, so junk is dropped, not run.
-    """
-    if not isinstance(spec, dict):
-        return None
-    op = spec.get("op")
-    try:
-        if op == "threshold_shift":
-            return ThresholdShift(float(spec["delta"]))
-        if op == "scorer_swap":
-            return ScorerSwap(str(spec["matchkey"]), str(spec["field"]), str(spec["scorer"]))
-        if op == "blocking_strategy":
-            return BlockingStrategyEdit(str(spec["strategy"]))
-        if op == "weight_shift":
-            return WeightShift(str(spec["matchkey"]), str(spec["field"]), float(spec["delta"]))
-        if op == "matchkey_type":
-            return MatchkeyTypeSwap(str(spec["matchkey"]), str(spec["target_type"]))
-        if op == "blocking_key":
-            return BlockingKeyEdit(
-                str(spec["action"]),
-                tuple(spec["fields"]),
-                tuple(spec.get("transforms", ())),
-            )
-    except (KeyError, TypeError, ValueError):
-        return None
-    return None
-
-
-def _parse_llm_edits(payload: object) -> list[ConfigEdit]:
-    """Parse an LLM response into a list of validated ``ConfigEdit``s."""
-    if not isinstance(payload, dict) or payload.get("action") == "stop":
-        return []
-    raw = payload.get("edits")
-    if not isinstance(raw, list):
-        return []
-    return [e for e in (_edit_from_spec(s) for s in raw) if e is not None]
 
 
 # --------------------------------------------------------------------------- #
@@ -500,7 +266,7 @@ class LLMProposer:
             payload = json.loads(text)
         except json.JSONDecodeError:
             return []
-        return _parse_llm_edits(payload)
+        return parse_llm_edits(payload)
 
     def _build_prompt(self, state: SearchState, best: OptimizerTrial) -> str:
         tried = "\n".join(

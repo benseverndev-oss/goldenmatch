@@ -190,6 +190,14 @@ moves off the default when a candidate is strictly better.
    today's sweep). Extending the vocabulary to the full §4 table stays in #488.
 3. **Phase 3 (done):** `LLMProposer` — env-gated, default off — the AI-driven
    iteration. A `propose_fn` injection makes it testable without a network.
+4b. **Phase 4 (controller consolidation done):** the `ConfigEdit` vocabulary now
+   lives in its own cycle-free module `core/config_edits.py` (imported by both the
+   optimizer and the policy). `LLMRefitPolicy._call_llm` emits the **same closed
+   edit vocabulary** (`{"edits": [{"op": ...}]}`, parsed by `parse_llm_edits`, folded
+   onto the current config by `fold_edits`) instead of raw diffs — so the controller's
+   single-trajectory repair and the optimizer's search speak one lever language.
+   `apply_config_diff` is retained as a legacy helper. Remaining Phase-4 follow-up:
+   expose surfaces (§8 — MCP/CLI/A2A).
 4. **Phase 4 (optimizer side done):** completed the §4 `ConfigEdit` table
    (`WeightShift`, `MatchkeyTypeSwap` weighted↔probabilistic, `BlockingKeyEdit`
    add/remove), wired the weight **and blocking-key** families into
