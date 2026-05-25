@@ -6,9 +6,11 @@ Computes a :class:`ZeroLabelConfidenceProfile` from an already-assembled
 ``docs/design/2026-05-25-zero-label-confidence-autoconfig-design.md``.
 
 Phase 1 (this module): the directly-derivable signals + a combined
-``overall_confidence`` with anti-degeneracy guards. Phase-2 signals
-(``cluster_bridge_risk``, ``perturbation_stability``, expected precision/recall
-proxies) stay ``None`` until their instrumentation / extra-run machinery lands.
+``overall_confidence`` with anti-degeneracy guards. Phase-2 signals are populated
+observationally: ``cluster_bridge_risk`` and the ``expected_precision_proxy`` /
+``expected_recall_proxy`` derive from emitted aggregates here; they are NOT folded
+into ``overall_confidence`` (that blend change is DQbench-gated, see #489).
+``perturbation_stability`` is filled by the env-gated re-run pass below.
 
 Honesty note: this is a lightweight, dependency-free *approximation* of ZeroER
 (which is a GMM+EM over similarity vectors). For a truer latent-separation
@@ -129,6 +131,36 @@ def score_cluster_bridge_risk(cluster: ClusterProfile) -> float:
     return _clamp(0.6 * edge_spread + 0.4 * chain_signal)
 
 
+def score_expected_precision(
+    scoring: ScoringProfile, latent_separation: float, contamination: float
+) -> float:
+    """Label-free precision proxy in [0, 1] (NOT measured precision).
+
+    High when few random (non-blocked) pairs cross threshold (low
+    ``contamination``) AND the score distribution is cleanly separated — i.e. the
+    threshold sits above the random-pair score mass. ``0.0`` when nothing was
+    scored. See the module's honesty note: this is a proxy, not a P/R measurement.
+    """
+    if scoring.n_pairs_scored <= 0:
+        return 0.0
+    return _clamp(0.7 * (1.0 - contamination) + 0.3 * latent_separation)
+
+
+def score_expected_recall(scoring: ScoringProfile) -> float:
+    """Label-free recall proxy in [0, 1] (NOT measured recall).
+
+    Of the plausible-match score mass (above threshold + borderline band), the
+    fraction already captured above threshold. A borderline band that's large
+    relative to the above-threshold mass means likely matches sit just under the
+    threshold (uncaptured) → lower expected recall. ``0.0`` when no match-ish
+    mass exists.
+    """
+    match_ish = scoring.mass_above_threshold + scoring.mass_in_borderline
+    if scoring.n_pairs_scored <= 0 or match_ish <= 0.0:
+        return 0.0
+    return _clamp(scoring.mass_above_threshold / match_ish)
+
+
 def combine_zero_label_scores(
     dist: dict[str, float],
     contamination: float,
@@ -211,6 +243,10 @@ def compute_zero_label_confidence(
         dist, contamination, transitive, size_risk, bridge_risk,
         scoring, cluster, n_rows, reasons,
     )
+    # Observational P/R proxies (not folded into overall_confidence — that blend
+    # change is gated on a DQbench non-regression run, see design §6 / #489).
+    precision_proxy = score_expected_precision(scoring, dist["latent_separation"], contamination)
+    recall_proxy = score_expected_recall(scoring)
     return ZeroLabelConfidenceProfile(
         latent_separation=dist["latent_separation"],
         distribution_overlap=dist["distribution_overlap"],
@@ -220,6 +256,8 @@ def compute_zero_label_confidence(
         transitive_coherence=transitive,
         cluster_size_risk=size_risk,
         cluster_bridge_risk=bridge_risk,
+        expected_precision_proxy=precision_proxy,
+        expected_recall_proxy=recall_proxy,
         overall_confidence=overall,
         confidence_reasons=tuple(reasons),
     )

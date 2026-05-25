@@ -137,6 +137,38 @@ def test_deterministic():
     assert a == b
 
 
+# --- #490: expected precision / recall proxies (observational, non-None) ---
+
+def test_expected_precision_proxy_drops_with_contamination():
+    clean = compute_zero_label_confidence(_profile(random_pair=0.0)).expected_precision_proxy
+    dirty = compute_zero_label_confidence(_profile(random_pair=0.9)).expected_precision_proxy
+    assert clean is not None and dirty is not None
+    assert 0.0 <= dirty <= 1.0 and 0.0 <= clean <= 1.0
+    assert clean > 0.7  # clean separation + no random-pair contamination
+    assert dirty < clean
+
+
+def test_expected_recall_proxy_high_when_above_threshold_dominates():
+    z = compute_zero_label_confidence(_profile(mass_above=0.4, mass_borderline=0.01))
+    assert z.expected_recall_proxy is not None
+    assert z.expected_recall_proxy > 0.9
+
+
+def test_expected_recall_proxy_low_when_borderline_dominates():
+    # Likely matches sit in the borderline band (just under threshold) -> uncaptured.
+    z = compute_zero_label_confidence(_profile(mass_above=0.05, mass_borderline=0.45))
+    assert z.expected_recall_proxy is not None
+    assert z.expected_recall_proxy < 0.2
+
+
+def test_pr_proxies_zero_when_nothing_scored():
+    z = compute_zero_label_confidence(
+        _profile(histogram=[0] * 20, n_pairs=0, mass_above=0.0, mass_borderline=0.0)
+    )
+    assert z.expected_precision_proxy == 0.0
+    assert z.expected_recall_proxy == 0.0
+
+
 def test_empty_histogram_no_crash():
     z = compute_zero_label_confidence(_profile(histogram=[0] * 20, n_pairs=0))
     assert z.latent_separation == 0.0
