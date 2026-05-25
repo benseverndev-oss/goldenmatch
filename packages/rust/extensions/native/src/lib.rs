@@ -8,6 +8,7 @@
 use pyo3::prelude::*;
 
 mod cluster;
+mod score;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -15,5 +16,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::cluster_confidence, m)?)?;
+    m.add_function(wrap_pyfunction!(score::jaro_winkler_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::levenshtein_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     Ok(())
 }

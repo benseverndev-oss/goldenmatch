@@ -94,6 +94,40 @@ def test_cluster_confidence_parity(monkeypatch, pair_scores, size):
             assert native[key] == pytest.approx(py[key], abs=1e-12)
 
 
+def test_scorers_match_rapidfuzz():
+    """Phase 2: the native scorers must match Python rapidfuzz (what
+    core/scorer.py::score_field uses) bit-for-bit, else block-scoring parity
+    is impossible. Covers edge cases + a seeded random battery."""
+    import random
+    import string
+
+    from rapidfuzz.distance import JaroWinkler, Levenshtein
+    from rapidfuzz.fuzz import token_sort_ratio as rf_token_sort_ratio
+
+    n = _native_loader.native_module()
+
+    fixed = [
+        ("", ""), ("a", ""), ("", "b"), ("abc", "abc"),
+        ("John Smith", "Jon Smyth"), ("Smith John", "John Smith"),
+        ("café", "cafe"), ("中文字", "中文学"), ("  a  b ", "b a"),
+        ("MacDonald", "Macdonald"), ("12345", "12354"),
+    ]
+    rng = random.Random(12345)
+    alphabet = string.ascii_letters + "  éü中0"
+
+    def rand_str() -> str:
+        return "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 16)))
+
+    pairs = fixed + [(rand_str(), rand_str()) for _ in range(2000)]
+    for a, b in pairs:
+        assert n.jaro_winkler_similarity(a, b) == pytest.approx(
+            JaroWinkler.similarity(a, b), abs=1e-9), f"jaro_winkler {a!r} {b!r}"
+        assert n.levenshtein_similarity(a, b) == pytest.approx(
+            Levenshtein.normalized_similarity(a, b), abs=1e-9), f"levenshtein {a!r} {b!r}"
+        assert n.token_sort_ratio(a, b) == pytest.approx(
+            rf_token_sort_ratio(a, b), abs=1e-9), f"token_sort {a!r} {b!r}"
+
+
 def test_native_off_by_default(monkeypatch):
     # Unset env -> "auto" -> Python (no component gated on yet): default-safe.
     monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
