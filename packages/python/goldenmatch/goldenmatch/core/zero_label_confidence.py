@@ -199,3 +199,60 @@ def compute_zero_label_confidence(
         overall_confidence=overall,
         confidence_reasons=tuple(reasons),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: perturbation stability (pure helpers; the re-run orchestration lives
+# in AutoConfigController, which owns the sample + pipeline). Env-gated via
+# GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY.
+# ---------------------------------------------------------------------------
+
+_PERTURB_DELTAS = (0.05, -0.05)
+
+
+def threshold_perturbations(config: Any, deltas: tuple[float, ...] = _PERTURB_DELTAS) -> list[Any]:
+    """Deep-copied config variants with each weighted/probabilistic matchkey
+    threshold shifted by ``±delta`` (clamped to [0, 1]). Returns only variants
+    that actually changed a threshold; empty when nothing is perturbable
+    (e.g. an exact-only config)."""
+    variants: list[Any] = []
+    for delta in deltas:
+        cfg = config.model_copy(deep=True)
+        touched = False
+        for mk in cfg.get_matchkeys():
+            if getattr(mk, "type", None) in ("weighted", "probabilistic") and mk.threshold is not None:
+                new_t = _clamp(mk.threshold + delta)
+                if new_t != mk.threshold:
+                    mk.threshold = new_t
+                    touched = True
+        if touched:
+            variants.append(cfg)
+    return variants
+
+
+def profile_drift(base: ComplexityProfile, perturbed: ComplexityProfile) -> float:
+    """Mean normalized drift in [0, 1] across cluster/score signals."""
+    bc, pc = base.cluster, perturbed.cluster
+    bs, ps = base.scoring, perturbed.scoring
+
+    def _rel(a: float, b: float) -> float:
+        return _clamp(abs(a - b) / max(abs(a), abs(b), 1.0))
+
+    drifts = [
+        _rel(bc.n_clusters, pc.n_clusters),
+        _rel(bc.cluster_size_max, pc.cluster_size_max),
+        _clamp(abs(bc.transitivity_rate - pc.transitivity_rate)),  # already 0..1
+        _clamp(abs(bs.mass_above_threshold - ps.mass_above_threshold)),  # 0..1
+    ]
+    return _clamp(sum(drifts) / len(drifts))
+
+
+def perturbation_stability(
+    base: ComplexityProfile, perturbed_profiles: list[ComplexityProfile]
+) -> float | None:
+    """``1 - mean(drift)`` over the perturbed profiles, in [0, 1]. None when
+    there were no usable perturbations (caller treats as 'not measured')."""
+    if not perturbed_profiles:
+        return None
+    drifts = [profile_drift(base, p) for p in perturbed_profiles]
+    return _clamp(1.0 - sum(drifts) / len(drifts))

@@ -13,7 +13,12 @@ from goldenmatch.core.complexity_profile import (
     ScoringProfile,
     ZeroLabelConfidenceProfile,
 )
-from goldenmatch.core.zero_label_confidence import compute_zero_label_confidence
+from goldenmatch.core.zero_label_confidence import (
+    compute_zero_label_confidence,
+    perturbation_stability,
+    profile_drift,
+    threshold_perturbations,
+)
 
 
 def _profile(
@@ -123,3 +128,59 @@ def test_attached_to_legacy_dict():
     assert "overall_confidence" in legacy["zero_label"]
     # absent -> None (back-compat)
     assert p.to_legacy_dict()["zero_label"] is None
+
+
+# --- Phase 2: perturbation-stability pure helpers ---
+
+def _weighted_config(threshold: float = 0.8):
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk", type="weighted", threshold=threshold,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"], transforms=[])],
+        ),
+    )
+
+
+def test_threshold_perturbations_shifts_each_threshold():
+    variants = threshold_perturbations(_weighted_config(0.8))
+    assert len(variants) == 2
+    thresholds = sorted(round(v.get_matchkeys()[0].threshold, 4) for v in variants)
+    assert thresholds == [0.75, 0.85]
+
+
+def test_threshold_perturbations_empty_for_exact_only():
+    from goldenmatch.config.schemas import GoldenMatchConfig, MatchkeyConfig, MatchkeyField
+    cfg = GoldenMatchConfig(matchkeys=[MatchkeyConfig(
+        name="mk", type="exact",
+        fields=[MatchkeyField(field="email", scorer="exact", weight=1.0, transforms=[])],
+    )])
+    assert threshold_perturbations(cfg) == []
+
+
+def test_profile_drift_zero_for_identical():
+    p = _profile()
+    assert profile_drift(p, p) == 0.0
+
+
+def test_profile_drift_positive_for_different_clusters():
+    base = _profile(n_clusters=10, cluster_size_max=3)
+    pert = _profile(n_clusters=2, cluster_size_max=50)
+    assert profile_drift(base, pert) > 0.0
+
+
+def test_perturbation_stability_aggregation():
+    base = _profile()
+    assert perturbation_stability(base, []) is None
+    assert perturbation_stability(base, [base, base]) == 1.0
+    drifted = _profile(n_clusters=1, cluster_size_max=99, transitivity=0.2)
+    assert perturbation_stability(base, [drifted]) < 1.0
