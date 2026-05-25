@@ -15,10 +15,10 @@ piece.
   byte-identical to the original behavior.
 - ``LLMProposer``: the **AI-driven iteration** layer. Round 0 seeds with the grid
   sweep so the agent has trials to reason about; later rounds ask an LLM for the
-  next config diff from the best trial's zero-label ``confidence_reasons``. The live
-  path is env-gated (``GOLDENMATCH_AUTOCONFIG_LLM=1`` + ``OPENAI_API_KEY``) and reuses
-  the controller's ``LLMRefitPolicy`` diff machinery; it degrades to the grid seed
-  when unconfigured.
+  next structured ``ConfigEdit``s (the shared closed vocabulary) from the best
+  trial's zero-label ``confidence_reasons``. The live path is env-gated
+  (``GOLDENMATCH_AUTOCONFIG_LLM=1`` + ``OPENAI_API_KEY``); it degrades to the grid
+  seed when unconfigured.
 
 The headline path is: search on a sample by confidence, pick the best, then the
 caller reruns the winning config on the full data.
@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import polars as pl
 
-from goldenmatch.config.schemas import GoldenMatchConfig
+from goldenmatch.config.schemas import BlockingKeyConfig, GoldenMatchConfig
 
 if TYPE_CHECKING:
     from goldenmatch.core.complexity_profile import ComplexityProfile
@@ -50,9 +50,10 @@ _LLM_PROPOSER_SYSTEM = (
     "You are an expert in entity-resolution configuration driving an empirical "
     "config search. Each round you see the best config so far, its label-free "
     "confidence score, the diagnostic reasons behind that score, and the trials "
-    "already tried. Propose ONE minimal config diff (as JSON) that is most likely "
-    "to raise the confidence score, without repeating a trial already tried. "
-    "Respond with valid JSON only."
+    "already tried. Propose a short list of minimal structured config edits (as "
+    "JSON, from the closed vocabulary you are given) most likely to raise the "
+    "confidence score, without repeating a trial already tried. Respond with "
+    "valid JSON only."
 )
 
 
@@ -249,6 +250,145 @@ class BlockingStrategyEdit:
         return _revalidate(cfg)
 
 
+@dataclass(frozen=True)
+class WeightShift:
+    """Reweight one field of a weighted matchkey (floor 0.0)."""
+
+    matchkey: str
+    field: str
+    delta: float
+
+    @property
+    def label(self) -> str:
+        return f"weight:{self.field}{self.delta:+.2f}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        cfg = config.model_copy(deep=True)
+        changed = False
+        for mk in cfg.get_matchkeys():
+            if mk.name != self.matchkey or getattr(mk, "type", None) != "weighted":
+                continue
+            for f in (mk.fields or []):
+                if f.field == self.field and f.weight is not None:
+                    new_w = max(0.0, f.weight + self.delta)
+                    if new_w != f.weight:
+                        f.weight = new_w
+                        changed = True
+        if not changed:
+            return None
+        return _revalidate(cfg)
+
+
+@dataclass(frozen=True)
+class MatchkeyTypeSwap:
+    """Swap a matchkey between ``weighted`` and ``probabilistic``.
+
+    A weighted matchkey already carries everything probabilistic needs (each
+    field has a scorer); going the other way we backfill a threshold and uniform
+    per-field weights so the weighted invariant holds.
+    """
+
+    matchkey: str
+    target_type: str  # "weighted" | "probabilistic"
+
+    @property
+    def label(self) -> str:
+        return f"mktype:{self.matchkey}={self.target_type}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        if self.target_type not in _PERTURBABLE_TYPES:
+            return None
+        cfg = config.model_copy(deep=True)
+        changed = False
+        for mk in cfg.get_matchkeys():
+            cur = getattr(mk, "type", None)
+            if mk.name != self.matchkey or cur == self.target_type or cur not in _PERTURBABLE_TYPES:
+                continue
+            mk.type = self.target_type
+            mk.comparison = None
+            if self.target_type == "weighted":
+                if mk.threshold is None:
+                    mk.threshold = mk.link_threshold if mk.link_threshold is not None else 0.5
+                for f in (mk.fields or []):
+                    if f.weight is None:
+                        f.weight = 1.0
+            changed = True
+        if not changed:
+            return None
+        return _revalidate(cfg)
+
+
+@dataclass(frozen=True)
+class BlockingKeyEdit:
+    """Add or remove a blocking key, identified by its field set + transforms."""
+
+    action: str  # "add" | "remove"
+    fields: tuple[str, ...]
+    transforms: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        return f"block-{self.action}:{'+'.join(self.fields)}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        if config.blocking is None or self.action not in ("add", "remove") or not self.fields:
+            return None
+        target, ttx = list(self.fields), list(self.transforms)
+        keys = list(config.blocking.keys or [])
+        exists = any(k.fields == target and (k.transforms or []) == ttx for k in keys)
+        if self.action == "add":
+            if exists:
+                return None
+            keys = [*keys, BlockingKeyConfig(fields=target, transforms=ttx)]
+        else:
+            if not exists:
+                return None
+            keys = [k for k in keys if not (k.fields == target and (k.transforms or []) == ttx)]
+        cfg = config.model_copy(update={"blocking": config.blocking.model_copy(update={"keys": keys})})
+        return _revalidate(cfg)
+
+
+def _edit_from_spec(spec: object) -> ConfigEdit | None:
+    """Map one LLM-emitted edit spec (a JSON object) to a ``ConfigEdit``.
+
+    Returns ``None`` for an unknown op or a malformed spec — the closed
+    vocabulary is the only thing the LLM can drive, so junk is dropped, not run.
+    """
+    if not isinstance(spec, dict):
+        return None
+    op = spec.get("op")
+    try:
+        if op == "threshold_shift":
+            return ThresholdShift(float(spec["delta"]))
+        if op == "scorer_swap":
+            return ScorerSwap(str(spec["matchkey"]), str(spec["field"]), str(spec["scorer"]))
+        if op == "blocking_strategy":
+            return BlockingStrategyEdit(str(spec["strategy"]))
+        if op == "weight_shift":
+            return WeightShift(str(spec["matchkey"]), str(spec["field"]), float(spec["delta"]))
+        if op == "matchkey_type":
+            return MatchkeyTypeSwap(str(spec["matchkey"]), str(spec["target_type"]))
+        if op == "blocking_key":
+            return BlockingKeyEdit(
+                str(spec["action"]),
+                tuple(spec["fields"]),
+                tuple(spec.get("transforms", ())),
+            )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _parse_llm_edits(payload: object) -> list[ConfigEdit]:
+    """Parse an LLM response into a list of validated ``ConfigEdit``s."""
+    if not isinstance(payload, dict) or payload.get("action") == "stop":
+        return []
+    raw = payload.get("edits")
+    if not isinstance(raw, list):
+        return []
+    return [e for e in (_edit_from_spec(s) for s in raw) if e is not None]
+
+
 # --------------------------------------------------------------------------- #
 # Proposers
 # --------------------------------------------------------------------------- #
@@ -275,18 +415,18 @@ class GridProposer:
 
 
 class LLMProposer:
-    """AI-driven iteration: an LLM agent proposes the next lever move.
+    """AI-driven iteration: an LLM agent proposes the next lever moves.
 
     Round 0 seeds with the grid sweep so the agent has trials to reason about;
     each later round reads the best trial + its zero-label ``confidence_reasons``
-    and asks the LLM for the next config diff. Reuses ``apply_config_diff`` from
-    ``autoconfig_policy`` so the controller's repair loop and this search speak one
-    diff language.
+    and asks the LLM for the next moves as a list of structured ``ConfigEdit``s
+    (the same closed vocabulary the deterministic proposers use). The loop scores
+    one candidate per valid edit, so the report attributes every move to a lever.
 
     The live OpenAI path is env-gated (``GOLDENMATCH_AUTOCONFIG_LLM=1`` +
-    ``OPENAI_API_KEY``). Inject ``propose_fn`` to bypass the network (tests). When
-    neither is available, later rounds return nothing → the search degrades to the
-    grid seed.
+    ``OPENAI_API_KEY``). Inject ``propose_fn`` (returning a list of
+    ``ConfigEdit``s) to bypass the network in tests. When neither is available,
+    later rounds return nothing → the search degrades to the grid seed.
     """
 
     single_round = False
@@ -297,7 +437,7 @@ class LLMProposer:
         offsets: tuple[float, ...] = _DEFAULT_THRESHOLD_OFFSETS,
         model: str = "gpt-4o-mini",
         max_llm_calls: int = 3,
-        propose_fn: Callable[[SearchState], dict | None] | None = None,
+        propose_fn: Callable[[SearchState], list[ConfigEdit] | None] | None = None,
     ) -> None:
         self._grid = GridProposer(offsets)
         self._model = model
@@ -311,32 +451,32 @@ class LLMProposer:
         best = state.best
         if best is None or self._calls >= self._max_llm_calls:
             return []
-        diff = self._propose_fn(state) if self._propose_fn is not None else self._call_llm(state, best)
-        if not diff:
-            return []
-        from goldenmatch.core.autoconfig_policy import apply_config_diff
-
-        cfg = apply_config_diff(best.config, diff)
-        if cfg is None:
+        edits = self._propose_fn(state) if self._propose_fn is not None else self._call_llm(state, best)
+        if not edits:
             return []
         self._calls += 1
-        return [(f"llm-r{state.round}", cfg)]
+        out: list[tuple[str, GoldenMatchConfig]] = []
+        for edit in edits:
+            cfg = edit.apply(best.config)
+            if cfg is not None:
+                out.append((f"llm-r{state.round}:{edit.label}", cfg))
+        return out
 
-    def _call_llm(self, state: SearchState, best: OptimizerTrial) -> dict | None:
+    def _call_llm(self, state: SearchState, best: OptimizerTrial) -> list[ConfigEdit]:
         import json
         import os
 
         if os.environ.get("GOLDENMATCH_AUTOCONFIG_LLM", "0") != "1":
-            return None
+            return []
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            return None
+            return []
         try:
             from openai import (  # pyright: ignore[reportMissingImports]  # optional dep
                 OpenAI,
             )
         except ImportError:
-            return None
+            return []
 
         try:
             client = OpenAI(api_key=api_key)
@@ -353,16 +493,14 @@ class LLMProposer:
             text = response.choices[0].message.content
         except Exception as exc:  # noqa: BLE001 - LLM failure must not abort the search
             logger.info("LLMProposer: LLM call failed (%s); ending search", exc)
-            return None
+            return []
         if not text:
-            return None
+            return []
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
-            return None
-        if payload.get("action") != "modify":
-            return None
-        return payload.get("diff") or None
+            return []
+        return _parse_llm_edits(payload)
 
     def _build_prompt(self, state: SearchState, best: OptimizerTrial) -> str:
         tried = "\n".join(
@@ -385,13 +523,16 @@ scores {state.objective}={best.score:.4f} (label "{best.label}").
 
 ## Task
 Return JSON with one of:
-  {{"action": "stop"}}                  -- no diff is likely to help; stop.
-  {{"action": "modify", "diff": {{...}}}} -- propose ONE minimal diff.
+  {{"action": "stop"}}                    -- no edit is likely to help; stop.
+  {{"edits": [ ...edit objects... ]}}     -- propose 1-3 minimal edits to try next.
 
-The diff is a partial GoldenMatchConfig. Supported keys:
-  - "matchkeys": [{{"name": "...", "threshold": 0.7}}]   (threshold change by name)
-  - "blocking": {{"keys": [{{"fields": ["surname"], "transforms": ["soundex"]}}]}}
-  - "drop_matchkeys": ["name"]
+Each edit object is one of (every edit applies to the best config above):
+  {{"op": "threshold_shift", "delta": -0.05}}
+  {{"op": "scorer_swap", "matchkey": "...", "field": "...", "scorer": "token_sort"}}
+  {{"op": "blocking_strategy", "strategy": "multi_pass"}}
+  {{"op": "blocking_key", "action": "add", "fields": ["surname"], "transforms": ["soundex"]}}
+  {{"op": "weight_shift", "matchkey": "...", "field": "...", "delta": 0.5}}
+  {{"op": "matchkey_type", "matchkey": "...", "target_type": "probabilistic"}}
 
 Do not repeat a trial already tried. Respond with valid JSON only.
 """
@@ -399,25 +540,28 @@ Do not repeat a trial already tried. Respond with valid JSON only.
 
 class CoordinateDescentProposer:
     """Deterministic multi-lever search. Each round optimizes ONE lever family
-    off the best config so far: thresholds, then per-field scorer, then blocking
-    strategy. Cheaper than a full cross-product and fully CI-testable (no LLM).
+    off the best config so far: thresholds, per-field scorer, per-field weight
+    (multi-field weighted matchkeys only), then blocking strategy. Cheaper than a
+    full cross-product and fully CI-testable (no LLM).
 
     Tracks its own family pointer (not ``state.round``) so empty families are
     skipped; returns ``[]`` only once all families are exhausted.
     """
 
     single_round = False
-    _FAMILIES = ("threshold", "scorer", "blocking")
+    _FAMILIES = ("threshold", "scorer", "weight", "blocking")
 
     def __init__(
         self,
         *,
         offsets: tuple[float, ...] = _DEFAULT_THRESHOLD_OFFSETS,
         scorers: tuple[str, ...] = ("token_sort", "ensemble"),
+        weight_deltas: tuple[float, ...] = (-0.5, 0.5),
         blocking_strategies: tuple[str, ...] = ("multi_pass",),
     ) -> None:
         self._offsets = offsets
         self._scorers = scorers
+        self._weight_deltas = weight_deltas
         self._blocking_strategies = blocking_strategies
         self._fam_idx = 0
 
@@ -425,13 +569,25 @@ class CoordinateDescentProposer:
         if family == "threshold":
             return [ThresholdShift(o) for o in self._offsets]
         if family == "scorer":
-            edits: list[ConfigEdit] = []
+            scorer_edits: list[ConfigEdit] = []
             for mk in _perturbable_matchkeys(base):
                 for f in (mk.fields or []):
                     for sc in self._scorers:
                         if f.scorer != sc:
-                            edits.append(ScorerSwap(mk.name, f.field, sc))
-            return edits
+                            scorer_edits.append(ScorerSwap(mk.name, f.field, sc))
+            return scorer_edits
+        if family == "weight":
+            # Single-field weighted matchkeys normalize the weight away, so a
+            # shift is a no-op there — only emit for multi-field matchkeys.
+            weight_edits: list[ConfigEdit] = []
+            for mk in base.get_matchkeys():
+                fields = mk.fields or []
+                if getattr(mk, "type", None) != "weighted" or len(fields) < 2:
+                    continue
+                for f in fields:
+                    for d in self._weight_deltas:
+                        weight_edits.append(WeightShift(mk.name, f.field, d))
+            return weight_edits
         if family == "blocking":
             return [BlockingStrategyEdit(s) for s in self._blocking_strategies]
         return []
@@ -548,7 +704,7 @@ def optimize_config(
     proposer: str | Proposer = "grid",
     threshold_offsets: tuple[float, ...] = _DEFAULT_THRESHOLD_OFFSETS,
     sample_size: int | None = None,
-    max_rounds: int = 4,
+    max_rounds: int = 6,
     max_trials: int | None = None,
     llm_model: str = "gpt-4o-mini",
     max_llm_calls: int = 3,

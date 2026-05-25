@@ -1,14 +1,15 @@
 # Agentic config optimizer for auto-config — design
 
 Date: 2026-05-25
-Status: implemented (PR #486). Phases 1-3 shipped: threshold sweep, the
-proposer/scorer/loop split, the `ConfigEdit` lever vocabulary (§4:
-`ThresholdShift`/`ScorerSwap`/`BlockingStrategyEdit`), the deterministic
-`CoordinateDescentProposer` (§5.2), and the `LLMProposer` (§5.3, AI-driven
-iteration). Open follow-up (#488): extend the `ConfigEdit` vocabulary to the full
-§4 table (weighted-vs-probabilistic type swap, weight shifts, blocking-key edits)
-and migrate the `LLMProposer` to emit `ConfigEdit`s instead of raw diffs (§9
-Phase 4).
+Status: implemented (PR #486). Phases 1-4 (optimizer side) shipped: threshold
+sweep, the proposer/scorer/loop split, the **full §4 `ConfigEdit` vocabulary**
+(`ThresholdShift`/`ScorerSwap`/`BlockingStrategyEdit`/`WeightShift`/
+`MatchkeyTypeSwap`/`BlockingKeyEdit`), the deterministic `CoordinateDescentProposer`
+(§5.2, now including the weight family), and the `LLMProposer` (§5.3) which **emits
+structured `ConfigEdit`s** (closed vocabulary) rather than raw diffs. Open
+follow-up (#488): consolidate `LLMRefitPolicy` onto the same `ConfigEdit`
+vocabulary so the controller's repair loop and the optimizer speak one lever
+language, and expose the surfaces (MCP/CLI/A2A) from §8.
 Relationship: this is the **search** layer. Its objective is the
 **shared unsupervised score** defined in
 `2026-05-25-zero-label-confidence-autoconfig-design.md`. One signal, two
@@ -93,14 +94,16 @@ validates each edit against the base, scores it, and records the trial.
 The agent must not emit free-form YAML — that is unsafe and unvalidatable. Define a
 small, closed edit language; each edit is a validated mutation of a `GoldenMatchConfig`.
 
-| Edit | Params | Maps to |
+All six are implemented in `core/config_optimizer.py`:
+
+| Edit class | Params | Maps to |
 |---|---|---|
-| `ThresholdShift` | matchkey, delta | clamp(mk.threshold + delta) — Phase 1 already does the global form |
-| `ScorerSwap` | matchkey, field, scorer | set field scorer (jaro_winkler / token_sort / ensemble / levenshtein / dice / jaccard / qgram / soundex_match) — #491 |
-| `BlockingStrategy` | strategy | static / multi_pass / canopy / learned |
-| `BlockingKey` | add/remove cols | mutate blocking keys |
-| `MatchkeyType` | matchkey, type | weighted <-> probabilistic (reuse `build_probabilistic_matchkeys`) |
-| `WeightShift` | matchkey, field, delta | reweight a weighted field |
+| `ThresholdShift` | delta | clamp(mk.threshold + delta) across perturbable matchkeys |
+| `ScorerSwap` | matchkey, field, scorer | set a field's scorer (validated against `VALID_SCORERS` + plugins) |
+| `BlockingStrategyEdit` | strategy | static / multi_pass / canopy / learned / ... |
+| `BlockingKeyEdit` | action, fields, transforms | add/remove a blocking key (rejects if it invalidates the strategy) |
+| `MatchkeyTypeSwap` | matchkey, target_type | weighted ↔ probabilistic (backfills threshold + uniform weights on the way back) |
+| `WeightShift` | matchkey, field, delta | reweight a weighted field (floor 0.0) |
 
 Each edit type has: an `apply(config) -> config` that returns a deep-copied,
 schema-validated config (reject and skip on `ValidationError`), and a human label
@@ -186,10 +189,14 @@ moves off the default when a candidate is strictly better.
    built off the best-so-far). No default behavior change (default proposer ==
    today's sweep). Extending the vocabulary to the full §4 table stays in #488.
 3. **Phase 3 (done):** `LLMProposer` — env-gated, default off — the AI-driven
-   iteration. Reuses the controller's diff applier (`apply_config_diff`, shared with
-   `LLMRefitPolicy`); a `propose_fn` injection makes it testable without a network.
-4. **Phase 4:** consolidate `LLMRefitPolicy` onto the shared `ConfigEdit` vocabulary
-   so the controller and optimizer share one lever language; expose surfaces.
+   iteration. A `propose_fn` injection makes it testable without a network.
+4. **Phase 4 (optimizer side done):** completed the §4 `ConfigEdit` table
+   (`WeightShift`, `MatchkeyTypeSwap` weighted↔probabilistic, `BlockingKeyEdit`
+   add/remove), wired the weight family into `CoordinateDescentProposer`, and
+   **migrated `LLMProposer` to emit structured `ConfigEdit`s** instead of raw
+   diffs (`{"edits": [{"op": ...}]}` parsed by `_parse_llm_edits`; each valid edit
+   becomes one attributed candidate `llm-r{round}:{edit.label}`). Remaining (#488):
+   consolidate `LLMRefitPolicy` onto the same vocabulary, and expose surfaces (§8).
 
 Each phase is additive and default-safe; the deterministic path is always the
 fallback.

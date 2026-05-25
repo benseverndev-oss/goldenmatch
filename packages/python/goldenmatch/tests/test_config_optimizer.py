@@ -17,12 +17,17 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.config_optimizer import (
+    BlockingKeyEdit,
     BlockingStrategyEdit,
     CoordinateDescentProposer,
     LLMProposer,
+    MatchkeyTypeSwap,
     OptimizeResult,
     ScorerSwap,
     ThresholdShift,
+    WeightShift,
+    _edit_from_spec,
+    _parse_llm_edits,
     _threshold_variants,
     optimize_config,
 )
@@ -162,22 +167,38 @@ def test_max_trials_caps_search():
     assert len(result.trials) == 2
 
 
-def test_llm_proposer_iterates_with_injected_diff():
+def test_llm_proposer_iterates_with_injected_edits():
     # Inject a fake LLM that proposes a progressively lower threshold each round,
     # so the search runs multiple rounds with unique candidates (no network).
     calls = {"n": 0}
 
-    def fake_diff(state):
+    def fake_edits(state):
         calls["n"] += 1
-        return {"matchkeys": [{"name": "mk", "threshold": round(0.60 - 0.02 * state.round, 4)}]}
+        return [ThresholdShift(round(-0.05 - 0.02 * state.round, 4))]
 
-    prop = LLMProposer(propose_fn=fake_diff, max_llm_calls=3)
+    prop = LLMProposer(propose_fn=fake_edits, max_llm_calls=3)
     result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
     assert result.proposer == "LLMProposer"
     llm_trials = [t for t in result.trials if t.label.startswith("llm-r")]
     assert len(llm_trials) == 3
     assert calls["n"] >= 3
     assert result.rounds >= 2
+
+
+def test_llm_proposer_emits_multiple_edits_per_round():
+    # One round, two edits -> two attributed candidates, each labeled by its lever.
+    # Both are structural (not threshold), so they can't collide with the grid seed.
+    def fake_edits(state):
+        return [
+            ScorerSwap("mk", "first_name", "token_sort"),
+            BlockingStrategyEdit("multi_pass"),
+        ]
+
+    prop = LLMProposer(propose_fn=fake_edits, max_llm_calls=1)
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
+    llm_labels = [t.label for t in result.trials if t.label.startswith("llm-r")]
+    assert any("scorer:first_name=token_sort" in lbl for lbl in llm_labels)
+    assert any("blocking:multi_pass" in lbl for lbl in llm_labels)
 
 
 def test_llm_proposer_stops_when_diff_none():
@@ -248,3 +269,107 @@ def test_coordinate_string_alias():
     result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer="coordinate")
     assert result.proposer == "coordinate"
     assert len(result.trials) > len(_threshold_variants(_weighted_config(0.8), (-0.1, -0.05, 0.0, 0.05, 0.1)))
+
+
+# --- Phase 4: full ConfigEdit vocabulary + LLM emits ConfigEdits ---
+
+def _weighted_config_2f(threshold: float = 0.8) -> GoldenMatchConfig:
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk", type="weighted", threshold=threshold, rerank=False,
+            fields=[
+                MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0, transforms=[]),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", weight=1.0, transforms=[]),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["email"], transforms=[])],
+        ),
+    )
+
+
+def test_weight_shift_edit():
+    cfg = _weighted_config_2f(0.8)
+    shifted = WeightShift("mk", "first_name", 0.5).apply(cfg)
+    assert shifted is not None
+    assert shifted.get_matchkeys()[0].fields[0].weight == 1.5
+    # floor at 0.0
+    floored = WeightShift("mk", "first_name", -5.0).apply(cfg)
+    assert floored is not None and floored.get_matchkeys()[0].fields[0].weight == 0.0
+    # unknown field / matchkey -> no change -> None
+    assert WeightShift("mk", "nope", 0.5).apply(cfg) is None
+    assert WeightShift("other", "first_name", 0.5).apply(cfg) is None
+
+
+def test_matchkey_type_swap_edit():
+    cfg = _weighted_config(0.8)
+    prob = MatchkeyTypeSwap("mk", "probabilistic").apply(cfg)
+    assert prob is not None and prob.get_matchkeys()[0].type == "probabilistic"
+    # round-trip back to weighted backfills threshold + weights
+    back = MatchkeyTypeSwap("mk", "weighted").apply(prob)
+    assert back is not None and back.get_matchkeys()[0].type == "weighted"
+    assert back.get_matchkeys()[0].threshold is not None
+    assert all(f.weight is not None for f in back.get_matchkeys()[0].fields)
+    # no-op (already that type) -> None
+    assert MatchkeyTypeSwap("mk", "weighted").apply(cfg) is None
+    # unsupported target -> None
+    assert MatchkeyTypeSwap("mk", "exact").apply(cfg) is None
+
+
+def test_blocking_key_edit():
+    cfg = _weighted_config(0.8)  # blocking keys = [last_name]
+    added = BlockingKeyEdit("add", ("first_name",)).apply(cfg)
+    assert added is not None
+    assert [k.fields for k in added.blocking.keys] == [["last_name"], ["first_name"]]
+    # adding an existing key -> None
+    assert BlockingKeyEdit("add", ("last_name",)).apply(cfg) is None
+    # removing a present key
+    removed = BlockingKeyEdit("remove", ("first_name",)).apply(added)
+    assert removed is not None and [k.fields for k in removed.blocking.keys] == [["last_name"]]
+    # removing a key that isn't there -> None
+    assert BlockingKeyEdit("remove", ("zzz",)).apply(cfg) is None
+    # removing the only key from a static strategy is invalid -> rejected
+    assert BlockingKeyEdit("remove", ("last_name",)).apply(cfg) is None
+
+
+def test_edit_from_spec_parses_each_op():
+    assert isinstance(_edit_from_spec({"op": "threshold_shift", "delta": -0.05}), ThresholdShift)
+    assert isinstance(
+        _edit_from_spec({"op": "scorer_swap", "matchkey": "mk", "field": "f", "scorer": "token_sort"}),
+        ScorerSwap,
+    )
+    assert isinstance(_edit_from_spec({"op": "blocking_strategy", "strategy": "multi_pass"}), BlockingStrategyEdit)
+    assert isinstance(
+        _edit_from_spec({"op": "weight_shift", "matchkey": "mk", "field": "f", "delta": 0.5}), WeightShift
+    )
+    assert isinstance(
+        _edit_from_spec({"op": "matchkey_type", "matchkey": "mk", "target_type": "probabilistic"}),
+        MatchkeyTypeSwap,
+    )
+    assert isinstance(
+        _edit_from_spec({"op": "blocking_key", "action": "add", "fields": ["surname"]}), BlockingKeyEdit
+    )
+    # unknown op / malformed -> None
+    assert _edit_from_spec({"op": "nope"}) is None
+    assert _edit_from_spec({"op": "threshold_shift"}) is None  # missing delta
+    assert _edit_from_spec("not a dict") is None
+
+
+def test_parse_llm_edits_handles_stop_and_lists():
+    assert _parse_llm_edits({"action": "stop"}) == []
+    assert _parse_llm_edits({}) == []
+    edits = _parse_llm_edits({"edits": [
+        {"op": "threshold_shift", "delta": -0.05},
+        {"op": "garbage"},
+        {"op": "blocking_strategy", "strategy": "multi_pass"},
+    ]})
+    assert len(edits) == 2  # garbage dropped
+
+
+def test_coordinate_descent_includes_weight_family():
+    prop = CoordinateDescentProposer(
+        scorers=("token_sort",), weight_deltas=(0.5,), blocking_strategies=("multi_pass",),
+    )
+    result = optimize_config(_df(), base_config=_weighted_config_2f(0.8), proposer=prop)
+    labels = [t.label for t in result.trials]
+    assert any(lbl.startswith("weight:") for lbl in labels)

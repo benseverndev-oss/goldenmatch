@@ -110,14 +110,17 @@ from goldenmatch.core.cluster import (
 # ── Cluster comparison (CCMS) ──────────────────────────────────────────
 from goldenmatch.core.compare_clusters import CompareResult, compare_clusters
 from goldenmatch.core.config_optimizer import (
+    BlockingKeyEdit,
     BlockingStrategyEdit,
     CoordinateDescentProposer,
     GridProposer,
     LLMProposer,
+    MatchkeyTypeSwap,
     OptimizeResult,
     OptimizerTrial,
     ScorerSwap,
     ThresholdShift,
+    WeightShift,
     optimize_config,
 )
 
@@ -325,6 +328,7 @@ __all__ = [
     "optimize_config", "OptimizeResult", "OptimizerTrial",
     "GridProposer", "LLMProposer", "CoordinateDescentProposer",
     "ThresholdShift", "ScorerSwap", "BlockingStrategyEdit",
+    "WeightShift", "MatchkeyTypeSwap", "BlockingKeyEdit",
     "suggest_threshold",
     # Auto-config verification
     "preflight", "postflight",
