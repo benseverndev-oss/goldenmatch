@@ -1,9 +1,13 @@
 """Block-scoring native-kernel bench (Phase 2 confirmation at scale).
 
 Isolates the one stage the native kernel changes — bucket block-scoring — and
-measures it pure-Python (rapidfuzz loop) vs native (rapidfuzz-rs + rayon) on the
-SAME prepared frame, in one process. Reports the `bucket_score` wall, peak RSS,
-and asserts the emitted pair SET is identical across the two paths.
+measures the native kernel (rapidfuzz-rs + rayon): `bucket_score` wall, emitted
+pairs, peak RSS. The pure-Python baseline is opt-in (`--with-python`) for the
+speedup ratio + pair-set parity check; it's left OFF by default because it's
+O(pairs), quadratic in block size, and intractable on the full Zipfian-surname
+fixture (the speedup + parity are locked by the unit tests and smaller-scale
+runs). At scale, this bench confirms native's absolute wall and that it
+completes.
 
 It deliberately does NOT run the full dedupe (auto-config / clustering / golden
 are unchanged by this kernel and would just add ~50 min × 2 of noise). For an
@@ -15,10 +19,14 @@ engage: a weighted matchkey on names+email with native-eligible scorers
 precomputed columns). Auto-config may add negative-evidence, which disqualifies
 the fast path — fine in production, wrong for a controlled kernel bench.
 
+Accepts a `.parquet` (e.g. the reusable `bench_<rows>.parquet` from the
+`bench-dataset-v1` release) or a `.csv` fixture; the columns it needs are
+`first_name`, `last_name`, `email` (the person shape both generators emit).
+
 Run (after building the ext):
     uv run python scripts/build_native.py
     uv run python scripts/bench_native_bucket.py \
-        --fixture .profile_tmp/synthetic_audit.csv \
+        --fixture bench-dataset/bench_5000000.parquet \
         --output .profile_tmp/native_bucket_result.json \
         --summary-md "$GITHUB_STEP_SUMMARY"
 """
@@ -111,6 +119,15 @@ def main() -> int:
                         help="0 -> score_buckets default (min(cpu*4, 1024))")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--summary-md", type=Path, default=None)
+    parser.add_argument(
+        "--with-python", action="store_true",
+        help="Also run the pure-Python baseline for speedup + pair-set parity. "
+             "Off by default: the Python loop is O(pairs), quadratic in block "
+             "size, so it's intractable on the full Zipfian-surname fixture. "
+             "Use it on a small fixture to re-check parity/speedup; at scale "
+             "this bench measures native alone (parity is locked by the unit "
+             "tests + smaller-scale runs).",
+    )
     args = parser.parse_args()
 
     import polars as pl
@@ -120,7 +137,11 @@ def main() -> int:
     from goldenmatch.core.matchkey import precompute_matchkey_transforms
 
     print(f"[bench] loading {args.fixture}", flush=True)
-    df = pl.read_csv(args.fixture)
+    df = (
+        pl.read_parquet(args.fixture)
+        if args.fixture.suffix == ".parquet"
+        else pl.read_csv(args.fixture)
+    )
     df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
     print(f"[bench] rows={df.height:,} cols={df.width}", flush=True)
 
@@ -142,12 +163,19 @@ def main() -> int:
     except Exception:
         ext_version = "not-built"
 
-    # Python baseline first, then native, on the same prepared frame.
-    py = _run_one("0", df, blocking, mk, n_buckets)
+    # Native is always measured. The pure-Python baseline is opt-in
+    # (--with-python) because it's O(pairs), quadratic in block size, and
+    # intractable on the full Zipfian-surname fixture. Speedup + parity are
+    # locked by the unit tests + smaller-scale runs; at scale this confirms
+    # native's absolute wall and that it completes.
     nat = _run_one("1", df, blocking, mk, n_buckets)
+    py = _run_one("0", df, blocking, mk, n_buckets) if args.with_python else None
 
-    parity_ok = py["pairset_sha256"] == nat["pairset_sha256"]
-    speedup = (py["bucket_score_s"] / nat["bucket_score_s"]) if nat["bucket_score_s"] else 0.0
+    parity_ok = None
+    speedup = None
+    if py is not None:
+        parity_ok = py["pairset_sha256"] == nat["pairset_sha256"]
+        speedup = (py["bucket_score_s"] / nat["bucket_score_s"]) if nat["bucket_score_s"] else 0.0
 
     result = {
         "rows": df.height,
@@ -155,35 +183,45 @@ def main() -> int:
         "block_key": args.block_key,
         "threshold": args.threshold,
         "ext_version": ext_version,
-        "python": py,
         "native": nat,
+        "python": py,
         "parity_pairset_identical": parity_ok,
-        "bucket_score_speedup": round(speedup, 2),
+        "bucket_score_speedup": (round(speedup, 2) if speedup is not None else None),
     }
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2))
         print(f"[bench] wrote {args.output}", flush=True)
 
+    table_rows = [
+        f"| native (rapidfuzz-rs + rayon) | {nat['bucket_score_s']}s | {nat['wall_s']}s | {nat['pair_count']} | {nat['peak_rss_mb']}MB |",
+    ]
+    if py is not None:
+        table_rows.insert(
+            0,
+            f"| python (rapidfuzz loop) | {py['bucket_score_s']}s | {py['wall_s']}s | {py['pair_count']} | {py['peak_rss_mb']}MB |",
+        )
     lines = [
-        "## Native block-scoring bench (5M)", "",
+        "## Native block-scoring bench", "",
         f"- rows: **{df.height:,}**  buckets: {n_buckets}  block_key: `{args.block_key}`  ext: {ext_version}",
         "",
         "| path | bucket_score | wall | pairs | peak RSS |",
         "|---|---|---|---|---|",
-        f"| python (rapidfuzz loop) | {py['bucket_score_s']}s | {py['wall_s']}s | {py['pair_count']} | {py['peak_rss_mb']}MB |",
-        f"| native (rapidfuzz-rs + rayon) | {nat['bucket_score_s']}s | {nat['wall_s']}s | {nat['pair_count']} | {nat['peak_rss_mb']}MB |",
-        "",
-        f"- **bucket_score speedup: {speedup:.2f}x**",
-        f"- pair-set parity: {'PASS (identical)' if parity_ok else 'FAIL (pair sets differ!)'}",
+        *table_rows,
     ]
+    if py is not None:
+        lines += [
+            "",
+            f"- **bucket_score speedup: {speedup:.2f}x**",
+            f"- pair-set parity: {'PASS (identical)' if parity_ok else 'FAIL (pair sets differ!)'}",
+        ]
     text = "\n".join(lines) + "\n"
     if args.summary_md and str(args.summary_md) != "-":
         with args.summary_md.open("a", encoding="utf-8") as f:
             f.write(text)
     print(text)
 
-    if not parity_ok:
+    if py is not None and not parity_ok:
         print("[bench] ERROR: native and python emitted different pair sets", flush=True)
         return 1
     return 0

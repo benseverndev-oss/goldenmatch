@@ -1,13 +1,22 @@
 # Native block-scoring bench — workflow_dispatch only.
 #
 # Confirms the Phase 2 native kernel win (rapidfuzz-rs + rayon block scoring) at
-# scale, on a paid large runner. Generates a person-like fixture, builds the
-# native extension, then runs scripts/bench_native_bucket.py which scores the
-# SAME prepared frame pure-Python vs native in one process and reports the
-# bucket_score speedup + pair-set parity.
+# scale, on a paid large runner. Downloads a pre-generated person-shaped
+# dataset from the `bench-dataset-v1` release (generated once via the
+# `generate-bench-dataset` workflow — NOT regenerated here every run), builds
+# the native extension, then runs scripts/bench_native_bucket.py which measures
+# the native kernel's bucket_score wall + pairs + peak RSS. The pure-Python
+# baseline (speedup ratio + parity) is opt-in via --with-python and left OFF
+# here: it's quadratic in block size and intractable on the full fixture. The
+# speedup + parity are locked by the unit tests + smaller-scale runs.
 #
 # Isolates the bucket-scoring stage on purpose (the only thing the kernel
 # changes). For an end-to-end 5M dedupe use the `scale-audit-5m` workflow.
+#
+# Prereq: the `bench_<rows>.parquet` asset must exist on the dataset_tag
+# release. If it doesn't, run `generate-bench-dataset` (rows + tag) first; this
+# job fails fast rather than silently regenerating a multi-million-row fixture
+# on every run.
 #
 # To run: GitHub -> Actions -> "bench-native-bucket" -> Run workflow.
 name: bench-native-bucket
@@ -15,14 +24,14 @@ name: bench-native-bucket
 on:
   workflow_dispatch:
     inputs:
-      n_records:
-        description: "Total record count (default 5000000)"
+      rows:
+        description: "Row count — selects the bench_<rows>.parquet release asset"
         required: false
         default: "5000000"
-      dupe_rate:
-        description: "Fraction of records that are duplicates (0..1)"
+      dataset_tag:
+        description: "Release tag holding the pre-generated dataset"
         required: false
-        default: "0.12"
+        default: "bench-dataset-v1"
       block_key:
         description: "Blocking key column (default last_name)"
         required: false
@@ -38,7 +47,7 @@ permissions:
 jobs:
   bench:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 120
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
     steps:
@@ -65,19 +74,25 @@ jobs:
       - name: Build native extension
         run: uv run python scripts/build_native.py
 
-      - name: Generate ${{ inputs.n_records }}-row fixture
+      - name: Download pre-generated dataset (bench_${{ inputs.rows }}.parquet)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p .profile_tmp
-          uv run python scripts/scale_audit_5m_generate.py \
-            --n-records ${{ inputs.n_records }} \
-            --dupe-rate ${{ inputs.dupe_rate }} \
-            --output .profile_tmp/synthetic_audit.csv
-          ls -lh .profile_tmp/synthetic_audit.csv
+          mkdir -p bench-dataset
+          gh release download "${{ inputs.dataset_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bench_${{ inputs.rows }}.parquet" \
+            --dir bench-dataset/ || true
+          if [ ! -f "bench-dataset/bench_${{ inputs.rows }}.parquet" ]; then
+            echo "::error::bench_${{ inputs.rows }}.parquet missing on release '${{ inputs.dataset_tag }}'. Generate it once via the 'generate-bench-dataset' workflow (rows=${{ inputs.rows }}, tag=${{ inputs.dataset_tag }}), then re-run this bench."
+            exit 1
+          fi
+          ls -lh bench-dataset/
 
       - name: Run native block-scoring bench (python vs native)
         run: |
           uv run python scripts/bench_native_bucket.py \
-            --fixture .profile_tmp/synthetic_audit.csv \
+            --fixture bench-dataset/bench_${{ inputs.rows }}.parquet \
             --block-key "${{ inputs.block_key }}" \
             --output .profile_tmp/native_bucket_result.json \
             --summary-md "$GITHUB_STEP_SUMMARY"
