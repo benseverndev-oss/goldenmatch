@@ -25,11 +25,16 @@ All `file:line` anchors are against the tree at the time of writing.
   into `core/cluster.py` (`build_clusters`, `_severe_bridge_count`,
   `compute_cluster_confidence`) behind the gate. `tests/test_native_parity.py`
   asserts identical output Python-vs-native (18 cases incl. float parity within
-  1e-12 + bottleneck-pair tie-break). **`transitivity_rate` (once-per-profile, not
-  a per-cluster loop) and `mst_split` (rare oversized-split exception path with an
-  entangled dict rebuild) are deliberately kept in Python** — the three hot
-  per-cluster/per-edge loops are the value; those two are not worth the parity
-  risk. Default stays Python (`_GATED_ON` empty) pending a DQbench run.
+  1e-12 + bottleneck-pair tie-break). **`transitivity_rate` and `mst_split` are
+  deliberately kept in Python**, each for a concrete reason, not just triage:
+  `transitivity_rate` samples triples via `random.Random(seed).sample(...)` (any
+  cluster >20 members, or >1000 total triples — a single 20-member cluster already
+  exceeds that at C(20,3)=1140), so its output depends on CPython's Mersenne
+  Twister sequence and **cannot be reproduced bit-for-bit in Rust** without
+  reimplementing CPython's RNG — a native port would fail the parity gate. It's
+  also once-per-profile, not a per-cluster hot loop. `mst_split` is the rare
+  oversized-split exception path with an entangled dict rebuild. Default stays
+  Python (`_GATED_ON` empty) pending a DQbench run.
 - **Phase 2 — blocked in this environment.** `rapidfuzz`/`rayon` crates aren't in
   the offline cargo cache and there's no crates.io network here, so the
   block-scorer kernel can't be built/validated. Design below stands; needs a
@@ -114,31 +119,38 @@ stable sorts and the same tie-break rules as Python.
 
 ## 2. Phase 1 — clustering kernel (first real kernel)
 
-### 2.1 Rust surface (`src/cluster.rs`)
+### 2.1 Rust surface (`src/cluster.rs`) — as implemented
 ```rust
 #[pyfunction] fn connected_components(edges: Vec<(i64,i64,f64)>, all_ids: Vec<i64>) -> Vec<Vec<i64>>
-#[pyfunction] fn mst_split(members: Vec<i64>, edges: Vec<(i64,i64,f64)>, max_size: usize) -> Vec<Vec<i64>>
-#[pyfunction] fn cluster_confidence(edges: Vec<(i64,i64,f64)>, size: usize)
-                  -> (f64, f64, f64, Option<(i64,i64)>, f64)  // min_edge, avg_edge, connectivity, bottleneck_pair, confidence
 #[pyfunction] fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64,i64,f64)>) -> usize
-#[pyfunction] fn transitivity_rate(members_by_cluster: Vec<Vec<i64>>, edges: Vec<(i64,i64,f64)>, threshold: f64) -> f64
+#[pyfunction] fn cluster_confidence(edges: Vec<(i64,i64,f64)>, size: usize)
+                  -> (Option<f64>, Option<f64>, f64, Option<(i64,i64)>, f64)  // min_edge, avg_edge, connectivity, bottleneck_pair, confidence
 ```
 Marshalling is trivial primitives (`(i64,i64,f64)` + `i64`); no Arrow needed.
+
+**Not ported (by design):** `transitivity_rate` samples triples via
+`random.Random(seed).sample(...)`, so its result is tied to CPython's Mersenne
+Twister stream — unreproducible in Rust without reimplementing the RNG, so a port
+would fail the parity gate (and it's once-per-profile anyway). `mst_split` is the
+rare oversized-split exception path whose Python form returns rebuilt sub-cluster
+dicts (members + sliced pair_scores + recomputed confidence); the dict-rebuild
+entanglement isn't worth the parity surface. Both stay Python.
 
 ### 2.2 Python integration (`core/cluster.py`)
 `build_clusters(pairs, all_ids=None, max_cluster_size=100, weak_cluster_threshold=0.3, auto_split=True) -> dict[int, dict]`
 keeps its **exact signature and return shape** (`members, size, oversized,
 pair_scores, confidence, bottleneck_pair, cluster_quality`). Internally, when
-`native_enabled()`:
-- replace the `UnionFind` class + `get_clusters()` (`cluster.py:52-106`) with
+`native_enabled("clustering")` (each guarded by the gate so the Python branch is
+the source of truth):
+- the `UnionFind` + `get_clusters()` block (`cluster.py:323-332`) calls
   `_native.connected_components(...)`;
-- `split_oversized_cluster` / `_build_mst` (`cluster.py:109-160`) → `_native.mst_split`;
-- `compute_cluster_confidence` (`cluster.py:403`) → `_native.cluster_confidence`;
-- `_severe_bridge_count` / `_measure_bridges` (`cluster.py:168-220`) → `_native.severe_bridge_count`;
-- `transitivity_rate` → `_native.transitivity_rate`.
+- `compute_cluster_confidence` (`cluster.py:413`) delegates to
+  `_native.cluster_confidence`, then wraps the tuple back into the dict;
+- `_severe_bridge_count` (`cluster.py:168`) delegates to
+  `_native.severe_bridge_count`.
 
 The dict assembly + `cluster_quality` assignment stays in Python (cheap, preserves
-the contract). `_emit_cluster_profile` (`cluster.py:223`) reads the same values.
+the contract). `_emit_cluster_profile` reads the same values.
 
 ### 2.3 Parity test (`tests/test_native_parity.py`)
 `@pytest.mark.skipif(_native is None)`. For a battery of fixtures — singletons,
