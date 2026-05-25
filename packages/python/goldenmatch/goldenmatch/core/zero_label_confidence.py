@@ -117,13 +117,19 @@ def score_cluster_confidence(cluster: ClusterProfile, n_rows: int) -> float:
 def score_cluster_bridge_risk(cluster: ClusterProfile) -> float:
     """``cluster_bridge_risk`` — bridge-like cluster risk (higher = worse).
 
-    Heuristic proxy from existing cluster signals (NO new instrumentation): a
-    large drop from the median edge confidence to the weakest edge suggests a
-    cluster held together by a weak bridge, and low transitivity suggests
-    chain-like clusters (bridges between sub-groups). 0 when every cluster is a
-    singleton (no bridges possible). True articulation-point / bridge detection
-    on the per-cluster pair graph is a future refinement (tracked separately).
+    Prefers the **measured** signal: ``measured_bridge_risk`` is the fraction of
+    multi-member clusters that contain a severe bridge (an edge whose removal
+    splits the cluster into two >=2-node parts — the "merged by one weak link"
+    pathology), computed by true bridge detection on the per-cluster pair graph
+    (``cluster.py::_measure_bridges``).
+
+    Falls back to a heuristic proxy when the measured signal is unavailable
+    (``None`` — e.g. distributed paths, or clusters too large to measure cheaply):
+    a large drop from median to weakest edge confidence + low transitivity. 0 when
+    every cluster is a singleton (no bridges possible).
     """
+    if cluster.measured_bridge_risk is not None:
+        return _clamp(cluster.measured_bridge_risk)
     if cluster.cluster_size_max <= 1:
         return 0.0
     edge_spread = _clamp(cluster.edge_confidence_p50 - cluster.edge_confidence_min)

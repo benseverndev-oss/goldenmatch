@@ -137,6 +137,62 @@ def test_deterministic():
     assert a == b
 
 
+# --- #487: true articulation-point / bridge detection ---
+
+def test_severe_bridge_count_detects_weak_link():
+    from goldenmatch.core.cluster import _severe_bridge_count
+    # {1,2} -- bridge(2,3) -- {3,4}: removing 2-3 splits into two 2-node parts.
+    assert _severe_bridge_count([1, 2, 3, 4], {(1, 2): 0.9, (3, 4): 0.9, (2, 3): 0.8}) == 1
+    # clique of 3: no bridge (every edge removal keeps it connected).
+    assert _severe_bridge_count([1, 2, 3], {(1, 2): 0.9, (2, 3): 0.9, (1, 3): 0.9}) == 0
+    # 3-node chain: a split would be 1 vs 2 nodes -> not "severe".
+    assert _severe_bridge_count([1, 2, 3], {(1, 2): 0.9, (2, 3): 0.9}) == 0
+
+
+def test_build_clusters_emits_measured_bridge_signal():
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.core.profile_emitter import profile_capture
+    pairs = [(1, 2, 0.9), (3, 4, 0.9), (2, 3, 0.8)]  # two pairs joined by a weak bridge
+    with profile_capture() as emitter:
+        build_clusters(pairs, all_ids=[1, 2, 3, 4])
+    cp = emitter.cluster
+    assert cp is not None
+    assert cp.bridge_edge_count >= 1
+    assert cp.measured_bridge_risk is not None and cp.measured_bridge_risk > 0.0
+
+
+def test_build_clusters_clique_has_no_measured_bridge():
+    from goldenmatch.core.cluster import build_clusters
+    from goldenmatch.core.profile_emitter import profile_capture
+    with profile_capture() as emitter:
+        build_clusters([(1, 2, 0.9), (2, 3, 0.9), (1, 3, 0.9)], all_ids=[1, 2, 3])
+    cp = emitter.cluster
+    assert cp.bridge_edge_count == 0
+    assert cp.measured_bridge_risk == 0.0
+
+
+def test_bridge_risk_uses_measured_signal_over_proxy():
+    from goldenmatch.core.zero_label_confidence import score_cluster_bridge_risk
+    # Proxy inputs say "clean" (no edge spread, full transitivity) but the
+    # measured signal found a bridge -> measured wins.
+    cp = ClusterProfile(
+        n_clusters=5, cluster_size_max=4, transitivity_rate=1.0,
+        edge_confidence_p50=0.9, edge_confidence_min=0.9,
+        measured_bridge_risk=0.75,
+    )
+    assert score_cluster_bridge_risk(cp) == 0.75
+
+
+def test_bridge_risk_falls_back_to_proxy_when_unmeasured():
+    from goldenmatch.core.zero_label_confidence import score_cluster_bridge_risk
+    cp = ClusterProfile(
+        n_clusters=5, cluster_size_max=4, transitivity_rate=0.5,
+        edge_confidence_p50=0.9, edge_confidence_min=0.3,
+    )
+    assert cp.measured_bridge_risk is None
+    assert score_cluster_bridge_risk(cp) > 0.3  # heuristic proxy fires
+
+
 # --- #490: expected precision / recall proxies (observational, non-None) ---
 
 def test_expected_precision_proxy_drops_with_contamination():

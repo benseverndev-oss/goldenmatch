@@ -260,6 +260,14 @@ class ClusterProfile:
     edge_confidence_p50: float = 0.0
     edge_confidence_min: float = 0.0
     oversized_cluster_count: int = 0
+    # Measured cluster-graph bridge structure (true articulation/bridge
+    # detection on the in-memory path). ``bridge_edge_count`` is the raw count of
+    # severe bridges (an edge whose removal splits a cluster into two >=2-node
+    # parts); ``measured_bridge_risk`` is the fraction of measurable multi-member
+    # clusters that contain one. ``None`` when no cluster was small enough to
+    # measure cheaply (e.g. distributed paths) -> zero_label falls back to a proxy.
+    bridge_edge_count: int = 0
+    measured_bridge_risk: float | None = None
 
     def health(self, n_rows: int) -> HealthVerdict:
         if n_rows > 0 and self.cluster_size_max > 0.1 * n_rows:

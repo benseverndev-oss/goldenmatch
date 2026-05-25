@@ -160,6 +160,66 @@ def split_oversized_cluster(
     return result
 
 
+# Bridge detection is O(E*(V+E)) per cluster; only run on clusters at or below
+# this size so the sample path stays cheap (clusters there are small).
+_BRIDGE_MAX_CLUSTER_SIZE = 100
+
+
+def _severe_bridge_count(members: list[int], pair_scores: dict) -> int:
+    """Count edges whose removal splits this cluster into two components each
+    with >= 2 nodes -- the 'merged by one weak link' pathology. A bridge between
+    a node and a singleton tail is not severe (one side < 2)."""
+    adj: dict[int, set[int]] = {m: set() for m in members}
+    for k in pair_scores:
+        if isinstance(k, tuple) and len(k) == 2 and k[0] in adj and k[1] in adj:
+            adj[k[0]].add(k[1])
+            adj[k[1]].add(k[0])
+    n = len(members)
+    count = 0
+    for k in pair_scores:
+        if not (isinstance(k, tuple) and len(k) == 2):
+            continue
+        a, b = k
+        if a not in adj or b not in adj:
+            continue
+        # BFS from a with the a-b edge removed; if b is unreachable it's a bridge.
+        seen = {a}
+        stack = [a]
+        while stack:
+            u = stack.pop()
+            for w in adj[u]:
+                if (u == a and w == b) or (u == b and w == a):
+                    continue
+                if w not in seen:
+                    seen.add(w)
+                    stack.append(w)
+        if b not in seen:
+            side_a = len(seen)
+            if side_a >= 2 and (n - side_a) >= 2:
+                count += 1
+    return count
+
+
+def _measure_bridges(clusters: dict[int, dict]) -> tuple[int, float | None]:
+    """Returns ``(bridge_edge_count, measured_bridge_risk)``. ``measured_bridge_risk``
+    is ``None`` when no multi-member cluster was small enough to measure cheaply
+    (the zero_label scorer then falls back to its heuristic proxy)."""
+    measurable = [
+        c for c in clusters.values()
+        if 2 <= c["size"] <= _BRIDGE_MAX_CLUSTER_SIZE
+    ]
+    if not measurable:
+        return 0, None
+    total_bridges = 0
+    risky = 0
+    for c in measurable:
+        b = _severe_bridge_count(c["members"], c.get("pair_scores", {}))
+        total_bridges += b
+        if b > 0:
+            risky += 1
+    return total_bridges, risky / len(measurable)
+
+
 def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
     """Emit ClusterProfile to current emitter. No-op when no capture is active."""
     import math
@@ -200,6 +260,8 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
     else:
         threshold = 0.5  # fallback
 
+    bridge_edge_count, measured_bridge_risk = _measure_bridges(clusters)
+
     profile = ClusterProfile(
         n_clusters=len(clusters),
         cluster_size_p50=percentile(sizes, 0.50),
@@ -209,6 +271,8 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
         edge_confidence_p50=confidences[len(confidences) // 2] if confidences else 0.0,
         edge_confidence_min=confidences[0] if confidences else 0.0,
         oversized_cluster_count=sum(1 for c in clusters.values() if c.get("oversized")),
+        bridge_edge_count=bridge_edge_count,
+        measured_bridge_risk=measured_bridge_risk,
     )
     current_emitter().set_cluster(profile)
 
