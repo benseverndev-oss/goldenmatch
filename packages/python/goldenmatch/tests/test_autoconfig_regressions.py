@@ -28,6 +28,7 @@ from goldenmatch import dedupe_df
 from goldenmatch._api import _extract_stats
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
+    _legacy_auto_configure_v0,
     auto_configure_df,
     build_matchkeys,
 )
@@ -121,7 +122,14 @@ def test_learned_blocking_not_triggered_below_50k():
     learner trained on 100% of its own input, producing multi-minute
     runtimes. Small datasets should use static/multi_pass blocking.
     """
-    cfg = auto_configure_df(_person_df(5_000))
+    # Assert on the v0 (config-build) layer, not the full controller. The
+    # learned-vs-static decision is made in build_blocking and is identical
+    # at every controller iteration (the committed config for this no-dup
+    # RED fixture is v0). Running the full controller here executes the
+    # pipeline 3-4x (~115s) and blew the 120s CI timeout under `-n auto`
+    # contention -- a worker-crash flake, not an assertion failure. Same
+    # pattern as test_reranking_enabled_three_plus_fields.
+    cfg = _legacy_auto_configure_v0(_person_df(5_000))
     assert cfg.blocking is not None
     assert cfg.blocking.strategy != "learned", (
         f"5K rows triggered learned blocking: strategy={cfg.blocking.strategy}"
@@ -193,7 +201,11 @@ def test_low_cardinality_not_promoted_to_exact_matchkey():
     the phone classifier accepts it, and with ~80 distinct values in 5K
     rows each 'exact birth_year' match collapses ~60 unrelated people.
     """
-    cfg = auto_configure_df(_person_df(5_000))
+    # v0 (config-build) layer: the exact-matchkey cardinality guard fires in
+    # build_matchkeys and is iteration-independent (committed config == v0 for
+    # this RED no-dup fixture). The full controller would execute the pipeline
+    # 3-4x (~110s) and time out under `-n auto` CI contention.
+    cfg = _legacy_auto_configure_v0(_person_df(5_000))
     for mk in cfg.get_matchkeys():
         if mk.type != "exact":
             continue
