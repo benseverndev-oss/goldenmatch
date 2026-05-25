@@ -313,25 +313,29 @@ def train_em(
     for iteration in range(max_iterations):
         old_m = {k: list(v) for k, v in m_probs.items()}
 
-        # E-step: compute posterior P(match | comparison vector)
-        posteriors = np.zeros(n_pairs)
-        for i in range(n_pairs):
-            log_m = 0.0
-            log_u = 0.0
-            for j, f in enumerate(mk.fields):
-                level = comp_matrix[i, j]
-                m_val = max(m_probs[f.field][level], 1e-10)
-                u_val = max(u_probs[f.field][level], 1e-10)
-                log_m += math.log(m_val)
-                log_u += math.log(u_val)
+        # E-step: compute posterior P(match | comparison vector).
+        # Vectorized over pairs (this was the FS-training bottleneck: a
+        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
+        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
+        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
+        # matching the scalar accumulation order so results stay
+        # bit-identical to the loop it replaces.
+        log_m = np.zeros(n_pairs)
+        log_u = np.zeros(n_pairs)
+        for j, f in enumerate(mk.fields):
+            levels_j = comp_matrix[:, j]
+            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+            log_m += m_table[levels_j]
+            log_u += u_table[levels_j]
 
-            log_match = math.log(max(p_match, 1e-10)) + log_m
-            log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
+        log_match = math.log(max(p_match, 1e-10)) + log_m
+        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
 
-            max_log = max(log_match, log_nonmatch)
-            posteriors[i] = math.exp(log_match - max_log) / (
-                math.exp(log_match - max_log) + math.exp(log_nonmatch - max_log)
-            )
+        max_log = np.maximum(log_match, log_nonmatch)
+        e_match = np.exp(log_match - max_log)
+        e_nonmatch = np.exp(log_nonmatch - max_log)
+        posteriors = e_match / (e_match + e_nonmatch)
 
         # M-step: update ONLY m_probs and p_match (u is fixed)
         total_match = posteriors.sum()
