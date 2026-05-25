@@ -183,12 +183,20 @@ def test_precompute_matchkey_transforms_skips_record_embedding():
     assert sig_name in out.columns
 
 
-def test_precompute_matchkey_transforms_skips_empty_transforms():
-    df = pl.DataFrame({"name": ["Alice"]})
-    mk = _mk("m", [_field("name", [])])
+def test_precompute_matchkey_transforms_materializes_empty_transforms():
+    # Transform-less fields are materialized as the cast(Utf8) identity column
+    # so the bucket fast path / native kernel can engage (and to drop the
+    # per-block .select() the slow path would otherwise run). Values match the
+    # _get_transformed_values fallback exactly.
+    df = pl.DataFrame({"name": ["Alice"], "zip": [77001]})
+    mk = _mk("m", [_field("name", []), _field("zip", [])])
     out = precompute_matchkey_transforms(df, [mk])
-    xform_cols = [c for c in out.columns if c.startswith("__xform_")]
-    assert xform_cols == []
+    sig_name = _xform_sig(_field("name", []))
+    sig_zip = _xform_sig(_field("zip", []))
+    assert sig_name in out.columns and sig_zip in out.columns
+    assert out[sig_name].to_list() == ["Alice"]
+    # non-string source is cast to Utf8, matching the slow-path fallback
+    assert out[sig_zip].to_list() == ["77001"]
 
 
 def test_precompute_matchkey_transforms_is_idempotent():

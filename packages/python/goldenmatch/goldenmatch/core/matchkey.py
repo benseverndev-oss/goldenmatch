@@ -210,9 +210,14 @@ def precompute_matchkey_transforms(
     `field.columns`, has its own scoring path that doesn't call
     `_get_transformed_values`).
 
-    Skips fields with empty transforms list — nothing to precompute, and
-    `_get_transformed_values`' legacy path is already a single `to_list()`
-    call.
+    Fields with an empty transforms list are materialized too, as the plain
+    `cast(Utf8)` identity column (`_try_native_chain` always casts first). This
+    is required for the bucket fast path: `_resolve_fast_path` only engages —
+    and only then can the native `score_block_pairs` kernel fire — when every
+    field's `__xform_<sig>__` column is already present. It also removes the
+    per-block `.select()` the slow path's `_get_transformed_values` fallback
+    would otherwise run for transform-less fields. The materialized values are
+    identical to that fallback, so scoring output is unchanged.
 
     **Caller contract:** downstream code must NOT mutate the source columns
     referenced by the matchkey fields after this function runs. The fast
@@ -229,8 +234,6 @@ def precompute_matchkey_transforms(
     for mk in matchkeys:
         for field in mk.fields:
             if field.scorer == "record_embedding":
-                continue
-            if not field.transforms:
                 continue
             sig = _xform_sig(field)
             if sig in seen or sig in df.columns:
