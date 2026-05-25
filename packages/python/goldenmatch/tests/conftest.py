@@ -54,45 +54,6 @@ def _disable_autoconfig_memory(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _deterministic_controller_budget(monkeypatch):
-    """Make auto-config's iteration count deterministic under ``pytest -n auto``.
-
-    The controller's iteration loop (autoconfig_controller.py) bails out early
-    when wall-clock ``elapsed > budget.max_seconds``. Under xdist, workers
-    compete for CPU, so the same wall budget completes FEWER iterations than
-    single-process -> the controller commits a less-refined config -> tests
-    asserting a specific refined outcome (e.g.
-    test_low_cardinality_not_promoted_to_exact_matchkey,
-    test_learned_blocking_not_triggered_below_50k) fail intermittently. This is
-    the documented intermittent ``python (goldenmatch)`` CI flake: the suite
-    passes single-process but fails under ``-n auto`` on loaded runners.
-
-    Fix: for the default-budget path (``ControllerBudget.for_dataset``, used by
-    ``auto_configure_df``), keep the calibrated iteration cap + sample sizes but
-    remove the wall-time early-bail (max_seconds -> inf). The loop is then bound
-    only by ``max_iterations`` + convergence, both deterministic regardless of
-    CPU contention. Tests that exercise the time budget construct an explicit
-    ``ControllerBudget(max_seconds=...)`` and bypass ``for_dataset``, so they
-    are unaffected.
-    """
-    try:
-        from goldenmatch.core.autoconfig_controller import ControllerBudget
-    except ImportError:
-        yield
-        return
-
-    _orig_for_dataset = ControllerBudget.for_dataset
-
-    def _patched(cls, n_rows):
-        budget = _orig_for_dataset(n_rows)
-        budget.max_seconds = float("inf")
-        return budget
-
-    monkeypatch.setattr(ControllerBudget, "for_dataset", classmethod(_patched))
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _ensure_refdata_plugins_registered():
     """Re-register refdata plugins before every test.
 
