@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
 # extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.23.3, <0.24", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
 
 [profile.release]
 opt-level = 3
