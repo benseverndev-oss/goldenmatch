@@ -1,187 +1,63 @@
-//! String scorers — pure-Rust reimplementations of the `rapidfuzz` scorers that
-//! `core/scorer.py::score_field` uses, for the Phase 2 native block-scorer.
+//! String scorers backed by the `rapidfuzz` Rust crate — the same algorithms
+//! the Python `rapidfuzz` bindings use, for the Phase 2 native block-scorer.
 //!
-//! Hand-rolled (no `rapidfuzz-rs` crate) for two reasons: it builds with only
-//! pyo3 (no extra crates to fetch), and it lets us control the formula to match
-//! Python `rapidfuzz` exactly. Parity is asserted in tests/test_native_parity.py
-//! against the installed `rapidfuzz`. All functions operate on Unicode chars
-//! (codepoints), matching rapidfuzz.
+//! Replaces the earlier hand-rolled scorers, which were ~2x slower than
+//! rapidfuzz on representative shapes (a `Vec<char>` allocation per comparison
+//! + naive O(n*m) inner loops). rapidfuzz-rs uses the same bit-parallel
+//! algorithms as rapidfuzz-cpp, so per-comparison cost matches the Python path
+//! while the kernel removes the per-pair Python interpreter overhead. Parity is
+//! asserted (within float tolerance) in tests/test_native_parity.py. All
+//! functions operate on Unicode chars (codepoints), matching rapidfuzz.
 use pyo3::prelude::*;
+use rapidfuzz::distance::{jaro_winkler, levenshtein};
+use rapidfuzz::fuzz;
+use rayon::prelude::*;
+use std::collections::HashSet;
 
-fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
-    let len1 = s1.len();
-    let len2 = s2.len();
-    if len1 == 0 && len2 == 0 {
-        return 1.0;
-    }
-    if len1 == 0 || len2 == 0 {
-        return 0.0;
-    }
-    let match_dist = (len1.max(len2) / 2).saturating_sub(1);
-    let mut s1_matches = vec![false; len1];
-    let mut s2_matches = vec![false; len2];
-    let mut matches = 0usize;
-    for i in 0..len1 {
-        let start = i.saturating_sub(match_dist);
-        let end = (i + match_dist + 1).min(len2);
-        for j in start..end {
-            if !s2_matches[j] && s1[i] == s2[j] {
-                s1_matches[i] = true;
-                s2_matches[j] = true;
-                matches += 1;
-                break;
-            }
-        }
-    }
-    if matches == 0 {
-        return 0.0;
-    }
-    let mut transpositions = 0usize;
-    let mut k = 0usize;
-    for (i, &matched) in s1_matches.iter().enumerate() {
-        if matched {
-            while !s2_matches[k] {
-                k += 1;
-            }
-            if s1[i] != s2[k] {
-                transpositions += 1;
-            }
-            k += 1;
-        }
-    }
-    // rapidfuzz floors half-transpositions (integer divide), which differs from
-    // float /2.0 only when greedy matching yields an odd mismatch count.
-    let t = (transpositions / 2) as f64;
-    let m = matches as f64;
-    (m / len1 as f64 + m / len2 as f64 + (m - t) / m) / 3.0
-}
-
-/// rapidfuzz `JaroWinkler.similarity` (prefix_weight default 0.1, max prefix 4).
-/// rapidfuzz applies the prefix boost unconditionally (no 0.7 threshold).
-fn jaro_winkler(s1: &[char], s2: &[char], prefix_weight: f64) -> f64 {
-    let jaro = jaro_similarity(s1, s2);
-    // rapidfuzz applies the prefix boost only when jaro > 0.7 (Winkler's
-    // boost threshold); below it, JaroWinkler == Jaro.
-    if jaro <= 0.7 {
-        return jaro;
-    }
-    let max_prefix = s1.len().min(s2.len()).min(4);
-    let mut prefix = 0usize;
-    for i in 0..max_prefix {
-        if s1[i] == s2[i] {
-            prefix += 1;
-        } else {
-            break;
-        }
-    }
-    jaro + prefix as f64 * prefix_weight * (1.0 - jaro)
-}
-
-fn levenshtein_distance(s1: &[char], s2: &[char]) -> usize {
-    let (len1, len2) = (s1.len(), s2.len());
-    if len1 == 0 {
-        return len2;
-    }
-    if len2 == 0 {
-        return len1;
-    }
-    let mut prev: Vec<usize> = (0..=len2).collect();
-    let mut cur = vec![0usize; len2 + 1];
-    for i in 1..=len1 {
-        cur[0] = i;
-        for j in 1..=len2 {
-            let cost = if s1[i - 1] == s2[j - 1] { 0 } else { 1 };
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[len2]
-}
-
-/// rapidfuzz `Levenshtein.normalized_similarity` with uniform weights:
-/// 1 - dist/max(len1, len2).
-fn levenshtein_normalized_similarity(s1: &[char], s2: &[char]) -> f64 {
-    let maxlen = s1.len().max(s2.len());
-    if maxlen == 0 {
-        return 1.0;
-    }
-    1.0 - levenshtein_distance(s1, s2) as f64 / maxlen as f64
-}
-
-/// Length of the longest common subsequence (for Indel-based `ratio`).
-fn lcs_length(s1: &[char], s2: &[char]) -> usize {
-    let (len1, len2) = (s1.len(), s2.len());
-    if len1 == 0 || len2 == 0 {
-        return 0;
-    }
-    let mut prev = vec![0usize; len2 + 1];
-    let mut cur = vec![0usize; len2 + 1];
-    for i in 1..=len1 {
-        for j in 1..=len2 {
-            cur[j] = if s1[i - 1] == s2[j - 1] {
-                prev[j - 1] + 1
-            } else {
-                prev[j].max(cur[j - 1])
-            };
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[len2]
-}
-
-/// rapidfuzz `fuzz.ratio` (Indel-based): 2*LCS/(len1+len2) * 100.
-fn ratio(s1: &[char], s2: &[char]) -> f64 {
-    let total = s1.len() + s2.len();
-    if total == 0 {
-        return 100.0;
-    }
-    2.0 * lcs_length(s1, s2) as f64 / total as f64 * 100.0
-}
-
-fn token_sort(s: &str) -> Vec<char> {
+/// `rapidfuzz.fuzz.token_sort_ratio` preprocessing: split on whitespace, sort
+/// the tokens, rejoin with a single space. (Then `fuzz::ratio` on the result.)
+fn token_sort_string(s: &str) -> String {
     let mut toks: Vec<&str> = s.split_whitespace().collect();
     toks.sort_unstable();
-    toks.join(" ").chars().collect()
+    toks.join(" ")
 }
 
-// ---- PyO3 surface (returns the same 0-1 / 0-100 scale score_field expects) ----
+// ---- PyO3 surface (scale matches score_buckets._resolve_score_pair_callable:
+//      jaro_winkler/levenshtein on 0-1, token_sort_ratio on 0-100) ----
 
 #[pyfunction]
 pub fn jaro_winkler_similarity(a: &str, b: &str) -> f64 {
-    let s1: Vec<char> = a.chars().collect();
-    let s2: Vec<char> = b.chars().collect();
-    jaro_winkler(&s1, &s2, 0.1)
+    // rapidfuzz JaroWinkler default prefix_weight = 0.1.
+    jaro_winkler::normalized_similarity(a.chars(), b.chars())
 }
 
 #[pyfunction]
 pub fn levenshtein_similarity(a: &str, b: &str) -> f64 {
-    let s1: Vec<char> = a.chars().collect();
-    let s2: Vec<char> = b.chars().collect();
-    levenshtein_normalized_similarity(&s1, &s2)
+    // rapidfuzz Levenshtein default uniform weights (1, 1, 1).
+    levenshtein::normalized_similarity(a.chars(), b.chars())
 }
 
 /// token_sort_ratio on the 0-100 scale (score_field divides by 100).
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
-    ratio(&token_sort(a), &token_sort(b))
+    let sa = token_sort_string(a);
+    let sb = token_sort_string(b);
+    // rapidfuzz-rs fuzz::ratio returns [0, 1]; Python fuzz.ratio is [0, 100].
+    fuzz::ratio(sa.chars(), sb.chars()) * 100.0
 }
 
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
-/// fast-path scale (jaro_winkler/levenshtein on 0-1, token_sort/100, exact 0/1).
-/// ids: 0=jaro_winkler, 1=levenshtein, 2=token_sort, 3=exact.
+/// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
+/// 2=token_sort, 3=exact.
 fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
     match scorer_id {
-        0 => {
-            let s1: Vec<char> = a.chars().collect();
-            let s2: Vec<char> = b.chars().collect();
-            jaro_winkler(&s1, &s2, 0.1)
+        0 => jaro_winkler::normalized_similarity(a.chars(), b.chars()),
+        1 => levenshtein::normalized_similarity(a.chars(), b.chars()),
+        2 => {
+            let sa = token_sort_string(a);
+            let sb = token_sort_string(b);
+            fuzz::ratio(sa.chars(), sb.chars())
         }
-        1 => {
-            let s1: Vec<char> = a.chars().collect();
-            let s2: Vec<char> = b.chars().collect();
-            levenshtein_normalized_similarity(&s1, &s2)
-        }
-        2 => ratio(&token_sort(a), &token_sort(b)) / 100.0,
         3 => {
             if a == b {
                 1.0
@@ -199,16 +75,22 @@ fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
 /// for row `r`, in the bucket's block-sorted order. `block_sizes` are the
 /// consecutive block lengths in that same order. Emits canonical (min,max)
 /// pairs whose weighted score (sum(score*weight) / total_weight, with None
-/// values skipped) meets `threshold`, excluding `exclude`. The arithmetic and
-/// field order mirror the Python loop, but the per-field scorers here are
-/// independent reimplementations of rapidfuzz (not rapidfuzz-rs), so scores
-/// match the Python path to within float tolerance (~1e-9 per field; see the
-/// `abs=1e-9` scorer parity tests), not bit-for-bit. The emitted pair set is
-/// identical in practice; it could differ only for a pair whose weighted score
-/// sits within that tolerance of `threshold`.
+/// values skipped) meets `threshold`, excluding `exclude`.
+///
+/// Blocks are scored in parallel with `rayon` under `allow_threads` (the GIL is
+/// released for the whole compute — no Python objects are touched inside), so
+/// the kernel uses every core instead of relying on the caller's per-bucket
+/// thread pool. `par_iter().flat_map(...).collect()` preserves block order, so
+/// output ordering matches the sequential Python loop.
+///
+/// The scorers are rapidfuzz-rs (same algorithms as Python rapidfuzz), so
+/// scores match the Python path to within float tolerance, not bit-for-bit; the
+/// emitted pair set could differ only for a pair whose weighted score sits
+/// within that tolerance of `threshold`.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 pub fn score_block_pairs(
+    py: Python<'_>,
     row_ids: Vec<i64>,
     block_sizes: Vec<usize>,
     field_values: Vec<Vec<Option<String>>>,
@@ -218,41 +100,54 @@ pub fn score_block_pairs(
     threshold: f64,
     exclude: Vec<(i64, i64)>,
 ) -> Vec<(i64, i64, f64)> {
-    let exclude: std::collections::HashSet<(i64, i64)> = exclude.into_iter().collect();
+    let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
     let n_fields = scorer_ids.len();
-    let mut out: Vec<(i64, i64, f64)> = Vec::new();
+
+    // Precompute each block's (offset, size) span so blocks are independent
+    // units of parallel work.
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
     let mut offset = 0usize;
     for &size in &block_sizes {
-        if size >= 2 {
-            let end = offset + size;
-            for i in offset..end - 1 {
-                let ri = row_ids[i];
-                for j in (i + 1)..end {
-                    let rj = row_ids[j];
-                    let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
-                    if exclude.contains(&pair_key) {
-                        continue;
-                    }
-                    let mut score_sum = 0.0_f64;
-                    let mut weight_sum = 0.0_f64;
-                    for f in 0..n_fields {
-                        if let (Some(a), Some(b)) =
-                            (&field_values[f][i], &field_values[f][j])
-                        {
-                            score_sum += score_one(scorer_ids[f], a, b) * weights[f];
-                            weight_sum += weights[f];
-                        }
-                    }
-                    if weight_sum > 0.0 {
-                        let combined = score_sum / total_weight;
-                        if combined >= threshold {
-                            out.push((pair_key.0, pair_key.1, combined));
+        spans.push((offset, size));
+        offset += size;
+    }
+
+    py.allow_threads(|| {
+        spans
+            .par_iter()
+            .flat_map_iter(|&(offset, size)| {
+                let mut local: Vec<(i64, i64, f64)> = Vec::new();
+                if size >= 2 {
+                    let end = offset + size;
+                    for i in offset..end - 1 {
+                        let ri = row_ids[i];
+                        for j in (i + 1)..end {
+                            let rj = row_ids[j];
+                            let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                            if exclude.contains(&pair_key) {
+                                continue;
+                            }
+                            let mut score_sum = 0.0_f64;
+                            let mut weight_sum = 0.0_f64;
+                            for f in 0..n_fields {
+                                if let (Some(a), Some(b)) =
+                                    (&field_values[f][i], &field_values[f][j])
+                                {
+                                    score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                                    weight_sum += weights[f];
+                                }
+                            }
+                            if weight_sum > 0.0 {
+                                let combined = score_sum / total_weight;
+                                if combined >= threshold {
+                                    local.push((pair_key.0, pair_key.1, combined));
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-        offset += size;
-    }
-    out
+                local
+            })
+            .collect()
+    })
 }
