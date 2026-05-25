@@ -771,8 +771,16 @@ class AutoConfigController:
         if v0_entry is not None:
             history.entries.append(v0_entry)
 
-        # Pick committed config
-        best_entry = history.pick_committed(precision_collapse_floor=0.9)
+        # Pick committed config. Zero-label Phase 2: when
+        # GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=1, commit by zero-label
+        # confidence instead of the -mass_separation tiebreaker (default off).
+        _use_zero_label = (
+            os.environ.get("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "0") == "1"
+        )
+        best_entry = history.pick_committed(
+            precision_collapse_floor=0.9,
+            use_zero_label_confidence=_use_zero_label,
+        )
         if best_entry is None:
             # Every iteration errored — no usable profile produced. Fall back to v0.
             n_errored = sum(1 for e in history.entries if e.error is not None)

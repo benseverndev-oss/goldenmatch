@@ -115,6 +115,7 @@ class RunHistory:
     def pick_committed(
         self,
         precision_collapse_floor: float | None = None,
+        use_zero_label_confidence: bool = False,
     ) -> HistoryEntry | None:
         """Pick the entry to commit. Returns None ONLY if every entry
         errored or has no profile — otherwise returns the best entry by
@@ -139,6 +140,17 @@ class RunHistory:
         floor are demoted in the lex key (rank=3 instead of 2). This
         protects against the "everything matches" pathology. Typical
         value: 0.9. Disabled by default to preserve backward compat.
+
+        ``use_zero_label_confidence`` (zero-label Phase 2, env-gated via
+        ``GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT``): when True and an entry's
+        profile carries a ``zero_label`` profile, the secondary tiebreaker
+        becomes ``-zero_label.overall_confidence`` instead of ``-mass_separation``.
+        This commits the config whose unlabeled ER structure is most plausible
+        rather than the one that merely inflates ``mass_above_threshold`` (the
+        bias ``-mass_separation`` has). ``overall_confidence`` already bakes in
+        the everything-matches / no-matches / cluster-collapse guards, so this
+        is defense-in-depth alongside ``precision_collapse_floor`` (which still
+        applies). Default False -> identical behavior to before (no change).
         """
         if (precision_collapse_floor is not None
                 and not (0.0 <= precision_collapse_floor <= 1.0)):
@@ -190,6 +202,10 @@ class RunHistory:
                 # clusters vs the ~145K v0 would have produced.
                 rank = 3
                 return (rank, 0.0, e.iteration)
+            # Zero-label Phase 2: prefer the most-plausible unlabeled structure
+            # over the -sep heuristic (which is biased toward lower thresholds).
+            if use_zero_label_confidence and e.profile.zero_label is not None:
+                return (rank, -e.profile.zero_label.overall_confidence, e.iteration)
             return (rank, -sep, e.iteration)
 
         return min(survivors, key=key)
