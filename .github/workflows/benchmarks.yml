@@ -29,6 +29,10 @@ on:
         description: "Run DQbench with LLM scorer (requires OPENAI_API_KEY)"
         type: boolean
         default: false
+      native:
+        description: "Build + run with native kernels (GOLDENMATCH_NATIVE=1) for the Phase 1/2 gate sign-off"
+        type: boolean
+        default: false
 
 # Locked-down by default; benchmarks job stays read-only.
 permissions:
@@ -49,6 +53,9 @@ jobs:
     env:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
+      # "1" forces ALL native kernels (clustering + block_scoring) on; "0" pins
+      # Python. Scheduled runs (no inputs.native) stay Python.
+      NATIVE: ${{ inputs.native && '1' || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
@@ -76,12 +83,27 @@ jobs:
         if: steps.prereqs.outputs.configured == 'true'
         run: uv sync --all-packages
 
+      # Native kernels ship gated OFF by default; build them so a `native=true`
+      # dispatch measures DQbench on the native path (the parity + composite
+      # >= 91.04 sign-off gate for flipping core/_native_loader._GATED_ON).
+      # Mirrors the ci.yml `native` lane's toolchain + build steps.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        with:
+          workspaces: packages/rust/extensions/native
+      - name: Build native extension
+        if: steps.prereqs.outputs.configured == 'true' && inputs.native
+        run: uv run python scripts/build_native.py
+
       - name: Run real benchmarks (DBLP-ACM/Febrl3/NCVR)
         if: steps.prereqs.outputs.configured == 'true' && (env.DATASETS == 'all' || env.DATASETS != 'dqbench')
         shell: bash
         env:
           # Memory disabled so cross-run state doesn't leak between scheduled runs.
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
         run: |
           set -euo pipefail
           # The runner script (committed in this PR — see scripts/run_benchmarks.py)
@@ -97,6 +119,7 @@ jobs:
         shell: bash
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
         run: |
           set -euo pipefail
           uv run python scripts/run_benchmarks.py \
@@ -110,6 +133,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+          GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "::error::OPENAI_API_KEY secret not set; cannot run with-LLM benchmarks"
