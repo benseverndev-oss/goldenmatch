@@ -408,3 +408,41 @@ def test_coordinate_descent_wins_with_non_threshold_lever():
         default=0.0,
     )
     assert result.best_trial.score > best_threshold_f1
+
+
+# --- #491: previously-unreachable scorers reachable via the optimizer ---
+
+def test_optimizer_default_reaches_extra_scorers():
+    # levenshtein + soundex_match are unreachable from heuristic auto-config
+    # (#491). The coordinate proposer's default scorer family now reaches them
+    # empirically -- each is generated AND scored without error. (dice/jaccard
+    # are bloom-filter/PPRL scorers, deliberately excluded from the text path.)
+    prop = CoordinateDescentProposer(blocking_strategies=())
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
+    scored = {t.label for t in result.trials if t.error is None}
+    for sc in ("levenshtein", "soundex_match"):
+        assert f"scorer:first_name={sc}" in scored
+
+
+def test_optimizer_can_win_with_levenshtein():
+    # An `exact` scorer + threshold sweep can never match the typo pairs (F1=0);
+    # a swap to levenshtein does. Proves a previously-unreachable scorer can be
+    # selected as the winner (#491 acceptance).
+    df = pl.DataFrame({
+        "name": ["Catherine", "Catherina", "Alexander", "Alexandar", "Bob", "Zachary"],
+        "zip": ["1", "1", "2", "2", "3", "4"],
+    })
+    ground_truth = {(0, 1), (2, 3)}
+    base = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk", type="weighted", threshold=0.8, rerank=False,
+            fields=[MatchkeyField(field="name", scorer="exact", weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
+        ),
+    )
+    prop = CoordinateDescentProposer(scorers=("levenshtein",), blocking_strategies=())
+    result = optimize_config(df, base_config=base, ground_truth=ground_truth, proposer=prop)
+    assert result.best_trial.label == "scorer:name=levenshtein"
+    assert result.best_trial.score > 0.0

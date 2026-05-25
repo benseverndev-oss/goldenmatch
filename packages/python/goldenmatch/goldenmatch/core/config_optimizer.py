@@ -559,7 +559,14 @@ class CoordinateDescentProposer:
         self,
         *,
         offsets: tuple[float, ...] = _DEFAULT_THRESHOLD_OFFSETS,
-        scorers: tuple[str, ...] = ("token_sort", "ensemble"),
+        scorers: tuple[str, ...] = (
+            # #491: levenshtein + soundex_match were unreachable from heuristic
+            # auto-config; the optimizer's scorer family is the empirical home for
+            # the data-dependent string-similarity choice. (dice/jaccard are
+            # bloom-filter/PPRL scorers — they expect hex CLKs, not plain text —
+            # so they are NOT in the general candidate set.)
+            "token_sort", "ensemble", "levenshtein", "soundex_match",
+        ),
         weight_deltas: tuple[float, ...] = (-0.5, 0.5),
         blocking_strategies: tuple[str, ...] = ("multi_pass",),
         blocking_key_adds: tuple[tuple[str, ...], ...] = (),
