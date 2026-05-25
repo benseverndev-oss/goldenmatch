@@ -1,0 +1,92 @@
+# Native block-scoring bench — workflow_dispatch only.
+#
+# Confirms the Phase 2 native kernel win (rapidfuzz-rs + rayon block scoring) at
+# scale, on a paid large runner. Generates a person-like fixture, builds the
+# native extension, then runs scripts/bench_native_bucket.py which scores the
+# SAME prepared frame pure-Python vs native in one process and reports the
+# bucket_score speedup + pair-set parity.
+#
+# Isolates the bucket-scoring stage on purpose (the only thing the kernel
+# changes). For an end-to-end 5M dedupe use the `scale-audit-5m` workflow.
+#
+# To run: GitHub -> Actions -> "bench-native-bucket" -> Run workflow.
+name: bench-native-bucket
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Total record count (default 5000000)"
+        required: false
+        default: "5000000"
+      dupe_rate:
+        description: "Fraction of records that are duplicates (0..1)"
+        required: false
+        default: "0.12"
+      block_key:
+        description: "Blocking key column (default last_name)"
+        required: false
+        default: "last_name"
+      runner:
+        description: "Runner label (default ubuntu-latest-large)"
+        required: false
+        default: "ubuntu-latest-large"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        # The native crate's rust-toolchain.toml pins 1.94.1; rustup
+        # auto-installs it when cargo runs in that dir.
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+
+      - name: Generate ${{ inputs.n_records }}-row fixture
+        run: |
+          mkdir -p .profile_tmp
+          uv run python scripts/scale_audit_5m_generate.py \
+            --n-records ${{ inputs.n_records }} \
+            --dupe-rate ${{ inputs.dupe_rate }} \
+            --output .profile_tmp/synthetic_audit.csv
+          ls -lh .profile_tmp/synthetic_audit.csv
+
+      - name: Run native block-scoring bench (python vs native)
+        run: |
+          uv run python scripts/bench_native_bucket.py \
+            --fixture .profile_tmp/synthetic_audit.csv \
+            --block-key "${{ inputs.block_key }}" \
+            --output .profile_tmp/native_bucket_result.json \
+            --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: native-bucket-bench-result
+          path: |
+            .profile_tmp/native_bucket_result.json
+          retention-days: 90
