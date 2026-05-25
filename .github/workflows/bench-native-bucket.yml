@@ -4,9 +4,11 @@
 # scale, on a paid large runner. Downloads a pre-generated person-shaped
 # dataset from the `bench-dataset-v1` release (generated once via the
 # `generate-bench-dataset` workflow — NOT regenerated here every run), builds
-# the native extension, then runs scripts/bench_native_bucket.py which scores
-# the SAME prepared frame pure-Python vs native in one process and reports the
-# bucket_score speedup + pair-set parity.
+# the native extension, then runs scripts/bench_native_bucket.py which measures
+# the native kernel's bucket_score wall + pairs + peak RSS. The pure-Python
+# baseline (speedup ratio + parity) is opt-in via --with-python and left OFF
+# here: it's quadratic in block size and intractable on the full fixture. The
+# speedup + parity are locked by the unit tests + smaller-scale runs.
 #
 # Isolates the bucket-scoring stage on purpose (the only thing the kernel
 # changes). For an end-to-end 5M dedupe use the `scale-audit-5m` workflow.
