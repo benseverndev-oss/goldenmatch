@@ -238,10 +238,22 @@ def test_score_buckets_end_to_end_parity(monkeypatch):
     assert sorted(py) == sorted(native)
 
 
-def test_native_off_by_default(monkeypatch):
-    # Unset env -> "auto" -> Python (no component gated on yet): default-safe.
-    monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
+def test_native_off_when_forced(monkeypatch):
+    # GOLDENMATCH_NATIVE=0 is the kill switch: forces the Python path even for
+    # gated-on components.
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
     assert _native_loader.native_enabled("clustering") is False
+    assert _native_loader.native_enabled("block_scoring") is False
+
+
+def test_auto_uses_native_only_for_gated_components(monkeypatch):
+    # Under "auto" (unset), a signed-off component uses native iff the ext is
+    # importable; a component that hasn't cleared the gate stays on Python.
+    monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
+    available = _native_loader.native_available()
+    assert _native_loader.native_enabled("clustering") is available
+    assert _native_loader.native_enabled("block_scoring") is available
+    assert _native_loader.native_enabled("not_a_real_component") is False
 
 
 def test_native_required_mode_uses_native(monkeypatch):
