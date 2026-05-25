@@ -238,10 +238,17 @@ def test_score_buckets_end_to_end_parity(monkeypatch):
     assert sorted(py) == sorted(native)
 
 
-def test_native_off_by_default(monkeypatch):
-    # Unset env -> "auto" -> Python (no component gated on yet): default-safe.
+def test_auto_gate_follows_gated_set(monkeypatch):
+    # Unset env -> "auto": gated-on components (clustering, block_scoring) use
+    # native iff the ext is built; ungated components + the no-ext case stay
+    # Python. This is robust to both CI lanes (ext present in the native lane,
+    # absent in the plain python lane).
     monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
-    assert _native_loader.native_enabled("clustering") is False
+    present = _native_loader.native_available()
+    assert _native_loader.native_enabled("clustering") is present
+    assert _native_loader.native_enabled("block_scoring") is present
+    # A component that hasn't been signed off is never auto-selected.
+    assert _native_loader.native_enabled("not_a_signed_off_component") is False
 
 
 def test_native_required_mode_uses_native(monkeypatch):

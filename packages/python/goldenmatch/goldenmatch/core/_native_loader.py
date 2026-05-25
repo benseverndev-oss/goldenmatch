@@ -8,9 +8,10 @@ unchanged. Selection is centralised here so every call site reads one gate.
 - ``"0"``    -> force the Python path (never use native).
 - ``"1"``    -> require native; raise if it isn't importable (CI parity lane).
 - ``"auto"`` / unset -> use native iff it's importable AND the component has been
-  signed off (is in ``_GATED_ON``). Empty today, so the **default is Python** for
-  every component until its parity + DQbench gate passes — we ship the ext able to
-  run and flip the default per phase, per the spec.
+  signed off (is in ``_GATED_ON``). ``clustering`` + ``block_scoring`` are signed
+  off (parity bit-exact + DQbench composite unchanged); other components stay
+  Python until their own gate passes. Where the ext isn't built, every component
+  falls back to Python regardless.
 
 Spec: ``docs/design/2026-05-25-rust-acceleration-spec.md`` §0.3.
 """
@@ -27,7 +28,7 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 
 # Components whose native path has cleared parity + DQbench and may run under
 # ``GOLDENMATCH_NATIVE=auto``. Add a name here only after sign-off.
-_GATED_ON: frozenset[str] = frozenset()
+_GATED_ON: frozenset[str] = frozenset({"clustering", "block_scoring"})
 
 
 def native_module() -> Any:
