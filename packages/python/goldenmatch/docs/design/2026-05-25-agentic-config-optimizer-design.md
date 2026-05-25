@@ -1,12 +1,14 @@
 # Agentic config optimizer for auto-config — design
 
 Date: 2026-05-25
-Status: implemented (PR #486). Phase 1 (threshold sweep), the proposer/scorer/loop
-split, and Phase 3's `LLMProposer` (AI-driven iteration) all shipped. Deviation:
-the shipped proposer returns candidate configs and the `LLMProposer` applies its
-own diff via the shared `apply_config_diff` helper, rather than the `ConfigEdit`
-class hierarchy described in §4 — that hierarchy + the deterministic
-`CoordinateDescentProposer` (§5.2) remain the open follow-up (#488).
+Status: implemented (PR #486). Phases 1-3 shipped: threshold sweep, the
+proposer/scorer/loop split, the `ConfigEdit` lever vocabulary (§4:
+`ThresholdShift`/`ScorerSwap`/`BlockingStrategyEdit`), the deterministic
+`CoordinateDescentProposer` (§5.2), and the `LLMProposer` (§5.3, AI-driven
+iteration). Open follow-up (#488): extend the `ConfigEdit` vocabulary to the full
+§4 table (weighted-vs-probabilistic type swap, weight shifts, blocking-key edits)
+and migrate the `LLMProposer` to emit `ConfigEdit`s instead of raw diffs (§9
+Phase 4).
 Relationship: this is the **search** layer. Its objective is the
 **shared unsupervised score** defined in
 `2026-05-25-zero-label-confidence-autoconfig-design.md`. One signal, two
@@ -178,9 +180,11 @@ moves off the default when a candidate is strictly better.
 ## 9. Phasing / migration
 
 1. **Phase 1 (done):** `optimize_config` + threshold sweep + zero-label/F1 scoring.
-2. **Phase 2 (partial):** the loop/proposer/scorer split + `GridProposer` shipped.
-   The `ConfigEdit` vocabulary + deterministic `CoordinateDescentProposer` remain
-   open (#488). No default behavior change (default proposer == today's sweep).
+2. **Phase 2 (done):** the loop/proposer/scorer split, `GridProposer`, the
+   `ConfigEdit` vocabulary (`ThresholdShift`/`ScorerSwap`/`BlockingStrategyEdit`),
+   and the deterministic `CoordinateDescentProposer` (one lever family per round,
+   built off the best-so-far). No default behavior change (default proposer ==
+   today's sweep). Extending the vocabulary to the full §4 table stays in #488.
 3. **Phase 3 (done):** `LLMProposer` — env-gated, default off — the AI-driven
    iteration. Reuses the controller's diff applier (`apply_config_diff`, shared with
    `LLMRefitPolicy`); a `propose_fn` injection makes it testable without a network.

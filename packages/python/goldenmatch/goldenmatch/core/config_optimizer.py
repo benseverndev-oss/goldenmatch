@@ -156,6 +156,100 @@ def _threshold_variants(
 
 
 # --------------------------------------------------------------------------- #
+# ConfigEdit lever vocabulary
+# --------------------------------------------------------------------------- #
+# A small, closed edit language: each edit is a validated mutation of a
+# GoldenMatchConfig with a human label. Deterministic proposers and (future) LLM
+# proposers share this vocabulary so a search is explainable regardless of who
+# drove it. apply() returns None for a no-op or invalid edit (caller skips it).
+
+class ConfigEdit(Protocol):
+    @property
+    def label(self) -> str: ...
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None: ...
+
+
+def _revalidate(cfg: GoldenMatchConfig) -> GoldenMatchConfig | None:
+    try:
+        return GoldenMatchConfig.model_validate(cfg.model_dump())
+    except Exception:  # noqa: BLE001 - invalid edit -> skip
+        return None
+
+
+@dataclass(frozen=True)
+class ThresholdShift:
+    """Shift every perturbable matchkey threshold by ``delta`` (clamped)."""
+
+    delta: float
+
+    @property
+    def label(self) -> str:
+        return "baseline" if self.delta == 0.0 else f"threshold{self.delta:+.2f}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        if not _perturbable_matchkeys(config):
+            return config if self.delta == 0.0 else None
+        cfg = config.model_copy(deep=True)
+        changed = False
+        for mk in cfg.get_matchkeys():
+            if getattr(mk, "type", None) in _PERTURBABLE_TYPES and mk.threshold is not None:
+                new_t = _clamp(mk.threshold + self.delta)
+                if new_t != mk.threshold:
+                    mk.threshold = new_t
+                    changed = True
+        if self.delta == 0.0:
+            return cfg  # baseline: valid, no change
+        return cfg if changed else None
+
+
+@dataclass(frozen=True)
+class ScorerSwap:
+    """Swap one matchkey field's scorer."""
+
+    matchkey: str
+    field: str
+    scorer: str
+
+    @property
+    def label(self) -> str:
+        return f"scorer:{self.field}={self.scorer}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        cfg = config.model_copy(deep=True)
+        changed = False
+        for mk in cfg.get_matchkeys():
+            if mk.name != self.matchkey:
+                continue
+            for f in (mk.fields or []):
+                if f.field == self.field and f.scorer != self.scorer:
+                    f.scorer = self.scorer
+                    changed = True
+        if not changed:
+            return None
+        return _revalidate(cfg)
+
+
+@dataclass(frozen=True)
+class BlockingStrategyEdit:
+    """Change the blocking strategy (keys preserved)."""
+
+    strategy: str
+
+    @property
+    def label(self) -> str:
+        return f"blocking:{self.strategy}"
+
+    def apply(self, config: GoldenMatchConfig) -> GoldenMatchConfig | None:
+        if config.blocking is None or config.blocking.strategy == self.strategy:
+            return None
+        cfg = config.model_copy(update={
+            "blocking": config.blocking.model_copy(update={"strategy": self.strategy}),
+        })
+        return _revalidate(cfg)
+
+
+# --------------------------------------------------------------------------- #
 # Proposers
 # --------------------------------------------------------------------------- #
 
@@ -303,6 +397,60 @@ Do not repeat a trial already tried. Respond with valid JSON only.
 """
 
 
+class CoordinateDescentProposer:
+    """Deterministic multi-lever search. Each round optimizes ONE lever family
+    off the best config so far: thresholds, then per-field scorer, then blocking
+    strategy. Cheaper than a full cross-product and fully CI-testable (no LLM).
+
+    Tracks its own family pointer (not ``state.round``) so empty families are
+    skipped; returns ``[]`` only once all families are exhausted.
+    """
+
+    single_round = False
+    _FAMILIES = ("threshold", "scorer", "blocking")
+
+    def __init__(
+        self,
+        *,
+        offsets: tuple[float, ...] = _DEFAULT_THRESHOLD_OFFSETS,
+        scorers: tuple[str, ...] = ("token_sort", "ensemble"),
+        blocking_strategies: tuple[str, ...] = ("multi_pass",),
+    ) -> None:
+        self._offsets = offsets
+        self._scorers = scorers
+        self._blocking_strategies = blocking_strategies
+        self._fam_idx = 0
+
+    def _edits(self, family: str, base: GoldenMatchConfig) -> list[ConfigEdit]:
+        if family == "threshold":
+            return [ThresholdShift(o) for o in self._offsets]
+        if family == "scorer":
+            edits: list[ConfigEdit] = []
+            for mk in _perturbable_matchkeys(base):
+                for f in (mk.fields or []):
+                    for sc in self._scorers:
+                        if f.scorer != sc:
+                            edits.append(ScorerSwap(mk.name, f.field, sc))
+            return edits
+        if family == "blocking":
+            return [BlockingStrategyEdit(s) for s in self._blocking_strategies]
+        return []
+
+    def propose(self, state: SearchState) -> list[tuple[str, GoldenMatchConfig]]:
+        base = state.best.config if state.best is not None else state.base_config
+        while self._fam_idx < len(self._FAMILIES):
+            family = self._FAMILIES[self._fam_idx]
+            self._fam_idx += 1
+            out: list[tuple[str, GoldenMatchConfig]] = []
+            for edit in self._edits(family, base):
+                cfg = edit.apply(base)
+                if cfg is not None:
+                    out.append((edit.label, cfg))
+            if out:
+                return out
+        return []
+
+
 def _resolve_proposer(
     proposer: str | Proposer,
     offsets: tuple[float, ...],
@@ -313,10 +461,13 @@ def _resolve_proposer(
         key = proposer.lower()
         if key == "grid":
             return GridProposer(offsets)
+        if key in ("coordinate", "coordinate_descent"):
+            return CoordinateDescentProposer(offsets=offsets)
         if key == "llm":
             return LLMProposer(offsets=offsets, model=model, max_llm_calls=max_llm_calls)
         raise ValueError(
-            f"unknown proposer {proposer!r}; use 'grid', 'llm', or a Proposer instance"
+            f"unknown proposer {proposer!r}; use 'grid', 'coordinate', 'llm', "
+            "or a Proposer instance"
         )
     return proposer
 
@@ -473,9 +624,8 @@ def optimize_config(
     seen: set[str] = set()
     while state.round < max_rounds:
         candidates = prop.propose(state)
-        if not candidates:
+        if not candidates:  # proposer signals it is done
             break
-        added = 0
         for label, cfg in candidates:
             fp = _fingerprint(cfg)
             if fp in seen:
@@ -485,13 +635,12 @@ def optimize_config(
                 label, cfg, objective,
                 controller=controller, sample=sample, df=df, ground_truth=ground_truth,
             ))
-            added += 1
             if max_trials is not None and len(state.trials) >= max_trials:
                 break
         state.round += 1
         if max_trials is not None and len(state.trials) >= max_trials:
             break
-        if getattr(prop, "single_round", False) or added == 0:
+        if getattr(prop, "single_round", False):
             break
 
     valid = [t for t in state.trials if t.error is None]

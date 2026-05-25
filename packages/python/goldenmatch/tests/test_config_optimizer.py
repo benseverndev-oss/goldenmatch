@@ -17,8 +17,12 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.config_optimizer import (
+    BlockingStrategyEdit,
+    CoordinateDescentProposer,
     LLMProposer,
     OptimizeResult,
+    ScorerSwap,
+    ThresholdShift,
     _threshold_variants,
     optimize_config,
 )
@@ -203,3 +207,44 @@ def test_apply_config_diff_shared_helper():
     assert new is not None
     assert new.get_matchkeys()[0].threshold == 0.6
     assert apply_config_diff(cfg, {}) is None  # no-op diff
+
+
+# --- Phase 2: ConfigEdit vocabulary + coordinate-descent proposer ---
+
+def test_config_edits_apply_and_reject():
+    cfg = _weighted_config(0.8)
+
+    shifted = ThresholdShift(-0.1).apply(cfg)
+    assert shifted is not None
+    assert abs(shifted.get_matchkeys()[0].threshold - 0.7) < 1e-9
+    assert ThresholdShift(0.0).apply(cfg) is not None  # baseline is valid
+
+    swapped = ScorerSwap("mk", "first_name", "token_sort").apply(cfg)
+    assert swapped is not None
+    assert swapped.get_matchkeys()[0].fields[0].scorer == "token_sort"
+    # no-op swap (same scorer) -> None
+    assert ScorerSwap("mk", "first_name", "jaro_winkler").apply(cfg) is None
+    # unknown matchkey name -> no change -> None
+    assert ScorerSwap("nope", "first_name", "token_sort").apply(cfg) is None
+
+    bl = BlockingStrategyEdit("multi_pass").apply(cfg)
+    assert bl is not None and bl.blocking.strategy == "multi_pass"
+    assert BlockingStrategyEdit("static").apply(cfg) is None  # same strategy -> None
+
+
+def test_coordinate_descent_explores_multiple_lever_families():
+    prop = CoordinateDescentProposer(scorers=("token_sort",), blocking_strategies=("multi_pass",))
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer=prop)
+    assert result.proposer == "CoordinateDescentProposer"
+    labels = [t.label for t in result.trials]
+    assert any(lbl.startswith("threshold") or lbl == "baseline" for lbl in labels)
+    assert any(lbl.startswith("scorer:") for lbl in labels)
+    assert any(lbl.startswith("blocking:") for lbl in labels)
+    assert result.rounds >= 3
+    assert isinstance(result.best_config, GoldenMatchConfig)
+
+
+def test_coordinate_string_alias():
+    result = optimize_config(_df(), base_config=_weighted_config(0.8), proposer="coordinate")
+    assert result.proposer == "coordinate"
+    assert len(result.trials) > len(_threshold_variants(_weighted_config(0.8), (-0.1, -0.05, 0.0, 0.05, 0.1)))
