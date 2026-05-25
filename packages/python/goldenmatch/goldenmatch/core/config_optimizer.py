@@ -541,15 +541,19 @@ Do not repeat a trial already tried. Respond with valid JSON only.
 class CoordinateDescentProposer:
     """Deterministic multi-lever search. Each round optimizes ONE lever family
     off the best config so far: thresholds, per-field scorer, per-field weight
-    (multi-field weighted matchkeys only), then blocking strategy. Cheaper than a
-    full cross-product and fully CI-testable (no LLM).
+    (multi-field weighted matchkeys only), blocking strategy, then candidate
+    blocking keys. Cheaper than a full cross-product and fully CI-testable (no LLM).
 
     Tracks its own family pointer (not ``state.round``) so empty families are
     skipped; returns ``[]`` only once all families are exhausted.
+
+    ``blocking_key_adds`` defaults to empty (the optimizer doesn't guess columns);
+    pass candidate field-sets to let the search recover true matches that the base
+    blocking key never co-locates — a recall gain no threshold move can reach.
     """
 
     single_round = False
-    _FAMILIES = ("threshold", "scorer", "weight", "blocking")
+    _FAMILIES = ("threshold", "scorer", "weight", "blocking", "blocking_key")
 
     def __init__(
         self,
@@ -558,11 +562,13 @@ class CoordinateDescentProposer:
         scorers: tuple[str, ...] = ("token_sort", "ensemble"),
         weight_deltas: tuple[float, ...] = (-0.5, 0.5),
         blocking_strategies: tuple[str, ...] = ("multi_pass",),
+        blocking_key_adds: tuple[tuple[str, ...], ...] = (),
     ) -> None:
         self._offsets = offsets
         self._scorers = scorers
         self._weight_deltas = weight_deltas
         self._blocking_strategies = blocking_strategies
+        self._blocking_key_adds = blocking_key_adds
         self._fam_idx = 0
 
     def _edits(self, family: str, base: GoldenMatchConfig) -> list[ConfigEdit]:
@@ -590,6 +596,8 @@ class CoordinateDescentProposer:
             return weight_edits
         if family == "blocking":
             return [BlockingStrategyEdit(s) for s in self._blocking_strategies]
+        if family == "blocking_key":
+            return [BlockingKeyEdit("add", fields) for fields in self._blocking_key_adds]
         return []
 
     def propose(self, state: SearchState) -> list[tuple[str, GoldenMatchConfig]]:

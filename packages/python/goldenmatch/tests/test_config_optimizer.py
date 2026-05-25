@@ -373,3 +373,38 @@ def test_coordinate_descent_includes_weight_family():
     result = optimize_config(_df(), base_config=_weighted_config_2f(0.8), proposer=prop)
     labels = [t.label for t in result.trials]
     assert any(lbl.startswith("weight:") for lbl in labels)
+
+
+def test_coordinate_descent_wins_with_non_threshold_lever():
+    # The two true-match pairs live in DIFFERENT zip blocks, so under the base
+    # blocking key they are never compared at ANY threshold -> threshold sweep
+    # alone is suboptimal (F1 stuck at 0). Adding a blocking key on `last` puts
+    # each pair in one block, so the win is a non-threshold lever (#488 acceptance).
+    df = pl.DataFrame({
+        "name": ["John Smith", "John Smith", "Mary Jones", "Mary Jones", "Bob Lee", "Xavier Young"],
+        "last": ["Smith", "Smith", "Jones", "Jones", "Lee", "Young"],
+        "zip": ["10001", "99999", "20002", "88888", "30003", "40004"],
+    })
+    ground_truth = {(0, 1), (2, 3)}
+    base = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk", type="weighted", threshold=0.8, rerank=False,
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
+        ),
+    )
+    prop = CoordinateDescentProposer(
+        scorers=(), blocking_strategies=(), blocking_key_adds=(("last",),),
+    )
+    result = optimize_config(df, base_config=base, ground_truth=ground_truth, proposer=prop)
+    assert result.objective == "f1"
+    # the winning trial is a blocking-key add, not a threshold move
+    assert result.best_trial.label.startswith("block-add")
+    best_threshold_f1 = max(
+        (t.score for t in result.trials
+         if t.label == "baseline" or t.label.startswith("threshold")),
+        default=0.0,
+    )
+    assert result.best_trial.score > best_threshold_f1

@@ -192,11 +192,17 @@ moves off the default when a candidate is strictly better.
    iteration. A `propose_fn` injection makes it testable without a network.
 4. **Phase 4 (optimizer side done):** completed the §4 `ConfigEdit` table
    (`WeightShift`, `MatchkeyTypeSwap` weighted↔probabilistic, `BlockingKeyEdit`
-   add/remove), wired the weight family into `CoordinateDescentProposer`, and
-   **migrated `LLMProposer` to emit structured `ConfigEdit`s** instead of raw
-   diffs (`{"edits": [{"op": ...}]}` parsed by `_parse_llm_edits`; each valid edit
-   becomes one attributed candidate `llm-r{round}:{edit.label}`). Remaining (#488):
-   consolidate `LLMRefitPolicy` onto the same vocabulary, and expose surfaces (§8).
+   add/remove), wired the weight **and blocking-key** families into
+   `CoordinateDescentProposer` (the blocking-key family closes #488's "vary blocking
+   key columns" — a recall lever no threshold move can reach when true matches sit
+   in different blocks), and **migrated `LLMProposer` to emit structured
+   `ConfigEdit`s** instead of raw diffs (`{"edits": [{"op": ...}]}` parsed by
+   `_parse_llm_edits`; each valid edit becomes one attributed candidate
+   `llm-r{round}:{edit.label}`). #488's acceptance (a non-threshold lever winning
+   where threshold sweep alone is suboptimal) is covered by
+   `test_coordinate_descent_wins_with_non_threshold_lever`. Remaining design-Phase-4
+   follow-up: consolidate `LLMRefitPolicy` onto the same vocabulary, and expose
+   surfaces (§8 — MCP/CLI/A2A).
 
 Each phase is additive and default-safe; the deterministic path is always the
 fallback.
