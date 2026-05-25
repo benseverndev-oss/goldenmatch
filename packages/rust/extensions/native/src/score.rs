@@ -2,12 +2,13 @@
 //! the Python `rapidfuzz` bindings use, for the Phase 2 native block-scorer.
 //!
 //! Replaces the earlier hand-rolled scorers, which were ~2x slower than
-//! rapidfuzz on representative shapes (a `Vec<char>` allocation per comparison
-//! + naive O(n*m) inner loops). rapidfuzz-rs uses the same bit-parallel
-//! algorithms as rapidfuzz-cpp, so per-comparison cost matches the Python path
-//! while the kernel removes the per-pair Python interpreter overhead. Parity is
-//! asserted (within float tolerance) in tests/test_native_parity.py. All
-//! functions operate on Unicode chars (codepoints), matching rapidfuzz.
+//! rapidfuzz on representative shapes (they allocated a `Vec<char>` per
+//! comparison and used naive O(n*m) inner loops). rapidfuzz-rs uses the same
+//! bit-parallel algorithms as rapidfuzz-cpp, so per-comparison cost matches the
+//! Python path while the kernel removes the per-pair Python interpreter
+//! overhead. Parity is asserted (within float tolerance) in
+//! tests/test_native_parity.py. All functions operate on Unicode chars
+//! (codepoints), matching rapidfuzz.
 use pyo3::prelude::*;
 use rapidfuzz::distance::{jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
