@@ -1,11 +1,40 @@
 # Rust acceleration — technical spec
 
 Date: 2026-05-25
-Status: proposed. Companion to `2026-05-25-rust-acceleration-roadmap.md` (the
-roadmap is the "what/when"; this is the "how" — concrete module layout, APIs,
-parity-test design, packaging, and per-phase acceptance criteria).
+Status: **Phase 0 + Phase 1 implemented**; Phase 2 environment-blocked here;
+Phase 3 buildable but unverified; Phase 4 research. Companion to
+`2026-05-25-rust-acceleration-roadmap.md` (the roadmap is the "what/when"; this is
+the "how" — concrete module layout, APIs, parity-test design, packaging, and
+per-phase acceptance criteria).
 
 All `file:line` anchors are against the tree at the time of writing.
+
+## Implementation status (2026-05-25)
+
+- **Phase 0 — done.** `goldenmatch._native` crate at
+  `packages/rust/extensions/native` (standalone workspace, pyo3 abi3-py311,
+  `cdylib`); `core/_native_loader.py` gate (`GOLDENMATCH_NATIVE` 0/1/auto,
+  default Python); built via `scripts/build_native.py` (atomic install of
+  `goldenmatch/_native.abi3.so`, which is gitignored). NOTE: the build is a
+  script, **not** a registered hatch hook — registering a hook runs on every
+  build of the live PyPI package, so it's deferred until validated in CI to avoid
+  risking `pip install goldenmatch`.
+- **Phase 1 — done (2 of 5 kernels), parity-green.** `connected_components`
+  (Union-Find) and `severe_bridge_count` are implemented in Rust
+  (`native/src/cluster.rs`) and wired into `core/cluster.py::build_clusters` and
+  `_severe_bridge_count` behind the gate. `tests/test_native_parity.py` asserts
+  identical output Python-vs-native across chain/clique/bridge/oversized/singleton
+  fixtures (12 cases). Remaining Phase-1 kernels (`mst_split`,
+  `cluster_confidence`, `transitivity_rate`) stay Python for now — additive, same
+  pattern. Default stays Python (`_GATED_ON` empty) pending a DQbench run.
+- **Phase 2 — blocked in this environment.** `rapidfuzz`/`rayon` crates aren't in
+  the offline cargo cache and there's no crates.io network here, so the
+  block-scorer kernel can't be built/validated. Design below stands; needs a
+  network-enabled build env.
+- **Phase 3 — buildable, unverified.** The Arrow helpers already exist in
+  `bridge/src/convert.rs`; the api.rs rewiring builds offline (pyo3 cached) but
+  full parity needs the DuckDB/pgrx layers (Postgres is CI-Linux-only). Not done.
+- **Phase 4 — research, not started.**
 
 ## 0. Module & build architecture
 

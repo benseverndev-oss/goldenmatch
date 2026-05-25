@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core._profile_helpers import transitivity_rate
 from goldenmatch.core.complexity_profile import ClusterProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
@@ -169,6 +170,10 @@ def _severe_bridge_count(members: list[int], pair_scores: dict) -> int:
     """Count edges whose removal splits this cluster into two components each
     with >= 2 nodes -- the 'merged by one weak link' pathology. A bridge between
     a node and a singleton tail is not severe (one side < 2)."""
+    if native_enabled("clustering"):
+        edges = [(k[0], k[1], v) for k, v in pair_scores.items()
+                 if isinstance(k, tuple) and len(k) == 2]
+        return native_module().severe_bridge_count(members, edges)
     adj: dict[int, set[int]] = {m: set() for m in members}
     for k in pair_scores:
         if isinstance(k, tuple) and len(k) == 2 and k[0] in adj and k[1] in adj:
@@ -320,16 +325,21 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
-    uf = UnionFind()
-    uf.add_many(all_ids)
-    for id_a, id_b, _score in pairs:
-        uf.union(id_a, id_b)
+    if native_enabled("clustering"):
+        # Native Union-Find (component membership is identical to the Python
+        # union-by-rank path). Returns list[list[int]].
+        clusters = native_module().connected_components(list(pairs), all_ids)
+    else:
+        uf = UnionFind()
+        uf.add_many(all_ids)
+        for id_a, id_b, _score in pairs:
+            uf.union(id_a, id_b)
 
-    clusters = uf.get_clusters()
-    # Release UnionFind internals (parent + rank dicts). At 25M these hold
-    # ~2.5 GB combined; Python GC won't free them until `uf` falls out of
-    # scope, which is later in this function. Force-release now.
-    del uf
+        clusters = uf.get_clusters()
+        # Release UnionFind internals (parent + rank dicts). At 25M these hold
+        # ~2.5 GB combined; Python GC won't free them until `uf` falls out of
+        # scope, which is later in this function. Force-release now.
+        del uf
 
     member_to_cid: dict[int, int] = {}
     sorted_clusters = sorted(clusters, key=lambda s: min(s))

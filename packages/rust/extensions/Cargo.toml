@@ -5,6 +5,7 @@ members = [
 ]
 exclude = [
     "postgres",
+    "native",
 ]
 
 [workspace.package]

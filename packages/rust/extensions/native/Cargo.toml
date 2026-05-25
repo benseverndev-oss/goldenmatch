@@ -1,0 +1,28 @@
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the `bridge` crate's `auto-initialize` feature — the
+# two are mutually incompatible (ext-module must NOT link libpython; embedding
+# must). Mirrors why `postgres` is excluded from the bridge workspace.
+[workspace]
+
+[package]
+name = "goldenmatch-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Native acceleration kernels for GoldenMatch (PyO3 extension module)"
+
+[lib]
+# Produces lib_native.so; renamed to goldenmatch/_native.abi3.so at install.
+# The #[pymodule] is `_native`, so the init symbol is PyInit__native.
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.23.3, <0.24", features = ["extension-module", "abi3-py311"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

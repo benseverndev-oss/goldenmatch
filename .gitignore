@@ -60,3 +60,7 @@ packages/python/goldenmatch/bench-dataset-v1/
 # tracked at the repo root and re-dirtied the working tree on each run; it was
 # `git rm --cached`'d alongside this entry.
 .goldenmatch/
+
+# Compiled native acceleration ext (built from packages/rust/extensions/native
+# via scripts/build_native.py). Platform-specific abi3 artifact, never source.
+packages/python/goldenmatch/goldenmatch/_native*.so
