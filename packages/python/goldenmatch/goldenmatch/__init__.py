@@ -268,6 +268,10 @@ from goldenmatch.pprl.protocol import (
     run_pprl,
 )
 
+# Native Core surface (graph/pair primitives + native string scorers). Imported
+# last so the core modules it re-exports are already initialized.
+from goldenmatch import native
+
 # ── Shortcuts ────────────────────────────────────────────────────────────
 explain_pair = explain_pair_nl
 explain_cluster = explain_cluster_nl
@@ -276,6 +280,8 @@ pprl_auto_config = auto_configure_pprl
 __all__ = [
     # Version
     "__version__",
+    # Native Core (goldenmatch.native: graph/pair primitives + string scorers)
+    "native",
     # High-level API
     "dedupe", "dedupe_df", "match", "match_df",
     "score_strings", "score_pair_df", "explain_pair_df",
