@@ -716,14 +716,19 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      # The `ray` optional extra (ray>=2.0). pandas: ray.data uses it for some
-      # batch ops. Installed explicitly (mirrors the native lane's onnxruntime
-      # install) so the default dep tree stays ray-free and these tests keep
-      # skipping everywhere else.
+      # The `ray` optional extra. `ray[default]` (not bare ray-core) pulls the
+      # full local-cluster runtime. pandas is pinned <3: ray.data doesn't
+      # support pandas 3.x and a bare `pandas` resolves to 3.x, which hangs
+      # ray.data block handling. Installed explicitly (mirrors the native
+      # lane's onnxruntime install) so the default dep tree stays ray-free and
+      # these tests keep skipping everywhere else. CI-safe ray.init settings
+      # live in tests/conftest.py::_ray_ci_init (local head, dashboard off).
       - name: Install ray extra
-        run: uv pip install 'ray>=2.0' pandas
+        run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Diagnostics
-        run: uv run python -c "import ray, polars, scipy; print('ray', ray.__version__, 'polars', polars.__version__)"
+        run: |
+          df -h /dev/shm || true
+          uv run python -c "import ray, pandas, polars, scipy; print('ray', ray.__version__, 'pandas', pandas.__version__, 'polars', polars.__version__)"
       - name: Distributed tests (ray present -> ray-gated tests run, not skip)
         # Serial (no -n auto): under xdist each worker would spin up its own
         # ray cluster and race on ports. The fixtures here are tiny (<=8

@@ -131,3 +131,48 @@ def sample_parquet(tmp_path) -> Path:
     })
     df.write_parquet(path)
     return path
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ray_ci_init():
+    """Pre-initialize Ray once with CI-safe settings so the production
+    ``ray.init(ignore_reinit_error=True, ...)`` calls inside
+    ``goldenmatch.distributed`` become no-ops.
+
+    Default ``ray.init()`` hangs on ubuntu-latest CI: the first ray.data op
+    blocks forever on the stats-actor RPC because node-IP autodetection +
+    dashboard startup never settle on the 2-core runner. Forcing a fresh local
+    head on 127.0.0.1 with the dashboard off avoids it. No-op when ray isn't
+    installed (every non-distributed lane) or when RAY_ADDRESS points at a real
+    cluster (the bench workflows)."""
+    import os
+
+    try:
+        import ray
+    except Exception:
+        yield
+        return
+
+    if not ray.is_initialized():
+        init_kwargs: dict[str, object] = dict(
+            num_cpus=2,
+            include_dashboard=False,
+            configure_logging=False,
+            log_to_driver=False,
+            ignore_reinit_error=True,
+        )
+        if not os.environ.get("RAY_ADDRESS"):
+            # Force a brand-new local head; skip the slow/hanging IP autodetect.
+            init_kwargs["address"] = "local"
+            init_kwargs["_node_ip_address"] = "127.0.0.1"
+        try:
+            ray.init(**init_kwargs)
+        except Exception:
+            # Don't block the suite on fixture setup — let the production code
+            # init ray itself if the constrained init somehow fails.
+            pass
+    yield
+    try:
+        ray.shutdown()
+    except Exception:
+        pass
