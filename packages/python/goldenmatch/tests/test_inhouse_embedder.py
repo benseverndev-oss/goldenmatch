@@ -175,6 +175,48 @@ def test_train_requires_pairs():
         train_embedder([])
 
 
+def test_cosine_is_default_loss_and_improves_separation():
+    cfg = TrainConfig(dim=32, epochs=150, lr=0.5, seed=0,
+                      featurizer=FeaturizerConfig(n_features=2048))
+    assert cfg.loss == "cosine"
+    _model, report = train_embedder(_toy_pairs(), cfg)
+    assert report.separation_after > report.separation_before
+    assert report.separation_after > 0.1
+
+
+def test_cosine_loss_is_deterministic():
+    cfg = TrainConfig(dim=32, epochs=30, seed=0, loss="cosine",
+                      featurizer=FeaturizerConfig(n_features=1024))
+    m1, _ = train_embedder(_toy_pairs(), cfg)
+    m2, _ = train_embedder(_toy_pairs(), cfg)
+    assert np.array_equal(m1.weights, m2.weights)
+
+
+def test_euclidean_loss_option_still_trains():
+    cfg = TrainConfig(dim=32, epochs=150, lr=0.5, seed=0, loss="euclidean",
+                      featurizer=FeaturizerConfig(n_features=2048))
+    _model, report = train_embedder(_toy_pairs(), cfg)
+    assert report.separation_after > report.separation_before
+
+
+def test_unknown_loss_raises():
+    with pytest.raises(ValueError, match="loss"):
+        train_embedder(_toy_pairs(), TrainConfig(loss="triplet"))
+
+
+@onnx_required
+def test_cosine_trained_model_still_exports_to_onnx_and_matches():
+    # The loss changes the weights, not the graph: the ONNX projection head must
+    # still match the numpy forward exactly after cosine training.
+    model, _ = train_embedder(
+        _toy_pairs(), TrainConfig(dim=16, epochs=20, seed=0, loss="cosine",
+                                  featurizer=FeaturizerConfig(n_features=512))
+    )
+    texts = ["John Smith", "Acme Corp", "Margaret Chen"]
+    feats = model.featurizer.transform(texts)
+    np.testing.assert_allclose(model.project(feats), model._project_onnx(feats), atol=1e-5)
+
+
 # ----- provider integration -----
 
 def test_embed_records_inhouse_provider():
