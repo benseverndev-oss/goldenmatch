@@ -300,24 +300,34 @@ def score_buckets(
         if sizes.height == 0:
             return [], 0
         size_list = sizes["__size__"].to_list()
-        row_ids = sorted_df["__row_id__"].to_list()
-        # field_specs: list of (xform_col, weight, score_fn, scorer_name).
-        field_arrays = [
-            sorted_df[col].to_list() for col, _w, _fn, _name in field_specs
-        ]
         weights = [w for _col, w, _fn, _name in field_specs]
 
-        # Native kernel: identical per-pair loop in Rust (gated + scorers
-        # supported). Returns the same canonical (min,max) pairs in the same
-        # order; local_blocks = count of scoreable blocks.
+        # Native Arrow kernel: hand the block-sorted __row_id__ + field columns
+        # to Rust as zero-copy Arrow buffers, skipping the per-element .to_list()
+        # materialization + PyO3 Vec<Vec<Option<String>>> clone that dominate
+        # this stage (~58% of native wall at 1M rows -> ~2x kernel speedup; see
+        # scripts/bench_native_kernels.py). Identical (min,max) pairs in the same
+        # block order as the Vec kernel + the Python loop (parity asserted in
+        # tests/test_native_parity.py). __row_id__ is cast to Int64 (no-op when
+        # already Int64) because the kernel requires int64 buffers.
         if native_scorer_ids is not None:
-            pairs = native_module().score_block_pairs(
-                row_ids, size_list, field_arrays, native_scorer_ids,
+            row_ids_arrow = sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
+            field_arrays_arrow = [
+                sorted_df[col].to_arrow() for col, _w, _fn, _name in field_specs
+            ]
+            pairs = native_module().score_block_pairs_arrow(
+                row_ids_arrow, field_arrays_arrow, size_list, native_scorer_ids,
                 weights, total_weight, threshold, list(frozen_exclude),
             )
             local_blocks = sum(1 for s in size_list if s >= 2)
             return pairs, local_blocks
 
+        # Python per-pair fallback: materialize the columns as lists.
+        # field_specs: list of (xform_col, weight, score_fn, scorer_name).
+        row_ids = sorted_df["__row_id__"].to_list()
+        field_arrays = [
+            sorted_df[col].to_list() for col, _w, _fn, _name in field_specs
+        ]
         score_fns = [fn for _col, _w, fn, _name in field_specs]
         n_fields = len(field_specs)
         local_pairs: list[tuple[int, int, float]] = []

@@ -377,6 +377,14 @@ def two_phase_wcc(
             pl.col("member_id").cast(pl.Int64).alias("id"),
             pl.col("label").cast(pl.Int64),
         )
+        # A member touched by pairs in >1 partition is emitted once per
+        # partition by Phase A, so it appears multiple times in components_pl.
+        # Phase B unions all of a member's local roots into one global_root, so
+        # every duplicate carries the SAME label — dedup is safe and necessary:
+        # without it, downstream groupby("label").count() inflates cluster_size
+        # and materialize_cluster_dict duplicates members at partition
+        # boundaries (a scale-only divergence from the in-memory components).
+        .unique(subset=["id"], keep="first")
     )
 
     return ray.data.from_arrow(final_pl.to_arrow())

@@ -8,6 +8,27 @@ import pytest
 
 ray = pytest.importorskip("ray")
 
+# Surname/firstname pools that distribute across soundex codes. A degenerate
+# fixture (e.g. 3 surnames x 1000 rows) collapses into ~3 giant soundex blocks;
+# auto-config then picks name blocking, scores ~C(1000,2) dense pairs per block,
+# and the in-memory oversized-cluster split loop peels one node per O(edges)
+# pass -> effectively non-terminating. >= 20 distinct surnames keeps blocks
+# small. See feedback: "Synthetic surname fixtures must distribute across
+# soundex codes" + tests/test_autoconfig_regressions.py::_SURNAMES.
+_SURNAMES = [
+    "Smith", "Jones", "Williams", "Brown", "Davis", "Miller", "Wilson",
+    "Moore", "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris",
+    "Martin", "Thompson", "Garcia", "Martinez", "Robinson", "Clark",
+    "Rodriguez", "Lewis", "Lee", "Walker", "Hall", "Allen", "Young",
+    "King", "Wright", "Lopez",
+]
+_FIRSTNAMES = [
+    "Alex", "Blair", "Casey", "Dana", "Eli", "Finley", "Gray", "Harper",
+    "Indigo", "Jamie", "Kendall", "Logan", "Morgan", "Noel", "Oakley",
+    "Parker", "Quinn", "Riley", "Sage", "Taylor", "Umi", "Val", "Wren",
+    "Xena", "Yael", "Zane",
+]
+
 
 def test_controller_accepts_ray_dataset_input(tmp_path):
     """AutoConfigController.run must accept a Ray Dataset and return a config."""
@@ -15,11 +36,12 @@ def test_controller_accepts_ray_dataset_input(tmp_path):
     from goldenmatch import auto_configure_df
     from goldenmatch.distributed import read_csv_partitioned
 
+    n = 3000
     csv = tmp_path / "in.csv"
     pl.DataFrame({
-        "first_name": ["Alice", "Bob", "Charlie"] * 1000,
-        "last_name": ["Smith", "Jones", "Brown"] * 1000,
-        "email": [f"u{i}@example.com" for i in range(3000)],
+        "first_name": [_FIRSTNAMES[i % len(_FIRSTNAMES)] for i in range(n)],
+        "last_name": [_SURNAMES[i % len(_SURNAMES)] for i in range(n)],
+        "email": [f"u{i}@example.com" for i in range(n)],
     }).write_csv(csv)
 
     ds = read_csv_partitioned(str(csv), n_partitions=4)
