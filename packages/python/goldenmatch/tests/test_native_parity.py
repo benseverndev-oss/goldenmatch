@@ -423,6 +423,37 @@ def test_embed_full_path_native_parity(monkeypatch):
     assert (py == native).all()
 
 
+def test_fused_embed_matches_dense(monkeypatch):
+    """The fused native featurize+project kernel (auto backend) must match the
+    dense featurize->matmul path. Not bit-exact — the fused path accumulates in
+    f64 in n-gram order vs the dense f32 matmul — so assert within f32 tol."""
+    import numpy as np
+    from goldenmatch.embeddings.inhouse import (
+        EmbedModelConfig,
+        FeaturizerConfig,
+        GoldenEmbedModel,
+    )
+    m = GoldenEmbedModel(
+        EmbedModelConfig(dim=64, featurizer=FeaturizerConfig(n_features=4096)), seed=11
+    )
+    texts = ["John Smith", "Jon Smyth", "Zebra Industries", "中文 test", "", None, "a"]
+    dense = m.embed(texts, backend="numpy")  # native featurize + numpy matmul
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    assert hasattr(_native_loader.native_module(), "char_ngram_project")
+    fused = m.embed(texts, backend="auto")   # fused kernel
+    np.testing.assert_allclose(fused, dense, atol=1e-5)
+
+
+def test_fused_embed_skipped_when_bias_set():
+    # The fused path's feature-norm cancellation only holds without a bias; a
+    # biased head must fall back to the dense path (returns None from _embed_fused).
+    import numpy as np
+    from goldenmatch.embeddings.inhouse import EmbedModelConfig, GoldenEmbedModel
+    m = GoldenEmbedModel(EmbedModelConfig(dim=16, use_bias=True), seed=0)
+    m.bias = np.linspace(-0.5, 0.5, 16).astype(np.float32)
+    assert m._embed_fused(["foo", "bar"]) is None
+
+
 def test_native_off_when_forced(monkeypatch):
     # GOLDENMATCH_NATIVE=0 is the kill switch: forces the Python path even for
     # gated-on components.
