@@ -705,11 +705,7 @@ jobs:
   distributed:
     needs: changes
     if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.ci_workflow == 'true'
-    # large-new-64GB (16c/64GB), not ubuntu-latest: ray's GCS/raylet system
-    # processes starve on a 2-core runner (the driver + GCS + raylet contend
-    # for 2 cores -> GCS subscriber poll hangs, see the 2026-05-26 timeouts).
-    # The repo's two-phase-WCC + distributed bench lanes run ray on this runner.
-    runs-on: large-new-64GB
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -720,27 +716,24 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
-      # The `ray` optional extra. `ray[default]` (not bare ray-core) pulls the
-      # full local-cluster runtime. pandas is pinned <3: ray.data doesn't
-      # support pandas 3.x and a bare `pandas` resolves to 3.x, which hangs
-      # ray.data block handling. Installed explicitly (mirrors the native
-      # lane's onnxruntime install) so the default dep tree stays ray-free and
-      # these tests keep skipping everywhere else. CI-safe ray.init settings
-      # live in tests/conftest.py::_ray_ci_init (local head, dashboard off).
+      # ray is an optional extra; install it into the uv venv so the ray-gated
+      # tests/test_distributed_*.py actually run (they skip everywhere else via
+      # pytest.importorskip). pandas<3 because ray pins pandas<3.
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
-      - name: Diagnostics
-        run: |
-          df -h /dev/shm || true
-          uv run python -c "import ray, pandas, polars, scipy; print('ray', ray.__version__, 'pandas', pandas.__version__, 'polars', polars.__version__)"
+      # CRITICAL: run the ray tests with the venv python DIRECTLY, not `uv run`.
+      # Under `uv run`, ray's raylet spawns workers via uv, which hits a
+      # VIRTUAL_ENV mismatch, ignores the venv, and launches a python with no
+      # ray on its path -> every worker dies (ModuleNotFoundError: ray) and all
+      # tasks hang forever ("object not ready"). Diagnosed 2026-05-26 on a
+      # hosted runner via the worker logs. `.venv/bin/python` makes ray spawn
+      # workers that can import ray. Serial (no -n auto): xdist workers would
+      # each start a ray cluster and race on ports.
       - name: Distributed tests (ray present -> ray-gated tests run, not skip)
-        # Serial (no -n auto): under xdist each worker would spin up its own
-        # ray cluster and race on ports. The fixtures here are tiny (<=8
-        # nodes); --timeout converts any ray hang into an actionable failure
-        # instead of a 20-min job timeout with no diagnostics.
         run: |
-          uv run pytest packages/python/goldenmatch/tests/test_distributed_*.py \
-            --timeout=180 --timeout-method=thread --durations=20 -v
+          .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
+            --timeout=120 --durations=20 -v
 
   action:
     needs: changes
