@@ -199,6 +199,66 @@ def test_score_block_pairs_kernel_parity():
             assert gs == pytest.approx(rs, abs=1e-12)
 
 
+def test_score_block_pairs_arrow_matches_vec_kernel():
+    """The Arrow-native kernel (zero-copy buffer input) must emit identical pairs
+    to the Vec kernel (Python-list input) on the same data. Alternates Utf8 and
+    LargeUtf8 field columns to exercise both StrCol arms (Polars emits LargeUtf8;
+    a plain pyarrow string array is Utf8)."""
+    import random
+    import string
+
+    import pyarrow as pa
+
+    n = _native_loader.native_module()
+    scorer_ids = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3}
+    names = ["jaro_winkler", "token_sort"]
+    ids = [scorer_ids[x] for x in names]
+    rng = random.Random(123)
+
+    def rand_val():
+        if rng.random() < 0.1:
+            return None
+        return "".join(rng.choice(string.ascii_letters + " ") for _ in range(rng.randint(2, 8)))
+
+    for it in range(300):
+        nrows = rng.randint(0, 12)
+        row_ids = rng.sample(range(1000), nrows)
+        sizes, rem = [], nrows
+        while rem > 0:
+            s = rng.randint(1, min(4, rem))
+            sizes.append(s)
+            rem -= s
+        fa = [[rand_val() for _ in range(nrows)] for _ in names]
+        weights = [rng.choice([0.5, 1.0, 2.0]) for _ in names]
+        tw = sum(weights)
+        threshold = rng.choice([0.0, 0.5, 0.8])
+        exclude = []
+        if nrows >= 2 and rng.random() < 0.3:
+            a, b = rng.sample(row_ids, 2)
+            exclude = [(min(a, b), max(a, b))]
+
+        vec = n.score_block_pairs(row_ids, sizes, fa, ids, weights, tw, threshold, exclude)
+        str_type = pa.large_string() if it % 2 == 0 else pa.string()
+        row_arrow = pa.array(row_ids, type=pa.int64())
+        fa_arrow = [pa.array(col, type=str_type) for col in fa]
+        arrow = n.score_block_pairs_arrow(
+            row_arrow, fa_arrow, sizes, ids, weights, tw, threshold, exclude
+        )
+        assert vec == arrow, f"iter {it}: {vec} != {arrow}"
+
+
+def test_score_block_pairs_arrow_rejects_non_int64_row_ids():
+    """The Arrow kernel requires an int64 row_id buffer (the dtype the pipeline
+    casts to). A mismatched buffer must raise, not silently misread."""
+    import pyarrow as pa
+
+    n = _native_loader.native_module()
+    row_arrow = pa.array([0, 1], type=pa.int32())
+    fa_arrow = [pa.array(["a", "b"], type=pa.large_string())]
+    with pytest.raises((ValueError, Exception)):
+        n.score_block_pairs_arrow(row_arrow, fa_arrow, [2], [0], [1.0], 1.0, 0.0, [])
+
+
 def test_score_buckets_end_to_end_parity(monkeypatch):
     """Phase 2: score_buckets() must emit identical pairs with the native kernel
     on (GOLDENMATCH_NATIVE=1) vs off (=0)."""
