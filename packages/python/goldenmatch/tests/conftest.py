@@ -135,18 +135,17 @@ def sample_parquet(tmp_path) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _ray_ci_init():
-    """Pre-initialize Ray once with CI-safe settings so the production
+    """Pre-initialize Ray once with the dashboard off so the production
     ``ray.init(ignore_reinit_error=True, ...)`` calls inside
-    ``goldenmatch.distributed`` become no-ops.
+    ``goldenmatch.distributed`` become no-ops, then warm up the control plane.
 
-    Default ``ray.init()`` hangs on ubuntu-latest CI: the first ray.data op
-    blocks forever on the stats-actor RPC because node-IP autodetection +
-    dashboard startup never settle on the 2-core runner. Forcing a fresh local
-    head on 127.0.0.1 with the dashboard off avoids it. No-op when ray isn't
-    installed (every non-distributed lane) or when RAY_ADDRESS points at a real
-    cluster (the bench workflows)."""
-    import os
-
+    This matches the init the (working) distributed-bench lanes use. Earlier CI
+    attempts forced ``address="local"`` + ``_node_ip_address="127.0.0.1"``,
+    which appears to wedge ray's GCS on the runner: the first ray.data op then
+    hung on the stats-actor RPC. We drop those overrides and instead push one
+    trivial task through GCS with a hard timeout, so a wedged control plane
+    fails fast + visibly here instead of as a silent 180s test hang. No-op when
+    ray isn't installed (every non-distributed lane)."""
     try:
         import ray
     except Exception:
@@ -154,23 +153,24 @@ def _ray_ci_init():
         return
 
     if not ray.is_initialized():
-        init_kwargs: dict[str, object] = dict(
-            num_cpus=2,
-            include_dashboard=False,
-            configure_logging=False,
-            log_to_driver=False,
-            ignore_reinit_error=True,
-        )
-        if not os.environ.get("RAY_ADDRESS"):
-            # Force a brand-new local head; skip the slow/hanging IP autodetect.
-            init_kwargs["address"] = "local"
-            init_kwargs["_node_ip_address"] = "127.0.0.1"
         try:
-            ray.init(**init_kwargs)
-        except Exception:
-            # Don't block the suite on fixture setup — let the production code
-            # init ray itself if the constrained init somehow fails.
-            pass
+            ray.init(
+                include_dashboard=False,
+                configure_logging=False,
+                log_to_driver=False,
+                ignore_reinit_error=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[ray_ci_init] ray.init failed: {e!r}", flush=True)
+
+    # Warm up: one trivial task through GCS with a hard timeout. Healthy control
+    # plane returns instantly; a wedged one surfaces a clear marker here.
+    try:
+        ray.get(ray.remote(lambda: 1).remote(), timeout=90)
+        print("[ray_ci_init] ray control plane healthy", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ray_ci_init] ray warmup failed: {e!r}", flush=True)
+
     yield
     try:
         ray.shutdown()
