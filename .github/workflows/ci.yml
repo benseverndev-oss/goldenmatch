@@ -705,7 +705,11 @@ jobs:
   distributed:
     needs: changes
     if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.ci_workflow == 'true'
-    runs-on: ubuntu-latest
+    # large-new-64GB (16c/64GB), not ubuntu-latest: ray's GCS/raylet system
+    # processes starve on a 2-core runner (the driver + GCS + raylet contend
+    # for 2 cores -> GCS subscriber poll hangs, see the 2026-05-26 timeouts).
+    # The repo's two-phase-WCC + distributed bench lanes run ray on this runner.
+    runs-on: large-new-64GB
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
