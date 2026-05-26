@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -17,6 +18,27 @@ if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore
 
 _log = logging.getLogger("goldenmatch.memory")
+_clog = logging.getLogger("goldenmatch.cluster")
+
+# Auto-split work budget (cumulative edges processed across the split loop).
+# split_oversized_cluster removes the single weakest MST edge per pass, which is
+# O(edges); a large DENSE cluster with no clean weak bridge peels ~1 node per
+# pass and degrades to O(nodes * edges) -- effectively non-terminating. Legitimate
+# weak-bridge splits finish far under this budget; a dense peel trips it and the
+# remaining oversized clusters are left intact (excluded from golden downstream,
+# matching auto_split=False). Env-overridable for testing.
+_DEFAULT_SPLIT_EDGE_WORK_BUDGET = 5_000_000
+
+
+def _split_edge_work_budget() -> int:
+    """Cumulative-edge-work cap for the auto-split loop (env-overridable)."""
+    raw = os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET")
+    if raw is None:
+        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
 
 
 def _record_unmerge_corrections(
@@ -374,12 +396,36 @@ def build_clusters(
         cinfo["confidence"] = conf["confidence"]
         cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
 
-    # Auto-split oversized clusters (when enabled)
+    # Auto-split oversized clusters (when enabled). See _split_edge_work_budget:
+    # the per-pass single-weakest-edge split degrades to O(nodes * edges) on a
+    # large dense cluster, so two guards keep the loop terminating without
+    # changing behavior for normal weak-bridge clusters:
+    #   1. no-progress: if a split can't break the cluster (returns it unchanged),
+    #      leave it oversized instead of re-enqueueing the same cluster forever.
+    #   2. work budget: cap cumulative edge-work; once tripped, leave the current
+    #      and any still-queued clusters oversized.
+    # Oversized clusters left un-split are excluded from golden downstream, the
+    # same as auto_split=False -- a giant cohesive blob of near-identical records
+    # is legitimately one quarantined cluster, not N arbitrary cuts.
     to_split = [cid for cid, c in result.items() if c["oversized"]] if auto_split else []
+    edge_work = 0
+    edge_budget = _split_edge_work_budget()
+    budget_tripped = False
     while to_split:
         cid = to_split.pop()
         cinfo = result.pop(cid)
+        edge_work += len(cinfo["pair_scores"])
+        if edge_work > edge_budget:
+            cinfo["oversized"] = True
+            result[cid] = cinfo  # leave oversized; queued cids stay in result too
+            budget_tripped = True
+            break
         sub_clusters = split_oversized_cluster(cinfo["members"], cinfo["pair_scores"])
+        if len(sub_clusters) <= 1:
+            # Couldn't split (no edges / no MST): leave it as-is, don't re-enqueue.
+            cinfo["oversized"] = cinfo["size"] > max_cluster_size
+            result[cid] = cinfo
+            continue
         next_cid = max(result.keys(), default=0) + 1
         for sc in sub_clusters:
             sc["oversized"] = sc["size"] > max_cluster_size
@@ -388,6 +434,14 @@ def build_clusters(
             if sc["oversized"]:
                 to_split.append(next_cid)
             next_cid += 1
+    if budget_tripped:
+        n_oversized = sum(1 for c in result.values() if c.get("oversized"))
+        _clog.warning(
+            "build_clusters: auto-split edge-work budget (%d) exhausted; %d "
+            "cluster(s) left oversized (dense, no clean weak-bridge split). "
+            "Oversized clusters are excluded from golden downstream.",
+            edge_budget, n_oversized,
+        )
 
     # Assign cluster_quality and apply confidence downgrade
     for cid, cinfo in result.items():
