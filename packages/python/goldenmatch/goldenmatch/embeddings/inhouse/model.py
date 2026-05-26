@@ -97,20 +97,47 @@ class GoldenEmbedModel:
         """Embed ``texts`` -> ``(n, dim)`` L2-normalized matrix.
 
         ``backend``: ``"numpy"`` (reference), ``"onnx"`` (onnxruntime), or
-        ``"auto"`` (onnx if onnxruntime importable, else numpy).
+        ``"auto"`` — the fused native featurize+project kernel when available
+        (no dense feature matrix; see ``_embed_fused``), else onnx, else numpy.
         """
         if not texts:
             return np.zeros((0, self.config.dim), dtype=np.float32)
+        if backend == "auto":
+            fused = self._embed_fused(texts)
+            if fused is not None:
+                return fused
         feats = self.featurizer.transform(texts)
         if backend == "numpy":
             return self.project(feats)
         if backend == "onnx":
             return self._project_onnx(feats)
-        # auto
+        # auto, fused unavailable
         try:
             return self._project_onnx(feats)
         except ImportError:
             return self.project(feats)
+
+    def _embed_fused(self, texts: list[str | None]) -> np.ndarray | None:
+        """Native fused featurize+project: accumulate ``sign * W[idx]`` straight
+        into the ``(n, dim)`` output, skipping the dense ``(n, n_features)``
+        feature matrix and the dense matmul. Output is identical to the dense
+        path (the feature-norm cancels under L2-normalization). Returns ``None``
+        — so the caller falls back — when the native kernel is unavailable or the
+        head has a bias (the bias breaks the feature-norm cancellation)."""
+        if self.bias is not None:
+            return None
+        from goldenmatch.core._native_loader import native_enabled, native_module
+        if not native_enabled("featurize"):
+            return None
+        mod = native_module()
+        if not hasattr(mod, "char_ngram_project"):
+            return None  # native ext present but predates the fused kernel
+        fc = self.config.featurizer
+        raw = mod.char_ngram_project(
+            list(texts), self.weights.tobytes(), fc.n_features, self.config.dim,
+            fc.ngram_min, fc.ngram_max, fc.lowercase, fc.boundary, fc.seed,
+        )
+        return np.frombuffer(raw, dtype=np.float32).reshape(len(texts), self.config.dim)
 
     # ----- ONNX -----
     def to_onnx_model(self):
