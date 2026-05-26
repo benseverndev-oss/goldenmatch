@@ -8,6 +8,7 @@
 use pyo3::prelude::*;
 
 mod cluster;
+mod featurize;
 mod pairs;
 mod score;
 
@@ -21,6 +22,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pairs::dedup_pairs_max_score, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::candidate_pair_count, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::block_histogram, m)?)?;
+    m.add_function(wrap_pyfunction!(featurize::char_ngram_features, m)?)?;
     m.add_function(wrap_pyfunction!(score::jaro_winkler_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::levenshtein_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;

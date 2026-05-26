@@ -2,13 +2,15 @@
 
 Turns record text into a fixed-width float32 feature vector using signed
 feature hashing over character n-grams — the lexical/typographic signal that
-dominates entity resolution on names and addresses. The hash is BLAKE2b keyed
-by a seed, so the featurization is byte-stable across processes, platforms, and
-(future) the Rust ``goldenembed-rs`` runtime — no reliance on Python's salted
-``hash()``.
+dominates entity resolution on names and addresses. The hash is BLAKE2b over
+``seed_le_bytes || ngram_utf8``, so the featurization is byte-stable across
+processes, platforms, and the native Rust kernel — no reliance on Python's
+salted ``hash()``.
 
-This is the model's "tokenizer": it stays in Python (string ops don't belong in
-the ONNX graph); only the learned projection is exported to ONNX.
+This is the model's "tokenizer". It runs in the native ``goldenmatch._native``
+kernel when the ``featurize`` component is enabled (the pure-Python path below
+is the source of truth and the parity reference); only the learned projection
+is exported to ONNX.
 """
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import hashlib
 from dataclasses import dataclass
 
 import numpy as np
+
+from goldenmatch.core._native_loader import native_enabled, native_module
 
 
 @dataclass(frozen=True)
@@ -67,11 +71,8 @@ class CharNGramFeaturizer:
 
     def _hash(self, token: str) -> tuple[int, float]:
         """Map a token to (index, sign). Index in [0, n_features); sign in {-1, +1}."""
-        digest = hashlib.blake2b(
-            token.encode("utf-8"),
-            digest_size=8,
-            salt=self.config.seed.to_bytes(8, "little"),
-        ).digest()
+        data = self.config.seed.to_bytes(8, "little") + token.encode("utf-8")
+        digest = hashlib.blake2b(data, digest_size=8).digest()
         h = int.from_bytes(digest, "little")
         idx = h % self.config.n_features
         sign = 1.0 if (h >> 63) & 1 else -1.0
@@ -79,12 +80,26 @@ class CharNGramFeaturizer:
 
     def transform(self, texts: list[str | None]) -> np.ndarray:
         """Featurize ``texts`` into an ``(n, n_features)`` L2-normalized matrix."""
-        out = np.zeros((len(texts), self.config.n_features), dtype=np.float32)
+        cfg = self.config
+        if native_enabled("featurize"):
+            raw = native_module().char_ngram_features(
+                list(texts), cfg.n_features, cfg.ngram_min, cfg.ngram_max,
+                cfg.lowercase, cfg.boundary, cfg.seed,
+            )
+            # raw is a native-endian float32 byte buffer (row-major). frombuffer
+            # is zero-copy and read-only; reshape returns a view.
+            return np.frombuffer(raw, dtype=np.float32).reshape(len(texts), cfg.n_features)
+
+        out = np.zeros((len(texts), cfg.n_features), dtype=np.float32)
         for r, text in enumerate(texts):
             for gram in self._ngrams(text):
                 idx, sign = self._hash(gram)
                 out[r, idx] += sign
-            norm = float(np.linalg.norm(out[r]))
+            # Normalize with explicit float32 sum + float32 sqrt so the native
+            # kernel can reproduce it bit-for-bit (the nonzero counts are small
+            # exact integers, so the sum carries no rounding).
+            row = out[r]
+            norm = float(np.sqrt((row * row).sum(dtype=np.float32)))
             if norm > 0.0:
-                out[r] /= norm
+                out[r] = row / norm
         return out

@@ -317,6 +317,52 @@ def test_connected_components_parity(monkeypatch, pairs, all_ids):
     assert {frozenset(c) for c in py} == {frozenset(c) for c in native}
 
 
+# ── In-house embedder featurizer (component "featurize") ──
+
+_FEATURIZE_FIXTURES = [
+    ["John Smith"],
+    ["Acme Corporation, Inc.", "ACME CORP"],
+    [""],                                   # empty -> zero vector
+    ["  Mixed   CASE  café ", "mixed case café"],  # whitespace + lowercase + accent
+    ["a", "中文 test", "Zebra Industries"],  # short, CJK, multi-token
+    [None, "fallback"],                     # None handled as empty
+]
+
+
+@pytest.mark.parametrize("texts", _FEATURIZE_FIXTURES)
+def test_char_ngram_features_parity(monkeypatch, texts):
+    from goldenmatch.embeddings.inhouse.featurizer import (
+        CharNGramFeaturizer,
+        FeaturizerConfig,
+    )
+    f = CharNGramFeaturizer(FeaturizerConfig(n_features=2048, seed=0))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = f.transform(list(texts))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = f.transform(list(texts))
+    # Bit-exact: integer-valued accumulation + float32 sum/sqrt normalization.
+    assert (py == native).all()
+
+
+def test_embed_full_path_native_parity(monkeypatch):
+    """The whole embed path (featurize -> projection): native featurizer +
+    numpy projection must match the pure-Python featurizer + projection."""
+    from goldenmatch.embeddings.inhouse import (
+        EmbedModelConfig,
+        FeaturizerConfig,
+        GoldenEmbedModel,
+    )
+    m = GoldenEmbedModel(
+        EmbedModelConfig(dim=32, featurizer=FeaturizerConfig(n_features=2048)), seed=11
+    )
+    texts = ["John Smith", "Jon Smyth", "Zebra Industries", ""]
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = m.embed(texts, backend="numpy")
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = m.embed(texts, backend="numpy")
+    assert (py == native).all()
+
+
 def test_native_off_when_forced(monkeypatch):
     # GOLDENMATCH_NATIVE=0 is the kill switch: forces the Python path even for
     # gated-on components.
@@ -333,6 +379,7 @@ def test_auto_uses_native_only_for_gated_components(monkeypatch):
     assert _native_loader.native_enabled("clustering") is available
     assert _native_loader.native_enabled("block_scoring") is available
     assert _native_loader.native_enabled("pairs") is available
+    assert _native_loader.native_enabled("featurize") is available
     assert _native_loader.native_enabled("not_a_real_component") is False
 
 

@@ -42,7 +42,14 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 #     arithmetic plus a strict-`>` max reduction, no float tolerance — so there
 #     is no threshold-crossing risk and no DQbench surface to clear; parity is
 #     asserted directly in tests/test_native_parity.py.
-_GATED_ON: frozenset[str] = frozenset({"clustering", "block_scoring", "pairs"})
+#   - featurize: the in-house embedder's char-n-gram feature hashing
+#     (CharNGramFeaturizer). BLAKE2b hashing + float32 normalization match the
+#     Python reference bit-for-bit (the nonzero counts are small exact integers,
+#     so the sum-of-squares carries no rounding); parity asserted in
+#     tests/test_native_parity.py.
+_GATED_ON: frozenset[str] = frozenset(
+    {"clustering", "block_scoring", "pairs", "featurize"}
+)
 
 
 def native_module() -> Any:
