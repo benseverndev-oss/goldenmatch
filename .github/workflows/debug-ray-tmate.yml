@@ -1,0 +1,40 @@
+name: debug-ray-tmate
+
+# Dispatch-only interactive debugging for the ray.data-on-hosted-runner hang.
+# Installs ray + goldenmatch, prints diagnostics, then pauses the runner with a
+# tmate SSH/web session so we can reproduce the stats-actor hang on the EXACT
+# environment that fails and iterate live. Never runs on PRs/pushes. Not for merge.
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "runner label (ubuntu-latest | large-new-64GB)"
+        default: "ubuntu-latest"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Install ray
+        run: uv pip install 'ray[default]' 'pandas<3'
+      - name: Diagnostics
+        run: |
+          uv run python -c "import ray, sys; print('ray', ray.__version__, '| py', sys.version.split()[0])"
+          echo "nproc=$(nproc)"; free -h | head -2; df -h /dev/shm
+      - name: tmate session (open SSH string + web terminal in the log above)
+        uses: mxschmitt/action-tmate@c0afd6f790e3a5564914980036ebf83216678101  # v3
+        with:
+          limit-access-to-actor: false
