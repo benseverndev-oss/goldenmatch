@@ -62,6 +62,13 @@ embeddings = [
     "sentence-transformers>=2.2",
     "faiss-cpu>=1.7",
 ]
+# In-house trainable embedder: ONNX export + onnxruntime inference. The numpy
+# forward pass works without these; they're needed only for .onnx export and the
+# onnxruntime-backed inference path.
+inhouse-embeddings = [
+    "onnx>=1.15",
+    "onnxruntime>=1.17",
+]
 llm = [
     "anthropic>=0.30",
     "openai>=1.30",

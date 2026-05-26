@@ -23,6 +23,7 @@ import numpy as np
 from goldenmatch.embeddings.cache import EmbeddingCache
 from goldenmatch.embeddings.providers import (
     EmbeddingProvider,
+    InHouseProvider,
     LocalProvider,
     NoneProvider,
     OpenAIProvider,
@@ -33,6 +34,7 @@ from goldenmatch.embeddings.providers import (
 __all__ = [
     "EmbeddingCache",
     "EmbeddingProvider",
+    "InHouseProvider",
     "LocalProvider",
     "NoneProvider",
     "OpenAIProvider",

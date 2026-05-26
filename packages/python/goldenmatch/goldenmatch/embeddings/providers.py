@@ -112,6 +112,34 @@ class OpenAIProvider:
         return np.asarray([r["embedding"] for r in rows], dtype=np.float32)
 
 
+class InHouseProvider:
+    """The local, in-house char-n-gram + learned-projection embedder.
+
+    Wraps a trained :class:`~goldenmatch.embeddings.inhouse.model.GoldenEmbedModel`
+    (passed directly or loaded from a saved-model path). Runs the projection via
+    onnxruntime when available, else the numpy reference forward pass.
+    """
+
+    def __init__(self, model: object, *, backend: str = "auto") -> None:
+        from goldenmatch.embeddings.inhouse.model import GoldenEmbedModel
+
+        if isinstance(model, GoldenEmbedModel):
+            self._model = model
+        elif model:
+            self._model = GoldenEmbedModel.load(model)  # type: ignore[arg-type]
+        else:
+            raise ValueError(
+                "provider='inhouse' requires model= (a saved-model path or a "
+                "GoldenEmbedModel instance). Train one with "
+                "goldenmatch.embeddings.inhouse.train_embedder(...)."
+            )
+        self.backend = backend
+        self.model_id = self._model.model_id
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        return self._model.embed(list(texts), backend=self.backend)
+
+
 def resolve_provider(
     provider: str | EmbeddingProvider,
     *,
@@ -130,7 +158,9 @@ def resolve_provider(
         return VertexProvider(model)
     if name == "openai":
         return OpenAIProvider(model)
+    if name == "inhouse":
+        return InHouseProvider(model)
     raise ValueError(
-        f"unknown embedding provider {provider!r} "
-        "(expected 'local', 'vertex', 'openai', 'none', or a provider object)"
+        f"unknown embedding provider {provider!r} (expected 'local', 'vertex', "
+        "'openai', 'inhouse', 'none', or a provider object)"
     )
