@@ -178,6 +178,13 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
     from goldenmatch_duckdb.core_apis import register_core_api_functions
     register_core_api_functions(con)
 
+    # ── Native Core kernels + local embedding ─────────────────────────────
+    # goldenmatch_connected_components / goldenmatch_pair_dedup wrap the
+    # native graph kernels (goldenmatch.native); goldenmatch_embed_local wraps
+    # the local in-house embedder (provider="inhouse"). See `core_kernels.py`.
+    from goldenmatch_duckdb.core_kernels import register_core_kernel_functions
+    register_core_kernel_functions(con)
+
 
 # ── Implementation ──────────────────────────────────────────────────────
 

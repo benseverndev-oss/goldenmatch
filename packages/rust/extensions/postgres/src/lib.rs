@@ -5,6 +5,7 @@ pgrx::pg_module_magic!();
 mod core_apis;
 mod correction;
 mod goldenflow;
+mod kernels;
 mod pipeline;
 mod quick;
 mod spi;

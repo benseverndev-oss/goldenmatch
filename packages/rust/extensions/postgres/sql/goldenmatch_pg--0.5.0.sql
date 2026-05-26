@@ -611,3 +611,33 @@ CREATE FUNCTION "goldenflow_whitespace_normalize"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenflow_whitespace_normalize_wrapper';
+
+-- ── Native Core kernels + local embedding (#509) ──────────────────────────
+-- DuckDB<->Postgres lockstep with core_kernels.py. Graph kernels wrap
+-- goldenmatch.native (Rust kernels when built, else pure-Python); the embedder
+-- wraps the local in-house model. JSON in / JSON out, fail-soft to {"error":..}.
+
+-- Connected components over a JSON array of [a, b, score] pairs.
+CREATE FUNCTION "goldenmatch_connected_components"(
+    "pairs_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_connected_components_wrapper';
+
+-- Canonicalize + keep the max score per pair.
+CREATE FUNCTION "goldenmatch_pair_dedup"(
+    "pairs_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_pair_dedup_wrapper';
+
+-- Embed one text with a local in-house model (a saved GoldenEmbedModel dir).
+CREATE FUNCTION "goldenmatch_embed_local"(
+    "text" TEXT,
+    "model_path" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_embed_local_wrapper';
