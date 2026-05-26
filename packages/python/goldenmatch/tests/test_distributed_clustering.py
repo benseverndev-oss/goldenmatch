@@ -203,7 +203,9 @@ def test_build_clusters_distributed_routes_to_label_prop_when_forced(caplog):
 
 
 def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
-    """GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=0 forces label-prop path."""
+    """GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=0 forces the distributed
+    path (not the scipy fallback). With no force_label_propagation, the default
+    WCC algorithm is two_phase_wcc (see _wcc_algorithm)."""
     import logging
 
     from goldenmatch.distributed.clustering import (
@@ -219,4 +221,148 @@ def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
         build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3])
 
     routing_msgs = [r.message.lower() for r in caplog.records]
-    assert any("distributed label propagation" in m for m in routing_msgs)
+    # Env override took the distributed path; default WCC = two_phase_wcc.
+    assert any("two_phase_wcc" in m for m in routing_msgs), routing_msgs
+    assert not any("scipy" in m for m in routing_msgs)
+
+
+# ── Quality-invariant scale validation ──
+#
+# The distributed paths use DIFFERENT algorithms than the in-memory path
+# (scipy.csgraph below the 50M-pair threshold; label propagation or two-phase
+# WCC above), and two-phase WCC is partition-sensitive (Phase A is per-partition
+# local Union-Find, Phase B reconciles roots across partitions). Nothing
+# previously asserted that these produce the SAME connected components as the
+# in-memory baseline, or that the result is invariant to Ray partition count.
+# A silent divergence means a user scaling row/partition count could get
+# different entity merges with nothing failing. These tests close that gap on a
+# battery of adversarial graph shapes (chain = label-prop's worst case; bridge,
+# clique, multi-component + isolated, all-singletons).
+
+from goldenmatch.core.cluster import build_clusters  # noqa: E402
+
+# (name, pairs, all_ids)
+_GRAPH_FIXTURES = [
+    ("two_comp_isolated", [(1, 2, 0.9), (2, 3, 0.85), (5, 6, 0.95)], [1, 2, 3, 5, 6, 99]),
+    ("bridge", [(1, 2, 0.9), (3, 4, 0.9), (2, 3, 0.8)], [1, 2, 3, 4]),
+    ("clique", [(1, 2, 0.9), (2, 3, 0.85), (1, 3, 0.95)], [1, 2, 3]),
+    ("chain8", [(i, i + 1, 0.9) for i in range(1, 8)], list(range(1, 9))),
+    ("all_singletons", [], [1, 2, 3]),
+]
+_GRAPHS_WITH_EDGES = [f for f in _GRAPH_FIXTURES if f[1]]
+
+
+def _normalize(component_member_lists, all_ids):
+    """Full partition of ``all_ids`` into sorted member-tuples, singletons
+    included. Robust whether the source emits singletons explicitly (the
+    distributed paths) or omits them (in-memory ``build_clusters``)."""
+    seen: set[int] = set()
+    parts = []
+    for members in component_member_lists:
+        ms = tuple(sorted(int(m) for m in set(members)))
+        parts.append(ms)
+        seen.update(ms)
+    parts.extend((int(i),) for i in all_ids if i not in seen)
+    return sorted(parts)
+
+
+def _inmem_partition(pairs, all_ids):
+    d = build_clusters(list(pairs), all_ids=list(all_ids))
+    return _normalize([info["members"] for info in d.values()], all_ids)
+
+
+def _labels_to_partition(labels_ds, all_ids):
+    rows = labels_ds.take_all()
+    ids = [r["id"] for r in rows]
+    # Every member appears exactly once: duplicate member rows (Phase A emits a
+    # boundary member per partition) would inflate cluster_size downstream.
+    assert len(ids) == len(set(ids)), "duplicate member rows in labels output"
+    groups: dict[int, list[int]] = {}
+    for r in rows:
+        groups.setdefault(r["label"], []).append(r["id"])
+    return _normalize(list(groups.values()), all_ids)
+
+
+def _clusters_ds_to_partition(clusters_ds, all_ids):
+    rows = clusters_ds.take_all()
+    members = [r["member_id"] for r in rows]
+    assert len(members) == len(set(members)), "duplicate member rows in cluster output"
+    groups: dict[int, list[int]] = {}
+    # cluster_size must equal the actual member count of each cluster.
+    size_by_cid: dict[int, int] = {}
+    for r in rows:
+        groups.setdefault(r["cluster_id"], []).append(r["member_id"])
+        size_by_cid[r["cluster_id"]] = r["cluster_size"]
+    for cid, mems in groups.items():
+        assert size_by_cid[cid] == len(mems), (
+            f"cluster {cid}: reported size {size_by_cid[cid]} != {len(mems)} members"
+        )
+    return _normalize(list(groups.values()), all_ids)
+
+
+@pytest.mark.parametrize("name,pairs,all_ids", _GRAPH_FIXTURES)
+def test_scipy_route_matches_in_memory(name, pairs, all_ids):
+    """Default route (scipy.csgraph, below threshold) == in-memory components."""
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    clusters_ds = build_clusters_distributed(pairs_list_to_dataset(pairs), all_ids=all_ids)
+    assert _clusters_ds_to_partition(clusters_ds, all_ids) == _inmem_partition(pairs, all_ids)
+
+
+@pytest.mark.parametrize("name,pairs,all_ids", _GRAPH_FIXTURES)
+def test_label_propagation_matches_in_memory(name, pairs, all_ids):
+    """force_label_propagation route == in-memory components."""
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    clusters_ds = build_clusters_distributed(
+        pairs_list_to_dataset(pairs), all_ids=all_ids, force_label_propagation=True,
+    )
+    assert _clusters_ds_to_partition(clusters_ds, all_ids) == _inmem_partition(pairs, all_ids)
+
+
+@pytest.mark.parametrize("name,pairs,all_ids", _GRAPH_FIXTURES)
+def test_two_phase_wcc_matches_in_memory(name, pairs, all_ids):
+    """Two-phase WCC (default distributed algorithm) == in-memory components."""
+    from goldenmatch.distributed.clustering import pairs_list_to_dataset, two_phase_wcc
+
+    labels_ds = two_phase_wcc(pairs_list_to_dataset(pairs), all_ids)
+    assert _labels_to_partition(labels_ds, all_ids) == _inmem_partition(pairs, all_ids)
+
+
+@pytest.mark.parametrize("name,pairs,all_ids", _GRAPHS_WITH_EDGES)
+def test_two_phase_wcc_partition_count_invariant(name, pairs, all_ids):
+    """Same edges, different Ray partition counts -> identical components.
+    Two-phase WCC is the partition-sensitive path (per-partition Phase A +
+    cross-partition Phase B merge), so a partition bug surfaces here. npart=7
+    over <=7 pairs forces single-edge / empty partitions (Phase A edge cases)."""
+    from goldenmatch.distributed.clustering import pairs_list_to_dataset, two_phase_wcc
+
+    expected = _inmem_partition(pairs, all_ids)
+    for npart in (1, 2, 3, 7):
+        ds = pairs_list_to_dataset(pairs).repartition(npart)
+        got = _labels_to_partition(two_phase_wcc(ds, all_ids), all_ids)
+        assert got == expected, f"{name}: npart={npart} diverged: {got} != {expected}"
+
+
+@pytest.mark.parametrize("name,pairs,all_ids", _GRAPHS_WITH_EDGES)
+def test_label_propagation_partition_count_invariant(name, pairs, all_ids):
+    """Label propagation must also be invariant to input partition count."""
+    from goldenmatch.distributed.clustering import (
+        build_clusters_distributed,
+        pairs_list_to_dataset,
+    )
+
+    expected = _inmem_partition(pairs, all_ids)
+    for npart in (1, 2, 5):
+        ds = pairs_list_to_dataset(pairs).repartition(npart)
+        clusters_ds = build_clusters_distributed(
+            ds, all_ids=all_ids, force_label_propagation=True,
+        )
+        got = _clusters_ds_to_partition(clusters_ds, all_ids)
+        assert got == expected, f"{name}: npart={npart} diverged: {got} != {expected}"

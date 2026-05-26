@@ -9,6 +9,10 @@
 //! overhead. Parity is asserted (within float tolerance) in
 //! tests/test_native_parity.py. All functions operate on Unicode chars
 //! (codepoints), matching rapidfuzz.
+use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
+use arrow::datatypes::DataType;
+use arrow::pyarrow::PyArrowType;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rapidfuzz::distance::{jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
@@ -151,4 +155,130 @@ pub fn score_block_pairs(
             })
             .collect()
     })
+}
+
+/// A block-sorted Utf8 column read zero-copy from an Arrow buffer. Polars emits
+/// `LargeUtf8` (i64 offsets) by default; plain pyarrow string arrays are `Utf8`
+/// (i32). Both are owned (Arc-backed -> `Send + Sync`) so the rayon closure can
+/// borrow them across `allow_threads`.
+enum StrCol {
+    Utf8(StringArray),
+    Large(LargeStringArray),
+}
+
+impl StrCol {
+    fn from_data(data: ArrayData) -> PyResult<Self> {
+        match data.data_type() {
+            DataType::Utf8 => Ok(StrCol::Utf8(StringArray::from(data))),
+            DataType::LargeUtf8 => Ok(StrCol::Large(LargeStringArray::from(data))),
+            other => Err(PyValueError::new_err(format!(
+                "score_block_pairs_arrow: field column must be utf8/large_utf8, got {other:?}"
+            ))),
+        }
+    }
+
+    #[inline]
+    fn get(&self, i: usize) -> Option<&str> {
+        match self {
+            StrCol::Utf8(a) => (!a.is_null(i)).then(|| a.value(i)),
+            StrCol::Large(a) => (!a.is_null(i)).then(|| a.value(i)),
+        }
+    }
+}
+
+/// Arrow-native sibling of [`score_block_pairs`]: reads `row_ids` (Int64) and the
+/// `field_arrays` (Utf8/LargeUtf8) directly from Arrow buffers via the C Data
+/// Interface, so the caller skips the per-element `.to_list()` materialization +
+/// PyO3 `Vec<Vec<Option<String>>>` clone that dominate the block-scoring stage
+/// (measured ~58% of native wall at 1M rows; see scripts/bench_native_kernels.py).
+///
+/// Identical scoring to `score_block_pairs` — same scorers, same weighted-average
+/// (None values skipped), same canonical (min,max) emission in block order — so
+/// the two are diffed in tests/test_native_parity.py. `block_sizes` are the
+/// consecutive block lengths in the (same) block-sorted row order.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+pub fn score_block_pairs_arrow(
+    py: Python<'_>,
+    row_ids: PyArrowType<ArrayData>,
+    field_arrays: Vec<PyArrowType<ArrayData>>,
+    block_sizes: Vec<usize>,
+    scorer_ids: Vec<u8>,
+    weights: Vec<f64>,
+    total_weight: f64,
+    threshold: f64,
+    exclude: Vec<(i64, i64)>,
+) -> PyResult<Vec<(i64, i64, f64)>> {
+    let row_data = row_ids.0;
+    if row_data.data_type() != &DataType::Int64 {
+        return Err(PyValueError::new_err(format!(
+            "score_block_pairs_arrow: row_ids must be int64, got {:?}",
+            row_data.data_type()
+        )));
+    }
+    let row_ids = Int64Array::from(row_data);
+    let fields: Vec<StrCol> = field_arrays
+        .into_iter()
+        .map(|p| StrCol::from_data(p.0))
+        .collect::<PyResult<_>>()?;
+
+    let n_rows = row_ids.len();
+    for (f, col) in fields.iter().enumerate() {
+        let col_len = match col {
+            StrCol::Utf8(a) => a.len(),
+            StrCol::Large(a) => a.len(),
+        };
+        if col_len != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_arrow: field {f} length {col_len} != row count {n_rows}"
+            )));
+        }
+    }
+
+    let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
+    let n_fields = scorer_ids.len();
+
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
+    let mut offset = 0usize;
+    for &size in &block_sizes {
+        spans.push((offset, size));
+        offset += size;
+    }
+
+    Ok(py.allow_threads(|| {
+        spans
+            .par_iter()
+            .flat_map_iter(|&(offset, size)| {
+                let mut local: Vec<(i64, i64, f64)> = Vec::new();
+                if size >= 2 {
+                    let end = offset + size;
+                    for i in offset..end - 1 {
+                        let ri = row_ids.value(i);
+                        for j in (i + 1)..end {
+                            let rj = row_ids.value(j);
+                            let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                            if exclude.contains(&pair_key) {
+                                continue;
+                            }
+                            let mut score_sum = 0.0_f64;
+                            let mut weight_sum = 0.0_f64;
+                            for f in 0..n_fields {
+                                if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
+                                    score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                                    weight_sum += weights[f];
+                                }
+                            }
+                            if weight_sum > 0.0 {
+                                let combined = score_sum / total_weight;
+                                if combined >= threshold {
+                                    local.push((pair_key.0, pair_key.1, combined));
+                                }
+                            }
+                        }
+                    }
+                }
+                local
+            })
+            .collect()
+    }))
 }

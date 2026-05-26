@@ -197,6 +197,44 @@ def test_was_split_not_in_output():
         assert "_was_split" not in cinfo
 
 
+def test_dense_cluster_split_is_bounded(monkeypatch):
+    """A large DENSE cluster has no clean weak bridge, so the single-weakest-edge
+    split peels ~1 node per O(edges) pass -- O(nodes*edges), effectively a hang.
+    The work budget must bound the loop and leave the blob oversized rather than
+    peeling it into arbitrary pieces. Regression for the build_clusters
+    dense-cluster split-loop pathology (found greening the ray lane, 2026-05-26)."""
+    import time
+
+    # Tiny budget so the guard trips deterministically on the first dense pass.
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "1000")
+    n = 60
+    all_ids = list(range(n))
+    # Complete graph: every pair a strong match -> one dense cohesive cluster.
+    pairs = [(i, j, 0.95) for i in range(n) for j in range(i + 1, n)]
+
+    t0 = time.time()
+    clusters = build_clusters(pairs, all_ids, max_cluster_size=10)
+    elapsed = time.time() - t0
+
+    assert elapsed < 5.0, f"auto-split loop not bounded: {elapsed:.1f}s"
+    # The dense blob is left oversized (not peeled into arbitrary sub-clusters).
+    assert any(c["size"] > 10 for c in clusters.values())
+    # Membership is conserved exactly -- no lost or duplicated records.
+    members = sorted(m for c in clusters.values() for m in c["members"])
+    assert members == all_ids
+
+
+def test_sparse_oversized_still_splits_under_default_budget():
+    """The budget must not change behavior for normal (sparse) weak-bridge
+    clusters: a chain well under the default budget still splits fully."""
+    # Chain of 8, max_cluster_size=2 -> must split so no cluster exceeds 2.
+    pairs = [(i, i + 1, 0.9 - i * 0.05) for i in range(7)]
+    clusters = build_clusters(pairs, list(range(8)), max_cluster_size=2)
+    assert all(c["size"] <= 2 for c in clusters.values())
+    members = sorted(m for c in clusters.values() for m in c["members"])
+    assert members == list(range(8))
+
+
 def test_union_find_nodes_returns_added_members():
     from goldenmatch.core.cluster import UnionFind
 
