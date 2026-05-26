@@ -135,22 +135,60 @@ def sample_parquet(tmp_path) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _ray_ci_init():
-    """Pre-initialize Ray once with the dashboard off so the production
-    ``ray.init(ignore_reinit_error=True, ...)`` calls inside
-    ``goldenmatch.distributed`` become no-ops, then warm up the control plane.
+    """Initialize Ray for the distributed lane and neutralize the ray.data
+    global stats actor.
 
-    This matches the init the (working) distributed-bench lanes use. Earlier CI
-    attempts forced ``address="local"`` + ``_node_ip_address="127.0.0.1"``,
-    which appears to wedge ray's GCS on the runner: the first ray.data op then
-    hung on the stats-actor RPC. We drop those overrides and instead push one
-    trivial task through GCS with a hard timeout, so a wedged control plane
-    fails fast + visibly here instead of as a silent 180s test hang. No-op when
-    ray isn't installed (every non-distributed lane)."""
+    On this CI runner ray.data's detached ``_StatsActor`` RPC hangs forever:
+    the first ray.data op blocks on ``gen_dataset_id_from_stats_actor`` and
+    never returns, regardless of runner size / deps / init params (4 attempts,
+    2026-05-26). Ray itself is healthy (execution reaches ``from_items``); only
+    the stats actor is unreachable. So we monkeypatch the stats-actor entry
+    points to local no-ops. Best-effort + version-tolerant: patches whichever
+    names exist and swallows any failure. No-op when ray isn't installed (every
+    non-distributed lane)."""
     try:
         import ray
     except Exception:
         yield
         return
+
+    # --- neutralize ray.data's hanging stats actor -------------------------
+    # gen_dataset_id_from_stats_actor is the synchronous main-thread blocker;
+    # the metric-push methods are defensive (they normally batch on a daemon
+    # thread, but register synchronously on some versions). Returning a local
+    # id / None is safe: these are fire-and-forget telemetry, not load-bearing.
+    try:
+        import itertools
+        import uuid
+
+        from ray.data._internal import stats as _ds_stats
+
+        _ids = itertools.count(1)
+
+        def _local_dataset_id(*_a, **_k):
+            return f"ci_{next(_ids)}_{uuid.uuid4().hex[:8]}"
+
+        def _noop(*_a, **_k):
+            return None
+
+        _noop_names = (
+            "register_dataset_to_stats_actor",
+            "update_execution_metrics",
+            "clear_execution_metrics",
+            "update_iteration_metrics",
+            "clear_iteration_metrics",
+        )
+        for _t in (getattr(_ds_stats, n, None) for n in ("_StatsManager", "StatsManager")):
+            if _t is None:
+                continue
+            if hasattr(_t, "gen_dataset_id_from_stats_actor"):
+                setattr(_t, "gen_dataset_id_from_stats_actor", _local_dataset_id)
+            for _m in _noop_names:
+                if hasattr(_t, _m):
+                    setattr(_t, _m, _noop)
+        print("[ray_ci_init] ray.data stats actor neutralized", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ray_ci_init] stats-actor patch skipped: {e!r}", flush=True)
 
     if not ray.is_initialized():
         try:
@@ -162,14 +200,6 @@ def _ray_ci_init():
             )
         except Exception as e:  # noqa: BLE001
             print(f"[ray_ci_init] ray.init failed: {e!r}", flush=True)
-
-    # Warm up: one trivial task through GCS with a hard timeout. Healthy control
-    # plane returns instantly; a wedged one surfaces a clear marker here.
-    try:
-        ray.get(ray.remote(lambda: 1).remote(), timeout=90)
-        print("[ray_ci_init] ray control plane healthy", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[ray_ci_init] ray warmup failed: {e!r}", flush=True)
 
     yield
     try:
