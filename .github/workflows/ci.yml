@@ -32,6 +32,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
+      distributed: ${{ steps.filter.outputs.distributed }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -135,6 +136,18 @@ jobs:
               # inference via ort). Own workspace, not in the `rust` job's
               # `cargo test --workspace`, so it needs its own lane.
               - 'packages/rust/extensions/goldenembed/**'
+            distributed:
+              # Ray-backed distributed paths. The main `python` job installs
+              # without the `ray` extra, so every tests/test_distributed_*.py
+              # SKIPS there (pytest.importorskip("ray")). The `distributed` job
+              # installs ray so they actually run. Trigger on the distributed
+              # package, its tests, and the core modules those paths call into
+              # (cluster.UnionFind backs two_phase_wcc; ray_backend drives
+              # distributed scoring).
+              - 'packages/python/goldenmatch/goldenmatch/distributed/**'
+              - 'packages/python/goldenmatch/tests/test_distributed_*.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+              - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -681,6 +694,45 @@ jobs:
         working-directory: packages/rust/extensions/goldenembed
         run: cargo test --release
 
+  # Ray-backed distributed lane. The full goldenmatch `python` job runs
+  # `uv sync --all-packages` WITHOUT the optional `ray` extra, so every
+  # tests/test_distributed_*.py SKIPS there via `pytest.importorskip("ray")`.
+  # Installing ray here makes them actually execute — most importantly the
+  # quality-invariance gate in test_distributed_clustering.py, which asserts
+  # the three distributed routes (scipy.csgraph / label propagation /
+  # two-phase WCC) produce the SAME connected components as the in-memory
+  # build_clusters AND are invariant to Ray partition count (1/2/3/7).
+  distributed:
+    needs: changes
+    if: needs.changes.outputs.distributed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # The `ray` optional extra (ray>=2.0). pandas: ray.data uses it for some
+      # batch ops. Installed explicitly (mirrors the native lane's onnxruntime
+      # install) so the default dep tree stays ray-free and these tests keep
+      # skipping everywhere else.
+      - name: Install ray extra
+        run: uv pip install 'ray>=2.0' pandas
+      - name: Diagnostics
+        run: uv run python -c "import ray, polars, scipy; print('ray', ray.__version__, 'polars', polars.__version__)"
+      - name: Distributed tests (ray present -> ray-gated tests run, not skip)
+        # Serial (no -n auto): under xdist each worker would spin up its own
+        # ray cluster and race on ports. The fixtures here are tiny (<=8
+        # nodes); --timeout converts any ray hang into an actionable failure
+        # instead of a 20-min job timeout with no diagnostics.
+        run: |
+          uv run pytest packages/python/goldenmatch/tests/test_distributed_*.py \
+            --timeout=180 --timeout-method=thread --durations=20 -v
+
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
@@ -906,6 +958,7 @@ jobs:
       - duckdb_extensions
       - native
       - goldenembed
+      - distributed
       - pyright
       - readme_callouts
     if: always()
