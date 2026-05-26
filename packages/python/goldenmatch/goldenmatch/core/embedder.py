@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -75,17 +76,75 @@ class Embedder:
 # Module-level cache for embedder instances
 # ---------------------------------------------------------------------------
 
-_embedders: dict[str, Embedder] = {}
+_embedders: dict[str, Embedder | _ProviderEmbedder] = {}
 
 
-def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder:
+class _ProviderEmbedder:
+    """Adapts a ``goldenmatch.embeddings`` provider to the ``Embedder`` interface
+    the scorer uses (``embed_column`` + ``cosine_similarity_matrix``).
+
+    Lets the in-house embedder (and any other provider) back the
+    ``embedding`` / ``record_embedding`` scorers without changing the scorer.
+    """
+
+    def __init__(self, provider: object) -> None:
+        self._provider = provider
+        self._cache: dict[str, np.ndarray] = {}
+        self.model_name = getattr(provider, "model_id", "provider")
+
+    def embed_column(self, values: list[str], cache_key: str) -> np.ndarray:
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        clean = [str(v) if v is not None and str(v).strip() else "" for v in values]
+        emb = np.asarray(self._provider.embed(clean), dtype=np.float32)  # type: ignore[attr-defined]
+        self._cache[cache_key] = emb
+        return emb
+
+    def cosine_similarity_matrix(self, embeddings: np.ndarray) -> np.ndarray:
+        # Normalize defensively — not every provider returns unit vectors.
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        unit = embeddings / norms
+        return unit @ unit.T
+
+
+def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
+    """Build a `_ProviderEmbedder` for the in-house model.
+
+    ``model_name`` is ``"inhouse:<path>"`` (path to a saved GoldenEmbedModel) or
+    bare ``"inhouse"`` (path from ``GOLDENMATCH_INHOUSE_MODEL``).
+    """
+    from goldenmatch.embeddings.providers import InHouseProvider
+
+    path = model_name.split(":", 1)[1] if ":" in model_name else os.environ.get(
+        "GOLDENMATCH_INHOUSE_MODEL"
+    )
+    if not path:
+        raise ValueError(
+            "in-house embedder requires a model path: set the matchkey field "
+            "`model` to 'inhouse:/path/to/model', or set GOLDENMATCH_INHOUSE_MODEL. "
+            "Train one with goldenmatch.embeddings.inhouse.train_embedder(...)."
+        )
+    return _ProviderEmbedder(InHouseProvider(path))
+
+
+def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder | _ProviderEmbedder:
     """Return a cached Embedder instance, using GPU routing when available.
 
     Checks GOLDENMATCH_GPU_MODE to select the right backend:
     - vertex: uses VertexEmbedder (Google Vertex AI, no local GPU needed)
     - remote: uses RemoteEmbedder (custom endpoint)
     - local/cpu_safe: uses local sentence-transformers Embedder
+
+    A ``model_name`` of ``"inhouse"`` / ``"inhouse:<path>"`` routes to the local,
+    in-house ER embedder (`goldenmatch.embeddings.inhouse`) — no cloud or torch.
     """
+    # In-house embedder: explicit, config-driven (the matchkey field's `model`).
+    if model_name == "inhouse" or model_name.startswith("inhouse:"):
+        if model_name not in _embedders:
+            _embedders[model_name] = _make_inhouse_embedder(model_name)
+        return _embedders[model_name]
+
     if model_name not in _embedders:
         try:
             from goldenmatch.core.gpu import detect_gpu_mode

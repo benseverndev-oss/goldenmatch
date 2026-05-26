@@ -1703,6 +1703,73 @@ pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String,
     })
 }
 
+/// Connected components over JSON `[[a, b, score], ...]` pairs via the Native
+/// Core kernel (`goldenmatch.native.connected_components` — Rust when the ext
+/// is built, else the pure-Python reference). Returns a JSON array of
+/// components (each a sorted array of ids). Fail-soft to `{"error": ...}`.
+pub fn connected_components(pairs_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let native = py.import("goldenmatch.native")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+            let pairs = if pairs_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (pairs_json,))?
+            };
+            let comps = native.call_method1("connected_components", (pairs,))?;
+            py_json_dumps(py, comps)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Canonicalize + keep max score per pair over JSON `[[a, b, score], ...]` via
+/// `goldenmatch.native.dedup_pairs_max_score`. Returns a JSON array of
+/// `[a, b, score]`. Fail-soft to `{"error": ...}`.
+pub fn pair_dedup(pairs_json: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let native = py.import("goldenmatch.native")?;
+            let json_mod = py.import("json")?;
+            let builtins = py.import("builtins")?;
+            let pairs = if pairs_json.is_empty() {
+                builtins.call_method0("list")?
+            } else {
+                json_mod.call_method1("loads", (pairs_json,))?
+            };
+            let out = native.call_method1("dedup_pairs_max_score", (pairs,))?;
+            py_json_dumps(py, out)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
+/// Embed one text with the local in-house embedder
+/// (`goldenmatch.embeddings.embed_records(provider="inhouse", model=...)`).
+/// `model_path` is a saved `GoldenEmbedModel` directory. Returns a JSON float
+/// array. Fail-soft to `{"error": ...}`.
+pub fn embed_local(text: &str, model_path: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let result: Result<String, BridgeError> = (|| {
+            let emb = py.import("goldenmatch.embeddings")?;
+            let texts = pyo3::types::PyList::empty(py);
+            texts.append(text)?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("provider", "inhouse")?;
+            kwargs.set_item("model", model_path)?;
+            let vecs = emb.call_method("embed_records", (texts,), Some(&kwargs))?;
+            let row = vecs.call_method0("tolist")?.get_item(0)?;
+            py_json_dumps(py, row)
+        })();
+        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

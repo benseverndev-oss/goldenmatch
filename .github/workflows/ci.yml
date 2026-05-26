@@ -31,6 +31,7 @@ jobs:
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
+      goldenembed: ${{ steps.filter.outputs.goldenembed }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -122,8 +123,18 @@ jobs:
               - 'packages/rust/extensions/native/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/pairs.py'
+              - 'packages/python/goldenmatch/goldenmatch/embeddings/**'
               - 'packages/python/goldenmatch/tests/test_native_parity.py'
+              - 'packages/python/goldenmatch/tests/test_pairs.py'
+              - 'packages/python/goldenmatch/tests/test_embeddings.py'
+              - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
               - 'scripts/build_native.py'
+            goldenembed:
+              # Standalone Rust embedding runtime (char n-gram featurize + ONNX
+              # inference via ort). Own workspace, not in the `rust` job's
+              # `cargo test --workspace`, so it needs its own lane.
+              - 'packages/rust/extensions/goldenembed/**'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -635,8 +646,40 @@ jobs:
       - name: Build native extension into the package
         # No --offline: CI has network + a cold cache on first run.
         run: uv run python scripts/build_native.py
-      - name: Parity suite (ext present -> tests run instead of skipping)
-        run: uv run pytest packages/python/goldenmatch/tests/test_native_parity.py -v
+      - name: Install ONNX runtime (exercises the in-house embedder export path)
+        # The [inhouse-embeddings] extra; without it the ONNX parity tests skip.
+        run: uv pip install onnx onnxruntime
+      - name: Parity + in-house suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/goldenmatch/tests/test_native_parity.py \
+            packages/python/goldenmatch/tests/test_pairs.py \
+            packages/python/goldenmatch/tests/test_embeddings.py \
+            packages/python/goldenmatch/tests/test_inhouse_embedder.py \
+            -v
+
+  # Standalone Rust embedding runtime (goldenembed): builds the crate (which
+  # links onnxruntime via the `ort` crate) and runs the featurizer unit tests.
+  # The full ONNX-inference parity vs Python is validated out-of-CI against a
+  # trained model; the unit tests cover the deterministic featurizer here.
+  goldenembed:
+    needs: changes
+    if: needs.changes.outputs.goldenembed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldenembed
+      - name: clippy
+        working-directory: packages/rust/extensions/goldenembed
+        run: cargo clippy --release --all-targets -- -D warnings
+      - name: test
+        working-directory: packages/rust/extensions/goldenembed
+        run: cargo test --release
 
   action:
     needs: changes
@@ -862,6 +905,7 @@ jobs:
       - rust_pgrx
       - duckdb_extensions
       - native
+      - goldenembed
       - pyright
       - readme_callouts
     if: always()

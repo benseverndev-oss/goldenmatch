@@ -5,6 +5,9 @@ Cargo.lock
 # verified artifact, so it must resolve the exact deps (pyo3 patch) it was
 # verified against, not float on every CI run.
 !native/Cargo.lock
+# Same rationale for goldenembed: the `goldenembed` CI lane builds it (and links
+# onnxruntime via `ort`), so pin the exact resolved deps it was verified against.
+!goldenembed/Cargo.lock
 *.so
 *.dylib
 *.dll
