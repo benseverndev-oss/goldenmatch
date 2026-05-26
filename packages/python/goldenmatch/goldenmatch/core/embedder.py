@@ -76,7 +76,7 @@ class Embedder:
 # Module-level cache for embedder instances
 # ---------------------------------------------------------------------------
 
-_embedders: dict[str, "Embedder | _ProviderEmbedder"] = {}
+_embedders: dict[str, Embedder | _ProviderEmbedder] = {}
 
 
 class _ProviderEmbedder:
@@ -128,7 +128,7 @@ def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
     return _ProviderEmbedder(InHouseProvider(path))
 
 
-def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> "Embedder | _ProviderEmbedder":
+def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder | _ProviderEmbedder:
     """Return a cached Embedder instance, using GPU routing when available.
 
     Checks GOLDENMATCH_GPU_MODE to select the right backend:
