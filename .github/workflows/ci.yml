@@ -122,7 +122,12 @@ jobs:
               - 'packages/rust/extensions/native/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/pairs.py'
+              - 'packages/python/goldenmatch/goldenmatch/embeddings/**'
               - 'packages/python/goldenmatch/tests/test_native_parity.py'
+              - 'packages/python/goldenmatch/tests/test_pairs.py'
+              - 'packages/python/goldenmatch/tests/test_embeddings.py'
+              - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
               - 'scripts/build_native.py'
             action:
               - 'packages/actions/**'
@@ -635,8 +640,17 @@ jobs:
       - name: Build native extension into the package
         # No --offline: CI has network + a cold cache on first run.
         run: uv run python scripts/build_native.py
-      - name: Parity suite (ext present -> tests run instead of skipping)
-        run: uv run pytest packages/python/goldenmatch/tests/test_native_parity.py -v
+      - name: Install ONNX runtime (exercises the in-house embedder export path)
+        # The [inhouse-embeddings] extra; without it the ONNX parity tests skip.
+        run: uv pip install onnx onnxruntime
+      - name: Parity + in-house suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/goldenmatch/tests/test_native_parity.py \
+            packages/python/goldenmatch/tests/test_pairs.py \
+            packages/python/goldenmatch/tests/test_embeddings.py \
+            packages/python/goldenmatch/tests/test_inhouse_embedder.py \
+            -v
 
   action:
     needs: changes
