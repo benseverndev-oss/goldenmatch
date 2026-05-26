@@ -30,6 +30,12 @@ All features are accessible via `import goldenmatch as gm`.
 
 __version__ = "1.19.0"
 
+# ── Native Core surface ───────────────────────────────────────────────────
+# goldenmatch.native: graph/pair primitives + native string scorers, re-exported
+# for discoverability. Import-safe ahead of the rest — native.py only pulls in
+# leaf goldenmatch.core.* modules, so there's no cycle back through this package.
+from goldenmatch import native
+
 # ── High-level API (convenience functions) ────────────────────────────────
 from goldenmatch._api import (
     DedupeResult,
@@ -267,10 +273,6 @@ from goldenmatch.pprl.protocol import (
     link_trusted_third_party,
     run_pprl,
 )
-
-# Native Core surface (graph/pair primitives + native string scorers). Imported
-# last so the core modules it re-exports are already initialized.
-from goldenmatch import native
 
 # ── Shortcuts ────────────────────────────────────────────────────────────
 explain_pair = explain_pair_nl
