@@ -182,13 +182,38 @@ def _ray_ci_init():
             if _t is None:
                 continue
             if hasattr(_t, "gen_dataset_id_from_stats_actor"):
-                setattr(_t, "gen_dataset_id_from_stats_actor", _local_dataset_id)
+                _t.gen_dataset_id_from_stats_actor = _local_dataset_id
             for _m in _noop_names:
                 if hasattr(_t, _m):
                     setattr(_t, _m, _noop)
         print("[ray_ci_init] ray.data stats actor neutralized", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[ray_ci_init] stats-actor patch skipped: {e!r}", flush=True)
+
+    # Supported ray.data config (not monkeypatching): turn off the control-plane
+    # subsystems that hang on hosted CI. op_resource_reservation_enabled drives
+    # the operator resource-reservation path behind the autoscaling coordinator
+    # ("Failed to send resource request" loop). Disabling it + the metrics /
+    # progress-bar actors removes those RPCs entirely. Must be set before any
+    # Dataset is created (this session fixture runs before the tests). Each flag
+    # is hasattr-guarded so a ray version that drops one doesn't error.
+    try:
+        from ray.data.context import DataContext
+
+        _ctx = DataContext.get_current()
+        for _flag, _val in (
+            ("op_resource_reservation_enabled", False),
+            ("enable_progress_bars", False),
+            ("enable_operator_progress_bars", False),
+            ("enable_get_object_locations_for_metrics", False),
+            ("enable_per_node_metrics", False),
+            ("enable_auto_log_stats", False),
+        ):
+            if hasattr(_ctx, _flag):
+                setattr(_ctx, _flag, _val)
+        print("[ray_ci_init] ray.data control-plane subsystems disabled", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[ray_ci_init] DataContext config skipped: {e!r}", flush=True)
 
     if not ray.is_initialized():
         try:
