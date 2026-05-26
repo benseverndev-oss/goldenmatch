@@ -123,10 +123,12 @@ jobs:
               # the Python files it's wired into + the build script.
               - 'packages/rust/extensions/native/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
+              - 'packages/python/goldenmatch/goldenmatch/core/_hashing.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
               - 'packages/python/goldenmatch/goldenmatch/core/pairs.py'
               - 'packages/python/goldenmatch/goldenmatch/embeddings/**'
               - 'packages/python/goldenmatch/tests/test_native_parity.py'
+              - 'packages/python/goldenmatch/tests/test_record_fingerprint.py'
               - 'packages/python/goldenmatch/tests/test_pairs.py'
               - 'packages/python/goldenmatch/tests/test_embeddings.py'
               - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
@@ -666,6 +668,7 @@ jobs:
         run: |
           uv run pytest \
             packages/python/goldenmatch/tests/test_native_parity.py \
+            packages/python/goldenmatch/tests/test_record_fingerprint.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_embeddings.py \
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \

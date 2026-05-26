@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 mod cluster;
 mod featurize;
+mod hash;
 mod pairs;
 mod score;
 
@@ -29,5 +30,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;
     Ok(())
 }
