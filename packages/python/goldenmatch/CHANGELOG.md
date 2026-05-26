@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-05-26
+
 ### Added — cluster-decision tuner (RFC from MJH Print Modernization)
 
 Third tuner in the Learning Memory family, paralleling the
