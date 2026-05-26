@@ -203,7 +203,9 @@ def test_build_clusters_distributed_routes_to_label_prop_when_forced(caplog):
 
 
 def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
-    """GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=0 forces label-prop path."""
+    """GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD=0 forces the distributed
+    path (not the scipy fallback). With no force_label_propagation, the default
+    WCC algorithm is two_phase_wcc (see _wcc_algorithm)."""
     import logging
 
     from goldenmatch.distributed.clustering import (
@@ -219,7 +221,9 @@ def test_build_clusters_distributed_threshold_env_override(monkeypatch, caplog):
         build_clusters_distributed(pairs_ds, all_ids=[1, 2, 3])
 
     routing_msgs = [r.message.lower() for r in caplog.records]
-    assert any("distributed label propagation" in m for m in routing_msgs)
+    # Env override took the distributed path; default WCC = two_phase_wcc.
+    assert any("two_phase_wcc" in m for m in routing_msgs), routing_msgs
+    assert not any("scipy" in m for m in routing_msgs)
 
 
 # ── Quality-invariant scale validation ──

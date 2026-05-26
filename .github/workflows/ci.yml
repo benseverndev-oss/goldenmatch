@@ -729,11 +729,16 @@ jobs:
       # hosted runner via the worker logs. `.venv/bin/python` makes ray spawn
       # workers that can import ray. Serial (no -n auto): xdist workers would
       # each start a ray cluster and race on ports.
+      # --timeout=300 (not 120): the controller autoconfig test runs several
+      # ray.data sample-pipeline iterations and the label-prop partition-count
+      # invariance cases iterate to fixpoint on chains (label-prop's worst case).
+      # On a 2-core hosted runner the heaviest single test sits ~100-150s; 120s
+      # clipped it. The job-level timeout-minutes: 20 is the real backstop.
       - name: Distributed tests (ray present -> ray-gated tests run, not skip)
         run: |
           .venv/bin/python -c "import ray, scipy, polars; print('ray', ray.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_distributed_*.py \
-            --timeout=120 --durations=20 -v
+            --timeout=300 --durations=20 -v
 
   action:
     needs: changes
