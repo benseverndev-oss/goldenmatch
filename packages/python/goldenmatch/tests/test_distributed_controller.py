@@ -60,10 +60,10 @@ def test_controller_distributed_path_does_not_materialize_full_df(tmp_path, monk
     400 MB, so the check only ever measured Ray's variable runtime overhead
     (it grew 703 MB on one shared-runner run, 18 MB on another). A non-degenerate
     surname pool also avoids the soundex-collapse pair explosion."""
+    import goldenmatch.distributed.sample as sample_mod
     import polars as pl
     from goldenmatch import auto_configure_df
     from goldenmatch.distributed import read_csv_partitioned
-    import goldenmatch.distributed.sample as sample_mod
 
     n = 100_000
     csv = tmp_path / "big.csv"
