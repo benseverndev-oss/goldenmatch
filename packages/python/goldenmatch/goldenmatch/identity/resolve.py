@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +24,7 @@ from typing import Any
 
 import polars as pl
 
+from goldenmatch.core._hashing import record_fingerprint
 from goldenmatch.identity.model import (
     EdgeKind,
     EventKind,
@@ -72,22 +75,82 @@ def _hash_payload(payload: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _id_scheme() -> str:
+    """Primary content-hash record-id scheme: ``"h1"`` (canonical
+    cross-surface fingerprint, the default) or ``"hash"`` (legacy json.dumps).
+    ``GOLDENMATCH_IDENTITY_ID_SCHEME=hash`` forces legacy as primary -- a
+    migration kill-switch. See docs/design/2026-05-26-stable-record-hash-cabi
+    -plan.md."""
+    return "hash" if os.environ.get(
+        "GOLDENMATCH_IDENTITY_ID_SCHEME", "h1"
+    ).strip().lower() == "hash" else "h1"
+
+
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Coerce a row payload to the primitives ``record_fingerprint`` accepts.
+
+    Temporals -> ISO-8601; non-finite floats -> their token string; other
+    non-primitives -> ``str()``. v1 of the canonical spec is primitive-only;
+    these coercions are a documented v1.1 follow-up (pinned in the kernel +
+    mirrored across surfaces when a second write surface adopts the C ABI). For
+    now they keep ingest working on real data (date columns etc.) while clean
+    str/int/float/bool/None records get a fully cross-surface fingerprint."""
+    out: dict[str, Any] = {}
+    for k, v in payload.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            out[k] = repr(v)  # "nan" / "inf" / "-inf" as a stable token
+        elif v is None or isinstance(v, (bool, int, float, str, bytes)):
+            out[k] = v
+        else:
+            iso = getattr(v, "isoformat", None)
+            out[k] = iso() if callable(iso) else str(v)
+    return out
+
+
+def _record_id_candidates(
+    row: dict[str, Any],
+    source: str,
+    source_pk_col: str | None,
+) -> tuple[str, list[str]]:
+    """Return ``(primary_id, lookup_candidates)`` for a record row.
+
+    Natural PK -> ``("{source}:{pk}", ["{source}:{pk}"])`` (unchanged).
+    No PK -> a content-hash id. The primary is the canonical cross-surface
+    fingerprint (``"{source}:h1:{12}"``); the legacy json.dumps id
+    (``"{source}:hash:{12}"``) is kept as an additional *lookup candidate* so
+    records ingested before the cutover keep resolving to the same entity (no
+    rewrite, no split). Candidates are ordered primary-first. A record whose
+    values the canonical spec can't yet fingerprint stays on the legacy scheme.
+    """
+    if source_pk_col and source_pk_col in row and row[source_pk_col] is not None:
+        pk = str(row[source_pk_col])
+        rid = f"{source}:{pk}"
+        return rid, [rid]
+    payload = _row_to_payload(row)
+    legacy_id = f"{source}:hash:{_hash_payload(payload)[:12]}"
+    try:
+        h1_id = f"{source}:h1:{record_fingerprint(_canonical_payload(payload))[:12]}"
+    except (TypeError, ValueError):
+        # Belt-and-suspenders: anything the canonical spec can't handle stays
+        # legacy-only (still fully resolvable). Should be rare after coercion.
+        return legacy_id, [legacy_id]
+    if _id_scheme() == "hash":
+        return legacy_id, [legacy_id, h1_id]
+    return h1_id, [h1_id, legacy_id]
+
+
 def derive_record_id(
     row: dict[str, Any],
     source: str,
     source_pk_col: str | None,
 ) -> tuple[str, str]:
-    """Return ``(record_id, source_pk)`` for a record row.
-
-    When ``source_pk_col`` is set and the row has a non-null value, use that.
-    Otherwise fall back to the payload hash (``{source}:hash:{12 hex}``).
-    """
-    if source_pk_col and source_pk_col in row and row[source_pk_col] is not None:
-        pk = str(row[source_pk_col])
-        return f"{source}:{pk}", pk
-    payload_hash = _hash_payload(_row_to_payload(row))
-    short = payload_hash[:12]
-    return f"{source}:hash:{short}", f"hash:{short}"
+    """Return ``(record_id, source_pk)`` for a record row, using the primary
+    id scheme (see ``_record_id_candidates``). Kept for back-compat;
+    ``resolve_clusters`` uses the candidate-aware path directly so it can apply
+    the legacy-fallback migration."""
+    primary, _ = _record_id_candidates(row, source, source_pk_col)
+    pk = primary[len(source) + 1:] if primary.startswith(f"{source}:") else primary
+    return primary, pk
 
 
 def _golden_record_from_members(
@@ -144,25 +207,56 @@ def resolve_clusters(
         return summary
 
     # 1. Build row_id -> record_id mapping + ensure source_records are upserted.
+    #
+    # Record-id migration (docs/design/2026-05-26-stable-record-hash-cabi-plan.md):
+    # rows without a natural source PK get a content-hash id. The default scheme
+    # is now the canonical cross-surface fingerprint ("{source}:h1:{12}"); the
+    # legacy json.dumps scheme ("{source}:hash:{12}") is still derived as a
+    # *lookup candidate*, so records ingested before the cutover keep resolving
+    # to the same entity (no rewrite, no split). Each record is keyed under
+    # whichever candidate already exists in the store, else its primary id.
     rows = df.to_dicts()
     rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}
     rowid_to_source: dict[int, str] = {}
     rowid_to_pk: dict[int, str] = {}
     rowid_to_hash: dict[int, str] = {}
+    _rowid_primary: dict[int, str] = {}
+    _rowid_candidates: dict[int, list[str]] = {}
 
     for row in rows:
         rid = row.get("__row_id__")
         if rid is None:
             continue
+        irid = int(rid)
         source = str(row.get("__source__", "dataframe"))
-        record_id, pk = derive_record_id(row, source, source_pk_col)
-        payload = _row_to_payload(row)
-        rowid_to_recid[int(rid)] = record_id
-        rowid_to_payload[int(rid)] = payload
-        rowid_to_source[int(rid)] = source
-        rowid_to_pk[int(rid)] = pk
-        rowid_to_hash[int(rid)] = _hash_payload(payload)
+        primary_id, candidates = _record_id_candidates(row, source, source_pk_col)
+        _rowid_primary[irid] = primary_id
+        _rowid_candidates[irid] = candidates
+        rowid_to_payload[irid] = _row_to_payload(row)
+        rowid_to_source[irid] = source
+        rowid_to_hash[irid] = _hash_payload(rowid_to_payload[irid])
+
+    # One bulk lookup over the candidate union resolves each record to an
+    # existing id (legacy-fallback) and doubles as the pre-flight check the
+    # bulk fast-path below uses to spot brand-new clusters (the 500K-cluster
+    # bench, #368 Phase 6, depends on this single pre-flight lookup).
+    _all_candidates = sorted({c for cs in _rowid_candidates.values() for c in cs})
+    _existing_by_id: dict[str, str] = (
+        store.lookup_entity_ids(_all_candidates) if _all_candidates else {}
+    )
+    preflight_existing: dict[str, str] = {}
+    for irid, candidates in _rowid_candidates.items():
+        chosen = next(
+            (c for c in candidates if c in _existing_by_id), _rowid_primary[irid]
+        )
+        rowid_to_recid[irid] = chosen
+        src = rowid_to_source[irid]
+        rowid_to_pk[irid] = (
+            chosen[len(src) + 1:] if chosen.startswith(f"{src}:") else chosen
+        )
+        if chosen in _existing_by_id:
+            preflight_existing[chosen] = _existing_by_id[chosen]
 
     # 2. Scored pair lookup canonicalized by record_id pair.
     pair_score_by_recpair: dict[tuple[str, str], float] = {}
@@ -172,22 +266,6 @@ def resolve_clusters(
         if not ra or not rb:
             continue
         pair_score_by_recpair[canon_record_pair(ra, rb)] = float(s)
-
-    # 2b. Pre-flight bulk lookup: figure out which clusters are entirely
-    # brand-new (no member's record_id has an existing entity_id). Those
-    # clusters can be bulk-flushed via COPY at the end of the loop on
-    # Postgres backends, avoiding ~5-10 round-trips per cluster. The
-    # 500K-cluster bench (#368 Phase 6) drops from a 60-min timeout to
-    # ~minutes with this fast-path.
-    all_record_ids: list[str] = []
-    for info in clusters.values():
-        for m in info.get("members") or []:
-            rid = rowid_to_recid.get(int(m))
-            if rid:
-                all_record_ids.append(rid)
-    preflight_existing: dict[str, str] = (
-        store.lookup_entity_ids(all_record_ids) if all_record_ids else {}
-    )
 
     # Bulk-path eligibility: postgres-only, no overlap with existing
     # identities, no weak-conflict edges (the conflict path mutates per

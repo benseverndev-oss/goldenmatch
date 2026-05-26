@@ -175,7 +175,7 @@ def test_resolve_idempotent_replay(store):
     assert len(store.history(eid)) == events_before  # CREATED guard prevented duplicate
 
 
-def test_resolve_no_source_pk_falls_back_to_hash(store):
+def test_resolve_no_source_pk_uses_h1_fingerprint(store):
     df = _df([
         {"name": "Alice", "email": "a@x.com"},
         {"name": "Alyce", "email": "a@x.com"},
@@ -185,10 +185,90 @@ def test_resolve_no_source_pk_falls_back_to_hash(store):
         "wd", store, run_name="r1", source_pk_col=None,
     )
     assert summary.created == 1
-    # Records use the fallback "src:hash:..." pattern.
+    # No-PK records now use the canonical fingerprint id "src:h1:..." (default).
+    eid = store.list_identities()[0].entity_id
+    recs = store.get_records_for_entity(eid)
+    assert all(r.record_id.startswith("src:h1:") for r in recs)
+
+
+def test_resolve_legacy_hash_ids_still_resolve(store, monkeypatch):
+    """Migration: records ingested under the legacy 'src:hash:' scheme keep
+    resolving to the same entity once the default flips to 'h1' -- no new
+    identity, no split, no duplicate record rows."""
+    rows = [
+        {"name": "Alice", "email": "a@x.com"},
+        {"name": "Alyce", "email": "a@x.com"},
+    ]
+    # Ingest #1 simulates a pre-cutover store (legacy scheme primary).
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_ID_SCHEME", "hash")
+    resolve_clusters(
+        {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
+        "wd", store, run_name="r1", source_pk_col=None,
+    )
+    eid = store.list_identities()[0].entity_id
+    legacy_ids = {r.record_id for r in store.get_records_for_entity(eid)}
+    assert all(rid.startswith("src:hash:") for rid in legacy_ids)
+
+    # Ingest #2 under the new default (h1): same records must absorb, not split.
+    monkeypatch.delenv("GOLDENMATCH_IDENTITY_ID_SCHEME", raising=False)
+    summary = resolve_clusters(
+        {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
+        "wd", store, run_name="r2", source_pk_col=None,
+    )
+    assert store.count_identities() == 1
+    assert summary.created == 0
+    # Records stay keyed under their existing legacy ids (no duplicate rows).
+    assert {r.record_id for r in store.get_records_for_entity(eid)} == legacy_ids
+
+
+def test_resolve_h1_idempotent_replay(store):
+    """No-PK records under the default h1 scheme replay idempotently."""
+    rows = [
+        {"name": "Alice", "email": "a@x.com"},
+        {"name": "Alyce", "email": "a@x.com"},
+    ]
+    resolve_clusters(
+        {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
+        "wd", store, run_name="r1", source_pk_col=None,
+    )
+    n1 = store.count_identities()
+    resolve_clusters(
+        {0: _cluster([0, 1])}, _df(rows), [(0, 1, 0.95)],
+        "wd", store, run_name="r1", source_pk_col=None,
+    )
+    assert store.count_identities() == n1
+
+
+def test_resolve_id_scheme_killswitch(store, monkeypatch):
+    """GOLDENMATCH_IDENTITY_ID_SCHEME=hash forces the legacy primary scheme."""
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_ID_SCHEME", "hash")
+    resolve_clusters(
+        {0: _cluster([0, 1])},
+        _df([
+            {"name": "Alice", "email": "a@x.com"},
+            {"name": "Alyce", "email": "a@x.com"},
+        ]),
+        [(0, 1, 0.95)], "wd", store, run_name="r1", source_pk_col=None,
+    )
     eid = store.list_identities()[0].entity_id
     recs = store.get_records_for_entity(eid)
     assert all(r.record_id.startswith("src:hash:") for r in recs)
+
+
+def test_record_id_candidates_coerces_date_to_h1():
+    """A date value (polars Date -> datetime.date in to_dicts) must not break
+    id derivation: _canonical_payload coerces it (isoformat) so the record
+    still gets a canonical h1 id rather than falling back to legacy."""
+    import datetime as _dt
+
+    from goldenmatch.identity import resolve as _resolve
+
+    row = {"__row_id__": 0, "__source__": "src", "name": "Alice",
+           "dob": _dt.date(1990, 1, 1)}
+    primary, candidates = _resolve._record_id_candidates(row, "src", None)
+    assert primary.startswith("src:h1:")
+    assert primary == candidates[0]
+    assert any(c.startswith("src:hash:") for c in candidates)  # legacy still a candidate
 
 
 def test_resolve_evidence_edges_have_field_scores(store):
