@@ -144,3 +144,77 @@ def test_public_uses_native_when_on(monkeypatch):
     assert _hashing.record_fingerprint(rec) == _native_loader.native_module().record_fingerprint(
         rec
     )
+
+
+# ── C ABI cross-language determinism (Phase 3) ──
+# gm_record_fingerprint is the C symbol non-Python surfaces (pgrx/DuckDB/Node)
+# call. Loaded via ctypes from the same shared object, it must produce the same
+# hex as the PyO3 function + the pure-Python reference + the pinned vectors.
+def _load_native_cdll():
+    import ctypes
+
+    mod = _native_loader.native_module()
+    path = getattr(mod, "__file__", None)
+    if not path:
+        return None
+    try:
+        return ctypes.CDLL(path)
+    except OSError:
+        return None
+
+
+# JSON can't carry bytes; exclude any bytes-valued records from the C-ABI battery.
+_JSON_BATTERY = [
+    r for r in _BATTERY if not any(isinstance(v, bytes) for v in r.values())
+]
+
+
+@pytestmark_native
+@pytest.mark.parametrize("record", _JSON_BATTERY)
+def test_c_abi_matches_pyo3_and_reference(record):
+    import ctypes
+    import json
+
+    lib = _load_native_cdll()
+    if lib is None or not hasattr(lib, "gm_record_fingerprint"):
+        pytest.skip("gm_record_fingerprint C symbol not loadable in this build")
+    lib.gm_record_fingerprint.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.gm_record_fingerprint.restype = ctypes.c_int
+    out = ctypes.create_string_buffer(65)
+    rc = lib.gm_record_fingerprint(json.dumps(record).encode("utf-8"), out)
+    assert rc == 0, (rc, record)
+    hex_c = out.value.decode("ascii")
+    assert hex_c == _hashing._fingerprint_py(record)
+    assert hex_c == _native_loader.native_module().record_fingerprint(record)
+
+
+@pytestmark_native
+@pytest.mark.parametrize("record,expected", _PINNED)
+def test_c_abi_matches_pinned(record, expected):
+    import ctypes
+    import json
+
+    lib = _load_native_cdll()
+    if lib is None or not hasattr(lib, "gm_record_fingerprint"):
+        pytest.skip("gm_record_fingerprint C symbol not loadable in this build")
+    lib.gm_record_fingerprint.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.gm_record_fingerprint.restype = ctypes.c_int
+    out = ctypes.create_string_buffer(65)
+    rc = lib.gm_record_fingerprint(json.dumps(record).encode("utf-8"), out)
+    assert rc == 0
+    assert out.value.decode("ascii") == expected
+
+
+@pytestmark_native
+def test_c_abi_rejects_bad_input():
+    import ctypes
+
+    lib = _load_native_cdll()
+    if lib is None or not hasattr(lib, "gm_record_fingerprint"):
+        pytest.skip("gm_record_fingerprint C symbol not loadable in this build")
+    lib.gm_record_fingerprint.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.gm_record_fingerprint.restype = ctypes.c_int
+    out = ctypes.create_string_buffer(65)
+    assert lib.gm_record_fingerprint(b"not json", out) == 1          # invalid JSON
+    assert lib.gm_record_fingerprint(b"[1,2,3]", out) == 1           # not an object
+    assert lib.gm_record_fingerprint(b'{"a":[1]}', out) == 1         # nested array
