@@ -7,9 +7,9 @@ name: bench-fs-stages
 on:
   workflow_dispatch:
     inputs:
-      rows:
-        description: "End-to-end dedupe row count"
-        default: "50000"
+      ns:
+        description: "Row counts to sweep (comma-separated)"
+        default: "1000,5000,10000,30000,60000"
       fs_pairs:
         description: "FS comparison-loop pair counts (comma-separated)"
         default: "50000,200000"
@@ -42,7 +42,7 @@ jobs:
         run: |
           set -o pipefail
           uv run python packages/python/goldenmatch/scripts/bench_fs_and_stages.py \
-            --rows "${{ inputs.rows }}" \
+            --ns "${{ inputs.ns }}" \
             --fs-pairs "${{ inputs.fs_pairs }}" \
             --runs "${{ inputs.runs }}" | tee /tmp/bench.txt
           {
