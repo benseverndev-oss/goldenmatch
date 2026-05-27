@@ -76,6 +76,9 @@ from goldenmatch.config.schemas import (
     ValidationConfig,
 )
 
+# ── Canonical record fingerprint (cross-surface stable record-id hash) ─────
+from goldenmatch.core._hashing import record_fingerprint
+
 # ── Agent ────────────────────────────────────────────────────────────────
 from goldenmatch.core.agent import AgentSession
 from goldenmatch.core.anomaly import detect_anomalies
@@ -289,6 +292,9 @@ __all__ = [
     "score_strings", "score_pair_df", "explain_pair_df",
     "pprl_link", "evaluate", "load_config",
     "DedupeResult", "MatchResult",
+    # Canonical record fingerprint (stable record-id hash; same value as the
+    # native C ABI + DuckDB/Postgres goldenmatch_record_fingerprint).
+    "record_fingerprint",
     # Agent
     "AgentSession", "ReviewQueue", "gate_pairs",
     # Config

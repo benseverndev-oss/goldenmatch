@@ -84,6 +84,9 @@ export { TabularData, isNullish, toColumnValue } from "./data.js";
 // ---------------------------------------------------------------------------
 
 export { applyTransform, applyTransforms, soundex, metaphone } from "./transforms.js";
+// Canonical record fingerprint — cross-surface stable record-id hash (byte
+// parity with Python record_fingerprint + the native C ABI + the SQL UDFs).
+export { recordFingerprint } from "./record-fingerprint.js";
 
 // ---------------------------------------------------------------------------
 // Scoring
