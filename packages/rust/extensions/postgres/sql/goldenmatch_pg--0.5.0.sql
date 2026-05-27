@@ -641,3 +641,13 @@ CREATE FUNCTION "goldenmatch_embed_local"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_embed_local_wrapper';
+
+-- Canonical record fingerprint (64 hex) of a JSON record object. The
+-- cross-surface stable record-id hash; matches the DuckDB
+-- goldenmatch_record_fingerprint UDF + the Python identity path.
+CREATE FUNCTION "goldenmatch_record_fingerprint"(
+    "record_json" TEXT
+) RETURNS TEXT
+STRICT
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'goldenmatch_record_fingerprint_wrapper';
