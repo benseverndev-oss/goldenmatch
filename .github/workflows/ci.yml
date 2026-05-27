@@ -874,6 +874,18 @@ jobs:
           # Confirm new v1.7-v1.12 functions registered alongside the originals.
           sudo -u postgres psql -p "${PGPORT}" -c "SELECT proname FROM pg_proc WHERE proname LIKE 'goldenmatch%' OR proname LIKE 'gm_%' ORDER BY proname;"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenmatch_score('John Smith'::TEXT, 'Jon Smyth'::TEXT, 'jaro_winkler'::TEXT);"
+          # Cross-language determinism: the pure-Rust record fingerprint must
+          # equal the pinned vector shared with Python / native C ABI / DuckDB.
+          # (RAISE under ON_ERROR_STOP fails the lane on any mismatch.)
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE fp TEXT := goldenmatch.goldenmatch_record_fingerprint('{"a":"x"}');
+            BEGIN
+              IF fp <> '7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3' THEN
+                RAISE EXCEPTION 'goldenmatch_record_fingerprint mismatch: %', fp;
+              END IF;
+            END $$;
+          EOSQL
           # goldenflow_* transforms (fail-open: pass input through if goldenflow absent).
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 -c "SELECT goldenmatch.goldenflow_normalize_email('  John@Example.COM '::TEXT), goldenmatch.goldenflow_whitespace_normalize('a   b'::TEXT);"
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
