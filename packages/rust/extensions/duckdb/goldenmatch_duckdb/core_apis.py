@@ -29,7 +29,6 @@ import duckdb
 
 from goldenmatch_duckdb.functions import _validate_table_name
 
-
 # ── Registration ─────────────────────────────────────────────────────────
 
 
@@ -111,6 +110,13 @@ def register_core_api_functions(con: duckdb.DuckDBPyConnection) -> None:
         ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR",
     )
 
+    # Canonical record fingerprint -- the cross-surface stable record-id hash
+    # (same value the Python identity path + the native C ABI produce).
+    con.create_function(
+        "goldenmatch_record_fingerprint", _record_fingerprint,
+        ["VARCHAR"], "VARCHAR",
+    )
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -174,6 +180,21 @@ def _detect_domain(columns_json: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": str(exc)})
     return json.dumps(dataclasses.asdict(profile), default=str)
+
+
+def _record_fingerprint(record_json: str) -> str:
+    """Wrap ``record_fingerprint`` -- the canonical, cross-surface-stable
+    SHA-256 fingerprint (64 hex) of a JSON record object. ``__``-prefixed keys
+    are dropped. Returns the same value the Python identity path and the native
+    C ABI produce for the same record. Fail-soft to ``{"error": ...}``."""
+    from goldenmatch.core._hashing import record_fingerprint
+    try:
+        record = _parse_json(record_json, {})
+        if not isinstance(record, dict):
+            return json.dumps({"error": "record must be a JSON object"})
+        return record_fingerprint(record)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"error": str(exc)})
 
 
 def _extract_features(text: str, kind: str) -> str:

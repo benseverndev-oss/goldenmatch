@@ -44,3 +44,19 @@ pub fn goldenmatch_embed_local(text: String, model_path: String) -> String {
         Err(e) => pgrx::error!("goldenmatch_embed_local: {}", e),
     }
 }
+
+/// Canonical record fingerprint (64 lowercase hex) of a JSON record object.
+/// The cross-surface stable record-id hash — same value the DuckDB
+/// `goldenmatch_record_fingerprint` UDF and the Python identity path produce.
+/// `__`-prefixed keys are dropped.
+///
+/// ```sql
+/// SELECT goldenmatch.goldenmatch_record_fingerprint('{"first":"Alex","last":"Smith"}');
+/// ```
+#[pg_extern]
+pub fn goldenmatch_record_fingerprint(record_json: String) -> String {
+    match goldenmatch_bridge::api::record_fingerprint(&record_json) {
+        Ok(hex) => hex,
+        Err(e) => pgrx::error!("goldenmatch_record_fingerprint: {}", e),
+    }
+}

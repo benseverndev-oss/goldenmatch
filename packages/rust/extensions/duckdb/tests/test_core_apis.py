@@ -388,3 +388,44 @@ class TestProbabilistic:
         }
         # Reconstructed EMResult round-trips.
         EMResult(**json.loads(em_json))
+
+
+# ── record fingerprint (Phase 3b: canonical cross-surface id hash) ──────────
+
+
+class TestRecordFingerprint:
+    def test_matches_core(self, con):
+        record = {"first": "Alex", "last": "Smith", "email": "a@x.com"}
+        udf = con.sql(
+            "SELECT goldenmatch_record_fingerprint(?)",
+            params=[json.dumps(record)],
+        ).fetchone()[0]
+        # Parity against the core fingerprint on the same record.
+        from goldenmatch.core._hashing import record_fingerprint
+        assert udf == record_fingerprint(record)
+        assert len(udf) == 64
+
+    def test_matches_pinned_vector(self, con):
+        # {"a": "x"} -> sha256(b"a" 0x1f b"s" b"x" 0x1e), independent of impl.
+        udf = con.sql(
+            "SELECT goldenmatch_record_fingerprint(?)",
+            params=[json.dumps({"a": "x"})],
+        ).fetchone()[0]
+        assert udf == "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3"
+
+    def test_drops_underscore_fields(self, con):
+        with_meta = con.sql(
+            "SELECT goldenmatch_record_fingerprint(?)",
+            params=[json.dumps({"a": 1, "__row_id__": 9})],
+        ).fetchone()[0]
+        without = con.sql(
+            "SELECT goldenmatch_record_fingerprint(?)",
+            params=[json.dumps({"a": 1})],
+        ).fetchone()[0]
+        assert with_meta == without
+
+    def test_non_object_is_fail_soft(self, con):
+        out = con.sql(
+            "SELECT goldenmatch_record_fingerprint(?)", params=["[1,2,3]"]
+        ).fetchone()[0]
+        assert json.loads(out)["error"]
