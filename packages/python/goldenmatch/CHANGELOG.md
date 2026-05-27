@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dual identity composite recovers more person-data recall** (#438). The
+  composite identity matchkey (1.23.0) picks its fields by cardinality among
+  `col_type=="name"` columns; on datasets where the classifier mislabels an
+  address as a "name" (e.g. Febrl3), that keys the composite on addresses. Since
+  different datasets corrupt different fields (Febrl3 mangles names, NCVR mangles
+  addresses), auto-config now ALSO emits a second composite keyed on the
+  person-name-pattern columns (given_name/surname) + DOB, so a true pair clean on
+  EITHER field-set matches. Same date-anchor gate; OR'd, so it only adds candidate
+  pairs. Febrl3 F1 0.924 → 0.933 (recall 0.905 → 0.921, precision unchanged);
+  NCVR flat (0.969); DBLP-ACM and DQbench unchanged (no DOB column → no composite).
+
 ## [1.23.0] - 2026-05-27
 
 ### Changed

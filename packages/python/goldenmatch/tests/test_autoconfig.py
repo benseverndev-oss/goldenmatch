@@ -243,6 +243,29 @@ class TestBuildMatchkeys:
         assert not [mk for mk in mks if mk.name == "exact_identity"]
         assert not [mk for mk in mks if mk.name == "phonetic_identity"]
 
+    def test_dual_composite_when_cardinality_pick_differs_from_names(self):
+        # When the data classifier mislabels a high-cardinality column as
+        # col_type="name" (e.g. an address on Febrl3), the cardinality pick keys
+        # the composite on it. A second composite keyed on the person-name-pattern
+        # columns (given_name/surname) must also be emitted, so a pair clean on
+        # EITHER field-set matches (different datasets corrupt different fields).
+        profiles = [
+            # mislabeled, very high cardinality -> wins the cardinality pick
+            ColumnProfile("address_1", "Utf8", "name", 0.9, cardinality_ratio=0.99),
+            ColumnProfile("given_name", "Utf8", "name", 0.9, cardinality_ratio=0.30),
+            ColumnProfile("surname", "Utf8", "name", 0.9, cardinality_ratio=0.30),
+            ColumnProfile("date_of_birth", "Utf8", "date", 0.9, cardinality_ratio=0.05),
+        ]
+        mks = build_matchkeys(profiles)
+        cardinality_pick = [mk for mk in mks if mk.name == "exact_identity"]
+        name_pick = [mk for mk in mks if mk.name == "exact_identity_name"]
+        assert len(cardinality_pick) == 1 and len(name_pick) == 1
+        # cardinality composite keyed on the high-card (mislabeled) column
+        assert "address_1" in {f.field for f in cardinality_pick[0].fields}
+        # name-pattern composite keyed on the real person names + DOB
+        name_fields = {f.field for f in name_pick[0].fields}
+        assert {"given_name", "surname", "date_of_birth"} <= name_fields
+
     def test_phonetic_identity_matchkey_soundex_on_names(self):
         # #491 heuristic path: alongside the exact name+DOB composite, emit a
         # phonetic sibling that soundex-encodes the name fields so equal-sounding
