@@ -213,6 +213,35 @@ class TestBuildMatchkeys:
         assert len(weighted) == 1
         assert weighted[0].threshold == 0.80  # mix of fuzzy
 
+    def test_composite_identity_matchkey_when_name_plus_dob(self):
+        # NCVR recall fix: name + DOB columns whose individual cardinality is
+        # sub-threshold for an exact matchkey should still produce a composite
+        # exact matchkey on their (highly unique) combination, so a corrupted
+        # secondary field (e.g. address) can't sink an otherwise-clean pair.
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("birth_year", "Int64", "year", 0.9, cardinality_ratio=0.02),
+        ]
+        mks = build_matchkeys(profiles)
+        composite = [mk for mk in mks if mk.name == "exact_identity"]
+        assert len(composite) == 1
+        assert composite[0].type == "exact"
+        fields = {f.field for f in composite[0].fields}
+        assert "birth_year" in fields and len(fields) >= 2
+
+    def test_no_composite_identity_without_date_anchor(self):
+        # Names alone collide heavily (different people share first+last), so a
+        # name-only composite would manufacture false merges on adversarial /
+        # collision-heavy data with no DOB to disambiguate (DQbench tier3).
+        # The composite must require a date/year anchor.
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+        ]
+        mks = build_matchkeys(profiles)
+        assert not [mk for mk in mks if mk.name == "exact_identity"]
+
     def test_description_uses_record_embedding(self):
         profiles = [
             ColumnProfile("title", "Utf8", "description", 0.7),

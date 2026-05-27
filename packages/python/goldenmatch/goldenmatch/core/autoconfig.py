@@ -710,6 +710,39 @@ def build_matchkeys(
                 )],
             ))
 
+    # Composite "strong identity" matchkey (NCVR recall fix).
+    # Individual name/year columns rarely clear the cardinality>=0.5 exact gate
+    # (and year is blocking-only), so person data degrades to a single weighted
+    # matchkey that averages every field — one corrupted field (e.g. an
+    # abbreviated address) then sinks an otherwise-clean true pair. Their
+    # COMBINATION is highly unique, so an exact matchkey on name+dob recovers
+    # those pairs WITHOUT loosening any fuzzy scorer (keeps DQbench precision).
+    # Matchkeys are OR'd, so this only adds candidate pairs.
+    _name_fields = sorted(
+        [p for p in profiles if p.col_type == "name" and p.null_rate < 0.3],
+        key=lambda p: p.cardinality_ratio, reverse=True,
+    )[:2]
+    _date_fields = [
+        p for p in profiles
+        if p.col_type in ("year", "date") and p.null_rate < 0.3
+    ]
+    # Gate on a DOB/year anchor: a name+date combination is a real identity
+    # signal, but names ALONE collide heavily (measured on DQbench tier3:
+    # first+last keys pile up to max-group-13 / 85% of rows in multi-record
+    # groups, vs name+DOB on NCVR at max-group-4). Requiring a date anchor
+    # keeps the composite from manufacturing false merges on name-collision
+    # -heavy / adversarial data that has no DOB to disambiguate.
+    if len(_name_fields) >= 1 and len(_date_fields) >= 1:
+        composite_fields = [
+            MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
+            for p in (_name_fields + _date_fields)
+        ]
+        matchkeys.append(MatchkeyConfig(
+            name="exact_identity",
+            type="exact",
+            fields=composite_fields,
+        ))
+
     # Weighted matchkey from fuzzy fields
     all_weighted = list(fuzzy_fields)
 
