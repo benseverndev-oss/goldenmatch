@@ -1,0 +1,64 @@
+# #506 Step 3: pipeline-level embedding-provider comparison. Runs the FULL ER
+# pipeline with the embedding scorer backed by each provider and reports
+# F1/precision/recall to the step summary, answering "is the in-house embedder
+# within ~1-2% of Vertex on structured data?".
+#
+# The `none` and `inhouse` arms run here with no credentials (inhouse trains
+# in-process, pure numpy). The `vertex` arm needs GOLDENMATCH_GPU_MODE=vertex +
+# Vertex/GCP creds (pull from Infisical on the bench box) and is skipped here.
+#
+# To run: GitHub -> Actions -> "bench-embedding-providers" -> Run workflow.
+name: bench-embedding-providers
+
+on:
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: "Comma-separated arms (none,inhouse[,vertex])"
+        required: false
+        default: "none,inhouse"
+      datasets:
+        description: "Comma-separated datasets (febrl3,dblp-acm)"
+        required: false
+        default: "febrl3,dblp-acm"
+      epochs:
+        description: "In-house training epochs"
+        required: false
+        default: "200"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      DSDIR: .profile_tmp/bench-datasets
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Editable-install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+      - name: Install recordlinkage (Febrl generator)
+        run: uv pip install recordlinkage
+      - name: Fetch DBLP-ACM (Leipzig; tests/benchmarks/datasets is gitignored)
+        run: |
+          mkdir -p "$DSDIR"
+          curl -fSL -o "/tmp/DBLP-ACM.zip" "https://dbs.uni-leipzig.de/file/DBLP-ACM.zip"
+          unzip -o "/tmp/DBLP-ACM.zip" -d "$DSDIR/DBLP-ACM" >/dev/null
+      - name: Compare embedding providers (none / inhouse)
+        run: |
+          .venv/bin/python scripts/bench_embedding_providers.py \
+            --datasets "${{ inputs.datasets }}" \
+            --providers "${{ inputs.providers }}" \
+            --datasets-dir "$DSDIR" \
+            --epochs "${{ inputs.epochs }}" \
+            --summary-md "$GITHUB_STEP_SUMMARY"
