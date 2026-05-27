@@ -72,27 +72,57 @@ def _median(fn, runs: int):
     return statistics.median(ts), ts
 
 
-def profile_pipeline(df: pl.DataFrame, runs: int) -> None:
+def _run_pipeline(df: pl.DataFrame, native_mode: str) -> tuple[float, dict]:
+    """One dedupe_df under bench_capture with GOLDENMATCH_NATIVE=native_mode.
+    Returns (wall, stage_timings). native_enabled() reads the env each call, so
+    toggling it per-run flips the block-scoring + clustering kernels."""
+    import os
+
     from goldenmatch import dedupe_df
     from goldenmatch.core.bench import bench_capture
 
+    os.environ["GOLDENMATCH_NATIVE"] = native_mode
+    t0 = time.perf_counter()
+    with bench_capture() as b:
+        dedupe_df(df, fuzzy={"first_name": 0.85, "last_name": 0.85}, blocking=["zip"])
+    return time.perf_counter() - t0, dict(b.timings)
+
+
+def profile_pipeline(df: pl.DataFrame, runs: int) -> None:
+    from goldenmatch.core._native_loader import native_available
+
     print(f"\n=== END-TO-END dedupe_df  (rows={df.height}) ===", flush=True)
-    last: dict = {}
+    print(f"native ext importable: {native_available()}", flush=True)
+    if not native_available():
+        print("   WARNING: native ext not built -> only the pure-Python path is "
+              "measurable; build it (scripts/build_native.py) to see the kernel.",
+              flush=True)
 
-    def run():
-        nonlocal last
-        with bench_capture() as b:
-            dedupe_df(df, fuzzy={"first_name": 0.85, "last_name": 0.85},
-                      blocking=["zip"])
-        last = dict(b.timings)
+    score_times: dict[str, float] = {}
+    for mode in ("0", "auto"):
+        timings_last: dict = {}
+        walls = []
+        for _ in range(runs):
+            w, t = _run_pipeline(df, mode)
+            walls.append(w)
+            timings_last = t
+        med = statistics.median(walls)
+        label = "python (NATIVE=0)" if mode == "0" else "native (NATIVE=auto)"
+        total = sum(timings_last.values()) or 1.0
+        print(f"\n-- {label}: total wall ({runs}-run median) {med:.2f}s "
+              f"runs={[round(x, 2) for x in walls]}", flush=True)
+        for k, v in sorted(timings_last.items(), key=lambda kv: -kv[1])[:8]:
+            print(f"   {v:8.3f}s  {100 * v / total:5.1f}%  {k}", flush=True)
+        # Track the scoring stage for the native-vs-python comparison.
+        score_times[mode] = timings_last.get("fuzzy_score_blocks") or \
+            timings_last.get("fuzzy_scoring") or 0.0
 
-    med, ts = _median(run, runs)
-    print(f"total wall ({runs}-run median): {med:.2f}s   runs={[round(x, 2) for x in ts]}",
-          flush=True)
-    total = sum(last.values()) or 1.0
-    print("stage timings (last run), descending  [share of summed stages]:", flush=True)
-    for k, v in sorted(last.items(), key=lambda kv: -kv[1]):
-        print(f"   {v:8.3f}s  {100 * v / total:5.1f}%  {k}", flush=True)
+    py, nat = score_times.get("0", 0.0), score_times.get("auto", 0.0)
+    if py > 0 and nat > 0:
+        ratio = py / nat
+        engaged = "ENGAGED" if ratio >= 1.3 else "NOT engaging (routing gap?)"
+        print(f"\nscoring stage: python {py:.3f}s vs native {nat:.3f}s "
+              f"-> {ratio:.2f}x  [native fast-path {engaged}]", flush=True)
 
 
 def profile_fs(df: pl.DataFrame, fs_pairs: list[int], runs: int) -> None:
