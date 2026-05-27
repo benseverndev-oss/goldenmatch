@@ -683,6 +683,48 @@ jobs:
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
             -v
 
+  # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
+  # wheel (the polars / polars-runtime split) and prove the runtime loads
+  # through the wheel path. Distinct from `native`, which builds the in-tree
+  # `goldenmatch._native` .so via build_native.py and runs the parity suite.
+  # Here we deliberately DON'T run build_native.py, so the loader must fall
+  # back to `goldenmatch_native._native` from the installed wheel.
+  native_wheel:
+    needs: changes
+    if: needs.changes.outputs.native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      # Frontend only (pure-Python goldenmatch); NO build_native.py, so
+      # `goldenmatch._native` is absent and the loader must use the wheel.
+      - run: uv sync --all-packages
+      - name: Build the goldenmatch-native wheel (maturin, abi3)
+        run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/native/Cargo.toml --out dist
+      - name: Install the wheel + smoke-test the split
+        run: |
+          uv pip install dist/goldenmatch_native-*.whl
+          uv run python - <<'PY'
+          import goldenmatch_native  # the separately-distributed runtime package
+          from goldenmatch.core import _native_loader
+          mod = _native_loader.native_module()
+          assert mod is not None, "loader did not discover goldenmatch_native"
+          assert mod.__name__ == "goldenmatch_native._native", mod.__name__
+          fp = mod.record_fingerprint({"a": "x"})
+          assert fp == "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3", fp
+          assert _native_loader.native_enabled("hashing") is True
+          print("OK: goldenmatch-native wheel loads via the split path; fingerprint vector matches")
+          PY
+
   # Standalone Rust embedding runtime (goldenembed): builds the crate (which
   # links onnxruntime via the `ort` crate) and runs the featurizer unit tests.
   # The full ONNX-inference parity vs Python is validated out-of-CI against a
@@ -1004,6 +1046,7 @@ jobs:
       - rust_pgrx
       - duckdb_extensions
       - native
+      - native_wheel
       - goldenembed
       - distributed
       - pyright

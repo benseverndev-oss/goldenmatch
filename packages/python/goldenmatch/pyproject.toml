@@ -111,6 +111,13 @@ quality = [
 transform = [
     "goldenflow>=1.0.0",
 ]
+# Optional native acceleration runtime (compiled Rust/PyO3 abi3 wheel, shipped
+# separately, polars / polars-runtime style). goldenmatch.core._native_loader
+# discovers it automatically; absent it, the pure-Python paths run unchanged.
+# Kept out of `all` (compiled, platform-specific — like `ray`/`duckdb`).
+native = [
+    "goldenmatch-native>=0.1.0",
+]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
