@@ -65,6 +65,16 @@ def _runtime(ram_gb: float = 16.0, cpus: int = 4) -> RuntimeProfile:
     return RuntimeProfile(available_ram_gb=ram_gb, cpu_count=cpus, disk_free_gb=100.0)
 
 
+@pytest.fixture(autouse=True)
+def _native_off(monkeypatch):
+    """The simple / fast-box rules pick the bucket backend when the native
+    block-scorer is enabled, else polars-direct. Pin it OFF by default so the
+    backend assertions below are deterministic regardless of whether the native
+    ext happens to be built in the test env. The bucket-branch tests re-enable it."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: False)
+
+
 def test_rule_pathological_fires_at_one_row():
     """Single-row inputs trigger the pathological rule. Defensive -- the
     controller already short-circuits these earlier; the rule exists so
@@ -89,6 +99,35 @@ def test_rule_simple_plan_fires_under_100k_rows():
     assert plan.max_workers == 4
     assert plan.clustering_strategy == "in_memory"
     assert plan.rule_name == "plan_selected_simple"
+
+
+def test_simple_plan_uses_bucket_when_native_enabled(monkeypatch):
+    """With the native block-scorer enabled, the simple plan selects the bucket
+    backend (measured 1.7-3.7x faster than polars-direct, identical clusters)."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    p = _profile(n_rows=50_000, total_comparisons=1_000_000)
+    plan = rule_simple_plan.action(p, _runtime(), 50_000)
+    assert plan.backend == "bucket"
+    assert plan.rule_name == "plan_selected_simple"
+
+
+def test_fast_box_plan_uses_bucket_when_native_enabled(monkeypatch):
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    p = _profile(n_rows=200_000, total_comparisons=1_000_000)
+    plan = rule_fast_box.action(p, _runtime(ram_gb=64.0), 200_000)
+    assert plan.backend == "bucket"
+    assert plan.rule_name == "plan_selected_fast_box"
+
+
+def test_bucket_opt_out_forces_polars_direct(monkeypatch):
+    """GOLDENMATCH_PLANNER_BUCKET=0 forces polars-direct even with native on."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    monkeypatch.setenv("GOLDENMATCH_PLANNER_BUCKET", "0")
+    p = _profile(n_rows=50_000, total_comparisons=1_000_000)
+    assert rule_simple_plan.action(p, _runtime(), 50_000).backend == "polars-direct"
 
 
 def test_rule_simple_plan_fires_under_50m_pairs_at_99k_rows():

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import GoldenMatchConfig
 
-BackendName = Literal["polars-direct", "chunked", "duckdb", "ray"]
+BackendName = Literal["polars-direct", "chunked", "duckdb", "ray", "bucket"]
 ClusteringStrategy = Literal["in_memory", "partitioned_union_find", "streaming_cc"]
 SpillThreshold = Literal["ram", "duckdb", "disk_per_worker"] | None
 

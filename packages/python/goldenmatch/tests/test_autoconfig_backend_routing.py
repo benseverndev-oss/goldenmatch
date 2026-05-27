@@ -37,6 +37,17 @@ from goldenmatch.core.complexity_profile import (
 from goldenmatch.core.runtime_profile import RuntimeProfile
 
 
+@pytest.fixture(autouse=True)
+def _native_off(monkeypatch):
+    """Backend selection for the simple / fast-box rules is now native-conditional
+    (bucket when the native block-scorer is enabled, else polars-direct). Pin it
+    OFF so these routing assertions are deterministic regardless of whether the
+    native ext is built in the test env. Bucket-branch coverage lives in
+    test_autoconfig_planner_rules.py."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: False)
+
+
 def _profile(n_rows: int = 1000, total_comparisons: int = 100) -> ComplexityProfile:
     return ComplexityProfile(
         data=DataProfile(n_rows=n_rows, n_cols=3),
