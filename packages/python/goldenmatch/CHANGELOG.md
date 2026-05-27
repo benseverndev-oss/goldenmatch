@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-config now commits by zero-label confidence by default** (issue #489).
+  The controller's `pick_committed` tiebreaker prefers the higher
+  `-overall_confidence` candidate over the higher `-mass_separation` one among
+  same-health-rank entries that carry a `zero_label` profile (the
+  precision-collapse rank-3 demotion still precedes it). Gated on a DQbench
+  non-regression run (composite 92.03 >= 91.04 floor; byte-identical to the
+  prior default on T1/T2/T3). Opt out with
+  `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=0` to restore the legacy
+  `-mass_separation` tiebreaker.
+
 ## [1.22.0] - 2026-05-27
 
 ### Added — field-level golden-record provenance at scale
