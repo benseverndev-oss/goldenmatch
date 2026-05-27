@@ -241,6 +241,27 @@ class TestBuildMatchkeys:
         ]
         mks = build_matchkeys(profiles)
         assert not [mk for mk in mks if mk.name == "exact_identity"]
+        assert not [mk for mk in mks if mk.name == "phonetic_identity"]
+
+    def test_phonetic_identity_matchkey_soundex_on_names(self):
+        # #491 heuristic path: alongside the exact name+DOB composite, emit a
+        # phonetic sibling that soundex-encodes the name fields so equal-sounding
+        # spellings (Smith/Smyth) sharing a DOB still match. Same DOB gate as the
+        # exact composite (name-only soundex keys collide too much to be identity).
+        profiles = [
+            ColumnProfile("first_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("last_name", "Utf8", "name", 0.9, cardinality_ratio=0.3),
+            ColumnProfile("birth_year", "Int64", "year", 0.9, cardinality_ratio=0.02),
+        ]
+        mks = build_matchkeys(profiles)
+        phonetic = [mk for mk in mks if mk.name == "phonetic_identity"]
+        assert len(phonetic) == 1
+        assert phonetic[0].type == "exact"
+        # name fields carry the soundex transform; the DOB anchor does not
+        name_fields = [f for f in phonetic[0].fields if f.field in ("first_name", "last_name")]
+        assert name_fields and all("soundex" in f.transforms for f in name_fields)
+        dob = [f for f in phonetic[0].fields if f.field == "birth_year"]
+        assert dob and "soundex" not in dob[0].transforms
 
     def test_description_uses_record_embedding(self):
         profiles = [
