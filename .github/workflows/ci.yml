@@ -122,6 +122,7 @@ jobs:
               # (which SKIPS when the ext is absent). Trigger on the crate plus
               # the Python files it's wired into + the build script.
               - 'packages/rust/extensions/native/**'
+              - 'packages/rust/extensions/fingerprint-core/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/_hashing.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
@@ -658,6 +659,14 @@ jobs:
       - name: clippy (native crate)
         working-directory: packages/rust/extensions/native
         run: cargo clippy --release -- -D warnings
+      - name: clippy + test (fingerprint-core crate)
+        # Shared pyo3-free canonicalizer (also a dep of the pgrx crate). Its own
+        # unit tests pin the canonical vectors; the native parity + pgrx pg_test
+        # exercise it through each surface.
+        working-directory: packages/rust/extensions/fingerprint-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
       - name: Build native extension into the package
         # No --offline: CI has network + a cold cache on first run.
         run: uv run python scripts/build_native.py
