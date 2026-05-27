@@ -44,3 +44,40 @@ pub fn goldenmatch_embed_local(text: String, model_path: String) -> String {
         Err(e) => pgrx::error!("goldenmatch_embed_local: {}", e),
     }
 }
+
+/// Canonical record fingerprint (64 lowercase hex) of a JSON record object.
+/// The cross-surface stable record-id hash — same value the DuckDB
+/// `goldenmatch_record_fingerprint` UDF, the native C ABI, and the Python
+/// identity path produce. `__`-prefixed keys are dropped.
+///
+/// Computed **in pure Rust** via `goldenmatch-fingerprint-core` — NOT through
+/// the embedded-CPython bridge. This is the first SQL function that needs no
+/// interpreter for its work (the decoupling lever).
+///
+/// ```sql
+/// SELECT goldenmatch.goldenmatch_record_fingerprint('{"first":"Alex","last":"Smith"}');
+/// ```
+#[pg_extern]
+pub fn goldenmatch_record_fingerprint(record_json: String) -> String {
+    match goldenmatch_fingerprint_core::fingerprint_json(&record_json) {
+        Ok(hex) => hex,
+        Err(e) => pgrx::error!("goldenmatch_record_fingerprint: {}", e),
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::prelude::*;
+
+    /// pgrx computes the canonical fingerprint in pure Rust; assert it matches
+    /// the pinned vector shared with the Python + native + DuckDB surfaces.
+    #[pg_test]
+    fn record_fingerprint_matches_pinned() {
+        let got = crate::kernels::goldenmatch_record_fingerprint(r#"{"a":"x"}"#.to_string());
+        assert_eq!(
+            got,
+            "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3"
+        );
+    }
+}

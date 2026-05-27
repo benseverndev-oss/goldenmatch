@@ -47,8 +47,13 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
 #     Python reference bit-for-bit (the nonzero counts are small exact integers,
 #     so the sum-of-squares carries no rounding); parity asserted in
 #     tests/test_native_parity.py.
+#   - hashing: the canonical record_fingerprint kernel. SHA-256 over an
+#     identical type-tagged, key-sorted, framed byte canonicalization in Rust
+#     and Python -- asserted byte-for-byte (incl. pinned golden vectors) in
+#     tests/test_record_fingerprint.py. Native vs Python produce the same id,
+#     so gating native on/off never changes a record id.
 _GATED_ON: frozenset[str] = frozenset(
-    {"clustering", "block_scoring", "pairs", "featurize"}
+    {"clustering", "block_scoring", "pairs", "featurize", "hashing"}
 )
 
 
