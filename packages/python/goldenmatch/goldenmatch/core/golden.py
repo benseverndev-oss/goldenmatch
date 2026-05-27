@@ -706,6 +706,62 @@ def build_golden_records_batch(
     return results
 
 
+def golden_records_to_provenance(
+    golden_records: list[dict],
+    clusters: dict[int, dict],
+    rules: GoldenRulesConfig,
+) -> list[ClusterProvenance]:
+    """Adapt ``build_golden_records_batch(..., provenance=True)`` output to the
+    ``ClusterProvenance`` shape that lineage's ``golden_provenance`` consumes.
+
+    Each enriched record dict ({col: {value, confidence, source_row_id}, plus
+    ``__cluster_id__`` / ``__golden_confidence__``) becomes a
+    ``ClusterProvenance``. ``cluster_quality`` / ``cluster_confidence`` come
+    from ``clusters``; per-field ``strategy`` is re-derived from the rules
+    (cluster override -> field rule -> default). ``candidates`` is always ``[]``
+    -- the batch builder deliberately doesn't compute the per-row candidate
+    list (that's the per-cluster work the vectorized path avoids), so this
+    provenance is value + source_row_id, not the full slow-path candidate set.
+
+    Requires the records to carry ``source_row_id`` (i.e. built with
+    ``provenance=True``); missing keys degrade to ``None`` rather than raising.
+    """
+    cluster_overrides = getattr(rules, "cluster_overrides", None)
+
+    def _strategy_for(cid: int, col: str) -> str:
+        if cluster_overrides:
+            per_cluster = cluster_overrides.get(int(cid))
+            if per_cluster and col in per_cluster:
+                return per_cluster[col].strategy
+        rule = rules.field_rules.get(col)
+        return rule.strategy if rule is not None else rules.default_strategy
+
+    out: list[ClusterProvenance] = []
+    for rec in golden_records:
+        cid = rec["__cluster_id__"]
+        cinfo = clusters.get(cid, {})
+        fields: dict[str, FieldProvenance] = {}
+        for col, info in rec.items():
+            if col in ("__cluster_id__", "__golden_confidence__"):
+                continue
+            if not (isinstance(info, dict) and "value" in info):
+                continue
+            fields[col] = FieldProvenance(
+                value=info["value"],
+                source_row_id=info.get("source_row_id"),
+                strategy=_strategy_for(cid, col),
+                confidence=info.get("confidence", 0.0),
+                candidates=[],
+            )
+        out.append(ClusterProvenance(
+            cluster_id=cid,
+            cluster_quality=cinfo.get("cluster_quality", "strong"),
+            cluster_confidence=cinfo.get("confidence", 0.0),
+            fields=fields,
+        ))
+    return out
+
+
 def build_golden_record(
     cluster_df: pl.DataFrame,
     rules: GoldenRulesConfig,

@@ -1311,7 +1311,13 @@ def _run_dedupe_pipeline(
             # eager DataFrames AND called cluster_df[col].to_list() ~6.7M
             # times. New path: 4 to_list() calls + Python list slicing.
             # Measured: golden stage 307s -> ~30s at 5M.
-            golden_records = build_golden_records_batch(multi_df, golden_rules)
+            # provenance=True (opt-in) enriches each field with source_row_id
+            # for the lineage sidecar; the golden_df builder below ignores the
+            # extra key, so the same records feed both paths (no double build).
+            golden_records = build_golden_records_batch(
+                multi_df, golden_rules,
+                provenance=config.output.lineage_provenance,
+            )
 
     # Build golden DataFrame
     golden_df = None
@@ -1397,7 +1403,15 @@ def _run_dedupe_pipeline(
         try:
             from goldenmatch.core.lineage import build_lineage, save_lineage
             lineage = build_lineage(all_pairs, collected_df, matchkeys, clusters)
-            save_lineage(lineage, directory, run_name)
+            golden_provenance = None
+            if config.output.lineage_provenance and golden_records:
+                from goldenmatch.core.golden import golden_records_to_provenance
+                golden_provenance = golden_records_to_provenance(
+                    golden_records, clusters, golden_rules,
+                )
+            save_lineage(
+                lineage, directory, run_name, golden_provenance=golden_provenance,
+            )
         except Exception as e:
             logger.warning("Lineage generation failed: %s", e)
 

@@ -587,6 +587,12 @@ class OutputConfig(BaseModel):
     format: str | None = None
     directory: str | None = None
     run_name: str | None = None
+    # When True, the lineage sidecar gains a `golden_records` section with
+    # per-field provenance (value + source_row_id of the winning record).
+    # Default off: at large scale this materializes one provenance object per
+    # cluster + a large JSON sidecar. The vectorized batch builder makes it
+    # feasible (per-field source_row_id, no per-row candidate list).
+    lineage_provenance: bool = False
 
 
 # ── LLM Budget / Scorer Config ────────────────────────────────────────────
