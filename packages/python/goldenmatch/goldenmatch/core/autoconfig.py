@@ -742,6 +742,26 @@ def build_matchkeys(
             type="exact",
             fields=composite_fields,
         ))
+        # Phonetic sibling (#491 heuristic path): same name+DOB composite but
+        # with a `soundex` transform on the name fields, so phonetically-equal
+        # spellings (Smith/Smyth, Catherine/Katherine) that the EXACT composite
+        # misses still match — provided the DOB anchor agrees. Reuses the same
+        # DOB gate: name-only soundex keys collide far too much to be an
+        # identity claim, but soundex(name)+DOB stays specific, and adversarial
+        # data without a DOB column (DQbench tier3) gets neither composite.
+        # OR'd in, so it only adds candidate pairs.
+        phonetic_fields = [
+            MatchkeyField(field=p.name, transforms=["lowercase", "strip", "soundex"])
+            for p in _name_fields
+        ] + [
+            MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
+            for p in _date_fields
+        ]
+        matchkeys.append(MatchkeyConfig(
+            name="phonetic_identity",
+            type="exact",
+            fields=phonetic_fields,
+        ))
 
     # Weighted matchkey from fuzzy fields
     all_weighted = list(fuzzy_fields)
