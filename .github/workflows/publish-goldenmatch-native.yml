@@ -77,13 +77,14 @@ jobs:
 
   macos:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-native-v')
+    # Both arches build on the Apple Silicon runner; x86_64 is a cross-compile
+    # (Apple ships the x86_64 SDK slice). macos-13 (Intel) runners queue
+    # indefinitely in this org, so we don't depend on them.
+    runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: macos-13, target: x86_64 }   # Intel
-          - { runner: macos-14, target: aarch64 }   # Apple Silicon
-    runs-on: ${{ matrix.runner }}
+        target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
