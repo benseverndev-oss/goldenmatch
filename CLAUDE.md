@@ -57,6 +57,11 @@ Local CWD = package dir (e.g. `packages/python/goldencheck`); CI CWD = repo root
 ## GitHub auth
 - `benzsevern/*` AND `benseverndev-oss/*` repos use personal account `benzsevern`, not work `benzsevern-mjh`. Always `gh auth switch --user benzsevern` before push, switch back after. (The `benseverndev-oss` org is owned by the personal `benzsevern` account; same auth dance applies.)
 
+## goldenmatch-native (optional compiled runtime)
+- `goldenmatch-native` is a SEPARATE maturin/abi3 package (polars / polars-runtime split): `goldenmatch` stays pure-Python; `pip install goldenmatch[native]` pulls the compiled `_native` kernel. Crate + maturin `pyproject.toml` at `packages/rust/extensions/native/`; same crate still builds in-tree via `scripts/build_native.py`.
+- Loader discover order (`goldenmatch/core/_native_loader.py`): `goldenmatch._native` (in-tree build) -> `goldenmatch_native._native` (the wheel) -> pure Python.
+- Release: tag `goldenmatch-native-v*` fires `publish-goldenmatch-native.yml` (distinct from Python `v*` / TS `goldenmatch-js-v*`). Build BOTH macOS arches on `macos-14` (cross-compile x86_64) -- `macos-13` Intel runners queue indefinitely in this org. `workflow_dispatch` has a `publish` toggle for a build-matrix dry run (no PyPI upload).
+
 ## Post-fold GitHub Actions
 Only `.github/workflows/` at the repo root runs. Workflow files left under `packages/python/<pkg>/.github/workflows/` from pre-fold repos are orphaned (silently ignored). v1.6.0 release shipped no PyPI publish until `publish-goldenmatch.yml` was added at the root.
 - `publish-goldenmatch.yml` — fires on `release: published` for `v*` tags (skips `goldenmatch-js-v*`); `workflow_dispatch` with `ref` input for retro-publish. Uses `PYPI_TOKEN` (trusted publishing not configured).

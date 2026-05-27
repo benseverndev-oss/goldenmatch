@@ -292,7 +292,8 @@ Hosted on Railway, registered on Smithery:
 - GitHub Wiki repo uses `master` branch, main repo uses `main`
 - GitHub Wiki needs `_Sidebar.md` and `_Footer.md` for custom nav/footer
 - Rich terminal recording: `Console(record=True)` then `console.export_svg(title='...')`
-- PyPI version must be bumped in both `pyproject.toml` and `goldenmatch/__init__.py`
+- PyPI version must be bumped in THREE spots: `pyproject.toml`, `goldenmatch/__init__.py`, and `CHANGELOG.md` (new dated entry). Release flow: bump -> PR -> merge -> tag `v1.x.y` -> `publish-goldenmatch.yml` -> PyPI (~25s; JSON API lags ~20s).
+- `test_api.py::TestDedupeDf::test_dedupe_df_empty` observed flaky under `pytest -n auto` (`assert 3 == 0`, passed on rerun, with a `'Finding' has no attribute 'rule_id'` quality-scan warning) -- rerun rather than chase; a version-only PR can't cause it.
 - v1.0.0 is live on PyPI -- Production/Stable, semver enforced — `pip install goldenmatch` works
 - Adding a TUI tab: update `test_tabs_exist` in `tests/test_tui.py` — asserts exact tab count (currently 6)
 - OpenAI API key: set `OPENAI_API_KEY` env var. Used by LLM scorer and LLM boost. Key stored in `.testing/.env`
