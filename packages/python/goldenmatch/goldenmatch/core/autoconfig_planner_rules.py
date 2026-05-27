@@ -10,11 +10,18 @@ rules that mutate the GoldenMatchConfig during controller iteration.
 """
 from __future__ import annotations
 
+import os
+
 from goldenmatch.core._native_loader import native_enabled
 from goldenmatch.core.autoconfig_planner import PlannerRule
 from goldenmatch.core.complexity_profile import ComplexityProfile
 from goldenmatch.core.execution_plan import BackendName, ExecutionPlan
 from goldenmatch.core.runtime_profile import RuntimeProfile
+
+# Opt-out kill-switch: set to 0/off/false/no to force polars-direct even when
+# the native bucket scorer is available (operability lever if a bucket-path
+# issue ever surfaces in production).
+_BUCKET_OPT_OUT = frozenset({"0", "off", "false", "no"})
 
 
 def _scoring_backend() -> BackendName:
@@ -25,7 +32,12 @@ def _scoring_backend() -> BackendName:
     rows with BYTE-IDENTICAL clusters, and the win grows with N. The native
     scorer only runs on the bucket backend, so prefer it whenever the kernel is
     actually enabled; fall back to polars-direct otherwise (bucket + the Python
-    scorer is ~on par / slightly slower, so the win requires the kernel)."""
+    scorer is ~on par / slightly slower, so the win requires the kernel).
+
+    Default-on where the kernel is present; ``GOLDENMATCH_PLANNER_BUCKET=0``
+    forces polars-direct (opt-out)."""
+    if os.environ.get("GOLDENMATCH_PLANNER_BUCKET", "1").strip().lower() in _BUCKET_OPT_OUT:
+        return "polars-direct"
     return "bucket" if native_enabled("block_scoring") else "polars-direct"
 
 # ── Rule 1: pathological inputs (spec §Rule 1) ──────────────────────────────

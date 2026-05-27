@@ -121,6 +121,15 @@ def test_fast_box_plan_uses_bucket_when_native_enabled(monkeypatch):
     assert plan.rule_name == "plan_selected_fast_box"
 
 
+def test_bucket_opt_out_forces_polars_direct(monkeypatch):
+    """GOLDENMATCH_PLANNER_BUCKET=0 forces polars-direct even with native on."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    monkeypatch.setenv("GOLDENMATCH_PLANNER_BUCKET", "0")
+    p = _profile(n_rows=50_000, total_comparisons=1_000_000)
+    assert rule_simple_plan.action(p, _runtime(), 50_000).backend == "polars-direct"
+
+
 def test_rule_simple_plan_fires_under_50m_pairs_at_99k_rows():
     """Even near the upper-bound row count, low pair count keeps simple plan eligible."""
     p = _profile(n_rows=99_000, total_comparisons=49_000_000)
