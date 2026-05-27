@@ -1,0 +1,47 @@
+name: bench-fs-stages
+
+# Manual measure-first profiler (decision-matrix gate: measure before writing a
+# kernel). Runs the dedupe stage breakdown + the Fellegi-Sunter comparison-vector
+# loop microbench on a clean, beefy runner and writes the report to the job
+# summary. Not part of PR gating.
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "End-to-end dedupe row count"
+        default: "50000"
+      fs_pairs:
+        description: "FS comparison-loop pair counts (comma-separated)"
+        default: "50000,200000"
+      runs:
+        description: "Repetitions per measurement (median reported)"
+        default: "3"
+
+jobs:
+  bench:
+    # Beefy box so the profile isn't starved (matches the suite's bench/eval
+    # default runner).
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Profile (stages + FS loop)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_fs_and_stages.py \
+            --rows "${{ inputs.rows }}" \
+            --fs-pairs "${{ inputs.fs_pairs }}" \
+            --runs "${{ inputs.runs }}" | tee /tmp/bench.txt
+          {
+            echo '## bench-fs-stages'
+            echo '```'
+            cat /tmp/bench.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
