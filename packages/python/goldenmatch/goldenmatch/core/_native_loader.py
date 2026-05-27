@@ -20,10 +20,19 @@ from __future__ import annotations
 import os
 from typing import Any
 
+# The kernel is reachable two ways, tried in order:
+#   1. ``goldenmatch._native`` — the in-tree build dropped by
+#      ``scripts/build_native.py`` for local dev / the CI parity lane.
+#   2. ``goldenmatch_native._native`` — the separately-distributed
+#      ``goldenmatch-native`` abi3 wheel (``pip install goldenmatch[native]``),
+#      the polars / polars-runtime split. Same ``_native`` pymodule either way.
 try:
     import goldenmatch._native as _native  # pyright: ignore[reportMissingImports]
-except Exception:  # noqa: BLE001 - any import/load failure falls back to Python
-    _native = None
+except Exception:  # noqa: BLE001 - any import/load failure falls back below
+    try:
+        from goldenmatch_native import _native  # pyright: ignore[reportMissingImports]
+    except Exception:  # noqa: BLE001 - neither path available -> pure Python
+        _native = None
 
 
 # Components whose native path has cleared parity + DQbench and may run under

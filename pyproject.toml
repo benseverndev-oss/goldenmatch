@@ -15,6 +15,13 @@ goldenpipe = { workspace = true }
 infermap = { workspace = true }
 goldensuite-mcp = { workspace = true }
 goldencheck-types = { workspace = true }
+# goldenmatch-native is the optional compiled runtime (goldenmatch[native]).
+# It's NOT a workspace member (it's a maturin/Rust crate under packages/rust/),
+# so point uv at the path for dev/CI resolution. uv reads its static PEP 621
+# metadata without building unless the `native` extra is actually installed; the
+# published goldenmatch wheel resolves goldenmatch-native from PyPI (uv.sources
+# is workspace-local, stripped from published Requires-Dist).
+goldenmatch-native = { path = "packages/rust/extensions/native" }
 
 [dependency-groups]
 dev = [
