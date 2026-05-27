@@ -33,6 +33,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   being present (names alone collide too heavily to anchor an identity claim).
   Benchmarks: NCVR F1 0.871 → 0.969, Febrl3 0.897 → 0.912, DBLP-ACM and DQbench
   unchanged.
+- **Phonetic name+DOB identity matchkey** (#491). A sibling to the composite
+  above: the same name+DOB key but with a `soundex` transform on the name
+  fields, so equal-sounding spellings (Smith/Smyth, Catherine/Katherine) that
+  share a DOB still match when the exact composite misses them. Same date-anchor
+  gate, so DQbench (no DOB column) is untouched; matchkeys are OR'd, so it only
+  adds candidate pairs. Lifts Febrl3 F1 0.912 → 0.924 (CI smoke).
+
+### Internal
+
+- CI Febrl3 smoke-gate floor raised 0.85 → 0.90 (#438), reflecting the recall
+  improvements above (CI-measured Febrl3 F1 now 0.924, deterministic).
 
 ## [1.22.0] - 2026-05-27
 
