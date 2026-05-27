@@ -1,0 +1,23 @@
+# Standalone workspace so this pyo3-free / pgrx-free core can be a path
+# dependency of BOTH the `native` crate (its own workspace, extension-module)
+# and the `postgres` crate (excluded from the bridge workspace, pgrx) without
+# either workspace claiming it.
+[workspace]
+
+[package]
+name = "goldenmatch-fingerprint-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Canonical record-fingerprint canonicalization (no pyo3, no pgrx) shared across surfaces"
+
+[lib]
+name = "goldenmatch_fingerprint_core"
+
+[dependencies]
+# Must match Python hashlib.sha256 byte-for-byte (see core/_hashing.py).
+sha2 = "0.10"
+# JSON parsing for non-Python callers (pgrx / DuckDB / C ABI). arbitrary_precision
+# preserves integer literals exactly so big ints match the Python-str() path.
+serde_json = { version = "1", features = ["arbitrary_precision"] }

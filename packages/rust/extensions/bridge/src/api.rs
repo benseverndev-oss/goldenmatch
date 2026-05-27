@@ -1726,30 +1726,6 @@ pub fn connected_components(pairs_json: &str) -> Result<String, BridgeError> {
     })
 }
 
-/// Canonical record fingerprint (64 lowercase hex) of a JSON record object via
-/// `goldenmatch.core._hashing.record_fingerprint`. The cross-surface stable
-/// record-id hash — same value the DuckDB UDF and the Python identity path
-/// produce. `__`-prefixed keys are dropped. Fail-soft to `{"error": ...}`.
-pub fn record_fingerprint(record_json: &str) -> Result<String, BridgeError> {
-    crate::init()?;
-    Python::with_gil(|py| {
-        let result: Result<String, BridgeError> = (|| {
-            let hashing = py.import("goldenmatch.core._hashing")?;
-            let json_mod = py.import("json")?;
-            let builtins = py.import("builtins")?;
-            let record = if record_json.is_empty() {
-                builtins.call_method0("dict")?
-            } else {
-                json_mod.call_method1("loads", (record_json,))?
-            };
-            let fp = hashing.call_method1("record_fingerprint", (record,))?;
-            let s: String = fp.extract()?;
-            Ok(s)
-        })();
-        Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
-    })
-}
-
 /// Canonicalize + keep max score per pair over JSON `[[a, b, score], ...]` via
 /// `goldenmatch.native.dedup_pairs_max_score`. Returns a JSON array of
 /// `[a, b, score]`. Fail-soft to `{"error": ...}`.
