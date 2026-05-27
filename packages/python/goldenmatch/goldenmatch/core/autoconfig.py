@@ -763,6 +763,29 @@ def build_matchkeys(
             fields=phonetic_fields,
         ))
 
+    # Dual-composite: also emit a name+DOB composite keyed on person-name-PATTERN
+    # columns (given_name/surname/first/last) when they exist and differ from the
+    # cardinality pick above. The data classifier sometimes mislabels address
+    # columns as col_type="name" (Febrl3: address_1/address_2 outrank the real
+    # names by cardinality), so the cardinality composite can key on addresses.
+    # Different datasets corrupt different fields (Febrl3 mangles names, NCVR
+    # mangles addresses), so anchoring on BOTH field-sets means a true pair clean
+    # on EITHER matches. Same DOB gate; OR'd, so it only adds candidate pairs.
+    _pattern_name_fields = sorted(
+        [p for p in profiles if p.null_rate < 0.3 and _classify_by_name(p.name) == "name"],
+        key=lambda p: p.cardinality_ratio, reverse=True,
+    )[:2]
+    if (_date_fields and _pattern_name_fields
+            and {p.name for p in _pattern_name_fields} != {p.name for p in _name_fields}):
+        matchkeys.append(MatchkeyConfig(
+            name="exact_identity_name",
+            type="exact",
+            fields=[
+                MatchkeyField(field=p.name, transforms=["lowercase", "strip"])
+                for p in (_pattern_name_fields + _date_fields)
+            ],
+        ))
+
     # Weighted matchkey from fuzzy fields
     all_weighted = list(fuzzy_fields)
 
