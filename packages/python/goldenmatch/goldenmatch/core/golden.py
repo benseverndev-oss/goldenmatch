@@ -377,6 +377,7 @@ def _build_golden_records_polars_native(
     multi_df: pl.DataFrame,
     rules: GoldenRulesConfig,
     user_cols: list[str],
+    provenance: bool = False,
 ) -> list[dict]:
     """Polars-native fast path for the common simple-strategy case.
 
@@ -426,6 +427,20 @@ def _build_golden_records_polars_native(
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
             )
+            if provenance:
+                # Pick __row_id__ with the IDENTICAL filter + sort key as the
+                # value above, so the same physical row wins both (Polars
+                # stable sort guarantees alignment). All three exprs filter on
+                # the same ``col.is_not_null()`` predicate, so they stay
+                # row-aligned. All-null column -> empty filter -> first() None.
+                agg_exprs.append(
+                    pl.col("__row_id__").filter(pl.col(col).is_not_null())
+                    .sort_by(
+                        pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
+                        descending=True,
+                    )
+                    .first().alias(f"__rid_{col}__")
+                )
         agg = (
             prepped.group_by("__cluster_id__", maintain_order=True)
             .agg(agg_exprs)
@@ -439,6 +454,12 @@ def _build_golden_records_polars_native(
             agg_exprs.append(
                 pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
             )
+            if provenance:
+                # row_id of the first non-null value (same filter + first()).
+                agg_exprs.append(
+                    pl.col("__row_id__").filter(pl.col(col).is_not_null())
+                    .first().alias(f"__rid_{col}__")
+                )
         agg = (
             multi_df.group_by("__cluster_id__", maintain_order=True)
             .agg(agg_exprs)
@@ -463,6 +484,10 @@ def _build_golden_records_polars_native(
         cluster_ids = batch["__cluster_id__"].to_list()
         val_arrays = {col: batch[f"__val_{col}__"].to_list() for col in user_cols}
         nuniq_arrays = {col: batch[f"__nuniq_{col}__"].to_list() for col in user_cols}
+        rid_arrays = (
+            {col: batch[f"__rid_{col}__"].to_list() for col in user_cols}
+            if provenance else None
+        )
         for i, cid in enumerate(cluster_ids):
             result: dict = {}
             confidences: list[float] = []
@@ -475,7 +500,11 @@ def _build_golden_records_polars_native(
                     conf = same_strategy_conf
                 else:
                     conf = diff_strategy_conf
-                result[col] = {"value": val, "confidence": conf}
+                field: dict = {"value": val, "confidence": conf}
+                if rid_arrays is not None:
+                    # None when val is None (filter on an all-null col is empty).
+                    field["source_row_id"] = rid_arrays[col][i]
+                result[col] = field
                 confidences.append(conf)
             result["__golden_confidence__"] = (
                 sum(confidences) / len(confidences) if confidences else 0.0
@@ -511,6 +540,7 @@ def build_golden_records_batch(
     multi_df: Any,  # pl.DataFrame | ray.data.Dataset (Phase 4)
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
+    provenance: bool = False,
 ) -> list[dict]:
     """Vectorized batch builder for many golden records sharing a parent df.
 
@@ -538,22 +568,33 @@ def build_golden_records_batch(
             May also be a ray.data.Dataset (Phase 4 distributed path).
         rules: golden rules configuration.
         quality_scores: optional per-(row_id, col) quality weights.
+        provenance: when True, each field dict additionally carries
+            ``source_row_id`` -- the ``__row_id__`` of the record whose value
+            won survivorship for that field (``None`` when the field is
+            all-null). Requires a ``__row_id__`` column. Preserves the
+            single-group_by-per-column vectorization (one extra agg expr per
+            column on the fast path; the slow path maps ``merge_field``'s
+            winning index).
 
     Returns:
         List of golden records (same dict shape as ``build_golden_record``),
         in ascending ``__cluster_id__`` order. Each result has its
-        ``__cluster_id__`` field set.
+        ``__cluster_id__`` field set. With ``provenance=True`` every field
+        dict gains ``source_row_id`` alongside ``value`` and ``confidence``.
     """
     # Phase 4: distributed path when multi_df is a Ray Dataset.
     from goldenmatch.distributed import is_ray_dataset
     if is_ray_dataset(multi_df):
-        if quality_scores:
+        # provenance (like quality_scores) needs per-row __row_id__ alignment
+        # that the distributed smart path doesn't carry; collect to driver and
+        # run the in-memory build.
+        if quality_scores or provenance:
             import logging
 
             import pyarrow as pa
             logging.getLogger(__name__).info(
-                "build_golden_records_batch: quality_scores set on Ray Dataset "
-                "input; collecting to driver for in-memory build.",
+                "build_golden_records_batch: quality_scores/provenance set on "
+                "Ray Dataset input; collecting to driver for in-memory build.",
             )
             tables = list(multi_df.iter_batches(batch_format="pyarrow"))
             multi_df = pl.from_arrow(pa.concat_tables(tables)) if tables else pl.DataFrame()
@@ -569,6 +610,8 @@ def build_golden_records_batch(
 
     if "__cluster_id__" not in multi_df.columns:
         raise ValueError("multi_df must contain __cluster_id__ column")
+    if provenance and "__row_id__" not in multi_df.columns:
+        raise ValueError("provenance=True requires a __row_id__ column")
     if multi_df.height == 0:
         return []
 
@@ -578,7 +621,9 @@ def build_golden_records_batch(
             if not _is_internal(c) and c != "__cluster_id__"
         ]
         if user_cols:
-            return _build_golden_records_polars_native(multi_df, rules, user_cols)
+            return _build_golden_records_polars_native(
+                multi_df, rules, user_cols, provenance=provenance,
+            )
 
     sorted_df = multi_df.sort("__cluster_id__")
     sizes = (
@@ -639,10 +684,16 @@ def build_golden_records_batch(
                     for rid in row_id_array[offset:offset + size]
                 ]
 
-            val, conf, _idx = merge_field(
+            val, conf, idx = merge_field(
                 values, field_rule, sources=sources, dates=dates, quality_weights=weights,
             )
-            result[col] = {"value": val, "confidence": conf}
+            field: dict = {"value": val, "confidence": conf}
+            if provenance:
+                # row_id_array is guaranteed non-None here (guarded above).
+                field["source_row_id"] = (
+                    row_id_array[offset + idx] if idx is not None else None
+                )
+            result[col] = field
             confidences.append(conf)
 
         result["__golden_confidence__"] = (
