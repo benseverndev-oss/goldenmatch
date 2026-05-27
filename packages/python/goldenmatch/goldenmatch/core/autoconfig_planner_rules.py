@@ -10,10 +10,23 @@ rules that mutate the GoldenMatchConfig during controller iteration.
 """
 from __future__ import annotations
 
+from goldenmatch.core._native_loader import native_enabled
 from goldenmatch.core.autoconfig_planner import PlannerRule
 from goldenmatch.core.complexity_profile import ComplexityProfile
-from goldenmatch.core.execution_plan import ExecutionPlan
+from goldenmatch.core.execution_plan import BackendName, ExecutionPlan
 from goldenmatch.core.runtime_profile import RuntimeProfile
+
+
+def _scoring_backend() -> BackendName:
+    """In-memory scoring backend for the simple / fast-box plans.
+
+    Measured 2026-05-26 (scripts/bench_fs_and_stages.py): the bucket backend +
+    native Arrow block-scorer is 1.7-3.7x faster than polars-direct from 1K-60K
+    rows with BYTE-IDENTICAL clusters, and the win grows with N. The native
+    scorer only runs on the bucket backend, so prefer it whenever the kernel is
+    actually enabled; fall back to polars-direct otherwise (bucket + the Python
+    scorer is ~on par / slightly slower, so the win requires the kernel)."""
+    return "bucket" if native_enabled("block_scoring") else "polars-direct"
 
 # ── Rule 1: pathological inputs (spec §Rule 1) ──────────────────────────────
 
@@ -74,7 +87,7 @@ def _simple_plan(
     n_rows_full: int,
 ) -> ExecutionPlan:
     return ExecutionPlan(
-        backend="polars-direct",
+        backend=_scoring_backend(),
         chunk_size=None,
         max_workers=min(4, runtime.cpu_count),
         pair_spill_threshold=None,
@@ -118,7 +131,7 @@ def _fast_box_plan(
     n_rows_full: int,
 ) -> ExecutionPlan:
     return ExecutionPlan(
-        backend="polars-direct",
+        backend=_scoring_backend(),
         max_workers=min(16, runtime.cpu_count),
         clustering_strategy="in_memory",
         rule_name="plan_selected_fast_box",
