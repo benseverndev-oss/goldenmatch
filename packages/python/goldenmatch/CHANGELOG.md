@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-05-27
+
+### Added — field-level golden-record provenance at scale
+
+- **`build_golden_records_batch(..., provenance=True)`** adds `source_row_id`
+  to each field dict — the `__row_id__` of the record whose value won
+  survivorship for that field — while preserving the single-group_by-per-column
+  vectorization (one extra agg expr per column on the fast path). `None` for
+  all-null fields; raises if there's no `__row_id__` column.
+- **`config.output.lineage_provenance`** (default `False`): when enabled, the
+  lineage sidecar (`{run_name}_lineage.json`) gains a `golden_records` section
+  with per-field provenance (value, `source_row_id`, strategy, confidence)
+  for every cluster. Default off because at large scale this materializes one
+  provenance object per cluster plus a large JSON sidecar; the vectorized
+  builder is what makes it feasible. `candidates` is empty in this path (the
+  per-row candidate list is the slow-path-only detail that breaks
+  vectorization).
+- **`golden_records_to_provenance(records, clusters, rules)`** adapts the
+  batch builder's output to the `ClusterProvenance` shape lineage consumes.
+
 ## [1.21.0] - 2026-05-27
 
 ### Added — optional native acceleration runtime
