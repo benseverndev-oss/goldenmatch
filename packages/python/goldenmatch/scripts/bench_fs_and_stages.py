@@ -125,6 +125,79 @@ def profile_pipeline(df: pl.DataFrame, runs: int) -> None:
               f"-> {ratio:.2f}x  [native fast-path {engaged}]", flush=True)
 
 
+def _mk_weighted_cfg(backend):
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="name", type="weighted", threshold=0.85,
+            fields=[
+                MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.5),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", weight=0.5),
+            ],
+        )],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        backend=backend,
+    )
+
+
+def _run_cfg(df: pl.DataFrame, cfg, native_mode: str) -> tuple[float, dict]:
+    import os
+
+    from goldenmatch import dedupe_df
+    from goldenmatch.core.bench import bench_capture
+
+    os.environ["GOLDENMATCH_NATIVE"] = native_mode
+    t0 = time.perf_counter()
+    with bench_capture() as b:
+        dedupe_df(df, config=cfg)
+    return time.perf_counter() - t0, dict(b.timings)
+
+
+def profile_backends(df: pl.DataFrame, runs: int) -> None:
+    """Head-to-head: does the bucket backend + native Arrow kernel beat the
+    default polars-direct path at mid scale? Explicit config bypasses the
+    controller so we pin the backend. Decides whether lowering the bucket
+    threshold (or wiring the kernel into the default scorer) would unlock the
+    ~5x scoring win below the controller's current ~100K cutover."""
+    print(f"\n=== BACKEND HEAD-TO-HEAD  (rows={df.height}, explicit config) ===", flush=True)
+    configs = [
+        ("polars-direct  native=auto", None, "auto"),
+        ("bucket         native=0   ", "bucket", "0"),
+        ("bucket         native=auto", "bucket", "auto"),
+    ]
+    res: dict[str, float] = {}
+    for label, backend, native in configs:
+        walls, last = [], {}
+        try:
+            for _ in range(runs):
+                w, t = _run_cfg(df, _mk_weighted_cfg(backend), native)
+                walls.append(w)
+                last = t
+        except Exception as exc:  # noqa: BLE001 - report, don't abort the bench
+            print(f"-- {label}: ERROR {type(exc).__name__}: {exc}", flush=True)
+            continue
+        med = statistics.median(walls)
+        res[label.strip()] = med
+        top = ", ".join(f"{k}={v:.2f}s" for k, v in
+                        sorted(last.items(), key=lambda kv: -kv[1])[:3])
+        print(f"-- {label}: total {med:.2f}s   [{top}]", flush=True)
+    pd_ = res.get("polars-direct  native=auto")
+    bn = res.get("bucket         native=auto")
+    bp = res.get("bucket         native=0")
+    if pd_ and bn:
+        print(f"\nbucket+native vs polars-direct: {bn:.2f}s vs {pd_:.2f}s "
+              f"-> {pd_ / bn:.2f}x  (>1 = bucket+native wins at this scale)", flush=True)
+    if bp and bn:
+        print(f"native kernel within bucket: {bp:.2f}s -> {bn:.2f}s = {bp / bn:.2f}x",
+              flush=True)
+
+
 def profile_fs(df: pl.DataFrame, fs_pairs: list[int], runs: int) -> None:
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
     from goldenmatch.core.probabilistic import _build_comparison_matrix, _sample_pairs
@@ -166,6 +239,7 @@ def main() -> int:
     print(f"rows={args.rows}  fs_pairs={fs_pairs}  runs={args.runs}", flush=True)
     df = gen(args.rows)
     profile_pipeline(df, args.runs)
+    profile_backends(df, args.runs)
     profile_fs(df, fs_pairs, args.runs)
     return 0
 
