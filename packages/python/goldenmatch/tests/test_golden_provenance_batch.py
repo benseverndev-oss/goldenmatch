@@ -89,3 +89,72 @@ def test_provenance_off_is_unchanged():
     rec = _one(build_golden_records_batch(df, rules), 1)
     assert set(rec["name"]) == {"value", "confidence"}
     assert "source_row_id" not in rec["name"]
+
+
+def test_records_to_provenance_adapter():
+    from goldenmatch.core.golden import golden_records_to_provenance
+    df = pl.DataFrame({
+        "__row_id__": [10, 11],
+        "__cluster_id__": [1, 1],
+        "name": ["Bob", "Bobby"],
+    })
+    rules = GoldenRulesConfig(default_strategy="most_complete")
+    records = build_golden_records_batch(df, rules, provenance=True)
+    clusters = {1: {"members": [10, 11], "size": 2,
+                    "cluster_quality": "strong", "confidence": 0.9}}
+    prov = golden_records_to_provenance(records, clusters, rules)
+    assert len(prov) == 1
+    cp = prov[0]
+    assert cp.cluster_id == 1
+    assert cp.cluster_quality == "strong"
+    assert cp.cluster_confidence == 0.9
+    fp = cp.fields["name"]
+    assert fp.value == "Bobby"
+    assert fp.source_row_id == 11
+    assert fp.strategy == "most_complete"
+    assert fp.candidates == []  # scale tradeoff: no per-row candidate list
+
+
+def test_pipeline_writes_golden_provenance_when_flag_on(tmp_path):
+    """End-to-end: lineage_provenance=True -> the lineage sidecar carries a
+    golden_records section with per-field source_row_id; off -> no such key."""
+    import json
+
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        OutputConfig,
+    )
+    from goldenmatch.core.pipeline import run_dedupe_df
+
+    # Bob/Bobby share an email -> one multi-member cluster; Carol is unique.
+    df = pl.DataFrame({
+        "name": ["Bob", "Bobby", "Carol"],
+        "email": ["b@x", "b@x", "c@x"],
+    })
+    mks = [MatchkeyConfig(name="email", type="exact",
+                          fields=[MatchkeyField(field="email")])]
+
+    def _run(flag: bool, run_name: str):
+        cfg = GoldenMatchConfig(
+            matchkeys=mks,
+            output=OutputConfig(directory=str(tmp_path), run_name=run_name,
+                                lineage_provenance=flag),
+        )
+        run_dedupe_df(df, cfg, output_clusters=True)
+        return json.loads((tmp_path / f"{run_name}_lineage.json").read_text())
+
+    on = _run(True, "prov_on")
+    assert "golden_records" in on
+    name_provs = [
+        f["source_row_id"]
+        for rec in on["golden_records"]
+        for col, f in rec["fields"].items()
+        if col == "name"
+    ]
+    # most_complete picks "Bobby" (row index 1) over "Bob" (row 0).
+    assert 1 in name_provs
+
+    off = _run(False, "prov_off")
+    assert "golden_records" not in off
