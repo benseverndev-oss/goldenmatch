@@ -439,6 +439,19 @@ class ControllerBudget:
         return cls(sample_size_default=20_000, max_seconds=120.0)
 
 
+def _zero_label_commit_enabled() -> bool:
+    """Whether the controller commits by zero-label confidence.
+
+    Default ON since v1.22 (issue #489 — DQbench composite non-regression at
+    91.04+). When True and a candidate carries a ``zero_label`` profile,
+    ``RunHistory.pick_committed`` breaks ties on ``-overall_confidence`` instead
+    of ``-mass_separation``. Opt out by setting
+    ``GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=0`` to restore the legacy
+    ``-mass_separation`` tiebreaker.
+    """
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "1") != "0"
+
+
 class AutoConfigController:
     """Drives iterative refit: pathological-input gates, sampling, policy loop, finalize."""
 
@@ -771,15 +784,12 @@ class AutoConfigController:
         if v0_entry is not None:
             history.entries.append(v0_entry)
 
-        # Pick committed config. Zero-label Phase 2: when
-        # GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=1, commit by zero-label
-        # confidence instead of the -mass_separation tiebreaker (default off).
-        _use_zero_label = (
-            os.environ.get("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "0") == "1"
-        )
+        # Pick committed config. Zero-label Phase 2: commit by zero-label
+        # confidence instead of the -mass_separation tiebreaker (default ON,
+        # see _zero_label_commit_enabled).
         best_entry = history.pick_committed(
             precision_collapse_floor=0.9,
-            use_zero_label_confidence=_use_zero_label,
+            use_zero_label_confidence=_zero_label_commit_enabled(),
         )
         if best_entry is None:
             # Every iteration errored — no usable profile produced. Fall back to v0.

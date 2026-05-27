@@ -83,3 +83,26 @@ def test_precision_collapse_guard_precedes_confidence():
         precision_collapse_floor=0.9, use_zero_label_confidence=True,
     )
     assert picked is a
+
+
+# Controller default (issue #489): zero-label commit is ON unless explicitly
+# opted out with GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=0.
+def test_controller_default_enables_zero_label(monkeypatch):
+    from goldenmatch.core.autoconfig_controller import _zero_label_commit_enabled
+
+    monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", raising=False)
+    assert _zero_label_commit_enabled() is True
+
+
+def test_controller_optout_disables_zero_label(monkeypatch):
+    from goldenmatch.core.autoconfig_controller import _zero_label_commit_enabled
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "0")
+    assert _zero_label_commit_enabled() is False
+
+
+def test_controller_explicit_one_enables_zero_label(monkeypatch):
+    from goldenmatch.core.autoconfig_controller import _zero_label_commit_enabled
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT", "1")
+    assert _zero_label_commit_enabled() is True
