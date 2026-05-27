@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-05-27
+
 ### Changed
 
 - **Auto-config now commits by zero-label confidence by default** (issue #489).
@@ -17,6 +19,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   prior default on T1/T2/T3). Opt out with
   `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT=0` to restore the legacy
   `-mass_separation` tiebreaker.
+
+### Fixed
+
+- **Composite name+DOB identity matchkey recovers person-data recall** (#538).
+  When individual name/year columns fall below the cardinality≥0.5 exact-matchkey
+  gate, auto-config previously degraded to a single weighted matchkey that
+  averages every field, so one corrupted field (e.g. an abbreviated address
+  scored by `token_sort`) could sink an otherwise-clean true pair. Auto-config
+  now also emits an exact matchkey on the name+DOB *combination* (highly unique
+  even when the individual fields aren't). Matchkeys are OR'd, so this only adds
+  candidate pairs — no fuzzy scorer is loosened. Gated on a date/year anchor
+  being present (names alone collide too heavily to anchor an identity claim).
+  Benchmarks: NCVR F1 0.871 → 0.969, Febrl3 0.897 → 0.912, DBLP-ACM and DQbench
+  unchanged.
+- **Phonetic name+DOB identity matchkey** (#491). A sibling to the composite
+  above: the same name+DOB key but with a `soundex` transform on the name
+  fields, so equal-sounding spellings (Smith/Smyth, Catherine/Katherine) that
+  share a DOB still match when the exact composite misses them. Same date-anchor
+  gate, so DQbench (no DOB column) is untouched; matchkeys are OR'd, so it only
+  adds candidate pairs. Lifts Febrl3 F1 0.912 → 0.924 (CI smoke).
+
+### Internal
+
+- CI Febrl3 smoke-gate floor raised 0.85 → 0.90 (#438), reflecting the recall
+  improvements above (CI-measured Febrl3 F1 now 0.924, deterministic).
 
 ## [1.22.0] - 2026-05-27
 
