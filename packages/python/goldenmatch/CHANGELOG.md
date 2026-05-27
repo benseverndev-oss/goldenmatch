@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-05-27
+
+### Added — optional native acceleration runtime
+
+- **`goldenmatch[native]` extra** pulls in `goldenmatch-native`, a separately
+  distributed compiled (Rust/PyO3, abi3) runtime — the polars / polars-runtime
+  split. `goldenmatch` itself stays a pure-Python wheel; install
+  `pip install "goldenmatch[native]"` (or `pip install goldenmatch-native`
+  directly) and it's discovered automatically. Absent it, the pure-Python paths
+  run unchanged.
+- With the runtime present, the auto-config planner routes simple/fast-box plans
+  through the **native Arrow block-scorer** (1.7–3.7x faster at 1k–60k rows,
+  byte-identical clusters). Opt out with `GOLDENMATCH_PLANNER_BUCKET=0`.
+- Wheels: linux x86_64 + aarch64, windows x64, macOS x86_64 + arm64 (CPython
+  3.11+).
+
+### Added — stable record fingerprint
+
+- **`record_fingerprint(record)`** in the public API (and the TypeScript port):
+  a canonical, cross-language SHA-256 over a type-tagged, key-sorted byte
+  canonicalization. Stable across Python/TypeScript/SQL surfaces and used to
+  derive identity record ids.
+
 ## [1.20.0] - 2026-05-26
 
 ### Added — cluster-decision tuner (RFC from MJH Print Modernization)
