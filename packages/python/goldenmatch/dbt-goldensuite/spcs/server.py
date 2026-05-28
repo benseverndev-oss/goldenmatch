@@ -39,7 +39,6 @@ walkthrough.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections.abc import Callable
@@ -114,80 +113,73 @@ def _table_handler(fn: Callable[..., list[list[Any]]]):
 
 
 # ---------------------------------------------------------------------------
-# Identity graph reads -- thin wrappers around goldenmatch.identity
+# Shared handler module -- the same goldenmatch.snowflake.udfs functions
+# that the Snowpark Python UDFs call into. SPCS just exposes them via
+# HTTP instead of being invoked by Snowflake directly. Single source of
+# truth for the goldenmatch-side glue keeps the two paths bit-identical.
 # ---------------------------------------------------------------------------
+
+
+from goldenmatch.snowflake import udfs as _gm  # noqa: E402
 
 
 def _identity_resolve(record_id: str, db_path: str) -> Any:
-    # TODO(spcs): wire to the goldenmatch.identity entry point that
-    # `goldenmatch_identity_resolve` in the DuckDB / pgrx extensions
-    # already calls. The Postgres + DuckDB SQL UDFs return JSON in
-    # the same shape, so the same Python helper should serve here.
-    raise NotImplementedError(
-        f"identity_resolve({record_id!r}, db={db_path or DEFAULT_IDENTITY_DB!r})"
-    )
+    return _gm.identity_resolve(record_id, db_path or DEFAULT_IDENTITY_DB)
 
 
 def _identity_view(entity_id: str, db_path: str) -> Any:
-    # TODO(spcs): wire to goldenmatch.identity equivalent of
-    # `goldenmatch_identity_view`.
-    raise NotImplementedError(
-        f"identity_view({entity_id!r}, db={db_path or DEFAULT_IDENTITY_DB!r})"
-    )
+    return _gm.identity_view(entity_id, db_path or DEFAULT_IDENTITY_DB)
 
 
 def _identity_history(entity_id: str, db_path: str) -> Any:
-    raise NotImplementedError(
-        f"identity_history({entity_id!r}, db={db_path or DEFAULT_IDENTITY_DB!r})"
-    )
+    return _gm.identity_history(entity_id, db_path or DEFAULT_IDENTITY_DB)
 
 
 def _identity_conflicts(dataset: str, db_path: str) -> Any:
-    raise NotImplementedError(
-        f"identity_conflicts({dataset!r}, db={db_path or DEFAULT_IDENTITY_DB!r})"
-    )
+    return _gm.identity_conflicts(dataset, db_path or DEFAULT_IDENTITY_DB)
 
 
 def _identity_list(dataset: str, status: str, db_path: str) -> Any:
-    raise NotImplementedError(
-        f"identity_list(dataset={dataset!r}, status={status!r}, "
-        f"db={db_path or DEFAULT_IDENTITY_DB!r})"
-    )
+    return _gm.identity_list(dataset, status, db_path or DEFAULT_IDENTITY_DB)
 
 
 # ---------------------------------------------------------------------------
-# GoldenCheck / quality
+# GoldenCheck / quality -- Phase 2 (table-reading; needs Snowpark Session).
 # ---------------------------------------------------------------------------
 
 
 def _goldencheck_scan_table(relation: str, domain: str) -> str:
-    # TODO(spcs): wire to goldencheck's scan entry point. The DuckDB
-    # UDF `goldencheck_scan_table` returns a JSON array of findings
-    # in this exact shape; reuse the same serializer.
-    raise NotImplementedError(
-        f"goldencheck_scan_table({relation!r}, domain={domain!r})"
-    )
+    # Mirrors the goldenmatch.snowflake.udfs.scan_table scaffold --
+    # Phase 2, gated on the Snowflake-native goldencheck profiler.
+    return _gm.scan_table(relation, domain)
 
 
 def _goldencheck_health_score(relation: str) -> float:
-    # TODO(spcs): wire to goldencheck's health-score entry point.
-    raise NotImplementedError(f"goldencheck_health_score({relation!r})")
+    return _gm.health_score(relation)
 
 
 # ---------------------------------------------------------------------------
-# GoldenFlow transforms
+# GoldenFlow transforms -- map server endpoint name -> handler function.
 # ---------------------------------------------------------------------------
+
+
+_FLOW_HANDLERS = {
+    "normalize_email":       _gm.normalize_email,
+    "normalize_phone":       _gm.normalize_phone,
+    "normalize_date":        _gm.normalize_date,
+    "normalize_name_proper": _gm.normalize_name_proper,
+    "canonicalize_url":      _gm.canonicalize_url,
+    "canonicalize_address":  _gm.canonicalize_address,
+    "strip":                 _gm.strip,
+    "whitespace_normalize":  _gm.whitespace_normalize,
+}
 
 
 def _make_flow(name: str):
-    # TODO(spcs): import the resolved transform once -- module-level,
-    # not per-request -- and call it here. The DuckDB UDFs already do
-    # this for each transform; mirror the same import path.
+    fn = _FLOW_HANDLERS[name]
 
     def call(value: str | None) -> str | None:
-        if value is None:
-            return None
-        raise NotImplementedError(f"goldenflow_{name}({value!r})")
+        return fn(value)
 
     call.__name__ = f"flow_{name}"
     return call
@@ -201,49 +193,30 @@ def _make_flow(name: str):
 def _correction_add(
     decision: str, dataset: str, memory_path: str, args_json: str,
 ) -> str:
-    # TODO(spcs): wire to goldenmatch.core.memory.store.add_correction.
-    # The DuckDB UDF `goldenmatch_correction_add` already takes the
-    # same (decision, dataset, memory_path, args_json) tuple --
-    # reuse its handler verbatim.
-    args = json.loads(args_json or "{}")
-    raise NotImplementedError(
-        f"correction_add(decision={decision!r}, dataset={dataset!r}, "
-        f"memory_path={memory_path or DEFAULT_MEMORY_DB!r}, args={args!r})"
+    return _gm.correction_add(
+        decision, dataset, memory_path or DEFAULT_MEMORY_DB, args_json,
     )
 
 
 # ---------------------------------------------------------------------------
-# Dedupe -- the three output shapes
+# Dedupe -- the three output shapes. Phase 2 in goldenmatch.snowflake.udfs;
+# SPCS exposes them once the SP migration lands.
 # ---------------------------------------------------------------------------
 
 
 def _dedupe_full(input_table: str, config_json: str) -> list[list[Any]]:
-    # TODO(spcs): use Snowpark Session to read the input table into
-    # a Polars frame, then call goldenmatch.dedupe_df(df, config=cfg)
-    # and emit one [cluster_id, golden_variant] row per cluster.
-    # Reference the DuckDB UDF `goldenmatch_dedupe_full` for the
-    # exact serialization shape.
-    raise NotImplementedError(
-        f"dedupe_full(input_table={input_table!r}, "
-        f"config_bytes={len(config_json)})"
-    )
+    rows = _gm.DedupeFull().process(input_table, config_json)
+    return [list(r) for r in rows] if rows else []
 
 
 def _dedupe_clusters(input_table: str, config_json: str) -> list[list[Any]]:
-    # TODO(spcs): emit one [cluster_id, member_id, score] row per
-    # cluster member. Same input + config handling as _dedupe_full.
-    raise NotImplementedError(
-        f"dedupe_clusters(input_table={input_table!r})"
-    )
+    rows = _gm.DedupeClusters().process(input_table, config_json)
+    return [list(r) for r in rows] if rows else []
 
 
 def _dedupe_pairs(input_table: str, config_json: str) -> list[list[Any]]:
-    # TODO(spcs): emit one [id_a, id_b, score] row per scored pair
-    # above the configured threshold. The Postgres pgrx UDF
-    # `goldenmatch_dedupe_pairs` is the reference shape.
-    raise NotImplementedError(
-        f"dedupe_pairs(input_table={input_table!r})"
-    )
+    rows = _gm.DedupePairs().process(input_table, config_json)
+    return [list(r) for r in rows] if rows else []
 
 
 # ---------------------------------------------------------------------------
