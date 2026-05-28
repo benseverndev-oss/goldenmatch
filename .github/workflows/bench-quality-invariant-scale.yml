@@ -83,7 +83,13 @@ jobs:
             print('worktree install OK:', goldenmatch.__file__)"
 
       - name: Run rung (rows=${{ inputs.rows }} shape=${{ inputs.shape }} backend=${{ inputs.backend }})
+        # pipefail is critical: without it `python ... | tee ...` returns tee's
+        # exit code, so a missing-file / traceback in the harness silently
+        # reports the step as success. Bit run 26575594657 — checkout was on
+        # main, scripts/ wasn't there yet, python exited 2, tee returned 0.
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .profile_tmp/qis
           BACKEND_FLAG=""
           if [ -n "${{ inputs.backend }}" ]; then
