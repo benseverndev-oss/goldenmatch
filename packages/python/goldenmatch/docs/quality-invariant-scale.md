@@ -5,13 +5,21 @@ Native Runtime + Local/In-house Embedding epic ([#504](https://github.com/bensev
 
 **Thesis (#510):** match quality and clustering behavior are invariant across scale.
 
-**Status (this document, v0):** *not yet validated* — the existing scale infra
-measures **throughput** (wall, peak RSS) but not **quality**. This page introduces
-the quality harness (`scripts/quality_invariant_scale.py`), the methodology, and the
-first two rungs. It also flags the concrete obstacle the small-rung evidence
-already surfaces: zero-config on the Phase-5 synthetic does **not** behave
-identically across scale, so the established "scale envelope" claims need a
-proper quality fixture before they can be reissued as quality claims.
+**Status (this document, v0.1):**
+
+- ✅ **Pipeline quality IS scale-invariant** on the realistic-vocab fixture
+  across 1 K → 10 K (Pairwise / B-cubed / Cluster F1 all 1.0 at both rungs;
+  zero drift, well inside the ≤ 0.005 / ≤ 0.01 acceptance). Larger rungs
+  pending on the bench box.
+- ❌ Zero-config does **not** behave identically across scale on the
+  *Phase-5* fixture (Pairwise F1 0.91 → 0.03 from 1 K → 10 K) — but that is
+  a fixture pathology (literal `name_<cid>` low-cardinality tokens), not a
+  pipeline failure. Documented below as the failure mode that exposed the
+  need for a fair fixture in the first place.
+
+The quality harness (`scripts/quality_invariant_scale.py`) ships both fixtures
+(`--shape realistic` default, `--shape phase5` for the adversarial case) so the
+two findings are reproducible from a fresh clone.
 
 ---
 
@@ -105,36 +113,70 @@ be reissued as quality numbers without a different fixture**.
 
 ---
 
-## What's needed to actually close #510
+## Realistic-vocab shape: quality IS invariant
 
-A proper quality-invariance result needs at least one of:
+The harness now ships a second fixture, `--shape realistic`. It uses the same
+5-rows-per-cluster + 10%-typo noise model as Phase-5, but with **5-syllable
+hash-derived names** (24⁵ ≈ 8 M-combo space, independent salts for first vs
+last, so (first, last) tuple collisions across distinct clusters are
+vanishingly rare) plus a realistic address/city/zip/birth_year vocab. The
+generator is in-process and deterministic from the seed; no field has the
+literal `name_<cid>` pathology.
 
-1. **A realistic synthetic** (varied syllable-based vocabs, like the one
-   `scripts/bench_embedding_providers.py::run_synthetic` already uses for #506)
-   so inter-cluster token similarity isn't pathological. That isolates whether
-   the *pipeline* (not the fixture) preserves quality across scale.
-2. **A pinned config** (e.g., exact-on-email with negative evidence on names,
-   or a fixed weighted matchkey) so the at-scale metric measures the pipeline,
-   not auto-config drift. Drift itself is worth reporting alongside.
-3. **Auto-config improvements** for low-cardinality literal-pattern shapes
-   (#491 lever-coverage / #195 controller behavior at low budgets) — a real,
-   separately-trackable workstream that would let zero-config quality be
-   invariant on a wider class of inputs.
+| Rows (clusters) | Pairwise F1 | B-cubed F1 | Cluster F1 | P / R (pairwise) | FP | Wall | Controller |
+|---|---|---|---|---|---|---|---|
+| **1 000** (200) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | 3.5 s | YELLOW — `POLICY_SATISFIED` |
+| **10 000** (2 000) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | ~25 s | YELLOW — `POLICY_SATISFIED` |
 
-Bigger rungs (1 M / 10 M / 25 M / 50 M / 100 M / 200 M) need the Railway
-`goldenmatch-bench-gen` box (or a sibling one-shot job modeled on
-`Dockerfile.embprov`). The harness's per-rung JSON shape is already
-ladder-compatible — wiring the bench-box runs and appending them to this table
-is the next deliverable once a meaningful fixture is in place.
+**Delta across the 1 K → 10 K rung: 0.000 on every metric, well inside #510's
+≤ 0.005 / ≤ 0.01 acceptance.** Zero false positives at both rungs (every typo'd
+row still gets clustered with its four siblings via email/last_name evidence),
+zero false negatives (no clusters split or missed), and exactly the right
+number of predicted clusters (200 / 2 000 matching GT). The controller commits
+YELLOW (not RED) — auto-config finds a viable config on this shape.
+
+So the **pipeline itself** preserves quality across this range when the
+fixture isn't pathological. The Phase-5 failure mode (zero-config drifting to a
+degenerate RED config under low-cardinality literal-pattern inputs) is an
+auto-config robustness issue surfaced by an adversarial fixture, **not** an
+intrinsic scale problem.
+
+---
+
+## What's still needed to fully close #510
+
+1. **Larger rungs (100 K / 1 M / 10 M / 25 M / 50 M / 100 M / 200 M)** on the
+   realistic fixture. The harness's per-rung JSON shape is already
+   ladder-compatible. Local box can do up through ~100 K; everything above
+   wants a Railway one-shot job modelled on `Dockerfile.embprov` (the #506
+   embedding-provider job's pattern: pip-install goldenmatch from PyPI, copy
+   `scripts/`, run `quality_invariant_scale.py --rows N --shape realistic`,
+   results land in deploy logs).
+2. **Backend parity at scale** — native kernels vs pure-Python pipeline
+   produce equal clusters/scores. The per-kernel level is locked
+   (`tests/test_native_parity.py`); pending here is the at-scale pipeline-level
+   parity rerun.
+3. **Auto-config low-card robustness** — separately trackable as a
+   #491 / #195 workstream. Phase-5's failure mode (the original `name_<cid>`
+   fixture) tells us the bound on what zero-config currently handles
+   gracefully; closing it would let the realistic claim apply to a wider class
+   of real-world inputs.
+4. **Pinned-config rerun** — optionally, run the same ladder under an explicit
+   config (e.g., exact-on-email + NE on names) to separate "pipeline quality
+   at scale" from "auto-config behavior at scale" cleanly.
 
 ---
 
 ## Reproducing this page
 
 ```bash
-# One rung end-to-end, locally:
-python scripts/quality_invariant_scale.py --rows 1000  --out qis_1k.json
-python scripts/quality_invariant_scale.py --rows 10000 --out qis_10k.json
+# Realistic shape (default — the fair fixture):
+python scripts/quality_invariant_scale.py --rows 1000  --out qis_r_1k.json
+python scripts/quality_invariant_scale.py --rows 10000 --out qis_r_10k.json
+
+# Phase-5 shape (the throughput-only fixture, kept for the failure-mode story):
+python scripts/quality_invariant_scale.py --rows 1000  --shape phase5 --out qis_p_1k.json
+python scripts/quality_invariant_scale.py --rows 10000 --shape phase5 --out qis_p_10k.json
 ```
 
 Each `qis_*.json` is the canonical per-rung shape; append rows to the table

@@ -45,14 +45,48 @@ ROWS_PER_CLUSTER = 5
 TYPO_RATE = 0.10
 
 
-def generate_with_gt(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarray]:
-    """Replicate the Phase 5 generator in-process, KEEPING the cluster id.
+_SYL = ["an", "be", "ca", "da", "el", "fi", "ga", "ha", "in", "jo", "ka", "la",
+        "ma", "na", "or", "pa", "ri", "sa", "ta", "va", "wo", "xe", "yu", "ze"]
+_STREETS = ["main st", "oak ave", "pine rd", "maple dr", "cedar ln",
+            "elm st", "washington ave", "park blvd"]
+_CITIES = ["springfield", "franklin", "clinton", "georgetown",
+           "salem", "fairview", "madison", "bristol"]
 
-    Returns (df, cluster_ids) where df has the four user-visible columns
-    (first_name, last_name, email, zip) plus a stable `id`, and cluster_ids[i]
-    is the ground-truth cluster id for the i-th row.
+
+def _hash_name(salt: str, seed: int, cid: int, n_syl: int = 5) -> str:
+    """Pseudo-random 5-syllable name from (salt, seed, cid). 24^5 ~= 8M combos
+    so at 100k clusters expected collisions ~= 600 per pool (cheap birthday
+    arithmetic), and a (first, last) tuple collision is effectively impossible.
+    Independent salts for first/last keep the two pools uncorrelated.
     """
-    n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER  # round to whole clusters
+    import hashlib
+    h = hashlib.md5(f"{salt}_{seed}_{cid}".encode()).digest()
+    return "".join(_SYL[h[i] % len(_SYL)] for i in range(n_syl))
+
+
+def generate_with_gt(n_rows: int, seed: int = 0, shape: str = "realistic"
+                     ) -> tuple[pl.DataFrame, np.ndarray]:
+    """Generate a synthetic person dedupe dataset + ground-truth cluster ids.
+
+    shape="phase5"   — the in-process replica of the Phase 5 generator (literal
+                       "name_<cid>" / "sur_<cid>" tokens). Throughput-shaped:
+                       low cardinality + high inter-cluster token similarity.
+    shape="realistic" — 5-syllable hash-derived names + a realistic vocab for
+                       address/city/zip/birth_year. Designed to be a fair
+                       fixture for measuring pipeline quality across scale (no
+                       inter-cluster name similarity, near-distinct identities).
+
+    Both share the 5-rows-per-cluster + 10% typo-on-first_name noise model.
+    """
+    if shape == "phase5":
+        return _generate_phase5(n_rows, seed)
+    if shape == "realistic":
+        return _generate_realistic(n_rows, seed)
+    raise ValueError(f"unknown shape {shape!r}; expected 'phase5' or 'realistic'")
+
+
+def _generate_phase5(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarray]:
+    n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
     n_clusters = n_rows // ROWS_PER_CLUSTER
     rng = np.random.default_rng(seed)
     cids = np.repeat(np.arange(n_clusters, dtype=np.int64), ROWS_PER_CLUSTER)
@@ -76,6 +110,49 @@ def generate_with_gt(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarr
         )
         .select("id", "first_name", "last_name", "email", "zip")
     )
+    return df, cids
+
+
+def _generate_realistic(n_rows: int, seed: int = 0) -> tuple[pl.DataFrame, np.ndarray]:
+    n_rows = (n_rows // ROWS_PER_CLUSTER) * ROWS_PER_CLUSTER
+    n_clusters = n_rows // ROWS_PER_CLUSTER
+    rng = np.random.default_rng(seed)
+
+    # Per-cluster canonical fields.
+    first_canon = [_hash_name("F", seed, c) for c in range(n_clusters)]
+    last_canon = [_hash_name("L", seed, c) for c in range(n_clusters)]
+    street_num = rng.integers(1, 9999, n_clusters)
+    street_idx = rng.integers(0, len(_STREETS), n_clusters)
+    address_canon = [f"{street_num[c]} {_STREETS[street_idx[c]]}" for c in range(n_clusters)]
+    city_canon = [_CITIES[i] for i in rng.integers(0, len(_CITIES), n_clusters)]
+    zip_canon = [f"{c % 100000:05d}" for c in range(n_clusters)]
+    year_canon = rng.integers(1940, 2005, n_clusters).astype(str).tolist()
+
+    cids = np.repeat(np.arange(n_clusters, dtype=np.int64), ROWS_PER_CLUSTER)
+    typo = rng.random(n_rows) < TYPO_RATE
+
+    first_rows = [first_canon[c] for c in cids]
+    last_rows = [last_canon[c] for c in cids]
+    addr_rows = [address_canon[c] for c in cids]
+    city_rows = [city_canon[c] for c in cids]
+    zip_rows = [zip_canon[c] for c in cids]
+    year_rows = [year_canon[c] for c in cids]
+
+    # Same 'a' -> '@' typo on first_name (matches phase5's noise model so the two
+    # shapes only differ in vocab, not noise). Carries into email.
+    first_with_typo = [f.replace("a", "@") if t else f for f, t in zip(first_rows, typo)]
+    email_rows = [f"{f}.{l}@example.com" for f, l in zip(first_with_typo, last_rows)]
+
+    df = pl.DataFrame({
+        "id": [f"r{i}" for i in range(n_rows)],
+        "first_name": first_with_typo,
+        "last_name": last_rows,
+        "address": addr_rows,
+        "city": city_rows,
+        "zip": zip_rows,
+        "birth_year": year_rows,
+        "email": email_rows,
+    })
     return df, cids
 
 
@@ -169,14 +246,14 @@ def _peak_rss_mb() -> float | None:
         return None
 
 
-def run_rung(n_rows: int, seed: int = 0) -> dict:
+def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic") -> dict:
     import goldenmatch
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     if sys.platform == "win32":
         tracemalloc.start()
 
     t0 = time.time()
-    df, gt = generate_with_gt(n_rows, seed=seed)
+    df, gt = generate_with_gt(n_rows, seed=seed, shape=shape)
     t_gen = time.time() - t0
 
     t1 = time.time()
@@ -223,10 +300,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--shape", choices=("realistic", "phase5"), default="realistic",
+                    help="realistic = varied syllable vocab (default, the fair fixture); "
+                         "phase5 = the in-process Phase-5 replica (throughput-shaped, "
+                         "pathological for ER quality)")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
 
-    res = run_rung(args.rows, seed=args.seed)
+    res = run_rung(args.rows, seed=args.seed, shape=args.shape)
+    res["shape"] = args.shape
     print(json.dumps(res, indent=2, default=str))
     if args.out:
         args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
