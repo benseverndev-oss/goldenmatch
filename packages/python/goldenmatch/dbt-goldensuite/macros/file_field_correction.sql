@@ -18,8 +18,11 @@
           reason='USPS lookup',
       ) }}
 
-  Other adapters (Snowflake, BigQuery, Redshift, etc.) raise a
-  compile error -- there is no MemoryStore-write surface there yet.
+  Snowflake support uses the same positional + args_json shape as
+  DuckDB (Snowpark Python UDFs accept positional args naturally and
+  the args_json string round-trips cleanly through VARIANT). Other
+  adapters (BigQuery, Redshift, etc.) raise a compile error -- there
+  is no MemoryStore-write surface there yet.
 -#}
 
 {% macro goldenmatch_file_field_correction(
@@ -43,10 +46,11 @@
     cluster_id, field_name, original, corrected, dataset, reason, memory_path
 ) %}
     {{ exceptions.raise_compiler_error(
-        "goldenmatch_file_field_correction is only supported on postgres and "
-        "duckdb targets today; got adapter=" ~ target.type ~ ". File the "
-        "correction via the REST API (POST /api/v1/memory/corrections) or "
-        "Python (goldenmatch.add_correction) instead."
+        "goldenmatch_file_field_correction is only supported on postgres, "
+        "duckdb, and snowflake targets today; got adapter=" ~ target.type ~
+        ". File the correction via the REST API "
+        "(POST /api/v1/memory/corrections) or Python "
+        "(goldenmatch.add_correction) instead."
     ) }}
 {% endmacro %}
 
@@ -87,6 +91,31 @@
         }
     {%- endset -%}
     SELECT goldenmatch_correction_add(
+        'field_correct',
+        {{ dbt.string_literal(dataset) }},
+        {{ dbt.string_literal(memory_path) if memory_path is not none else "''" }},
+        {{ dbt.string_literal(args_json) }}
+    )
+{% endmacro %}
+
+
+{# Snowflake: schema-qualified Snowpark Python UDF. Same positional
+   + args_json shape as DuckDB -- the Python handler is the wrapper
+   created by docs/snowflake-setup.md and ultimately calls
+   goldenmatch.add_correction(...) the same way. #}
+{% macro snowflake__goldenmatch_file_field_correction(
+    cluster_id, field_name, original, corrected, dataset, reason, memory_path
+) %}
+    {%- set args_json -%}
+        {
+          "cluster_id": {{ cluster_id }},
+          "field_name": {{ tojson(field_name) }},
+          "corrected_value": {{ tojson(corrected) }}
+          {%- if original is not none -%}, "original_value": {{ tojson(original) }}{%- endif -%}
+          {%- if reason is not none -%}, "reason": {{ tojson(reason) }}{%- endif -%}
+        }
+    {%- endset -%}
+    SELECT goldenmatch.goldenmatch_correction_add(
         'field_correct',
         {{ dbt.string_literal(dataset) }},
         {{ dbt.string_literal(memory_path) if memory_path is not none else "''" }},

@@ -32,14 +32,16 @@
 
 {#--- Pick the warehouse SQL function name for the requested output. ---#}
 {% macro goldenmatch_dedupe_fn_name(output_kind, adapter_type) %}
-    {%- if adapter_type not in ('postgres', 'duckdb') -%}
+    {%- if adapter_type not in ('postgres', 'duckdb', 'snowflake') -%}
         {{ exceptions.raise_compiler_error(
             "goldenmatch_dedupe materialization is only supported on "
-            "postgres and duckdb; got adapter=" ~ adapter_type
+            "postgres, duckdb, and snowflake; got adapter=" ~ adapter_type
         ) }}
     {%- endif -%}
     {%- if output_kind == 'golden' -%}
         {%- if adapter_type == 'postgres' -%}
+            {{ return('goldenmatch.goldenmatch_dedupe_full') }}
+        {%- elif adapter_type == 'snowflake' -%}
             {{ return('goldenmatch.goldenmatch_dedupe_full') }}
         {%- else -%}
             {{ return('goldenmatch_dedupe_full') }}
@@ -47,6 +49,13 @@
     {%- elif output_kind == 'clusters' -%}
         {%- if adapter_type == 'postgres' -%}
             {{ return('goldenmatch.goldenmatch_dedupe_clusters') }}
+        {%- elif adapter_type == 'snowflake' -%}
+            {{ exceptions.raise_compiler_error(
+                "output='clusters' is not yet implemented on Snowflake. "
+                "v0.6 ships golden-only on Snowflake (matching the "
+                "DuckDB v0.4.0 posture); clusters + pairs land in a "
+                "follow-up. Use output='golden' or switch to Postgres."
+            ) }}
         {%- else -%}
             {{ exceptions.raise_compiler_error(
                 "output='clusters' is not yet implemented on DuckDB. "
@@ -58,6 +67,10 @@
     {%- elif output_kind == 'pairs' -%}
         {%- if adapter_type == 'postgres' -%}
             {{ return('goldenmatch.goldenmatch_dedupe_pairs') }}
+        {%- elif adapter_type == 'snowflake' -%}
+            {{ exceptions.raise_compiler_error(
+                "output='pairs' is not yet implemented on Snowflake."
+            ) }}
         {%- else -%}
             {{ exceptions.raise_compiler_error(
                 "output='pairs' is not yet implemented on DuckDB."

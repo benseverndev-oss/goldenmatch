@@ -146,10 +146,41 @@ def test_assert_with_domain_arg() -> None:
     assert "'healthcare'" in sql
 
 
-def test_assert_unknown_adapter_errors() -> None:
+def test_assert_snowflake_renders() -> None:
     env = _build_env("snowflake", "quality_assert.sql")
     fn = env.globals["test_goldencheck_assert"]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    sql = fn(_Model("customers"), min_severity="warning")
+    # Schema-qualified UDF + Snowflake LATERAL FLATTEN over PARSE_JSON.
+    assert "goldencheck.goldencheck_scan_table" in sql
+    assert "'customers'" in sql
+    assert "PARSE_JSON" in sql
+    assert "FLATTEN" in sql
+    assert "'warning'" in sql
+    assert "'error'" in sql
+    assert "'info'" not in sql
+
+
+def test_assert_snowflake_ignore_list() -> None:
+    env = _build_env("snowflake", "quality_assert.sql")
+    fn = env.globals["test_goldencheck_assert"]
+    sql = fn(
+        _Model("customers"),
+        min_severity="warning",
+        ignore_checks=["nullability", "uniqueness"],
+    )
+    # Snowflake uses NOT IN (...), not <> ALL(ARRAY[...]).
+    assert "NOT IN" in sql
+    assert "'nullability'" in sql
+    assert "'uniqueness'" in sql
+
+
+def test_assert_unknown_adapter_errors() -> None:
+    env = _build_env("bigquery", "quality_assert.sql")
+    fn = env.globals["test_goldencheck_assert"]
+    with pytest.raises(
+        RuntimeError,
+        match="only supported on postgres, duckdb, and snowflake",
+    ):
         fn(_Model("anything"))
 
 
@@ -183,10 +214,22 @@ def test_health_gate_duckdb() -> None:
     assert "70" in sql
 
 
-def test_health_gate_unknown_adapter_errors() -> None:
+def test_health_gate_snowflake() -> None:
     env = _build_env("snowflake", "quality_health_gate.sql")
     fn = env.globals["test_goldencheck_health_gate"]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    sql = fn(_Model("customers"), min_score=85)
+    assert "goldencheck.goldencheck_health_score" in sql
+    assert "85" in sql
+    assert "score < 85" in sql
+
+
+def test_health_gate_unknown_adapter_errors() -> None:
+    env = _build_env("bigquery", "quality_health_gate.sql")
+    fn = env.globals["test_goldencheck_health_gate"]
+    with pytest.raises(
+        RuntimeError,
+        match="only supported on postgres, duckdb, and snowflake",
+    ):
         fn(_Model("anything"))
 
 

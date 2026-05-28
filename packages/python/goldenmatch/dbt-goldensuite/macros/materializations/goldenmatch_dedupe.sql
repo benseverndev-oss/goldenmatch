@@ -23,18 +23,18 @@
   2. Resolve match_config: file path (read + JSON-stringify) OR dict
      literal (JSON-stringify directly).
   3. Pick the right warehouse function for the requested output:
-     - golden   -> goldenmatch_dedupe_full (Postgres + DuckDB)
-     - clusters -> goldenmatch_dedupe_clusters (Postgres only in v0.4.0)
-     - pairs    -> goldenmatch_dedupe_pairs   (Postgres only in v0.4.0)
+     - golden   -> goldenmatch_dedupe_full (Postgres + DuckDB + Snowflake)
+     - clusters -> goldenmatch_dedupe_clusters (Postgres only in v0.6)
+     - pairs    -> goldenmatch_dedupe_pairs   (Postgres only in v0.6)
   4. CREATE TABLE <model> AS SELECT * FROM <function>(...)
   5. DROP TEMP staging table.
 
-  Out of scope for v0.4.0:
-  - DuckDB UDFs for dedupe_clusters / dedupe_pairs -- these exist on
-    the Postgres extension but not yet on the DuckDB Python UDF
-    surface. v0.4.0 ships golden-only on DuckDB; clusters + pairs
-    land in v0.4.1 once the UDFs are added.
-  - Snowflake / BigQuery / Redshift -- no goldenmatch extension; use
+  Out of scope for v0.6:
+  - DuckDB + Snowflake UDFs for dedupe_clusters / dedupe_pairs --
+    these exist on the Postgres extension but not on the
+    DuckDB / Snowflake Python UDF surface. Both ship golden-only;
+    clusters + pairs are a follow-up.
+  - BigQuery / Redshift -- no goldenmatch extension; use
     `goldenmatch.dedupe_df()` Python helper out-of-band instead.
 -#}
 
@@ -50,10 +50,10 @@
     {%- set output_kind = config.get('output', 'golden') -%}
     {%- set memory_db_path = config.get('memory_db_path', none) -%}
 
-    {%- if target.type not in ('postgres', 'duckdb') -%}
+    {%- if target.type not in ('postgres', 'duckdb', 'snowflake') -%}
         {{ exceptions.raise_compiler_error(
             "goldenmatch_dedupe materialization is only supported on "
-            "postgres and duckdb today; got adapter=" ~ target.type ~
+            "postgres, duckdb, and snowflake today; got adapter=" ~ target.type ~
             ". For other adapters, use the Python helper "
             "`dbt_goldensuite.materialize.run_goldenmatch_dedupe`."
         ) }}

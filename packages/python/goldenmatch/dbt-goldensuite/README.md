@@ -28,8 +28,8 @@ print(f"Deduped {result['input_rows']} -> {result['clusters']} clusters")
 
 This package ships macros only (no models/seeds/snapshots). The
 goldenmatch/goldencheck/goldenflow macros `adapter.dispatch()` between the
-Postgres and DuckDB extension function shapes; `infermap_apply` is pure SQL
-(works on every adapter):
+Postgres, DuckDB, and Snowflake extension function shapes; `infermap_apply`
+is pure SQL (works on every adapter):
 
 - **Dedupe materialization** -- `goldenmatch_dedupe` (`macros/materializations/`)
 - **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
@@ -38,6 +38,15 @@ Postgres and DuckDB extension function shapes; `infermap_apply` is pure SQL
 - **Transforms (GoldenFlow)** -- `transforms.sql`
 - **Schema mapping (InferMap)** -- `infermap_apply(relation, column_map)` applies a
   Python-computed `infermap` column mapping as a plain projecting SELECT.
+
+### Adapter coverage
+
+| Adapter   | Status | Setup |
+|-----------|--------|-------|
+| Postgres  | Full -- 11 SQL functions + 5 pipeline functions via the `goldenmatch_pg` pgrx extension. | Install `goldenmatch_pg` per the extensions repo README. |
+| DuckDB    | Full -- 7 UDFs + 5 identity-graph functions via `goldenmatch-duckdb`. | `pip install goldenmatch-duckdb` on the dbt-runner host. |
+| Snowflake | Full -- same surface as DuckDB. Snowpark Python UDFs in the `goldenmatch` schema. `goldenmatch_dedupe` ships golden-only (matches the DuckDB v0.4.0 posture; clusters + pairs follow up). | See [docs/snowflake-setup.md](docs/snowflake-setup.md) for the wheel-upload + UDF registration steps. |
+| Others    | Compile error with a remediation hint pointing at `goldenmatch.dedupe_df()` / `goldenflow.transform_df()` / `goldencheck` Python helpers. | n/a |
 
 ### GoldenPipe orchestration in dbt
 

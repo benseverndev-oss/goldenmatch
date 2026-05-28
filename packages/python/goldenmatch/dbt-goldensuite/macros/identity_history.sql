@@ -15,7 +15,7 @@
 
 {% macro default__identity_history_impl(entity_id, db_path) %}
     {{ exceptions.raise_compiler_error(
-        "identity_history is only supported on postgres and duckdb;
+        "identity_history is only supported on postgres, duckdb, and snowflake;
          got adapter=" ~ target.type
     ) }}
 {% endmacro %}
@@ -31,6 +31,14 @@
 
 {% macro duckdb__identity_history_impl(entity_id, db_path) %}
     goldenmatch_identity_history(
+        {{ dbt.string_literal(entity_id) }},
+        {{ "''" if db_path is none else dbt.string_literal(db_path) }}
+    )
+{% endmacro %}
+
+
+{% macro snowflake__identity_history_impl(entity_id, db_path) %}
+    goldenmatch.goldenmatch_identity_history(
         {{ dbt.string_literal(entity_id) }},
         {{ "''" if db_path is none else dbt.string_literal(db_path) }}
     )
