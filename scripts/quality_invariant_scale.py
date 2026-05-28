@@ -310,8 +310,23 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
             # confidence_required=False because passing --backend explicitly
             # is "measurement mode" -- accept whatever config the controller
             # commits even if RED. Zero-config path still keeps the guard.
+            #
+            # _skip_finalize=True ALSO measurement mode: 1M-v6 attribution
+            # showed the controller's _finalize step (line 1141 of
+            # autoconfig_controller.py) runs the FULL pipeline on the FULL df
+            # to compute a verification profile -- that's the 9.49 GB RSS
+            # allocator AND a 2x wall amplifier (the user-facing dedupe_df
+            # call then reruns the same pipeline). For RSS measurement we
+            # want ONE full-df pipeline run, not two; skip_finalize gives
+            # that. Cost: history.full_vs_sample_drift is None (caller can't
+            # detect sample-vs-full divergence). For production users this
+            # matters; for measurement it doesn't.
             with stage("qis_autoconfig"):
-                cfg = goldenmatch.auto_configure_df(df, confidence_required=False)
+                cfg = goldenmatch.auto_configure_df(
+                    df,
+                    confidence_required=False,
+                    _skip_finalize=True,
+                )
                 cfg.backend = backend  # type: ignore[attr-defined]
             with stage("qis_dedupe"):
                 result = goldenmatch.dedupe_df(df, config=cfg)
