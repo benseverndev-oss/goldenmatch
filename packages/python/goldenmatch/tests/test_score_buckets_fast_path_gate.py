@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.backends.score_buckets import (
     _ne_effectively_empty,
     _resolve_fast_path,
