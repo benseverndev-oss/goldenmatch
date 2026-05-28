@@ -38,6 +38,7 @@ is pure SQL (works on every adapter):
 - **Transforms (GoldenFlow)** -- `transforms.sql`
 - **Schema mapping (InferMap)** -- `infermap_apply(relation, column_map)` applies a
   Python-computed `infermap` column mapping as a plain projecting SELECT.
+- **Snowflake Cortex** -- `cortex_embed_768`, `cortex_embed_1024`, `cortex_embed` (dim-dispatched), `cortex_cosine_similarity`, `cortex_l2_distance`, `cortex_inner_product`, `cortex_complete`. In-warehouse embeddings + LLM. Snowflake-only. Pairs with the `snowflake_cortex` provider in `goldenmatch.embeddings` for parity between dbt models and Python code. See [docs/snowflake-cortex.md](docs/snowflake-cortex.md).
 
 ### Adapter coverage
 

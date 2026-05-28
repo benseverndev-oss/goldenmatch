@@ -27,6 +27,7 @@ from goldenmatch.embeddings.providers import (
     LocalProvider,
     NoneProvider,
     OpenAIProvider,
+    SnowflakeCortexProvider,
     VertexProvider,
     resolve_provider,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "LocalProvider",
     "NoneProvider",
     "OpenAIProvider",
+    "SnowflakeCortexProvider",
     "VertexProvider",
     "embed_records",
     "normalize_text",
