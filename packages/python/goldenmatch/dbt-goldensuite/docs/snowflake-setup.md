@@ -88,8 +88,10 @@ PACKAGES = ('polars', 'pyarrow');
 ```
 
 ```sql
--- Dedupe UDTF -- returns a table of golden records.
+-- Dedupe UDTFs -- one per output shape. All three follow the same
+-- (input_table STRING, config_json STRING) signature.
 
+-- output='golden' -- one row per cluster, golden record as VARIANT.
 CREATE OR REPLACE FUNCTION goldenmatch.goldenmatch_dedupe_full(
     input_table STRING,
     config_json STRING
@@ -103,6 +105,41 @@ RETURNS TABLE(
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.11'
 HANDLER = 'goldenmatch_udfs.DedupeFull'
+IMPORTS = ('@goldenmatch.goldenmatch_wheels/goldenmatch-1.x.x-py3-none-any.whl')
+PACKAGES = ('polars', 'pyarrow', 'rapidfuzz');
+
+-- output='clusters' -- one row per (cluster_id, member_id) pair.
+-- Use when you want to attribute every input row to its cluster.
+CREATE OR REPLACE FUNCTION goldenmatch.goldenmatch_dedupe_clusters(
+    input_table STRING,
+    config_json STRING
+)
+RETURNS TABLE(
+    cluster_id BIGINT,
+    member_id  BIGINT,
+    score      FLOAT
+)
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.11'
+HANDLER = 'goldenmatch_udfs.DedupeClusters'
+IMPORTS = ('@goldenmatch.goldenmatch_wheels/goldenmatch-1.x.x-py3-none-any.whl')
+PACKAGES = ('polars', 'pyarrow', 'rapidfuzz');
+
+-- output='pairs' -- one row per scored pair (above the threshold).
+-- Use when you want the raw matching evidence for downstream review
+-- queues or audit trails.
+CREATE OR REPLACE FUNCTION goldenmatch.goldenmatch_dedupe_pairs(
+    input_table STRING,
+    config_json STRING
+)
+RETURNS TABLE(
+    id_a  BIGINT,
+    id_b  BIGINT,
+    score FLOAT
+)
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.11'
+HANDLER = 'goldenmatch_udfs.DedupePairs'
 IMPORTS = ('@goldenmatch.goldenmatch_wheels/goldenmatch-1.x.x-py3-none-any.whl')
 PACKAGES = ('polars', 'pyarrow', 'rapidfuzz');
 ```
@@ -199,15 +236,15 @@ into your dbt repo and run a model with
 
 ## Caveats
 
-- The `goldenmatch_dedupe_full` UDTF runs the full pipeline inside a
-  single Snowflake worker. For large inputs (> 10M rows) prefer
-  running the Python pipeline out-of-band with Snowpark Container
-  Services or a dedicated runner; the warehouse-side UDTF is best
-  for incremental / mid-sized batches.
+- The dedupe UDTFs run the full pipeline inside a single Snowflake
+  worker. For large inputs (> 10M rows) the Snowpark Python UDF
+  path will be slow; route to the SPCS service instead -- see
+  [docs/snowflake-spcs.md](snowflake-spcs.md). The warehouse-side
+  UDFs are best for incremental / mid-sized batches.
 - Snowpark Python UDFs read from the `IMPORTS` stage at compile time;
   rotating the wheel version means recreating the UDFs (or wrapping
   the version in a session-level alias).
-- The native `goldenmatch[native]` Rust kernel is not yet available
-  in Snowpark Python UDFs. The pure-Python fallback is used; for
-  large workloads where native acceleration matters, prefer the
-  out-of-band runner path.
+- The native `goldenmatch[native]` Rust kernel is not available in
+  Snowpark Python UDFs (Anaconda channel ships pure-Python wheels).
+  The native kernel is available via the SPCS path -- see
+  `docs/snowflake-spcs.md`.

@@ -45,7 +45,8 @@ is pure SQL (works on every adapter):
 |-----------|--------|-------|
 | Postgres  | Full -- 11 SQL functions + 5 pipeline functions via the `goldenmatch_pg` pgrx extension. | Install `goldenmatch_pg` per the extensions repo README. |
 | DuckDB    | Full -- 7 UDFs + 5 identity-graph functions via `goldenmatch-duckdb`. | `pip install goldenmatch-duckdb` on the dbt-runner host. |
-| Snowflake | Full -- same surface as DuckDB. Snowpark Python UDFs in the `goldenmatch` schema. `goldenmatch_dedupe` ships golden-only (matches the DuckDB v0.4.0 posture; clusters + pairs follow up). | See [docs/snowflake-setup.md](docs/snowflake-setup.md) for the wheel-upload + UDF registration steps. |
+| Snowflake (Snowpark Python UDFs) | Full -- same SQL surface as the Postgres path. `goldenmatch_dedupe` supports all three output shapes (`golden`, `clusters`, `pairs`). Pure-Python (Anaconda's Snowflake channel doesn't carry `goldenmatch-native`). | See [docs/snowflake-setup.md](docs/snowflake-setup.md) for the wheel-upload + UDF registration steps. |
+| Snowflake (SPCS service functions) | Same SQL surface; same dbt macros; backed by `goldenmatch[native]` in a Snowpark Container Services container. Use for workloads where native acceleration matters. | See [docs/snowflake-spcs.md](docs/snowflake-spcs.md) for the Dockerfile + service spec + setup walkthrough. |
 | Others    | Compile error with a remediation hint pointing at `goldenmatch.dedupe_df()` / `goldenflow.transform_df()` / `goldencheck` Python helpers. | n/a |
 
 ### GoldenPipe orchestration in dbt

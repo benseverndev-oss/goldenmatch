@@ -50,12 +50,7 @@
         {%- if adapter_type == 'postgres' -%}
             {{ return('goldenmatch.goldenmatch_dedupe_clusters') }}
         {%- elif adapter_type == 'snowflake' -%}
-            {{ exceptions.raise_compiler_error(
-                "output='clusters' is not yet implemented on Snowflake. "
-                "v0.6 ships golden-only on Snowflake (matching the "
-                "DuckDB v0.4.0 posture); clusters + pairs land in a "
-                "follow-up. Use output='golden' or switch to Postgres."
-            ) }}
+            {{ return('goldenmatch.goldenmatch_dedupe_clusters') }}
         {%- else -%}
             {{ exceptions.raise_compiler_error(
                 "output='clusters' is not yet implemented on DuckDB. "
@@ -68,9 +63,7 @@
         {%- if adapter_type == 'postgres' -%}
             {{ return('goldenmatch.goldenmatch_dedupe_pairs') }}
         {%- elif adapter_type == 'snowflake' -%}
-            {{ exceptions.raise_compiler_error(
-                "output='pairs' is not yet implemented on Snowflake."
-            ) }}
+            {{ return('goldenmatch.goldenmatch_dedupe_pairs') }}
         {%- else -%}
             {{ exceptions.raise_compiler_error(
                 "output='pairs' is not yet implemented on DuckDB."

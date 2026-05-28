@@ -134,13 +134,11 @@ def test_fn_name_clusters_duckdb_errors() -> None:
         helpers.goldenmatch_dedupe_fn_name("clusters", "duckdb")
 
 
-def test_fn_name_clusters_snowflake_errors() -> None:
-    """v0.6 ships golden-only on Snowflake (parity with DuckDB v0.4.0)."""
+def test_fn_name_clusters_snowflake() -> None:
+    """Snowflake mirrors Postgres for the clusters output shape."""
     helpers = _load_helpers()
-    with pytest.raises(
-        RuntimeError, match="clusters.*not yet implemented on Snowflake",
-    ):
-        helpers.goldenmatch_dedupe_fn_name("clusters", "snowflake")
+    assert helpers.goldenmatch_dedupe_fn_name("clusters", "snowflake") == \
+        "goldenmatch.goldenmatch_dedupe_clusters"
 
 
 def test_fn_name_pairs_duckdb_errors() -> None:
@@ -149,12 +147,11 @@ def test_fn_name_pairs_duckdb_errors() -> None:
         helpers.goldenmatch_dedupe_fn_name("pairs", "duckdb")
 
 
-def test_fn_name_pairs_snowflake_errors() -> None:
+def test_fn_name_pairs_snowflake() -> None:
+    """Snowflake mirrors Postgres for the pairs output shape."""
     helpers = _load_helpers()
-    with pytest.raises(
-        RuntimeError, match="pairs.*not yet implemented on Snowflake",
-    ):
-        helpers.goldenmatch_dedupe_fn_name("pairs", "snowflake")
+    assert helpers.goldenmatch_dedupe_fn_name("pairs", "snowflake") == \
+        "goldenmatch.goldenmatch_dedupe_pairs"
 
 
 def test_fn_name_invalid_output_errors() -> None:

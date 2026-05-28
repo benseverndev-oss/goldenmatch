@@ -23,17 +23,17 @@
   2. Resolve match_config: file path (read + JSON-stringify) OR dict
      literal (JSON-stringify directly).
   3. Pick the right warehouse function for the requested output:
-     - golden   -> goldenmatch_dedupe_full (Postgres + DuckDB + Snowflake)
-     - clusters -> goldenmatch_dedupe_clusters (Postgres only in v0.6)
-     - pairs    -> goldenmatch_dedupe_pairs   (Postgres only in v0.6)
+     - golden   -> goldenmatch_dedupe_full     (Postgres + DuckDB + Snowflake)
+     - clusters -> goldenmatch_dedupe_clusters (Postgres + Snowflake)
+     - pairs    -> goldenmatch_dedupe_pairs    (Postgres + Snowflake)
   4. CREATE TABLE <model> AS SELECT * FROM <function>(...)
   5. DROP TEMP staging table.
 
-  Out of scope for v0.6:
-  - DuckDB + Snowflake UDFs for dedupe_clusters / dedupe_pairs --
-    these exist on the Postgres extension but not on the
-    DuckDB / Snowflake Python UDF surface. Both ship golden-only;
-    clusters + pairs are a follow-up.
+  Out of scope:
+  - DuckDB UDFs for dedupe_clusters / dedupe_pairs -- these exist on
+    the Postgres + Snowflake surfaces but not yet on the DuckDB
+    Python UDF surface. DuckDB ships golden-only; clusters + pairs
+    on DuckDB are a follow-up.
   - BigQuery / Redshift -- no goldenmatch extension; use
     `goldenmatch.dedupe_df()` Python helper out-of-band instead.
 -#}
