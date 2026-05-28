@@ -245,7 +245,20 @@ def _resolve_fast_path(
         field_specs.append((xform_col, float(weight), fn, scorer))
         total_weight += float(weight)
     if total_weight <= 0:
+        _decline(f"total_weight={total_weight}")
         return None
+    # Diagnostic on the success path: log matchkey shape so we can compare
+    # what the controller commits at different row counts (rerank thresholds
+    # and NE promotion are scale-dependent).
+    scorer_names = [s for _, _, _, s in field_specs]
+    ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
+    print(
+        f"[score_buckets._resolve_fast_path] ENGAGED: "
+        f"n_fields={len(mk.fields)} scorers={scorer_names} "
+        f"threshold={mk.threshold} rerank={getattr(mk, 'rerank', False)} "
+        f"ne_scorers={ne_scorers}",
+        flush=True,
+    )
     return (float(mk.threshold), total_weight, field_specs)
 
 
