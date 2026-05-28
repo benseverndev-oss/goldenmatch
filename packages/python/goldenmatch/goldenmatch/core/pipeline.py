@@ -766,35 +766,39 @@ def _run_dedupe_pipeline(
             # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
             if config.quality is None or config.quality.mode != "disabled":
                 from goldenmatch.core.quality import run_quality_check
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
-                if gc_fixes:
-                    logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_quality_scan"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
+                    if gc_fixes:
+                        logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+                    combined_lf = combined_df_tmp.lazy()
 
             # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
             # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
             # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
             if config.transform is None or config.transform.mode != "disabled":
                 from goldenmatch.core.transform import run_transform
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
-                if gf_fixes:
-                    logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_transform"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+                    if gf_fixes:
+                        logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
+                    combined_lf = combined_df_tmp.lazy()
 
             # ── Step 1.5a: AUTO-FIX + VALIDATION ──
             if config.validation and config.validation.auto_fix:
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
-                logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_auto_fix"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
+                    logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
+                    combined_lf = combined_df_tmp.lazy()
 
             # Populate in-memory cache (LRU eviction). We materialize as an
             # eager DataFrame so subsequent hits don't re-evaluate a long lazy
             # plan. Guard _PREP_CACHE_MAX > 0 so tests that monkey-patch it to
             # 0 don't trigger IndexError on pop() from an empty LRU list.
-            prepped_df = combined_lf.collect()
+            with stage("pipeline_prep_cache_populate"):
+                prepped_df = combined_lf.collect()
             if _PREP_CACHE_MAX > 0:
                 if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
                     evicted = _PREP_CACHE_LRU.pop(0)
