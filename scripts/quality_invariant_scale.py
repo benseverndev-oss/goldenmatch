@@ -169,65 +169,90 @@ def _pairs_from_clusters(cluster_members: dict[int, list[int]]) -> set[tuple[int
 def score_quality(
     predicted_members: dict[int, list[int]], gt_cids: np.ndarray
 ) -> dict[str, dict]:
-    """Pairwise + B-cubed + Cluster F1 of `predicted_members` vs the gt_cids array.
+    """O(N) streaming Pairwise + B-cubed + Cluster F1 vs the gt_cids array.
 
-    predicted_members is {predicted_cluster_id: [row_ids]} for MULTI-MEMBER
-    clusters; singletons (rows not in any cluster) are implicit.
+    Never materializes the GT pair set (which is ~16 GB at 100 M rows / 20 M
+    clusters of 5). For each predicted cluster, computes its contribution to
+    every metric from the gt_cid Counter of its members:
+
+      - pairwise tp  += sum( C(cnt[g], 2) for g in cnt )       per cluster
+      - pairwise pred-total += C(|P|, 2)
+      - pairwise gt-total = sum( C(gt_sizes[g], 2) )           once, via np.bincount
+      - B-cubed bp contribution = sum(cnt[g]^2) / |P|           per cluster
+      - B-cubed br contribution = sum(cnt[g]^2 / gt_sizes[g])  per cluster
+      - Cluster exact-match counted when |cnt|==1 AND |P|==gt_sizes[only_g]
+      - Singletons (rows not in any multi-member cluster) handled with a
+        vectorized boolean mask, contributing bp += 1 / br += 1/gt_sizes[gt_c].
+
+    Numbers match the prior set-based implementation exactly on the 1K/10K/100K
+    local rungs (validated). Memory at 200 M: ~3 GB peak (gt_sizes_arr +
+    in_multi mask + cluster member arrays), vs ~32 GB for the set-based version.
     """
-    n_rows = len(gt_cids)
-    # GT cluster -> members
-    gt_clusters: dict[int, list[int]] = {}
-    for i, c in enumerate(gt_cids.tolist()):
-        gt_clusters.setdefault(int(c), []).append(i)
+    n_rows = int(len(gt_cids))
+    # Per-GT-cluster size (used by B-cubed recall, cluster-F1 exact match, and
+    # the GT pair total). bincount needs nonneg ints; gt_cids are nonneg here.
+    gt_sizes_arr = np.bincount(gt_cids)
+    gt_multi_total = int((gt_sizes_arr > 1).sum())
+    gt_pair_total = int(np.sum(gt_sizes_arr * (gt_sizes_arr - 1) // 2))
 
-    # Build a per-row predicted-cluster lookup; rows not in any multi-member
-    # predicted cluster are singletons (predicted_cluster_id = -row_id - 1, unique).
-    row_to_pred: dict[int, set[int]] = {}
-    pred_members_full: dict[int, set[int]] = {}
-    next_singleton = -1
-    for cid, members in predicted_members.items():
-        s = set(members)
-        pred_members_full[int(cid)] = s
-        for r in members:
-            row_to_pred[r] = s
-    for i in range(n_rows):
-        if i not in row_to_pred:
-            sid = next_singleton; next_singleton -= 1
-            s = {i}
-            pred_members_full[sid] = s
-            row_to_pred[i] = s
+    in_multi = np.zeros(n_rows, dtype=bool)
+    pred_tp = 0
+    pred_pair_total = 0
+    bp_acc = 0.0
+    br_acc = 0.0
+    exact_cluster_matches = 0
+    pred_multi_total = 0
 
-    # Pairwise F1
-    pred_pairs = _pairs_from_clusters({k: list(v) for k, v in predicted_members.items()})
-    gt_pairs = _pairs_from_clusters({k: list(v) for k, v in gt_clusters.items() if len(v) > 1})
-    tp = len(pred_pairs & gt_pairs); fp = len(pred_pairs - gt_pairs); fn = len(gt_pairs - pred_pairs)
-    pp = tp / (tp + fp) if (tp + fp) else 0.0
-    pr = tp / (tp + fn) if (tp + fn) else 0.0
+    for members in predicted_members.values():
+        sz = len(members)
+        if sz <= 1:
+            continue
+        pred_multi_total += 1
+        arr = np.asarray(members, dtype=np.int64)
+        in_multi[arr] = True
+        gt_for_members = gt_cids[arr]
+        uniq, counts = np.unique(gt_for_members, return_counts=True)
+        # Pairwise tp from this cluster
+        pred_tp += int(np.sum(counts * (counts - 1) // 2))
+        pred_pair_total += sz * (sz - 1) // 2
+        # B-cubed contributions
+        sq = counts.astype(np.float64) ** 2
+        bp_acc += float(np.sum(sq) / sz)
+        br_acc += float(np.sum(sq / gt_sizes_arr[uniq]))
+        # Cluster exact-match: cluster is purely one gt cluster AND covers all of it
+        if uniq.size == 1 and sz == int(gt_sizes_arr[uniq[0]]):
+            exact_cluster_matches += 1
+
+    # Singletons: predicted cluster is just {row}, gt cluster has size gt_sizes_arr[gt_c].
+    # Each singleton contributes bp += 1/1 and br += 1/gt_sizes[gt_c].
+    singleton_mask = ~in_multi
+    n_single = int(singleton_mask.sum())
+    if n_single:
+        gt_single = gt_cids[singleton_mask]
+        bp_acc += float(n_single)
+        br_acc += float(np.sum(1.0 / gt_sizes_arr[gt_single]))
+
+    # Pairwise
+    fp_pairs = pred_pair_total - pred_tp
+    fn_pairs = gt_pair_total - pred_tp
+    pp = pred_tp / pred_pair_total if pred_pair_total else 0.0
+    pr = pred_tp / gt_pair_total if gt_pair_total else 0.0
     pf1 = (2 * pp * pr / (pp + pr)) if (pp + pr) else 0.0
-
-    # B-cubed F1
-    bp_acc = 0.0; br_acc = 0.0
-    for i in range(n_rows):
-        true_cluster = set(gt_clusters[int(gt_cids[i])])
-        pred_cluster = row_to_pred[i]
-        inter = len(true_cluster & pred_cluster)
-        bp_acc += inter / len(pred_cluster)
-        br_acc += inter / len(true_cluster)
+    # B-cubed
     bp = bp_acc / n_rows
     br = br_acc / n_rows
     bf1 = (2 * bp * br / (bp + br)) if (bp + br) else 0.0
-
-    # Cluster F1 (exact-set match)
-    gt_set = {frozenset(m) for m in gt_clusters.values() if len(m) > 1}
-    pred_set = {frozenset(v) for v in predicted_members.values() if len(v) > 1}
-    ctp = len(gt_set & pred_set); cfp = len(pred_set - gt_set); cfn = len(gt_set - pred_set)
-    cp = ctp / (ctp + cfp) if (ctp + cfp) else 0.0
-    cr = ctp / (ctp + cfn) if (ctp + cfn) else 0.0
+    # Cluster
+    cfp_cnt = pred_multi_total - exact_cluster_matches
+    cfn_cnt = gt_multi_total - exact_cluster_matches
+    cp = exact_cluster_matches / pred_multi_total if pred_multi_total else 0.0
+    cr = exact_cluster_matches / gt_multi_total if gt_multi_total else 0.0
     cf1 = (2 * cp * cr / (cp + cr)) if (cp + cr) else 0.0
     return {
-        "pairwise": {"f1": pf1, "p": pp, "r": pr, "tp": tp, "fp": fp, "fn": fn},
-        "b_cubed": {"f1": bf1, "p": bp, "r": br},
-        "cluster": {"f1": cf1, "p": cp, "r": cr, "exact": ctp, "gt_total": len(gt_set), "pred_total": len(pred_set)},
+        "pairwise": {"f1": pf1, "p": pp, "r": pr, "tp": int(pred_tp), "fp": int(fp_pairs), "fn": int(fn_pairs)},
+        "b_cubed":  {"f1": bf1, "p": bp, "r": br},
+        "cluster":  {"f1": cf1, "p": cp, "r": cr, "exact": exact_cluster_matches,
+                     "gt_total": gt_multi_total, "pred_total": pred_multi_total},
     }
 
 
