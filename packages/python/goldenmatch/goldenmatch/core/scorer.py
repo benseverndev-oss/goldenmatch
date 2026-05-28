@@ -26,6 +26,17 @@ from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
+# Process-level cache of NE (scorer, field) entries that already raised once.
+# `_apply_negative_evidence` is called per-pair inside a hot loop; without this
+# guard a broken NE entry (e.g. an unregistered scorer name like 'ensemble' picked
+# by auto-config) emits a WARNING per pair, hammering downstream log sinks. At
+# Railway-scale (10M+ rows, bucket backend) this was producing 140K msgs/sec —
+# enough to trip Railway's 500 logs/sec replica limit and stall the container.
+# Set holds a tuple of (scorer_name, field_name); first failure logs + records,
+# subsequent failures for the same key are silent and short-circuit before
+# re-invoking the failing scorer at all.
+_NE_BROKEN: set[tuple[str, str]] = set()
+
 
 def _emit_scoring_profile(
     pairs: list[tuple[int, int, float]],
@@ -138,20 +149,29 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
     for ne in matchkey.negative_evidence:
         if ne.field not in pair:
             continue
+        ne_key = (ne.scorer, ne.field)
+        if ne_key in _NE_BROKEN:
+            # Already known-broken this process; skip without re-invoking the
+            # failing scorer (the exception itself is expensive in a hot loop).
+            continue
         try:
             val_a, val_b = pair[ne.field]
             val_a = apply_transforms(val_a, ne.transforms)
             val_b = apply_transforms(val_b, ne.transforms)
             sim = score_field(val_a, val_b, ne.scorer)
         except (ValueError, KeyError) as exc:
+            _NE_BROKEN.add(ne_key)
             logger.warning(
-                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; skipping",
+                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
                 ne.scorer, ne.field, exc,
             )
             continue
         except Exception as exc:
+            _NE_BROKEN.add(ne_key)
             logger.warning(
-                "auto-config: NE scoring of field '%s' raised %s; skipping",
+                "auto-config: NE scoring of field '%s' raised %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
                 ne.field, type(exc).__name__,
             )
             continue
