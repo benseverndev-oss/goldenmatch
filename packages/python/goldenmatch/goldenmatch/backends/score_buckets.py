@@ -82,8 +82,26 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
         return lambda a, b: token_sort_ratio(a, b) / 100.0
     if scorer_name == "exact":
         return lambda a, b: 1.0 if a == b else 0.0
-    if scorer_name in ("embedding", "ensemble", "record_embedding"):
-        # Multi-component or model-backed -- not fast-path eligible.
+    if scorer_name == "ensemble":
+        # The matrix-path ensemble (scorer.py:343-348) is max(jw, ts, sx*0.8)
+        # where sx = soundex_match. None of those needs ML/network -- they're
+        # all pure-string transforms. Per-pair version composes the same
+        # three scorers under max. Bit-equivalent to the matrix path within
+        # rapidfuzz tolerance (the matrix path uses cdist for vectorized
+        # batches; per-pair uses the same rapidfuzz primitives one call at a
+        # time). Unblocks the bucket fast path on matchkeys auto-config
+        # produced via _pick_scorer_for_column's "other -> ensemble" rule.
+        from rapidfuzz.distance import JaroWinkler as _Jw
+        from rapidfuzz.fuzz import token_sort_ratio as _ts
+        import jellyfish as _jf
+        def _ensemble_pair(a: str, b: str) -> float:
+            jw = _Jw.similarity(a, b)
+            ts = _ts(a, b) / 100.0
+            sx = 0.8 if _jf.soundex(a) == _jf.soundex(b) else 0.0
+            return max(jw, ts, sx)
+        return _ensemble_pair
+    if scorer_name in ("embedding", "record_embedding"):
+        # Still model-backed; not fast-path eligible.
         return None
     if scorer_name in ("dice", "jaccard"):
         # Need vectorized bit-array math; not yet wired through fast path.
