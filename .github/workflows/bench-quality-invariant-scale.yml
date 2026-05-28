@@ -1,0 +1,158 @@
+# Quality-invariant scale ladder (#510) — workflow_dispatch only.
+#
+# Runs scripts/quality_invariant_scale.py at a given rung on the same
+# `large-new-64GB` runner that the rest of the bench-* workflows use. This
+# is the 16c/64GB box CLAUDE.md's published bench numbers are from
+# (5M-bucket = 53.7min/7.4GB, 25M-bucket = 6.5min/57.7GB peak RSS), so the
+# RAM ceiling matches the documented scale-envelope and the QIS results are
+# directly comparable to the Phase-5 / Phase-3 distributed work.
+#
+# Railway's qis-job caps at 24 GB and 10M-bucket-realistic exceeds that on
+# the QIS realistic-shape (different block-key density than bench-dataset-v1).
+# This workflow is the 10M-50M lane; 100M-200M still wants a Ray cluster
+# (bench-phase5-end2end pattern).
+#
+# To run: GitHub → Actions → "bench-quality-invariant-scale" → Run workflow.
+name: bench-quality-invariant-scale
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rung size (10000000 = 10M, 25000000 = 25M, etc.)"
+        required: false
+        default: "10000000"
+      shape:
+        description: "realistic | phase5"
+        required: false
+        default: "realistic"
+      backend:
+        description: "polars | bucket | chunked | duckdb | ray (blank = planner auto-pick)"
+        required: false
+        default: "bucket"
+      seed:
+        description: "Generator seed"
+        required: false
+        default: "0"
+      label:
+        description: "Tag for the output artifact (e.g. '10m-bucket', '25m-duckdb')"
+        required: false
+        default: "ad-hoc"
+
+permissions:
+  contents: read
+
+jobs:
+  scale-rung:
+    # large-new-64GB: 16c / 64GB Ubuntu 24.04. Per memory feedback_bench_default_runner.
+    runs-on: large-new-64GB
+    # 25M-bucket completes in 6.5 min on this box; 10M should be < 5 min.
+    # 50M-duckdb is the long pole — give it a 5h cap.
+    timeout-minutes: 300
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # 50M+ rungs need this gate flipped on for the v3 planner to consider
+      # ray. Harmless when the rung is < 50M.
+      GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable-install goldenmatch (defensive)
+        # Same "shadows worktree code" guard the other bench workflows use.
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Install ray (for backend=ray rungs only)
+        if: ${{ inputs.backend == 'ray' }}
+        run: uv pip install "ray>=2.30,<3"
+
+      - name: Verify worktree install
+        run: |
+          .venv/bin/python -c "import goldenmatch, goldenmatch.core.pipeline; \
+            assert 'packages/python/goldenmatch' in goldenmatch.__file__, \
+              f'goldenmatch resolves to {goldenmatch.__file__} — not the worktree'; \
+            print('worktree install OK:', goldenmatch.__file__)"
+
+      - name: Run rung (rows=${{ inputs.rows }} shape=${{ inputs.shape }} backend=${{ inputs.backend }})
+        run: |
+          mkdir -p .profile_tmp/qis
+          BACKEND_FLAG=""
+          if [ -n "${{ inputs.backend }}" ]; then
+            BACKEND_FLAG="--backend ${{ inputs.backend }}"
+          fi
+          .venv/bin/python scripts/quality_invariant_scale.py \
+            --rows ${{ inputs.rows }} \
+            --shape ${{ inputs.shape }} \
+            --seed ${{ inputs.seed }} \
+            $BACKEND_FLAG \
+            --out .profile_tmp/qis/qis_${{ inputs.label }}.json \
+            | tee .profile_tmp/qis/qis_${{ inputs.label }}.log
+
+      - name: Post headline to step summary
+        if: always()
+        run: |
+          OUT=.profile_tmp/qis/qis_${{ inputs.label }}.json
+          if [ ! -f "$OUT" ]; then
+            echo "no rung output — earlier step failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          .venv/bin/python - <<'PY' >> $GITHUB_STEP_SUMMARY
+          import json, os
+          label = os.environ["LABEL"]
+          d = json.load(open(f".profile_tmp/qis/qis_{label}.json"))
+          # Harness schema (see scripts/quality_invariant_scale.py::run_rung):
+          #   rows, wall_s.{generate,dedupe,total}, rss_mb_peak,
+          #   pairwise.{f1,p,r,fp,fn}, b_cubed.{f1,p,r}, cluster.{f1,p,r,exact},
+          #   shape, backend, committed_config.{health,stop_reason,iterations}
+          wall = (d.get("wall_s") or {}).get("total", 0.0)
+          ded = (d.get("wall_s") or {}).get("dedupe", 0.0)
+          rss = d.get("rss_mb_peak")
+          print(f"# qis rung: {label}")
+          print()
+          print(f"- rows: **{d.get('rows', 0):,}**  shape: `{d.get('shape', '?')}`  backend: `{d.get('backend', '?')}`")
+          if rss is not None:
+              print(f"- wall: **{wall:.1f}s** (dedupe {ded:.1f}s)  peak RSS: **{rss/1024:.1f} GB**")
+          else:
+              print(f"- wall: **{wall:.1f}s** (dedupe {ded:.1f}s)")
+          print()
+          print("## Quality")
+          print()
+          print("| metric | F1 | P | R |")
+          print("|---|---|---|---|")
+          for label_, key in (("pairwise", "pairwise"), ("b-cubed", "b_cubed"), ("cluster", "cluster")):
+              m = d.get(key) or {}
+              f1 = m.get("f1"); p = m.get("p"); r = m.get("r")
+              if f1 is not None:
+                  print(f"| {label_} | {f1:.4f} | {p:.4f} | {r:.4f} |")
+          pw = d.get("pairwise") or {}
+          if pw:
+              print()
+              print(f"- pairwise tp={pw.get('tp', 0):,} fp={pw.get('fp', 0):,} fn={pw.get('fn', 0):,}")
+          ctrl = d.get("committed_config") or {}
+          if ctrl:
+              print()
+              print("## Controller")
+              print()
+              print(f"- health: `{ctrl.get('health', '?')}`  stop_reason: `{ctrl.get('stop_reason', '?')}`  iterations: {ctrl.get('iterations', '?')}")
+          PY
+        env:
+          LABEL: ${{ inputs.label }}
+
+      - name: Upload rung artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: qis-${{ inputs.label }}
+          path: |
+            .profile_tmp/qis/qis_${{ inputs.label }}.json
+            .profile_tmp/qis/qis_${{ inputs.label }}.log
+          retention-days: 90
