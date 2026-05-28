@@ -210,13 +210,18 @@ def run_synthetic(providers, dim, epochs, tmp: Path, n_rows: int, seed: int = 42
     Lets the Railway job stress the pipeline at a size the dev box can't."""
     import random
     rng = random.Random(seed)
-    F = ["james","mary","john","patricia","robert","jennifer","michael","linda","william","elizabeth",
-         "david","barbara","richard","susan","joseph","jessica","thomas","sarah","charles","karen"]
-    L = ["smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez","martinez",
-         "hernandez","lopez","gonzalez","wilson","anderson","taylor","moore","jackson","martin","lee"]
+    # Generate large, near-unique name pools from syllable combos. A small
+    # fixed vocab (~20 names) is catastrophic at scale: thousands of DISTINCT
+    # people collide on the same name and the pipeline merges them all
+    # (fp explosion, F1 -> 0.15). 3-syllable combos give ~13k distinct tokens,
+    # so distinct entities rarely collide and only planted dups truly match.
+    SYL = ["an","be","ca","da","el","fi","ga","ha","in","jo","ka","la",
+           "ma","na","or","pa","ri","sa","ta","va","wo","xe","yu","ze"]
+    def _name():
+        return rng.choice(SYL) + rng.choice(SYL) + rng.choice(SYL)
     ST = ["main st","oak ave","pine rd","maple dr","cedar ln","elm st","washington ave","park blvd"]
     CT = ["springfield","franklin","clinton","georgetown","salem","fairview","madison","bristol"]
-    rows = [{"id": f"r{i}", "first_name": rng.choice(F), "last_name": rng.choice(L),
+    rows = [{"id": f"r{i}", "first_name": _name(), "last_name": _name(),
              "address": f"{rng.randint(1,9999)} {rng.choice(ST)}", "city": rng.choice(CT),
              "zip": f"{rng.randint(10000,99999)}", "birth_year": str(rng.randint(1940,2005))}
             for i in range(n_rows)]

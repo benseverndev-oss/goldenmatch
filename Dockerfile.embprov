@@ -12,7 +12,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "goldenmatch==1.23.0" recordlinkage
+# cryptography is required by VertexEmbedder._get_sa_token to RS256-sign the
+# service-account JWT (on Railway there's no local ADC, so the SA-key path is
+# used). Without it the vertex arm silently falls back to token_sort.
+RUN pip install --no-cache-dir "goldenmatch==1.23.0" recordlinkage cryptography
 
 COPY scripts ./scripts
 RUN mkdir -p /data
