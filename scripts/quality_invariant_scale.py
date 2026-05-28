@@ -295,26 +295,33 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     # stage_peak_rss_kb entries (insertion-ordered) gives the per-stage
     # contribution to the peak — the input we need to pick the right RSS
     # optimization target for #510. See PR #548.
-    from goldenmatch.core.bench import bench_capture
+    from goldenmatch.core.bench import bench_capture, stage
     bench_dict: dict = {}
     t1 = time.time()
     with bench_capture() as bench_rec:
+        # Top-level phase markers: bracket auto_configure_df and dedupe_df
+        # separately so the stage_peak_rss_kb dict carries explicit
+        # qis_autoconfig / qis_dedupe rows. Without these, the controller's
+        # internal sample-iteration stages (compute_matchkeys, combined_lf_collect,
+        # fuzzy_*) are interleaved with the same-named stages from the full-df
+        # pipeline run later, so attribution between "controller used X GB" and
+        # "dedupe used Y GB" is invisible in last-write-wins dict semantics.
         if backend:
             # confidence_required=False because passing --backend explicitly
-            # is "measurement mode" -- the caller has chosen the execution
-            # plan and wants the pipeline to run even if the controller commits
-            # a RED config. Without this, every rung >= 100K rows raises
-            # ControllerNotConfidentError when the realistic shape exhausts
-            # the iteration budget (the 5M-bucket bench did exactly that:
-            # BUDGET_ITERATIONS at iter 3, no RSS data collected). The 1M
-            # zero-config path (else branch below) still gets the controller's
-            # confidence guard since #510's headline quality claim is on the
-            # auto-config-only path.
-            cfg = goldenmatch.auto_configure_df(df, confidence_required=False)
-            cfg.backend = backend  # type: ignore[attr-defined]
-            result = goldenmatch.dedupe_df(df, config=cfg)
+            # is "measurement mode" -- accept whatever config the controller
+            # commits even if RED. Zero-config path still keeps the guard.
+            with stage("qis_autoconfig"):
+                cfg = goldenmatch.auto_configure_df(df, confidence_required=False)
+                cfg.backend = backend  # type: ignore[attr-defined]
+            with stage("qis_dedupe"):
+                result = goldenmatch.dedupe_df(df, config=cfg)
         else:
-            result = goldenmatch.dedupe_df(df)
+            # No separate qis_autoconfig stage on this path -- the zero-config
+            # `dedupe_df(df)` call runs auto-config + dedupe as one unit
+            # internally, and splitting them would change the call shape vs
+            # what real users hit. Top-level qis_dedupe still brackets the lot.
+            with stage("qis_dedupe"):
+                result = goldenmatch.dedupe_df(df)
     t_dedupe = time.time() - t1
     try:
         bench_dict = bench_rec.to_dict()
