@@ -662,14 +662,21 @@ class AutoConfigController:
                 _diag(f"iter {iteration} start")
                 try:
                     from goldenmatch.core.profile_emitter import profile_capture
-                    with profile_capture() as emitter:
-                        if _prep_store is not None:
-                            self._run_pipeline_sample(
-                                sample, sample_ref, config_n,
-                                _prep_store=_prep_store,
-                            )
-                        else:
-                            self._run_pipeline_sample(sample, sample_ref, config_n)
+                    # RSS attribution per-iter: unique stage names so the bench
+                    # dict captures one ru_maxrss row per iteration (not the
+                    # last-write-wins clobber pattern). This is how we confirm
+                    # the "growing 1.84 GB per iter" leak hypothesis: if each
+                    # iter's value steps up by ~the same amount, that's a leak
+                    # in _run_pipeline_sample state retention.
+                    with stage(f"controller_iter_{iteration:02d}_pipeline_sample"):
+                        with profile_capture() as emitter:
+                            if _prep_store is not None:
+                                self._run_pipeline_sample(
+                                    sample, sample_ref, config_n,
+                                    _prep_store=_prep_store,
+                                )
+                            else:
+                                self._run_pipeline_sample(sample, sample_ref, config_n)
                     _diag(f"iter {iteration} _run_pipeline_sample done in {time.time()-iter_start:.1f}s")
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,
