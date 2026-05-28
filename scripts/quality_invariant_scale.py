@@ -300,7 +300,17 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     t1 = time.time()
     with bench_capture() as bench_rec:
         if backend:
-            cfg = goldenmatch.auto_configure_df(df)
+            # confidence_required=False because passing --backend explicitly
+            # is "measurement mode" -- the caller has chosen the execution
+            # plan and wants the pipeline to run even if the controller commits
+            # a RED config. Without this, every rung >= 100K rows raises
+            # ControllerNotConfidentError when the realistic shape exhausts
+            # the iteration budget (the 5M-bucket bench did exactly that:
+            # BUDGET_ITERATIONS at iter 3, no RSS data collected). The 1M
+            # zero-config path (else branch below) still gets the controller's
+            # confidence guard since #510's headline quality claim is on the
+            # auto-config-only path.
+            cfg = goldenmatch.auto_configure_df(df, confidence_required=False)
             cfg.backend = backend  # type: ignore[attr-defined]
             result = goldenmatch.dedupe_df(df, config=cfg)
         else:
