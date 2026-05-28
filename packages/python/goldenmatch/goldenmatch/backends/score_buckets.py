@@ -281,6 +281,32 @@ def score_buckets(
         if all(i is not None for i in ids):
             native_scorer_ids = ids  # type: ignore[assignment]
 
+    # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket
+    # worker loop. Previously _score_one_bucket_fast called
+    # list(frozen_exclude) + passed it positionally, which forced the kernel
+    # to materialize a fresh Vec, marshal across PyO3, and rebuild a Rust
+    # HashSet ON EVERY worker call (64 at default n_buckets). At 10M with
+    # 36.5M exact pairs that was ~1170s of bucket_score wall (verified
+    # against QIS 10M-v9 native: bucket_score 1370s, kernel scoring math <50s).
+    # Now: one set built once, every worker call passes the Arc handle.
+    # Falls back to None (no exclude) when native isn't available or the
+    # build_exclude_set kernel isn't in the loaded native module (older wheel).
+    native_exclude_handle = None
+    if native_scorer_ids is not None:
+        try:
+            _build = native_module().build_exclude_set
+        except AttributeError:
+            _build = None
+        if _build is not None and frozen_exclude:
+            _t_eb = time.perf_counter()
+            native_exclude_handle = _build(list(frozen_exclude))
+            print(
+                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+                f"build_exclude_set({len(frozen_exclude)} pairs) in "
+                f"{time.perf_counter()-_t_eb:.2f}s",
+                flush=True,
+            )
+
     def _score_one_bucket_fast(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
         # Fast path for tiny-block workloads. Pre-extracts each transformed
         # field as a Python list ONCE per bucket, then iterates pairs within
@@ -315,10 +341,25 @@ def score_buckets(
             field_arrays_arrow = [
                 sorted_df[col].to_arrow() for col, _w, _fn, _name in field_specs
             ]
-            pairs = native_module().score_block_pairs_arrow(
-                row_ids_arrow, field_arrays_arrow, size_list, native_scorer_ids,
-                weights, total_weight, threshold, list(frozen_exclude),
-            )
+            # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
+            # native_exclude_handle from score_buckets entry). The kernel's
+            # exclude= and exclude_set= params are mutually opt-in -- when
+            # exclude_set is None, the kernel rebuilds a HashSet from the Vec
+            # (legacy path); when exclude_set is the Arc handle, kernel uses
+            # it directly. Older native builds without build_exclude_set
+            # fall through to the legacy positional Vec path.
+            if native_exclude_handle is not None:
+                pairs = native_module().score_block_pairs_arrow(
+                    row_ids_arrow, field_arrays_arrow, size_list,
+                    native_scorer_ids, weights, total_weight, threshold,
+                    exclude_set=native_exclude_handle,
+                )
+            else:
+                pairs = native_module().score_block_pairs_arrow(
+                    row_ids_arrow, field_arrays_arrow, size_list,
+                    native_scorer_ids, weights, total_weight, threshold,
+                    list(frozen_exclude),
+                )
             local_blocks = sum(1 for s in size_list if s >= 2)
             return pairs, local_blocks
 

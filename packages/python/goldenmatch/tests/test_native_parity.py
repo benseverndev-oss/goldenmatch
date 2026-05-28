@@ -247,6 +247,100 @@ def test_score_block_pairs_arrow_matches_vec_kernel():
         assert vec == arrow, f"iter {it}: {vec} != {arrow}"
 
 
+def test_exclude_set_handle_matches_vec_path():
+    """Track 1 Fix B: the prebuilt ExcludeSet handle path must emit identical
+    pairs to the legacy per-call Vec path on the same data. The handle is
+    built ONCE by build_exclude_set, then passed to every native call instead
+    of materializing list(frozen_exclude) + rebuilding a Rust HashSet per
+    bucket (the ~1170s of 1370s bucket_score wall at 10M, pre-fix)."""
+    import random
+    import string
+
+    import pyarrow as pa
+
+    n = _native_loader.native_module()
+    scorer_ids_map = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3}
+    names = ["jaro_winkler", "token_sort"]
+    ids = [scorer_ids_map[x] for x in names]
+    rng = random.Random(456)
+
+    def rand_val():
+        if rng.random() < 0.1:
+            return None
+        return "".join(rng.choice(string.ascii_letters + " ") for _ in range(rng.randint(2, 8)))
+
+    for it in range(150):
+        nrows = rng.randint(0, 12)
+        row_ids = rng.sample(range(1000), nrows)
+        sizes, rem = [], nrows
+        while rem > 0:
+            s = rng.randint(1, min(4, rem))
+            sizes.append(s)
+            rem -= s
+        fa = [[rand_val() for _ in range(nrows)] for _ in names]
+        weights = [rng.choice([0.5, 1.0, 2.0]) for _ in names]
+        tw = sum(weights)
+        threshold = rng.choice([0.0, 0.5, 0.8])
+        # Build a varied exclude list: empty, single pair, two pairs.
+        exclude: list[tuple[int, int]] = []
+        if nrows >= 2 and rng.random() < 0.5:
+            a, b = rng.sample(row_ids, 2)
+            exclude.append((min(a, b), max(a, b)))
+            if nrows >= 4 and rng.random() < 0.5:
+                c, d = rng.sample(row_ids, 2)
+                exclude.append((min(c, d), max(c, d)))
+
+        row_arrow = pa.array(row_ids, type=pa.int64())
+        fa_arrow = [pa.array(col, type=pa.large_string()) for col in fa]
+
+        # Legacy Vec path (build HashSet from the per-call Vec).
+        legacy = n.score_block_pairs_arrow(
+            row_arrow, fa_arrow, sizes, ids, weights, tw, threshold, exclude,
+        )
+
+        # Handle path (build once, pass by reference).
+        handle = n.build_exclude_set(exclude)
+        assert len(handle) == len(set(exclude)), (
+            f"iter {it}: ExcludeSet.__len__ {len(handle)} != dedup'd input "
+            f"{len(set(exclude))}"
+        )
+        new = n.score_block_pairs_arrow(
+            row_arrow, fa_arrow, sizes, ids, weights, tw, threshold,
+            exclude_set=handle,
+        )
+        assert legacy == new, f"iter {it} handle != legacy: {legacy} vs {new}"
+
+
+def test_exclude_set_handle_canonicalizes_pairs():
+    """build_exclude_set canonicalizes (a, b) to (min, max). A caller that
+    passes (5, 3) must get the same skip behavior as if they passed (3, 5)."""
+    import pyarrow as pa
+
+    n = _native_loader.native_module()
+    # 4-row block: row_ids [3, 5, 7, 9], all same value, score should match
+    # but the pair (3, 5) is excluded.
+    row_arrow = pa.array([3, 5, 7, 9], type=pa.int64())
+    fa_arrow = [pa.array(["x", "x", "x", "x"], type=pa.large_string())]
+    sizes = [4]
+    weights = [1.0]
+    tw = 1.0
+
+    # Pre-canonicalized (3, 5).
+    h_can = n.build_exclude_set([(3, 5)])
+    pairs_can = n.score_block_pairs_arrow(
+        row_arrow, fa_arrow, sizes, [0], weights, tw, 0.5, exclude_set=h_can,
+    )
+    # Reverse order (5, 3) — the kernel must canonicalize.
+    h_rev = n.build_exclude_set([(5, 3)])
+    pairs_rev = n.score_block_pairs_arrow(
+        row_arrow, fa_arrow, sizes, [0], weights, tw, 0.5, exclude_set=h_rev,
+    )
+    assert pairs_can == pairs_rev, "canonicalization differs by input order"
+    # Either way, the (3, 5) pair must be excluded from the output.
+    emitted = {(a, b) for a, b, _ in pairs_can}
+    assert (3, 5) not in emitted, f"excluded pair (3,5) leaked: {pairs_can}"
+
+
 def test_score_block_pairs_arrow_rejects_non_int64_row_ids():
     """The Arrow kernel requires an int64 row_id buffer (the dtype the pipeline
     casts to). A mismatched buffer must raise, not silently misread."""
