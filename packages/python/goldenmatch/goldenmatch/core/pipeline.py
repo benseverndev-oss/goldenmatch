@@ -810,9 +810,10 @@ def _run_dedupe_pipeline(
             # NEW (Phase 2): also write to disk store, if provided.
             if _prep_store is not None:
                 from goldenmatch.distributed.record_store import materialize_prepared_records
-                materialize_prepared_records(
-                    _prep_store, prepped_df, signature=disk_signature,
-                )
+                with stage("pipeline_prep_disk_store_write"):
+                    materialize_prepared_records(
+                        _prep_store, prepped_df, signature=disk_signature,
+                    )
                 logger.debug("prep store DISK-WRITE (signature=%s)", disk_signature)
 
     # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
@@ -841,21 +842,29 @@ def _run_dedupe_pipeline(
         combined_lf = combined_df_tmp.lazy()
 
     if config.validation and config.validation.rules:
-        rules = [
-            ValidationRule(
-                column=rc.column,
-                rule_type=rc.rule_type,
-                params=rc.params,
-                action=rc.action,
-            )
-            for rc in config.validation.rules
-        ]
-        combined_df_tmp = combined_lf.collect()
-        valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
-        logger.info("Validation: %d quarantined rows", quarantine_df.height)
-        combined_lf = valid_df.lazy()
+        with stage("pipeline_prep_validation_rules"):
+            rules = [
+                ValidationRule(
+                    column=rc.column,
+                    rule_type=rc.rule_type,
+                    params=rc.params,
+                    action=rc.action,
+                )
+                for rc in config.validation.rules
+            ]
+            combined_df_tmp = combined_lf.collect()
+            valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
+            logger.info("Validation: %d quarantined rows", quarantine_df.height)
+            combined_lf = valid_df.lazy()
     else:
         quarantine_df = None
+
+    # RSS attribution sentinel: a near-no-op stage that captures ru_maxrss right
+    # before standardize fires. Lets us tell whether peak growth happens INSIDE
+    # apply_standardization (sentinel low, standardize high) or in the prep work
+    # above (sentinel high, standardize delta 0).
+    with stage("pipeline_pre_standardize_sentinel"):
+        pass
 
     # ── Step 1.5b: STANDARDIZE ──
     if config.standardization and config.standardization.rules:
