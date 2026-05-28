@@ -100,6 +100,40 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
     return fn  # may itself be None for matrix-only plugins
 
 
+# Scorers that score_field() handles directly (without raising). NE entries
+# whose scorer is NOT in this set get silently skipped at runtime via the
+# _NE_BROKEN cache in core/scorer.py::_apply_negative_evidence -- so they
+# contribute zero penalty to the final score. The fast path can safely run
+# when every NE scorer is one of these "will-fail" names, because the
+# computed score matches what the slow path would produce (penalty=0 either
+# way). Without this check, auto-config's promote_negative_evidence on
+# 'ensemble' / 'embedding' / 'record_embedding' (none of which score_field
+# implements) forces the entire workload onto the slow path even though the
+# NE entries don't actually do anything at runtime.
+_SCORE_FIELD_DIRECT_SCORERS: frozenset[str] = frozenset({
+    "exact", "jaro_winkler", "levenshtein", "token_sort",
+    "soundex_match", "dice", "jaccard",
+})
+
+
+def _ne_effectively_empty(mk: MatchkeyConfig) -> bool:
+    """True when matchkey.negative_evidence is empty OR every NE entry uses
+    a scorer name that score_field doesn't handle (raises ValueError). Those
+    entries are silently skipped at runtime (PR #546's _NE_BROKEN cache), so
+    they contribute zero penalty and the fast path's NE-free computation
+    matches the slow path's NE-applied computation bit-for-bit."""
+    ne = getattr(mk, "negative_evidence", None)
+    if not ne:
+        return True
+    for ne_entry in ne:
+        scorer = getattr(ne_entry, "scorer", None)
+        if scorer is None or scorer in _SCORE_FIELD_DIRECT_SCORERS:
+            # This NE entry IS callable at runtime -> it contributes real
+            # penalty -> fast path would produce a different score -> bail.
+            return False
+    return True
+
+
 def _resolve_fast_path(
     mk: MatchkeyConfig,
     prepared_df: pl.DataFrame,
@@ -131,7 +165,7 @@ def _resolve_fast_path(
         return None
     if mk.threshold is None:
         return None
-    if getattr(mk, "negative_evidence", None):
+    if not _ne_effectively_empty(mk):
         return None
     if getattr(mk, "rerank", False):
         return None
