@@ -36,7 +36,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import polars as pl
 
 import goldenmatch
-from goldenmatch.config.schemas import GoldenMatchConfig, MatchkeyField
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.embedder import _embedders
 
 EMBED_SCORERS = ("embedding", "record_embedding")
@@ -150,10 +156,33 @@ def run_dblp_acm(providers, inhouse_path, dim, epochs, datasets_dir: Path, tmp: 
 
     if "inhouse" in providers:
         from bench_inhouse_embedder import _leipzig_pairs
-        inhouse_path = _train_inhouse(_leipzig_pairs("dblp-acm", str(datasets_dir)),
+        # _leipzig_pairs reads the CSVs directly from its dir arg, so pass the
+        # DBLP-ACM dir itself (not its parent).
+        inhouse_path = _train_inhouse(_leipzig_pairs("dblp-acm", str(d)),
                                       dim, epochs, tmp / "dblp_model")
 
-    base = goldenmatch.auto_configure_df(pl.concat([dblp, acm], how="diagonal_relaxed"))
+    # Explicit bibliographic match config. auto_configure_df on the concatenated
+    # frame produces a dedupe-shaped RED config that match_df can't use (F1
+    # collapses ~0.5), so build a sensible base here: block on a title prefix to
+    # tame the cross-source product, score title+authors lexically. The
+    # embedding arms ADD a record_embedding over [title, authors] on top (via
+    # _apply_provider), so the embedding scorer is the ONLY varied component.
+    base = GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            passes=[
+                BlockingKeyConfig(fields=["title"], transforms=["lowercase", "strip", "substring:0:6"]),
+                BlockingKeyConfig(fields=["title"], transforms=["lowercase", "strip", "substring:4:10"]),
+            ],
+        ),
+        matchkeys=[MatchkeyConfig(
+            name="biblio", type="weighted", threshold=0.6, rerank=False,
+            fields=[
+                MatchkeyField(field="title", scorer="token_sort", weight=1.0, transforms=["lowercase", "strip"]),
+                MatchkeyField(field="authors", scorer="token_sort", weight=0.6, transforms=["lowercase", "strip"]),
+            ],
+        )],
+    )
     dblp_ids = dblp["id"].cast(pl.Utf8).to_list()
     acm_ids = acm["id"].cast(pl.Utf8).to_list()
     n_dblp = len(dblp_ids)
