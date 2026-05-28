@@ -204,6 +204,68 @@ def run_dblp_acm(providers, inhouse_path, dim, epochs, datasets_dir: Path, tmp: 
     return out
 
 
+def run_synthetic(providers, dim, epochs, tmp: Path, n_rows: int, seed: int = 42):
+    """Scalable synthetic person dedupe (the 'larger' beefy-box case): n_rows
+    base records, 30% duplicated with field corruption; GT = (orig, dup) pairs.
+    Lets the Railway job stress the pipeline at a size the dev box can't."""
+    import random
+    rng = random.Random(seed)
+    F = ["james","mary","john","patricia","robert","jennifer","michael","linda","william","elizabeth",
+         "david","barbara","richard","susan","joseph","jessica","thomas","sarah","charles","karen"]
+    L = ["smith","johnson","williams","brown","jones","garcia","miller","davis","rodriguez","martinez",
+         "hernandez","lopez","gonzalez","wilson","anderson","taylor","moore","jackson","martin","lee"]
+    ST = ["main st","oak ave","pine rd","maple dr","cedar ln","elm st","washington ave","park blvd"]
+    CT = ["springfield","franklin","clinton","georgetown","salem","fairview","madison","bristol"]
+    rows = [{"id": f"r{i}", "first_name": rng.choice(F), "last_name": rng.choice(L),
+             "address": f"{rng.randint(1,9999)} {rng.choice(ST)}", "city": rng.choice(CT),
+             "zip": f"{rng.randint(10000,99999)}", "birth_year": str(rng.randint(1940,2005))}
+            for i in range(n_rows)]
+
+    def corrupt(s):
+        if len(s) < 3:
+            return s
+        p = rng.randint(0, len(s) - 1)
+        return s[:p] + rng.choice("abcdefghijklmnopqrstuvwxyz") + s[p + 1:]
+
+    gt, dups = set(), []
+    for idx in rng.sample(range(n_rows), n_rows * 3 // 10):
+        o = rows[idx]; c = dict(o); c["id"] = o["id"] + "_DUP"
+        for f in ("first_name", "last_name", "address"):
+            if rng.random() < 0.4:
+                c[f] = corrupt(c[f])
+        dups.append(c); gt.add((o["id"], c["id"]))
+    df = pl.DataFrame(rows + dups)
+    embed_cols = ["first_name", "last_name", "address", "city"]
+
+    inhouse_path = ""
+    if "inhouse" in providers:
+        def txt(r): return " ".join(str(r[k]) for k in ("first_name", "last_name", "address", "city"))
+        by = {r["id"]: r for r in rows + dups}
+        pairs = []
+        for a, b in gt:
+            pairs.append((txt(by[a]), txt(by[b]), 1))
+            pairs.append((txt(by[a]), txt(rows[rng.randint(0, n_rows - 1)]), 0))
+        inhouse_path = _train_inhouse(pairs, dim, epochs, tmp / "synth_model")
+
+    base = goldenmatch.auto_configure_df(df)
+    row_to_id = df["id"].to_list()
+    out = {}
+    for prov in providers:
+        _embedders.clear()
+        cfg = _apply_provider(base, prov, inhouse_path, embed_cols)
+        t0 = time.time()
+        res = goldenmatch.dedupe_df(df, config=cfg)
+        found = set()
+        for c in res.clusters.values():
+            m = sorted(c["members"])
+            for i in range(len(m)):
+                for j in range(i + 1, len(m)):
+                    a, b = row_to_id[m[i]], row_to_id[m[j]]
+                    found.add((min(a, b), max(a, b)))
+        out[prov] = (*_prf(found, gt), round(time.time() - t0, 1))
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--datasets", default="febrl3")
@@ -212,6 +274,8 @@ def main(argv=None) -> int:
                     default=Path("packages/python/goldenmatch/tests/benchmarks/datasets"))
     ap.add_argument("--dim", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=150)
+    ap.add_argument("--synthetic-rows", type=int, default=50000,
+                    help="row count for the 'synthetic' (larger) dataset")
     ap.add_argument("--summary-md", type=Path, default=None)
     args = ap.parse_args(argv)
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
@@ -231,6 +295,8 @@ def main(argv=None) -> int:
             res = run_febrl3(providers, "", args.dim, args.epochs, tmp)
         elif ds == "dblp-acm":
             res = run_dblp_acm(providers, "", args.dim, args.epochs, args.datasets_dir, tmp)
+        elif ds == "synthetic":
+            res = run_synthetic(providers, args.dim, args.epochs, tmp, args.synthetic_rows)
         else:
             print(f"unknown dataset {ds}"); continue
         if not res:

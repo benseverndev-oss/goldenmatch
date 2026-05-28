@@ -1,0 +1,15 @@
+# Scopes the repo-root Docker build context to scripts/ only. The embedding-
+# provider Railway job (Dockerfile.embprov) installs goldenmatch from PyPI and
+# only needs scripts/, so excluding everything else keeps `railway up`'s upload
+# tiny (the monorepo's .venv/node_modules/.git/target are tens of GB).
+#
+# Safe for the other Dockerfiles: Dockerfile.mcp / Dockerfile.bench build with
+# rootDirectory=packages/python/goldenmatch, so they read THAT directory's
+# ignore rules, not this repo-root one.
+*
+!scripts/
+!Dockerfile.embprov
+
+# even within scripts/, drop caches
+**/__pycache__/
+**/*.pyc
