@@ -367,6 +367,20 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     except Exception as e:
         committed_cfg = {"_capture_error": repr(e)[:120]}
 
+    # Native acceleration status: surface whether goldenmatch._native is loaded
+    # and which env gate we're under, so the bench artifact carries an explicit
+    # native-on/off witness. Prior runs silently fell back to pure-Python; this
+    # ends that ambiguity.
+    try:
+        from goldenmatch.core._native_loader import _GATED_ON, native_available
+        native_info = {
+            "available": bool(native_available()),
+            "env_gate": os.environ.get("GOLDENMATCH_NATIVE", "auto"),
+            "gated_on_components": sorted(_GATED_ON),
+        }
+    except Exception as e:
+        native_info = {"_capture_error": repr(e)[:120]}
+
     return {
         "rows": len(df),
         "clusters_gt": int(len(set(gt.tolist()))),
@@ -377,6 +391,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         "multi_member_clusters": multi,
         "committed_config": committed_cfg,
         "bench": bench_dict,
+        "native": native_info,
     }
 
 

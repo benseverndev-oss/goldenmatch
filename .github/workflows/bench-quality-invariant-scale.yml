@@ -54,6 +54,14 @@ jobs:
       # 50M+ rungs need this gate flipped on for the v3 planner to consider
       # ray. Harmless when the rung is < 50M.
       GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+      # Native acceleration: REQUIRE the Rust/PyO3 kernel. "1" makes the loader
+      # raise instead of silently falling back to Python. Per project_bucket_native_scoring_win
+      # memory the bucket+native scorer is 1.7-3.7x faster than polars-direct
+      # at 1k-60k clusters with identical accuracy. Without this gate the QIS
+      # measurements have been running the pure-Python scoring path the whole
+      # time -- which is what this workflow is supposed to measure goldenmatch
+      # at its best, NOT its slowest.
+      GOLDENMATCH_NATIVE: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
@@ -74,6 +82,27 @@ jobs:
       - name: Install ray (for backend=ray rungs only)
         if: ${{ inputs.backend == 'ray' }}
         run: uv pip install "ray>=2.30,<3"
+
+      - name: Set up Rust toolchain (for native build)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native acceleration kernel
+        # Drops goldenmatch._native into the editable install. Build script
+        # gates on the SAME interpreter we use to run the harness, so the abi3
+        # artifact is guaranteed to be importable. Without this step the
+        # GOLDENMATCH_NATIVE=1 verify-load below would fail (and silently fall
+        # back without it -- which is what's been happening on every prior
+        # measurement run in this workflow).
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Verify native loaded
+        run: |
+          .venv/bin/python -c "
+          from goldenmatch.core._native_loader import native_available, native_module
+          mod = native_module()
+          assert native_available(), 'goldenmatch._native not importable -- build_native.py output went to the wrong interpreter?'
+          print('native loaded OK:', mod)
+          "
 
       - name: Verify worktree install
         run: |
