@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Quality-invariant scale harness** (#510). `scripts/quality_invariant_scale.py`
+  runs a single rung end-to-end (deterministic in-process Phase-5 generator that
+  keeps the cluster id, zero-config dedupe, Pairwise + B-cubed + Cluster F1 vs GT,
+  plus wall / peak RSS / committed controller state) and emits per-rung JSON. The
+  initial published report (`docs/quality-invariant-scale.md`) shows the
+  zero-config baseline is NOT scale-invariant on the Phase-5 synthetic
+  (Pairwise F1 0.91 at 1K -> 0.03 at 10K; controller commits RED at both rungs),
+  documents the fixture-vs-pipeline failure mode, and lists the concrete
+  workstreams needed to close #510 (realistic synthetic / pinned-config /
+  auto-config low-card improvements). Larger rungs ride a Railway one-shot job
+  modelled on `Dockerfile.embprov`.
+
 ### Documentation
 
 - **In-house embedding provider callout** (#506). README surfaces `provider="inhouse"`
