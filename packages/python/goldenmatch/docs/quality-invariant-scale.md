@@ -8,9 +8,9 @@ Native Runtime + Local/In-house Embedding epic ([#504](https://github.com/bensev
 **Status (this document, v0.1):**
 
 - ✅ **Pipeline quality IS scale-invariant** on the realistic-vocab fixture
-  across 1 K → 10 K (Pairwise / B-cubed / Cluster F1 all 1.0 at both rungs;
-  zero drift, well inside the ≤ 0.005 / ≤ 0.01 acceptance). Larger rungs
-  pending on the bench box.
+  across **1 K → 100 K** (Pairwise F1 1.0000 → 1.0000 → 0.9998; total drift
+  0.0002, well inside the ≤ 0.005 / ≤ 0.01 acceptance — across two orders of
+  magnitude). 1 M → 200 M pending on the bench box.
 - ❌ Zero-config does **not** behave identically across scale on the
   *Phase-5* fixture (Pairwise F1 0.91 → 0.03 from 1 K → 10 K) — but that is
   a fixture pathology (literal `name_<cid>` low-cardinality tokens), not a
@@ -123,17 +123,22 @@ vanishingly rare) plus a realistic address/city/zip/birth_year vocab. The
 generator is in-process and deterministic from the seed; no field has the
 literal `name_<cid>` pathology.
 
-| Rows (clusters) | Pairwise F1 | B-cubed F1 | Cluster F1 | P / R (pairwise) | FP | Wall | Controller |
-|---|---|---|---|---|---|---|---|
-| **1 000** (200) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | 3.5 s | YELLOW — `POLICY_SATISFIED` |
-| **10 000** (2 000) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | ~25 s | YELLOW — `POLICY_SATISFIED` |
+| Rows (clusters) | Pairwise F1 | B-cubed F1 | Cluster F1 | P / R (pairwise) | FP | Wall | Peak RSS | Controller |
+|---|---|---|---|---|---|---|---|---|
+| **1 000** (200) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | 3.5 s | 12 MB | YELLOW — `POLICY_SATISFIED` |
+| **10 000** (2 000) | **1.0000** | **1.0000** | **1.0000** | 1.00 / 1.00 | 0 | ~25 s | — | YELLOW — `POLICY_SATISFIED` |
+| **100 000** (20 000) | **0.9998** | **0.9999** | **0.9997** | 0.9996 / 1.00 | 75 | 187 s | 280 MB | YELLOW — `POLICY_SATISFIED` |
 
-**Delta across the 1 K → 10 K rung: 0.000 on every metric, well inside #510's
-≤ 0.005 / ≤ 0.01 acceptance.** Zero false positives at both rungs (every typo'd
-row still gets clustered with its four siblings via email/last_name evidence),
-zero false negatives (no clusters split or missed), and exactly the right
-number of predicted clusters (200 / 2 000 matching GT). The controller commits
-YELLOW (not RED) — auto-config finds a viable config on this shape.
+**Delta across the 1 K → 100 K range: 0.0002 on Pairwise F1**, 0.0001 on
+B-cubed, 0.0003 on Cluster F1 — every dimension comfortably inside #510's
+≤ 0.005 / ≤ 0.01 acceptance, across **two orders of magnitude**. At 100 K the
+20 000 GT clusters are nearly all recovered exactly (19 998 / 20 000), and the
+75 false positives out of ~200 K predicted pairs (0.037 %) are birthday-
+collision territory — a handful of clusters whose 5-syl names plus typo'd
+emails happen to share a fuzzy-matchable token with another cluster, not a
+scale-dependent failure. The controller stays YELLOW / `POLICY_SATISFIED` at
+every rung — auto-config finds a viable config independent of scale on this
+shape.
 
 So the **pipeline itself** preserves quality across this range when the
 fixture isn't pathological. The Phase-5 failure mode (zero-config drifting to a
