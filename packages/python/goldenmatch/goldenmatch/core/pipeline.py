@@ -102,7 +102,11 @@ def _get_block_scorer(config: GoldenMatchConfig):
         return score_blocks_duckdb
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters
-from goldenmatch.core.golden import build_golden_records_batch
+from goldenmatch.core.golden import (
+    _polars_native_eligible,
+    build_golden_records_batch,
+    build_golden_records_df,
+)
 from goldenmatch.output.report import generate_dedupe_report, generate_match_report
 from goldenmatch.output.writer import write_output
 
@@ -1231,7 +1235,11 @@ def _run_dedupe_pipeline(
     })
 
     # ── Step 5: GOLDEN ──
-    golden_records = []
+    golden_records: list[dict] = []
+    # Set up the golden_df slot here so the fast path inside the stage("golden")
+    # block can write to it directly without the slow path's `golden_df = None`
+    # re-init clobbering it after the `with` exits.
+    golden_df: pl.DataFrame | None = None
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
     # v1.18: post-cluster golden-rules refinement. When the user opted
@@ -1314,13 +1322,36 @@ def _run_dedupe_pipeline(
             # provenance=True (opt-in) enriches each field with source_row_id
             # for the lineage sidecar; the golden_df builder below ignores the
             # extra key, so the same records feed both paths (no double build).
-            golden_records = build_golden_records_batch(
-                multi_df, golden_rules,
-                provenance=config.output.lineage_provenance,
+            #
+            # Fast path (provenance=False + uniform strategy + no quality_scores
+            # + no field_rules + no cluster_overrides): bypass the list[dict]
+            # intermediate entirely. At 10M / 2M multi-member clusters that
+            # intermediate allocates ~14 GB of CPython dict overhead;
+            # build_golden_records_df does the whole compute columnar in Polars
+            # at ~0.8 GB. Provenance + non-fast strategies still go through the
+            # list[dict] path so the existing semantics (per-field source_row_id,
+            # custom merge_field rules) stay intact.
+            _provenance_on = config.output.lineage_provenance
+            _fast_eligible = (
+                not _provenance_on
+                and _polars_native_eligible(golden_rules, quality_scores=None)
             )
+            if _fast_eligible:
+                golden_df = build_golden_records_df(multi_df, golden_rules)
+                # Leave golden_records empty: the provenance branch below
+                # (gated on `if config.output.lineage_provenance and golden_records`)
+                # is a no-op when provenance is off, so no metadata is lost.
+                golden_records = []
+            else:
+                golden_records = build_golden_records_batch(
+                    multi_df, golden_rules,
+                    provenance=_provenance_on,
+                )
 
-    # Build golden DataFrame
-    golden_df = None
+    # Build golden DataFrame (slow path: walks the list[dict] returned by
+    # build_golden_records_batch. The fast path above already populated
+    # golden_df directly and left golden_records empty, so this branch is
+    # a no-op on the fast path.)
     if golden_records:
         golden_rows = []
         for rec in golden_records:
