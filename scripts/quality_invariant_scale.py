@@ -271,7 +271,8 @@ def _peak_rss_mb() -> float | None:
         return None
 
 
-def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic") -> dict:
+def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
+             backend: str | None = None) -> dict:
     import goldenmatch
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     if sys.platform == "win32":
@@ -281,8 +282,19 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic") -> dict:
     df, gt = generate_with_gt(n_rows, seed=seed, shape=shape)
     t_gen = time.time() - t0
 
+    # Backend handling: zero-config (planner picks) when --backend is omitted;
+    # otherwise pre-build the auto-config and force the backend (the v3 planner
+    # honors a user override). At Railway-scale (10M+) the planner can land on
+    # `polars` if it can't detect enough RAM, which OOMs; --backend duckdb
+    # is the safest fallback (out-of-core) and bucket is the fastest when the
+    # container has 32+ GB.
     t1 = time.time()
-    result = goldenmatch.dedupe_df(df)
+    if backend:
+        cfg = goldenmatch.auto_configure_df(df)
+        cfg.backend = backend  # type: ignore[attr-defined]
+        result = goldenmatch.dedupe_df(df, config=cfg)
+    else:
+        result = goldenmatch.dedupe_df(df)
     t_dedupe = time.time() - t1
 
     predicted: dict[int, list[int]] = {}
@@ -329,11 +341,18 @@ def main(argv=None) -> int:
                     help="realistic = varied syllable vocab (default, the fair fixture); "
                          "phase5 = the in-process Phase-5 replica (throughput-shaped, "
                          "pathological for ER quality)")
+    ap.add_argument("--backend", default=None,
+                    choices=(None, "polars", "bucket", "chunked", "duckdb", "ray"),
+                    help="override the v3 planner's backend pick. Recommended ladder: "
+                         "polars <500K, bucket 500K-25M (>=32GB RAM), duckdb 25M-100M "
+                         "(out-of-core, no OOM on smaller boxes), ray 50M+ "
+                         "(distributed; needs the ray extra installed).")
     ap.add_argument("--out", type=Path, default=None, help="write per-rung JSON here")
     args = ap.parse_args(argv)
 
-    res = run_rung(args.rows, seed=args.seed, shape=args.shape)
+    res = run_rung(args.rows, seed=args.seed, shape=args.shape, backend=args.backend)
     res["shape"] = args.shape
+    res["backend"] = args.backend or "auto"
     print(json.dumps(res, indent=2, default=str))
     if args.out:
         args.out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
