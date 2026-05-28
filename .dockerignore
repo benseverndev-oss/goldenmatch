@@ -1,15 +1,41 @@
-# Scopes the repo-root Docker build context to scripts/ only. The embedding-
-# provider Railway job (Dockerfile.embprov) installs goldenmatch from PyPI and
-# only needs scripts/, so excluding everything else keeps `railway up`'s upload
-# tiny (the monorepo's .venv/node_modules/.git/target are tens of GB).
+# Exclude generated artifacts + the bulky directories that don't belong in any
+# Docker build context. Per-Dockerfile carve-outs aren't needed: every Dockerfile
+# in the repo wants source code; we just don't want the bytes-on-disk noise.
 #
-# Safe for the other Dockerfiles: Dockerfile.mcp / Dockerfile.bench build with
-# rootDirectory=packages/python/goldenmatch, so they read THAT directory's
-# ignore rules, not this repo-root one.
-*
-!scripts/
-!Dockerfile.embprov
+# History note: a prior version of this file aggressive-excluded everything
+# except scripts/, Dockerfile.embprov, Dockerfile.qis. That broke
+# packages/python/goldensuite-mcp/Dockerfile.mcp's `COPY . /app` step because
+# goldensuite-mcp is the one image in publish-containers.yml that builds with
+# repo root as context (the other 6 use their own package dir as context and
+# ignore this file entirely). Don't reintroduce the `*` pattern without first
+# fixing the goldensuite-mcp build to either (a) use a per-Dockerfile
+# `Dockerfile.mcp.dockerignore` or (b) install its deps from PyPI instead of
+# from local paths.
 
-# even within scripts/, drop caches
+# Build / cache artifacts
+.venv/
+node_modules/
+target/
+dist/
+build/
+*.egg-info/
 **/__pycache__/
 **/*.pyc
+**/*.pyo
+
+# Local CI / dev artifacts
+.profile_tmp/
+.dqbench/
+.testing/
+.railway/
+*.log
+
+# Pre-fold archive: the standalone goldenmatch repo's frozen git history.
+# Useful for spec archaeology, not for any container image.
+_archive/
+
+# Repo metadata not needed inside images.
+.git/
+.github/
+.claude/
+docs/superpowers/
