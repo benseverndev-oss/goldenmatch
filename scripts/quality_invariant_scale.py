@@ -327,6 +327,28 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
                     confidence_required=False,
                     _skip_finalize=True,
                 )
+                # CLAUDE.md harness pattern + #510 diagnosis (10M-v11):
+                # auto_configure_df sets mk.rerank=True on weighted matchkeys
+                # with 3+ fields (autoconfig.py:2176). The cross-encoder rerank
+                # would normally be cleared by autoconfig_verify in offline
+                # mode (autoconfig_verify.py:755), but the harness calls
+                # auto_configure_df + dedupe_df(config=cfg) directly --
+                # autoconfig_verify never runs, mk.rerank stays True,
+                # score_buckets._resolve_fast_path declines on line 138, and
+                # the workload falls onto slow find_fuzzy_matches (1370s of
+                # bucket_score wall at 10M). Stripping here mirrors what the
+                # verify step would have done in a network-isolated context
+                # AND matches CLAUDE.md's bench pattern. F1 has been locked
+                # at 0.9886 across v6-v11 (all slow path); rerank wasn't
+                # firing anyway, so stripping is a pure perf unlock.
+                for mk in (cfg.matchkeys or []):  # type: ignore[attr-defined]
+                    if getattr(mk, "type", None) == "weighted" and getattr(mk, "rerank", False):
+                        mk.rerank = False  # type: ignore[attr-defined]
+                        print(
+                            f"[qis] stripped mk.rerank from weighted matchkey "
+                            f"{getattr(mk, 'name', '?')!r} (n_fields={len(mk.fields)})",
+                            flush=True,
+                        )
                 cfg.backend = backend  # type: ignore[attr-defined]
             with stage("qis_dedupe"):
                 result = goldenmatch.dedupe_df(df, config=cfg)
