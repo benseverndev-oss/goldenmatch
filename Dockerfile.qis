@@ -1,0 +1,20 @@
+# Railway one-shot job: #510 quality-invariant scale ladder. One container per
+# rung — runs `scripts/quality_invariant_scale.py` at the size set by env (QIS_*).
+# Modeled on Dockerfile.embprov (the #506 pattern): install goldenmatch from
+# PyPI, copy scripts/, run the entry. Build context is scoped to scripts/ by
+# the repo-root .dockerignore (the monorepo is 40+ GB).
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    GOLDENMATCH_AUTOCONFIG_MEMORY=0
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "goldenmatch==1.23.0"
+
+COPY scripts ./scripts
+
+# One-shot: exits 0 on success; Railway's default ON_FAILURE restart policy
+# leaves a clean exit alone, so the deployment stays in its completed state
+# with the result JSON in the logs.
+CMD ["python", "scripts/railway_qis_job.py"]
