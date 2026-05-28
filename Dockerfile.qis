@@ -10,7 +10,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "goldenmatch==1.23.0"
+# git needed for the branch-pin install below; slim image doesn't ship it.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinning to the feat/510 branch (not 1.23.0) so the bucket backend at 10M+
+# rows picks up the NE-warning hot-loop guard in core/scorer.py — without it
+# auto-config's `ensemble` NE scorer raises once per pair and the resulting
+# log flood (140K msgs/sec) trips Railway's 500 logs/sec replica limit and
+# stalls the container. Will revert to "goldenmatch==1.23.1" once the patch
+# lands in a release.
+RUN pip install --no-cache-dir \
+    "goldenmatch @ git+https://github.com/benseverndev-oss/goldenmatch.git@feat/510-quality-invariant-scale#subdirectory=packages/python/goldenmatch"
 
 COPY scripts ./scripts
 
