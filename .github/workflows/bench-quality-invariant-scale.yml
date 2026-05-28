@@ -38,14 +38,22 @@ on:
         description: "Tag for the output artifact (e.g. '10m-bucket', '25m-duckdb')"
         required: false
         default: "ad-hoc"
+      runner:
+        description: "Runner override (default large-new-64GB; use ubuntu-latest for small rungs when the big runner queue is backed up)"
+        required: false
+        default: "large-new-64GB"
 
 permissions:
   contents: read
 
 jobs:
   scale-rung:
-    # large-new-64GB: 16c / 64GB Ubuntu 24.04. Per memory feedback_bench_default_runner.
-    runs-on: large-new-64GB
+    # Runner is dispatch-input-overridable (default large-new-64GB, 16c/64GB
+    # Ubuntu 24.04 per feedback_bench_default_runner). For small rungs (<=1M)
+    # ubuntu-latest is 4c/16GB and runs the same harness fine -- useful when
+    # the large-new-64GB queue is saturated and you just want native-build
+    # validation without waiting.
+    runs-on: ${{ inputs.runner || 'large-new-64GB' }}
     # 25M-bucket completes in 6.5 min on this box; 10M should be < 5 min.
     # 50M-duckdb is the long pole — give it a 5h cap.
     timeout-minutes: 300
