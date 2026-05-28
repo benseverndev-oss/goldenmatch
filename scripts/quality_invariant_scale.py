@@ -288,14 +288,28 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
     # `polars` if it can't detect enough RAM, which OOMs; --backend duckdb
     # is the safest fallback (out-of-core) and bucket is the fastest when the
     # container has 32+ GB.
+    #
+    # `bench_capture()` pushes a BenchmarkRecorder onto goldenmatch's stage
+    # ContextVar. Every `with stage(name)` in core/pipeline.py records its
+    # wall + process-lifetime peak RSS (KB) at exit. Diffing consecutive
+    # stage_peak_rss_kb entries (insertion-ordered) gives the per-stage
+    # contribution to the peak — the input we need to pick the right RSS
+    # optimization target for #510. See PR #548.
+    from goldenmatch.core.bench import bench_capture
+    bench_dict: dict = {}
     t1 = time.time()
-    if backend:
-        cfg = goldenmatch.auto_configure_df(df)
-        cfg.backend = backend  # type: ignore[attr-defined]
-        result = goldenmatch.dedupe_df(df, config=cfg)
-    else:
-        result = goldenmatch.dedupe_df(df)
+    with bench_capture() as bench_rec:
+        if backend:
+            cfg = goldenmatch.auto_configure_df(df)
+            cfg.backend = backend  # type: ignore[attr-defined]
+            result = goldenmatch.dedupe_df(df, config=cfg)
+        else:
+            result = goldenmatch.dedupe_df(df)
     t_dedupe = time.time() - t1
+    try:
+        bench_dict = bench_rec.to_dict()
+    except Exception as e:
+        bench_dict = {"_capture_error": repr(e)[:120]}
 
     predicted: dict[int, list[int]] = {}
     for cid, c in (result.clusters or {}).items():
@@ -330,6 +344,7 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         "predicted_clusters": len(predicted) + (len(df) - sum(len(v) for v in predicted.values())),
         "multi_member_clusters": multi,
         "committed_config": committed_cfg,
+        "bench": bench_dict,
     }
 
 
