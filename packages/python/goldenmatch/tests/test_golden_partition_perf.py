@@ -165,3 +165,103 @@ class TestGoldenPartitionOutput:
         assert oversized_cids.isdisjoint(golden_cids), (
             f"Oversized clusters {oversized_cids} leaked into golden {golden_cids}"
         )
+
+
+class TestGoldenRecordsDfEquivalence:
+    """build_golden_records_df (columnar fast path) must match build_golden_records_batch
+    (list[dict] slow path) for every cluster when both gates allow the fast path.
+
+    Motivation: the list[dict] path allocates ~14 GB at 10M / 2M clusters. The
+    columnar path stores the same data in ~0.8 GB. They MUST produce the same
+    cluster-id -> value mapping and the same per-cluster confidence.
+    """
+
+    def _multi_df_fixture(self) -> pl.DataFrame:
+        """Build a multi_df with 4 clusters: 2 that agree fully (n_unique=1
+        per col), 1 with one disagreement, 1 with all values null in one col.
+        Covers the three confidence branches.
+        """
+        return pl.DataFrame({
+            "__row_id__": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "__cluster_id__": [10, 10, 20, 20, 30, 30, 30, 40, 40, 40, 40],
+            "name": [
+                "Alice", "Alice",      # cluster 10: agreement
+                "Bob", "Bob",          # cluster 20: agreement
+                "Carol", "Carol", "Caroline",  # cluster 30: disagreement
+                None, "Dave", "Dave", "Dave",  # cluster 40: null + agreement
+            ],
+            "email": [
+                "a@x.com", "a@x.com",
+                "b@x.com", "b@x.com",
+                "c@x.com", "c@x.com", "c@x.com",
+                "d@x.com", "d@x.com", "d@x.com", "d@x.com",
+            ],
+        })
+
+    def test_fast_path_matches_slow_path_most_complete(self):
+        from goldenmatch.core.golden import (
+            build_golden_records_batch,
+            build_golden_records_df,
+        )
+
+        multi_df = self._multi_df_fixture()
+        rules = GoldenRulesConfig(default_strategy="most_complete")
+
+        fast_df = build_golden_records_df(multi_df, rules)
+        slow_records = build_golden_records_batch(multi_df, rules)
+
+        # Slow path returns list[dict]; convert to the same row shape the
+        # pipeline builds (one row per cluster, flat columns).
+        slow_rows = []
+        for rec in slow_records:
+            row = {
+                "__cluster_id__": rec["__cluster_id__"],
+                "__golden_confidence__": rec["__golden_confidence__"],
+            }
+            for k, v in rec.items():
+                if k in ("__cluster_id__", "__golden_confidence__"):
+                    continue
+                if isinstance(v, dict) and "value" in v:
+                    row[k] = v["value"]
+            slow_rows.append(row)
+        slow_df = pl.DataFrame(slow_rows)
+
+        # Sort both by cluster_id for a stable comparison.
+        fast_sorted = fast_df.sort("__cluster_id__")
+        slow_sorted = slow_df.sort("__cluster_id__").select(fast_sorted.columns)
+
+        # Values: per-cluster value picks must match.
+        for col in ("name", "email"):
+            assert fast_sorted[col].to_list() == slow_sorted[col].to_list(), (
+                f"value mismatch on column {col}"
+            )
+        # Confidence: same per-cluster value to 4 decimal places.
+        fast_conf = [round(c, 4) for c in fast_sorted["__golden_confidence__"].to_list()]
+        slow_conf = [round(c, 4) for c in slow_sorted["__golden_confidence__"].to_list()]
+        assert fast_conf == slow_conf, (
+            f"confidence mismatch: fast={fast_conf} slow={slow_conf}"
+        )
+
+    def test_fast_path_matches_slow_path_first_non_null(self):
+        """Same equivalence under first_non_null strategy (different conf
+        constants but same value-picking semantics)."""
+        from goldenmatch.core.golden import (
+            build_golden_records_batch,
+            build_golden_records_df,
+        )
+
+        multi_df = self._multi_df_fixture()
+        rules = GoldenRulesConfig(default_strategy="first_non_null")
+
+        fast_df = build_golden_records_df(multi_df, rules)
+        slow_records = build_golden_records_batch(multi_df, rules)
+
+        slow_conf_by_cid = {r["__cluster_id__"]: r["__golden_confidence__"] for r in slow_records}
+        fast_conf_by_cid = dict(zip(
+            fast_df["__cluster_id__"].to_list(),
+            fast_df["__golden_confidence__"].to_list(),
+        ))
+        for cid in slow_conf_by_cid:
+            assert round(fast_conf_by_cid[cid], 4) == round(slow_conf_by_cid[cid], 4), (
+                f"first_non_null confidence mismatch on cluster {cid}"
+            )
