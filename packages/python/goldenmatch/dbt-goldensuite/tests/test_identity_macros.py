@@ -114,14 +114,36 @@ def test_single_arg_macro_duckdb(macro_name, sql_pg, sql_duck) -> None:
     assert "goldenmatch." not in sql.replace(sql_duck, "")
 
 
+# Snowflake dispatch mirrors Postgres -- schema-qualified Snowpark Python
+# UDFs in the `goldenmatch` schema. See docs/snowflake-setup.md for
+# registration.
+@pytest.mark.parametrize("macro_name,sql_sf", [
+    ("identity_resolve", "goldenmatch.goldenmatch_identity_resolve"),
+    ("identity_view",    "goldenmatch.goldenmatch_identity_view"),
+    ("identity_history", "goldenmatch.goldenmatch_identity_history"),
+    ("identity_conflicts", "goldenmatch.goldenmatch_identity_conflicts"),
+])
+def test_single_arg_macro_snowflake(macro_name, sql_sf) -> None:
+    env = _build_env("snowflake", f"{macro_name}.sql")
+    fn = env.globals[macro_name]
+    sql = fn("ent-abc")
+    assert sql_sf in sql
+    assert "'ent-abc'" in sql
+    # NULL/none db_path renders as empty string literal.
+    assert "''" in sql
+
+
 @pytest.mark.parametrize("macro_name", [
     "identity_resolve", "identity_view", "identity_history",
     "identity_conflicts",
 ])
 def test_single_arg_macro_unknown_adapter(macro_name) -> None:
-    env = _build_env("snowflake", f"{macro_name}.sql")
+    env = _build_env("bigquery", f"{macro_name}.sql")
     fn = env.globals[macro_name]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"(?s)only supported on postgres, duckdb, and\s+snowflake",
+    ):
         fn("ent-abc")
 
 
@@ -173,10 +195,32 @@ def test_identity_list_duckdb() -> None:
     assert "goldenmatch.goldenmatch_identity_list" not in sql
 
 
-def test_identity_list_unknown_adapter_errors() -> None:
+def test_identity_list_snowflake_all_filters() -> None:
     env = _build_env("snowflake", "identity_list.sql")
     fn = env.globals["identity_list"]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    sql = fn(dataset="customers", status="active", db_path="/x/y.db")
+    assert "goldenmatch.goldenmatch_identity_list" in sql
+    assert "'customers'" in sql
+    assert "'active'" in sql
+    assert "'/x/y.db'" in sql
+
+
+def test_identity_list_snowflake_no_filters() -> None:
+    env = _build_env("snowflake", "identity_list.sql")
+    fn = env.globals["identity_list"]
+    sql = fn()
+    assert "goldenmatch.goldenmatch_identity_list" in sql
+    # All three args default to empty-string literals.
+    assert sql.count("''") == 3
+
+
+def test_identity_list_unknown_adapter_errors() -> None:
+    env = _build_env("bigquery", "identity_list.sql")
+    fn = env.globals["identity_list"]
+    with pytest.raises(
+        RuntimeError,
+        match=r"(?s)only supported on postgres, duckdb, and\s+snowflake",
+    ):
         fn()
 
 
