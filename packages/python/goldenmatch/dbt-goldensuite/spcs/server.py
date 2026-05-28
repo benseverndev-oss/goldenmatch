@@ -42,7 +42,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Flask is the runtime dep declared in the Dockerfile alongside
 # goldenmatch[native]. The local type-checker will flag this when
