@@ -381,8 +381,17 @@ def build_clusters(
         result: dict[int, dict] = {}
         for cluster_id, members in enumerate(sorted_clusters, start=1):
             size = len(members)
+            # v34 attribution showed this loop at 21.7s / 29% of cluster
+            # wall, dominated by the 2M `sorted(members)` calls (one per
+            # cluster). The sort isn't load-bearing -- every reader
+            # iterates or treats members as a set; even add_to_cluster
+            # (the only incremental writer) re-sorts after appending,
+            # proving the contract doesn't assume sorted input. Keep
+            # whatever order the native UF kernel returned -- it's
+            # deterministic across runs (id-anchored) which is the only
+            # invariant any caller actually consumes.
             result[cluster_id] = {
-                "members": sorted(members),
+                "members": list(members),
                 "size": size,
                 "oversized": size > max_cluster_size,
                 "pair_scores": {},
