@@ -915,22 +915,64 @@ def _run_dedupe_pipeline(
     with stage("exact_matching"):
         for mk in matchkeys:
             if mk.type == "exact":
-                pairs = find_exact_matches(combined_lf, mk)
-                if mk.negative_evidence:
-                    # v1.12 Path Y: filter pairs by NE penalty
-                    from goldenmatch.core.scorer import _apply_negative_evidence_to_exact_pairs
-                    pairs = _apply_negative_evidence_to_exact_pairs(
-                        pairs, mk, collected_df
-                    )
-                if across_files_only:
-                    pairs = [
-                        (a, b, s) for a, b, s in pairs
-                        if source_lookup.get(a) != source_lookup.get(b)
-                    ]
-                all_pairs.extend(pairs)
-                exact_pair_count += len(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
+                # Fast path: no NE, no across_files_only. Skip the
+                # find_exact_matches list[tuple[int,int,1.0]] materialization
+                # (3-4 GB of CPython tuple overhead at 36.5M exact pairs in
+                # the QIS 10M-bucket-realistic shape). Pull the row-id pairs
+                # as zero-copy int64 numpy arrays, build matched_pairs +
+                # all_pairs in one pass via vectorized minimum/maximum +
+                # bulk list-of-tuples construction.
+                if not mk.negative_evidence and not across_files_only:
+                    import numpy as _np
+
+                    from goldenmatch.core.scorer import _find_exact_match_ids
+                    ids_a_np, ids_b_np = _find_exact_match_ids(combined_lf, mk)
+                    n_pairs = int(ids_a_np.size)
+                    if n_pairs > 0:
+                        mins_np = _np.minimum(ids_a_np, ids_b_np)
+                        maxs_np = _np.maximum(ids_a_np, ids_b_np)
+                        mins_list = mins_np.tolist()
+                        maxs_list = maxs_np.tolist()
+                        del mins_np, maxs_np  # free 580 MB at 36.5M pairs
+                        # Build matched_pairs from the canonical pairs
+                        # (set.update consumes the zip without materializing
+                        # an intermediate list).
+                        matched_pairs.update(zip(mins_list, maxs_list))
+                        # Extend all_pairs with the (a, b, 1.0) tuples in one
+                        # shot. The list[tuple] construction is unavoidable
+                        # while all_pairs stays a Python list, but at least
+                        # only happens once (no intermediate from
+                        # find_exact_matches' old per-element comprehension).
+                        ids_a_list = ids_a_np.tolist()
+                        ids_b_list = ids_b_np.tolist()
+                        del ids_a_np, ids_b_np
+                        all_pairs.extend(
+                            (a, b, 1.0) for a, b in zip(ids_a_list, ids_b_list)
+                        )
+                    exact_pair_count += n_pairs
+                else:
+                    # Slow path: NE on exact matchkey (v1.12 Path Y) OR
+                    # across_files_only filter. Both need per-pair iteration
+                    # at the tuple level today; keep the legacy list[tuple]
+                    # shape so the existing filters drop in unchanged.
+                    pairs = find_exact_matches(combined_lf, mk)
+                    if mk.negative_evidence:
+                        # v1.12 Path Y: filter pairs by NE penalty
+                        from goldenmatch.core.scorer import (
+                            _apply_negative_evidence_to_exact_pairs,
+                        )
+                        pairs = _apply_negative_evidence_to_exact_pairs(
+                            pairs, mk, collected_df
+                        )
+                    if across_files_only:
+                        pairs = [
+                            (a, b, s) for a, b, s in pairs
+                            if source_lookup.get(a) != source_lookup.get(b)
+                        ]
+                    all_pairs.extend(pairs)
+                    exact_pair_count += len(pairs)
+                    for a, b, _s in pairs:
+                        matched_pairs.add((min(a, b), max(a, b)))
 
     record_metric("exact_pair_count", exact_pair_count)
     logger.info("Exact matching found %d pairs", exact_pair_count)
