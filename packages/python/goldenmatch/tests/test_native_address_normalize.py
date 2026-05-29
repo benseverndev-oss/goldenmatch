@@ -17,7 +17,6 @@ import pytest
 from goldenmatch.core.matchkey import _address_normalize_native, _try_native_chain
 from goldenmatch.refdata.addresses import is_available, normalize_address
 
-
 # Skip the whole module when the address data file isn't loadable -- the
 # native chain returns None in that case (caller falls back to Python).
 pytestmark = pytest.mark.skipif(

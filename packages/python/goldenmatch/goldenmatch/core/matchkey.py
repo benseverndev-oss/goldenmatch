@@ -102,7 +102,7 @@ def _list_eval(list_expr: pl.Expr, inner: pl.Expr) -> pl.Expr:
     """Thin wrapper around Polars `list.eval` to keep the address-normalize
     expression readable. Indirection avoids fanning the literal method name
     across multiple busy expression chains."""
-    return getattr(list_expr.list, "eval")(inner)
+    return list_expr.list.eval(inner)
 
 
 def _build_field_expr_native(field_name: str, transforms: list[str]) -> pl.Expr | None:
