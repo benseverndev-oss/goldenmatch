@@ -362,6 +362,7 @@ def test_snowflake_connect_string_pulls_from_env(install_snowflake, monkeypatch)
 
 
 def test_snowflake_write_uses_write_pandas(install_snowflake) -> None:
+    pytest.importorskip("pandas")
     from goldenmatch.db.connector_snowflake import SnowflakeConnector
 
     captured = install_snowflake([_FakeCursor()], wp_result=(True, 1, 3, []))
@@ -375,6 +376,7 @@ def test_snowflake_write_uses_write_pandas(install_snowflake) -> None:
 
 
 def test_snowflake_write_replace_truncates_first(install_snowflake) -> None:
+    pytest.importorskip("pandas")
     from goldenmatch.db.connector_snowflake import SnowflakeConnector
 
     truncate_cur = _FakeCursor()
@@ -389,6 +391,7 @@ def test_snowflake_write_replace_truncates_first(install_snowflake) -> None:
 
 
 def test_snowflake_write_pandas_failure_raises(install_snowflake) -> None:
+    pytest.importorskip("pandas")
     from goldenmatch.db.connector_snowflake import SnowflakeConnector
 
     install_snowflake([_FakeCursor()], wp_result=(False, 0, 0, []))
