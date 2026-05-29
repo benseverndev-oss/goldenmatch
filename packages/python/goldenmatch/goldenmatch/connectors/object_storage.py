@@ -136,6 +136,20 @@ class ObjectStorageConnector(BaseConnector):
                 "ObjectStorage: 'append' is not supported for parquet. "
                 "Write a new file under a partitioned prefix instead."
             )
+        # ndjson + cloud URI is rejected upfront: Polars' write_ndjson
+        # doesn't accept storage_options, and the check is independent of
+        # whether the cloud backend extra is installed -- callers need to
+        # see this error even on machines without boto3 / google-cloud-
+        # storage / azure-storage-blob.
+        if fmt == "ndjson":
+            scheme = urlparse(path).scheme.lower()
+            if scheme in ("s3", "s3a", "gs", "gcs", "abfs", "abfss", "az",
+                          "http", "https"):
+                raise ConnectorError(
+                    "ObjectStorage: write_ndjson to cloud URIs is not "
+                    "supported by Polars. Use parquet or csv on cloud "
+                    "destinations; ndjson works for local paths."
+                )
         self._check_dependency(path)
 
         if fmt == "parquet":
@@ -148,17 +162,7 @@ class ObjectStorageConnector(BaseConnector):
                 include_header=config.get("include_header", True),
             )
         elif fmt == "ndjson":
-            # Polars' write_ndjson doesn't accept storage_options; fall back
-            # to writing to a local path, OR raise if the user pointed at a
-            # cloud URI. CSV / parquet cover the cloud case cleanly.
-            scheme = urlparse(path).scheme.lower()
-            if scheme in ("s3", "s3a", "gs", "gcs", "abfs", "abfss", "az",
-                          "http", "https"):
-                raise ConnectorError(
-                    "ObjectStorage: write_ndjson to cloud URIs is not "
-                    "supported by Polars. Use parquet or csv on cloud "
-                    "destinations; ndjson works for local paths."
-                )
+            # Cloud rejection already fired above; only local paths reach here.
             df.write_ndjson(path)
         else:
             raise ConnectorError(
