@@ -42,6 +42,10 @@ on:
         description: "Runner override (default large-new-64GB; use ubuntu-latest for small rungs when the big runner queue is backed up)"
         required: false
         default: "large-new-64GB"
+      slim_projection:
+        description: "GOLDENMATCH_BUCKET_SLIM_PROJECTION value (0 or 1). PR #588 RSS-reduction A/B."
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -75,6 +79,9 @@ jobs:
       # clusters on sample CSV). Per-row parity tests pass; chain saves
       # ~65s at 10M QIS. Opt in here to measure the win on the bench.
       GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE: "1"
+      # PR #588: slim Polars projection before bucket_assign. Default off
+      # (matches v29 baseline); flip via workflow_dispatch input for A/B.
+      GOLDENMATCH_BUCKET_SLIM_PROJECTION: ${{ inputs.slim_projection || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
