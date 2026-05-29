@@ -151,20 +151,68 @@ _SCORE_FIELD_DIRECT_SCORERS: frozenset[str] = frozenset({
 
 def _ne_effectively_empty(mk: MatchkeyConfig) -> bool:
     """True when matchkey.negative_evidence is empty OR every NE entry uses
-    a scorer name that score_field doesn't handle (raises ValueError). Those
-    entries are silently skipped at runtime (PR #546's _NE_BROKEN cache), so
-    they contribute zero penalty and the fast path's NE-free computation
-    matches the slow path's NE-applied computation bit-for-bit."""
+    a scorer name that score_field doesn't handle.
+
+    Historical role (pre-2026-05-29): this gated fast-path eligibility --
+    NE with callable scorers forced the slow path. Now the fast path engages
+    with NE math inline (`_resolve_ne_specs` + per-pair penalty in
+    `_score_one_bucket_fast`). The helper survives because:
+      1. The slow path's `_NE_BROKEN` cache still uses the same classification
+         to silently skip broken NE entries.
+      2. Tests in test_score_buckets_fast_path_gate.py assert this classification
+         independently of whether the fast path declines or engages.
+      3. Controller / planner policy decisions can still consult it to detect
+         "NE no-op" workloads.
+    """
     ne = getattr(mk, "negative_evidence", None)
     if not ne:
         return True
     for ne_entry in ne:
         scorer = getattr(ne_entry, "scorer", None)
         if scorer is None or scorer in _SCORE_FIELD_DIRECT_SCORERS:
-            # This NE entry IS callable at runtime -> it contributes real
-            # penalty -> fast path would produce a different score -> bail.
             return False
     return True
+
+
+# NE spec layout: (xform_col, score_pair_fn, threshold, penalty). One per
+# resolvable NE entry. Empty list means "no NE math needed" -- either NE
+# was empty or every NE entry's scorer is in _NE_BROKEN territory (matches
+# the slow path's silent-skip behavior).
+NeSpec = tuple[str, Any, float, float]
+
+
+def _resolve_ne_specs(
+    mk: MatchkeyConfig,
+    prepared_df: pl.DataFrame,
+) -> list[NeSpec]:
+    """Resolve mk.negative_evidence into per-pair callable specs.
+
+    Mirrors the slow path's `_apply_negative_evidence`:
+      - NE entries whose scorer isn't in `_SCORE_FIELD_DIRECT_SCORERS`
+        are silently skipped (the slow path's _NE_BROKEN cache does this
+        at runtime; we replicate the policy at gate-time).
+      - Entries whose xform column isn't precomputed are skipped (same
+        rationale -- caller can't access transformed values without it).
+      - Penalty math is `final = max(0, score_positive - sum(penalties))`
+        applied where the slow path uses the same formula.
+    """
+    from goldenmatch.core.matchkey import _xform_sig
+
+    out: list[NeSpec] = []
+    ne_list = getattr(mk, "negative_evidence", None) or []
+    for ne in ne_list:
+        scorer = getattr(ne, "scorer", None)
+        if scorer is None or scorer not in _SCORE_FIELD_DIRECT_SCORERS:
+            # Mirror slow-path _NE_BROKEN behavior: contribute zero penalty.
+            continue
+        fn = _resolve_score_pair_callable(scorer)
+        if fn is None:
+            continue
+        xform_col = _xform_sig(ne)
+        if xform_col not in prepared_df.columns:
+            continue
+        out.append((xform_col, fn, float(ne.threshold), float(ne.penalty)))
+    return out
 
 
 def _resolve_fast_path(
@@ -174,23 +222,30 @@ def _resolve_fast_path(
     across_files_only: bool,
     source_lookup: dict[int, str] | None,
     target_ids: set[int] | None,
-) -> tuple[float, float, list[tuple[str, float, Any, str]]] | None:
+) -> tuple[float, float, list[tuple[str, float, Any, str]], list[NeSpec]] | None:
     """Decide whether mk is fast-path eligible and pre-resolve field specs.
 
-    Returns (threshold, total_weight, [(xform_col, weight, score_fn), ...])
-    when eligible, else None. Resolution is done ONCE at score_buckets entry
-    so per-pair work never touches the PluginRegistry, _get_transformed_values,
-    or scorer-name dispatch.
+    Returns (threshold, total_weight, field_specs, ne_specs) when eligible,
+    else None. Resolution is done ONCE at score_buckets entry so per-pair
+    work never touches the PluginRegistry, _get_transformed_values, or
+    scorer-name dispatch.
+
+    field_specs: list of (xform_col, weight, score_pair_fn, scorer_name).
+    ne_specs:    list of (xform_col, score_pair_fn, threshold, penalty);
+                 empty when NE is missing or all-broken (matches today's
+                 _ne_effectively_empty behavior). Non-empty when NE has
+                 resolvable scorer entries that contribute real penalty
+                 (new in 2026-05-29 -- previously declined).
 
     Eligibility gates (conservative — fall back to find_fuzzy_matches for
     anything more complex):
       - mk.type == "weighted"
       - mk.threshold set
-      - no negative_evidence
       - no rerank / LLM
-      - across_files_only=False, target_ids=None (dedupe single-source case)
       - every field resolves to a score_pair callable via
         _resolve_score_pair_callable AND has its xform column precomputed
+      - NE entries with resolvable scorers WERE a decline gate; now they
+        engage the fast path with per-pair penalty math.
     """
     from goldenmatch.core.matchkey import _xform_sig
 
@@ -206,10 +261,6 @@ def _resolve_fast_path(
     if mk.threshold is None:
         _decline("mk.threshold is None")
         return None
-    if not _ne_effectively_empty(mk):
-        ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
-        _decline(f"NE has callable scorer(s): {ne_scorers}")
-        return None
     if getattr(mk, "rerank", False):
         _decline("mk.rerank=True (auto-config enables for 3+ field weighted matchkeys)")
         return None
@@ -221,7 +272,9 @@ def _resolve_fast_path(
     # can engage with these set because they only act as post-filters on
     # emitted pairs, not as scoring math. The actual filtering happens after
     # the worker emits candidate pairs (mirrors _score_one_bucket's behavior).
-    # Removed 2026-05-29 to widen the fast path for match-mode workloads.
+    # Removed in PR #572 (match-mode widening); NE penalty math composes
+    # cleanly on top because NE is per-pair scoring and match-mode is
+    # per-pair post-filter -- they don't interact.
     if not mk.fields:
         _decline("mk.fields is empty")
         return None
@@ -246,6 +299,7 @@ def _resolve_fast_path(
     if total_weight <= 0:
         _decline(f"total_weight={total_weight}")
         return None
+    ne_specs = _resolve_ne_specs(mk, prepared_df)
     # Diagnostic on the success path: log matchkey shape so we can compare
     # what the controller commits at different row counts (rerank thresholds
     # and NE promotion are scale-dependent).
@@ -255,10 +309,10 @@ def _resolve_fast_path(
         f"[score_buckets._resolve_fast_path] ENGAGED: "
         f"n_fields={len(mk.fields)} scorers={scorer_names} "
         f"threshold={mk.threshold} rerank={getattr(mk, 'rerank', False)} "
-        f"ne_scorers={ne_scorers}",
+        f"ne_scorers={ne_scorers} ne_resolved={len(ne_specs)}",
         flush=True,
     )
-    return (float(mk.threshold), total_weight, field_specs)
+    return (float(mk.threshold), total_weight, field_specs, ne_specs)
 
 
 def score_buckets(
@@ -374,11 +428,20 @@ def score_buckets(
 
     # Native fast-path eligibility resolved ONCE: gated on, and every field's
     # scorer implemented by the native kernel. None -> Python per-pair loop.
+    # When NE has resolvable entries, force the Python path -- the native
+    # kernel emits pairs filtered against `threshold` BEFORE NE penalty is
+    # applied, so we'd have to re-emit + re-threshold downstream. The Python
+    # path handles NE math inline at the same per-pair cost. Returning to
+    # native-with-NE would mean teaching the kernel to emit pre-penalty
+    # candidate pairs (~2x emit volume) -- not worth it until measurement
+    # demands it.
     native_scorer_ids: list[int] | None = None
     if fast_path_specs is not None and native_enabled("block_scoring"):
-        ids = [_NATIVE_SCORER_IDS.get(spec[3]) for spec in fast_path_specs[2]]
-        if all(i is not None for i in ids):
-            native_scorer_ids = ids  # type: ignore[assignment]
+        _, _, _field_specs, _ne_specs = fast_path_specs
+        if not _ne_specs:
+            ids = [_NATIVE_SCORER_IDS.get(spec[3]) for spec in _field_specs]
+            if all(i is not None for i in ids):
+                native_scorer_ids = ids  # type: ignore[assignment]
 
     # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket
     # worker loop. Previously _score_one_bucket_fast called
@@ -435,7 +498,7 @@ def score_buckets(
         # is a 3x3 array and the alloc/free + np.zeros call cost dwarfs the
         # actual rapidfuzz work.
         assert fast_path_specs is not None  # gated by dispatcher
-        threshold, total_weight, field_specs = fast_path_specs
+        threshold, total_weight, field_specs, ne_specs = fast_path_specs
         sorted_df = bucket_df.sort("__block_key__")
         sizes = (
             sorted_df.lazy()
@@ -495,6 +558,13 @@ def score_buckets(
         ]
         score_fns = [fn for _col, _w, fn, _name in field_specs]
         n_fields = len(field_specs)
+        # NE per-pair specs (post-2026-05-29 widening). Pre-materialize the
+        # NE xform columns; empty when NE missing / all-broken (no overhead).
+        ne_arrays = [sorted_df[col].to_list() for col, _fn, _t, _p in ne_specs]
+        ne_fns = [fn for _col, fn, _t, _p in ne_specs]
+        ne_thresholds = [t for _col, _fn, t, _p in ne_specs]
+        ne_penalties = [p for _col, _fn, _t, p in ne_specs]
+        n_ne = len(ne_specs)
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
@@ -523,12 +593,31 @@ def score_buckets(
                                 continue
                             score_sum += s * weights[f_idx]
                             weight_sum += weights[f_idx]
-                        if weight_sum > 0:
-                            combined = score_sum / total_weight
-                            if combined >= threshold:
-                                local_pairs.append(
-                                    (pair_key[0], pair_key[1], float(combined))
-                                )
+                        if weight_sum <= 0:
+                            continue
+                        combined = score_sum / total_weight
+                        # NE penalty math (mirrors core/scorer.py
+                        # _apply_negative_evidence): subtract penalty when an
+                        # NE field's similarity is below its threshold. Clamp
+                        # at 0. Same formula as the slow path.
+                        if n_ne > 0:
+                            penalty = 0.0
+                            for k in range(n_ne):
+                                na = ne_arrays[k][i]
+                                nb = ne_arrays[k][j]
+                                if na is None or nb is None:
+                                    continue
+                                sim = ne_fns[k](na, nb)
+                                if sim is None:
+                                    continue
+                                if sim < ne_thresholds[k]:
+                                    penalty += ne_penalties[k]
+                            if penalty > 0:
+                                combined = max(0.0, combined - penalty)
+                        if combined >= threshold:
+                            local_pairs.append(
+                                (pair_key[0], pair_key[1], float(combined))
+                            )
                 local_blocks += 1
             offset += size
         if across_files_only or target_ids is not None:
