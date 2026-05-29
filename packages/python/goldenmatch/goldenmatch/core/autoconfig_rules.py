@@ -1120,6 +1120,71 @@ def rule_demote_clustered_identity(
     return None
 
 
+def rule_matchkey_demote_high_cardinality_field(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Demote a weighted-matchkey field whose post_transform_cardinality_ratio
+    is > 0.95 (uniquely identifying -- produces near-zero match candidates).
+
+    Background: v23 QIS measurement (2026-05-29) showed `matchkey` sub-profile
+    YELLOW from iter 0 to iter 4 without any rule addressing it. The
+    `MatchkeyProfile.health()` verdict is YELLOW when any field has
+    `post_transform_cardinality_ratio > 0.95`; that signal means the field
+    is uniquely identifying (every value distinct) so fuzzy/exact matching
+    on it almost never produces match candidates -- it's contributing
+    negative weight to the matchkey's discriminative power. The right
+    response: remove the field from the matchkey's fields list. Auto-config's
+    `promote_negative_evidence` will likely have kept it as NE on
+    high-identity columns, so the field continues to act as a NE penalty
+    when it disagrees -- which is what high-cardinality identifiers
+    (email, id) should be doing in the first place.
+
+    Safety:
+      - Won't strip a matchkey to empty (skip if it's the only field).
+      - Only operates on weighted matchkeys (exact matchkeys have different
+        cardinality semantics; > 0.95 there means "fingerprint-quality").
+      - Picks the HIGHEST-cardinality field when multiple fields qualify,
+        so iteration converges deterministically.
+    """
+    for mk in current.matchkeys or []:
+        if mk.type != "weighted":
+            continue
+        # Find all eligible fields (cardinality > 0.95, present in mk.fields).
+        candidates: list[tuple[str, float]] = []
+        field_names = {f.field for f in (mk.fields or [])}
+        for name, fs in profile.matchkey.per_field.items():
+            if name not in field_names:
+                continue
+            if fs.post_transform_cardinality_ratio > 0.95:
+                candidates.append((name, fs.post_transform_cardinality_ratio))
+        if not candidates:
+            continue
+        # Deterministic pick: highest cardinality first, ties broken by name.
+        candidates.sort(key=lambda kv: (-kv[1], kv[0]))
+        target_field, target_card = candidates[0]
+        new_fields = [f for f in (mk.fields or []) if f.field != target_field]
+        if not new_fields:
+            # Can't strip to empty; skip this matchkey, try next.
+            continue
+        new_mk = mk.model_copy(update={"fields": new_fields})
+        new_matchkeys = [new_mk if m is mk else m for m in (current.matchkeys or [])]
+        new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
+        decision = PolicyDecision(
+            rule_name="matchkey_demote_high_cardinality_field",
+            rationale=(
+                f"matchkey '{mk.name}' field '{target_field}' "
+                f"post_transform_cardinality_ratio={target_card:.3f} > 0.95 "
+                f"(uniquely identifying); removing from matchkey fields "
+                f"(NE retention handled separately by auto-config)"
+            ),
+            config_diff={
+                f"matchkeys[{mk.name}].fields": f"removed:{target_field}",
+            },
+        )
+        return new_cfg, decision
+    return None
+
+
 def rule_blocking_adaptive_on_p99_outlier(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1201,6 +1266,7 @@ DEFAULT_RULES = [
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_recall_gap_suspected,             # 14 tuning: random pair probe high OR over-tight signature
     rule_sparse_match_expand,              # 15 NEW v1.10: lower threshold proxy for sparse datasets
+    rule_matchkey_demote_high_cardinality_field,  # 16 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field (e.g. email in weighted matchkey)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
