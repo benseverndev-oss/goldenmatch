@@ -349,6 +349,26 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
                             f"{getattr(mk, 'name', '?')!r} (n_fields={len(mk.fields)})",
                             flush=True,
                         )
+                    # Strip NE from EXACT matchkeys too. Per QIS 10M-v11 trace:
+                    # the auto-configured exact matchkey has NE with scorer
+                    # 'ensemble' on the 'id' field. score_field doesn't
+                    # implement 'ensemble' so it's silently skipped at runtime
+                    # via PR #546's _NE_BROKEN cache (penalty=0, final_score=1.0
+                    # >= threshold -> every pair passes through unchanged). But
+                    # the slow _apply_negative_evidence_to_exact_pairs loop
+                    # still iterates all 36.5M pairs doing zero useful work,
+                    # AND _resolve_fast_path on the exact_matching numpy path
+                    # (PR #557) declines because mk.negative_evidence is truthy.
+                    # Stripping here unblocks the numpy fast path without
+                    # changing accuracy (broken NE was a no-op anyway).
+                    if getattr(mk, "type", None) == "exact" and getattr(mk, "negative_evidence", None):
+                        n_ne = len(mk.negative_evidence)
+                        mk.negative_evidence = []  # type: ignore[attr-defined]
+                        print(
+                            f"[qis] stripped {n_ne} NE entries from exact matchkey "
+                            f"{getattr(mk, 'name', '?')!r} (broken at runtime via _NE_BROKEN)",
+                            flush=True,
+                        )
                 cfg.backend = backend  # type: ignore[attr-defined]
             with stage("qis_dedupe"):
                 result = goldenmatch.dedupe_df(df, config=cfg)
