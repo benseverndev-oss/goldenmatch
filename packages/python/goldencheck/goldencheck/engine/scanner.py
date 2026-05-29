@@ -241,13 +241,25 @@ def scan_file(
     for col_name in df.columns:
         col = df[col_name]
         non_null = col.drop_nulls()
+        non_null_len = len(non_null)
+        # Cache n_unique + null_count once per column. The prior code called
+        # non_null.n_unique() TWICE in the same ColumnProfile kwarg list (for
+        # unique_count and unique_pct) and col.null_count() twice (null_count
+        # and null_pct). At the QIS 10M bench (6 columns) that was 12 full-
+        # frame Polars hash-aggregations + 12 null counts in the column-
+        # profile loop alone -- the dominant cost of pipeline_prep_quality_scan
+        # at 120.8s (v17 measured no change after PR #562's CSV round-trip
+        # removal, confirming the bottleneck was inside this loop, not the
+        # surrounding I/O). Strict 2x reduction; zero behavioral change.
+        n_unique = non_null.n_unique() if non_null_len > 0 else 0
+        null_count = col.null_count()
         cp = ColumnProfile(
             name=col_name,
             inferred_type=str(col.dtype),
-            null_count=col.null_count(),
-            null_pct=col.null_count() / row_count if row_count > 0 else 0,
-            unique_count=non_null.n_unique() if len(non_null) > 0 else 0,
-            unique_pct=non_null.n_unique() / len(non_null) if len(non_null) > 0 else 0,
+            null_count=null_count,
+            null_pct=null_count / row_count if row_count > 0 else 0,
+            unique_count=n_unique,
+            unique_pct=n_unique / non_null_len if non_null_len > 0 else 0,
             row_count=row_count,
         )
         column_profiles.append(cp)
