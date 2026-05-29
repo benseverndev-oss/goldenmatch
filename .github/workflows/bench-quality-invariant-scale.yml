@@ -70,6 +70,11 @@ jobs:
       # time -- which is what this workflow is supposed to measure goldenmatch
       # at its best, NOT its slowest.
       GOLDENMATCH_NATIVE: "1"
+      # PR #576 gated the Polars-native address_normalize chain behind
+      # this env var because an integration test failed parity (8 vs 5
+      # clusters on sample CSV). Per-row parity tests pass; chain saves
+      # ~65s at 10M QIS. Opt in here to measure the win on the bench.
+      GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
