@@ -91,9 +91,9 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
         # batches; per-pair uses the same rapidfuzz primitives one call at a
         # time). Unblocks the bucket fast path on matchkeys auto-config
         # produced via _pick_scorer_for_column's "other -> ensemble" rule.
+        import jellyfish as _jf
         from rapidfuzz.distance import JaroWinkler as _Jw
         from rapidfuzz.fuzz import token_sort_ratio as _ts
-        import jellyfish as _jf
         def _ensemble_pair(a: str, b: str) -> float:
             jw = _Jw.similarity(a, b)
             ts = _ts(a, b) / 100.0
