@@ -216,13 +216,12 @@ def _resolve_fast_path(
     if getattr(mk, "llm", None):
         _decline("mk.llm is set")
         return None
-    if across_files_only or source_lookup or target_ids is not None:
-        _decline(
-            f"match-mode flag set "
-            f"(across_files_only={across_files_only}, source_lookup={source_lookup is not None}, "
-            f"target_ids={target_ids is not None})"
-        )
-        return None
+    # NOTE: match-mode (across_files_only / source_lookup / target_ids) USED
+    # to decline the fast path here. That was conservative -- the fast path
+    # can engage with these set because they only act as post-filters on
+    # emitted pairs, not as scoring math. The actual filtering happens after
+    # the worker emits candidate pairs (mirrors _score_one_bucket's behavior).
+    # Removed 2026-05-29 to widen the fast path for match-mode workloads.
     if not mk.fields:
         _decline("mk.fields is empty")
         return None
@@ -407,6 +406,27 @@ def score_buckets(
                 flush=True,
             )
 
+    def _apply_match_mode_filter(
+        pairs: list[tuple[int, int, float]],
+    ) -> list[tuple[int, int, float]]:
+        """Mirror the slow path's match-mode post-filter (_score_one_bucket
+        lines 544-553). Applies in two stages: across_files_only drops
+        same-source pairs; target_ids drops same-side-of-target pairs.
+
+        Both filters are O(pairs) and very cheap relative to scoring; safe
+        to apply unconditionally on the fast path now that the gate is gone."""
+        if across_files_only and source_lookup is not None:
+            pairs = [
+                (a, b, s) for a, b, s in pairs
+                if source_lookup.get(a) != source_lookup.get(b)
+            ]
+        if target_ids is not None:
+            pairs = [
+                (a, b, s) for a, b, s in pairs
+                if (a in target_ids) != (b in target_ids)
+            ]
+        return pairs
+
     def _score_one_bucket_fast(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
         # Fast path for tiny-block workloads. Pre-extracts each transformed
         # field as a Python list ONCE per bucket, then iterates pairs within
@@ -461,6 +481,10 @@ def score_buckets(
                     list(frozen_exclude),
                 )
             local_blocks = sum(1 for s in size_list if s >= 2)
+            # Match-mode post-filter (native path doesn't know about
+            # source_lookup or target_ids; apply in Python after emit).
+            if across_files_only or target_ids is not None:
+                pairs = _apply_match_mode_filter(pairs)
             return pairs, local_blocks
 
         # Python per-pair fallback: materialize the columns as lists.
@@ -507,6 +531,8 @@ def score_buckets(
                                 )
                 local_blocks += 1
             offset += size
+        if across_files_only or target_ids is not None:
+            local_pairs = _apply_match_mode_filter(local_pairs)
         return local_pairs, local_blocks
 
     def _score_one_bucket(bucket_df: pl.DataFrame) -> tuple[list[tuple[int, int, float]], int]:
