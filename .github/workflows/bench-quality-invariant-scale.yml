@@ -45,6 +45,11 @@ on:
       slim_projection:
         description: "GOLDENMATCH_BUCKET_SLIM_PROJECTION value (0 or 1). Default '1' = today's behavior; pass '0' to bench the pre-slim baseline."
         required: false
+        default: "0"
+      precompute_rechunk:
+        description: "GOLDENMATCH_PRECOMPUTE_RECHUNK value (0 or 1). PR #591 RSS-reduction A/B."
+        required: false
+        default: "0"
         default: "1"
 
 permissions:
@@ -82,6 +87,9 @@ jobs:
       # PR #588: slim Polars projection before bucket_assign. Default off
       # (matches v29 baseline); flip via workflow_dispatch input for A/B.
       GOLDENMATCH_BUCKET_SLIM_PROJECTION: ${{ inputs.slim_projection || '0' }}
+      # PR #591: rechunk after precompute_matchkey_transforms so the
+      # bucket_slim_projection .select() can be true zero-copy.
+      GOLDENMATCH_PRECOMPUTE_RECHUNK: ${{ inputs.precompute_rechunk || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
