@@ -56,8 +56,8 @@ def _yellow_profile() -> ComplexityProfile:
         ),
         scoring=ScoringProfile(
             n_pairs_scored=200, candidates_compared=500,
-            mass_above_threshold=0.4, dip_statistic=0.05,
-            mass_in_borderline=0.4,  # YELLOW: > 0.3
+            mass_above_threshold=0.2, dip_statistic=0.05,
+            mass_in_borderline=0.4,  # YELLOW: > 0.3 AND > mass_above_threshold
         ),
         cluster=ClusterProfile(transitivity_rate=0.95),
         matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),

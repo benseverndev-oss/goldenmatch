@@ -351,7 +351,15 @@ class ScoringProfile:
             return HealthVerdict.RED
         if self.dip_statistic < 0.005 and self.n_pairs_scored > 0:
             return HealthVerdict.RED
-        if self.mass_in_borderline > 0.3:
+        # YELLOW only when the borderline band outweighs the above-threshold
+        # tail. The legacy `mass_in_borderline > 0.3` rule fired YELLOW on any
+        # noisy-but-correct shape (heavy-typo person data lands 30%+ of
+        # scored pairs in a 0.2-wide band around the threshold by
+        # construction; F1 stays >0.98). Tie the verdict to separation
+        # instead: when above-tail mass dominates the borderline band, the
+        # config is fine; only flip YELLOW when borderline genuinely
+        # swamps confident matches.
+        if self.mass_in_borderline > 0.3 and self.mass_in_borderline > self.mass_above_threshold:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
 
