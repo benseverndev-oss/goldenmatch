@@ -6,6 +6,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-05-29
+
+### Performance
+
+- **10M-QIS-bucket-realistic: 2604 s -> 502 s (81% wall reduction) at F1=0.9886 invariant.**
+  This release ships ~15 perf PRs landed during a single concentrated investigation. Total
+  RSS dropped from 46.4 GB to 38.2 GB at 10M rows on the bucket backend; pairwise F1
+  stayed at 0.9886 across every measurement.
+- **Fast-path widening for the bucket scorer.** The per-pair callable dispatch now
+  resolves: `soundex_match`, `dice`, `jaccard`, `ensemble` (#555/#565); `_score_one_bucket_fast`
+  applies NE penalty math inline (#573) and post-filters for match-mode (#572); the
+  fast path now engages for probabilistic matchkeys via `core/probabilistic_fast.py` (#575).
+- **GoldenFlow per-row UDF -> Polars-native fast paths.** `date_iso8601` numeric (#560)
+  and 4-digit year string (#561) shortcut; `normalize_unicode` ASCII fast path (#563);
+  `address_normalize` Polars-native chain (#576, opt-in via `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE=1`
+  pending integration parity).
+- **Pipeline microoptimizations.** Polars columnar fast path through the exact-matching
+  numpy pair build (#557); single fused `with_columns` in `precompute_matchkey_transforms`
+  (#564); cached `n_unique` + `null_count` in goldencheck's scanner column-profile loop (#569);
+  `scan_dataframe` entry point so `quality_check` skips the temp-CSV round-trip (#562);
+  `pipeline_initial_collect` stage marker so the first LazyFrame materialization is
+  attributed honestly (#574).
+
+### Auto-config
+
+- **Chao1 scale-aware cardinality** (#581, #583). `FieldStats` gains optional
+  `sample_n_rows` + `singleton_count` + `doubleton_count`; `MatchkeyProfile.health()`
+  accepts `n_full_rows` and `FieldStats.estimated_full_cardinality(n_full_rows)`
+  applies the Chao1 mark-recapture estimator (`S* = S + F1^2 / (2 * (F2 + 1))`).
+  Fixes the persistent matchkey YELLOW that bench telemetry surfaced on
+  many-tiny-clusters shapes (QIS realistic: 2M clusters * 5 rows, controller
+  sample sees ~1 rep/cluster, raw sample cardinality 0.997 -> Chao1 estimate
+  0.31). Backward compat: when Chao1 inputs aren't populated or `n_full_rows`
+  isn't threaded, the verdict falls back to the raw sample ratio.
+- **`rule_matchkey_demote_high_cardinality_field` heuristic** (#578). New
+  default rule that removes a uniquely-identifying field from a weighted
+  matchkey (cardinality > 0.99 via Chao1, requires >=2 remaining fields).
+  Auto-config's `promote_negative_evidence` retains such fields as NE
+  penalty entries, which is the role uniquely-identifying values (email,
+  sequential IDs) should play.
+- **DataProfile YELLOW signal cleanup** (#579). `DataProfile.health()` no
+  longer returns YELLOW just because every column shares a `column_types`
+  value (the shape of most CSVs). Single-column inputs still YELLOW.
+  Verdict is now precise instead of noisy. Real impact: QIS-style
+  fixtures that committed YELLOW solely for this definitional signal
+  now commit on the actual structural verdict.
+
+### Diagnostics
+
+- **Per-iteration controller telemetry** in the QIS harness (#577): each
+  history entry now emits `iteration`, total + per-sub-profile health,
+  decision (rule_name + rationale + config_diff keys), error, and
+  wall_clock_ms. Lets bench reports localize which rule fired (or didn't)
+  on each iteration without rebuilding the controller from source.
+
+
+
 ### Added
 
 - **Quality-invariant scale harness** (#510). `scripts/quality_invariant_scale.py`
