@@ -45,12 +45,11 @@ on:
       slim_projection:
         description: "GOLDENMATCH_BUCKET_SLIM_PROJECTION value (0 or 1). Default '1' = today's behavior; pass '0' to bench the pre-slim baseline."
         required: false
-        default: "0"
+        default: "1"
       precompute_rechunk:
         description: "GOLDENMATCH_PRECOMPUTE_RECHUNK value (0 or 1). PR #591 RSS-reduction A/B."
         required: false
         default: "0"
-        default: "1"
 
 permissions:
   contents: read
