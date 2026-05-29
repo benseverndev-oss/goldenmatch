@@ -400,11 +400,61 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
         state = _LAST_CONTROLLER_RUN.get()
         if state is not None:
             profile, history = state
+            # Per-iteration controller telemetry (v23 expansion).
+            # v22 measured POLICY_SATISFIED=6 / YELLOW -- heuristic rules
+            # saturated. To tell whether the 14 DEFAULT_RULES have a gap on
+            # QIS-realistic shape vs the YELLOW being irreducible, we need
+            # per-iteration visibility. iter_log captures rule_name +
+            # rationale + per-sub-profile health so we can see which
+            # dimension is bottlenecking and which rules fired (or didn't).
+            iter_log = []
+            for ent in history.entries:
+                p = ent.profile
+                n_rows = getattr(p.data, "n_rows", 0) or 0
+                sub_health: dict[str, str] = {}
+                for name, getter in (
+                    ("data", lambda: p.data.health()),
+                    ("domain", lambda: p.domain.health()),
+                    ("matchkey", lambda: p.matchkey.health()),
+                    ("blocking", lambda: p.blocking.health(n_rows=n_rows)),
+                    ("scoring", lambda: p.scoring.health()),
+                    ("cluster", lambda: p.cluster.health(n_rows=n_rows)),
+                ):
+                    try:
+                        v = getter()
+                        sub_health[name] = v.value if hasattr(v, "value") else str(v)
+                    except Exception as _exc:  # noqa: BLE001
+                        sub_health[name] = f"<{type(_exc).__name__}>"
+                _eh = ent.profile.health()
+                entry_dict: dict = {
+                    "iteration": ent.iteration,
+                    "health": _eh.value if hasattr(_eh, "value") else str(_eh),
+                    "sub_health": sub_health,
+                    "wall_ms": ent.wall_clock_ms,
+                }
+                if ent.decision is not None:
+                    entry_dict["decision"] = {
+                        "rule_name": ent.decision.rule_name,
+                        "rationale": ent.decision.rationale[:300],
+                        "config_diff_keys": sorted(
+                            list((ent.decision.config_diff or {}).keys())
+                        ),
+                        "expand_sample": ent.decision.expand_sample,
+                    }
+                if ent.error is not None:
+                    entry_dict["error"] = {
+                        "exception_type": ent.error.exception_type,
+                        "traceback_summary": ent.error.traceback_summary[:300],
+                    }
+                iter_log.append(entry_dict)
             committed_cfg = {
                 "health": profile.health().value,
                 "stop_reason": str(history.stop_reason),
                 "iterations": history.iteration,
                 "decisions": [d.rule_name for d in (history.decisions or [])],
+                "iter_log": iter_log,
+                "is_oscillating": bool(history.is_oscillating()),
+                "full_vs_sample_drift": history.full_vs_sample_drift,
             }
     except Exception as e:
         committed_cfg = {"_capture_error": repr(e)[:120]}
