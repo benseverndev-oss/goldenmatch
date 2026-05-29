@@ -108,6 +108,12 @@ gcs = [
 azure_blob = [
     "azure-storage-blob>=12.19",
 ]
+sqlserver = [
+    "pyodbc>=5.0",
+]
+mysql = [
+    "pymysql>=1.1",
+]
 duckdb = [
     "duckdb>=0.9",
 ]

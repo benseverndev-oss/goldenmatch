@@ -97,6 +97,13 @@ def load_connector(connector_name: str, config: dict) -> BaseConnector:
         "gs": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
         "azure_blob": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
         "abfs": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "postgres": "goldenmatch.connectors.postgres:PostgresConnector",
+        "postgresql": "goldenmatch.connectors.postgres:PostgresConnector",
+        "sqlserver": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "mssql": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "azure_sql": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "mysql": "goldenmatch.connectors.mysql:MySQLConnector",
+        "mariadb": "goldenmatch.connectors.mysql:MySQLConnector",
     }
 
     if connector_name not in _BUILTIN:
