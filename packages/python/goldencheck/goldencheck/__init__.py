@@ -28,7 +28,7 @@ from goldencheck.engine.differ import (
 )
 from goldencheck.engine.fixer import FixEntry, FixReport, apply_fixes
 from goldencheck.engine.reader import read_file
-from goldencheck.engine.scanner import scan_file, scan_file_with_llm
+from goldencheck.engine.scanner import scan_dataframe, scan_file, scan_file_with_llm
 from goldencheck.engine.triage import TriageResult, auto_triage
 
 # Engine: validator, confidence, triage, fixer, differ, reader
@@ -58,6 +58,7 @@ def __getattr__(name: str):
 
 __all__ = [
     # Core
+    "scan_dataframe",
     "scan_file",
     "scan_file_with_llm",
     "Finding",
