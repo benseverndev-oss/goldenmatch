@@ -1384,32 +1384,37 @@ def _run_dedupe_pipeline(
     #   5. call build_golden_record on each pre-filtered partition.
     # Total: O(N + sum-of-cluster-sizes) which is O(N), independent of K.
     with stage("golden"):
-        eligible: list[tuple[int, dict[str, Any]]] = [
-            (cid, info) for cid, info in clusters.items()
-            if info["size"] > 1 and not info["oversized"]
-        ]
+        with stage("golden_eligible_filter"):
+            eligible: list[tuple[int, dict[str, Any]]] = [
+                (cid, info) for cid, info in clusters.items()
+                if info["size"] > 1 and not info["oversized"]
+            ]
         if eligible:
-            # row_id → cluster_id mapping. Members are int row IDs; one row
-            # belongs to at most one cluster, so the map is unambiguous.
-            row_to_cluster: dict[int, int] = {}
-            for cid, info in eligible:
-                for mid in info["members"]:
-                    row_to_cluster[mid] = cid
+            with stage("golden_row_to_cluster_dict"):
+                # row_id → cluster_id mapping. Members are int row IDs; one row
+                # belongs to at most one cluster, so the map is unambiguous.
+                row_to_cluster: dict[int, int] = {}
+                for cid, info in eligible:
+                    for mid in info["members"]:
+                        row_to_cluster[mid] = cid
+                member_ids_all = list(row_to_cluster.keys())
 
-            member_ids_all = list(row_to_cluster.keys())
-            multi_df = collected_df.filter(
-                pl.col("__row_id__").is_in(member_ids_all)
-            )
-            # Attach __cluster_id__ via replace_strict. The old keys/new
-            # vals lists are tiny (1 entry per member); the join itself
-            # is linear in `multi_df.height`.
-            multi_df = multi_df.with_columns(
-                pl.col("__row_id__").replace_strict(
-                    list(row_to_cluster.keys()),
-                    list(row_to_cluster.values()),
-                    return_dtype=pl.Int64,
-                ).alias("__cluster_id__")
-            )
+            with stage("golden_multi_df_filter"):
+                multi_df = collected_df.filter(
+                    pl.col("__row_id__").is_in(member_ids_all)
+                )
+
+            with stage("golden_attach_cluster_id"):
+                # Attach __cluster_id__ via replace_strict. The old keys/new
+                # vals lists are tiny (1 entry per member); the join itself
+                # is linear in `multi_df.height`.
+                multi_df = multi_df.with_columns(
+                    pl.col("__row_id__").replace_strict(
+                        list(row_to_cluster.keys()),
+                        list(row_to_cluster.values()),
+                        return_dtype=pl.Int64,
+                    ).alias("__cluster_id__")
+                )
             # Batch builder: sorts by __cluster_id__ once and pre-extracts
             # each user column to a Python list ONCE. At 5M / 1.67M
             # multi-member clusters the previous partition_by(as_dict=True)
@@ -1435,16 +1440,18 @@ def _run_dedupe_pipeline(
                 and _polars_native_eligible(golden_rules, quality_scores=None)
             )
             if _fast_eligible:
-                golden_df = build_golden_records_df(multi_df, golden_rules)
+                with stage("golden_build_records_df_fast"):
+                    golden_df = build_golden_records_df(multi_df, golden_rules)
                 # Leave golden_records empty: the provenance branch below
                 # (gated on `if config.output.lineage_provenance and golden_records`)
                 # is a no-op when provenance is off, so no metadata is lost.
                 golden_records = []
             else:
-                golden_records = build_golden_records_batch(
-                    multi_df, golden_rules,
-                    provenance=_provenance_on,
-                )
+                with stage("golden_build_records_batch_slow"):
+                    golden_records = build_golden_records_batch(
+                        multi_df, golden_rules,
+                        provenance=_provenance_on,
+                    )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
