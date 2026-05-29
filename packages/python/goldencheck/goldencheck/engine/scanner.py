@@ -33,7 +33,7 @@ from goldencheck.relations.temporal import TemporalOrderProfiler
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["scan_file", "scan_file_with_llm"]
+__all__ = ["scan_file", "scan_file_with_llm", "scan_dataframe"]
 
 COLUMN_PROFILERS = [
     TypeInferenceProfiler(),
@@ -221,6 +221,39 @@ def _post_classification_checks(
     return new_findings
 
 
+def scan_dataframe(
+    df: pl.DataFrame,
+    file_path: str | Path = "<dataframe>",
+    sample_size: int = 100_000,
+    return_sample: bool = False,
+    domain: str | None = None,
+    baseline: BaselineProfile | Path | None = None,
+    schema: object | None = None,
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
+    """Scan an already-loaded Polars DataFrame.
+
+    Same semantics as :func:`scan_file` but accepts a DataFrame directly.
+    The CSV round-trip in `goldenmatch.core.quality.run_quality_check` was
+    surfacing as 121s of `pipeline_prep_quality_scan` wall on the 10M
+    quality-invariant-scale bench: writing the full df to a temp CSV
+    just so this function could read it back. With this entry point the
+    caller hands the in-memory frame straight to the scanner.
+
+    `file_path` is purely cosmetic (populates `DatasetProfile.file_path`
+    for downstream reports / drift checks); pass it when you have a real
+    path, otherwise the default `"<dataframe>"` sentinel is fine.
+    """
+    return _scan_dataframe_impl(
+        df,
+        file_path=str(file_path),
+        sample_size=sample_size,
+        return_sample=return_sample,
+        domain=domain,
+        baseline=baseline,
+        schema=schema,
+    )
+
+
 def scan_file(
     path: Path,
     sample_size: int = 100_000,
@@ -230,6 +263,27 @@ def scan_file(
     schema: object | None = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
+    return _scan_dataframe_impl(
+        df,
+        file_path=str(path),
+        sample_size=sample_size,
+        return_sample=return_sample,
+        domain=domain,
+        baseline=baseline,
+        schema=schema,
+    )
+
+
+def _scan_dataframe_impl(
+    df: pl.DataFrame,
+    *,
+    file_path: str,
+    sample_size: int,
+    return_sample: bool,
+    domain: str | None,
+    baseline: BaselineProfile | Path | None,
+    schema: object | None,
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     row_count = len(df)
     sample = maybe_sample(df, max_rows=sample_size)
     logger.info("Scanning %d rows, %d columns", row_count, len(df.columns))
@@ -368,12 +422,13 @@ def scan_file(
     # Run drift detection AFTER corroboration boost
     if baseline is not None:
         from goldencheck.drift import run_drift_checks
-        if baseline.source_filename and baseline.source_filename != path.name:
+        scan_basename = Path(file_path).name
+        if baseline.source_filename and baseline.source_filename != scan_basename:
             # %r quotes both values so YAML-supplied filename can't smuggle
             # newlines / control chars into structured logs.
             logger.warning(
                 "Baseline source %r doesn't match scan file %r",
-                baseline.source_filename, path.name,
+                baseline.source_filename, scan_basename,
             )
         drift_findings = run_drift_checks(sample, baseline)
         all_findings.extend(drift_findings)
@@ -387,7 +442,7 @@ def scan_file(
         ]
 
     all_findings.sort(key=lambda f: f.severity, reverse=True)
-    profile = DatasetProfile(file_path=str(path), row_count=row_count, column_count=len(df.columns), columns=column_profiles)
+    profile = DatasetProfile(file_path=file_path, row_count=row_count, column_count=len(df.columns), columns=column_profiles)
     if return_sample:
         return all_findings, profile, sample
     return all_findings, profile
