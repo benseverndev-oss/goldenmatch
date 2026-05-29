@@ -117,9 +117,24 @@ class DataProfile:
     column_priors: dict[str, ColumnPrior] | None = None
 
     def health(self) -> HealthVerdict:
+        """RED for empty data, YELLOW for single-column inputs, GREEN otherwise.
+
+        Historical (pre-2026-05-29): also returned YELLOW when every column
+        shared the same `column_types` value -- the intent was to flag "all
+        your columns are strings, you might want richer typing." In practice
+        that's the shape of MOST CSV inputs (every cell parses as text until
+        a typed downstream step says otherwise), so it tripped almost every
+        real dataset INCLUDING the QIS realistic fixture which produces a
+        clean F1=0.9886. v23 telemetry (#577) showed this signal stayed
+        YELLOW for all 5 controller iterations with no rule addressing it
+        because the verdict isn't actionable -- there's no config change
+        that fixes "your data is all strings." Removing the uniform-types
+        clause turns this from a noisy false-positive into a precise signal
+        for the genuinely-degenerate single-column case.
+        """
         if self.n_rows == 0:
             return HealthVerdict.RED
-        if self.n_cols == 1 or len(set(self.column_types.values())) == 1:
+        if self.n_cols == 1:
             return HealthVerdict.YELLOW
         return HealthVerdict.GREEN
 

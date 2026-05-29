@@ -72,6 +72,20 @@ def test_data_yellow_when_one_col():
     assert DataProfile(n_rows=10, n_cols=1, column_types={"a": "text"}).health() == HealthVerdict.YELLOW
 
 
+def test_data_green_when_all_columns_share_type():
+    """v23 (2026-05-29): all-uniform-types no longer YELLOW. CSV inputs are
+    overwhelmingly "every column parsed as text" -- treating that as a
+    quality signal flagged every dataset and produced no actionable rule
+    response in the controller. The QIS realistic fixture (F1=0.9886) was
+    being committed YELLOW solely because of this. Now: GREEN as long as
+    there's more than one column."""
+    p = DataProfile(
+        n_rows=100, n_cols=8,
+        column_types={f"c{i}": "text" for i in range(8)},
+    )
+    assert p.health() == HealthVerdict.GREEN
+
+
 def test_domain_yellow_when_low_conf_with_derived_cols():
     dp = DomainProfile(detected_domain="bibliographic", confidence=0.2,
                        derived_columns=["__title_key__"], low_confidence_row_count=10)

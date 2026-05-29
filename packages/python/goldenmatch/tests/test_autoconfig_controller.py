@@ -891,13 +891,20 @@ def _red_blocking_subprofile_dict():
 def _yellow_subprofiles():
     """Return sub-profile dict that yields ComplexityProfile.health() == YELLOW.
 
-    Uses a DataProfile with only one column type (all 'text') so DataProfile.health()
-    returns YELLOW. Other sub-profiles are GREEN-safe so YELLOW rolls up.
+    Uses a MatchkeyProfile field with cardinality > 0.95 so
+    MatchkeyProfile.health() returns YELLOW. Other sub-profiles are
+    GREEN-safe so YELLOW rolls up via _max_severity.
+
+    Pre-#579 this used the all-text-columns DataProfile signal, but that
+    signal was removed (it was definitional, not actionable -- most CSVs
+    are all-text). Switched to the matchkey signal which is still active
+    and actionable (see rule_matchkey_demote_high_cardinality_field in
+    #578).
     """
     return dict(
         data=DataProfile(
             n_rows=100, n_cols=2,
-            column_types={"a": "text", "b": "text"},
+            column_types={"a": "text", "b": "id-like"},
         ),
         blocking=BlockingProfile(
             keys_used=[["a"]], n_blocks=10, total_comparisons=500,
@@ -912,7 +919,8 @@ def _yellow_subprofiles():
             n_clusters=20, cluster_size_p50=2, cluster_size_p99=5,
             cluster_size_max=8, transitivity_rate=0.95,
         ),
-        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.5, 0.0, 10)}),
+        # cardinality 0.99 > 0.95 -> MatchkeyProfile.health() == YELLOW.
+        matchkey=MatchkeyProfile(per_field={"a": FieldStats(0.99, 0.0, 10)}),
     )
 
 
