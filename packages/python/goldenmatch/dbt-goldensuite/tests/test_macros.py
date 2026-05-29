@@ -161,10 +161,32 @@ def test_field_correction_duckdb_render() -> None:
     assert '"field_name": "address1"' in sql
 
 
-def test_field_correction_unknown_adapter_raises() -> None:
+def test_field_correction_snowflake_render() -> None:
     env = _build_env("snowflake", "file_field_correction.sql")
     fn = env.globals["goldenmatch_file_field_correction"]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    sql = fn(
+        cluster_id=42,
+        field_name="address1",
+        original=None,
+        corrected="1 Elm Street, Apt 4B",
+        dataset="customers",
+        reason=None,
+    )
+    # Schema-qualified UDF + same positional+args_json shape as DuckDB.
+    assert "goldenmatch.goldenmatch_correction_add" in sql
+    assert "'field_correct'" in sql
+    assert "'customers'" in sql
+    assert '"cluster_id": 42' in sql
+    assert '"field_name": "address1"' in sql
+
+
+def test_field_correction_unknown_adapter_raises() -> None:
+    env = _build_env("bigquery", "file_field_correction.sql")
+    fn = env.globals["goldenmatch_file_field_correction"]
+    with pytest.raises(
+        RuntimeError,
+        match="only supported on postgres, duckdb, and snowflake",
+    ):
         fn(
             cluster_id=1, field_name="x", original=None,
             corrected="y", dataset="d",
@@ -210,10 +232,30 @@ def test_pair_correction_duckdb_render() -> None:
     assert '"id_b": 99' in sql
 
 
+def test_pair_correction_snowflake_render() -> None:
+    env = _build_env("snowflake", "file_pair_correction.sql")
+    fn = env.globals["goldenmatch_file_pair_correction"]
+    sql = fn(
+        id_a=42, id_b=99, decision="approve",
+        dataset="customers", reason="manual review",
+    )
+    # Schema-qualified UDF + positional+args_json shape mirroring DuckDB.
+    # `reason` lives inside args_json, not as a positional arg.
+    assert "goldenmatch.goldenmatch_correction_add" in sql
+    assert "'approve'" in sql
+    assert "'customers'" in sql
+    assert '"reason": "manual review"' in sql
+    assert '"id_a": 42' in sql
+    assert '"id_b": 99' in sql
+
+
 def test_pair_correction_unknown_adapter_raises() -> None:
     env = _build_env("bigquery", "file_pair_correction.sql")
     fn = env.globals["goldenmatch_file_pair_correction"]
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
+    with pytest.raises(
+        RuntimeError,
+        match="only supported on postgres, duckdb, and snowflake",
+    ):
         fn(id_a=1, id_b=2, decision="approve", dataset="d")
 
 

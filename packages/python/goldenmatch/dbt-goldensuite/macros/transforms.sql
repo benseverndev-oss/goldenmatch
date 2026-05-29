@@ -18,6 +18,7 @@
   |-----------|--------|
   | Postgres  | Compile error in v0.5 -- pgrx functions not yet shipped. Tracked as a follow-up issue under #465. |
   | DuckDB    | Live -- uses Python UDFs registered by `goldenmatch_duckdb.goldenflow.register_goldenflow_functions`. Requires `pip install goldenflow` on the dbt-runner host. |
+  | Snowflake | Live -- uses Snowpark Python UDFs in the `goldenmatch` schema. See `docs/snowflake-setup.md` for the wheel-upload + UDF registration steps. |
   | Others    | Compile error with a remediation hint pointing to the Python helper `goldenflow.transform_df()`. |
 
   ## Why v0.5 ships DuckDB-only
@@ -233,4 +234,51 @@
         "whitespace_normalize Postgres support requires pgrx wrappers
          (v0.5.x follow-up to #465)."
     ) }}
+{% endmacro %}
+
+
+{#--- Snowflake implementations -----------------------------------------#}
+{#- Schema-qualified mirror of the DuckDB UDF surface. The Snowpark
+    Python UDFs are registered in the `goldenmatch` schema by the
+    setup script in docs/snowflake-setup.md. All eight UDFs are
+    deterministic + immutable, so Snowflake caches results per-input
+    inside a query. -#}
+
+{% macro snowflake__normalize_email_impl(column) %}
+    goldenmatch.goldenflow_normalize_email({{ column }})
+{% endmacro %}
+
+{% macro snowflake__normalize_phone_impl(column, region) %}
+    {#- region kwarg is reserved for future phonenumbers tuning. -#}
+    goldenmatch.goldenflow_normalize_phone({{ column }})
+{% endmacro %}
+
+{% macro snowflake__normalize_date_impl(column, target_format) %}
+    goldenmatch.goldenflow_normalize_date({{ column }})
+{% endmacro %}
+
+{% macro snowflake__normalize_name_impl(column, mode) %}
+    {%- if mode == 'proper' -%}
+        goldenmatch.goldenflow_normalize_name_proper({{ column }})
+    {%- elif mode == 'upper' -%}
+        UPPER({{ column }})
+    {%- elif mode == 'lower' -%}
+        LOWER({{ column }})
+    {%- endif -%}
+{% endmacro %}
+
+{% macro snowflake__canonicalize_url_impl(column) %}
+    goldenmatch.goldenflow_canonicalize_url({{ column }})
+{% endmacro %}
+
+{% macro snowflake__canonicalize_address_impl(column) %}
+    goldenmatch.goldenflow_canonicalize_address({{ column }})
+{% endmacro %}
+
+{% macro snowflake__strip_whitespace_impl(column) %}
+    goldenmatch.goldenflow_strip({{ column }})
+{% endmacro %}
+
+{% macro snowflake__whitespace_normalize_impl(column) %}
+    goldenmatch.goldenflow_whitespace_normalize({{ column }})
 {% endmacro %}

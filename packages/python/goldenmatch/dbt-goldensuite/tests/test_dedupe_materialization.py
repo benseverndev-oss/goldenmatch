@@ -107,6 +107,14 @@ def test_fn_name_golden_duckdb() -> None:
         "goldenmatch_dedupe_full"
 
 
+def test_fn_name_golden_snowflake() -> None:
+    """Snowflake mirrors Postgres -- schema-qualified Snowpark Python
+    UDTF in the `goldenmatch` schema."""
+    helpers = _load_helpers()
+    assert helpers.goldenmatch_dedupe_fn_name("golden", "snowflake") == \
+        "goldenmatch.goldenmatch_dedupe_full"
+
+
 def test_fn_name_clusters_postgres() -> None:
     helpers = _load_helpers()
     assert helpers.goldenmatch_dedupe_fn_name("clusters", "postgres") == \
@@ -126,10 +134,24 @@ def test_fn_name_clusters_duckdb_errors() -> None:
         helpers.goldenmatch_dedupe_fn_name("clusters", "duckdb")
 
 
+def test_fn_name_clusters_snowflake() -> None:
+    """Snowflake mirrors Postgres for the clusters output shape."""
+    helpers = _load_helpers()
+    assert helpers.goldenmatch_dedupe_fn_name("clusters", "snowflake") == \
+        "goldenmatch.goldenmatch_dedupe_clusters"
+
+
 def test_fn_name_pairs_duckdb_errors() -> None:
     helpers = _load_helpers()
     with pytest.raises(RuntimeError, match="pairs.*not yet implemented on DuckDB"):
         helpers.goldenmatch_dedupe_fn_name("pairs", "duckdb")
+
+
+def test_fn_name_pairs_snowflake() -> None:
+    """Snowflake mirrors Postgres for the pairs output shape."""
+    helpers = _load_helpers()
+    assert helpers.goldenmatch_dedupe_fn_name("pairs", "snowflake") == \
+        "goldenmatch.goldenmatch_dedupe_pairs"
 
 
 def test_fn_name_invalid_output_errors() -> None:
@@ -140,8 +162,11 @@ def test_fn_name_invalid_output_errors() -> None:
 
 def test_fn_name_unknown_adapter_errors() -> None:
     helpers = _load_helpers()
-    with pytest.raises(RuntimeError, match="only supported on postgres and duckdb"):
-        helpers.goldenmatch_dedupe_fn_name("golden", "snowflake")
+    with pytest.raises(
+        RuntimeError,
+        match="only supported on postgres, duckdb, and snowflake",
+    ):
+        helpers.goldenmatch_dedupe_fn_name("golden", "bigquery")
 
 
 if __name__ == "__main__":  # pragma: no cover

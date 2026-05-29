@@ -4,9 +4,9 @@
   >= the configured floor.
 
   Closes the v0.2 dbt-goldensuite expansion (#dbt-suite-expand). The
-  Postgres + DuckDB backends call the goldencheck DuckDB UDF
-  (`goldencheck_scan_table`) or the Postgres extension equivalent.
-  Other adapters compile-error with a remediation hint.
+  Postgres + DuckDB + Snowflake backends call the goldencheck UDF
+  (Postgres pgrx, DuckDB Python UDF, or Snowpark Python UDF). Other
+  adapters compile-error with a remediation hint.
 
   Usage in a dbt model's tests block:
 
@@ -47,9 +47,9 @@
     model, min_severity, ignore_checks, domain
 ) %}
     {{ exceptions.raise_compiler_error(
-        "goldencheck_assert is only supported on postgres and duckdb "
-        "targets today; got adapter=" ~ target.type ~ ". For other "
-        "adapters, run goldencheck out-of-band: "
+        "goldencheck_assert is only supported on postgres, duckdb, and "
+        "snowflake targets today; got adapter=" ~ target.type ~ ". For "
+        "other adapters, run goldencheck out-of-band: "
         "`goldencheck scan <export> --baseline goldencheck_baseline.yaml`."
     ) }}
 {% endmacro %}
@@ -110,6 +110,43 @@
                 )
             ) AS entry
         )
+    )
+    SELECT *
+    FROM findings
+    WHERE severity IN (
+        {%- if min_severity == 'info' %}'info', 'warning', 'error'{%- endif %}
+        {%- if min_severity == 'warning' %}'warning', 'error'{%- endif %}
+        {%- if min_severity == 'error' %}'error'{%- endif %}
+    )
+    {%- if ignore_list %}
+        AND check_name NOT IN (
+            {%- for c in ignore_list %}{{ dbt.string_literal(c) }}{% if not loop.last %},{% endif %}{%- endfor %}
+        )
+    {%- endif %}
+{% endmacro %}
+
+
+{# Snowflake: parse the UDF's JSON return with PARSE_JSON, fan it
+   out with LATERAL FLATTEN, then project the four fields out of the
+   VARIANT entries. Mirrors the Postgres jsonb_array_elements shape. #}
+{% macro snowflake__goldencheck_assert_impl(
+    model, min_severity, ignore_checks, domain
+) %}
+    {%- set ignore_list = ignore_checks if ignore_checks else [] -%}
+    WITH findings AS (
+        SELECT
+            entry.value:"check"::STRING    AS check_name,
+            entry.value:"severity"::STRING AS severity,
+            entry.value:"column"::STRING   AS column_name,
+            entry.value:"message"::STRING  AS message
+        FROM TABLE(FLATTEN(
+            input => PARSE_JSON(
+                goldencheck.goldencheck_scan_table(
+                    {{ dbt.string_literal(model.identifier) }},
+                    {{ "''" if domain is none else dbt.string_literal(domain) }}
+                )
+            )
+        )) AS entry
     )
     SELECT *
     FROM findings

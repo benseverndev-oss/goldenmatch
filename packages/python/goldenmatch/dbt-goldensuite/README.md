@@ -28,8 +28,8 @@ print(f"Deduped {result['input_rows']} -> {result['clusters']} clusters")
 
 This package ships macros only (no models/seeds/snapshots). The
 goldenmatch/goldencheck/goldenflow macros `adapter.dispatch()` between the
-Postgres and DuckDB extension function shapes; `infermap_apply` is pure SQL
-(works on every adapter):
+Postgres, DuckDB, and Snowflake extension function shapes; `infermap_apply`
+is pure SQL (works on every adapter):
 
 - **Dedupe materialization** -- `goldenmatch_dedupe` (`macros/materializations/`)
 - **Identity graph** -- `identity_resolve`, `identity_list`, `identity_view`, `identity_history`, `identity_conflicts`
@@ -38,6 +38,17 @@ Postgres and DuckDB extension function shapes; `infermap_apply` is pure SQL
 - **Transforms (GoldenFlow)** -- `transforms.sql`
 - **Schema mapping (InferMap)** -- `infermap_apply(relation, column_map)` applies a
   Python-computed `infermap` column mapping as a plain projecting SELECT.
+- **Snowflake Cortex** -- `cortex_embed_768`, `cortex_embed_1024`, `cortex_embed` (dim-dispatched), `cortex_cosine_similarity`, `cortex_l2_distance`, `cortex_inner_product`, `cortex_complete`. In-warehouse embeddings + LLM. Snowflake-only. Pairs with the `snowflake_cortex` provider in `goldenmatch.embeddings` for parity between dbt models and Python code. See [docs/snowflake-cortex.md](docs/snowflake-cortex.md).
+
+### Adapter coverage
+
+| Adapter   | Status | Setup |
+|-----------|--------|-------|
+| Postgres  | Full -- 11 SQL functions + 5 pipeline functions via the `goldenmatch_pg` pgrx extension. | Install `goldenmatch_pg` per the extensions repo README. |
+| DuckDB    | Full -- 7 UDFs + 5 identity-graph functions via `goldenmatch-duckdb`. | `pip install goldenmatch-duckdb` on the dbt-runner host. |
+| Snowflake (Snowpark Python UDFs) | Full -- same SQL surface as the Postgres path. `goldenmatch_dedupe` supports all three output shapes (`golden`, `clusters`, `pairs`). Pure-Python (Anaconda's Snowflake channel doesn't carry `goldenmatch-native`). | See [docs/snowflake-setup.md](docs/snowflake-setup.md) for the wheel-upload + UDF registration steps. |
+| Snowflake (SPCS service functions) | Same SQL surface; same dbt macros; backed by `goldenmatch[native]` in a Snowpark Container Services container. Use for workloads where native acceleration matters. | See [docs/snowflake-spcs.md](docs/snowflake-spcs.md) for the Dockerfile + service spec + setup walkthrough. |
+| Others    | Compile error with a remediation hint pointing at `goldenmatch.dedupe_df()` / `goldenflow.transform_df()` / `goldencheck` Python helpers. | n/a |
 
 ### GoldenPipe orchestration in dbt
 

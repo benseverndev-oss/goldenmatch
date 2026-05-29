@@ -20,7 +20,7 @@
 
 {% macro default__identity_list_impl(dataset, status, db_path) %}
     {{ exceptions.raise_compiler_error(
-        "identity_list is only supported on postgres and duckdb;
+        "identity_list is only supported on postgres, duckdb, and snowflake;
          got adapter=" ~ target.type
     ) }}
 {% endmacro %}
@@ -37,6 +37,15 @@
 
 {% macro duckdb__identity_list_impl(dataset, status, db_path) %}
     goldenmatch_identity_list(
+        {{ "''" if dataset is none else dbt.string_literal(dataset) }},
+        {{ "''" if status is none else dbt.string_literal(status) }},
+        {{ "''" if db_path is none else dbt.string_literal(db_path) }}
+    )
+{% endmacro %}
+
+
+{% macro snowflake__identity_list_impl(dataset, status, db_path) %}
+    goldenmatch.goldenmatch_identity_list(
         {{ "''" if dataset is none else dbt.string_literal(dataset) }},
         {{ "''" if status is none else dbt.string_literal(status) }},
         {{ "''" if db_path is none else dbt.string_literal(db_path) }}
