@@ -45,26 +45,30 @@ def test_soundex_match_matches_matrix_path():
 
 def test_dice_matches_matrix_path():
     """Per-pair dice must match the existing _dice_score_single in
-    core/scorer.py (which the matrix path's _dice_score_matrix is a
-    vectorized version of)."""
+    core/scorer.py. Note: dice + jaccard in goldenmatch are PPRL scorers --
+    they operate on HEX-encoded bloom filters, not raw strings. The matrix
+    path (_dice_score_matrix) does the same bit-vector math vectorized."""
     from goldenmatch.core.scorer import _dice_score_single
     fn = _resolve_score_pair_callable("dice")
     pairs = [
-        ("abcdef", "abcdef"),  # identical -> 1.0
-        ("abc", "xyz"),        # disjoint bigrams -> 0.0
-        ("abcdef", "abcxyz"),  # partial overlap
+        ("ff", "ff"),       # identical 8-bit -> 1.0
+        ("ff00", "00ff"),   # disjoint nonzero bits -> 0.0
+        ("ffff", "ff00"),   # half overlap
+        ("a5a5", "a5a5"),   # identical -> 1.0
     ]
     for a, b in pairs:
         assert math.isclose(fn(a, b), _dice_score_single(a, b))
 
 
 def test_jaccard_matches_matrix_path():
+    """Same PPRL bloom-filter constraint as dice."""
     from goldenmatch.core.scorer import _jaccard_score_single
     fn = _resolve_score_pair_callable("jaccard")
     pairs = [
-        ("abcdef", "abcdef"),
-        ("abc", "xyz"),
-        ("abcdef", "abcxyz"),
+        ("ff", "ff"),
+        ("ff00", "00ff"),
+        ("ffff", "ff00"),
+        ("a5a5", "a5a5"),
     ]
     for a, b in pairs:
         assert math.isclose(fn(a, b), _jaccard_score_single(a, b))
