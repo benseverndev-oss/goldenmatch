@@ -87,6 +87,8 @@ def load_connector(connector_name: str, config: dict) -> BaseConnector:
         "bigquery": "goldenmatch.connectors.bigquery:BigQueryConnector",
         "hubspot": "goldenmatch.connectors.hubspot:HubSpotConnector",
         "salesforce": "goldenmatch.connectors.salesforce:SalesforceConnector",
+        "mongo": "goldenmatch.connectors.mongo:MongoConnector",
+        "mongodb": "goldenmatch.connectors.mongo:MongoConnector",
     }
 
     if connector_name not in _BUILTIN:
