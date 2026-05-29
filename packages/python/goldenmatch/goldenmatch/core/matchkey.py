@@ -229,8 +229,18 @@ def precompute_matchkey_transforms(
 
     Returns the augmented DataFrame. Original columns are untouched.
     """
+    # Batch all native-chain expressions into ONE with_columns call so
+    # Polars's planner fuses them into a single compute graph. The previous
+    # loop did `df.select(expr.alias(sig))[sig]` per signature, which
+    # eagerly materialized one 10M-row column at a time -- at 6 matchkey
+    # fields on the QIS bench that was 6 separate Polars passes over the
+    # full df, dominating the precompute_matchkey_transforms stage (90s
+    # at 10M). Slow-path Python apply_transforms still runs per signature
+    # (intrinsically per-row); those go into new_cols as today and get
+    # appended in the same final with_columns.
     seen: set[str] = set()
-    new_cols: list[pl.Series] = []
+    native_exprs: list[pl.Expr] = []
+    python_cols: list[pl.Series] = []
     for mk in matchkeys:
         for field in mk.fields:
             if field.scorer == "record_embedding":
@@ -242,16 +252,19 @@ def precompute_matchkey_transforms(
 
             native_expr = _try_native_chain(field.field, field.transforms)
             if native_expr is not None:
-                col = df.select(native_expr.alias(sig))[sig]
+                native_exprs.append(native_expr.alias(sig))
             else:
                 values = df[field.field].to_list()
-                col = pl.Series(
+                python_cols.append(pl.Series(
                     sig,
                     [apply_transforms(v, field.transforms) if v is not None else None
                      for v in values],
-                )
-            new_cols.append(col)
+                ))
 
-    if not new_cols:
+    if not native_exprs and not python_cols:
         return df
-    return df.with_columns(new_cols)
+    if native_exprs:
+        df = df.with_columns(native_exprs)
+    if python_cols:
+        df = df.with_columns(python_cols)
+    return df
