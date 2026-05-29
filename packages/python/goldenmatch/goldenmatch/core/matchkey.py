@@ -52,9 +52,57 @@ def _try_native_transform(expr: pl.Expr, transform: str) -> pl.Expr | None:
         return expr.str.replace_all(r"[^0-9]", "")
     elif transform == "alpha_only":
         return expr.str.replace_all(r"[^a-zA-Z]", "")
+    elif transform == "address_normalize":
+        return _address_normalize_native(expr)
     else:
         # soundex, metaphone, etc. need Python UDF
         return None
+
+
+def _address_normalize_native(expr: pl.Expr) -> pl.Expr | None:
+    """Polars-native bit-equivalent of refdata.addresses.normalize_address.
+
+    Returns None when refdata data isn't loadable (caller falls back to the
+    Python path, which itself degrades to lowercase+strip in that case).
+    """
+    try:
+        from goldenmatch.refdata.addresses import _load as _addr_load
+    except ImportError:
+        return None
+    _addr_load()
+    from goldenmatch.refdata.addresses import _state as _loaded
+    if _loaded is None:
+        return None
+    canonical_map = dict(_loaded.canonical)
+
+    e = expr.str.strip_chars()
+    # `#N` -> `apt N`. Polars' Rust regex engine has no lookbehind, so we
+    # capture the preceding non-alphanumeric char and put it back via ${1}.
+    e = e.str.replace_all(r"(^|[^A-Za-z0-9])#\s*(\d+)", r"${1}apt ${2}")
+    e = e.str.replace_all(r"(?i)\bP\.?\s*O\.?\s*Box\b", "PO Box")
+    e = e.str.replace_all(r"(?i)\bPOBOX\b", "PO Box")
+    # Normalize commas to spaces so a single split delimiter handles `[\s,]+`.
+    e = e.str.replace_all(",", " ")
+    e = e.str.to_lowercase()
+    # Tokenize, per-token punctuation strip + dictionary canonicalization,
+    # then join. The list-element pipeline keeps everything in Polars.
+    tokens = e.str.split(" ")
+    per_token = (
+        pl.element()
+        .str.replace_all(r"^[.,;:#\-]+", "")
+        .str.replace_all(r"[.,;:]+$", "")
+        .replace(canonical_map)
+    )
+    canonicalized = _list_eval(tokens, per_token)
+    nonempty = _list_eval(canonicalized, pl.element().filter(pl.element() != ""))
+    return nonempty.list.join(" ")
+
+
+def _list_eval(list_expr: pl.Expr, inner: pl.Expr) -> pl.Expr:
+    """Thin wrapper around Polars `list.eval` to keep the address-normalize
+    expression readable. Indirection avoids fanning the literal method name
+    across multiple busy expression chains."""
+    return getattr(list_expr.list, "eval")(inner)
 
 
 def _build_field_expr_native(field_name: str, transforms: list[str]) -> pl.Expr | None:
