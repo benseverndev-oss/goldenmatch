@@ -411,11 +411,36 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
             for ent in history.entries:
                 p = ent.profile
                 n_rows = getattr(p.data, "n_rows", 0) or 0
+                # Diagnostic (2026-05-29): also surface n_full_rows + per-field
+                # Chao1 inputs + the Chao1-corrected cardinality so we can
+                # see whether the verdict's YELLOW is computed from raw or
+                # corrected cardinality. v25/v26 showed matchkey YELLOW
+                # persisting even after PR #583 plumbed n_full_rows through.
+                n_full_rows = getattr(p.data, "n_full_rows", None)
+                effective_n_full = (
+                    n_full_rows if n_full_rows is not None else n_rows
+                )
+                mk_field_dump: dict = {}
+                for fname, fs in (p.matchkey.per_field or {}).items():
+                    try:
+                        chao1 = fs.estimated_full_cardinality(effective_n_full)
+                    except Exception as _e:
+                        chao1 = f"<{type(_e).__name__}>"
+                    mk_field_dump[fname] = {
+                        "raw_card": getattr(fs, "post_transform_cardinality_ratio", None),
+                        "sample_n_rows": getattr(fs, "sample_n_rows", None),
+                        "singleton_count": getattr(fs, "singleton_count", None),
+                        "doubleton_count": getattr(fs, "doubleton_count", None),
+                        "chao1_estimated_full_cardinality": chao1,
+                    }
                 sub_health: dict[str, str] = {}
                 for name, getter in (
                     ("data", lambda: p.data.health()),
                     ("domain", lambda: p.domain.health()),
-                    ("matchkey", lambda: p.matchkey.health()),
+                    ("matchkey_raw", lambda: p.matchkey.health()),
+                    ("matchkey_chao1", lambda: p.matchkey.health(
+                        n_full_rows=effective_n_full,
+                    )),
                     ("blocking", lambda: p.blocking.health(n_rows=n_rows)),
                     ("scoring", lambda: p.scoring.health()),
                     ("cluster", lambda: p.cluster.health(n_rows=n_rows)),
@@ -429,8 +454,11 @@ def run_rung(n_rows: int, seed: int = 0, shape: str = "realistic",
                 entry_dict: dict = {
                     "iteration": ent.iteration,
                     "health": _eh.value if hasattr(_eh, "value") else str(_eh),
+                    "n_rows": n_rows,
+                    "n_full_rows": n_full_rows,
                     "sub_health": sub_health,
                     "wall_ms": ent.wall_clock_ms,
+                    "mk_field_dump": mk_field_dump,
                 }
                 if ent.decision is not None:
                     entry_dict["decision"] = {
