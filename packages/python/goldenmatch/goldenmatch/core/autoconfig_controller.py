@@ -20,6 +20,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig_history import RunHistory
+from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import (
     CollisionSignal,
     ColumnPrior,
@@ -548,27 +549,39 @@ class AutoConfigController:
         # Iteration loop (Task 4.2)
         # Phase 2: distributed path uses init_sample for _initial_config and
         # take_sample_distributed for the iteration sample. Polars path unchanged.
+        # RSS instrumentation (PR #548 follow-up): wrap each pre-iteration
+        # full-df indicator call with a stage(...) so the bench harness can
+        # attribute the controller's RSS contribution per call site. 1M and
+        # 5M bench data showed the entire peak (11.5 GB / 54.5 GB respectively)
+        # is established BEFORE the iteration loop starts -- but the previous
+        # instrumentation only saw the cumulative number, not which of these
+        # 5 calls drove it. Each wrapper is single-call, single-threaded, so
+        # the hot-path tax warning in core/bench.py doesn't apply here.
         if distributed:
             from goldenmatch.distributed.sample import take_sample_distributed as _tsd2
-            config_v0 = self._initial_config(
-                init_sample,
-                reference=reference,
-                v0_kwargs=v0_kwargs,
-                n_rows_full=n_rows,
-            )
+            with stage("controller_pre_initial_config"):
+                config_v0 = self._initial_config(
+                    init_sample,
+                    reference=reference,
+                    v0_kwargs=v0_kwargs,
+                    n_rows_full=n_rows,
+                )
             _diag("_initial_config done (distributed)")
-            sample: pl.DataFrame = _tsd2(df, sample_cap=20_000)
-            sample_ref: pl.DataFrame | None = None  # stratified by reference: Phase 3
+            with stage("controller_pre_take_sample"):
+                sample: pl.DataFrame = _tsd2(df, sample_cap=20_000)
+                sample_ref: pl.DataFrame | None = None  # stratified by reference: Phase 3
             _diag(f"take_sample_distributed done (sample.height={sample.height})")
         else:
-            config_v0 = self._initial_config(
-                df,
-                reference=reference,
-                v0_kwargs=v0_kwargs,
-                n_rows_full=n_rows,
-            )  # type: ignore[arg-type]
+            with stage("controller_pre_initial_config"):
+                config_v0 = self._initial_config(
+                    df,
+                    reference=reference,
+                    v0_kwargs=v0_kwargs,
+                    n_rows_full=n_rows,
+                )  # type: ignore[arg-type]
             _diag("_initial_config done")
-            sample, sample_ref = self._take_sample(df, reference=reference)  # type: ignore[arg-type]
+            with stage("controller_pre_take_sample"):
+                sample, sample_ref = self._take_sample(df, reference=reference)  # type: ignore[arg-type]
             _diag(f"_take_sample done (sample.height={sample.height})")
         history = RunHistory()
         config_n = config_v0
@@ -583,7 +596,8 @@ class AutoConfigController:
             dispatch_compute_column_priors,
             dispatch_estimate_sparse_match_signal,
         )
-        column_priors = dispatch_compute_column_priors(df)
+        with stage("controller_pre_compute_column_priors"):
+            column_priors = dispatch_compute_column_priors(df)
         _diag("compute_column_priors done")
 
         # v1.11: eager NE promotion — runs before the iteration loop so that
@@ -592,7 +606,8 @@ class AutoConfigController:
         # For the distributed path, use the init_sample (already a Polars frame).
         from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
         _ne_df = init_sample if distributed else df  # type: ignore[assignment]
-        config_v0 = promote_negative_evidence(config_v0, _ne_df, column_priors)
+        with stage("controller_pre_promote_negative_evidence"):
+            config_v0 = promote_negative_evidence(config_v0, _ne_df, column_priors)
         _diag("promote_negative_evidence done")
         config_n = config_v0
 
@@ -602,7 +617,8 @@ class AutoConfigController:
                 for f in mk.fields:
                     if f.field is not None:
                         exact_columns.append(f.field)
-        sparsity_verdict = dispatch_estimate_sparse_match_signal(df, exact_columns=exact_columns)
+        with stage("controller_pre_estimate_sparse_match_signal"):
+            sparsity_verdict = dispatch_estimate_sparse_match_signal(df, exact_columns=exact_columns)
         _diag(f"estimate_sparse_match_signal done (exact_cols={len(exact_columns)})")
         # IndicatorContext requires a Polars DataFrame for lazy indicator calls.
         # On the distributed path we supply the init_sample (already materialized).
@@ -646,14 +662,21 @@ class AutoConfigController:
                 _diag(f"iter {iteration} start")
                 try:
                     from goldenmatch.core.profile_emitter import profile_capture
-                    with profile_capture() as emitter:
-                        if _prep_store is not None:
-                            self._run_pipeline_sample(
-                                sample, sample_ref, config_n,
-                                _prep_store=_prep_store,
-                            )
-                        else:
-                            self._run_pipeline_sample(sample, sample_ref, config_n)
+                    # RSS attribution per-iter: unique stage names so the bench
+                    # dict captures one ru_maxrss row per iteration (not the
+                    # last-write-wins clobber pattern). This is how we confirm
+                    # the "growing 1.84 GB per iter" leak hypothesis: if each
+                    # iter's value steps up by ~the same amount, that's a leak
+                    # in _run_pipeline_sample state retention.
+                    with stage(f"controller_iter_{iteration:02d}_pipeline_sample"):
+                        with profile_capture() as emitter:
+                            if _prep_store is not None:
+                                self._run_pipeline_sample(
+                                    sample, sample_ref, config_n,
+                                    _prep_store=_prep_store,
+                                )
+                            else:
+                                self._run_pipeline_sample(sample, sample_ref, config_n)
                     _diag(f"iter {iteration} _run_pipeline_sample done in {time.time()-iter_start:.1f}s")
                     profile_n = self._assemble_profile(
                         emitter, df=sample, iteration=iteration,

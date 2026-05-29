@@ -38,14 +38,22 @@ on:
         description: "Tag for the output artifact (e.g. '10m-bucket', '25m-duckdb')"
         required: false
         default: "ad-hoc"
+      runner:
+        description: "Runner override (default large-new-64GB; use ubuntu-latest for small rungs when the big runner queue is backed up)"
+        required: false
+        default: "large-new-64GB"
 
 permissions:
   contents: read
 
 jobs:
   scale-rung:
-    # large-new-64GB: 16c / 64GB Ubuntu 24.04. Per memory feedback_bench_default_runner.
-    runs-on: large-new-64GB
+    # Runner is dispatch-input-overridable (default large-new-64GB, 16c/64GB
+    # Ubuntu 24.04 per feedback_bench_default_runner). For small rungs (<=1M)
+    # ubuntu-latest is 4c/16GB and runs the same harness fine -- useful when
+    # the large-new-64GB queue is saturated and you just want native-build
+    # validation without waiting.
+    runs-on: ${{ inputs.runner || 'large-new-64GB' }}
     # 25M-bucket completes in 6.5 min on this box; 10M should be < 5 min.
     # 50M-duckdb is the long pole — give it a 5h cap.
     timeout-minutes: 300
@@ -54,6 +62,14 @@ jobs:
       # 50M+ rungs need this gate flipped on for the v3 planner to consider
       # ray. Harmless when the rung is < 50M.
       GOLDENMATCH_ENABLE_DISTRIBUTED_RAY: "1"
+      # Native acceleration: REQUIRE the Rust/PyO3 kernel. "1" makes the loader
+      # raise instead of silently falling back to Python. Per project_bucket_native_scoring_win
+      # memory the bucket+native scorer is 1.7-3.7x faster than polars-direct
+      # at 1k-60k clusters with identical accuracy. Without this gate the QIS
+      # measurements have been running the pure-Python scoring path the whole
+      # time -- which is what this workflow is supposed to measure goldenmatch
+      # at its best, NOT its slowest.
+      GOLDENMATCH_NATIVE: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
@@ -75,6 +91,27 @@ jobs:
         if: ${{ inputs.backend == 'ray' }}
         run: uv pip install "ray>=2.30,<3"
 
+      - name: Set up Rust toolchain (for native build)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native acceleration kernel
+        # Drops goldenmatch._native into the editable install. Build script
+        # gates on the SAME interpreter we use to run the harness, so the abi3
+        # artifact is guaranteed to be importable. Without this step the
+        # GOLDENMATCH_NATIVE=1 verify-load below would fail (and silently fall
+        # back without it -- which is what's been happening on every prior
+        # measurement run in this workflow).
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Verify native loaded
+        run: |
+          .venv/bin/python -c "
+          from goldenmatch.core._native_loader import native_available, native_module
+          mod = native_module()
+          assert native_available(), 'goldenmatch._native not importable -- build_native.py output went to the wrong interpreter?'
+          print('native loaded OK:', mod)
+          "
+
       - name: Verify worktree install
         run: |
           .venv/bin/python -c "import goldenmatch, goldenmatch.core.pipeline; \
@@ -83,7 +120,13 @@ jobs:
             print('worktree install OK:', goldenmatch.__file__)"
 
       - name: Run rung (rows=${{ inputs.rows }} shape=${{ inputs.shape }} backend=${{ inputs.backend }})
+        # pipefail is critical: without it `python ... | tee ...` returns tee's
+        # exit code, so a missing-file / traceback in the harness silently
+        # reports the step as success. Bit run 26575594657 — checkout was on
+        # main, scripts/ wasn't there yet, python exited 2, tee returned 0.
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .profile_tmp/qis
           BACKEND_FLAG=""
           if [ -n "${{ inputs.backend }}" ]; then

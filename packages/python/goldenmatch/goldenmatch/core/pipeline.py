@@ -766,35 +766,39 @@ def _run_dedupe_pipeline(
             # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
             if config.quality is None or config.quality.mode != "disabled":
                 from goldenmatch.core.quality import run_quality_check
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
-                if gc_fixes:
-                    logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_quality_scan"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
+                    if gc_fixes:
+                        logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+                    combined_lf = combined_df_tmp.lazy()
 
             # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
             # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
             # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
             if config.transform is None or config.transform.mode != "disabled":
                 from goldenmatch.core.transform import run_transform
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
-                if gf_fixes:
-                    logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_transform"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+                    if gf_fixes:
+                        logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
+                    combined_lf = combined_df_tmp.lazy()
 
             # ── Step 1.5a: AUTO-FIX + VALIDATION ──
             if config.validation and config.validation.auto_fix:
-                combined_df_tmp = combined_lf.collect()
-                combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
-                logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
-                combined_lf = combined_df_tmp.lazy()
+                with stage("pipeline_prep_auto_fix"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
+                    logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
+                    combined_lf = combined_df_tmp.lazy()
 
             # Populate in-memory cache (LRU eviction). We materialize as an
             # eager DataFrame so subsequent hits don't re-evaluate a long lazy
             # plan. Guard _PREP_CACHE_MAX > 0 so tests that monkey-patch it to
             # 0 don't trigger IndexError on pop() from an empty LRU list.
-            prepped_df = combined_lf.collect()
+            with stage("pipeline_prep_cache_populate"):
+                prepped_df = combined_lf.collect()
             if _PREP_CACHE_MAX > 0:
                 if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
                     evicted = _PREP_CACHE_LRU.pop(0)
@@ -806,9 +810,10 @@ def _run_dedupe_pipeline(
             # NEW (Phase 2): also write to disk store, if provided.
             if _prep_store is not None:
                 from goldenmatch.distributed.record_store import materialize_prepared_records
-                materialize_prepared_records(
-                    _prep_store, prepped_df, signature=disk_signature,
-                )
+                with stage("pipeline_prep_disk_store_write"):
+                    materialize_prepared_records(
+                        _prep_store, prepped_df, signature=disk_signature,
+                    )
                 logger.debug("prep store DISK-WRITE (signature=%s)", disk_signature)
 
     # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
@@ -837,21 +842,29 @@ def _run_dedupe_pipeline(
         combined_lf = combined_df_tmp.lazy()
 
     if config.validation and config.validation.rules:
-        rules = [
-            ValidationRule(
-                column=rc.column,
-                rule_type=rc.rule_type,
-                params=rc.params,
-                action=rc.action,
-            )
-            for rc in config.validation.rules
-        ]
-        combined_df_tmp = combined_lf.collect()
-        valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
-        logger.info("Validation: %d quarantined rows", quarantine_df.height)
-        combined_lf = valid_df.lazy()
+        with stage("pipeline_prep_validation_rules"):
+            rules = [
+                ValidationRule(
+                    column=rc.column,
+                    rule_type=rc.rule_type,
+                    params=rc.params,
+                    action=rc.action,
+                )
+                for rc in config.validation.rules
+            ]
+            combined_df_tmp = combined_lf.collect()
+            valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
+            logger.info("Validation: %d quarantined rows", quarantine_df.height)
+            combined_lf = valid_df.lazy()
     else:
         quarantine_df = None
+
+    # RSS attribution sentinel: a near-no-op stage that captures ru_maxrss right
+    # before standardize fires. Lets us tell whether peak growth happens INSIDE
+    # apply_standardization (sentinel low, standardize high) or in the prep work
+    # above (sentinel high, standardize delta 0).
+    with stage("pipeline_pre_standardize_sentinel"):
+        pass
 
     # ── Step 1.5b: STANDARDIZE ──
     if config.standardization and config.standardization.rules:

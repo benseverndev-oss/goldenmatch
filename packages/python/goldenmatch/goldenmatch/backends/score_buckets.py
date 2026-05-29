@@ -194,19 +194,37 @@ def _resolve_fast_path(
     """
     from goldenmatch.core.matchkey import _xform_sig
 
+    # Diagnostic: log which gate declines eligibility so workloads stuck on
+    # the slow find_fuzzy_matches path can be debugged without rebuilding.
+    # Print once per call (i.e. per matchkey resolution), not per pair.
+    def _decline(reason: str) -> None:
+        print(f"[score_buckets._resolve_fast_path] declined: {reason}", flush=True)
+
     if mk.type != "weighted":
+        _decline(f"mk.type={mk.type!r} (need 'weighted')")
         return None
     if mk.threshold is None:
+        _decline("mk.threshold is None")
         return None
     if not _ne_effectively_empty(mk):
+        ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
+        _decline(f"NE has callable scorer(s): {ne_scorers}")
         return None
     if getattr(mk, "rerank", False):
+        _decline("mk.rerank=True (auto-config enables for 3+ field weighted matchkeys)")
         return None
     if getattr(mk, "llm", None):
+        _decline("mk.llm is set")
         return None
     if across_files_only or source_lookup or target_ids is not None:
+        _decline(
+            f"match-mode flag set "
+            f"(across_files_only={across_files_only}, source_lookup={source_lookup is not None}, "
+            f"target_ids={target_ids is not None})"
+        )
         return None
     if not mk.fields:
+        _decline("mk.fields is empty")
         return None
 
     field_specs: list[tuple[str, float, Any, str]] = []
@@ -215,9 +233,11 @@ def _resolve_fast_path(
         scorer = getattr(f, "scorer", None)
         weight = getattr(f, "weight", None)
         if scorer is None or weight is None:
+            _decline(f"field has scorer={scorer!r} weight={weight!r}")
             return None
         fn = _resolve_score_pair_callable(scorer)
         if fn is None:
+            _decline(f"_resolve_score_pair_callable({scorer!r}) is None")
             return None
         xform_col = _xform_sig(f)
         if xform_col not in prepared_df.columns:
@@ -225,7 +245,20 @@ def _resolve_fast_path(
         field_specs.append((xform_col, float(weight), fn, scorer))
         total_weight += float(weight)
     if total_weight <= 0:
+        _decline(f"total_weight={total_weight}")
         return None
+    # Diagnostic on the success path: log matchkey shape so we can compare
+    # what the controller commits at different row counts (rerank thresholds
+    # and NE promotion are scale-dependent).
+    scorer_names = [s for _, _, _, s in field_specs]
+    ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
+    print(
+        f"[score_buckets._resolve_fast_path] ENGAGED: "
+        f"n_fields={len(mk.fields)} scorers={scorer_names} "
+        f"threshold={mk.threshold} rerank={getattr(mk, 'rerank', False)} "
+        f"ne_scorers={ne_scorers}",
+        flush=True,
+    )
     return (float(mk.threshold), total_weight, field_specs)
 
 
