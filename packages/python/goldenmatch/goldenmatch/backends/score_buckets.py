@@ -444,6 +444,12 @@ def score_buckets(
             buckets_dict = bucketed.partition_by(
                 "__bucket__", as_dict=True,
             )
+            # Free the pre-partition `keyed` and `bucketed` parents. partition_by
+            # built N independent eager frames; the original contiguous parents
+            # are dead weight from this point forward and would otherwise stay
+            # resident through bucket_score + cluster + golden.
+            del keyed
+            del bucketed
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
     # Both held in RAM simultaneously: buckets_dict (N partitioned frames,
