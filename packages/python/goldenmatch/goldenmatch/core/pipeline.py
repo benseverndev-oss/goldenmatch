@@ -1214,11 +1214,14 @@ def _run_dedupe_pipeline(
                 _resolve_probabilistic_fast_path,
                 score_probabilistic_fast,
             )
-            _first_block_df = (
-                blocks[0].df.collect()
-                if blocks and isinstance(blocks[0].df, pl.LazyFrame)
-                else (blocks[0].df if blocks else None)
-            )
+            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
+            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
+            _first_block_df: pl.DataFrame | None
+            if blocks:
+                _b0 = blocks[0].df
+                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
+            else:
+                _first_block_df = None
             fast_spec = (
                 _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
                 if _first_block_df is not None else None
@@ -1876,11 +1879,14 @@ def _run_match_pipeline(
                 _resolve_probabilistic_fast_path,
                 score_probabilistic_fast,
             )
-            _first_block_df = (
-                blocks[0].df.collect()
-                if blocks and isinstance(blocks[0].df, pl.LazyFrame)
-                else (blocks[0].df if blocks else None)
-            )
+            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
+            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
+            _first_block_df: pl.DataFrame | None
+            if blocks:
+                _b0 = blocks[0].df
+                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
+            else:
+                _first_block_df = None
             fast_spec = (
                 _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
                 if _first_block_df is not None else None
