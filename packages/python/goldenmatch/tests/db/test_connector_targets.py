@@ -20,7 +20,6 @@ from typing import Any
 import polars as pl
 import pytest
 
-
 # ----- generic fakes ---------------------------------------------------------
 
 

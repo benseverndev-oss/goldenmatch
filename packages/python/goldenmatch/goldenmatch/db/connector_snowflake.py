@@ -117,7 +117,9 @@ class SnowflakeConnector(DatabaseConnector):
             return 0
 
         try:
-            from snowflake.connector.pandas_tools import write_pandas  # type: ignore[import-not-found]
+            from snowflake.connector.pandas_tools import (
+                write_pandas,  # type: ignore[import-not-found]
+            )
         except ImportError as e:
             raise ImportError(
                 "Snowflake bulk write requires snowflake-connector-python "
