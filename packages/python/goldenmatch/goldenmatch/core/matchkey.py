@@ -221,10 +221,34 @@ def _emit_matchkey_profile(lf_after: pl.LazyFrame, matchkeys: list) -> None:
                 p50 = lengths[len(lengths) // 2] if lengths else 0
             except Exception:
                 p50 = 0
+            # Chao1 inputs: count how many distinct values appear exactly once
+            # (F1, singletons) and exactly twice (F2, doubletons) in the
+            # sample. value_counts groups by value and returns the count
+            # column we can filter on. Lets MatchkeyProfile.health() and
+            # downstream rules estimate full-data cardinality from a small
+            # sample instead of being fooled by sample-scale uniqueness
+            # (v24 finding: at 3K sample / 2M-cluster shapes, every field
+            # looks unique in the sample even when it's not at full scale).
+            f1 = 0
+            f2 = 0
+            try:
+                vc = non_null.value_counts()
+                # value_counts result has shape (n_distinct, 2) with the
+                # second column always named "count" in recent Polars.
+                counts = vc["count"] if "count" in vc.columns else vc[vc.columns[-1]]
+                f1 = int((counts == 1).sum())
+                f2 = int((counts == 2).sum())
+            except Exception:
+                # Degrades to "no Chao1 inputs"; FieldStats falls back to
+                # raw cardinality in that case.
+                f1, f2 = 0, 0
             per_field[field_name] = FieldStats(
                 post_transform_cardinality_ratio=n_distinct / n_non_null,
                 post_transform_null_rate=1 - (n_non_null / n_total),
                 post_transform_value_length_p50=int(p50),
+                sample_n_rows=int(n_non_null),
+                singleton_count=f1,
+                doubleton_count=f2,
             )
     current_emitter().set_matchkey(MatchkeyProfile(per_field=per_field))
 

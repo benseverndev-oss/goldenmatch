@@ -1154,6 +1154,14 @@ def rule_matchkey_demote_high_cardinality_field(
       - Picks the HIGHEST-cardinality field when multiple qualify
         (deterministic).
     """
+    # Chao1-corrected cardinality: when the sample carries singleton +
+    # doubleton counts, estimate full-data cardinality. v24 telemetry showed
+    # raw sample cardinality > 0.99 for QIS fields that are actually 0.20
+    # at full scale (2M clusters * 5 rows, controller sample ~3K -> almost
+    # every sampled value is unique). Without this correction the rule
+    # misfired on `first_name`. With Chao1, only fields that ARE uniquely
+    # identifying at the bench's actual row count cross the threshold.
+    n_full_rows = profile.data.n_rows
     for mk in current.matchkeys or []:
         if mk.type != "weighted":
             continue
@@ -1162,12 +1170,11 @@ def rule_matchkey_demote_high_cardinality_field(
         for name, fs in profile.matchkey.per_field.items():
             if name not in field_names:
                 continue
-            if fs.post_transform_cardinality_ratio > _DEMOTE_CARD_THRESHOLD:
-                candidates.append((name, fs.post_transform_cardinality_ratio))
+            effective_card = fs.estimated_full_cardinality(n_full_rows)
+            if effective_card > _DEMOTE_CARD_THRESHOLD:
+                candidates.append((name, effective_card))
         if not candidates:
             continue
-        # Need enough remaining fields after demotion for the matchkey to
-        # stay discriminative. Skip if removing the target would leave < 2.
         if len(mk.fields or []) - 1 < _DEMOTE_MIN_REMAINING_FIELDS:
             continue
         candidates.sort(key=lambda kv: (-kv[1], kv[0]))
@@ -1180,10 +1187,10 @@ def rule_matchkey_demote_high_cardinality_field(
             rule_name="matchkey_demote_high_cardinality_field",
             rationale=(
                 f"matchkey '{mk.name}' field '{target_field}' "
-                f"post_transform_cardinality_ratio={target_card:.3f} > "
-                f"{_DEMOTE_CARD_THRESHOLD} (essentially unique); removing "
-                f"from matchkey fields (NE retention handled separately by "
-                f"auto-config)"
+                f"chao1_estimated_full_cardinality={target_card:.3f} > "
+                f"{_DEMOTE_CARD_THRESHOLD} (essentially unique at "
+                f"n_full_rows={n_full_rows:,}); removing from matchkey "
+                f"fields (NE retention handled separately by auto-config)"
             ),
             config_diff={
                 f"matchkeys[{mk.name}].fields": f"removed:{target_field}",
