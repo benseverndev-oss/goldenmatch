@@ -65,8 +65,13 @@ def test_normalize_name_proper_titlecases() -> None:
 def test_canonicalize_url_normalizes() -> None:
     out = udfs.canonicalize_url("HTTPS://Example.COM/Foo/")
     # url_normalize lowercases the scheme + host; path case preserved.
+    # CodeQL flags startswith("https://...") as an incomplete URL
+    # sanitization check (it's looking for URL allowlists, not test
+    # assertions) -- use ``split('/')`` to make the intent unambiguous.
     assert out is not None
-    assert out.startswith("https://example.com")
+    parts = out.split("/")
+    assert parts[0] == "https:"
+    assert parts[2] == "example.com"
 
 
 def test_canonicalize_address_standardizes() -> None:
