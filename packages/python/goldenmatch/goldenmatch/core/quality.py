@@ -10,6 +10,39 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 
+def _scan_findings(df: pl.DataFrame, domain: str | None):
+    """Run the goldencheck scan and confidence-downgrade pass.
+
+    Prefers the in-memory `scan_dataframe` entry point (added 2026-05-28
+    to skip the write_csv/read_csv round-trip that was 121s of the 10M
+    pipeline_prep_quality_scan wall). Falls back to the temp-CSV path
+    when an older goldencheck is installed.
+    """
+    from goldencheck.engine.confidence import apply_confidence_downgrade
+
+    try:
+        from goldencheck.engine.scanner import scan_dataframe
+    except ImportError:
+        scan_dataframe = None  # type: ignore[assignment]
+
+    if scan_dataframe is not None:
+        findings, _ = scan_dataframe(df, domain=domain)
+        return apply_confidence_downgrade(findings, llm_boost=False)
+
+    from goldencheck.engine.scanner import scan_file
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+        df.write_csv(tmp.name)
+        tmp_path = Path(tmp.name)
+    try:
+        findings, _ = scan_file(tmp_path, domain=domain)
+        return apply_confidence_downgrade(findings, llm_boost=False)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Could not delete temp file %s", tmp_path)
+
+
 def _goldencheck_available() -> bool:
     """Check if goldencheck is installed."""
     try:
@@ -59,22 +92,9 @@ def _scan_only(
     domain: str | None,
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Run GoldenCheck scan without fixes. Reports findings."""
-    from goldencheck.engine.confidence import apply_confidence_downgrade
-    from goldencheck.engine.scanner import scan_file
     from goldencheck.models.finding import Severity
 
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        df.write_csv(tmp.name)
-        tmp_path = Path(tmp.name)
-
-    try:
-        findings, _ = scan_file(tmp_path, domain=domain)
-        findings = apply_confidence_downgrade(findings, llm_boost=False)
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            logger.debug("Could not delete temp file %s", tmp_path)
+    findings = _scan_findings(df, domain=domain)
 
     errors = sum(1 for f in findings if f.severity == Severity.ERROR)
     warnings = sum(1 for f in findings if f.severity == Severity.WARNING)
@@ -107,22 +127,9 @@ def _scan_and_fix(
     domain: str | None,
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Run GoldenCheck scan + apply fixes."""
-    from goldencheck.engine.confidence import apply_confidence_downgrade
     from goldencheck.engine.fixer import apply_fixes
-    from goldencheck.engine.scanner import scan_file
 
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        df.write_csv(tmp.name)
-        tmp_path = Path(tmp.name)
-
-    try:
-        findings, _ = scan_file(tmp_path, domain=domain)
-        findings = apply_confidence_downgrade(findings, llm_boost=False)
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            logger.debug("Could not delete temp file %s", tmp_path)
+    findings = _scan_findings(df, domain=domain)
 
     # Apply fixes
     fixed_df, report = apply_fixes(df, findings, mode=fix_mode)
