@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from goldenmatch.core import scorer
 from goldenmatch.core.scorer import (
     _NATIVE_FIELD_SCORER_IDS,

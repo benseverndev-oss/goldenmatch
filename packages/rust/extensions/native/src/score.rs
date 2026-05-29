@@ -491,7 +491,7 @@ pub fn score_field_matrix(
         // score_one returns [0,1] for ids 0-3 already (id=2 calls
         // fuzz::ratio which is [0,1] in rapidfuzz-rs, NOT the *100 scale
         // the PyO3-exposed token_sort_ratio uses).
-        0 | 1 | 2 | 3 => compute_pairwise(&a, &b, symmetric, |x, y| {
+        0..=3 => compute_pairwise(&a, &b, symmetric, |x, y| {
             score_one(scorer_id, x, y) as f32
         }),
         _ => {
