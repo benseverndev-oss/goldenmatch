@@ -92,19 +92,35 @@ def test_native_chain_returns_expression():
     assert isinstance(e, pl.Expr)
 
 
-def test_try_native_chain_recognizes_address_normalize():
-    """_try_native_chain should now accept ['address_normalize'] as a fully
-    native chain (no fallback to Python apply_transforms)."""
+def test_try_native_chain_recognizes_address_normalize(monkeypatch):
+    """_try_native_chain accepts ['address_normalize'] when the env opt-in
+    is set. Default is OFF until integration parity is locked down."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE", "1")
     result = _try_native_chain("addr", ["address_normalize"])
     assert result is not None
     assert isinstance(result, pl.Expr)
 
 
-def test_try_native_chain_handles_address_normalize_combined():
-    """Real-world chain from auto-config: address_normalize + lowercase + strip.
-    Should all resolve native."""
+def test_try_native_chain_handles_address_normalize_combined(monkeypatch):
+    """Real-world chain from auto-config: address_normalize + lowercase + strip
+    resolves native when opt-in is set."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE", "1")
     result = _try_native_chain("addr", ["address_normalize", "lowercase", "strip"])
     assert result is not None
+
+
+def test_try_native_chain_address_normalize_default_off():
+    """Default behavior (env unset): chain returns None so caller falls back
+    to the Python plugin. Preserves pre-this-PR behavior."""
+    import os
+    # Defensive: ensure env is unset for this test
+    saved = os.environ.pop("GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE", None)
+    try:
+        result = _try_native_chain("addr", ["address_normalize"])
+        assert result is None, "default OFF: expected None to fall through to Python"
+    finally:
+        if saved is not None:
+            os.environ["GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE"] = saved
 
 
 def test_vectorized_batch_matches_per_row():
