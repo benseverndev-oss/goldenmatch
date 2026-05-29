@@ -133,12 +133,31 @@ class IdentityStore:
         path: str = ".goldenmatch/identity.db",
         connection: str | None = None,
         pool: Any = None,
+        database: str = "goldenmatch",
+        client: Any = None,
     ) -> None:
         self._backend = backend
         # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
         # check out a pooled conn for each call. Default None preserves the
         # legacy per-store single-conn behavior the existing tests rely on.
         self._pool = pool
+        # MongoIdentityStore wraps a pymongo client. For backend="mongo",
+        # delegated by the per-method `if self._backend == "mongo"` early
+        # returns below. The SQL paths see ``self._mongo is None`` and skip
+        # the dispatch.
+        self._mongo: Any = None
+        if backend == "mongo":
+            # Defer the import so the SQL backends don't pay for pymongo.
+            from goldenmatch.identity.mongo_backend import (
+                MongoIdentityStore,
+            )
+            self._mongo = MongoIdentityStore(
+                connection=connection, database=database, client=client,
+            )
+            # No SQL connection for mongo -- _conn stays unset and any SQL
+            # method that gets called without a dispatch branch hits the
+            # AttributeError fast, signaling a missing branch.
+            return
         if backend == "sqlite":
             import sqlite3  # noqa: PLC0415 -- lazy, see #364
             # Canonicalize path early so logs / errors see the resolved form
@@ -175,6 +194,9 @@ class IdentityStore:
             raise NotImplementedError(f"Backend '{backend}' not supported")
 
     def close(self) -> None:
+        if self._backend == "mongo":
+            self._mongo.close()
+            return
         self._conn.close()
 
     def __enter__(self) -> IdentityStore:
@@ -503,6 +525,9 @@ class IdentityStore:
         return self.get_identity(entity_id)
 
     def upsert_identity(self, node: IdentityNode) -> None:
+        if self._backend == "mongo":
+            self._mongo.upsert_identity(node)
+            return
         gr = json.dumps(node.golden_record) if node.golden_record is not None else None
         self._exec(
             """
@@ -526,6 +551,8 @@ class IdentityStore:
         )
 
     def get_identity(self, entity_id: str) -> IdentityNode | None:
+        if self._backend == "mongo":
+            return self._mongo.get_identity(entity_id)
         row = self._fetchone(
             "SELECT * FROM identity_nodes WHERE entity_id = ?", (entity_id,)
         )
@@ -538,6 +565,10 @@ class IdentityStore:
         limit: int = 100,
         offset: int = 0,
     ) -> list[IdentityNode]:
+        if self._backend == "mongo":
+            return self._mongo.list_identities(
+                dataset=dataset, status=status, limit=limit, offset=offset,
+            )
         clauses: list[str] = []
         params: list[Any] = []
         if dataset is not None:
@@ -556,6 +587,8 @@ class IdentityStore:
         return [self._row_to_identity(r) for r in rows]
 
     def count_identities(self, dataset: str | None = None) -> int:
+        if self._backend == "mongo":
+            return self._mongo.count_identities(dataset=dataset)
         if dataset is None:
             row = self._fetchone("SELECT COUNT(*) AS n FROM identity_nodes", ())
         else:
@@ -571,6 +604,9 @@ class IdentityStore:
         merged_into: str | None = None,
         run_name: str | None = None,
     ) -> None:
+        if self._backend == "mongo":
+            self._mongo.retire_identity(entity_id, merged_into=merged_into)
+            return
         new_status = (
             IdentityStatus.MERGED_INTO.value
             if merged_into is not None
@@ -583,6 +619,9 @@ class IdentityStore:
         )
 
     def upsert_record(self, rec: SourceRecord) -> None:
+        if self._backend == "mongo":
+            self._mongo.upsert_record(rec)
+            return
         payload = json.dumps(rec.payload) if rec.payload is not None else None
         self._exec(
             """
@@ -604,12 +643,16 @@ class IdentityStore:
         )
 
     def get_record(self, record_id: str) -> SourceRecord | None:
+        if self._backend == "mongo":
+            return self._mongo.get_record(record_id)
         row = self._fetchone(
             "SELECT * FROM source_records WHERE record_id = ?", (record_id,)
         )
         return self._row_to_record(row) if row else None
 
     def get_records_for_entity(self, entity_id: str) -> list[SourceRecord]:
+        if self._backend == "mongo":
+            return self._mongo.get_records_for_entity(entity_id)
         rows = self._fetchall(
             "SELECT * FROM source_records WHERE entity_id = ? ORDER BY first_seen_at",
             (entity_id,),
@@ -617,12 +660,16 @@ class IdentityStore:
         return [self._row_to_record(r) for r in rows]
 
     def find_entity_by_record(self, record_id: str) -> str | None:
+        if self._backend == "mongo":
+            return self._mongo.find_entity_by_record(record_id)
         row = self._fetchone(
             "SELECT entity_id FROM source_records WHERE record_id = ?", (record_id,)
         )
         return row["entity_id"] if row else None
 
     def lookup_entity_ids(self, record_ids: Iterable[str]) -> dict[str, str]:
+        if self._backend == "mongo":
+            return self._mongo.lookup_entity_ids(record_ids)
         ids = list(record_ids)
         if not ids:
             return {}
@@ -635,6 +682,8 @@ class IdentityStore:
         return {r["record_id"]: r["entity_id"] for r in rows}
 
     def add_edge(self, edge: EvidenceEdge) -> int | None:
+        if self._backend == "mongo":
+            return self._mongo.add_edge(edge)
         a, b = canon_record_pair(edge.record_a_id, edge.record_b_id)
         fs = json.dumps(edge.field_scores) if edge.field_scores else None
         ne = json.dumps(edge.negative_evidence) if edge.negative_evidence else None
@@ -677,6 +726,8 @@ class IdentityStore:
         return int(row["edge_id"]) if row else None
 
     def edges_for_entity(self, entity_id: str) -> list[EvidenceEdge]:
+        if self._backend == "mongo":
+            return self._mongo.edges_for_entity(entity_id)
         rows = self._fetchall(
             "SELECT * FROM evidence_edges WHERE entity_id = ? ORDER BY recorded_at",
             (entity_id,),
@@ -684,6 +735,8 @@ class IdentityStore:
         return [self._row_to_edge(r) for r in rows]
 
     def find_conflicts(self, dataset: str | None = None) -> list[EvidenceEdge]:
+        if self._backend == "mongo":
+            return self._mongo.find_conflicts(dataset=dataset)
         if dataset is None:
             rows = self._fetchall(
                 "SELECT * FROM evidence_edges WHERE kind = 'conflicts_with' "
@@ -699,6 +752,8 @@ class IdentityStore:
         return [self._row_to_edge(r) for r in rows]
 
     def emit_event(self, event: IdentityEvent) -> int | None:
+        if self._backend == "mongo":
+            return self._mongo.emit_event(event)
         payload = json.dumps(event.payload) if event.payload is not None else None
         self._exec(
             "INSERT INTO identity_events "
@@ -718,6 +773,8 @@ class IdentityStore:
     def history(
         self, entity_id: str, limit: int | None = None
     ) -> list[IdentityEvent]:
+        if self._backend == "mongo":
+            return self._mongo.history(entity_id, limit=limit)
         if limit:
             rows = self._fetchall(
                 "SELECT * FROM identity_events WHERE entity_id = ? "
@@ -732,6 +789,8 @@ class IdentityStore:
         return [self._row_to_event(r) for r in rows]
 
     def has_run_event(self, entity_id: str, run_name: str, kind: str) -> bool:
+        if self._backend == "mongo":
+            return self._mongo.has_run_event(entity_id, run_name, kind)
         row = self._fetchone(
             "SELECT 1 AS one FROM identity_events "
             "WHERE entity_id = ? AND run_name = ? AND kind = ? LIMIT 1",
@@ -740,6 +799,9 @@ class IdentityStore:
         return row is not None
 
     def add_alias(self, alias: IdentityAlias) -> None:
+        if self._backend == "mongo":
+            self._mongo.add_alias(alias)
+            return
         self._exec(
             "INSERT OR REPLACE INTO identity_aliases "
             "(alias, entity_id, kind, dataset, recorded_at) "
@@ -751,6 +813,8 @@ class IdentityStore:
         )
 
     def resolve_alias(self, alias: str, kind: str = "external_id") -> str | None:
+        if self._backend == "mongo":
+            return self._mongo.resolve_alias(alias, kind=kind)
         row = self._fetchone(
             "SELECT entity_id FROM identity_aliases WHERE alias = ? AND kind = ?",
             (alias, kind),

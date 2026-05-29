@@ -245,27 +245,40 @@ def find_exact_matches(
     __row_id__ that share the same matchkey value, each with score 1.0.
     Null matchkey values are excluded.
     """
+    ids_a, ids_b = _find_exact_match_ids(lf, mk)
+    if ids_a.size == 0:
+        return []
+    return [(int(a), int(b), 1.0) for a, b in zip(ids_a, ids_b)]
+
+
+def _find_exact_match_ids(
+    lf: pl.LazyFrame, mk: MatchkeyConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Same Polars self-join as ``find_exact_matches`` but returns the two
+    row-id columns as zero-copy int64 numpy arrays -- skipping the
+    ``list[tuple[int, int, 1.0]]`` materialization that dominates RSS at
+    scale (~3-4 GB of CPython tuple overhead at 36.5M exact pairs).
+
+    Used by the hot caller in ``pipeline.py`` Step exact_matching when the
+    matchkey has no negative_evidence + the run isn't across_files_only.
+    The legacy ``find_exact_matches`` delegates here for any caller that
+    still needs the list[tuple] shape (8 call sites at the time of this
+    refactor: chunked, incremental, tui/engine, tests, benchmark scripts)."""
     mk_col = f"__mk_{mk.name}__"
     df = lf.select("__row_id__", mk_col).collect()
-
-    # Drop nulls — they should not match
     df = df.filter(pl.col(mk_col).is_not_null())
-
     if df.height < 2:
-        return []
-
-    # Self-join on matchkey — produces all (left, right) combinations per group
-    joined = df.join(df, on=mk_col, suffix="_right")
-
-    # Keep only pairs where left < right (avoid duplicates and self-matches)
-    joined = joined.filter(pl.col("__row_id__") < pl.col("__row_id___right"))
-
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    joined = df.join(df, on=mk_col, suffix="_right").filter(
+        pl.col("__row_id__") < pl.col("__row_id___right")
+    )
     if joined.height == 0:
-        return []
-
-    ids_a = joined["__row_id__"].to_list()
-    ids_b = joined["__row_id___right"].to_list()
-    return [(a, b, 1.0) for a, b in zip(ids_a, ids_b)]
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    # to_numpy() on Int64 columns is zero-copy from Arrow. No Python ints
+    # are created; the buffer is the same one Polars allocated for the join.
+    ids_a = joined["__row_id__"].to_numpy()
+    ids_b = joined["__row_id___right"].to_numpy()
+    return ids_a, ids_b
 
 
 # ---------------------------------------------------------------------------
