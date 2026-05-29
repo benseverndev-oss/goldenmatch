@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core._profile_helpers import transitivity_rate
+from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import ClusterProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
@@ -347,54 +348,60 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
-    if native_enabled("clustering"):
-        # Native Union-Find (component membership is identical to the Python
-        # union-by-rank path). Returns list[list[int]].
-        clusters = native_module().connected_components(list(pairs), all_ids)
-    else:
-        uf = UnionFind()
-        uf.add_many(all_ids)
-        for id_a, id_b, _score in pairs:
-            uf.union(id_a, id_b)
+    with stage("cluster_connected_components"):
+        if native_enabled("clustering"):
+            # Native Union-Find (component membership is identical to the Python
+            # union-by-rank path). Returns list[list[int]].
+            clusters = native_module().connected_components(list(pairs), all_ids)
+        else:
+            uf = UnionFind()
+            uf.add_many(all_ids)
+            for id_a, id_b, _score in pairs:
+                uf.union(id_a, id_b)
 
-        clusters = uf.get_clusters()
-        # Release UnionFind internals (parent + rank dicts). At 25M these hold
-        # ~2.5 GB combined; Python GC won't free them until `uf` falls out of
-        # scope, which is later in this function. Force-release now.
-        del uf
+            clusters = uf.get_clusters()
+            # Release UnionFind internals (parent + rank dicts). At 25M these hold
+            # ~2.5 GB combined; Python GC won't free them until `uf` falls out of
+            # scope, which is later in this function. Force-release now.
+            del uf
 
-    member_to_cid: dict[int, int] = {}
-    sorted_clusters = sorted(clusters, key=lambda s: min(s))
-    # `clusters` is the list-of-sets view returned by get_clusters(); after
-    # sorting we don't need the original list, only the sorted view.
-    del clusters
+    with stage("cluster_sort_clusters"):
+        sorted_clusters = sorted(clusters, key=lambda s: min(s))
+        # `clusters` is the list-of-sets view returned by get_clusters(); after
+        # sorting we don't need the original list, only the sorted view.
+        del clusters
 
-    for cluster_id, members in enumerate(sorted_clusters, start=1):
-        for m in members:
-            member_to_cid[m] = cluster_id
+    with stage("cluster_member_to_cid"):
+        member_to_cid: dict[int, int] = {}
+        for cluster_id, members in enumerate(sorted_clusters, start=1):
+            for m in members:
+                member_to_cid[m] = cluster_id
 
-    result: dict[int, dict] = {}
-    for cluster_id, members in enumerate(sorted_clusters, start=1):
-        size = len(members)
-        result[cluster_id] = {
-            "members": sorted(members),
-            "size": size,
-            "oversized": size > max_cluster_size,
-            "pair_scores": {},
-        }
+    with stage("cluster_result_dict_init"):
+        result: dict[int, dict] = {}
+        for cluster_id, members in enumerate(sorted_clusters, start=1):
+            size = len(members)
+            result[cluster_id] = {
+                "members": sorted(members),
+                "size": size,
+                "oversized": size > max_cluster_size,
+                "pair_scores": {},
+            }
 
-    for id_a, id_b, score in pairs:
-        cid = member_to_cid[id_a]
-        result[cid]["pair_scores"][(id_a, id_b)] = score
-    # member_to_cid + sorted_clusters held ~1.25 + 1.0 GB at 25M scale; once
-    # pair_scores is populated they aren't read again inside this function.
-    del member_to_cid
-    del sorted_clusters
+    with stage("cluster_pair_scores_fill"):
+        for id_a, id_b, score in pairs:
+            cid = member_to_cid[id_a]
+            result[cid]["pair_scores"][(id_a, id_b)] = score
+        # member_to_cid + sorted_clusters held ~1.25 + 1.0 GB at 25M scale; once
+        # pair_scores is populated they aren't read again inside this function.
+        del member_to_cid
+        del sorted_clusters
 
-    for cid, cinfo in result.items():
-        conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
-        cinfo["confidence"] = conf["confidence"]
-        cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
+    with stage("cluster_compute_confidence"):
+        for cid, cinfo in result.items():
+            conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
+            cinfo["confidence"] = conf["confidence"]
+            cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
 
     # Auto-split oversized clusters (when enabled). See _split_edge_work_budget:
     # the per-pass single-weakest-edge split degrades to O(nodes * edges) on a
@@ -444,21 +451,22 @@ def build_clusters(
         )
 
     # Assign cluster_quality and apply confidence downgrade
-    for cid, cinfo in result.items():
-        if cinfo.get("_was_split"):
-            cinfo["cluster_quality"] = "split"
-        elif cinfo["size"] > 1 and cinfo.get("pair_scores"):
-            scores = list(cinfo["pair_scores"].values())
-            min_edge = min(scores)
-            avg_edge = sum(scores) / len(scores)
-            if avg_edge - min_edge > weak_cluster_threshold:
-                cinfo["cluster_quality"] = "weak"
-                cinfo["confidence"] *= 0.7
+    with stage("cluster_quality_assignment"):
+        for cid, cinfo in result.items():
+            if cinfo.get("_was_split"):
+                cinfo["cluster_quality"] = "split"
+            elif cinfo["size"] > 1 and cinfo.get("pair_scores"):
+                scores = list(cinfo["pair_scores"].values())
+                min_edge = min(scores)
+                avg_edge = sum(scores) / len(scores)
+                if avg_edge - min_edge > weak_cluster_threshold:
+                    cinfo["cluster_quality"] = "weak"
+                    cinfo["confidence"] *= 0.7
+                else:
+                    cinfo["cluster_quality"] = "strong"
             else:
                 cinfo["cluster_quality"] = "strong"
-        else:
-            cinfo["cluster_quality"] = "strong"
-        cinfo.pop("_was_split", None)
+            cinfo.pop("_was_split", None)
 
     _emit_cluster_profile(result)
     return result
