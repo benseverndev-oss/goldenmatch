@@ -1161,7 +1161,10 @@ def rule_matchkey_demote_high_cardinality_field(
     # every sampled value is unique). Without this correction the rule
     # misfired on `first_name`. With Chao1, only fields that ARE uniquely
     # identifying at the bench's actual row count cross the threshold.
-    n_full_rows = profile.data.n_rows
+    # data.effective_n_rows = n_full_rows when controller threaded it
+    # through; falls back to n_rows when not (e.g., non-controller emission
+    # paths where n_rows IS the full data).
+    n_full_rows = profile.data.effective_n_rows
     for mk in current.matchkeys or []:
         if mk.type != "weighted":
             continue

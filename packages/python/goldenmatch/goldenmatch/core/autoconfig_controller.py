@@ -509,6 +509,11 @@ class AutoConfigController:
             _df_for_gates = df  # type: ignore[assignment]
             n_rows = df.height  # type: ignore[union-attr]
             init_sample = df  # type: ignore[assignment]  # alias; never collected twice
+        # Stash the full dataset row count for _assemble_profile() so per-
+        # iteration profiles carry data.n_full_rows. Chao1 extrapolation in
+        # MatchkeyProfile.health() and rule_matchkey_demote_high_cardinality_field
+        # depend on this being the FULL data count, not the sample size.
+        self._current_run_full_n_rows = n_rows
 
         # Pathological gates ------------------------------------------------
         if _df_for_gates.height == 0:
@@ -1470,6 +1475,7 @@ class AutoConfigController:
         is_sample: bool = True,
         reference: pl.DataFrame | None = None,
         config: GoldenMatchConfig | None = None,
+        full_n_rows: int | None = None,
     ) -> ComplexityProfile:
         """Build ComplexityProfile from emitter writes. Missing sub-profiles
         fall back to defaults computed from ``df`` (plus ``reference`` in match
@@ -1493,6 +1499,19 @@ class AutoConfigController:
         )
 
         data = emitter.data or self._compute_data_profile(df, reference=reference)
+        # Stamp the full dataset row count when the caller knows it. Prefer
+        # the explicit param; fall back to the controller's per-run stash
+        # set at the entry of run() so iteration call sites don't all need
+        # to thread it through. Chao1 in MatchkeyProfile.health() and
+        # rule_matchkey_demote_high_cardinality_field need the full row
+        # count to extrapolate sample cardinality correctly.
+        effective_full_n_rows = (
+            full_n_rows
+            if full_n_rows is not None
+            else getattr(self, "_current_run_full_n_rows", None)
+        )
+        if effective_full_n_rows is not None and data.n_full_rows != effective_full_n_rows:
+            data = dataclasses.replace(data, n_full_rows=effective_full_n_rows)
         scoring = emitter.scoring or ScoringProfile()
 
         # Tier 1a: compute random-pair recall probe (only on real iterations, not the
