@@ -129,7 +129,14 @@ class TestResolveFastPath:
             "broken-NE matchkey should be fast-path eligible after the gate fix"
         )
 
-    def test_fast_path_declined_with_callable_ne(self):
+    def test_fast_path_engaged_with_callable_ne_missing_xform(self):
+        """Callable-NE on a field whose xform column isn't in prepared_df
+        falls through silently (mirrors the slow path's `_NE_BROKEN` cache
+        semantics: NE without computable inputs contributes zero penalty).
+
+        Pre-2026-05-29 this declined the fast path outright. Now the gate
+        engages and `_resolve_ne_specs` silently drops the unresolvable
+        entry."""
         mk = _mk_with_ne([
             NegativeEvidenceField(field="phone", scorer="jaro_winkler", threshold=0.8, penalty=0.5),
         ])
@@ -137,7 +144,39 @@ class TestResolveFastPath:
             mk, self._prepared_df(),
             across_files_only=False, source_lookup=None, target_ids=None,
         )
-        assert result is None, (
-            "callable-NE matchkey must still decline the fast path -- the "
-            "fast path doesn't apply NE penalty math"
+        assert result is not None, (
+            "callable-NE on a missing-xform field should silently skip and "
+            "engage the fast path (matches slow path's _NE_BROKEN semantics)"
         )
+        # And: ne_specs should be empty since the NE entry was skipped.
+        _, _, _, ne_specs = result
+        assert ne_specs == [], (
+            f"NE entry on missing-xform field should be silently dropped, "
+            f"got ne_specs={ne_specs}"
+        )
+
+    def test_fast_path_engaged_with_callable_ne_present_xform(self):
+        """Callable-NE on a field whose xform IS in prepared_df engages the
+        fast path AND populates ne_specs with the per-pair penalty math
+        plan. The bucket worker applies the penalty inline."""
+        from goldenmatch.config.schemas import MatchkeyField
+        from goldenmatch.core.matchkey import _xform_sig
+        # Build a fixture that has the phone xform column too.
+        phone_field = MatchkeyField(field="phone", scorer="jaro_winkler", weight=1.0)
+        phone_col = _xform_sig(phone_field)
+        prepared = self._prepared_df().with_columns(
+            pl.Series(phone_col, ["555-1234", "555-9999"])
+        )
+        mk = _mk_with_ne([
+            NegativeEvidenceField(field="phone", scorer="jaro_winkler", threshold=0.8, penalty=0.5),
+        ])
+        result = _resolve_fast_path(
+            mk, prepared,
+            across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is not None, "callable-NE with present xform should engage"
+        _, _, _, ne_specs = result
+        assert len(ne_specs) == 1, f"expected 1 resolved NE spec, got {ne_specs}"
+        assert ne_specs[0][0] == phone_col
+        assert ne_specs[0][2] == 0.8  # threshold
+        assert ne_specs[0][3] == 0.5  # penalty

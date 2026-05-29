@@ -241,25 +241,43 @@ def precompute_matchkey_transforms(
     seen: set[str] = set()
     native_exprs: list[pl.Expr] = []
     python_cols: list[pl.Series] = []
+
+    def _materialize_xform(field_obj):
+        """Resolve one (field, transforms) sig; appends to native_exprs or
+        python_cols. Idempotent via `seen` -- the same (field, transforms)
+        across multiple matchkeys / NE entries reuses one column.
+
+        Accepts any object with `.field` and `.transforms` attrs --
+        MatchkeyField and NegativeEvidenceField both qualify (the latter
+        is the new caller in the NE fast-path widening, 2026-05-29)."""
+        if getattr(field_obj, "scorer", None) == "record_embedding":
+            return
+        sig = _xform_sig(field_obj)
+        if sig in seen or sig in df.columns:
+            return
+        seen.add(sig)
+        native_expr = _try_native_chain(field_obj.field, field_obj.transforms)
+        if native_expr is not None:
+            native_exprs.append(native_expr.alias(sig))
+        else:
+            values = df[field_obj.field].to_list()
+            python_cols.append(pl.Series(
+                sig,
+                [apply_transforms(v, field_obj.transforms) if v is not None else None
+                 for v in values],
+            ))
+
     for mk in matchkeys:
         for field in mk.fields:
-            if field.scorer == "record_embedding":
-                continue
-            sig = _xform_sig(field)
-            if sig in seen or sig in df.columns:
-                continue
-            seen.add(sig)
-
-            native_expr = _try_native_chain(field.field, field.transforms)
-            if native_expr is not None:
-                native_exprs.append(native_expr.alias(sig))
-            else:
-                values = df[field.field].to_list()
-                python_cols.append(pl.Series(
-                    sig,
-                    [apply_transforms(v, field.transforms) if v is not None else None
-                     for v in values],
-                ))
+            _materialize_xform(field)
+        # v1.11 NE fast-path widening: precompute NE field xforms too so
+        # _resolve_fast_path's NE resolution can find the columns at gate
+        # time. NegativeEvidenceField has the same (field, transforms)
+        # duck-type as MatchkeyField, so _xform_sig reuses unchanged. Same
+        # signature => same column => NE on a field that ALSO appears in
+        # mk.fields with identical transforms is a free reuse.
+        for ne in (getattr(mk, "negative_evidence", None) or []):
+            _materialize_xform(ne)
 
     if not native_exprs and not python_cols:
         return df
