@@ -98,12 +98,19 @@ class TestResolveFastPath:
 
     def _prepared_df(self) -> pl.DataFrame:
         # Minimal prepared df with the xform columns the matchkey needs.
-        # _xform_sig builds the column name from the field + transforms;
-        # for plain field=X with no transforms it's just "__mk_X__".
+        # _xform_sig builds `__xform_<field>_<blake2b-8hex>__` from the
+        # field name + repr(field.transforms); compute it here so the
+        # fixture stays in sync with the implementation. The original
+        # comment claimed the column name was "__mk_X__" -- wrong; that
+        # is the EXACT-matchkey concat alias, not the xform sig.
+        from goldenmatch.core.matchkey import _xform_sig
+        from goldenmatch.config.schemas import MatchkeyField
+        col_first = _xform_sig(MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0))
+        col_last = _xform_sig(MatchkeyField(field="last_name", scorer="jaro_winkler", weight=1.0))
         return pl.DataFrame({
             "__row_id__": [0, 1],
-            "__mk_first_name__": ["alice", "alice"],
-            "__mk_last_name__": ["smith", "smith"],
+            col_first: ["alice", "alice"],
+            col_last: ["smith", "smith"],
         })
 
     def test_fast_path_engaged_with_broken_ne(self):
