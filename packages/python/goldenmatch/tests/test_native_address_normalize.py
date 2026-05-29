@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.core.matchkey import _address_normalize_native, _try_native_chain
 from goldenmatch.refdata.addresses import is_available, normalize_address
 
