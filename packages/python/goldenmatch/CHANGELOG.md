@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Documentation
+
+- **In-house embedding provider callout** (#506). README surfaces `provider="inhouse"`
+  (the cloud-free `MatchkeyField(model="inhouse:<path>")` path that's been wired
+  since 1.21) with the Railway-validated 3-way result: in-house lands within
+  ~0.2pp of Vertex AI on structured ER (febrl3 0.949 vs 0.951, DBLP-ACM 0.971
+  vs 0.971, synthetic-20k 0.981 vs 0.983). Use it when you want embedding-grade
+  recall without a cloud dependency. Harness + Railway one-shot job in
+  `scripts/bench_embedding_providers.py` + `Dockerfile.embprov` (#543).
+
 ### Fixed
 
 - **Dual identity composite recovers more person-data recall** (#438). The
