@@ -21,6 +21,17 @@ def _parse_date(val: str | None) -> date | None:
     name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series"
 )
 def date_iso8601(series: pl.Series) -> pl.Series:
+    # Fast path: numeric column (the inferred "date" type matched a column
+    # that's actually integer years -- e.g. birth_year=1995). Skip dateutil
+    # entirely; format as "YYYY-01-01" via Polars vectorized string concat.
+    # At 10M rows this drops the transform from ~150s (per-row dateutil) to
+    # <1s (Rust string concat under the hood). Diagnosed via goldenmatch QIS
+    # 10M bench: date_iso8601 was 49% of all pipeline_prep_transform wall.
+    # See packages/python/goldenflow/CLAUDE.md "date_iso8601 runs BEFORE
+    # auto_configure_df" gotcha for the upstream pipeline-order context.
+    if series.dtype.is_numeric():
+        return series.cast(pl.Int64, strict=False).cast(pl.Utf8) + "-01-01"
+
     def _fmt(val: str | None) -> str | None:
         if val is None:
             return None
