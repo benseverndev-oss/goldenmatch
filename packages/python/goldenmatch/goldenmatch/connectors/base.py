@@ -89,6 +89,21 @@ def load_connector(connector_name: str, config: dict) -> BaseConnector:
         "salesforce": "goldenmatch.connectors.salesforce:SalesforceConnector",
         "mongo": "goldenmatch.connectors.mongo:MongoConnector",
         "mongodb": "goldenmatch.connectors.mongo:MongoConnector",
+        "redshift": "goldenmatch.connectors.redshift:RedshiftConnector",
+        "duckdb": "goldenmatch.connectors.duckdb_source:DuckDBSourceConnector",
+        "object_storage": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "s3": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "gcs": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "gs": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "azure_blob": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "abfs": "goldenmatch.connectors.object_storage:ObjectStorageConnector",
+        "postgres": "goldenmatch.connectors.postgres:PostgresConnector",
+        "postgresql": "goldenmatch.connectors.postgres:PostgresConnector",
+        "sqlserver": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "mssql": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "azure_sql": "goldenmatch.connectors.sqlserver:SqlServerConnector",
+        "mysql": "goldenmatch.connectors.mysql:MySQLConnector",
+        "mariadb": "goldenmatch.connectors.mysql:MySQLConnector",
     }
 
     if connector_name not in _BUILTIN:
