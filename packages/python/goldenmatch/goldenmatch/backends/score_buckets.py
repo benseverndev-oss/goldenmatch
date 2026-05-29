@@ -368,14 +368,17 @@ def score_buckets(
     # (2026-05-29) showed every reader in this module touches only
     # __row_id__ / __source__ / __block_key__ / __xform_*__ plus the
     # raw source fields named by the blocking key. Everything else in
-    # prepared_df is dead weight from bucket_assign onward. Polars
-    # .select(cols) is zero-copy on Arrow chunks, so the projection
-    # itself is cheap; the bucket_assign with_columns COW then runs
-    # over the slim frame instead of the full one.
+    # prepared_df is dead weight from bucket_assign onward.
     #
-    # Default OFF until v30 bench confirms the predicted RSS drop. Flip
-    # with GOLDENMATCH_BUCKET_SLIM_PROJECTION=1.
-    if os.environ.get("GOLDENMATCH_BUCKET_SLIM_PROJECTION") == "1":
+    # v30 QIS 10M bench (2026-05-29): peak RSS dropped 39.3 GB -> 35.5 GB
+    # (-3.8 GB, -9.7%) at F1=0.9886 invariant and wall flat. The savings
+    # come from downstream stages (partition_by, bucket_score, cluster,
+    # golden) holding a smaller per-bucket frame -- NOT from the .select()
+    # being zero-copy as initially hypothesized (Polars allocates ~10 GB
+    # to consolidate __xform_*__ chunks during select). Default ON;
+    # opt out via GOLDENMATCH_BUCKET_SLIM_PROJECTION=0 if a workload
+    # downstream of score_buckets ever needs a column we drop.
+    if os.environ.get("GOLDENMATCH_BUCKET_SLIM_PROJECTION", "1") != "0":
         with stage("bucket_slim_projection"):
             keep: list[str] = ["__row_id__"]
             if "__source__" in prepared_df.columns:
