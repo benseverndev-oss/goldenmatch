@@ -763,6 +763,21 @@ def _run_dedupe_pipeline(
             cached_disk = None
 
         if cached_disk is None:
+            # ── Step 1.3.5: FIRST INGEST MATERIALIZATION ──
+            # Pull the initial `combined_lf.collect()` out of whichever prep
+            # stage runs first so its cost isn't misattributed. v20 QIS
+            # instrumentation (2026-05-29) showed pipeline_prep_quality_scan
+            # = 117.4s of which only ~5s was actual goldencheck work; the
+            # other ~112s was THIS collect materializing the 10M-row ingest
+            # LazyFrame. The cost is fundamental Polars work the rest of
+            # the prep block needs anyway -- it just shouldn't read as
+            # "quality scan time" in bench reports. Subsequent .collect()s
+            # in the prep block (transform / auto_fix / cache_populate)
+            # see a lazy-wrapped eager df and unwrap cheaply.
+            with stage("pipeline_initial_collect"):
+                combined_df_tmp = combined_lf.collect()
+                combined_lf = combined_df_tmp.lazy()
+
             # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
             if config.quality is None or config.quality.mode != "disabled":
                 from goldenmatch.core.quality import run_quality_check
