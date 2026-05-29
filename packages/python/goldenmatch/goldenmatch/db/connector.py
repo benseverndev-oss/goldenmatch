@@ -250,5 +250,13 @@ def create_connector(config: dict) -> DatabaseConnector:
 
     if source_type == "postgres":
         return PostgresConnector(connection)
-    else:
-        raise ValueError(f"Unsupported database type: {source_type}")
+    if source_type in ("mysql", "mariadb"):
+        from goldenmatch.db.connector_mysql import MySQLConnector
+        return MySQLConnector(connection)
+    if source_type in ("sqlserver", "mssql", "azure_sql"):
+        from goldenmatch.db.connector_sqlserver import SqlServerConnector
+        return SqlServerConnector(connection)
+    if source_type == "snowflake":
+        from goldenmatch.db.connector_snowflake import SnowflakeConnector
+        return SnowflakeConnector(connection)
+    raise ValueError(f"Unsupported database type: {source_type}")
