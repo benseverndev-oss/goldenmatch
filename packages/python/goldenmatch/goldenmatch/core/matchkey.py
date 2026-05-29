@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 import polars as pl
 
@@ -377,4 +378,15 @@ def precompute_matchkey_transforms(
         df = df.with_columns(native_exprs)
     if python_cols:
         df = df.with_columns(python_cols)
+    # Optional rechunk experiment (PR #591). The v30 RSS leaderboard
+    # showed `bucket_slim_projection` allocating ~10 GB during its
+    # .select() call, hypothesized to be Polars consolidating __xform_*__
+    # chunks deposited here by separate with_columns calls. A proactive
+    # rechunk MOVES that consolidation cost from select-time (where it
+    # also has to pull from the still-resident prepared_df) to here,
+    # where the unconsolidated chunks can be freed immediately. Net peak
+    # could drop if the old chunks release before downstream peak. Gated
+    # off by default until v31 measures it.
+    if os.environ.get("GOLDENMATCH_PRECOMPUTE_RECHUNK") == "1":
+        df = df.rechunk()
     return df
