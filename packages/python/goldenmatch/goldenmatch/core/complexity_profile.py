@@ -106,6 +106,20 @@ def _max_severity(*verdicts: HealthVerdict) -> HealthVerdict:
 
 @dataclass(frozen=True)
 class DataProfile:
+    """Per-dataset profile. `n_rows` is the size of whatever DataFrame was
+    profiled -- on the controller's per-iteration emission that's the
+    SAMPLE, not the full dataset.
+
+    `n_full_rows` (added 2026-05-29) is the full dataset's row count when
+    the controller has it (i.e., when this profile was emitted from a
+    sample but the controller knows the total). Chao1 extrapolation in
+    `MatchkeyProfile.health()` and `rule_matchkey_demote_high_cardinality_
+    field` needs the full row count, not the sample row count, to
+    correctly extrapolate sample-scale singleton/doubleton evidence to
+    full-data cardinality.
+
+    Falls back to `n_rows` when not set, preserving pre-2026-05-29 behavior.
+    """
     _version: int = 1
     n_rows: int = 0
     n_cols: int = 0
@@ -115,6 +129,14 @@ class DataProfile:
     value_length_p50: dict[str, int] = field(default_factory=dict)
     value_length_p99: dict[str, int] = field(default_factory=dict)
     column_priors: dict[str, ColumnPrior] | None = None
+    n_full_rows: int | None = None
+
+    @property
+    def effective_n_rows(self) -> int:
+        """Full-dataset row count when the controller threaded it through;
+        otherwise the local `n_rows` (which on a non-controller emission IS
+        the full data)."""
+        return self.n_full_rows if self.n_full_rows is not None else self.n_rows
 
     def health(self) -> HealthVerdict:
         """RED for empty data, YELLOW for single-column inputs, GREEN otherwise.
@@ -420,10 +442,14 @@ class ComplexityProfile:
     zero_label: ZeroLabelConfidenceProfile | None = None
 
     def health(self) -> HealthVerdict:
+        # Use data.effective_n_rows (= n_full_rows when threaded by the
+        # controller, n_rows otherwise) for Chao1 extrapolation. blocking
+        # and cluster health() existed before Chao1 and keep using n_rows
+        # to preserve their meaning ("rows in the profiled DataFrame").
         return _max_severity(
             self.data.health(),
             self.domain.health(),
-            self.matchkey.health(n_full_rows=self.data.n_rows),
+            self.matchkey.health(n_full_rows=self.data.effective_n_rows),
             self.blocking.health(n_rows=self.data.n_rows),
             self.scoring.health(),
             self.cluster.health(n_rows=self.data.n_rows),
