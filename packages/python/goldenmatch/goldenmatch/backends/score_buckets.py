@@ -388,10 +388,15 @@ def score_buckets(
         )
     else:
         _tb = time.perf_counter()
-        bucketed = keyed.with_columns(
-            (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
-            .alias("__bucket__")
-        )
+        # Adds an i64 __bucket__ column at 10M rows -- ~80 MB of int64 plus
+        # whatever Polars holds for the hash intermediate. Wrap so the RSS
+        # bench can attribute it instead of pooling it into the unwrapped
+        # gap between bucket_assign and bucket_partition.
+        with stage("bucket_hash_modulo"):
+            bucketed = keyed.with_columns(
+                (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
+                .alias("__bucket__")
+            )
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
         with stage("bucket_partition"):
@@ -404,9 +409,18 @@ def score_buckets(
             )
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
-    frozen_exclude = frozenset(matched_pairs)
-    non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
-    n_non_empty_buckets = len(non_empty_buckets)
+    # Both held in RAM simultaneously: buckets_dict (N partitioned frames,
+    # each holding rows + prep columns + key + bucket_id) and the new
+    # non_empty_buckets list (filter view referencing the same frames).
+    # frozen_exclude shadows matched_pairs as a Python frozenset -- at
+    # 10M-bucket-realistic this is the dominant Python-side accumulator. The
+    # marker here separates "partition done" from "ready to score" so the
+    # post-partition resident state shows up as its own line, not bucketed
+    # into bucket_partition or fuzzy_scoring.
+    with stage("bucket_post_partition_setup"):
+        frozen_exclude = frozenset(matched_pairs)
+        non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
+        n_non_empty_buckets = len(non_empty_buckets)
     print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
     # Fast-path eligibility: tiny-block workloads (5M-on-one-node, p99 block
