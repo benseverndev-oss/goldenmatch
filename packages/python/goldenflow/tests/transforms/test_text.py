@@ -58,6 +58,34 @@ def test_normalize_unicode():
     assert result.to_list() == ["e", "cafe", "naive"]
 
 
+def test_normalize_unicode_ascii_fast_path_is_noop():
+    """Pure-ASCII columns hit the fast path and skip per-row NFKD.
+
+    QIS 10M bench surfaced ~25-30s per ASCII string column on the
+    `gf:<col>:normalize_unicode` markers (6 columns x 30s = 180s of
+    pipeline_prep_transform wall). Hash-derived synthetic names and
+    most real-world ASCII columns (codes, IDs, latin text) are no-ops
+    under NFKD + combining-char strip. Detect via vectorized regex
+    [^\\x00-\\x7F] and short-circuit -- zero per-row Python.
+    """
+    s = pl.Series("a", ["Alice", "Bob", "Charlie", None])
+    result = normalize_unicode(s)
+    assert result.to_list() == ["Alice", "Bob", "Charlie", None]
+
+
+def test_normalize_unicode_mixed_column_takes_slow_path():
+    """Any non-ASCII byte forces the slow path; non-ASCII rows get NFKD."""
+    s = pl.Series("a", ["Alice", "caf\u00e9", "Bob"])
+    result = normalize_unicode(s)
+    assert result.to_list() == ["Alice", "cafe", "Bob"]
+
+
+def test_normalize_unicode_empty_or_all_null():
+    """Empty + all-null series short-circuit before regex scan."""
+    assert normalize_unicode(pl.Series("a", [], dtype=pl.Utf8)).to_list() == []
+    assert normalize_unicode(pl.Series("a", [None, None], dtype=pl.Utf8)).to_list() == [None, None]
+
+
 def test_remove_punctuation():
     result = _apply_expr(remove_punctuation, "a", ["hello!", "test@123", "a-b_c"])
     assert all(c.isalnum() or c.isspace() for val in result for c in val)

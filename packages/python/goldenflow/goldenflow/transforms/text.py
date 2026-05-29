@@ -34,10 +34,30 @@ def title_case(column: str) -> pl.Expr:
     return pl.col(column).str.to_titlecase()
 
 
+_NON_ASCII_RE = r"[^\x00-\x7F]"
+
+
 @register_transform(
     name="normalize_unicode", input_types=["string"], auto_apply=True, priority=85, mode="series"
 )
 def normalize_unicode(series: pl.Series) -> pl.Series:
+    # Fast path: pure-ASCII columns are a no-op for NFKD + combining-char
+    # strip. Detect via vectorized regex on the non-null subset and bail
+    # before paying for per-row unicodedata.normalize calls. At 10M rows
+    # across 6 string columns this transform was the second-largest slice
+    # of pipeline_prep_transform wall after date_iso8601 (per the QIS
+    # bench gf:<col>:normalize_unicode markers, ~25-30s each). Any
+    # column that round-trips through CSV with only ASCII bytes (the
+    # common shape for hash-derived synthetic data + ASCII-only real
+    # datasets) hits this branch.
+    if series.dtype != pl.Utf8:
+        return series
+    non_null = series.drop_nulls()
+    if non_null.len() == 0:
+        return series
+    if not bool(non_null.str.contains(_NON_ASCII_RE).any()):
+        return series
+
     def _normalize(val: str | None) -> str | None:
         if val is None:
             return None
