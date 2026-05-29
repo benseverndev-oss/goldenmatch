@@ -25,6 +25,31 @@ def test_date_iso8601():
     assert result[3] == "invalid"  # preserved
 
 
+def test_date_iso8601_numeric_year_fast_path():
+    """Integer year column (e.g. birth_year=1995) takes the Polars vectorized
+    fast path: format as 'YYYY-01-01' without invoking dateutil per row.
+
+    Diagnosed via goldenmatch QIS 10M bench: date_iso8601 on a numeric
+    birth_year column was 49% of all GoldenFlow transform wall (12 s at 1M /
+    ~120 s at 10M). The fast path drops it to <1 s at 10M.
+    """
+    s = pl.Series("birth_year", [1940, 1995, 2005, None], dtype=pl.Int64)
+    result = date_iso8601(s)
+    assert result[0] == "1940-01-01"
+    assert result[1] == "1995-01-01"
+    assert result[2] == "2005-01-01"
+    assert result[3] is None
+
+
+def test_date_iso8601_float_year_fast_path():
+    """Float years (e.g. CSV with trailing .0) cast cleanly to Int64."""
+    s = pl.Series("birth_year", [1995.0, 2005.0, None], dtype=pl.Float64)
+    result = date_iso8601(s)
+    assert result[0] == "1995-01-01"
+    assert result[1] == "2005-01-01"
+    assert result[2] is None
+
+
 def test_date_us():
     s = pl.Series("d", ["2024-03-15", "Jan 5, 2023"])
     result = date_us(s)
