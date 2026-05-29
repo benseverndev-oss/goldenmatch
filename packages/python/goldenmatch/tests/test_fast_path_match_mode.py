@@ -11,7 +11,12 @@ from __future__ import annotations
 import polars as pl
 import pytest
 from goldenmatch.backends.score_buckets import _resolve_fast_path, score_buckets
-from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig, MatchkeyField
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.matchkey import _xform_sig
 
 
@@ -77,7 +82,9 @@ class TestMatchModeFiltersPairs:
         df = df.with_columns(pl.lit("blockX").alias("__block_key__"))
         mk = _build_mk()
         # Use a constant blocking config -- bucket scorer expects keys list.
-        blocking = BlockingConfig(strategy="static", keys=["name"])
+        blocking = BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
+        )
         return score_buckets(
             df, blocking, mk,
             matched_pairs=set(),
@@ -123,7 +130,9 @@ class TestParityWithSlowPath:
         unfiltered = self._unfiltered()
         df = _build_prepared_df()
         df = df.with_columns(pl.lit("blockX").alias("__block_key__"))
-        blocking = BlockingConfig(strategy="static", keys=["name"])
+        blocking = BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
+        )
         filtered = score_buckets(
             df, blocking, _build_mk(),
             matched_pairs=set(),
@@ -139,7 +148,9 @@ class TestParityWithSlowPath:
     def _unfiltered(self):
         df = _build_prepared_df()
         df = df.with_columns(pl.lit("blockX").alias("__block_key__"))
-        blocking = BlockingConfig(strategy="static", keys=["name"])
+        blocking = BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["name"])]
+        )
         return score_buckets(
             df, blocking, _build_mk(),
             matched_pairs=set(),
