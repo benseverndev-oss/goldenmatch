@@ -1188,9 +1188,34 @@ def _run_dedupe_pipeline(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
             )
+            # Fast path: pre-resolve per-field callables + level-mapping
+            # plan once per matchkey, then run an indexed Python loop per
+            # block. Resolved against the FIRST block_df so the xform
+            # column check sees a representative shape; subsequent blocks
+            # share the same columns. Falls back to score_probabilistic
+            # when any gate fails (model-backed scorer, levels > 3, missing
+            # xform column, etc).
+            from goldenmatch.core.probabilistic_fast import (
+                _resolve_probabilistic_fast_path,
+                score_probabilistic_fast,
+            )
+            _first_block_df = (
+                blocks[0].df.collect()
+                if blocks and isinstance(blocks[0].df, pl.LazyFrame)
+                else (blocks[0].df if blocks else None)
+            )
+            fast_spec = (
+                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
+                if _first_block_df is not None else None
+            )
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                if fast_spec is not None:
+                    pairs = score_probabilistic_fast(
+                        block_df, fast_spec, exclude_pairs=matched_pairs,
+                    )
+                else:
+                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -1832,9 +1857,27 @@ def _run_match_pipeline(
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
+            from goldenmatch.core.probabilistic_fast import (
+                _resolve_probabilistic_fast_path,
+                score_probabilistic_fast,
+            )
+            _first_block_df = (
+                blocks[0].df.collect()
+                if blocks and isinstance(blocks[0].df, pl.LazyFrame)
+                else (blocks[0].df if blocks else None)
+            )
+            fast_spec = (
+                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
+                if _first_block_df is not None else None
+            )
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                if fast_spec is not None:
+                    pairs = score_probabilistic_fast(
+                        block_df, fast_spec, exclude_pairs=matched_pairs,
+                    )
+                else:
+                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
