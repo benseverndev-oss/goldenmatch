@@ -364,9 +364,43 @@ def score_buckets(
     key_expr = _build_block_key_expr(blocking_config.keys[0])
     print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: key_expr built", flush=True)
 
+    # Slim projection: drop columns no score-worker reads. The audit
+    # (2026-05-29) showed every reader in this module touches only
+    # __row_id__ / __source__ / __block_key__ / __xform_*__ plus the
+    # raw source fields named by the blocking key. Everything else in
+    # prepared_df is dead weight from bucket_assign onward. Polars
+    # .select(cols) is zero-copy on Arrow chunks, so the projection
+    # itself is cheap; the bucket_assign with_columns COW then runs
+    # over the slim frame instead of the full one.
+    #
+    # Default OFF until v30 bench confirms the predicted RSS drop. Flip
+    # with GOLDENMATCH_BUCKET_SLIM_PROJECTION=1.
+    if os.environ.get("GOLDENMATCH_BUCKET_SLIM_PROJECTION") == "1":
+        with stage("bucket_slim_projection"):
+            keep: list[str] = ["__row_id__"]
+            if "__source__" in prepared_df.columns:
+                keep.append("__source__")
+            keep.extend(c for c in prepared_df.columns if c.startswith("__xform_"))
+            # Source fields the block-key expression reads. Multi-key blocking
+            # (rare today) accumulates fields across every key in the config.
+            block_key_sources: set[str] = set()
+            for key in blocking_config.keys:
+                block_key_sources.update(key.fields)
+            for col in block_key_sources:
+                if col in prepared_df.columns and col not in keep:
+                    keep.append(col)
+            slim_df = prepared_df.select(keep)
+            print(
+                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: slim projection "
+                f"{len(prepared_df.columns)} -> {len(keep)} cols",
+                flush=True,
+            )
+    else:
+        slim_df = prepared_df
+
     with stage("bucket_assign"):
         _ta = time.perf_counter()
-        keyed = prepared_df.with_columns(key_expr)
+        keyed = slim_df.with_columns(key_expr)
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
 
     # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
