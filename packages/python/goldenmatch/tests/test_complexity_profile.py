@@ -167,7 +167,19 @@ def test_scoring_yellow_when_borderline_heavy():
         n_pairs_scored=500, score_histogram=[0] * 14 + [100, 100, 100] + [0] * 3,
         dip_statistic=0.05, mass_above_threshold=0.4, mass_in_borderline=0.5,
     )
+    # borderline (0.5) > above_threshold (0.4) -> separation negative -> YELLOW
     assert sp.health() == HealthVerdict.YELLOW
+
+
+def test_scoring_green_when_above_threshold_dominates_borderline():
+    # Heavy-typo person data: ~40% of scored pairs land near the threshold
+    # band, but the above-threshold tail is larger. Separation is positive;
+    # config is fine; verdict should not regress to YELLOW.
+    sp = ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0] * 10 + [50] * 10,
+        dip_statistic=0.05, mass_above_threshold=0.55, mass_in_borderline=0.4,
+    )
+    assert sp.health() == HealthVerdict.GREEN
 
 
 def test_cluster_red_when_one_giant_cluster():
