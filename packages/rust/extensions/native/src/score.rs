@@ -12,6 +12,7 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
+use numpy::{IntoPyArray, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rapidfuzz::distance::{jaro_winkler, levenshtein};
@@ -348,4 +349,281 @@ pub fn score_block_pairs_arrow(
             })
             .collect()
     }))
+}
+
+// ============================================================================
+// Per-field score matrix kernel (slow-path NxN replacement)
+// ----------------------------------------------------------------------------
+// `score_field_matrix(values_a, values_b, scorer_id) -> np.ndarray<f32, (N, M)>`
+// is the cdist-shaped primitive that unifies the slow path's
+// `_fuzzy_score_matrix` / `_soundex_score_matrix` / `_dice_score_matrix` /
+// `_jaccard_score_matrix` callers behind one Rust kernel. Zero-copy Arrow in,
+// owned-numpy-buffer out. Self-cdist (values_a is values_b) only fills the
+// upper triangle + mirrors -- saves ~half the work on symmetric calls.
+// ----------------------------------------------------------------------------
+
+/// Soundex code matching `jellyfish.soundex` byte-for-byte. ASCII letters
+/// only; non-letter input returns the empty string (caller treats empty
+/// codes as non-matching, mirroring Python's `_soundex_score_matrix`).
+fn soundex(s: &str) -> String {
+    // Take the first alphabetic char as the seed letter (uppercased).
+    let mut iter = s.chars();
+    let first = loop {
+        match iter.next() {
+            Some(c) if c.is_ascii_alphabetic() => break c.to_ascii_uppercase(),
+            Some(_) => continue,
+            None => return String::new(),
+        }
+    };
+    let mut out = String::with_capacity(4);
+    out.push(first);
+    let mut last_code = soundex_code(first);
+    for c in iter {
+        if !c.is_ascii_alphabetic() {
+            continue;
+        }
+        let code = soundex_code(c.to_ascii_uppercase());
+        // Skip Hs and Ws between consonants (jellyfish ignores them but does
+        // not reset last_code).
+        if code == b'0' && (c.eq_ignore_ascii_case(&'H') || c.eq_ignore_ascii_case(&'W')) {
+            continue;
+        }
+        if code != b'0' && code != last_code {
+            out.push(code as char);
+            if out.len() == 4 {
+                break;
+            }
+        }
+        last_code = code;
+    }
+    while out.len() < 4 {
+        out.push('0');
+    }
+    out
+}
+
+fn soundex_code(c: char) -> u8 {
+    match c {
+        'B' | 'F' | 'P' | 'V' => b'1',
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => b'2',
+        'D' | 'T' => b'3',
+        'L' => b'4',
+        'M' | 'N' => b'5',
+        'R' => b'6',
+        _ => b'0',
+    }
+}
+
+/// Bigram set for Dice/Jaccard. Uses char windows (codepoints, not bytes) so
+/// Unicode strings behave the same as Python's per-char slicing.
+fn bigrams(s: &str) -> HashSet<(char, char)> {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() < 2 {
+        return HashSet::new();
+    }
+    let mut set = HashSet::with_capacity(chars.len() - 1);
+    for w in chars.windows(2) {
+        set.insert((w[0], w[1]));
+    }
+    set
+}
+
+fn dice_from_sets(a: &HashSet<(char, char)>, b: &HashSet<(char, char)>) -> f32 {
+    let n_a = a.len();
+    let n_b = b.len();
+    if n_a == 0 || n_b == 0 {
+        return 0.0;
+    }
+    let intersect: usize = a.intersection(b).count();
+    (2.0 * intersect as f32) / ((n_a + n_b) as f32)
+}
+
+fn jaccard_from_sets(a: &HashSet<(char, char)>, b: &HashSet<(char, char)>) -> f32 {
+    let n_a = a.len();
+    let n_b = b.len();
+    if n_a == 0 || n_b == 0 {
+        return 0.0;
+    }
+    let intersect: usize = a.intersection(b).count();
+    let union: usize = n_a + n_b - intersect;
+    if union == 0 {
+        0.0
+    } else {
+        intersect as f32 / union as f32
+    }
+}
+
+/// Read an Arrow Utf8 / LargeUtf8 column into a Vec<String>, mapping null
+/// entries to empty strings (matches the slow path's caller convention --
+/// see `_fuzzy_score_matrix:349` and `_soundex_score_matrix:451`).
+fn arrow_to_strings(data: ArrayData) -> PyResult<Vec<String>> {
+    match data.data_type() {
+        DataType::Utf8 => {
+            let arr = StringArray::from(data);
+            let mut out = Vec::with_capacity(arr.len());
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    out.push(String::new());
+                } else {
+                    out.push(arr.value(i).to_string());
+                }
+            }
+            Ok(out)
+        }
+        DataType::LargeUtf8 => {
+            let arr = LargeStringArray::from(data);
+            let mut out = Vec::with_capacity(arr.len());
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    out.push(String::new());
+                } else {
+                    out.push(arr.value(i).to_string());
+                }
+            }
+            Ok(out)
+        }
+        other => Err(PyValueError::new_err(format!(
+            "score_field_matrix: expected Utf8 or LargeUtf8, got {other:?}"
+        ))),
+    }
+}
+
+/// Per-field score matrix.
+///
+/// `scorer_id`:
+///   0 = jaro_winkler, 1 = levenshtein, 2 = token_sort (returns [0,1] —
+///   matches the slow path's `_fuzzy_score_matrix` which divides ts by 100),
+///   3 = exact, 4 = soundex_match (binary 0/1), 5 = dice, 6 = jaccard.
+///
+/// `symmetric=True` when the caller knows `values_a is values_b`. Skips the
+/// lower triangle compute and mirrors. Symmetric output diagonal is 1.0 for
+/// scorers 0-6 on non-null pairs; 0.0 on null/null per the empty-string map.
+#[pyfunction]
+#[pyo3(signature = (values_a, values_b, scorer_id, symmetric=false))]
+pub fn score_field_matrix(
+    py: Python<'_>,
+    values_a: PyArrowType<ArrayData>,
+    values_b: PyArrowType<ArrayData>,
+    scorer_id: u8,
+    symmetric: bool,
+) -> PyResult<Py<PyArray2<f32>>> {
+    let a = arrow_to_strings(values_a.0)?;
+    let b = arrow_to_strings(values_b.0)?;
+    let n = a.len();
+    let m = b.len();
+
+    if !(0u8..=6u8).contains(&scorer_id) {
+        return Err(PyValueError::new_err(format!(
+            "score_field_matrix: unknown scorer_id={scorer_id} (valid: 0..=6)"
+        )));
+    }
+
+    // Compute under allow_threads; build the flat (n*m) vec there.
+    let buf: Vec<f32> = py.allow_threads(|| match scorer_id {
+        // score_one returns [0,1] for ids 0-3 already (id=2 calls
+        // fuzz::ratio which is [0,1] in rapidfuzz-rs, NOT the *100 scale
+        // the PyO3-exposed token_sort_ratio uses).
+        0 | 1 | 2 | 3 => compute_pairwise(&a, &b, symmetric, |x, y| {
+            score_one(scorer_id, x, y) as f32
+        }),
+        4 => {
+            // Precompute soundex codes once per string -- N*M comparisons would
+            // otherwise re-soundex every row pair.
+            let codes_a: Vec<String> = a.par_iter().map(|s| soundex(s)).collect();
+            let codes_b: Vec<String> = if symmetric {
+                codes_a.clone()
+            } else {
+                b.par_iter().map(|s| soundex(s)).collect()
+            };
+            compute_pairwise_precomputed(&codes_a, &codes_b, symmetric, |x, y| {
+                if !x.is_empty() && x == y {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+        }
+        _ => {
+            // 5 = dice, 6 = jaccard
+            let bigrams_a: Vec<HashSet<(char, char)>> = a.par_iter().map(|s| bigrams(s)).collect();
+            let bigrams_b: Vec<HashSet<(char, char)>> = if symmetric {
+                bigrams_a.clone()
+            } else {
+                b.par_iter().map(|s| bigrams(s)).collect()
+            };
+            let fn_ptr: fn(&HashSet<(char, char)>, &HashSet<(char, char)>) -> f32 =
+                if scorer_id == 5 { dice_from_sets } else { jaccard_from_sets };
+            compute_pairwise_precomputed(&bigrams_a, &bigrams_b, symmetric, fn_ptr)
+        }
+    });
+
+    // Reshape (n*m) -> (n, m) and hand off to numpy. numpy re-exports
+    // ndarray; use its Array2::from_shape_vec to construct.
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, m), buf)
+        .map_err(|e| PyValueError::new_err(format!("score_field_matrix: shape error: {e}")))?;
+    Ok(arr.into_pyarray(py).unbind())
+}
+
+/// Pairwise scorer over raw string slices; `score(a_i, b_j)` per cell.
+/// Result is row-major flat: out[i*m + j].
+fn compute_pairwise<F>(a: &[String], b: &[String], symmetric: bool, score: F) -> Vec<f32>
+where
+    F: Fn(&str, &str) -> f32 + Send + Sync,
+{
+    let n = a.len();
+    let m = b.len();
+    let mut out = vec![0.0f32; n * m];
+    // Row-parallel; each row is independent.
+    out.par_chunks_mut(m).enumerate().for_each(|(i, row)| {
+        if symmetric {
+            // Fill upper triangle including diagonal.
+            for j in i..m {
+                row[j] = score(&a[i], &b[j]);
+            }
+        } else {
+            for j in 0..m {
+                row[j] = score(&a[i], &b[j]);
+            }
+        }
+    });
+    if symmetric {
+        // Mirror upper triangle to lower.
+        for i in 0..n {
+            for j in 0..i {
+                out[i * m + j] = out[j * m + i];
+            }
+        }
+    }
+    out
+}
+
+/// Pairwise scorer over precomputed per-string artifacts (soundex codes,
+/// bigram sets, etc). Same flat layout as `compute_pairwise`.
+fn compute_pairwise_precomputed<T, F>(a: &[T], b: &[T], symmetric: bool, score: F) -> Vec<f32>
+where
+    T: Send + Sync,
+    F: Fn(&T, &T) -> f32 + Send + Sync,
+{
+    let n = a.len();
+    let m = b.len();
+    let mut out = vec![0.0f32; n * m];
+    out.par_chunks_mut(m).enumerate().for_each(|(i, row)| {
+        if symmetric {
+            for j in i..m {
+                row[j] = score(&a[i], &b[j]);
+            }
+        } else {
+            for j in 0..m {
+                row[j] = score(&a[i], &b[j]);
+            }
+        }
+    });
+    if symmetric {
+        for i in 0..n {
+            for j in 0..i {
+                out[i * m + j] = out[j * m + i];
+            }
+        }
+    }
+    out
 }

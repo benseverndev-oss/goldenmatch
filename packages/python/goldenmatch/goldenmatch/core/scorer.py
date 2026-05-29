@@ -313,6 +313,48 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     return [apply_transforms(v, field.transforms) if v is not None else None for v in values]
 
 
+# Native field-matrix kernel scorer IDs. Mirror score.rs::score_field_matrix
+# dispatch. Bloom-filter dice/jaccard (the slow path's _dice_score_matrix /
+# _jaccard_score_matrix) are intentionally NOT routed here -- the Rust IDs
+# 5/6 are char-bigram, not bloom-filter, semantics. PPRL workloads stay on
+# the existing vectorized numpy path.
+_NATIVE_FIELD_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0,
+    "levenshtein": 1,
+    "token_sort": 2,
+    "exact": 3,
+    "soundex_match": 4,
+}
+
+
+def _native_field_matrix(values: list, scorer_name: str) -> np.ndarray | None:
+    """Native cdist-shaped fallback. Returns None when the kernel isn't
+    loaded or the scorer isn't supported -- caller stays on the rapidfuzz
+    path.
+
+    Self-cdist: passes the same Arrow array on both sides and marks
+    `symmetric=True` so the Rust kernel skips half the work.
+    """
+    scorer_id = _NATIVE_FIELD_SCORER_IDS.get(scorer_name)
+    if scorer_id is None:
+        return None
+    try:
+        from goldenmatch.core._native_loader import native_module
+        native = native_module()
+    except Exception:
+        return None
+    if native is None or not hasattr(native, "score_field_matrix"):
+        return None
+    try:
+        import pyarrow as pa
+        clean = [v if v is not None else "" for v in values]
+        arr = pa.array(clean, type=pa.large_string())
+        return native.score_field_matrix(arr, arr, scorer_id, True)
+    except Exception:
+        # Any FFI / pyarrow / numpy hiccup falls through to rapidfuzz.
+        return None
+
+
 def _exact_score_matrix(values: list) -> np.ndarray:
     """NxN exact match matrix using hash-based grouping."""
     n = len(values)
@@ -354,17 +396,26 @@ def _fuzzy_score_matrix(
     # particular allocated 4× NxN float64 = 800 MB at N=5000, which was the
     # largest single contributor to the 1M-row OOM cliff (PR #173).
     if scorer_name == "ensemble":
-        # Combine multiple scorers, take element-wise max
-        jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
-        ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+        # Combine multiple scorers, take element-wise max. Each subscorer
+        # tries the native kernel first; falls back to rapidfuzz cdist.
+        jw = _native_field_matrix(values, "jaro_winkler")
+        if jw is None:
+            jw = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+        ts = _native_field_matrix(values, "token_sort")
+        if ts is None:
+            ts = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
         sx = _soundex_score_matrix(values).astype(np.float32) * 0.8
         matrix = np.maximum(np.maximum(jw, ts), sx)
-    elif scorer_name == "jaro_winkler":
-        matrix = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
-    elif scorer_name == "levenshtein":
-        matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
-    elif scorer_name == "token_sort":
-        matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+    elif scorer_name in ("jaro_winkler", "levenshtein", "token_sort"):
+        m = _native_field_matrix(values, scorer_name)
+        if m is not None:
+            matrix = m
+        elif scorer_name == "jaro_winkler":
+            matrix = np.asarray(cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32)
+        elif scorer_name == "levenshtein":
+            matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
+        else:
+            matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
     elif scorer_name == "dice":
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
@@ -449,7 +500,16 @@ def _record_embedding_score_matrix(
 
 
 def _soundex_score_matrix(values: list) -> np.ndarray:
-    """NxN soundex match matrix."""
+    """NxN soundex match matrix.
+
+    Tries the native kernel (Rust soundex + symmetric pairwise compare) first
+    so the row-loop + per-row jellyfish.soundex Python overhead drops out at
+    scale. Falls back to the hash-group exact-match path when native isn't
+    available -- functionally identical, just slower at large N.
+    """
+    m = _native_field_matrix(values, "soundex_match")
+    if m is not None:
+        return m
     codes = [jellyfish.soundex(v) if v is not None else None for v in values]
     return _exact_score_matrix(codes)
 
