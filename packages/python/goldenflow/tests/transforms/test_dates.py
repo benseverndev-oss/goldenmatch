@@ -41,6 +41,41 @@ def test_date_iso8601_numeric_year_fast_path():
     assert result[3] is None
 
 
+def test_date_iso8601_string_year_fast_path():
+    """Utf8 column of 4-digit year strings takes the string fast path.
+
+    Common shape when a year column was read from CSV as text -- the QIS
+    realistic fixture's birth_year generator uses
+    .astype(str).tolist() which produces Polars Utf8 ('1995'). v15 measured
+    161s on this case at 10M because the numeric fast path didn't trigger;
+    the string fast path added in this commit drops it to <1s.
+    """
+    s = pl.Series("birth_year", ["1940", "1995", "2005", None], dtype=pl.Utf8)
+    result = date_iso8601(s)
+    assert result[0] == "1940-01-01"
+    assert result[1] == "1995-01-01"
+    assert result[2] == "2005-01-01"
+    assert result[3] is None
+
+
+def test_date_iso8601_string_year_with_whitespace_fast_path():
+    """Fast path strips whitespace before formatting (matches CSV quirks)."""
+    s = pl.Series("birth_year", [" 1995", "2005 ", " 1940 "], dtype=pl.Utf8)
+    result = date_iso8601(s)
+    assert result[0] == "1995-01-01"
+    assert result[1] == "2005-01-01"
+    assert result[2] == "1940-01-01"
+
+
+def test_date_iso8601_mixed_year_and_full_date_falls_through_to_slow_path():
+    """If ANY value isn't a 4-digit year, the slow dateutil path runs so
+    full dates ('2024-03-15') still parse correctly."""
+    s = pl.Series("d", ["2024-03-15", "Jan 5, 2023"], dtype=pl.Utf8)
+    result = date_iso8601(s)
+    assert result[0] == "2024-03-15"
+    assert result[1] == "2023-01-05"
+
+
 def test_date_iso8601_float_year_fast_path():
     """Float years (e.g. CSV with trailing .0) cast cleanly to Int64."""
     s = pl.Series("birth_year", [1995.0, 2005.0, None], dtype=pl.Float64)
