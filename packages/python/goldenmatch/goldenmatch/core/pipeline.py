@@ -924,6 +924,7 @@ def _run_dedupe_pipeline(
                 # bulk list-of-tuples construction.
                 if not mk.negative_evidence and not across_files_only:
                     import numpy as _np
+
                     from goldenmatch.core.scorer import _find_exact_match_ids
                     ids_a_np, ids_b_np = _find_exact_match_ids(combined_lf, mk)
                     n_pairs = int(ids_a_np.size)
