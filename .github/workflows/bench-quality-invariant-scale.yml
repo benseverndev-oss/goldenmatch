@@ -47,9 +47,9 @@ on:
         required: false
         default: "1"
       golden_slim_multidf:
-        description: "GOLDENMATCH_GOLDEN_SLIM_MULTIDF value (0 or 1). PR #595 RSS-reduction A/B for golden's +9 GB attach_cluster_id COW."
+        description: "GOLDENMATCH_GOLDEN_SLIM_MULTIDF value (0 or 1). Default '1' = today's behavior; pass '0' to bench the pre-slim baseline."
         required: false
-        default: "0"
+        default: "1"
 
 permissions:
   contents: read
