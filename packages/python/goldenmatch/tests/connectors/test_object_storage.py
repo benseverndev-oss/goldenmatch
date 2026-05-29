@@ -9,7 +9,6 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-
 # ----- format inference -------------------------------------------------------
 
 
@@ -195,6 +194,7 @@ def test_dependency_check_helpful_error_when_missing(monkeypatch) -> None:
     """If the s3 backend extra isn't installed, the user gets a
     ``pip install goldenmatch[s3]`` hint."""
     import sys
+
     from goldenmatch.connectors.base import ConnectorError
     from goldenmatch.connectors.object_storage import ObjectStorageConnector
 
