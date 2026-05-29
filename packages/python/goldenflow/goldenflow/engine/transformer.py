@@ -200,6 +200,38 @@ class TransformEngine:
         manifest: Manifest,
     ) -> pl.DataFrame:
         """Apply a single transform to a column, recording results in manifest."""
+        # Optional cross-package bench instrumentation: when goldenmatch is
+        # installed AND a bench_capture is currently active, wrap each
+        # transform application in a stage(name) so the per-transform wall +
+        # ru_maxrss are attributed in the bench dict. Stage name encodes
+        # column + transform so the same transform on different columns is
+        # diff'able. No-op when goldenmatch isn't importable (standalone
+        # goldenflow use) or no bench_capture is active. Used to diagnose
+        # which transform dominated the pipeline_prep_transform wall at the
+        # QIS 10M-bucket-realistic bench (~316s / GoldenFlow at 10M).
+        try:
+            from goldenmatch.core.bench import stage as _bench_stage
+            _stage_cm = _bench_stage(f"gf:{column}:{info.name}")
+        except ImportError:
+            from contextlib import nullcontext
+            _stage_cm = nullcontext()
+
+        with _stage_cm:
+            return self._apply_single_transform_body(
+                df, column, info, params, manifest,
+            )
+
+    def _apply_single_transform_body(
+        self,
+        df: pl.DataFrame,
+        column: str,
+        info: TransformInfo,
+        params: list[str],
+        manifest: Manifest,
+    ) -> pl.DataFrame:
+        """Inner body of _apply_single_transform, factored out so the bench
+        stage wrapper can clamp around the actual work without adding
+        indentation to the existing logic."""
         before_sample = df[column].head(3).cast(pl.Utf8).to_list()
         total_rows = df.shape[0]
 
