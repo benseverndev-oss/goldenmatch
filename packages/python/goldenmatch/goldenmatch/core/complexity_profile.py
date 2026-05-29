@@ -155,9 +155,56 @@ class DomainProfile:
 
 @dataclass(frozen=True)
 class FieldStats:
+    """Per-field post-transform stats. The raw cardinality ratio is computed
+    on whatever sample the caller had; for the controller's sample at 10M
+    rows that's 2K-20K rows. Sample-scale cardinality is unreliable for
+    full-data behavior on shapes where most clusters are unrepresented in
+    the sample (QIS realistic: 2M clusters * 5 rows, 3K controller sample
+    -> almost every sampled value is unique, raw cardinality ~0.997, but
+    full-data cardinality is 0.20).
+
+    `sample_n_rows`, `singleton_count`, `doubleton_count` are optional
+    Chao1 inputs added 2026-05-29 to estimate full-data cardinality from
+    the sample. When all three are present `estimated_full_cardinality`
+    returns the Chao1 estimate; otherwise it returns the raw ratio
+    (preserves pre-Chao1 callers that only populate the three original
+    fields).
+    """
     post_transform_cardinality_ratio: float
     post_transform_null_rate: float
     post_transform_value_length_p50: int
+    # Chao1 mark-recapture inputs. Optional for backward compat.
+    sample_n_rows: int | None = None
+    singleton_count: int | None = None  # values seen exactly once in sample (F1)
+    doubleton_count: int | None = None  # values seen exactly twice in sample (F2)
+
+    def estimated_full_cardinality(self, n_full_rows: int) -> float:
+        """Chao1 estimate of full-data cardinality from sample stats.
+
+        Chao1: estimated full unique count S* = S + F1^2 / (2*(F2 + 1))
+        Then full cardinality = S* / n_full_rows, capped at 1.0.
+
+        +1 on F2 is a small bias correction that also dodges division by
+        zero when no doubletons exist (which itself signals an
+        under-sampled distribution -- everything seen once, nothing seen
+        twice -- where Chao1 has to extrapolate aggressively).
+
+        Returns the raw post-transform cardinality when Chao1 inputs are
+        missing or when n_full_rows <= 0 (matches pre-Chao1 behavior).
+        """
+        if (
+            self.sample_n_rows is None
+            or self.singleton_count is None
+            or self.doubleton_count is None
+            or self.sample_n_rows <= 0
+            or n_full_rows <= 0
+        ):
+            return self.post_transform_cardinality_ratio
+        s_sample = int(self.post_transform_cardinality_ratio * self.sample_n_rows)
+        estimated_full_unique = s_sample + (
+            self.singleton_count * self.singleton_count
+        ) / (2 * (self.doubleton_count + 1))
+        return min(1.0, estimated_full_unique / n_full_rows)
 
 
 @dataclass(frozen=True)
@@ -165,12 +212,35 @@ class MatchkeyProfile:
     _version: int = 1
     per_field: dict[str, FieldStats] = field(default_factory=dict)
 
-    def health(self) -> HealthVerdict:
+    def health(self, n_full_rows: int | None = None) -> HealthVerdict:
+        """RED if any field collapses to a single value (no discrimination).
+        YELLOW if any field has near-unique values that scoring can't merge.
+        GREEN otherwise.
+
+        n_full_rows: when provided AND the FieldStats carry Chao1 inputs,
+        use Chao1-estimated full-data cardinality for the YELLOW check
+        instead of the raw sample ratio. v24 QIS telemetry (2026-05-29)
+        showed every field's sample cardinality > 0.95 even when full-data
+        cardinality was 0.20 (2M clusters of 5 rows, 3K sample sees ~1 rep
+        per cluster). The raw verdict produced persistent matchkey YELLOW
+        for fixtures where dedupe achieved F1=0.9886 -- the signal was a
+        measurement artifact, not a quality problem. Chao1 corrects this.
+
+        Backward compat: n_full_rows=None (or FieldStats without Chao1
+        inputs) falls back to the raw post_transform_cardinality_ratio,
+        preserving pre-2026-05-29 verdict behavior.
+        """
         verdicts = []
         for fs in self.per_field.values():
             if fs.post_transform_cardinality_ratio == 0.0:
                 verdicts.append(HealthVerdict.RED)
-            elif fs.post_transform_cardinality_ratio > 0.95:
+                continue
+            effective_cardinality = (
+                fs.estimated_full_cardinality(n_full_rows)
+                if n_full_rows is not None
+                else fs.post_transform_cardinality_ratio
+            )
+            if effective_cardinality > 0.95:
                 verdicts.append(HealthVerdict.YELLOW)
         return _max_severity(*verdicts) if verdicts else HealthVerdict.GREEN
 
@@ -353,7 +423,7 @@ class ComplexityProfile:
         return _max_severity(
             self.data.health(),
             self.domain.health(),
-            self.matchkey.health(),
+            self.matchkey.health(n_full_rows=self.data.n_rows),
             self.blocking.health(n_rows=self.data.n_rows),
             self.scoring.health(),
             self.cluster.health(n_rows=self.data.n_rows),
