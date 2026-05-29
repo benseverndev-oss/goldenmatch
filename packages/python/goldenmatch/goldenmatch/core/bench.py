@@ -47,6 +47,7 @@ not per scorer-per-block).
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Generator
@@ -54,6 +55,28 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+
+# RSS sampling: `resource.getrusage().ru_maxrss` is the process-lifetime peak
+# resident set size (Linux: KB, macOS: bytes). It's monotonically non-decreasing
+# — sampling at every stage exit gives the cumulative curve, and diffing
+# consecutive stages gives each stage's contribution to the peak. Windows has
+# no equivalent in the stdlib, so the field stays empty there (rare on bench
+# paths — every bench-* workflow runs on Linux).
+try:
+    import resource  # type: ignore[import-not-found]
+    _HAS_RESOURCE = True
+except ImportError:  # pragma: no cover - Windows path, exercised manually
+    resource = None  # type: ignore[assignment]
+    _HAS_RESOURCE = False
+
+
+def _peak_rss_kb() -> int | None:
+    """Process-lifetime peak RSS in KB, or None on Windows."""
+    if not _HAS_RESOURCE:
+        return None
+    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # type: ignore[union-attr]
+    # Linux reports KB; macOS reports bytes. Normalize to KB.
+    return int(ru) if sys.platform != "darwin" else int(ru) // 1024
 
 
 @dataclass
@@ -72,6 +95,12 @@ class BenchmarkRecorder:
     """
     timings: dict[str, float] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
+    # Peak RSS (KB) observed at each stage's exit. ru_maxrss is monotonic, so
+    # the LATEST exit-time value per stage name wins (last-write-wins matches
+    # the existing metrics shape; reusing a stage name overwrites). To get
+    # per-stage contribution to the peak, diff consecutive entries in
+    # insertion order. Empty on Windows (resource module unavailable).
+    stage_peak_rss_kb: dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add_timing(self, name: str, elapsed: float) -> None:
@@ -82,9 +111,20 @@ class BenchmarkRecorder:
         with self._lock:
             self.metrics[key] = value
 
+    def set_stage_peak_rss(self, name: str, peak_kb: int) -> None:
+        """Record the process-lifetime peak RSS observed at stage exit.
+
+        Called from ``stage(...)`` after the timed block completes. No-op on
+        Windows (caller passes the result of ``_peak_rss_kb`` which is None
+        there, but we accept int only — the caller branches).
+        """
+        with self._lock:
+            self.stage_peak_rss_kb[name] = peak_kb
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "stage_timings_seconds": {k: round(v, 4) for k, v in self.timings.items()},
+            "stage_peak_rss_kb": dict(self.stage_peak_rss_kb),
             "metrics": dict(self.metrics),
         }
 
@@ -138,6 +178,13 @@ def stage(name: str) -> Generator[None, None, None]:
         yield
     finally:
         rec.add_timing(name, time.perf_counter() - t0)
+        # Record the process-lifetime peak RSS at stage exit. ru_maxrss is a
+        # cheap syscall (microseconds) and only runs once per stage, so this
+        # doesn't violate the hot-path-tax rule documented above. Skip on
+        # Windows where the resource module is unavailable.
+        peak = _peak_rss_kb()
+        if peak is not None:
+            rec.set_stage_peak_rss(name, peak)
 
 
 def record_metric(key: str, value: Any) -> None:

@@ -127,11 +127,48 @@ def test_postgres_errors_with_pgrx_followup_hint(macro) -> None:
 
 def test_strip_whitespace_default_falls_back_to_sql_trim() -> None:
     """strip_whitespace is the only transform with a usable default__
-    branch (standard SQL TRIM works everywhere)."""
-    env = _build_env("snowflake")
+    branch (standard SQL TRIM works everywhere). Unknown adapters that
+    don't have a dispatch impl still get TRIM via default__."""
+    env = _build_env("bigquery")
     fn = env.globals["strip_whitespace"]
     sql = fn("col")
     assert "TRIM(col)" in sql
+
+
+# Snowflake rendering -- schema-qualified Snowpark Python UDFs (see
+# docs/snowflake-setup.md for the wheel-upload + registration steps).
+@pytest.mark.parametrize("macro,udf", [
+    ("normalize_email",      "goldenmatch.goldenflow_normalize_email"),
+    ("normalize_phone",      "goldenmatch.goldenflow_normalize_phone"),
+    ("normalize_date",       "goldenmatch.goldenflow_normalize_date"),
+    ("canonicalize_url",     "goldenmatch.goldenflow_canonicalize_url"),
+    ("canonicalize_address", "goldenmatch.goldenflow_canonicalize_address"),
+    ("strip_whitespace",     "goldenmatch.goldenflow_strip"),
+    ("whitespace_normalize", "goldenmatch.goldenflow_whitespace_normalize"),
+])
+def test_snowflake_renders_udf_call(macro, udf) -> None:
+    env = _build_env("snowflake")
+    fn = env.globals[macro]
+    sql = fn("email_raw")
+    assert udf in sql
+    assert "email_raw" in sql
+
+
+def test_normalize_name_proper_snowflake() -> None:
+    env = _build_env("snowflake")
+    fn = env.globals["normalize_name"]
+    sql = fn("name_raw", mode="proper")
+    assert "goldenmatch.goldenflow_normalize_name_proper" in sql
+
+
+def test_normalize_name_upper_snowflake_uses_sql_builtin() -> None:
+    """upper mode skips the UDF + uses standard SQL UPPER() on snowflake
+    just like duckdb."""
+    env = _build_env("snowflake")
+    fn = env.globals["normalize_name"]
+    sql = fn("name_raw", mode="upper")
+    assert "UPPER(name_raw)" in sql
+    assert "goldenflow_normalize_name" not in sql
 
 
 # Other adapters -- compile error pointing at the Python helper.
@@ -144,7 +181,7 @@ def test_strip_whitespace_default_falls_back_to_sql_trim() -> None:
     "whitespace_normalize",
 ])
 def test_unknown_adapter_errors(macro) -> None:
-    env = _build_env("snowflake")
+    env = _build_env("bigquery")
     fn = env.globals[macro]
     with pytest.raises(RuntimeError, match="(?s).*out-of-band"):
         fn("col")

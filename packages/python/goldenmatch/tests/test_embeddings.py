@@ -141,3 +141,137 @@ def test_no_normalize_keys_on_raw_text():
     assert len(prov.batches) == 1
     assert sorted(prov.batches[0]) == ["Foo  Bar", "foo bar"]
     assert not np.array_equal(out[0], out[1])
+
+
+# ---------------------------------------------------------------------------
+# SnowflakeCortexProvider -- no live Snowflake required; we stub the
+# connector at the cursor.fetchall() boundary. Live-end-to-end coverage
+# lives in the dbt-goldensuite smoke harness against a real account.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCortexConn:
+    def __init__(self):
+        self.executed: list[tuple[str, tuple]] = []
+
+    def cursor(self):
+        return _FakeCortexCursor(self)
+
+
+class _FakeCortexCursor:
+    """Mimics the slice of snowflake.connector.cursor.SnowflakeCursor that
+    SnowflakeCortexProvider._embed_chunk uses."""
+
+    def __init__(self, conn: _FakeCortexConn) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params):
+        self._conn.executed.append((sql, params))
+        texts_json, _model = params
+        import json as _json
+        texts = _json.loads(texts_json)
+        # Stable deterministic vector per text -- mimics what real Cortex
+        # returns (a Python list of floats), one row per input text.
+        self._rows = [
+            (i, [float(len(t)), float(sum(map(ord, t)) % 97)] + [0.0] * 766)
+            for i, t in enumerate(texts)
+        ]
+
+    def fetchall(self):
+        return self._rows
+
+    def close(self):  # noqa: D401 - matches connector API
+        pass
+
+
+def test_cortex_provider_basic_shape():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    conn = _FakeCortexConn()
+    prov = SnowflakeCortexProvider(connection=conn)
+    out = prov.embed(["alpha", "be", "gamma"])
+    assert out.shape == (3, 768)
+    assert out.dtype == np.float32
+    # Cache layer is upstream; the provider itself returns one row per text.
+    assert len(conn.executed) == 1
+    sql, params = conn.executed[0]
+    assert "SNOWFLAKE.CORTEX.EMBED_TEXT_768" in sql
+    assert params[1] == "snowflake-arctic-embed-m-v1.5"
+
+
+def test_cortex_provider_picks_dim_from_known_model():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    conn = _FakeCortexConn()
+    prov = SnowflakeCortexProvider(
+        model="snowflake-arctic-embed-l-v2.0", connection=conn,
+    )
+    assert prov.dim == 1024
+    assert "EMBED_TEXT_1024" in prov._fn_name
+
+
+def test_cortex_provider_unknown_model_requires_dim():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    with pytest.raises(ValueError, match="unknown Snowflake Cortex model"):
+        SnowflakeCortexProvider(model="future-model-2027")
+
+
+def test_cortex_provider_override_model_dim():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    conn = _FakeCortexConn()
+    prov = SnowflakeCortexProvider(
+        model="future-model-2027", connection=conn, model_dim=512,
+    )
+    assert prov.dim == 512
+
+
+def test_cortex_provider_empty_input_returns_zeros():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    conn = _FakeCortexConn()
+    prov = SnowflakeCortexProvider(connection=conn)
+    out = prov.embed([])
+    assert out.shape == (0, 768)
+    # No round-trips on empty input.
+    assert conn.executed == []
+
+
+def test_cortex_provider_chunking():
+    from goldenmatch.embeddings import SnowflakeCortexProvider
+
+    conn = _FakeCortexConn()
+    prov = SnowflakeCortexProvider(connection=conn, chunk_size=3)
+    out = prov.embed(["a", "b", "c", "d", "e"])
+    assert out.shape == (5, 768)
+    # 2 chunks: [a,b,c] + [d,e]
+    assert len(conn.executed) == 2
+
+
+def test_cortex_provider_resolves_via_name():
+    from goldenmatch.embeddings import SnowflakeCortexProvider, resolve_provider
+
+    prov = resolve_provider("snowflake_cortex")
+    assert isinstance(prov, SnowflakeCortexProvider)
+    assert prov.model_id == "snowflake-cortex:snowflake-arctic-embed-m-v1.5"
+    # Hyphenated + short alias.
+    assert resolve_provider("snowflake-cortex").model_id == prov.model_id
+    assert resolve_provider("cortex").model_id == prov.model_id
+
+
+def test_cortex_provider_namespaces_cache():
+    """Parity with the Vertex/OpenAI providers: model_id includes the
+    provider+model so swapping providers doesn't reuse foreign vectors."""
+    from goldenmatch.embeddings import EmbeddingCache, SnowflakeCortexProvider
+
+    cache = EmbeddingCache()
+    c1 = _FakeCortexConn()
+    c2 = _FakeCortexConn()
+    p1 = SnowflakeCortexProvider(connection=c1, model="e5-base-v2")
+    p2 = SnowflakeCortexProvider(connection=c2, model="snowflake-arctic-embed-m-v1.5")
+    embed_records(["x"], provider=p1, cache=cache)
+    embed_records(["x"], provider=p2, cache=cache)
+    # Different models -> each ran its own query.
+    assert len(c1.executed) == 1
+    assert len(c2.executed) == 1

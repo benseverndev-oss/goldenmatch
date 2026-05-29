@@ -32,8 +32,8 @@
 
 {% macro default__goldencheck_health_gate_impl(model, min_score) %}
     {{ exceptions.raise_compiler_error(
-        "goldencheck_health_gate is only supported on postgres and "
-        "duckdb today; got adapter=" ~ target.type
+        "goldencheck_health_gate is only supported on postgres, "
+        "duckdb, and snowflake today; got adapter=" ~ target.type
     ) }}
 {% endmacro %}
 
@@ -59,6 +59,20 @@
         score < {{ min_score }} AS failed
     FROM (
         SELECT goldencheck_health_score(
+            {{ dbt.string_literal(model.identifier) }}
+        ) AS score
+    ) AS h
+    WHERE score < {{ min_score }}
+{% endmacro %}
+
+
+{% macro snowflake__goldencheck_health_gate_impl(model, min_score) %}
+    SELECT
+        score,
+        {{ min_score }} AS min_score,
+        score < {{ min_score }} AS failed
+    FROM (
+        SELECT goldencheck.goldencheck_health_score(
             {{ dbt.string_literal(model.identifier) }}
         ) AS score
     ) AS h

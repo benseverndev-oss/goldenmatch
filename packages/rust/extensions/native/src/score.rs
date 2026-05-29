@@ -18,6 +18,52 @@ use rapidfuzz::distance::{jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
 use rayon::prelude::*;
 use std::collections::HashSet;
+use std::sync::Arc;
+
+/// Shared exclude index for the bucket scorer. The Python caller used to pass
+/// the exclude set as a fresh `Vec<(i64, i64)>` on EVERY native call -- at 10M
+/// rows / 64 buckets that materialized + marshaled + Rust-rebuilt a 36M-tuple
+/// set 64 times per dedupe call, dominating the kernel wall (~1170s of 1370s
+/// observed bucket_score time in QIS 10M-v9 native).
+///
+/// `ExcludeSet` is a single Arc<HashSet> built once on the Python side via
+/// `build_exclude_set` and passed by handle to each worker's
+/// `score_block_pairs_arrow` call. Threads share it read-only; HashSet's
+/// `contains` is safe across &self. Arc::clone is O(1) (refcount bump).
+///
+/// Wire format on the Python side: the legacy `Vec<(i64, i64)>` path is still
+/// supported when no handle is supplied -- the kernel falls back to building a
+/// fresh HashSet from the Vec, matching the prior contract bit-for-bit.
+#[pyclass(module = "goldenmatch._native", name = "ExcludeSet")]
+pub struct ExcludeSet {
+    set: Arc<HashSet<(i64, i64)>>,
+}
+
+#[pymethods]
+impl ExcludeSet {
+    fn __len__(&self) -> usize {
+        self.set.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ExcludeSet(n_pairs={})", self.set.len())
+    }
+}
+
+/// Build an `ExcludeSet` from `(id_a, id_b)` tuples. Canonicalizes each pair
+/// to (min, max) so callers don't have to. Runs once per dedupe call; the
+/// returned handle is then passed to every `score_block_pairs_arrow` call in
+/// the bucket worker loop, amortizing the build cost from O(buckets * pairs)
+/// to O(pairs).
+#[pyfunction]
+pub fn build_exclude_set(pairs: Vec<(i64, i64)>) -> ExcludeSet {
+    let mut set: HashSet<(i64, i64)> = HashSet::with_capacity(pairs.len());
+    for (a, b) in pairs {
+        let key = if a < b { (a, b) } else { (b, a) };
+        set.insert(key);
+    }
+    ExcludeSet { set: Arc::new(set) }
+}
 
 /// `rapidfuzz.fuzz.token_sort_ratio` preprocessing: split on whitespace, sort
 /// the tokens, rejoin with a single space. (Then `fuzz::ratio` on the result.)
@@ -198,6 +244,10 @@ impl StrCol {
 /// consecutive block lengths in the (same) block-sorted row order.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
+#[pyo3(signature = (
+    row_ids, field_arrays, block_sizes, scorer_ids, weights,
+    total_weight, threshold, exclude=None, exclude_set=None,
+))]
 pub fn score_block_pairs_arrow(
     py: Python<'_>,
     row_ids: PyArrowType<ArrayData>,
@@ -207,7 +257,8 @@ pub fn score_block_pairs_arrow(
     weights: Vec<f64>,
     total_weight: f64,
     threshold: f64,
-    exclude: Vec<(i64, i64)>,
+    exclude: Option<Vec<(i64, i64)>>,
+    exclude_set: Option<PyRef<'_, ExcludeSet>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
@@ -235,7 +286,23 @@ pub fn score_block_pairs_arrow(
         }
     }
 
-    let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
+    // Exclude resolution: prefer the shared handle (Track 1 Fix B), fall back
+    // to the legacy Vec-rebuilt-per-call path for callers that haven't been
+    // updated. The handle path is O(1) Arc::clone; the legacy path is O(N)
+    // HashSet build, run once per call (= 64 times per dedupe at 10M, the
+    // measured wall hog).
+    let local_set: HashSet<(i64, i64)>;
+    let exclude_ref: &HashSet<(i64, i64)> = match (&exclude_set, exclude) {
+        (Some(handle), _) => &handle.set,
+        (None, Some(v)) => {
+            local_set = v.into_iter().collect();
+            &local_set
+        }
+        (None, None) => {
+            local_set = HashSet::new();
+            &local_set
+        }
+    };
     let n_fields = scorer_ids.len();
 
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
@@ -257,7 +324,7 @@ pub fn score_block_pairs_arrow(
                         for j in (i + 1)..end {
                             let rj = row_ids.value(j);
                             let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
-                            if exclude.contains(&pair_key) {
+                            if exclude_ref.contains(&pair_key) {
                                 continue;
                             }
                             let mut score_sum = 0.0_f64;

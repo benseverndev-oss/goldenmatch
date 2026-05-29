@@ -17,10 +17,36 @@ def _parse_date(val: str | None) -> date | None:
         return None
 
 
+_YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
+
+
 @register_transform(
     name="date_iso8601", input_types=["date"], auto_apply=True, priority=50, mode="series"
 )
 def date_iso8601(series: pl.Series) -> pl.Series:
+    # Fast path A: numeric column (the inferred "date" type matched a column
+    # that's actually integer years -- e.g. birth_year=1995). Skip dateutil
+    # entirely; format as "YYYY-01-01" via Polars vectorized string concat.
+    # At 10M rows this drops the transform from ~150s (per-row dateutil) to
+    # <1s (Rust string concat under the hood).
+    if series.dtype.is_numeric():
+        return series.cast(pl.Int64, strict=False).cast(pl.Utf8) + "-01-01"
+
+    # Fast path B: Utf8 column whose values are ALL 4-digit year strings
+    # (e.g. "1995"). This is the common shape when a year column was read
+    # from CSV as text. v15 measured 161s at 10M on this exact case -- the
+    # numeric fast path didn't trigger because the QIS fixture generates
+    # year_canon = rng.integers(1940, 2005).astype(str).tolist(), so Polars
+    # sees Utf8 values like "1995", not Int64. The dateutil slow path parses
+    # each "1995" -> date(1995, 1, 1) -> "1995-01-01" at ~16us per row.
+    # Vectorized: detect via regex (Rust-backed pl.str.contains), then strip
+    # + concat. ~150x speedup; falls through to dateutil for any column with
+    # non-year content.
+    if series.dtype == pl.Utf8:
+        non_null = series.drop_nulls()
+        if non_null.len() > 0 and bool(non_null.str.contains(_YEAR_ONLY_RE).all()):
+            return series.str.strip_chars() + "-01-01"
+
     def _fmt(val: str | None) -> str | None:
         if val is None:
             return None

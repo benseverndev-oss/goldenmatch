@@ -15,7 +15,7 @@
 
 {% macro default__identity_conflicts_impl(dataset, db_path) %}
     {{ exceptions.raise_compiler_error(
-        "identity_conflicts is only supported on postgres and duckdb;
+        "identity_conflicts is only supported on postgres, duckdb, and snowflake;
          got adapter=" ~ target.type
     ) }}
 {% endmacro %}
@@ -31,6 +31,14 @@
 
 {% macro duckdb__identity_conflicts_impl(dataset, db_path) %}
     goldenmatch_identity_conflicts(
+        {{ dbt.string_literal(dataset) }},
+        {{ "''" if db_path is none else dbt.string_literal(db_path) }}
+    )
+{% endmacro %}
+
+
+{% macro snowflake__identity_conflicts_impl(dataset, db_path) %}
+    goldenmatch.goldenmatch_identity_conflicts(
         {{ dbt.string_literal(dataset) }},
         {{ "''" if db_path is none else dbt.string_literal(db_path) }}
     )

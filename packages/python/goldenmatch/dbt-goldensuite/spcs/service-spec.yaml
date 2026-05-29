@@ -1,0 +1,45 @@
+# Snowpark Container Services spec for the goldenmatch SPCS service.
+#
+# Apply via:
+#   CREATE SERVICE goldenmatch.goldenmatch_service
+#     IN COMPUTE POOL goldenmatch_pool
+#     FROM @goldenmatch.goldenmatch_specs/service-spec.yaml;
+#
+# See docs/snowflake-spcs.md for the full setup walkthrough.
+
+spec:
+  containers:
+    - name: goldenmatch
+      image: <account>.registry.snowflakecomputing.com/<database>/<schema>/<repo>/goldenmatch-spcs:<tag>
+      # Mount a stage as a volume so the identity DB + memory DB
+      # persist across container restarts. The stage must exist in
+      # the same database as the service.
+      volumeMounts:
+        - name: data
+          mountPath: /data
+      env:
+        GOLDENMATCH_IDENTITY_DB: /data/identity.db
+        # Optional: pin native acceleration tier on/off.
+        # `auto` is the default; `1` forces native + fails if unavailable.
+        GOLDENMATCH_NATIVE: auto
+        # Standard SPCS service identity injects the calling
+        # session's auth -- no static credentials need to live here.
+      resources:
+        requests:
+          cpu: "2"
+          memory: "8Gi"
+        limits:
+          cpu: "4"
+          memory: "16Gi"
+
+  endpoints:
+    - name: api
+      port: 8080
+      public: false
+      # Required for Snowflake-internal SQL functions to reach the
+      # service. Set `public: true` only if you need an OAuth-gated
+      # web URL for debugging.
+
+  volumes:
+    - name: data
+      source: "@goldenmatch.goldenmatch_data"

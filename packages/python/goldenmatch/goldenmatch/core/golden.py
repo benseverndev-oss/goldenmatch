@@ -514,6 +514,129 @@ def _build_golden_records_polars_native(
     return results
 
 
+def build_golden_records_df(
+    multi_df: pl.DataFrame,
+    rules: GoldenRulesConfig,
+) -> pl.DataFrame:
+    """Fast columnar path: returns golden records as a Polars DataFrame directly.
+
+    Same semantics as the polars-native fast path inside
+    ``build_golden_records_batch`` (drop_nulls().first() aggregation,
+    nuniq-driven per-field confidence, mean overall confidence) but the
+    output is a single Polars DataFrame instead of a ``list[dict]`` walked
+    by the caller to produce a DataFrame anyway.
+
+    At 10M rows / ~2M multi-member clusters the list[dict] intermediate
+    allocates ~232 B of CPython dict overhead per cluster × 8 fields nested:
+    ~14 GB peak in goldenmatch's QIS bench (see PR #548 RSS instrumentation).
+    The columnar path stores the same data in Polars at ~50 B/cell: ~0.8 GB
+    peak. **~17x peak RSS reduction on the golden stage alone.**
+
+    Constraints (same gates as ``_polars_native_eligible``):
+    - quality_scores must be None (slow path handles overrides).
+    - rules.default_strategy in {most_complete, first_non_null}.
+    - rules.field_rules must be empty.
+    - rules.cluster_overrides must be empty.
+    - No provenance metadata (slow path emits source_row_id per field).
+
+    Output columns:
+    - ``__cluster_id__``: cluster id.
+    - ``__golden_confidence__``: mean of per-field confidences in [0, 1].
+    - one column per user column with the chosen value (drop_nulls().first()).
+    """
+    strategy = rules.default_strategy or "most_complete"
+    if strategy not in ("most_complete", "first_non_null"):
+        raise ValueError(
+            f"build_golden_records_df does not handle strategy {strategy!r}; "
+            "call build_golden_records_batch for slow-path strategies."
+        )
+    user_cols = [c for c in multi_df.columns if not c.startswith("__")]
+
+    same_strategy_conf = 1.0
+    diff_strategy_conf = 0.7 if strategy == "most_complete" else 0.6
+
+    if not user_cols:
+        # Edge case: no user columns. Return cluster_ids with zero confidence.
+        return (
+            multi_df.group_by("__cluster_id__", maintain_order=True)
+            .agg(pl.lit(0.0).alias("__golden_confidence__"))
+        )
+
+    # Aggregation. Two strategies, matching the existing
+    # _build_golden_records_polars_native semantics exactly:
+    #   - most_complete: pick the LONGEST non-null value (sort_by len DESC).
+    #     "Caroline" wins over "Carol" because it's more complete.
+    #   - first_non_null: pick the FIRST non-null value (drop_nulls().first()).
+    # Both record n_unique so the confidence assignment can branch on whether
+    # the cluster agreed.
+    agg_exprs: list[pl.Expr] = []
+    if strategy == "most_complete":
+        # Precompute per-cell string lengths so sort_by can rank within the
+        # cluster. Same shape as _build_golden_records_polars_native.
+        len_col_aliases = {col: f"__len_{col}__" for col in user_cols}
+        agg_input = multi_df.with_columns([
+            pl.col(col).cast(pl.Utf8).str.len_chars().alias(alias)
+            for col, alias in len_col_aliases.items()
+        ])
+        for col in user_cols:
+            agg_exprs.append(
+                pl.col(col).filter(pl.col(col).is_not_null())
+                .sort_by(
+                    pl.col(len_col_aliases[col]).filter(pl.col(col).is_not_null()),
+                    descending=True,
+                )
+                .first().alias(col)
+            )
+            agg_exprs.append(
+                pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
+            )
+    else:  # first_non_null
+        agg_input = multi_df
+        for col in user_cols:
+            agg_exprs.append(pl.col(col).drop_nulls().first().alias(col))
+            agg_exprs.append(
+                pl.col(col).drop_nulls().n_unique().alias(f"__nuniq_{col}__")
+            )
+    agg = (
+        agg_input.group_by("__cluster_id__", maintain_order=True)
+        .agg(agg_exprs)
+    )
+
+    # Per-field confidence: 0 when the chosen value is null; same_strategy_conf
+    # when every non-null value in the cluster agreed (nuniq<=1); otherwise
+    # diff_strategy_conf. Vectorized as Polars when/then/otherwise -- no
+    # Python loop over clusters.
+    conf_exprs = [
+        pl.when(pl.col(col).is_null()).then(pl.lit(0.0))
+        .when(pl.col(f"__nuniq_{col}__") <= 1).then(pl.lit(same_strategy_conf))
+        .otherwise(pl.lit(diff_strategy_conf))
+        .alias(f"__conf_{col}__")
+        for col in user_cols
+    ]
+    agg = agg.with_columns(conf_exprs)
+
+    # Overall confidence = mean of per-field confidences. Polars handles the
+    # division so 2M clusters never enter a Python loop.
+    n = len(user_cols)
+    overall_expr = (
+        sum(pl.col(f"__conf_{col}__") for col in user_cols) / pl.lit(float(n))
+    ).alias("__golden_confidence__")
+    agg = agg.with_columns(overall_expr)
+
+    # Drop helper columns; keep cluster_id + confidence + user_cols.
+    drop_cols = (
+        [f"__nuniq_{col}__" for col in user_cols]
+        + [f"__conf_{col}__" for col in user_cols]
+    )
+    agg = agg.drop(drop_cols)
+
+    # Reorder so __cluster_id__ + __golden_confidence__ come first, matching
+    # the shape pipeline.py used to build via golden_rows construction.
+    return agg.select(
+        ["__cluster_id__", "__golden_confidence__", *user_cols]
+    )
+
+
 def _polars_native_eligible(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None,

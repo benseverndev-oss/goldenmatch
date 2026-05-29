@@ -41,6 +41,19 @@ class TestBenchmarkRecorder:
         assert out["stage_timings_seconds"]["foo"] == 1.2346
         assert out["metrics"]["count"] == 100
 
+    def test_to_dict_exposes_stage_peak_rss(self):
+        """The new RSS-instrumentation surface ships an empty dict by default."""
+        rec = BenchmarkRecorder()
+        assert "stage_peak_rss_kb" in rec.to_dict()
+        assert rec.to_dict()["stage_peak_rss_kb"] == {}
+
+    def test_set_stage_peak_rss_last_writer_wins(self):
+        """ru_maxrss is monotonic; reusing a stage name takes the later peak."""
+        rec = BenchmarkRecorder()
+        rec.set_stage_peak_rss("scoring", 12_000)
+        rec.set_stage_peak_rss("scoring", 18_000)
+        assert rec.to_dict()["stage_peak_rss_kb"] == {"scoring": 18_000}
+
 
 class TestStageHelper:
     def test_stage_with_no_recorder_is_noop(self):
@@ -74,6 +87,22 @@ class TestStageHelper:
                 pass
         assert "error_phase" in rec.timings
         assert rec.timings["error_phase"] >= 0.005
+
+    def test_stage_records_peak_rss_on_linux(self):
+        """stage(...) populates stage_peak_rss_kb on platforms with the resource module."""
+        import sys
+        if sys.platform == "win32":
+            import pytest
+            pytest.skip("resource module unavailable on Windows; ru_maxrss has no equivalent")
+        with bench_capture() as rec:
+            with stage("rss_phase"):
+                # Allocate ~50 MB so ru_maxrss likely advances measurably.
+                blob = bytearray(50 * 1024 * 1024)  # noqa: F841
+                time.sleep(0.001)
+        assert "rss_phase" in rec.stage_peak_rss_kb
+        # ru_maxrss is in KB on Linux; any sane process running this test is
+        # already >5 MB. Just assert the field is populated with a real value.
+        assert rec.stage_peak_rss_kb["rss_phase"] > 5_000
 
     def test_nested_stages_record_independently(self):
         with bench_capture() as rec:

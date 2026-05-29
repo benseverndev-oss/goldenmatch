@@ -40,8 +40,8 @@
     id_a, id_b, decision, dataset, reason, matchkey_name, memory_path
 ) %}
     {{ exceptions.raise_compiler_error(
-        "goldenmatch_file_pair_correction is only supported on postgres and "
-        "duckdb targets today; got adapter=" ~ target.type
+        "goldenmatch_file_pair_correction is only supported on postgres, "
+        "duckdb, and snowflake targets today; got adapter=" ~ target.type
     ) }}
 {% endmacro %}
 
@@ -73,6 +73,26 @@
         }
     {%- endset -%}
     SELECT goldenmatch_correction_add(
+        {{ dbt.string_literal(decision) }},
+        {{ dbt.string_literal(dataset) }},
+        {{ dbt.string_literal(memory_path) if memory_path is not none else "''" }},
+        {{ dbt.string_literal(args_json) }}
+    )
+{% endmacro %}
+
+
+{% macro snowflake__goldenmatch_file_pair_correction(
+    id_a, id_b, decision, dataset, reason, matchkey_name, memory_path
+) %}
+    {%- set args_json -%}
+        {
+          "id_a": {{ id_a }},
+          "id_b": {{ id_b }}
+          {%- if reason is not none -%}, "reason": {{ tojson(reason) }}{%- endif -%}
+          {%- if matchkey_name is not none -%}, "matchkey_name": {{ tojson(matchkey_name) }}{%- endif -%}
+        }
+    {%- endset -%}
+    SELECT goldenmatch.goldenmatch_correction_add(
         {{ dbt.string_literal(decision) }},
         {{ dbt.string_literal(dataset) }},
         {{ dbt.string_literal(memory_path) if memory_path is not none else "''" }},
