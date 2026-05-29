@@ -1404,6 +1404,24 @@ def _run_dedupe_pipeline(
                     pl.col("__row_id__").is_in(member_ids_all)
                 )
 
+            # Slim projection (PR #595). v32 attribution localized the
+            # +9 GB peak jump entirely to golden_attach_cluster_id's
+            # with_columns COW -- multi_df carries every column from
+            # collected_df including __xform_*__ / __mk_*__ / __block_key__
+            # / __bucket__ internals that survivorship never reads. Drop
+            # them BEFORE the with_columns so the COW runs over a smaller
+            # frame. Default OFF until v33 measures it; flip via
+            # GOLDENMATCH_GOLDEN_SLIM_MULTIDF=1.
+            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF") == "1":
+                with stage("golden_slim_multidf"):
+                    _internal_prefixes = (
+                        "__xform_", "__mk_", "__block_key__", "__bucket__",
+                    )
+                    multi_df = multi_df.select([
+                        c for c in multi_df.columns
+                        if not any(c.startswith(p) for p in _internal_prefixes)
+                    ])
+
             with stage("golden_attach_cluster_id"):
                 # Attach __cluster_id__ via replace_strict. The old keys/new
                 # vals lists are tiny (1 entry per member); the join itself
