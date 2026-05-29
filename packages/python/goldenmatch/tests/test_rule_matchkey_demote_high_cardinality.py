@@ -13,6 +13,8 @@ discriminative power.
 from __future__ import annotations
 
 from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
     GoldenMatchConfig,
     MatchkeyConfig,
     MatchkeyField,
@@ -43,7 +45,17 @@ def _mk(*field_names: str, type_: str = "weighted") -> MatchkeyConfig:
 
 
 def _cfg(matchkeys: list[MatchkeyConfig]) -> GoldenMatchConfig:
-    return GoldenMatchConfig(matchkeys=matchkeys)
+    """Minimal valid config. Pydantic requires `blocking` to be present
+    whenever a weighted/probabilistic matchkey is configured, so the
+    fixture pins a trivial static-blocking key. The rule under test
+    doesn't read blocking, but the constructor validates it."""
+    return GoldenMatchConfig(
+        matchkeys=matchkeys,
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["__test_block__"])],
+        ),
+    )
 
 
 def _profile(field_cards: dict[str, float]) -> ComplexityProfile:

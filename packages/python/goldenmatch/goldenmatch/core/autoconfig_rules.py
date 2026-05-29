@@ -1264,9 +1264,9 @@ DEFAULT_RULES = [
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
-    rule_recall_gap_suspected,             # 14 tuning: random pair probe high OR over-tight signature
-    rule_sparse_match_expand,              # 15 NEW v1.10: lower threshold proxy for sparse datasets
-    rule_matchkey_demote_high_cardinality_field,  # 16 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field (e.g. email in weighted matchkey)
+    rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
+    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
+    rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
