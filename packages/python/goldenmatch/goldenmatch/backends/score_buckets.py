@@ -82,6 +82,23 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
         return lambda a, b: token_sort_ratio(a, b) / 100.0
     if scorer_name == "exact":
         return lambda a, b: 1.0 if a == b else 0.0
+    if scorer_name == "soundex_match":
+        # Pure-Python jellyfish.soundex; per-pair binary match. Identical
+        # to the matrix path's soundex_match (core/scorer.py:88), just
+        # one call at a time instead of cdist-batched.
+        import jellyfish as _jf
+        return lambda a, b: 1.0 if _jf.soundex(a) == _jf.soundex(b) else 0.0
+    if scorer_name == "dice":
+        # Delegate to the existing per-pair implementation in core/scorer.py
+        # (_dice_score_single, bigram set Dice coefficient). Matrix path is
+        # vectorized via _dice_score_matrix; per-pair is the same coefficient
+        # one pair at a time. Unblocks fast path for workloads where
+        # auto-config or explicit config picks dice on a string field.
+        from goldenmatch.core.scorer import _dice_score_single
+        return _dice_score_single
+    if scorer_name == "jaccard":
+        from goldenmatch.core.scorer import _jaccard_score_single
+        return _jaccard_score_single
     if scorer_name == "ensemble":
         # The matrix-path ensemble (scorer.py:343-348) is max(jw, ts, sx*0.8)
         # where sx = soundex_match. None of those needs ML/network -- they're
@@ -103,9 +120,7 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None
-    if scorer_name in ("dice", "jaccard"):
-        # Need vectorized bit-array math; not yet wired through fast path.
-        return None
+    # (dice / jaccard / soundex_match handled above)
     # Plugin scorer -- accept only when it exposes ``score_pair``.
     try:
         from goldenmatch.plugins.registry import PluginRegistry
