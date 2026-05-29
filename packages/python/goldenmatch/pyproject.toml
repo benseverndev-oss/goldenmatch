@@ -96,6 +96,24 @@ databricks = [
 salesforce = [
     "simple-salesforce>=1.12",
 ]
+redshift = [
+    "redshift-connector>=2.0",
+]
+s3 = [
+    "boto3>=1.26",
+]
+gcs = [
+    "google-cloud-storage>=2.10",
+]
+azure_blob = [
+    "azure-storage-blob>=12.19",
+]
+sqlserver = [
+    "pyodbc>=5.0",
+]
+mysql = [
+    "pymysql>=1.1",
+]
 duckdb = [
     "duckdb>=0.9",
 ]

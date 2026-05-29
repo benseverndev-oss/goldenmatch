@@ -147,6 +147,7 @@ npm install goldenmatch
 ### Privacy
 - **PPRL multi-party linkage** — match across organizations without sharing raw data (92.4% F1 on FEBRL4)
 - **PPRL auto-configuration** — profiles your data and picks optimal fields, bloom filter parameters, and threshold
+- **In-house embedding (cloud-free)** — back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543) — febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
 
 ### Integration
 - **REST API + MCP Server** — 31 tools for matching, explaining, reviewing, data quality, transforms, and AutoConfigController telemetry
