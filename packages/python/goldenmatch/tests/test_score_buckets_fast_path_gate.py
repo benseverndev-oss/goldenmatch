@@ -103,8 +103,8 @@ class TestResolveFastPath:
         # fixture stays in sync with the implementation. The original
         # comment claimed the column name was "__mk_X__" -- wrong; that
         # is the EXACT-matchkey concat alias, not the xform sig.
-        from goldenmatch.core.matchkey import _xform_sig
         from goldenmatch.config.schemas import MatchkeyField
+        from goldenmatch.core.matchkey import _xform_sig
         col_first = _xform_sig(MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0))
         col_last = _xform_sig(MatchkeyField(field="last_name", scorer="jaro_winkler", weight=1.0))
         return pl.DataFrame({
