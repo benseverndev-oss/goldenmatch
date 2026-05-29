@@ -90,27 +90,31 @@ class TestRuleFires:
         assert "last_name" in new_field_names
 
     def test_picks_highest_cardinality_first(self):
-        """When multiple fields qualify, the highest-cardinality one is demoted
-        first (deterministic, ties broken by name)."""
-        cfg = _cfg([_mk("email", "id", "first_name")])
-        profile = _profile({"email": 0.99, "id": 1.0, "first_name": 0.20})
+        """When multiple fields qualify (cardinality > 0.99), the
+        highest-cardinality one is demoted first."""
+        cfg = _cfg([_mk("email", "id", "first_name", "last_name")])
+        profile = _profile({
+            "email": 0.995, "id": 1.0, "first_name": 0.20, "last_name": 0.20,
+        })
         result = rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory())
         assert result is not None
         new_cfg, _ = result
-        # id has cardinality 1.0, higher than email's 0.99
+        # id has cardinality 1.0, higher than email's 0.995
         new_field_names = [f.field for f in new_cfg.matchkeys[0].fields]
         assert "id" not in new_field_names
         # email still in (next iteration would catch it)
         assert "email" in new_field_names
 
     def test_includes_cardinality_in_rationale(self):
-        cfg = _cfg([_mk("name", "email")])
-        profile = _profile({"name": 0.20, "email": 0.97})
+        cfg = _cfg([_mk("first_name", "last_name", "email")])
+        profile = _profile({
+            "first_name": 0.20, "last_name": 0.20, "email": 0.995,
+        })
         result = rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory())
         assert result is not None
         _, decision = result
         assert "email" in decision.rationale
-        assert "0.97" in decision.rationale
+        assert "0.995" in decision.rationale
 
 
 class TestRuleDoesNotFire:
@@ -119,22 +123,29 @@ class TestRuleDoesNotFire:
         profile = _profile({"first_name": 0.20, "last_name": 0.20})
         assert rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory()) is None
 
-    def test_cardinality_exactly_095_does_not_fire(self):
-        """Boundary: > 0.95, not >= 0.95. Match what health() uses."""
-        cfg = _cfg([_mk("name")])
-        profile = _profile({"name": 0.95})
+    def test_cardinality_below_099_does_not_fire(self):
+        """Threshold is > 0.99 (tighter than health()'s > 0.95). Fields at
+        0.95-0.99 cardinality are naturally-discriminating fuzzy fields that
+        DO produce match candidates (e.g. corrupted names). Don't demote."""
+        cfg = _cfg([_mk("first_name", "last_name", "name")])
+        profile = _profile({
+            "first_name": 0.20, "last_name": 0.20, "name": 0.97,
+        })
+        assert rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory()) is None
+
+    def test_skips_when_demotion_would_leave_too_few_fields(self):
+        """Requires >= 2 fields remaining after demotion. Don't strip a
+        2-field matchkey to a 1-field one -- that loses discriminative power."""
+        cfg = _cfg([_mk("first_name", "email")])
+        profile = _profile({"first_name": 0.20, "email": 1.0})
         assert rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory()) is None
 
     def test_skips_when_would_empty_the_matchkey(self):
-        """If the only field is high-cardinality, removing it would leave the
-        matchkey empty. Skip and let other rules handle it."""
         cfg = _cfg([_mk("email")])
         profile = _profile({"email": 1.0})
         assert rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory()) is None
 
     def test_skips_exact_matchkey(self):
-        """Exact matchkeys have different cardinality semantics; > 0.95 there
-        means "fingerprint-quality" which is desired."""
         cfg = _cfg([_mk("email", "first_name", type_="exact")])
         profile = _profile({"email": 1.0, "first_name": 0.20})
         assert rule_matchkey_demote_high_cardinality_field(profile, cfg, RunHistory()) is None

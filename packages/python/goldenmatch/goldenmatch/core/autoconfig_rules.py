@@ -1120,52 +1120,59 @@ def rule_demote_clustered_identity(
     return None
 
 
+_DEMOTE_CARD_THRESHOLD = 0.99
+_DEMOTE_MIN_REMAINING_FIELDS = 2
+
+
 def rule_matchkey_demote_high_cardinality_field(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
     """Demote a weighted-matchkey field whose post_transform_cardinality_ratio
-    is > 0.95 (uniquely identifying -- produces near-zero match candidates).
+    is > 0.99 (essentially every value distinct -- email-like uniqueness).
 
-    Background: v23 QIS measurement (2026-05-29) showed `matchkey` sub-profile
+    Background: v23 QIS telemetry (2026-05-29) showed `matchkey` sub-profile
     YELLOW from iter 0 to iter 4 without any rule addressing it. The
     `MatchkeyProfile.health()` verdict is YELLOW when any field has
-    `post_transform_cardinality_ratio > 0.95`; that signal means the field
-    is uniquely identifying (every value distinct) so fuzzy/exact matching
-    on it almost never produces match candidates -- it's contributing
-    negative weight to the matchkey's discriminative power. The right
-    response: remove the field from the matchkey's fields list. Auto-config's
-    `promote_negative_evidence` will likely have kept it as NE on
-    high-identity columns, so the field continues to act as a NE penalty
-    when it disagrees -- which is what high-cardinality identifiers
-    (email, id) should be doing in the first place.
+    cardinality > 0.95.
+
+    Threshold > 0.99 (not > 0.95) is deliberately tighter than the health
+    verdict's: naturally-discriminating fuzzy fields (corrupted names,
+    addresses) sit at 0.95-0.98 cardinality and ARE useful for fuzzy
+    matching even though they're highly distinct. Only true unique
+    identifiers (email = first.last@example.com, sequential IDs) reach
+    0.99+; those are the ones that contribute near-zero match signal and
+    should be demoted. DQbench T3 clean-compat regression (PR #578 v1)
+    fired at the 0.95 threshold, removing useful name fields and pushing
+    cluster count from ~165 to 250.
 
     Safety:
-      - Won't strip a matchkey to empty (skip if it's the only field).
-      - Only operates on weighted matchkeys (exact matchkeys have different
-        cardinality semantics; > 0.95 there means "fingerprint-quality").
-      - Picks the HIGHEST-cardinality field when multiple fields qualify,
-        so iteration converges deterministically.
+      - Cardinality > 0.99 (not the > 0.95 health threshold).
+      - Requires at least 2 fields remaining after demotion so the
+        matchkey keeps discriminative power.
+      - Weighted matchkeys only (exact matchkeys have different cardinality
+        semantics; > 0.99 there means "fingerprint-quality").
+      - Picks the HIGHEST-cardinality field when multiple qualify
+        (deterministic).
     """
     for mk in current.matchkeys or []:
         if mk.type != "weighted":
             continue
-        # Find all eligible fields (cardinality > 0.95, present in mk.fields).
         candidates: list[tuple[str, float]] = []
         field_names = {f.field for f in (mk.fields or [])}
         for name, fs in profile.matchkey.per_field.items():
             if name not in field_names:
                 continue
-            if fs.post_transform_cardinality_ratio > 0.95:
+            if fs.post_transform_cardinality_ratio > _DEMOTE_CARD_THRESHOLD:
                 candidates.append((name, fs.post_transform_cardinality_ratio))
         if not candidates:
             continue
-        # Deterministic pick: highest cardinality first, ties broken by name.
+        # Need enough remaining fields after demotion for the matchkey to
+        # stay discriminative. Skip if removing the target would leave < 2.
+        if len(mk.fields or []) - 1 < _DEMOTE_MIN_REMAINING_FIELDS:
+            continue
         candidates.sort(key=lambda kv: (-kv[1], kv[0]))
         target_field, target_card = candidates[0]
         new_fields = [f for f in (mk.fields or []) if f.field != target_field]
-        if not new_fields:
-            # Can't strip to empty; skip this matchkey, try next.
-            continue
         new_mk = mk.model_copy(update={"fields": new_fields})
         new_matchkeys = [new_mk if m is mk else m for m in (current.matchkeys or [])]
         new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
@@ -1173,9 +1180,10 @@ def rule_matchkey_demote_high_cardinality_field(
             rule_name="matchkey_demote_high_cardinality_field",
             rationale=(
                 f"matchkey '{mk.name}' field '{target_field}' "
-                f"post_transform_cardinality_ratio={target_card:.3f} > 0.95 "
-                f"(uniquely identifying); removing from matchkey fields "
-                f"(NE retention handled separately by auto-config)"
+                f"post_transform_cardinality_ratio={target_card:.3f} > "
+                f"{_DEMOTE_CARD_THRESHOLD} (essentially unique); removing "
+                f"from matchkey fields (NE retention handled separately by "
+                f"auto-config)"
             ),
             config_diff={
                 f"matchkeys[{mk.name}].fields": f"removed:{target_field}",
