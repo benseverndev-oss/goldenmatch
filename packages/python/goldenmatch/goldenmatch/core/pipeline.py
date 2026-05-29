@@ -1410,9 +1410,13 @@ def _run_dedupe_pipeline(
             # collected_df including __xform_*__ / __mk_*__ / __block_key__
             # / __bucket__ internals that survivorship never reads. Drop
             # them BEFORE the with_columns so the COW runs over a smaller
-            # frame. Default OFF until v33 measures it; flip via
-            # GOLDENMATCH_GOLDEN_SLIM_MULTIDF=1.
-            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF") == "1":
+            # frame.
+            #
+            # v33 measured: -2.6 GB peak vs v32 baseline, F1 invariant,
+            # wall flat. Default ON; opt out via
+            # GOLDENMATCH_GOLDEN_SLIM_MULTIDF=0 if any downstream golden
+            # path ever needs an internal column.
+            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
                 with stage("golden_slim_multidf"):
                     _internal_prefixes = (
                         "__xform_", "__mk_", "__block_key__", "__bucket__",
