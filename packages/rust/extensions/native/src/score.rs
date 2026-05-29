@@ -414,45 +414,6 @@ fn soundex_code(c: char) -> u8 {
     }
 }
 
-/// Bigram set for Dice/Jaccard. Uses char windows (codepoints, not bytes) so
-/// Unicode strings behave the same as Python's per-char slicing.
-fn bigrams(s: &str) -> HashSet<(char, char)> {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() < 2 {
-        return HashSet::new();
-    }
-    let mut set = HashSet::with_capacity(chars.len() - 1);
-    for w in chars.windows(2) {
-        set.insert((w[0], w[1]));
-    }
-    set
-}
-
-fn dice_from_sets(a: &HashSet<(char, char)>, b: &HashSet<(char, char)>) -> f32 {
-    let n_a = a.len();
-    let n_b = b.len();
-    if n_a == 0 || n_b == 0 {
-        return 0.0;
-    }
-    let intersect: usize = a.intersection(b).count();
-    (2.0 * intersect as f32) / ((n_a + n_b) as f32)
-}
-
-fn jaccard_from_sets(a: &HashSet<(char, char)>, b: &HashSet<(char, char)>) -> f32 {
-    let n_a = a.len();
-    let n_b = b.len();
-    if n_a == 0 || n_b == 0 {
-        return 0.0;
-    }
-    let intersect: usize = a.intersection(b).count();
-    let union: usize = n_a + n_b - intersect;
-    if union == 0 {
-        0.0
-    } else {
-        intersect as f32 / union as f32
-    }
-}
-
 /// Read an Arrow Utf8 / LargeUtf8 column into a Vec<String>, mapping null
 /// entries to empty strings (matches the slow path's caller convention --
 /// see `_fuzzy_score_matrix:349` and `_soundex_score_matrix:451`).
@@ -493,11 +454,18 @@ fn arrow_to_strings(data: ArrayData) -> PyResult<Vec<String>> {
 /// `scorer_id`:
 ///   0 = jaro_winkler, 1 = levenshtein, 2 = token_sort (returns [0,1] —
 ///   matches the slow path's `_fuzzy_score_matrix` which divides ts by 100),
-///   3 = exact, 4 = soundex_match (binary 0/1), 5 = dice, 6 = jaccard.
+///   3 = exact, 4 = soundex_match (binary 0/1).
 ///
 /// `symmetric=True` when the caller knows `values_a is values_b`. Skips the
-/// lower triangle compute and mirrors. Symmetric output diagonal is 1.0 for
-/// scorers 0-6 on non-null pairs; 0.0 on null/null per the empty-string map.
+/// lower triangle compute and mirrors. Symmetric output diagonal is 1.0 on
+/// non-null pairs across all scorers; 0.0 on null/null per the empty-string
+/// mapping `arrow_to_strings` applies.
+///
+/// Dice / Jaccard are intentionally absent. Goldenmatch's slow-path
+/// `_dice_score_matrix` and `_jaccard_score_matrix` are bloom-filter (PPRL
+/// hex) scorers, not char-bigram. A native PPRL kernel is a separate
+/// design (hex parse + popcount) and would not share this kernel's
+/// dispatch.
 #[pyfunction]
 #[pyo3(signature = (values_a, values_b, scorer_id, symmetric=false))]
 pub fn score_field_matrix(
@@ -512,9 +480,9 @@ pub fn score_field_matrix(
     let n = a.len();
     let m = b.len();
 
-    if !(0u8..=6u8).contains(&scorer_id) {
+    if !(0u8..=4u8).contains(&scorer_id) {
         return Err(PyValueError::new_err(format!(
-            "score_field_matrix: unknown scorer_id={scorer_id} (valid: 0..=6)"
+            "score_field_matrix: unknown scorer_id={scorer_id} (valid: 0..=4)"
         )));
     }
 
@@ -526,9 +494,9 @@ pub fn score_field_matrix(
         0 | 1 | 2 | 3 => compute_pairwise(&a, &b, symmetric, |x, y| {
             score_one(scorer_id, x, y) as f32
         }),
-        4 => {
-            // Precompute soundex codes once per string -- N*M comparisons would
-            // otherwise re-soundex every row pair.
+        _ => {
+            // 4 = soundex_match. Precompute soundex codes once per string
+            // -- N*M comparisons would otherwise re-soundex every row pair.
             let codes_a: Vec<String> = a.par_iter().map(|s| soundex(s)).collect();
             let codes_b: Vec<String> = if symmetric {
                 codes_a.clone()
@@ -542,18 +510,6 @@ pub fn score_field_matrix(
                     0.0
                 }
             })
-        }
-        _ => {
-            // 5 = dice, 6 = jaccard
-            let bigrams_a: Vec<HashSet<(char, char)>> = a.par_iter().map(|s| bigrams(s)).collect();
-            let bigrams_b: Vec<HashSet<(char, char)>> = if symmetric {
-                bigrams_a.clone()
-            } else {
-                b.par_iter().map(|s| bigrams(s)).collect()
-            };
-            let fn_ptr: fn(&HashSet<(char, char)>, &HashSet<(char, char)>) -> f32 =
-                if scorer_id == 5 { dice_from_sets } else { jaccard_from_sets };
-            compute_pairwise_precomputed(&bigrams_a, &bigrams_b, symmetric, fn_ptr)
         }
     });
 
