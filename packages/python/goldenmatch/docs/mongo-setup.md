@@ -57,14 +57,14 @@ Connection sourcing falls back through:
 
 ## Identity Store
 
-For the Identity Graph, `MongoIdentityStore` ships a standalone class with the same surface that the SQL backends expose for reads + writes. It's a sibling of `IdentityStore(backend="sqlite")` / `IdentityStore(backend="postgres")`, not a `backend=` branch on the existing class -- that unification is Phase 2 follow-up.
+Mongo is now a peer to SQLite and Postgres in the unified `IdentityStore` interface. Switch backends by changing one constructor argument:
 
 ```python
-from goldenmatch.identity.mongo_backend import MongoIdentityStore
+from goldenmatch.identity.store import IdentityStore, new_entity_id
 from goldenmatch.identity.model import IdentityNode, SourceRecord
-from goldenmatch.identity.store import new_entity_id
 
-store = MongoIdentityStore(
+store = IdentityStore(
+    backend="mongo",
     connection="mongodb://localhost:27017",
     database="goldenmatch",
 )
@@ -81,12 +81,20 @@ store.upsert_record(SourceRecord(
 store.close()
 ```
 
-Use it as a context manager to auto-close the client:
+Every public method on `IdentityStore` checks `self._backend == "mongo"` and routes through the Mongo backend — existing SQLite and Postgres callers are byte-identical-unchanged. Pass `client=` instead of `connection=` to reuse an existing `pymongo.MongoClient`.
+
+### Low-level access (rare)
+
+`goldenmatch.identity.mongo_backend.MongoIdentityStore` is the direct class the unified `IdentityStore` delegates to. Use it when you need to override behavior the `IdentityStore` constructor doesn't expose:
 
 ```python
+from goldenmatch.identity.mongo_backend import MongoIdentityStore
+
 with MongoIdentityStore(connection="mongodb://...", database="gm") as store:
     ...
 ```
+
+For 95% of usage, prefer `IdentityStore(backend="mongo", ...)`.
 
 ### Schema
 
@@ -113,13 +121,10 @@ Indexes are created idempotently on every store open -- no separate migration ru
 | Events | `emit_event`, `history`, `has_run_event` |
 | Aliases | `add_alias`, `resolve_alias` |
 
-Methods NOT in Phase 1 (and so not available through `MongoIdentityStore` yet):
+Methods NOT in scope yet:
 
-- `bulk_*` writers (Postgres-only fast-path; the SQL backend uses COPY).
-- `IdentityStore(backend="mongo")` dispatch -- you instantiate `MongoIdentityStore` directly.
+- `bulk_*` writers (Postgres-only fast-path; the SQL backend uses COPY). Mongo equivalent would be `bulk_write` with ordered=False -- candidate for a perf-focused follow-up.
 - The Alembic migration trail (`goldenmatch identity migrate`) targets the Postgres schema; Mongo's index-create-on-open is the equivalent.
-
-These land in Phase 2 alongside a Protocol-based dispatch refactor that lets the existing `IdentityStore` route `backend="mongo"` through `MongoIdentityStore` transparently.
 
 ## Why MongoDB?
 
