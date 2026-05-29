@@ -1120,6 +1120,79 @@ def rule_demote_clustered_identity(
     return None
 
 
+_DEMOTE_CARD_THRESHOLD = 0.99
+_DEMOTE_MIN_REMAINING_FIELDS = 2
+
+
+def rule_matchkey_demote_high_cardinality_field(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Demote a weighted-matchkey field whose post_transform_cardinality_ratio
+    is > 0.99 (essentially every value distinct -- email-like uniqueness).
+
+    Background: v23 QIS telemetry (2026-05-29) showed `matchkey` sub-profile
+    YELLOW from iter 0 to iter 4 without any rule addressing it. The
+    `MatchkeyProfile.health()` verdict is YELLOW when any field has
+    cardinality > 0.95.
+
+    Threshold > 0.99 (not > 0.95) is deliberately tighter than the health
+    verdict's: naturally-discriminating fuzzy fields (corrupted names,
+    addresses) sit at 0.95-0.98 cardinality and ARE useful for fuzzy
+    matching even though they're highly distinct. Only true unique
+    identifiers (email = first.last@example.com, sequential IDs) reach
+    0.99+; those are the ones that contribute near-zero match signal and
+    should be demoted. DQbench T3 clean-compat regression (PR #578 v1)
+    fired at the 0.95 threshold, removing useful name fields and pushing
+    cluster count from ~165 to 250.
+
+    Safety:
+      - Cardinality > 0.99 (not the > 0.95 health threshold).
+      - Requires at least 2 fields remaining after demotion so the
+        matchkey keeps discriminative power.
+      - Weighted matchkeys only (exact matchkeys have different cardinality
+        semantics; > 0.99 there means "fingerprint-quality").
+      - Picks the HIGHEST-cardinality field when multiple qualify
+        (deterministic).
+    """
+    for mk in current.matchkeys or []:
+        if mk.type != "weighted":
+            continue
+        candidates: list[tuple[str, float]] = []
+        field_names = {f.field for f in (mk.fields or [])}
+        for name, fs in profile.matchkey.per_field.items():
+            if name not in field_names:
+                continue
+            if fs.post_transform_cardinality_ratio > _DEMOTE_CARD_THRESHOLD:
+                candidates.append((name, fs.post_transform_cardinality_ratio))
+        if not candidates:
+            continue
+        # Need enough remaining fields after demotion for the matchkey to
+        # stay discriminative. Skip if removing the target would leave < 2.
+        if len(mk.fields or []) - 1 < _DEMOTE_MIN_REMAINING_FIELDS:
+            continue
+        candidates.sort(key=lambda kv: (-kv[1], kv[0]))
+        target_field, target_card = candidates[0]
+        new_fields = [f for f in (mk.fields or []) if f.field != target_field]
+        new_mk = mk.model_copy(update={"fields": new_fields})
+        new_matchkeys = [new_mk if m is mk else m for m in (current.matchkeys or [])]
+        new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
+        decision = PolicyDecision(
+            rule_name="matchkey_demote_high_cardinality_field",
+            rationale=(
+                f"matchkey '{mk.name}' field '{target_field}' "
+                f"post_transform_cardinality_ratio={target_card:.3f} > "
+                f"{_DEMOTE_CARD_THRESHOLD} (essentially unique); removing "
+                f"from matchkey fields (NE retention handled separately by "
+                f"auto-config)"
+            ),
+            config_diff={
+                f"matchkeys[{mk.name}].fields": f"removed:{target_field}",
+            },
+        )
+        return new_cfg, decision
+    return None
+
+
 def rule_blocking_adaptive_on_p99_outlier(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1199,8 +1272,9 @@ DEFAULT_RULES = [
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
-    rule_recall_gap_suspected,             # 14 tuning: random pair probe high OR over-tight signature
-    rule_sparse_match_expand,              # 15 NEW v1.10: lower threshold proxy for sparse datasets
+    rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
+    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
+    rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via
     # AutoConfigController._maybe_decorate_with_llm_scorer(), which runs once
