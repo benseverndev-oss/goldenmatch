@@ -56,19 +56,19 @@ gcloud iam service-accounts keys create gm-ray-bench-key.json \
 ### 3. Store the GCP creds in Infisical
 
 The workflow pulls these at runtime from Infisical project
-`a99885f0`, env `dev`. Set them with `infisical secrets set` (use
+`a99885f0-c5af-4ae1-9dc8-255cc60aa129`, env `dev`. Set them with `infisical secrets set` (use
 `--silent` and redirect stdout so values don't echo into the
 terminal):
 
 ```powershell
 # Project id
 $projectId = (gcloud config get-value project)
-infisical.cmd secrets set --projectId a99885f0 --env dev `
+infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
     GCP_PROJECT_ID=$projectId > $null
 
 # Service account JSON (multi-line; pass via env var to avoid quoting)
 $env:_GM_SA_JSON = Get-Content gm-ray-bench-key.json -Raw
-infisical.cmd secrets set --projectId a99885f0 --env dev `
+infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
     GCP_SA_KEY=$env:_GM_SA_JSON > $null
 Remove-Item env:_GM_SA_JSON
 Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
@@ -77,7 +77,7 @@ Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
 Verify by name only (no values):
 
 ```powershell
-infisical.cmd secrets --projectId a99885f0 --env dev | Select-String GCP
+infisical.cmd secrets --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev | Select-String GCP
 ```
 
 ### 4. Create a Machine Identity for GitHub Actions

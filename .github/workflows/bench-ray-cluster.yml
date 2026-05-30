@@ -8,11 +8,11 @@
 # Required GitHub secrets (provision once per repo):
 #   INFISICAL_CLIENT_ID      — Universal Auth client id for a Machine
 #                              Identity scoped to the goldenmatch
-#                              Infisical project (a99885f0) with read
+#                              Infisical project (a99885f0-c5af-4ae1-9dc8-255cc60aa129) with read
 #                              access on the `dev` environment.
 #   INFISICAL_CLIENT_SECRET  — companion secret for the same identity.
 #
-# Pulled FROM Infisical project a99885f0, env=dev, at runtime:
+# Pulled FROM Infisical project a99885f0-c5af-4ae1-9dc8-255cc60aa129, env=dev, at runtime:
 #   GCP_PROJECT_ID   — GCP project to bill
 #   GCP_SA_KEY       — service account JSON with the roles below
 #
@@ -86,7 +86,7 @@ jobs:
       - name: Fetch GCP creds from Infisical
         # Authenticate the Machine Identity, then pull GCP_PROJECT_ID
         # and GCP_SA_KEY from the goldenmatch Infisical project
-        # (a99885f0, dev env). The values are masked in subsequent
+        # (a99885f0-c5af-4ae1-9dc8-255cc60aa129, dev env). The values are masked in subsequent
         # logs via ::add-mask::. The SA JSON is written to disk and
         # GOOGLE_APPLICATION_CREDENTIALS points at it; the project id
         # is exported as a job-scope env var so the render + sweep
@@ -107,12 +107,12 @@ jobs:
           echo "::add-mask::$INFISICAL_TOKEN"
 
           GCP_PROJECT_ID=$(infisical secrets get GCP_PROJECT_ID \
-            --projectId=a99885f0 --env=dev --plain --token="$INFISICAL_TOKEN")
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
           echo "::add-mask::$GCP_PROJECT_ID"
 
           # Multi-line SA JSON: write straight to disk; never echo.
           infisical secrets get GCP_SA_KEY \
-            --projectId=a99885f0 --env=dev --plain --token="$INFISICAL_TOKEN" \
+            --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
             > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
 
