@@ -325,6 +325,15 @@ def _try_build_native_chain(column: str, std_names: list[str]) -> pl.Expr | None
 # ── Apply to DataFrame ──────────────────────────────────────────────────────
 
 
+def _staged_per_col_enabled() -> bool:
+    """When GOLDENMATCH_STANDARDIZE_STAGED=1, apply each column's rule chain
+    via a forced collect+lazy round-trip so the bench attributes per-column
+    wall. Defeats Polars fusion across columns -- diagnostic only.
+    """
+    import os
+    return os.environ.get("GOLDENMATCH_STANDARDIZE_STAGED") == "1"
+
+
 def apply_standardization(
     lf: pl.LazyFrame,
     rules: dict[str, list[str]],
@@ -342,6 +351,11 @@ def apply_standardization(
     """
     available_cols = set(lf.collect_schema().names())
     exprs = []
+    # Diagnostic mode: log per-column rule list + chain path so the bench
+    # can see WHICH columns + rules are running. Cheap, always-on logging
+    # (info-level; one line per column at most).
+    from goldenmatch.core.bench import stage as _bench_stage
+    _staged = _staged_per_col_enabled()
 
     for column, std_names in rules.items():
         if column not in available_cols:
@@ -349,11 +363,19 @@ def apply_standardization(
                 f"Standardization: column {column!r} not found in data, skipping."
             )
             continue
+        logger.info(
+            "standardize rule: column=%r rules=%s",
+            column, std_names,
+        )
 
         # Try fully native chain first (fastest)
         native_expr = _try_build_native_chain(column, std_names)
         if native_expr is not None:
-            exprs.append(native_expr)
+            if _staged:
+                with _bench_stage(f"std_col_native_{column}"):
+                    lf = lf.with_columns([native_expr]).collect().lazy()
+            else:
+                exprs.append(native_expr)
             continue
 
         # If only one standardizer has no native, use native for the ones that do
@@ -379,7 +401,11 @@ def apply_standardization(
                 return val
 
             expr = expr.map_elements(chained_fn, return_dtype=pl.Utf8).alias(column)
-            exprs.append(expr)
+            if _staged:
+                with _bench_stage(f"std_col_mixed_{column}"):
+                    lf = lf.with_columns([expr]).collect().lazy()
+            else:
+                exprs.append(expr)
         else:
             # All non-native, pure map_elements
             funcs = [get_standardizer(name) for name in std_names]
@@ -395,7 +421,11 @@ def apply_standardization(
                 .map_elements(chained_fn, return_dtype=pl.Utf8)
                 .alias(column)
             )
-            exprs.append(expr)
+            if _staged:
+                with _bench_stage(f"std_col_pymap_{column}"):
+                    lf = lf.with_columns([expr]).collect().lazy()
+            else:
+                exprs.append(expr)
 
     if exprs:
         lf = lf.with_columns(exprs)
