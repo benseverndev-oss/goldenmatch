@@ -50,6 +50,10 @@ on:
         description: "GOLDENMATCH_GOLDEN_SLIM_MULTIDF value (0 or 1). Default '1' = today's behavior; pass '0' to bench the pre-slim baseline."
         required: false
         default: "1"
+      prep_staged_collect:
+        description: "GOLDENMATCH_PREP_STAGED_COLLECT value (0 or 1). PR #599 forces intermediate collects to localize combined_lf_collect's 80s wall. WILL slow the run (defeats fusion) -- diagnostic only."
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -89,6 +93,9 @@ jobs:
       # PR #595: slim multi_df before golden_attach_cluster_id's with_columns
       # COW. v32 attribution showed that step held the entire +9 GB peak jump.
       GOLDENMATCH_GOLDEN_SLIM_MULTIDF: ${{ inputs.golden_slim_multidf || '0' }}
+      # PR #599: forces intermediate collects in the prep graph to attribute
+      # combined_lf_collect's 80s wall. Diagnostic-only; defeats Polars fusion.
+      GOLDENMATCH_PREP_STAGED_COLLECT: ${{ inputs.prep_staged_collect || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 

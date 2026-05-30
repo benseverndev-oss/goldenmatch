@@ -882,13 +882,28 @@ def _run_dedupe_pipeline(
         pass
 
     # ── Step 1.5b: STANDARDIZE ──
+    # When GOLDENMATCH_PREP_STAGED_COLLECT=1, FORCE an intermediate collect
+    # after each prep step so the bench can attribute combined_lf_collect's
+    # 80s wall to standardize vs domain_extraction vs compute_matchkeys.
+    # Default off (the forced materializations defeat Polars fusion and
+    # only exist to localize the wall hotspot for the next perf PR).
+    _staged_collect = os.environ.get("GOLDENMATCH_PREP_STAGED_COLLECT") == "1"
+
+    def _force_collect_if_staged(lf: pl.LazyFrame, label: str) -> pl.LazyFrame:
+        if not _staged_collect:
+            return lf
+        with stage(f"prep_force_collect_{label}"):
+            return lf.collect().lazy()
+
     if config.standardization and config.standardization.rules:
         with stage("standardize"):
             combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+        combined_lf = _force_collect_if_staged(combined_lf, "standardize")
 
     # ── Step 1.5c: DOMAIN FEATURE EXTRACTION ──
     with stage("domain_extraction"):
         combined_lf = _apply_domain_extraction(combined_lf, config)
+    combined_lf = _force_collect_if_staged(combined_lf, "domain_extraction")
 
     # ── Learning Memory: pre-scoring learner overlay ──
     with stage("memory_pre_overlay"):
@@ -897,6 +912,7 @@ def _run_dedupe_pipeline(
     # ── Step 2: TRANSFORM ──
     with stage("compute_matchkeys"):
         combined_lf = compute_matchkeys(combined_lf, matchkeys)
+    combined_lf = _force_collect_if_staged(combined_lf, "compute_matchkeys")
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
     # Hoist matchkey transforms onto the materialized df once — eliminates
