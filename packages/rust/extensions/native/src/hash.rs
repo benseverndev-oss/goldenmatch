@@ -15,6 +15,7 @@ use goldenmatch_fingerprint_core::{fingerprint_fields, fingerprint_json, FpValue
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString};
+use rayon::prelude::*;
 
 fn py_to_fpvalue(name: &str, value: &Bound<'_, PyAny>) -> PyResult<FpValue> {
     if value.is_none() {
@@ -68,6 +69,55 @@ pub fn record_fingerprint(record: &Bound<'_, PyDict>) -> PyResult<String> {
         fields.push((name, fv));
     }
     fingerprint_fields(fields).map_err(PyValueError::new_err)
+}
+
+/// Bulk canonical SHA-256 fingerprints for N records.
+///
+/// Identical per-record semantics to `record_fingerprint`. Returns one hex
+/// string per input record, in order. Errors propagate from the FIRST
+/// failing record (matches the per-record loop callers wrote before this
+/// kernel landed).
+///
+/// Two phases:
+///   1. Sequential pyo3 extraction — convert each `dict[str, scalar]` to a
+///      `Vec<(String, FpValue)>`. Holds the GIL; cannot parallelize.
+///   2. GIL-released SHA-256 + hex via rayon. Per-record work is independent
+///      so par_iter is correct.
+///
+/// Spec:
+/// docs/superpowers/specs/2026-05-30-bulk-record-fingerprint-kernel-spec.md
+/// (gitignored; local design notes).
+#[pyfunction]
+pub fn record_fingerprints_batch(
+    py: Python<'_>,
+    records: Vec<Bound<'_, PyDict>>,
+) -> PyResult<Vec<String>> {
+    // ---- Phase 1: extract all records to FpValue field lists (GIL-held). --
+    let mut extracted: Vec<Vec<(String, FpValue)>> = Vec::with_capacity(records.len());
+    for record in &records {
+        let mut fields: Vec<(String, FpValue)> = Vec::with_capacity(record.len());
+        for (k, v) in record.iter() {
+            let name: String = k
+                .extract()
+                .map_err(|_| PyTypeError::new_err("record field names must be strings"))?;
+            if name.starts_with("__") {
+                continue;
+            }
+            let fv = py_to_fpvalue(&name, &v)?;
+            fields.push((name, fv));
+        }
+        extracted.push(fields);
+    }
+
+    // ---- Phase 2: par_iter SHA-256 + hex (GIL released). -------------------
+    // Errors in fingerprint_fields are theoretically possible (canonicalization
+    // edge cases) -- collect into Result<Vec, String> via try_fold-equivalent.
+    py.allow_threads(|| {
+        extracted
+            .into_par_iter()
+            .map(|fields| fingerprint_fields(fields).map_err(PyValueError::new_err))
+            .collect::<PyResult<Vec<String>>>()
+    })
 }
 
 /// C ABI: canonical record fingerprint over a JSON object string.
