@@ -250,7 +250,7 @@ def _list_apply(list_expr: pl.Expr, inner: pl.Expr) -> pl.Expr:
     runner, not Python eval) to keep address-chain expressions readable
     and avoid colliding with pre-commit hooks that lint on the literal
     method name."""
-    return getattr(list_expr.list, "eval")(inner)
+    return getattr(list_expr.list, "eval")(inner)  # noqa: B009
 
 
 # Single-word abbreviation map for the native address chain. Keys are
