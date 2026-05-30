@@ -159,10 +159,34 @@ jobs:
         # `ray submit` ships the script to the head node and runs it.
         # The script writes its JSON output to /tmp on the head; we
         # rsync it back via `ray rsync_down` after the run.
+        #
+        # We background a `ray status` poller (every 30s) so the GH
+        # live log shows head/worker resource use and per-node state
+        # interleaved with bench stdout. Without this, the only
+        # signal mid-run is autoscaler "Resized to N CPUs" lines and
+        # whatever the bench script chooses to print.
         run: |
           set -euo pipefail
           mkdir -p .profile_tmp/qis
           OUT_REMOTE="/tmp/qis_${{ inputs.label }}.json"
+
+          # Background poller. Runs in a subshell so we can trap-kill
+          # it cleanly on bench completion regardless of exit code.
+          (
+            while true; do
+              echo "===== ray status @ $(date -u +%H:%M:%S) ====="
+              ray exec .ray/cluster-gce.yaml "ray status" 2>&1 \
+                | grep -E "Node status|Active|Pending|Recent|Resources|CPU|memory|object_store|Healthy|Unhealthy" \
+                || echo "ray status poll failed (transient SSH/docker issue)"
+              echo ""
+              sleep 30
+            done
+          ) &
+          POLLER_PID=$!
+          # Trap fires on script exit (success OR failure) to release
+          # the poller PID and its SSH control-master connections.
+          trap "kill $POLLER_PID 2>/dev/null || true" EXIT
+
           ray submit .ray/cluster-gce.yaml \
             scripts/quality_invariant_scale.py \
             -- --rows ${{ inputs.rows }} \
