@@ -82,7 +82,7 @@ available_node_types:
           type: PERSISTENT
           initializeParams:
             diskSizeGb: 100
-            sourceImage: projects/deeplearning-platform-release/global/images/family/common-cpu
+            sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
       scheduling:
         - preemptible: false
   ray_worker_default:
@@ -97,7 +97,7 @@ available_node_types:
           type: PERSISTENT
           initializeParams:
             diskSizeGb: 100
-            sourceImage: projects/deeplearning-platform-release/global/images/family/common-cpu
+            sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
       # Preemptible (spot) workers are 60-80% cheaper. Phase 5 streaming
       # is partition-resumable so preemption is tolerable at this scale.
       # Flip to false if you see preemption-driven retries dominating wall.
