@@ -54,6 +54,10 @@ on:
         description: "GOLDENMATCH_PREP_STAGED_COLLECT value (0 or 1). PR #599 forces intermediate collects to localize combined_lf_collect's 80s wall. WILL slow the run (defeats fusion) -- diagnostic only."
         required: false
         default: "0"
+      standardize_staged:
+        description: "GOLDENMATCH_STANDARDIZE_STAGED value (0 or 1). Forces per-column collects in apply_standardization to localize the 54s wall. WILL slow further -- diagnostic only."
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -96,6 +100,9 @@ jobs:
       # PR #599: forces intermediate collects in the prep graph to attribute
       # combined_lf_collect's 80s wall. Diagnostic-only; defeats Polars fusion.
       GOLDENMATCH_PREP_STAGED_COLLECT: ${{ inputs.prep_staged_collect || '0' }}
+      # PR #600: per-column staged collect inside apply_standardization to
+      # attribute the 54s wall per rule. Diagnostic only.
+      GOLDENMATCH_STANDARDIZE_STAGED: ${{ inputs.standardize_staged || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
