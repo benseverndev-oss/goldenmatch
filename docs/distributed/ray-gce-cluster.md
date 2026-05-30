@@ -61,8 +61,13 @@ existing naming convention:
 
 | Infisical secret name | Format | Decoded form |
 |---|---|---|
-| `GOOGLE_CLOUD_PROJECT` | plain string | the GCP project id |
+| `GCP_RAY_BENCH_PROJECT_ID` | plain string | the GCP project id where the bench SA lives (e.g. `golden-490919`) |
 | `GCP_SA_KEY_B64` | base64-encoded | service account JSON |
+
+`GCP_RAY_BENCH_PROJECT_ID` is a Ray-bench-specific name on purpose -- the
+team's existing `GOOGLE_CLOUD_PROJECT` secret points at a different
+project used for Vertex AI work. Reusing it would 403 the bench SA on
+every cloudresourcemanager call.
 
 The workflow base64-decodes `GCP_SA_KEY_B64` and writes the JSON
 straight to disk; the raw bytes never round-trip through env vars.
