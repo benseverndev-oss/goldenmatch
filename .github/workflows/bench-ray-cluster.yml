@@ -13,10 +13,12 @@
 #   INFISICAL_CLIENT_SECRET  — companion secret for the same identity.
 #
 # Pulled FROM Infisical project a99885f0-c5af-4ae1-9dc8-255cc60aa129, env=dev, at runtime:
-#   GCP_PROJECT_ID   — GCP project to bill
-#   GCP_SA_KEY       — service account JSON with the roles below
+#   GOOGLE_CLOUD_PROJECT  — GCP project to bill
+#   GCP_SA_KEY_B64        — base64-encoded service account JSON
+#                           (roles listed below). Decoded to disk at
+#                           fetch time; never echoed.
 #
-# Required GCP service account roles on GCP_PROJECT_ID:
+# Required GCP service account roles:
 #   - roles/compute.admin       (create/delete instances + disks)
 #   - roles/iam.serviceAccountUser (let Ray attach the SA to instances)
 #
@@ -106,15 +108,25 @@ jobs:
             --client-secret="$INFISICAL_CLIENT_SECRET")
           echo "::add-mask::$INFISICAL_TOKEN"
 
-          GCP_PROJECT_ID=$(infisical secrets get GCP_PROJECT_ID \
+          # GOOGLE_CLOUD_PROJECT is the team's existing Infisical secret
+          # name; surfaces it locally as GCP_PROJECT_ID for the rest of
+          # this workflow's env to read.
+          GCP_PROJECT_ID=$(infisical secrets get GOOGLE_CLOUD_PROJECT \
             --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN")
           echo "::add-mask::$GCP_PROJECT_ID"
 
-          # Multi-line SA JSON: write straight to disk; never echo.
-          infisical secrets get GCP_SA_KEY \
+          # SA key is stored base64-encoded under GCP_SA_KEY_B64. Decode
+          # straight to disk (never echo). base64 -d is GNU coreutils;
+          # uses --ignore-garbage to tolerate any leading whitespace
+          # the Infisical CLI might emit alongside the value.
+          infisical secrets get GCP_SA_KEY_B64 \
             --projectId=a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env=dev --plain --token="$INFISICAL_TOKEN" \
-            > "$HOME/gcp-sa.json"
+            | base64 -d --ignore-garbage > "$HOME/gcp-sa.json"
           chmod 600 "$HOME/gcp-sa.json"
+
+          # Sanity: the decoded file must be a JSON object. Validates the
+          # base64 round-trip without echoing the contents.
+          python3 -c "import json; json.load(open('$HOME/gcp-sa.json'))"
 
           echo "GCP_PROJECT_ID=$GCP_PROJECT_ID" >> $GITHUB_ENV
           echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
