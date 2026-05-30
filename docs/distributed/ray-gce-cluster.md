@@ -25,7 +25,11 @@ leak: ~$1/hr if both teardown steps fail.
 ```sh
 gcloud projects create goldenmatch-ray-bench --name="goldenmatch ray bench"
 gcloud config set project goldenmatch-ray-bench
-gcloud services enable compute.googleapis.com iam.googleapis.com
+gcloud services enable \
+    compute.googleapis.com \
+    iam.googleapis.com \
+    cloudresourcemanager.googleapis.com \
+    iamcredentials.googleapis.com
 ```
 
 The project ID becomes the `GCP_PROJECT_ID` GitHub secret.
