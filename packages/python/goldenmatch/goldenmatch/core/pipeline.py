@@ -1615,56 +1615,6 @@ def _run_dedupe_pipeline(
     return results
 
 
-def _route_ray_via_phase5(
-    df: pl.DataFrame,
-    config: GoldenMatchConfig,
-    source_name: str,
-) -> Any:
-    """Convert the input DataFrame to a Ray Dataset and route through
-    run_dedupe_pipeline_distributed under Phase 5 streaming mode.
-
-    PR 1 of the Ray Phase 5 routing lane. The conversion uses
-    ray.data.from_arrow on df.to_arrow() (zero-copy at the Arrow buffer
-    level; Ray Dataset partitions the chunks lazily). The subsequent
-    streaming pipeline avoids the driver-side take_all that the Phase 2
-    cheat-line still performs.
-
-    Stamps GOLDENMATCH_DISTRIBUTED_PIPELINE=2 for the duration so the
-    dispatcher in distributed/pipeline.py routes to _run_phase5_pipeline.
-    The previous value (if any) is restored on exit so callers that set
-    it explicitly are honored.
-    """
-    import ray.data as _rd  # noqa: PLC0415
-
-    from goldenmatch.distributed.pipeline import (  # noqa: PLC0415
-        run_dedupe_pipeline_distributed,
-    )
-
-    ds = _rd.from_arrow(df.to_arrow())
-    prev = os.environ.get("GOLDENMATCH_DISTRIBUTED_PIPELINE")
-    os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
-    try:
-        # v42b surfaced that _run_phase5_pipeline re-runs auto_configure_df
-        # internally and raises ControllerNotConfidentError when the
-        # controller commits RED -- which it does on QIS realistic shape
-        # (failing_subprofile=blocking). The bucket path tolerates the
-        # same RED commit (v40 produced F1=0.9923 on a RED config); match
-        # that posture here by passing confidence_required=False. Phase 5
-        # ignoring the pre-built `config` and re-auto-configuring is a
-        # separate design flaw -- it deserves its own PR (PR 3+ in this
-        # lane). For PR 1's "smallest possible diff" scope, this is the
-        # workaround that unblocks the kill-criterion bench.
-        return run_dedupe_pipeline_distributed(
-            ds, config=config, source_name=source_name,
-            confidence_required=False,
-        )
-    finally:
-        if prev is None:
-            os.environ.pop("GOLDENMATCH_DISTRIBUTED_PIPELINE", None)
-        else:
-            os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = prev
-
-
 def run_dedupe_df(
     df: pl.DataFrame,
     config: GoldenMatchConfig,
