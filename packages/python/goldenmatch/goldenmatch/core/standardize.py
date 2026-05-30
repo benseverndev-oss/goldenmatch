@@ -234,6 +234,17 @@ def _native_name_lower(expr: pl.Expr) -> pl.Expr:
     return _null_if_empty(e)
 
 
+def _native_name_proper(expr: pl.Expr) -> pl.Expr:
+    """Native equivalent of std_name_proper: strip + title-case, empty -> null.
+
+    Python's str.title() and Polars' str.to_titlecase() both treat
+    non-alphabetic chars (including hyphens) as word separators, so
+    'mary-jane'.title() == 'Mary-Jane' matches both implementations.
+    """
+    e = expr.str.strip_chars().str.to_titlecase()
+    return _null_if_empty(e)
+
+
 def _native_state(expr: pl.Expr) -> pl.Expr:
     """Native equivalent of std_state: strip + uppercase, empty -> null."""
     e = expr.str.strip_chars().str.to_uppercase()
@@ -296,6 +307,7 @@ _NATIVE_STANDARDIZERS: dict[str, object] = {
     "strip": _native_strip,
     "name_upper": _native_name_upper,
     "name_lower": _native_name_lower,
+    "name_proper": _native_name_proper,
     "state": _native_state,
     "trim_whitespace": _native_trim_whitespace,
     "phone": _native_phone,
