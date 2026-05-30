@@ -1,0 +1,95 @@
+# Bench: per-record loop vs bulk record_fingerprints_batch.
+#
+# workflow_dispatch only. Builds the native module, runs
+# scripts/bench_native_bulk_fingerprint.py at three shapes
+# (smoke / medium / large = 10K / 100K / 1M records), posts the
+# py-vs-rs speedup table to the step summary.
+#
+# Decision gate: large-shape speedup >= 2x ships the wire-up PR
+# (identity/resolve.py refactor to collect payloads + call bulk once
+# + zip back). Below that the per-record Python pre-pass is the
+# floor and wiring won't move the identity-resolve wall enough.
+# Spec:
+# docs/superpowers/specs/2026-05-30-bulk-record-fingerprint-kernel-spec.md
+# (gitignored; local design notes).
+
+name: bench-native-bulk-fingerprint
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch (defensive shadow guard)
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Verify native loaded + record_fingerprints_batch exposed
+        run: |
+          .venv/bin/python -c "
+          import goldenmatch._native as n
+          assert hasattr(n, 'record_fingerprints_batch'), (
+              'kernel not exposed -- this PR may have failed to land '
+              'or the rebuild missed hash.rs'
+          )
+          print('native loaded; record_fingerprints_batch present')
+          "
+
+      - name: Run bulk fingerprint bench
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/native-bench
+          .venv/bin/python scripts/bench_native_bulk_fingerprint.py \
+            | tee .profile_tmp/native-bench/bulk_fingerprint.txt
+
+      - name: Post bench output to step summary
+        if: always()
+        run: |
+          if [ ! -f .profile_tmp/native-bench/bulk_fingerprint.txt ]; then
+            echo "no bench output -- earlier step failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          {
+            echo "## record_fingerprint: per-record loop vs bulk kernel"
+            echo ""
+            echo "Decision gate: ship the wire-up follow-up PR"
+            echo "(identity/resolve.py refactor) iff the large-shape"
+            echo "speedup is >= 2x. Below that the per-record Python"
+            echo "pre-pass dominates and wiring won't meaningfully"
+            echo "reduce identity-resolve wall."
+            echo ""
+            echo '```'
+            cat .profile_tmp/native-bench/bulk_fingerprint.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload raw bench output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-bulk-fingerprint-bench
+          path: .profile_tmp/native-bench/bulk_fingerprint.txt
+          if-no-files-found: warn

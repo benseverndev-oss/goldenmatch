@@ -76,3 +76,25 @@ def record_fingerprint(record: dict[str, Any]) -> str:
     if native_enabled("hashing"):
         return native_module().record_fingerprint(record)
     return _fingerprint_py(record)
+
+
+def record_fingerprints_batch(records: list[dict[str, Any]]) -> list[str]:
+    """Bulk variant of ``record_fingerprint`` -- one hex string per input
+    record, in order. Identical per-record semantics; the kernel amortizes
+    Python-interpreter overhead across the batch and parallelizes SHA-256 via
+    rayon under ``py.allow_threads``. Falls back to a per-record loop when
+    the native module isn't loaded or the bulk kernel isn't exposed.
+
+    Realistic benefit only on the identity-resolve hot path
+    (``identity/resolve.py:_record_id_candidates``) when ``config.identity.
+    enabled`` is True. Decision-gate spec:
+    docs/superpowers/specs/2026-05-30-bulk-record-fingerprint-kernel-spec.md
+    (local, gitignored)."""
+    if native_enabled("hashing"):
+        native = native_module()
+        bulk = getattr(native, "record_fingerprints_batch", None)
+        if bulk is not None:
+            return bulk(records)
+    # Fallback: per-record loop. Same shape as the existing single-record
+    # path, just iterated.
+    return [record_fingerprint(r) for r in records]
