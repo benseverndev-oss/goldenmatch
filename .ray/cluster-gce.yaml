@@ -42,7 +42,7 @@ rsync_exclude:
 # series; the bench container layer installs goldenmatch on top via
 # pip.
 docker:
-  image: "rayproject/ray:2.30.0-py312"
+  image: "rayproject/ray:2.43.0-py312"
   container_name: "ray_container"
   pull_before_run: true
 

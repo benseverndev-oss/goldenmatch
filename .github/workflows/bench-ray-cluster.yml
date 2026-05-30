@@ -62,7 +62,7 @@ jobs:
       # (avoids collisions if two dispatches overlap) and the right
       # project_id + git SHA.
       CLUSTER_NAME: "goldenmatch-bench-${{ github.run_id }}"
-      RAY_RELEASE: "2.30.0"
+      RAY_RELEASE: "2.43.0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
