@@ -427,6 +427,24 @@ def dedupe_df(
         if cfg_excl and _kwarg_token is None:
             _kwarg_token = _RUNTIME_EXCLUDE_COLUMNS.set(list(cfg_excl))
 
+        # PR 1 of the Ray Phase 5 routing lane (spec: docs/superpowers/
+        # specs/2026-05-30-ray-phase5-routing-spec.md, gitignored).
+        # When the resolved config says backend=ray AND the env gate is
+        # on, hand the DataFrame to run_dedupe_pipeline_distributed under
+        # Phase 5 streaming mode instead of the legacy ray_backend swap.
+        # The legacy swap OOMs at 5M (v41 bench, 2026-05-30) -- it reuses
+        # the bucket prep frame on the driver while workers each hold a
+        # ~1.7 GB deserialized exclude set.
+        #
+        # Default OFF. Returns DedupeResult-compatible shape via
+        # _route_ray_via_phase5. v42 bench measures it.
+        import os as _os
+        if (
+            getattr(config, "backend", None) == "ray"
+            and _os.environ.get("GOLDENMATCH_RAY_PHASE5_ROUTING") == "1"
+        ):
+            from goldenmatch.core.pipeline import _route_ray_via_phase5
+            return _route_ray_via_phase5(df, config, source_name)
         result = run_dedupe_df(
             df, config, source_name=source_name,
             auto_config=False,
