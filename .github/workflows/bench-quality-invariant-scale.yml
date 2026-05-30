@@ -127,9 +127,13 @@ jobs:
         # Same "shadows worktree code" guard the other bench workflows use.
         run: uv pip install -e packages/python/goldenmatch
 
-      - name: Install ray (for backend=ray rungs only)
+      - name: Install ray + pandas (for backend=ray rungs only)
         if: ${{ inputs.backend == 'ray' }}
-        run: uv pip install "ray>=2.30,<3"
+        # pandas is a hard import dep of ray.data (loaded at module init).
+        # Without it, _route_ray_via_phase5 -> `import ray.data` raises
+        # ModuleNotFoundError before any streaming work begins. v42 hit
+        # this. pinned <3 to match ray's own pandas range.
+        run: uv pip install "ray>=2.30,<3" "pandas>=2,<3"
 
       - name: Set up Rust toolchain (for native build)
         uses: dtolnay/rust-toolchain@stable
