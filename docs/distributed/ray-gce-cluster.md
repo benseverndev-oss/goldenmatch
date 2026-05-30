@@ -53,21 +53,63 @@ gcloud iam service-accounts keys create gm-ray-bench-key.json \
     --iam-account="$SA_EMAIL"
 ```
 
-### 3. Set the GitHub secrets
+### 3. Store the GCP creds in Infisical
 
-```sh
-gh secret set GCP_PROJECT_ID \
-    --repo benseverndev-oss/goldenmatch \
-    --body "$(gcloud config get-value project)"
+The workflow pulls these at runtime from Infisical project
+`a99885f0`, env `dev`. Set them with `infisical secrets set` (use
+`--silent` and redirect stdout so values don't echo into the
+terminal):
 
-gh secret set GCP_SA_KEY \
-    --repo benseverndev-oss/goldenmatch \
-    --body "$(cat gm-ray-bench-key.json)"
+```powershell
+# Project id
+$projectId = (gcloud config get-value project)
+infisical.cmd secrets set --projectId a99885f0 --env dev `
+    GCP_PROJECT_ID=$projectId > $null
 
-rm gm-ray-bench-key.json   # don't keep the JSON on disk
+# Service account JSON (multi-line; pass via env var to avoid quoting)
+$env:_GM_SA_JSON = Get-Content gm-ray-bench-key.json -Raw
+infisical.cmd secrets set --projectId a99885f0 --env dev `
+    GCP_SA_KEY=$env:_GM_SA_JSON > $null
+Remove-Item env:_GM_SA_JSON
+Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
 ```
 
-### 4. Dispatch the workflow
+Verify by name only (no values):
+
+```powershell
+infisical.cmd secrets --projectId a99885f0 --env dev | Select-String GCP
+```
+
+### 4. Create a Machine Identity for GitHub Actions
+
+The workflow authenticates to Infisical via a dedicated Machine
+Identity using Universal Auth (client id + secret pair):
+
+1. Infisical web UI → `goldenmatch` project → Access Control →
+   Machine Identities → Create.
+2. Name: `goldenmatch-bench-ray-cluster`. Auth method: **Universal
+   Auth**. Trusted IPs: `0.0.0.0/0` (Actions runners are dynamic;
+   restrict later if needed).
+3. Project permissions: read-only on env `dev`, paths `/GCP_*`.
+4. Copy the generated **Client ID** and **Client Secret**. The
+   secret is shown ONCE.
+
+### 5. Set the two GitHub Actions secrets
+
+```sh
+gh secret set INFISICAL_CLIENT_ID \
+    --repo benseverndev-oss/goldenmatch \
+    --body "<paste client id>"
+
+gh secret set INFISICAL_CLIENT_SECRET \
+    --repo benseverndev-oss/goldenmatch \
+    --body "<paste client secret>"
+```
+
+These two are the ONLY GH-Actions secrets the workflow needs. Future
+Infisical-backed secrets reuse the same auth pair.
+
+### 6. Dispatch the workflow
 
 ```sh
 gh workflow run bench-ray-cluster.yml \
