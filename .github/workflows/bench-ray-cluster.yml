@@ -5,14 +5,25 @@
 # config (1 head + 3 preemptible workers). The tear-down step runs in
 # `if: always()` so a failed bench still releases the instances.
 #
-# Required GitHub secrets (provision once per repo, see
-# docs/distributed/ray-gce-cluster.md for the gcloud commands):
+# Required GitHub secrets (provision once per repo):
+#   INFISICAL_CLIENT_ID      — Universal Auth client id for a Machine
+#                              Identity scoped to the goldenmatch
+#                              Infisical project (a99885f0) with read
+#                              access on the `dev` environment.
+#   INFISICAL_CLIENT_SECRET  — companion secret for the same identity.
+#
+# Pulled FROM Infisical project a99885f0, env=dev, at runtime:
 #   GCP_PROJECT_ID   — GCP project to bill
 #   GCP_SA_KEY       — service account JSON with the roles below
 #
-# Required service account roles on GCP_PROJECT_ID:
+# Required GCP service account roles on GCP_PROJECT_ID:
 #   - roles/compute.admin       (create/delete instances + disks)
 #   - roles/iam.serviceAccountUser (let Ray attach the SA to instances)
+#
+# Pattern: any future Infisical-backed secret reuses the same auth
+# pair instead of accumulating GH secrets. See
+# docs/distributed/ray-gce-cluster.md for the one-time Infisical
+# Machine Identity setup commands.
 
 name: bench-ray-cluster
 
@@ -57,43 +68,71 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Ray + gcloud helpers
-        # Ray needs to be installed locally so the controller can drive
-        # `ray up` / `ray submit` / `ray down`. The version pin matches
-        # the cluster.yaml docker image.
+      - name: Install Ray + gcloud helpers + Infisical CLI
+        # Ray drives `ray up` / `ray submit` / `ray down` locally; the
+        # version pin matches the cluster.yaml docker image. Infisical
+        # CLI fetches GCP creds at runtime (Option B from the 2026-05-30
+        # Ray-GCE-lane conversation -- secrets stay in one place
+        # instead of accumulating GH-Actions copies).
         run: |
           pip install --upgrade pip
           pip install "ray[default]==${{ env.RAY_RELEASE }}" "google-api-python-client"
           pip install pyyaml
+          # Infisical CLI: official tarball, pinned major. The 0.43.x
+          # series ships `infisical login --method=universal-auth` and
+          # `infisical secrets get --plain` which we both use.
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
 
-      - name: Auth to GCP
-        # Hydrate the service account JSON onto disk and set
-        # GOOGLE_APPLICATION_CREDENTIALS so gcloud/google-api-client
-        # pick it up. The JSON itself is never written to logs.
+      - name: Fetch GCP creds from Infisical
+        # Authenticate the Machine Identity, then pull GCP_PROJECT_ID
+        # and GCP_SA_KEY from the goldenmatch Infisical project
+        # (a99885f0, dev env). The values are masked in subsequent
+        # logs via ::add-mask::. The SA JSON is written to disk and
+        # GOOGLE_APPLICATION_CREDENTIALS points at it; the project id
+        # is exported as a job-scope env var so the render + sweep
+        # steps see it without ${{ secrets.* }}.
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
         run: |
-          if [ -z "$GCP_SA_KEY" ]; then
-            echo "::error::GCP_SA_KEY secret not set; see docs/distributed/ray-gce-cluster.md"
+          set -euo pipefail
+          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
+            echo "::error::INFISICAL_CLIENT_ID or INFISICAL_CLIENT_SECRET not set; see docs/distributed/ray-gce-cluster.md"
             exit 1
           fi
-          echo "$GCP_SA_KEY" > "$HOME/gcp-sa.json"
+          # `infisical login` prints the token on stdout when --plain.
+          INFISICAL_TOKEN=$(infisical login --silent --plain \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET")
+          echo "::add-mask::$INFISICAL_TOKEN"
+
+          GCP_PROJECT_ID=$(infisical secrets get GCP_PROJECT_ID \
+            --projectId=a99885f0 --env=dev --plain --token="$INFISICAL_TOKEN")
+          echo "::add-mask::$GCP_PROJECT_ID"
+
+          # Multi-line SA JSON: write straight to disk; never echo.
+          infisical secrets get GCP_SA_KEY \
+            --projectId=a99885f0 --env=dev --plain --token="$INFISICAL_TOKEN" \
+            > "$HOME/gcp-sa.json"
+          chmod 600 "$HOME/gcp-sa.json"
+
+          echo "GCP_PROJECT_ID=$GCP_PROJECT_ID" >> $GITHUB_ENV
           echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
 
       - name: Render cluster.yaml with project + git SHA
-        env:
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
-          if [ -z "$GCP_PROJECT_ID" ]; then
-            echo "::error::GCP_PROJECT_ID secret not set"
-            exit 1
-          fi
-          # Inject project_id, git SHA, cluster_name, and max_workers
-          # into the template. sed is fine; the placeholders are unique.
+          set -euo pipefail
+          # GCP_PROJECT_ID is in $GITHUB_ENV from the previous step.
+          # Inject project_id, git SHA, cluster_name, max_workers.
+          # The placeholders are unique strings so sed is unambiguous.
           sed -i "s|GOLDENMATCH_GCP_PROJECT_PLACEHOLDER|$GCP_PROJECT_ID|g" .ray/cluster-gce.yaml
           sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
           sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
           sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
+          # Head -40 is fine here because GCP_PROJECT_ID is already
+          # masked in subsequent log output.
           echo "----- Rendered cluster.yaml -----"
           head -40 .ray/cluster-gce.yaml
 
@@ -143,16 +182,24 @@ jobs:
         # Suppress errors so the workflow doesn't itself fail here.
         if: always()
         run: |
+          # $GCP_PROJECT_ID and $GOOGLE_APPLICATION_CREDENTIALS were
+          # exported in $GITHUB_ENV by the Infisical fetch step at the
+          # top of the job, so they're visible here even though we
+          # don't reference secrets.* directly.
+          if [ -z "${GCP_PROJECT_ID:-}" ]; then
+            echo "GCP_PROJECT_ID not in env -- earlier step failed before Infisical fetch; nothing to sweep."
+            exit 0
+          fi
           gcloud auth activate-service-account \
             --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
-            --project="${{ secrets.GCP_PROJECT_ID }}" || true
+            --project="$GCP_PROJECT_ID" || true
           gcloud compute instances list \
             --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }}" \
-            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --project="$GCP_PROJECT_ID" \
             --format="value(name,zone)" 2>/dev/null | while read name zone; do
               if [ -n "$name" ]; then
                 gcloud compute instances delete "$name" \
-                  --zone="$zone" --project="${{ secrets.GCP_PROJECT_ID }}" \
+                  --zone="$zone" --project="$GCP_PROJECT_ID" \
                   --quiet || true
               fi
             done
