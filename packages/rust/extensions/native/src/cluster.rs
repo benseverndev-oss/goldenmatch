@@ -141,3 +141,138 @@ pub fn cluster_confidence(edges: Vec<(i64, i64, f64)>, size: usize) -> Confidenc
     let confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity;
     (Some(min_edge), Some(avg_edge), connectivity, bottleneck, confidence)
 }
+
+// =============================================================================
+// build_clusters_native -- post-UF orchestration kernel (prototype).
+// =============================================================================
+// Subsumes the Python loop in core/cluster.py:cluster.build_clusters from
+// "connected_components" through "compute_cluster_confidence" (steps 1-5 of
+// the v34 attribution -- 70-75% of cluster wall). The auto_split + quality
+// assignment stay in Python on the returned dict.
+//
+// Spec: docs/superpowers/specs/2026-05-30-cluster-orchestration-kernel-spec.md
+// (gitignored; local design notes).
+
+use pyo3::types::{PyDict, PyList, PyTuple};
+
+/// Build cluster dict[int, dict] from raw pair edges + all node IDs.
+///
+/// Returns a Python dict matching the existing build_clusters output shape:
+///   {cluster_id: {
+///      "members": list[int],
+///      "size": int,
+///      "oversized": bool,
+///      "pair_scores": dict[tuple[int,int], float],
+///      "confidence": float,
+///      "bottleneck_pair": tuple[int,int] | None,
+///   }}
+///
+/// Order invariants the Python path depends on:
+/// - cluster_id assignment is enumerate(sorted_clusters, start=1) where
+///   sorted is by min(member). This kernel preserves that.
+/// - pair_scores dict insertion order is the order edges are encountered
+///   during the input pair iteration. CPython 3.7+ dicts preserve insertion
+///   order; pyo3 PyDict::set_item likewise. The kernel iterates input pairs
+///   once and inserts into the destination dict directly, so order matches.
+/// - cluster_confidence's bottleneck-pair tie-break is "first minimum wins"
+///   which depends on the same insertion order; identical sequence here.
+#[pyfunction]
+pub fn build_clusters_native<'py>(
+    py: Python<'py>,
+    pairs: Vec<(i64, i64, f64)>,
+    all_ids: Vec<i64>,
+    max_cluster_size: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    // ---- 1. Union-Find (reuse the find() logic from connected_components). --
+    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(
+        all_ids.len() + pairs.len() * 2,
+    );
+    for id in &all_ids {
+        parent.entry(*id).or_insert(*id);
+    }
+    for (a, b, _s) in &pairs {
+        parent.entry(*a).or_insert(*a);
+        parent.entry(*b).or_insert(*b);
+    }
+    for (a, b, _s) in &pairs {
+        let ra = find(&mut parent, *a);
+        let rb = find(&mut parent, *b);
+        if ra != rb {
+            parent.insert(ra, rb);
+        }
+    }
+
+    // ---- 2. Group nodes by root; build member_to_cid via the canonical
+    //         "sorted by min(member), enumerate from 1" assignment. ----------
+    let keys: Vec<i64> = parent.keys().copied().collect();
+    let mut root_to_members: HashMap<i64, Vec<i64>> = HashMap::new();
+    for k in keys {
+        let r = find(&mut parent, k);
+        root_to_members.entry(r).or_default().push(k);
+    }
+    let mut clusters: Vec<Vec<i64>> = root_to_members.into_values().collect();
+    // Same key as the Python `sorted(clusters, key=lambda s: min(s))`.
+    clusters.sort_by_key(|c| *c.iter().min().expect("non-empty by construction"));
+
+    // member_to_cid: node -> 1-based cluster_id.
+    let mut member_to_cid: HashMap<i64, i64> =
+        HashMap::with_capacity(parent.len());
+    for (idx, members) in clusters.iter().enumerate() {
+        let cid = (idx + 1) as i64;
+        for &m in members {
+            member_to_cid.insert(m, cid);
+        }
+    }
+
+    // ---- 3. Bucket input edges by cluster_id -- order-preserving Vec. ------
+    // We use Vec (not HashMap) so the per-cluster edge ordering matches the
+    // order edges appear in `pairs`. This is the invariant cluster_confidence
+    // relies on for the bottleneck-pair tie-break.
+    let n_clusters = clusters.len();
+    let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> =
+        vec![Vec::new(); n_clusters];
+    for (a, b, s) in pairs {
+        if let Some(&cid) = member_to_cid.get(&a) {
+            // cid is 1-based; per_cluster_edges is 0-indexed.
+            per_cluster_edges[(cid - 1) as usize].push((a, b, s));
+        }
+    }
+
+    // ---- 4. Build the output Python dict. -----------------------------------
+    let out = PyDict::new(py);
+    for (idx, members) in clusters.iter().enumerate() {
+        let cid = (idx + 1) as i64;
+        let size = members.len();
+        let edges = &per_cluster_edges[idx];
+
+        // Per-cluster sub-dict.
+        let sub = PyDict::new(py);
+
+        // members: list[int]. Python no longer sorts (PR #598).
+        let members_list = PyList::new(py, members)?;
+        sub.set_item("members", members_list)?;
+        sub.set_item("size", size)?;
+        sub.set_item("oversized", size > max_cluster_size)?;
+
+        // pair_scores: dict[tuple[int,int], float]. Insertion order = edges
+        // iteration order = Python's old loop order.
+        let pair_scores = PyDict::new(py);
+        for &(a, b, s) in edges {
+            let key = PyTuple::new(py, [a, b])?;
+            pair_scores.set_item(key, s)?;
+        }
+        sub.set_item("pair_scores", pair_scores)?;
+
+        // confidence + bottleneck_pair via the existing helper.
+        let (_min_e, _avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        sub.set_item("confidence", conf)?;
+        match bn {
+            Some((a, b)) => sub.set_item("bottleneck_pair", PyTuple::new(py, [a, b])?)?,
+            None => sub.set_item("bottleneck_pair", py.None())?,
+        }
+
+        out.set_item(cid, sub)?;
+    }
+
+    Ok(out)
+}
