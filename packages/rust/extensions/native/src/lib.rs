@@ -19,6 +19,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::cluster_confidence, m)?)?;
+    m.add_function(wrap_pyfunction!(cluster::build_clusters_native, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::canonicalize_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::dedup_pairs_max_score, m)?)?;
     m.add_function(wrap_pyfunction!(pairs::candidate_pair_count, m)?)?;
