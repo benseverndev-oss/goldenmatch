@@ -1,0 +1,181 @@
+# Bench-ray-cluster: provision an ephemeral GCE Ray cluster, run the
+# QIS bench against it, tear the cluster down. Workflow_dispatch only.
+#
+# Costs: ~$1 per 30-minute bench at the default 4-node n2-standard-16
+# config (1 head + 3 preemptible workers). The tear-down step runs in
+# `if: always()` so a failed bench still releases the instances.
+#
+# Required GitHub secrets (provision once per repo, see
+# docs/distributed/ray-gce-cluster.md for the gcloud commands):
+#   GCP_PROJECT_ID   — GCP project to bill
+#   GCP_SA_KEY       — service account JSON with the roles below
+#
+# Required service account roles on GCP_PROJECT_ID:
+#   - roles/compute.admin       (create/delete instances + disks)
+#   - roles/iam.serviceAccountUser (let Ray attach the SA to instances)
+
+name: bench-ray-cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Rung size (5000000 = 5M, 100000000 = 100M)"
+        required: false
+        default: "5000000"
+      shape:
+        description: "realistic | phase5"
+        required: false
+        default: "realistic"
+      label:
+        description: "Tag for the output artifact"
+        required: false
+        default: "ad-hoc"
+      max_workers:
+        description: "Number of worker nodes (head is always +1)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  ray-cluster-bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # We render `.ray/cluster-gce.yaml` from the placeholder template
+      # at workflow runtime so each dispatch sees a fresh cluster name
+      # (avoids collisions if two dispatches overlap) and the right
+      # project_id + git SHA.
+      CLUSTER_NAME: "goldenmatch-bench-${{ github.run_id }}"
+      RAY_RELEASE: "2.30.0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ray + gcloud helpers
+        # Ray needs to be installed locally so the controller can drive
+        # `ray up` / `ray submit` / `ray down`. The version pin matches
+        # the cluster.yaml docker image.
+        run: |
+          pip install --upgrade pip
+          pip install "ray[default]==${{ env.RAY_RELEASE }}" "google-api-python-client"
+          pip install pyyaml
+
+      - name: Auth to GCP
+        # Hydrate the service account JSON onto disk and set
+        # GOOGLE_APPLICATION_CREDENTIALS so gcloud/google-api-client
+        # pick it up. The JSON itself is never written to logs.
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::GCP_SA_KEY secret not set; see docs/distributed/ray-gce-cluster.md"
+            exit 1
+          fi
+          echo "$GCP_SA_KEY" > "$HOME/gcp-sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
+
+      - name: Render cluster.yaml with project + git SHA
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "::error::GCP_PROJECT_ID secret not set"
+            exit 1
+          fi
+          # Inject project_id, git SHA, cluster_name, and max_workers
+          # into the template. sed is fine; the placeholders are unique.
+          sed -i "s|GOLDENMATCH_GCP_PROJECT_PLACEHOLDER|$GCP_PROJECT_ID|g" .ray/cluster-gce.yaml
+          sed -i "s|GOLDENMATCH_GIT_SHA_PLACEHOLDER|${{ github.sha }}|g" .ray/cluster-gce.yaml
+          sed -i "s|cluster_name: goldenmatch-bench$|cluster_name: ${{ env.CLUSTER_NAME }}|" .ray/cluster-gce.yaml
+          sed -i "s|max_workers: 3$|max_workers: ${{ inputs.max_workers }}|" .ray/cluster-gce.yaml
+          echo "----- Rendered cluster.yaml -----"
+          head -40 .ray/cluster-gce.yaml
+
+      - name: Ray up
+        # Provisions head + workers, installs goldenmatch on each via
+        # the setup_commands block. Typical wall: ~3-5 min.
+        run: |
+          ray up -y --no-config-cache .ray/cluster-gce.yaml
+
+      - name: Submit bench
+        # `ray submit` ships the script to the head node and runs it.
+        # The script writes its JSON output to /tmp on the head; we
+        # rsync it back via `ray rsync_down` after the run.
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/qis
+          OUT_REMOTE="/tmp/qis_${{ inputs.label }}.json"
+          ray submit .ray/cluster-gce.yaml \
+            scripts/quality_invariant_scale.py \
+            -- --rows ${{ inputs.rows }} \
+               --shape ${{ inputs.shape }} \
+               --backend ray \
+               --out "$OUT_REMOTE"
+          ray rsync_down .ray/cluster-gce.yaml \
+            "$OUT_REMOTE" ".profile_tmp/qis/qis_${{ inputs.label }}.json"
+
+      - name: Upload bench artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "qis-${{ inputs.label }}"
+          path: ".profile_tmp/qis/qis_${{ inputs.label }}.json"
+          if-no-files-found: warn
+
+      - name: Ray down (always)
+        # The teardown runs even when previous steps fail so we don't
+        # leak GCE instances. --workers-only first to release the
+        # expensive workers fast, then the head.
+        if: always()
+        run: |
+          ray down -y --workers-only .ray/cluster-gce.yaml || true
+          ray down -y .ray/cluster-gce.yaml || true
+
+      - name: Defensive cleanup (instance-list sweep)
+        # Belt-and-braces: if `ray down` somehow missed instances,
+        # delete any GCE instance carrying our cluster name label.
+        # Suppress errors so the workflow doesn't itself fail here.
+        if: always()
+        run: |
+          gcloud auth activate-service-account \
+            --key-file="$GOOGLE_APPLICATION_CREDENTIALS" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" || true
+          gcloud compute instances list \
+            --filter="labels.ray-cluster-name=${{ env.CLUSTER_NAME }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --format="value(name,zone)" 2>/dev/null | while read name zone; do
+              if [ -n "$name" ]; then
+                gcloud compute instances delete "$name" \
+                  --zone="$zone" --project="${{ secrets.GCP_PROJECT_ID }}" \
+                  --quiet || true
+              fi
+            done
+
+      - name: Post headline to step summary
+        if: always()
+        run: |
+          OUT=".profile_tmp/qis/qis_${{ inputs.label }}.json"
+          if [ ! -f "$OUT" ]; then
+            echo "no rung output -- earlier step failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          python - <<'PY' >> $GITHUB_STEP_SUMMARY
+          import json, os
+          d = json.load(open(os.environ["OUT"]))
+          rows = d.get("rows", "?")
+          wall = d.get("wall_s", {})
+          rss_gb = d.get("rss_mb_peak", 0) / 1024
+          f1 = d.get("pairwise", {}).get("f1", "?")
+          print(f"## bench-ray-cluster: {rows:,} rows")
+          print(f"- wall: {wall}")
+          print(f"- peak RSS: {rss_gb:.2f} GB (driver-side; per-node varies)")
+          print(f"- pairwise F1: {f1}")
+          PY
+        env:
+          OUT: ".profile_tmp/qis/qis_${{ inputs.label }}.json"

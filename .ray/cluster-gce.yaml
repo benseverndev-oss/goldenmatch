@@ -1,0 +1,107 @@
+# Ray Cluster Launcher config for the goldenmatch Phase 5 bench harness.
+# Targets GCE; ephemeral by design (spun up per bench, torn down on exit).
+#
+# Provisioned by `.github/workflows/bench-ray-cluster.yml` via:
+#   ray up -y .ray/cluster-gce.yaml
+#   ray submit .ray/cluster-gce.yaml scripts/quality_invariant_scale.py ...
+#   ray down -y .ray/cluster-gce.yaml
+#
+# Costs: 1 head + 3 workers at n2-standard-16 = 4 × ~$0.50/hr.
+# A 30-min bench therefore runs ~$1; teardown is automatic.
+# Override the worker count via the `--max-workers` flag on `ray up`.
+
+cluster_name: goldenmatch-bench
+provider:
+  type: gcp
+  region: us-central1
+  availability_zone: us-central1-a
+  # project_id is injected by the workflow at dispatch time so the same
+  # cluster.yaml works across MJH GCP projects.
+  project_id: GOLDENMATCH_GCP_PROJECT_PLACEHOLDER
+
+# Single head node; 3 workers. Pick n2-standard-16 to mirror our existing
+# `large-new-64GB` GitHub runner baseline (16 vCPU / 64 GB) so per-node
+# behavior is directly comparable to the single-runner numbers in this
+# repo.
+auth:
+  ssh_user: ubuntu
+
+max_workers: 3
+upscaling_speed: 1.0
+idle_timeout_minutes: 5
+
+# The bench downloads input parquet from the bench-dataset-v1 GH Release
+# at runtime; no persistent disk needed beyond Ray's own scratch.
+file_mounts: {}
+file_mounts_sync_continuously: false
+rsync_exclude:
+  - "**/.git"
+  - "**/.git/**"
+
+# Docker image carries Ray + our Python env. We pin to a Ray release
+# series; the bench container layer installs goldenmatch on top via
+# pip.
+docker:
+  image: "rayproject/ray:2.30.0-py312"
+  container_name: "ray_container"
+  pull_before_run: true
+
+initialization_commands: []
+
+# Install goldenmatch from the repo's tag. The bench workflow stamps
+# this from the commit SHA so reruns hit identical code.
+setup_commands:
+  - >-
+    pip install --upgrade pip &&
+    pip install "polars>=1.0" "pandas>=2,<3" "pyarrow>=10" "psutil>=5.9" "rapidfuzz>=3.0" "jellyfish>=1.0" &&
+    pip install "git+https://github.com/benseverndev-oss/goldenmatch@GOLDENMATCH_GIT_SHA_PLACEHOLDER#subdirectory=packages/python/goldenmatch"
+head_setup_commands: []
+worker_setup_commands: []
+
+head_start_ray_commands:
+  - ray stop
+  - >-
+    ulimit -n 65536 && ray start --head --port=6379
+    --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml
+
+worker_start_ray_commands:
+  - ray stop
+  - >-
+    ulimit -n 65536 && ray start --address=$RAY_HEAD_IP:6379
+    --object-manager-port=8076
+
+# Instance specs. n2-standard-16 = 16 vCPU / 64 GB RAM.
+available_node_types:
+  ray.head.default:
+    resources: {}
+    node_config:
+      machineType: n2-standard-16
+      disks:
+        - boot: true
+          autoDelete: true
+          type: PERSISTENT
+          initializeParams:
+            diskSizeGb: 100
+            sourceImage: projects/deeplearning-platform-release/global/images/family/common-cpu
+      scheduling:
+        - preemptible: false
+  ray.worker.default:
+    min_workers: 3
+    max_workers: 3
+    resources: {}
+    node_config:
+      machineType: n2-standard-16
+      disks:
+        - boot: true
+          autoDelete: true
+          type: PERSISTENT
+          initializeParams:
+            diskSizeGb: 100
+            sourceImage: projects/deeplearning-platform-release/global/images/family/common-cpu
+      # Preemptible (spot) workers are 60-80% cheaper. Phase 5 streaming
+      # is partition-resumable so preemption is tolerable at this scale.
+      # Flip to false if you see preemption-driven retries dominating wall.
+      scheduling:
+        - preemptible: true
+
+head_node_type: ray.head.default
