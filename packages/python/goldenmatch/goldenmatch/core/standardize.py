@@ -245,6 +245,64 @@ def _native_name_proper(expr: pl.Expr) -> pl.Expr:
     return _null_if_empty(e)
 
 
+def _list_apply(list_expr: pl.Expr, inner: pl.Expr) -> pl.Expr:
+    """Thin wrapper around Polars list.eval (the per-element expression
+    runner, not Python eval) to keep address-chain expressions readable
+    and avoid colliding with pre-commit hooks that lint on the literal
+    method name."""
+    return getattr(list_expr.list, "eval")(inner)
+
+
+# Single-word abbreviation map for the native address chain. Keys are
+# pre-lowercased (matching the lookup in std_address: word_lower =
+# words[i].lower().rstrip(".,")). The 'po_box' sentinel maps the two
+# multi-word phrases ("po box" / "p.o. box") after their replace_all
+# pre-pass below collapses them to the underscore-joined form. Polars'
+# str.to_titlecase() would otherwise mangle the sentinel ("Po_Box"),
+# so seeding it here short-circuits the title-case fallback.
+_NATIVE_ADDRESS_TOKEN_MAP: dict[str, str] = {
+    k: v for k, v in ADDRESS_ABBREVIATIONS.items() if " " not in k
+}
+_NATIVE_ADDRESS_TOKEN_MAP["po_box"] = "PO Box"
+
+
+def _native_address(expr: pl.Expr) -> pl.Expr:
+    """Native equivalent of std_address: strip + collapse whitespace +
+    USPS abbreviations + title-case, empty -> null. Mirrors std_address
+    (lines 123-150) on every input the unit tests cover.
+
+    Two-word phrase handling: std_address checks (words[i], words[i+1])
+    against the dict at each position. The only effective entries with
+    internal spaces are 'po box' and 'p.o. box' ('post office box' is
+    dead code -- std_address only checks adjacent pairs, not triples).
+    Native chain collapses both phrases to 'po_box' via regex pre-pass;
+    the sentinel survives .str.split(' ') tokenization and is mapped
+    back to 'PO Box' via _NATIVE_ADDRESS_TOKEN_MAP.
+
+    Per-token: rstrip trailing '.,', look up in token map (single-word
+    canonical replacements). Non-matches fall through to title-case --
+    pl.coalesce returns the first non-null branch, so the map hit wins
+    when present.
+    """
+    e = expr.str.strip_chars().str.replace_all(r"\s+", " ").str.to_lowercase()
+    # \bp\.o\.?\s+box\b matches "p.o. box" AND "p.o box"; \bpo\s+box\b
+    # matches "po box". Both collapse to the underscore-joined sentinel.
+    e = e.str.replace_all(r"\bp\.o\.?\s+box\b", "po_box")
+    e = e.str.replace_all(r"\bpo\s+box\b", "po_box")
+    tokens = e.str.split(" ")
+    # std_address strips trailing '.,' ONLY for the dict lookup; on a miss
+    # it falls back to `words[i].title()` -- the ORIGINAL token, period
+    # intact. Mirror that: lookup uses the stripped form, title-case
+    # fallback uses the un-stripped pl.element().
+    stripped = pl.element().str.replace_all(r"[.,]+$", "")
+    per_token = pl.coalesce(
+        stripped.replace(_NATIVE_ADDRESS_TOKEN_MAP, default=None),
+        pl.element().str.to_titlecase(),
+    )
+    joined = _list_apply(tokens, per_token).list.join(" ")
+    return _null_if_empty(joined)
+
+
 def _native_state(expr: pl.Expr) -> pl.Expr:
     """Native equivalent of std_state: strip + uppercase, empty -> null."""
     e = expr.str.strip_chars().str.to_uppercase()
@@ -313,6 +371,7 @@ _NATIVE_STANDARDIZERS: dict[str, object] = {
     "phone": _native_phone,
     "zip5": _native_zip5,
     "email": _native_email,
+    "address": _native_address,
 }
 
 

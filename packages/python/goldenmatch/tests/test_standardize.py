@@ -141,6 +141,41 @@ class TestStdAddress:
         assert std_address(None) is None
 
 
+class TestNativeAddressParity:
+    """The std_address Python path and apply_standardization's native chain
+    must agree on every input the existing TestStdAddress cases exercise,
+    plus a handful of edge cases (mixed-case, punct-trailing, digits)."""
+
+    CASES = [
+        "123 Main Street",
+        "456 Oak Avenue",
+        "789 North Elm Boulevard",
+        "P.O. Box 123",
+        "PO BOX 999",
+        "po box 7",
+        "123  Main    Street",
+        "1 East 42nd St.",
+        "200 South Pkwy",
+        "5 Northwest Hwy",
+        "100 Court House Rd.",
+        "11 Park Place",
+        "  ",
+        "",
+    ]
+
+    def test_native_chain_matches_python(self):
+        df = pl.DataFrame({"address": self.CASES})
+        result = apply_standardization(df.lazy(), {"address": ["address"]}).collect()
+        actual = result["address"].to_list()
+        expected = [std_address(v) for v in self.CASES]
+        assert actual == expected, (
+            f"Native address chain diverged from std_address.\n"
+            f"inputs: {self.CASES}\n"
+            f"expected: {expected}\n"
+            f"actual:   {actual}"
+        )
+
+
 class TestStdState:
     def test_uppercase(self):
         assert std_state("pa") == "PA"
