@@ -147,7 +147,6 @@ def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
     # this lane once we have a real Ray cluster + a working v42 to
     # benchmark against.
     import polars as pl  # noqa: PLC0415
-
     import ray.data as _rd  # noqa: PLC0415
 
     rows = list(canonical.iter_rows())
