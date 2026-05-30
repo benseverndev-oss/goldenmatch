@@ -53,21 +53,75 @@ gcloud iam service-accounts keys create gm-ray-bench-key.json \
     --iam-account="$SA_EMAIL"
 ```
 
-### 3. Set the GitHub secrets
+### 3. Store the GCP creds in Infisical
 
-```sh
-gh secret set GCP_PROJECT_ID \
-    --repo benseverndev-oss/goldenmatch \
-    --body "$(gcloud config get-value project)"
+The workflow pulls these at runtime from Infisical project
+`a99885f0-c5af-4ae1-9dc8-255cc60aa129`, env `dev`, under the team's
+existing naming convention:
 
-gh secret set GCP_SA_KEY \
-    --repo benseverndev-oss/goldenmatch \
-    --body "$(cat gm-ray-bench-key.json)"
+| Infisical secret name | Format | Decoded form |
+|---|---|---|
+| `GOOGLE_CLOUD_PROJECT` | plain string | the GCP project id |
+| `GCP_SA_KEY_B64` | base64-encoded | service account JSON |
 
-rm gm-ray-bench-key.json   # don't keep the JSON on disk
+The workflow base64-decodes `GCP_SA_KEY_B64` and writes the JSON
+straight to disk; the raw bytes never round-trip through env vars.
+
+Set them with `infisical secrets set` (redirect stdout to `$null` so
+values don't echo into the terminal):
+
+```powershell
+# Project id (plain)
+$projectId = (gcloud config get-value project)
+infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
+    GOOGLE_CLOUD_PROJECT=$projectId > $null
+
+# Service account JSON: base64-encode locally, store the encoded form
+$saB64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes("gm-ray-bench-key.json"))
+infisical.cmd secrets set --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev `
+    GCP_SA_KEY_B64=$saB64 > $null
+Remove-Variable saB64
+Remove-Item gm-ray-bench-key.json   # don't keep the JSON on disk
 ```
 
-### 4. Dispatch the workflow
+Verify by name only (no values):
+
+```powershell
+infisical.cmd secrets --projectId a99885f0-c5af-4ae1-9dc8-255cc60aa129 --env dev | Select-String "GOOGLE_CLOUD_PROJECT|GCP_SA_KEY_B64"
+```
+
+### 4. Create a Machine Identity for GitHub Actions
+
+The workflow authenticates to Infisical via a dedicated Machine
+Identity using Universal Auth (client id + secret pair):
+
+1. Infisical web UI → `goldenmatch` project → Access Control →
+   Machine Identities → Create.
+2. Name: `goldenmatch-bench-ray-cluster`. Auth method: **Universal
+   Auth**. Trusted IPs: `0.0.0.0/0` (Actions runners are dynamic;
+   restrict later if needed).
+3. Project permissions: read-only on env `dev` for
+   `GOOGLE_CLOUD_PROJECT` and `GCP_SA_KEY_B64` (the only two secrets
+   the workflow fetches).
+4. Copy the generated **Client ID** and **Client Secret**. The
+   secret is shown ONCE.
+
+### 5. Set the two GitHub Actions secrets
+
+```sh
+gh secret set INFISICAL_CLIENT_ID \
+    --repo benseverndev-oss/goldenmatch \
+    --body "<paste client id>"
+
+gh secret set INFISICAL_CLIENT_SECRET \
+    --repo benseverndev-oss/goldenmatch \
+    --body "<paste client secret>"
+```
+
+These two are the ONLY GH-Actions secrets the workflow needs. Future
+Infisical-backed secrets reuse the same auth pair.
+
+### 6. Dispatch the workflow
 
 ```sh
 gh workflow run bench-ray-cluster.yml \
