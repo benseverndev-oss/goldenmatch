@@ -130,17 +130,35 @@ def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
 
     canonical = pairs_ds.map_batches(_canonicalize, batch_format="pyarrow")
 
-    grouped = canonical.groupby(["id_a", "id_b"]).max("score")
+    # v42c (2026-05-30) surfaced that Ray Dataset's `groupby([keys]).max(col)`
+    # defaults to a single-partition output HashAggregate. At 5M-realistic
+    # the scorer produces ~18M pairs and the aggregation hangs indefinitely
+    # serializing the shuffle to one worker. CLAUDE.md documents the same
+    # pathology at 25M (run 26131602938) and on the Phase 4 design path.
+    #
+    # Pragmatic cheat-line: collect canonicalized pairs to the driver,
+    # dedup in Polars (vectorized groupby is fast at this scale), and
+    # round-trip back to a Ray Dataset. At 18M pairs (~150 MB Arrow) this
+    # is bounded driver-side work -- faster than a hung Ray shuffle.
+    #
+    # This is NOT the right architectural answer. The right fix is to
+    # configure Ray Dataset's groupby num_partitions or use a hash-shuffle
+    # repartition before the aggregation. Deferred to a follow-up PR in
+    # this lane once we have a real Ray cluster + a working v42 to
+    # benchmark against.
+    import polars as pl  # noqa: PLC0415
 
-    # Normalize "max(score)" / "score_max" -> "score".
-    def _rename(batch: pa.Table) -> pa.Table:
-        cols = batch.column_names
-        new_cols = []
-        for c in cols:
-            if c in ("id_a", "id_b"):
-                new_cols.append(c)
-            else:
-                new_cols.append("score")
-        return batch.rename_columns(new_cols)
+    import ray.data as _rd  # noqa: PLC0415
 
-    return grouped.map_batches(_rename, batch_format="pyarrow")
+    rows = list(canonical.iter_rows())
+    if not rows:
+        return _rd.from_items([])
+    df = pl.from_dicts(rows).group_by(["id_a", "id_b"]).max()
+    # Polars group_by(...).max() keeps key columns and aggregates the rest.
+    # Normalize the score column name if Polars renamed it on aggregation.
+    if "score" not in df.columns:
+        for c in df.columns:
+            if c not in ("id_a", "id_b"):
+                df = df.rename({c: "score"})
+                break
+    return _rd.from_arrow(df.to_arrow())
