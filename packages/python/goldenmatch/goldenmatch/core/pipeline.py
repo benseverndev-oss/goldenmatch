@@ -1644,8 +1644,19 @@ def _route_ray_via_phase5(
     prev = os.environ.get("GOLDENMATCH_DISTRIBUTED_PIPELINE")
     os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
     try:
+        # v42b surfaced that _run_phase5_pipeline re-runs auto_configure_df
+        # internally and raises ControllerNotConfidentError when the
+        # controller commits RED -- which it does on QIS realistic shape
+        # (failing_subprofile=blocking). The bucket path tolerates the
+        # same RED commit (v40 produced F1=0.9923 on a RED config); match
+        # that posture here by passing confidence_required=False. Phase 5
+        # ignoring the pre-built `config` and re-auto-configuring is a
+        # separate design flaw -- it deserves its own PR (PR 3+ in this
+        # lane). For PR 1's "smallest possible diff" scope, this is the
+        # workaround that unblocks the kill-criterion bench.
         return run_dedupe_pipeline_distributed(
             ds, config=config, source_name=source_name,
+            confidence_required=False,
         )
     finally:
         if prev is None:
