@@ -46,7 +46,13 @@ docker:
   container_name: "ray_container"
   pull_before_run: true
 
-initialization_commands: []
+initialization_commands:
+  # Ubuntu LTS base doesn't ship Docker; Ray's container runtime
+  # needs it. Idempotent: skips if docker is already present.
+  - "command -v docker >/dev/null || (curl -fsSL https://get.docker.com | sudo sh)"
+  # Ray SSHes as the `ubuntu` user; add it to the docker group so
+  # later docker invocations don't need sudo.
+  - "sudo usermod -aG docker ubuntu"
 
 # Install goldenmatch from the repo's tag. The bench workflow stamps
 # this from the commit SHA so reruns hit identical code.
