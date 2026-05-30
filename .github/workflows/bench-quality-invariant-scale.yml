@@ -58,6 +58,10 @@ on:
         description: "GOLDENMATCH_STANDARDIZE_STAGED value (0 or 1). Forces per-column collects in apply_standardization to localize the 54s wall. WILL slow further -- diagnostic only."
         required: false
         default: "0"
+      ray_phase5_routing:
+        description: "GOLDENMATCH_RAY_PHASE5_ROUTING value (0 or 1). PR #603 routes backend=ray through run_dedupe_pipeline_distributed (Phase 5 streaming) instead of the legacy ray_backend swap. Default OFF until measured."
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -103,6 +107,9 @@ jobs:
       # PR #600: per-column staged collect inside apply_standardization to
       # attribute the 54s wall per rule. Diagnostic only.
       GOLDENMATCH_STANDARDIZE_STAGED: ${{ inputs.standardize_staged || '0' }}
+      # PR #603 (Ray Phase 5 routing lane, PR 1): route backend=ray through
+      # the streaming pipeline instead of the legacy ray_backend swap.
+      GOLDENMATCH_RAY_PHASE5_ROUTING: ${{ inputs.ray_phase5_routing || '0' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 

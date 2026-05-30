@@ -1615,6 +1615,45 @@ def _run_dedupe_pipeline(
     return results
 
 
+def _route_ray_via_phase5(
+    df: pl.DataFrame,
+    config: GoldenMatchConfig,
+    source_name: str,
+) -> Any:
+    """Convert the input DataFrame to a Ray Dataset and route through
+    run_dedupe_pipeline_distributed under Phase 5 streaming mode.
+
+    PR 1 of the Ray Phase 5 routing lane. The conversion uses
+    ray.data.from_arrow on df.to_arrow() (zero-copy at the Arrow buffer
+    level; Ray Dataset partitions the chunks lazily). The subsequent
+    streaming pipeline avoids the driver-side take_all that the Phase 2
+    cheat-line still performs.
+
+    Stamps GOLDENMATCH_DISTRIBUTED_PIPELINE=2 for the duration so the
+    dispatcher in distributed/pipeline.py routes to _run_phase5_pipeline.
+    The previous value (if any) is restored on exit so callers that set
+    it explicitly are honored.
+    """
+    import ray.data as _rd  # noqa: PLC0415
+
+    from goldenmatch.distributed.pipeline import (  # noqa: PLC0415
+        run_dedupe_pipeline_distributed,
+    )
+
+    ds = _rd.from_arrow(df.to_arrow())
+    prev = os.environ.get("GOLDENMATCH_DISTRIBUTED_PIPELINE")
+    os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
+    try:
+        return run_dedupe_pipeline_distributed(
+            ds, config=config, source_name=source_name,
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("GOLDENMATCH_DISTRIBUTED_PIPELINE", None)
+        else:
+            os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = prev
+
+
 def run_dedupe_df(
     df: pl.DataFrame,
     config: GoldenMatchConfig,
