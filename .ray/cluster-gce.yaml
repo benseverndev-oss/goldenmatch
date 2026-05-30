@@ -72,7 +72,7 @@ worker_start_ray_commands:
 
 # Instance specs. n2-standard-16 = 16 vCPU / 64 GB RAM.
 available_node_types:
-  ray.head.default:
+  ray_head_default:
     resources: {}
     node_config:
       machineType: n2-standard-16
@@ -85,7 +85,7 @@ available_node_types:
             sourceImage: projects/deeplearning-platform-release/global/images/family/common-cpu
       scheduling:
         - preemptible: false
-  ray.worker.default:
+  ray_worker_default:
     min_workers: 3
     max_workers: 3
     resources: {}
@@ -104,4 +104,4 @@ available_node_types:
       scheduling:
         - preemptible: true
 
-head_node_type: ray.head.default
+head_node_type: ray_head_default
