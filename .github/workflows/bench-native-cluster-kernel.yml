@@ -1,0 +1,98 @@
+# Bench: Python build_clusters vs native build_clusters_native.
+#
+# Wakes when dispatched manually. Builds the native module, runs
+# scripts/bench_native_cluster_kernel.py at three shapes (smoke /
+# medium / large), and posts the speedup table to the run's step
+# summary.
+#
+# Decision gate: ship the kernel-wiring follow-up PR ONLY IF the
+# large-shape speedup is >= 2x. Otherwise the dict-construction floor
+# dominates and wiring won't move the QIS cluster wall enough to
+# justify the surface-area change. Spec:
+# docs/superpowers/specs/2026-05-30-cluster-orchestration-kernel-spec.md
+# (gitignored; local design notes).
+
+name: bench-native-cluster-kernel
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch (defensive shadow guard)
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        # build_native.py drops _native.so into the editable install
+        # so `import goldenmatch._native` resolves to the just-built
+        # artifact (not a stale wheel).
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Verify native loaded + build_clusters_native exposed
+        run: |
+          .venv/bin/python -c "
+          import goldenmatch._native as n
+          assert hasattr(n, 'build_clusters_native'), (
+              'kernel not exposed -- PR #610 may have failed to land '
+              'or the rebuild missed cluster.rs'
+          )
+          print('native loaded; build_clusters_native present')
+          "
+
+      - name: Run cluster kernel bench
+        # The script writes its table to stdout; tee into a file we
+        # later pipe to the step summary.
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/native-bench
+          .venv/bin/python scripts/bench_native_cluster_kernel.py \
+            | tee .profile_tmp/native-bench/cluster.txt
+
+      - name: Post bench output to step summary
+        if: always()
+        run: |
+          if [ ! -f .profile_tmp/native-bench/cluster.txt ]; then
+            echo "no bench output -- earlier step failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          {
+            echo "## build_clusters: Python vs native"
+            echo ""
+            echo "Decision gate: ship the kernel wire-up follow-up PR"
+            echo "iff the large-shape speedup is >= 2x. Otherwise the"
+            echo "dict-construction floor dominates and wiring won't"
+            echo "meaningfully reduce QIS cluster wall."
+            echo ""
+            echo '```'
+            cat .profile_tmp/native-bench/cluster.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload raw bench output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cluster-bench
+          path: .profile_tmp/native-bench/cluster.txt
+          if-no-files-found: warn
