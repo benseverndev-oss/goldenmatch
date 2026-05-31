@@ -471,6 +471,7 @@ def apply_standardization(
                     val = fn(val)
                 return val
 
+            # noqa: GM-MAP-ELEMENTS: mixed chain has non-native standardizer needing per-row Python; Phase 6 / #628
             expr = expr.map_elements(chained_fn, return_dtype=pl.Utf8).alias(column)
             if _staged:
                 with _bench_stage(f"std_col_mixed_{column}"):
@@ -486,6 +487,7 @@ def apply_standardization(
                     val = fn(val)
                 return val
 
+            # noqa: GM-MAP-ELEMENTS: all-non-native chain (user-registered std without Polars eq); Phase 6 / #628
             expr = (
                 pl.col(column)
                 .cast(pl.Utf8)
