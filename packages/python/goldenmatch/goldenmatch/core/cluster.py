@@ -16,6 +16,8 @@ from goldenmatch.core.complexity_profile import ClusterProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
 if TYPE_CHECKING:
+    import polars as pl
+
     from goldenmatch.core.memory.store import MemoryStore
 
 _log = logging.getLogger("goldenmatch.memory")
@@ -797,3 +799,72 @@ def unmerge_cluster(
         next_cid += 1
 
     return clusters
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 1a (#623): columnar pair-stream entry point
+# ---------------------------------------------------------------------------
+#
+# Sibling function to ``build_clusters`` that accepts a ``pl.DataFrame``
+# pair stream (the Phase 1a output of ``score_blocks_columnar`` /
+# ``find_fuzzy_matches_columnar``) instead of the legacy list of tuples.
+#
+# Today's implementation converts the DataFrame to the list shape at the
+# boundary and delegates to ``build_clusters`` — same correctness contract
+# as the Phase 1a scorer wrappers. Phase 1c will invert: the columnar
+# function becomes canonical, the list version becomes a shim.
+#
+# Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+
+
+def build_clusters_columnar(
+    pairs_df: pl.DataFrame,
+    all_ids: list[int] | None = None,
+    max_cluster_size: int = 100,
+    weak_cluster_threshold: float = 0.3,
+    auto_split: bool = True,
+) -> dict[int, dict]:
+    """Columnar wrapper around :func:`build_clusters`.
+
+    Accepts a Polars DataFrame ``(id_a, id_b, score)`` (canonical
+    ``PAIR_STREAM_SCHEMA`` from ``scorer.pairs_list_to_df``). Returns the
+    same ``dict[int, dict]`` cluster shape as ``build_clusters``; Phase 2
+    will change the return shape to the two-frame ``(assignments,
+    metadata)`` layout. For Phase 1a the goal is JUST to accept the
+    columnar input.
+
+    Args:
+        pairs_df: Polars DataFrame with int64 ``id_a``, int64 ``id_b``,
+            float64 ``score`` columns. ``PAIR_STREAM_SCHEMA``-shaped.
+        all_ids: Optional explicit ID list; if None, derived from the
+            ``id_a`` + ``id_b`` columns via ``.unique()``.
+        max_cluster_size, weak_cluster_threshold, auto_split:
+            Forwarded to ``build_clusters`` unchanged.
+
+    Returns:
+        Same ``dict[int, dict]`` as ``build_clusters``. Phase 2 changes
+        this to the columnar two-frame shape.
+    """
+    import polars as _pl
+
+    from goldenmatch.core.scorer import pairs_df_to_list
+
+    if all_ids is None and not pairs_df.is_empty():
+        # Derive all_ids from the DataFrame via Polars expressions instead
+        # of iterating tuples (the slow path in build_clusters' own derive
+        # branch). Phase 2 lifts this to a fully vectorized columnar
+        # derive in the canonical implementation.
+        ids_series = _pl.concat(
+            [pairs_df["id_a"], pairs_df["id_b"]],
+        ).unique()
+        all_ids = [int(i) for i in ids_series.to_list()]
+
+    pairs = pairs_df_to_list(pairs_df)
+    return build_clusters(
+        pairs,
+        all_ids=all_ids,
+        max_cluster_size=max_cluster_size,
+        weak_cluster_threshold=weak_cluster_threshold,
+        auto_split=auto_split,
+    )

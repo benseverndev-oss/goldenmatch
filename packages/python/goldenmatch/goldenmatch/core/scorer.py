@@ -1144,3 +1144,112 @@ def rerank_top_pairs(
         len(result), len(pairs),
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 1a (#623): columnar pair-stream entry points
+# ---------------------------------------------------------------------------
+#
+# Sibling functions to the list-returning scorers above. Same inputs, same
+# scoring math, but return ``pl.DataFrame`` instead of ``list[tuple]``. Let
+# Phase 1b callers (build_clusters, web preview, lineage, identity edge
+# ingestion, MCP/REST surfaces) migrate piecewise without breaking any
+# existing list-based consumer.
+#
+# Phase 1c will invert the relationship: the columnar functions become the
+# canonical implementation and the list versions become thin
+# ``.to_pairs_list()`` shims, eventually removed entirely.
+#
+# Today's implementation is a wrap-and-convert: the list path runs, then we
+# build the DataFrame from the result. That carries Phase 1a's correctness
+# guarantee (the inner scoring is byte-identical) at the cost of a single
+# Python -> Arrow conversion per call. The conversion is O(N_pairs); at the
+# 200M-pair / 5M-row reference shape that's ~10s of overhead, recovered in
+# Phase 1c. Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+
+PAIR_STREAM_SCHEMA: dict[str, pl.DataType] = {
+    "id_a": pl.Int64(),
+    "id_b": pl.Int64(),
+    "score": pl.Float64(),
+}
+"""Canonical pair-stream schema. ``id_a < id_b`` invariant maintained by the
+caller (legacy scorers already canonicalize via ``(min, max)``)."""
+
+
+def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
+    """Adapter: legacy ``(id_a, id_b, score)`` list -> typed DataFrame.
+
+    Empty input returns a zero-row frame with the canonical schema so
+    downstream Polars expressions (joins, group_by, with_columns) work
+    without an ``if df.is_empty()`` guard at every call site.
+    """
+    if not pairs:
+        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+    return pl.DataFrame(pairs, schema=PAIR_STREAM_SCHEMA, orient="row")
+
+
+def pairs_df_to_list(df: pl.DataFrame) -> list[tuple[int, int, float]]:
+    """Adapter: DataFrame pair stream -> legacy list shape.
+
+    For migrating call sites that need the list shape during the Phase 1b
+    window. Removed in Phase 1c.
+    """
+    if df.is_empty():
+        return []
+    return [
+        (int(a), int(b), float(s))
+        for a, b, s in zip(
+            df["id_a"].to_list(),
+            df["id_b"].to_list(),
+            df["score"].to_list(),
+            strict=True,
+        )
+    ]
+
+
+def find_fuzzy_matches_columnar(
+    block_df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
+    pre_scored_pairs: list[tuple[int, int, float]] | None = None,
+) -> pl.DataFrame:
+    """Columnar wrapper around :func:`find_fuzzy_matches`.
+
+    Returns a typed Polars DataFrame ``(id_a, id_b, score)`` with the
+    ``PAIR_STREAM_SCHEMA`` shape. Behavior identical to the list version
+    (same scoring math, same canonicalization, same threshold filter);
+    only the return shape differs.
+
+    See module docstring section on Phase 1a for context.
+    """
+    pairs = find_fuzzy_matches(block_df, mk, exclude_pairs, pre_scored_pairs)
+    return pairs_list_to_df(pairs)
+
+
+def score_blocks_columnar(
+    blocks: list,
+    mk: MatchkeyConfig,
+    matched_pairs: set[tuple[int, int]],
+    max_workers: int | None = None,
+    across_files_only: bool = False,
+    source_lookup: dict[int, str] | None = None,
+    target_ids: set[int] | None = None,
+) -> pl.DataFrame:
+    """Columnar wrapper around :func:`score_blocks_parallel`.
+
+    Returns the same ``PAIR_STREAM_SCHEMA`` DataFrame. ``matched_pairs``
+    is mutated in place exactly as the list version does (the side effect
+    is part of the contract — callers rely on it to deduplicate pairs
+    across blocking passes).
+    """
+    pairs = score_blocks_parallel(
+        blocks,
+        mk,
+        matched_pairs,
+        max_workers=max_workers,
+        across_files_only=across_files_only,
+        source_lookup=source_lookup,
+        target_ids=target_ids,
+    )
+    return pairs_list_to_df(pairs)
