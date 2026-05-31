@@ -1015,3 +1015,117 @@ def build_golden_record_with_provenance(
 
     golden_df = pl.DataFrame(golden_rows) if golden_rows else pl.DataFrame()
     return GoldenRecordResult(df=golden_df, provenance=provenance_list)
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 4 (#626): golden consumes columnar input
+# ---------------------------------------------------------------------------
+#
+# Sibling function to ``build_golden_records_batch`` that accepts the
+# Phase 2 two-frame cluster representation (``ClusterFrames``)
+# directly, instead of requiring the caller to pre-build a
+# ``multi_df`` with a ``__cluster_id__`` column. Today's
+# implementation joins ``cluster_assignments`` against the source
+# frame via a vectorized Polars expression and delegates to
+# ``build_golden_records_batch`` -- same correctness contract, no perf
+# regression (the join replaces a manual loop the caller would
+# otherwise write).
+#
+# Why this phase exists: the existing ``build_golden_records_batch``
+# requires its caller to materialize the per-cluster row assignment
+# as a ``__cluster_id__`` column on the multi-member source slice. In
+# the distributed identity / Splink-Spark Phase 5 path that means the
+# driver must collect the cluster assignments via
+# ``materialize_cluster_dict`` (the ~3 GB / 25M cheat-line). Phase 4
+# gives the caller a single function: hand it the ``ClusterFrames``
+# and the source df, get golden records out -- no manual cluster_id
+# attachment, ready to consume directly from Phase 2's columnar
+# shape.
+#
+# Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+
+
+def build_golden_records_from_frames(
+    source_df: pl.DataFrame,
+    frames,  # cluster.ClusterFrames; imported lazily to keep golden.py independent
+    rules: GoldenRulesConfig,
+    quality_scores: dict[tuple[int, str], float] | None = None,
+    provenance: bool = False,
+) -> list[dict]:
+    """Phase 4 entry point: build golden records from a Phase-2
+    ``ClusterFrames`` plus the source DataFrame.
+
+    Args:
+        source_df: Original source data with a ``__row_id__`` column.
+            Rows NOT referenced by ``frames.assignments.member_id`` are
+            silently dropped (they're singletons; golden only operates
+            on multi-member clusters).
+        frames: ``ClusterFrames`` from
+            ``cluster.build_clusters_v2_columnar`` (or equivalent). The
+            ``assignments`` frame must have ``cluster_id`` (i64) and
+            ``member_id`` (i64) columns. The ``metadata`` frame is read
+            to filter singletons via the ``size`` column.
+        rules: forwarded to ``build_golden_records_batch`` unchanged.
+        quality_scores, provenance: forwarded unchanged.
+
+    Returns:
+        Same shape as ``build_golden_records_batch`` -- list of golden
+        record dicts, one per multi-member cluster, sorted by
+        ``__cluster_id__``.
+
+    Empty cases:
+        - empty ``source_df`` -> ``[]``.
+        - empty ``assignments`` -> ``[]``.
+        - assignments contains member_ids absent from ``source_df`` ->
+          those clusters are silently dropped (consistent with how the
+          existing pipeline drops rows whose __row_id__ isn't in the
+          source).
+    """
+    if source_df.height == 0 or frames.assignments.is_empty():
+        return []
+
+    if "__row_id__" not in source_df.columns:
+        raise ValueError(
+            "build_golden_records_from_frames: source_df must contain a "
+            "__row_id__ column. Use "
+            "source_df.with_row_index(name='__row_id__') if your input "
+            "frame doesn't have one.",
+        )
+
+    # Drop singleton clusters via the metadata.size filter -- golden
+    # only processes multi-member clusters per the existing
+    # ``build_golden_records_batch`` contract. This filter is cheap
+    # (Polars filter on a small metadata frame) and avoids feeding
+    # singleton clusters through the per-column group_by pipeline.
+    multi_cluster_ids = (
+        frames.metadata
+        .filter(pl.col("size") > 1)
+        .select("cluster_id")
+    )
+
+    # Vectorized join: attach __cluster_id__ to each source row whose
+    # __row_id__ appears in the assignments frame. ``inner`` join
+    # drops rows that aren't members of any multi-member cluster (the
+    # "rows NOT referenced ... are silently dropped" contract above).
+    assignments_multi = frames.assignments.join(
+        multi_cluster_ids, on="cluster_id", how="inner",
+    ).rename({"cluster_id": "__cluster_id__"})
+
+    multi_df = source_df.join(
+        assignments_multi,
+        left_on="__row_id__",
+        right_on="member_id",
+        how="inner",
+    )
+
+    if multi_df.height == 0:
+        return []
+
+    return build_golden_records_batch(
+        multi_df,
+        rules,
+        quality_scores=quality_scores,
+        provenance=provenance,
+    )
+
