@@ -620,7 +620,9 @@ def find_fuzzy_matches(
     mk: MatchkeyConfig,
     exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]] | None = None,
     pre_scored_pairs: list[tuple[int, int, float]] | None = None,
-) -> list[tuple[int, int, float]]:
+    *,
+    _emit_dataframe: bool = False,
+) -> list[tuple[int, int, float]] | pl.DataFrame:
     """Find fuzzy matches within a block DataFrame.
 
     Uses vectorized rapidfuzz cdist for batch scoring, with early termination
@@ -632,9 +634,23 @@ def find_fuzzy_matches(
         exclude_pairs: Optional set of (min_id, max_id) pairs to skip.
         pre_scored_pairs: Optional pre-computed (id_a, id_b, score) pairs
             from ANN blocking. When set, skip NxN scoring.
+        _emit_dataframe: Arrow-native roadmap Phase 1c hot-path opt-in.
+            When True AND the call is on the hot path (no NE, no
+            ``exclude_pairs``, no ``pre_scored_pairs``), emit a
+            ``pl.DataFrame`` directly from numpy arrays instead of
+            constructing a Python list of tuples. Zero per-pair Python
+            overhead at scale (the bottleneck for 200M-pair / 5M-row runs
+            per the Phase 1 spec). Non-hot-path branches still return
+            ``list[tuple]`` even when True; ``find_fuzzy_matches_columnar``
+            wraps those at the boundary. Default False keeps the existing
+            list contract for backward compat. The arg is positional-only
+            via the ``*`` marker so legacy callers don't accidentally pass
+            it.
 
     Returns:
-        List of (row_id_a, row_id_b, score) tuples above threshold.
+        ``list[tuple[int, int, float]]`` by default (legacy contract).
+        ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA`` columns when
+        ``_emit_dataframe=True`` AND the call hits the hot path.
     """
     # find_fuzzy_matches requires mk.threshold + field weights/scorers set;
     # upstream config validation enforces this. Pyright sees the schema-level
@@ -850,6 +866,19 @@ def find_fuzzy_matches(
                 results.append((int(a), int(b), float(s)))
         return results
 
+    # HOT PATH: no NE, no exclude_pairs, no pre_scored_pairs. ~99% of
+    # production block-scoring calls land here. The Phase 1c
+    # _emit_dataframe opt-in (#623) bypasses the list-of-tuples
+    # construction by building a Polars DataFrame directly from the
+    # numpy arrays. List comprehension at 200M pairs (5M-row reference
+    # shape) is the per-pair Python overhead the Arrow-native roadmap
+    # exists to remove; this is where it lands.
+    if _emit_dataframe:
+        return pl.DataFrame({
+            "id_a": ids_a if hasattr(ids_a, "astype") else np.asarray(ids_a, dtype=np.int64),
+            "id_b": ids_b if hasattr(ids_b, "astype") else np.asarray(ids_b, dtype=np.int64),
+            "score": scores if hasattr(scores, "astype") else np.asarray(scores, dtype=np.float64),
+        }, schema=PAIR_STREAM_SCHEMA)
     return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)]
 
 
@@ -1221,9 +1250,34 @@ def find_fuzzy_matches_columnar(
     (same scoring math, same canonicalization, same threshold filter);
     only the return shape differs.
 
-    See module docstring section on Phase 1a for context.
+    Phase 1c hot-path optimization (#623): when the call hits the hot
+    path (no NE, no exclude_pairs, no pre_scored_pairs), we pass
+    ``_emit_dataframe=True`` so ``find_fuzzy_matches`` emits the
+    DataFrame directly from its numpy arrays — bypassing the
+    list-of-tuples construction that dominates the wall at 200M-pair
+    scale. Non-hot-path branches still wrap-and-convert (rare in
+    production: NE is opt-in, exclude_pairs is empty for first-pass
+    blocking).
     """
+    is_hot_path = (
+        not mk.negative_evidence
+        and (exclude_pairs is None or len(exclude_pairs) == 0)
+        and pre_scored_pairs is None
+    )
+    if is_hot_path:
+        result = find_fuzzy_matches(
+            block_df, mk, exclude_pairs, pre_scored_pairs,
+            _emit_dataframe=True,
+        )
+        # On the hot path the emission branch returns a DataFrame, but
+        # the n < 2 / total_weight == 0 early returns above the hot
+        # path always return ``[]`` regardless of the flag (they
+        # short-circuit before knowing about it). Wrap defensively.
+        if isinstance(result, pl.DataFrame):
+            return result
+        return pairs_list_to_df(result)
     pairs = find_fuzzy_matches(block_df, mk, exclude_pairs, pre_scored_pairs)
+    assert isinstance(pairs, list)
     return pairs_list_to_df(pairs)
 
 
