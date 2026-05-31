@@ -1088,3 +1088,123 @@ def build_clusters_v2_columnar(
         auto_split=auto_split,
     )
     return cluster_dict_to_frames(legacy)
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 3 (#625): build_clusters via Rust Arrow kernel
+# ---------------------------------------------------------------------------
+#
+# Reads pair stream + all_ids as Arrow buffers (zero-copy from Polars),
+# runs Union-Find in Rust, returns ClusterFrames-shaped output without
+# the dict/list intermediate that capped build_clusters_native at 1.09x.
+#
+# Third Rust Arrow kernel in the Phase 3 series after dedup_pairs_arrow
+# (#643) and record_fingerprints_batch_arrow (#644). Same strategic
+# pattern: kernels with Arrow IO unblock DataFusion B2 via PyCapsule
+# ScalarUDFs.
+#
+# v1 scope: Union-Find + cluster_id assignment + confidence/bottleneck/
+# oversized metadata. Auto-split (oversized -> MST split) and weak-
+# cluster downgrades (cluster_quality=weak) are NOT in this kernel --
+# callers wrap and post-process for those. The output's ``quality``
+# column is always ``"strong"`` and ``auto_split`` is ignored;
+# build_clusters_v2_columnar can re-apply downstream filters when
+# needed.
+
+
+def build_clusters_arrow_native(
+    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    all_ids: list[int] | None = None,
+    max_cluster_size: int = 100,
+) -> ClusterFrames:
+    """Rust Arrow native cluster builder. Reads the pair stream's Arrow
+    buffers directly via the C Data Interface, runs Union-Find in Rust,
+    emits two ClusterFrames-shaped Arrow buffer sets.
+
+    Phase 3 deliverable per the Arrow-native roadmap (#625). The
+    dict-shaped ``build_clusters_native`` Rust kernel benched at 1.09x
+    (capped by per-cluster PyDict construction); this Arrow path
+    bypasses the dict construction entirely.
+
+    Falls back to ``build_clusters_v2_columnar`` (Polars columnar +
+    legacy build_clusters) when the native ``clustering`` component
+    is disabled or the Arrow kernel isn't built -- graceful degrade
+    with identical output shape.
+
+    Args:
+        pairs_df: ``PAIR_STREAM_SCHEMA`` DataFrame.
+        all_ids: Optional explicit ID list (defaults to derived from
+            pair endpoints).
+        max_cluster_size: Threshold for the ``oversized`` flag on
+            metadata.
+
+    Returns:
+        ``ClusterFrames`` with the canonical (assignments, metadata)
+        shape. ``quality`` column is always ``"strong"`` in v1 --
+        weak-cluster downgrades and auto-split happen via the legacy
+        post-processor path; callers can chain that as needed.
+    """
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    # Fall back when native isn't enabled or the kernel isn't exposed.
+    if not native_enabled("clustering"):
+        return build_clusters_v2_columnar(
+            pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
+        )
+    native = native_module()
+    arrow_fn = getattr(native, "build_clusters_arrow", None)
+    if arrow_fn is None:
+        return build_clusters_v2_columnar(
+            pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
+        )
+
+    import polars as _pl
+
+    if all_ids is None:
+        # Vectorized derive: concat id_a/id_b and uniq. Polars handles
+        # this without materializing a Python list.
+        if pairs_df.is_empty():
+            all_ids = []
+        else:
+            ids_series = _pl.concat(
+                [pairs_df["id_a"], pairs_df["id_b"]],
+            ).unique()
+            all_ids = [int(i) for i in ids_series.to_list()]
+
+    a_arrow = pairs_df["id_a"].to_arrow() if not pairs_df.is_empty() \
+        else _pl.Series("id_a", [], dtype=_pl.Int64).to_arrow()
+    b_arrow = pairs_df["id_b"].to_arrow() if not pairs_df.is_empty() \
+        else _pl.Series("id_b", [], dtype=_pl.Int64).to_arrow()
+    s_arrow = pairs_df["score"].to_arrow() if not pairs_df.is_empty() \
+        else _pl.Series("score", [], dtype=_pl.Float64).to_arrow()
+    all_ids_arrow = _pl.Series("__ids__", all_ids, dtype=_pl.Int64).to_arrow()
+
+    (
+        a_cid, a_mid,
+        m_cid, m_size, m_conf, m_over, m_bot_a, m_bot_b,
+    ) = arrow_fn(a_arrow, b_arrow, s_arrow, all_ids_arrow, max_cluster_size)
+
+    assignments = _pl.DataFrame({
+        "cluster_id": _pl.from_arrow(a_cid),
+        "member_id":  _pl.from_arrow(a_mid),
+    })
+    metadata = _pl.DataFrame({
+        "cluster_id":       _pl.from_arrow(m_cid),
+        "size":             _pl.from_arrow(m_size),
+        "confidence":       _pl.from_arrow(m_conf),
+        "quality":          _pl.Series(
+            "quality", ["strong"] * metadata_height(m_cid), dtype=_pl.Utf8,
+        ),
+        "oversized":        _pl.from_arrow(m_over),
+        "bottleneck_pair_a": _pl.from_arrow(m_bot_a),
+        "bottleneck_pair_b": _pl.from_arrow(m_bot_b),
+    })
+    return ClusterFrames(assignments=assignments, metadata=metadata)
+
+
+def metadata_height(arrow_array) -> int:
+    """Tiny helper -- get row count from a PyArrow ArrayData/Array
+    without materializing the values. Used for the ``quality`` column
+    construction in ``build_clusters_arrow_native``."""
+    # PyArrow arrays expose ``__len__``.
+    return len(arrow_array)
