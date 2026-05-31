@@ -906,6 +906,11 @@ def _score_one_block(
         exclude_pairs=exclude_pairs,
         pre_scored_pairs=block.pre_scored_pairs,
     )
+    # _score_one_block never opts into the Phase-1c DataFrame emit
+    # (_emit_dataframe defaults to False); the return is always a list.
+    # Narrow for pyright now that the find_fuzzy_matches return type
+    # includes pl.DataFrame as a union.
+    assert isinstance(pairs, list)
 
     if across_files_only and source_lookup:
         pairs = [
