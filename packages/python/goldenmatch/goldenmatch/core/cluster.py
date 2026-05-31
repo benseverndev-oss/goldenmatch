@@ -932,7 +932,17 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
     """Adapter: legacy ``dict[int, dict]`` cluster shape -> two-frame
     Phase-2 representation. Lossless modulo ``pair_scores`` (which
     moves to a lazy view computed from the pair stream in Phase 2b).
+
+    Phase 2c hot-path (#624): builds the columnar arrays directly via
+    numpy with pre-sized buffers and slice-assignment, instead of
+    list-of-tuples append-per-row. At the 17M-cluster scale that
+    ``materialize_cluster_dict`` hits at 25M (per CLAUDE.md), the
+    Python append overhead dominated; this brings it down to a
+    single-pass numpy fill where the only Python loop is per-cluster
+    (not per-member). ``pl.DataFrame`` accepts numpy arrays zero-copy
+    via the columnar constructor.
     """
+    import numpy as _np
     import polars as _pl
 
     if not clusters:
@@ -951,29 +961,59 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
             }),
         )
 
-    assign_rows: list[tuple[int, int]] = []
-    meta_rows: list[dict] = []
-    for cid, cluster in clusters.items():
-        members = cluster.get("members", [])
-        for m in members:
-            assign_rows.append((int(cid), int(m)))
-        bottleneck = cluster.get("bottleneck_pair") or (0, 0)
-        meta_rows.append({
-            "cluster_id": int(cid),
-            "size": int(cluster.get("size", len(members))),
-            "confidence": float(cluster.get("confidence", 0.0)),
-            "quality": str(cluster.get("cluster_quality", "strong")),
-            "oversized": bool(cluster.get("oversized", False)),
-            "bottleneck_pair_a": int(bottleneck[0]) if bottleneck else 0,
-            "bottleneck_pair_b": int(bottleneck[1]) if bottleneck else 0,
-        })
-
-    assignments = _pl.DataFrame(
-        assign_rows,
-        schema={"cluster_id": _pl.Int64(), "member_id": _pl.Int64()},
-        orient="row",
+    n_clusters = len(clusters)
+    total_members = sum(
+        len(c.get("members", [])) for c in clusters.values()
     )
-    metadata = _pl.DataFrame(meta_rows)
+
+    # Pre-size numpy buffers for both frames. Avoids the O(N) Python
+    # list growth + tuple construction the previous implementation paid
+    # per (cluster, member) pair.
+    a_cid = _np.empty(total_members, dtype=_np.int64)
+    a_mid = _np.empty(total_members, dtype=_np.int64)
+
+    m_cid = _np.empty(n_clusters, dtype=_np.int64)
+    m_size = _np.empty(n_clusters, dtype=_np.int64)
+    m_conf = _np.empty(n_clusters, dtype=_np.float64)
+    m_quality: list[str] = [""] * n_clusters
+    m_oversized = _np.empty(n_clusters, dtype=_np.bool_)
+    m_bot_a = _np.empty(n_clusters, dtype=_np.int64)
+    m_bot_b = _np.empty(n_clusters, dtype=_np.int64)
+
+    a_idx = 0
+    for m_idx, (cid, cluster) in enumerate(clusters.items()):
+        members = cluster.get("members", [])
+        n = len(members)
+        if n:
+            # Broadcast cluster_id across the slice; copy members via
+            # numpy's list-fast-path. One copy per cluster, not one
+            # tuple per member.
+            a_cid[a_idx:a_idx + n] = cid
+            a_mid[a_idx:a_idx + n] = members
+            a_idx += n
+
+        bottleneck = cluster.get("bottleneck_pair") or (0, 0)
+        m_cid[m_idx] = cid
+        m_size[m_idx] = cluster.get("size", n)
+        m_conf[m_idx] = cluster.get("confidence", 0.0)
+        m_quality[m_idx] = str(cluster.get("cluster_quality", "strong"))
+        m_oversized[m_idx] = bool(cluster.get("oversized", False))
+        m_bot_a[m_idx] = bottleneck[0] if bottleneck else 0
+        m_bot_b[m_idx] = bottleneck[1] if bottleneck else 0
+
+    assignments = _pl.DataFrame({
+        "cluster_id": a_cid,
+        "member_id": a_mid,
+    })
+    metadata = _pl.DataFrame({
+        "cluster_id": m_cid,
+        "size": m_size,
+        "confidence": m_conf,
+        "quality": m_quality,
+        "oversized": m_oversized,
+        "bottleneck_pair_a": m_bot_a,
+        "bottleneck_pair_b": m_bot_b,
+    })
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
