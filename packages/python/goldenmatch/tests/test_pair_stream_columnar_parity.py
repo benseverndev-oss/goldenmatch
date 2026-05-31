@@ -54,6 +54,64 @@ def _mk() -> MatchkeyConfig:
     )
 
 
+# ── Phase 1c hot-path direct-emit (#623) ────────────────────────────
+
+
+class TestHotPathDirectEmit:
+    """Phase 1c: ``find_fuzzy_matches(..., _emit_dataframe=True)`` must
+    emit a ``pl.DataFrame`` directly from numpy arrays on the hot path
+    (no NE, no exclude_pairs, no pre_scored_pairs), bypassing the
+    list-of-tuples construction that dominates wall at 200M-pair scale.
+    """
+
+    def test_hot_path_returns_dataframe(self):
+        block_df = _block_df([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+        result = find_fuzzy_matches(
+            block_df, _mk(),
+            exclude_pairs=None, pre_scored_pairs=None,
+            _emit_dataframe=True,
+        )
+        assert isinstance(result, pl.DataFrame), (
+            f"hot path with _emit_dataframe=True must return DataFrame, "
+            f"got {type(result).__name__}"
+        )
+        from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+        assert result.schema == PAIR_STREAM_SCHEMA
+
+    def test_hot_path_matches_list_path(self):
+        """DataFrame-emit output must match list-emit output as
+        canonical-pair sets."""
+        block_df = _block_df([
+            (1, "John Smith"), (2, "Jon Smith"), (3, "Jane Smith"),
+            (4, "John Smyth"), (5, "Bob Jones"),
+        ])
+        list_pairs = find_fuzzy_matches(block_df, _mk())
+        df_pairs = find_fuzzy_matches(block_df, _mk(), _emit_dataframe=True)
+        assert isinstance(df_pairs, pl.DataFrame)
+
+        list_set = {(min(a, b), max(a, b)) for a, b, _ in list_pairs}
+        df_set = {
+            (min(int(a), int(b)), max(int(a), int(b)))
+            for a, b in zip(
+                df_pairs["id_a"].to_list(),
+                df_pairs["id_b"].to_list(),
+                strict=True,
+            )
+        }
+        assert df_set == list_set
+
+    def test_exclude_pairs_path_falls_back_to_list(self):
+        """When ``exclude_pairs`` is non-empty, the function takes a
+        list-building branch above the hot-path emission; the flag is
+        not honored there. ``find_fuzzy_matches_columnar`` handles this
+        via the defensive wrap. Locks the contract."""
+        block_df = _block_df([(1, "John"), (2, "Jon")])
+        result = find_fuzzy_matches(
+            block_df, _mk(), exclude_pairs={(1, 2)}, _emit_dataframe=True,
+        )
+        assert isinstance(result, list)
+
+
 # ── Adapter round-trip ──────────────────────────────────────────────
 
 

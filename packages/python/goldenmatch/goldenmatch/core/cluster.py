@@ -920,8 +920,12 @@ class ClusterFrames:
     The two frames share ``cluster_id`` as the key. Phase 2c will make
     this the canonical return shape; today it's an additive sibling.
     """
-    assignments: object  # pl.DataFrame; not typed to keep this module Polars-lazy at import time
-    metadata: object  # pl.DataFrame
+    # Both fields are pl.DataFrame at runtime. Annotated as string
+    # forward refs against the TYPE_CHECKING-only ``pl`` import so the
+    # module stays Polars-lazy at import time, while pyright narrows
+    # ``frames.assignments.is_empty()`` etc. correctly.
+    assignments: pl.DataFrame
+    metadata: pl.DataFrame
 
 
 def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
@@ -1015,7 +1019,7 @@ def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
 
 
 def build_clusters_v2_columnar(
-    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    pairs_df: pl.DataFrame,
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
