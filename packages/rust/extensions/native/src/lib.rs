@@ -37,5 +37,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<score::ExcludeSet>()?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch_arrow, m)?)?;
     Ok(())
 }

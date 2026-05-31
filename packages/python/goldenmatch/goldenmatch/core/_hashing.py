@@ -98,3 +98,55 @@ def record_fingerprints_batch(records: list[dict[str, Any]]) -> list[str]:
     # Fallback: per-record loop. Same shape as the existing single-record
     # path, just iterated.
     return [record_fingerprint(r) for r in records]
+
+
+def record_fingerprints_batch_arrow(records_df):  # pl.DataFrame -> list[str]
+    """Arrow-native bulk fingerprints. Reads the DataFrame's columns
+    directly as Arrow arrays (zero-copy) and calls the Rust kernel,
+    which iterates the buffers in place -- no per-record Python dict
+    construction, no per-cell pyo3 marshalling.
+
+    Phase 3 deliverable per the Arrow-native roadmap (#625). Strategic
+    load-bearing for DataFusion B2: the kernel signature accepts
+    column-name + Arrow array list, the exact shape a PyCapsule
+    ScalarUDF would expose.
+
+    Falls back to ``record_fingerprints_batch`` (dict-shaped) when the
+    Arrow kernel isn't exposed -- gives older native builds a graceful
+    degrade path with identical output values.
+
+    Args:
+        records_df: Polars DataFrame whose columns ARE the record
+            fields. ``__``-prefixed columns are dropped (same contract
+            as the dict kernel). Supported column dtypes: Utf8,
+            LargeUtf8, Int64, Float64, Boolean. Null cells map to
+            ``FpValue::Null``.
+
+    Returns:
+        List of 64-char lowercase hex fingerprint strings, one per
+        row in input order.
+    """
+    if not native_enabled("hashing"):
+        # Convert to dicts and use the per-record loop -- same shape
+        # the existing record_fingerprints_batch fallback gives.
+        return record_fingerprints_batch(records_df.to_dicts())
+    native = native_module()
+    arrow_fn = getattr(native, "record_fingerprints_batch_arrow", None)
+    if arrow_fn is None:
+        # Older native build -- delegate to the dict kernel.
+        return record_fingerprints_batch(records_df.to_dicts())
+
+    field_names: list[str] = []
+    field_arrays: list = []
+    for col in records_df.columns:
+        if col.startswith("__"):
+            continue
+        field_names.append(col)
+        field_arrays.append(records_df[col].to_arrow())
+
+    arrow_out = arrow_fn(field_names, field_arrays)
+    # arrow_out is a PyArrowType<ArrayData> -> LargeStringArray. Convert
+    # to a Python list[str] via Polars (handles the Arrow -> Python
+    # decoding without per-row overhead beyond the final list build).
+    import polars as _pl
+    return _pl.from_arrow(arrow_out).to_list()
