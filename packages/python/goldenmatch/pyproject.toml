@@ -120,6 +120,13 @@ duckdb = [
 ray = [
     "ray>=2.0",
 ]
+# Experimental DataFusion backend (spike: docs/superpowers/specs/
+# 2026-05-30-datafusion-backend-spike-design.md). Opt-in via
+# config.backend="datafusion". Apache Arrow query engine; pairs with
+# goldenmatch-native for zero-Python-loop scoring.
+datafusion = [
+    "datafusion>=44",
+]
 agent = [
     "aiohttp>=3.9",
 ]

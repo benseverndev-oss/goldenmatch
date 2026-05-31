@@ -1,0 +1,112 @@
+# Bench: DataFusion vs bucket vs parallel at 10K + 100K, Day-3 gate.
+#
+# workflow_dispatch only. Runs scripts/bench_datafusion_vs_bucket.py
+# on large-new-64GB (16c / 64GB) -- the same baseline the bucket
+# 25M-on-one-node numbers were measured on. Uploads the JSON
+# artifact and posts the markdown summary to the step summary.
+#
+# Decision gate (replicated in the bench script, surfaced here for
+# visibility): at n=100K, if datafusion_wall / bucket_wall > 2.0,
+# the bench exits non-zero and we stop the spike to triage before
+# pushing to Day 4 (1M).
+#
+# Spec:
+#   docs/superpowers/specs/2026-05-30-datafusion-backend-spike-design.md
+#   (gitignored)
+#
+# IMPORTANT: this bench must NOT run locally on the dev box -- the
+# 100K controller-iteration shape OOMed Ben's Windows machine
+# (2026-05-30). All heavy compute lives in GH Actions per
+# memory/feedback_avoid_full_suite_oom.
+
+name: bench-datafusion-vs-bucket
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch[datafusion]
+        # The [datafusion] extra pulls datafusion>=44 (~38 MB wheel).
+        # Editable so the bench picks up the spike branch's
+        # backends/datafusion_backend.py without re-syncing.
+        run: uv pip install -e "packages/python/goldenmatch[datafusion]"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        # bucket and datafusion backends both REQUIRE the native
+        # module -- bucket for its inner score_block_pairs_arrow
+        # kernel, datafusion for the jaro_winkler / levenshtein /
+        # token_sort UDFs. Without native, the bench short-circuits
+        # to a meaningless result.
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Verify native loaded for both backends
+        run: |
+          .venv/bin/python -c "
+          import goldenmatch._native as n
+          for fn in ('jaro_winkler_similarity', 'levenshtein_similarity',
+                     'token_sort_ratio', 'score_block_pairs_arrow'):
+              assert hasattr(n, fn), f'native missing {fn}'
+          print('native loaded with all required kernels')
+          "
+
+      - name: Run Day-3 bench (10K + 100K, 3 iters each, 3 backends)
+        # The script writes its own JSON to .profile_tmp/datafusion-bench/.
+        # It also prints a markdown table that we re-capture into
+        # GITHUB_STEP_SUMMARY below. Non-zero exit means the Day-3
+        # decision gate failed (datafusion >2x slower than bucket at 100K).
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/datafusion-bench
+          # Tee stdout so we can post the markdown table from it.
+          .venv/bin/python packages/python/goldenmatch/scripts/bench_datafusion_vs_bucket.py \
+            2>&1 | tee .profile_tmp/datafusion-bench/day3_stdout.txt
+
+      - name: Post markdown summary
+        if: always()
+        run: |
+          STDOUT=.profile_tmp/datafusion-bench/day3_stdout.txt
+          if [ ! -f "$STDOUT" ]; then
+            echo "no stdout captured -- earlier step failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## bench-datafusion-vs-bucket (Day 3)"
+            echo ""
+            echo "Spec gate: at n=100K, ratio = datafusion_wall / bucket_wall must be <= 2.0 to continue to Day 4 (1M)."
+            echo ""
+            # Pull only the markdown table + the GATE line from the
+            # bench script output. Anything outside that range is
+            # per-iter logging noise.
+            awk '/^## Bench summary/,/^GATE @/' "$STDOUT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: datafusion-vs-bucket-day3
+          path: .profile_tmp/datafusion-bench/
+          if-no-files-found: warn

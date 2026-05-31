@@ -100,6 +100,21 @@ def _get_block_scorer(config: GoldenMatchConfig):
         # connector branch existed.
         from goldenmatch.backends.score_duckdb import score_blocks_duckdb
         return score_blocks_duckdb
+    if backend == "datafusion":
+        # Experimental backend (spike: docs/superpowers/specs/
+        # 2026-05-30-datafusion-backend-spike-design.md). Routes block
+        # scoring through Apache DataFusion with native scorers wrapped
+        # as vectorized Arrow-batch UDFs. Day-2 scope: single-field
+        # weighted matchkey with one of {jaro_winkler, levenshtein,
+        # token_sort}; raises NotImplementedError outside that scope
+        # (callers must NOT catch + silently fall back -- the spike
+        # depends on deterministic routing to produce interpretable
+        # bench numbers). Requires goldenmatch[datafusion] + the
+        # compiled goldenmatch._native module.
+        from goldenmatch.backends.datafusion_backend import (
+            score_blocks_datafusion,
+        )
+        return score_blocks_datafusion
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.golden import (
