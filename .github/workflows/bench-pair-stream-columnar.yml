@@ -1,0 +1,98 @@
+# Bench: list-based vs columnar pair stream at 100K / 1M / 5M.
+#
+# workflow_dispatch only. Runs scripts/bench_pair_stream_columnar.py
+# on large-new-64GB (16c / 64GB) -- the same baseline as
+# bench-datafusion-vs-bucket and the 25M-on-one-node reference runs.
+#
+# Decision gate (Arrow-native roadmap Phase 1, #623): at 5M, columnar
+# total wall <= 50% of list wall AND columnar peak RSS <= 25% of list
+# peak RSS. Phase 1a is a wrap-and-convert shim today, so the bench
+# is expected to surface NO speedup or a small regression until Phase
+# 1c lifts the legacy inner loop into the columnar path. The bench
+# infra ships now so Phase 1c can measure against an established
+# baseline.
+#
+# IMPORTANT: don't run locally past 100K --
+# memory/feedback_avoid_full_suite_oom applies.
+
+name: bench-pair-stream-columnar
+
+on:
+  workflow_dispatch:
+    inputs:
+      shapes:
+        description: "Space-separated row counts (default: 100000 1000000 5000000)"
+        required: false
+        default: "100000 1000000 5000000"
+      iters:
+        description: "Iterations per (n, path)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        # Bucket backend's inner kernel (score_block_pairs_arrow) is
+        # required for the list path to hit its production-grade wall
+        # at 1M+. Without it, the bench measures a pre-native baseline
+        # that's not representative of today's main.
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Run pair-stream bench
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/pair-stream-bench
+          .venv/bin/python packages/python/goldenmatch/scripts/bench_pair_stream_columnar.py \
+            --shapes ${{ inputs.shapes }} \
+            --iters ${{ inputs.iters }} \
+            2>&1 | tee .profile_tmp/pair-stream-bench/stdout.txt
+
+      - name: Post markdown summary
+        if: always()
+        run: |
+          STDOUT=.profile_tmp/pair-stream-bench/stdout.txt
+          if [ ! -f "$STDOUT" ]; then
+            echo "no stdout captured -- earlier step failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## bench-pair-stream-columnar"
+            echo ""
+            echo "Phase 1 gate at n=5M: columnar wall <= 50% of list wall AND columnar RSS <= 25% of list RSS."
+            echo "Today's Phase 1a is wrap-and-convert; gate is expected to MISS until Phase 1c."
+            echo ""
+            awk '/^## Pair stream bench summary/,/^JSON saved:/' "$STDOUT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pair-stream-bench
+          path: .profile_tmp/pair-stream-bench/
+          if-no-files-found: warn
