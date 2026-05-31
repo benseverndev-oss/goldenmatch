@@ -1,0 +1,119 @@
+# Hotspot profiler — identifies where wall time goes in the pair-stream
+# / cluster / golden path. Drives the next optimization round by
+# pointing at real hotspots instead of guessing.
+#
+# workflow_dispatch only. Mirrors the bench-pair-stream-columnar
+# pattern: large-new-64GB runner, subprocess-isolated per (shape,
+# target, profiler), 90-min timeout. Uploads per-combo JSON +
+# pyinstrument HTML flame graphs + cProfile pstats binaries for
+# offline analysis.
+#
+# Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+#
+# IMPORTANT: don't run locally past 100K -- memory/feedback_avoid_full_suite_oom
+# applies (pyinstrument is ~5% overhead, cProfile is 30-40%, neither
+# changes the OOM ceiling for the underlying pipeline).
+
+name: profile-hotspots
+
+on:
+  workflow_dispatch:
+    inputs:
+      shapes:
+        description: "Space-separated row counts (default: 100000 1000000)"
+        required: false
+        default: "100000 1000000"
+      targets:
+        description: "Space-separated paths to profile: list columnar"
+        required: false
+        default: "list columnar"
+      profilers:
+        description: "Space-separated profilers: pyinstrument cprofile"
+        required: false
+        default: "pyinstrument cprofile"
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: large-new-64GB
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Install pyinstrument
+        # pyinstrument is the statistical sampling profiler (~5% wall
+        # overhead, HTML flame-graph output). Optional dep; installed
+        # only in this workflow.
+        run: uv pip install pyinstrument
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        # Bucket/native scoring kernels are required for the list path
+        # to hit production-grade wall. Without native, the profiler
+        # would point at the pure-Python fallback, which isn't what
+        # production users hit.
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Run hotspot profiler
+        run: |
+          set -euo pipefail
+          mkdir -p .profile_tmp/hotspots
+          .venv/bin/python packages/python/goldenmatch/scripts/profile_hotspots.py \
+            --shapes ${{ inputs.shapes }} \
+            --targets ${{ inputs.targets }} \
+            --profilers ${{ inputs.profilers }} \
+            --out .profile_tmp/hotspots \
+            2>&1 | tee .profile_tmp/hotspots/stdout.txt
+
+      - name: Post markdown summary
+        if: always()
+        run: |
+          STDOUT=.profile_tmp/hotspots/stdout.txt
+          if [ ! -f "$STDOUT" ]; then
+            echo "no stdout captured -- earlier step failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## profile-hotspots"
+            echo ""
+            echo "Identifies *where* wall time goes in the pair-stream /"
+            echo "cluster / golden path. Two profilers:"
+            echo ""
+            echo "- **pyinstrument** (~5% overhead) — HTML flame graph"
+            echo "  best for 'where is the wall actually going'"
+            echo "- **cProfile** (~30-40% overhead) — exact per-function"
+            echo "  cumtime, authoritative when comparing specific calls"
+            echo ""
+            echo "Reports are uploaded as artifacts under"
+            echo "\`hotspot-profiles\`. Open the \`.html\` files to browse"
+            echo "the flame graphs interactively."
+            echo ""
+            awk '/^## Hotspot profile summary/,/^=== n=/' "$STDOUT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hotspot artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotspot-profiles
+          path: .profile_tmp/hotspots/
+          if-no-files-found: warn
