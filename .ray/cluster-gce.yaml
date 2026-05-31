@@ -104,10 +104,14 @@ available_node_types:
           initializeParams:
             diskSizeGb: 100
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
-      # Preemptible (spot) workers are 60-80% cheaper. Phase 5 streaming
-      # is partition-resumable so preemption is tolerable at this scale.
-      # Flip to false if you see preemption-driven retries dominating wall.
+      # On-demand workers. We started on preemptible (60-80% cheaper) but
+      # n2-standard-16 spot capacity in us-central1-a was intermittent --
+      # v44l / v45 saw workers either fail to launch or get preempted
+      # within seconds, while the on-demand head provisioned cleanly.
+      # On-demand costs ~4x per worker but is the right call until the
+      # cluster path is proven end-to-end. Flip back once we've shown
+      # the Ray code path works at this scale.
       scheduling:
-        - preemptible: true
+        - preemptible: false
 
 head_node_type: ray_head_default
