@@ -8,6 +8,10 @@
 //! default once the parity test passes.
 use std::collections::BTreeMap;
 
+use arrow::array::{Array, ArrayData, Float64Array, Int64Array};
+use arrow::datatypes::DataType;
+use arrow::pyarrow::PyArrowType;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Canonicalize each pair to `(min, max, score)`, preserving input order and
@@ -53,6 +57,107 @@ pub fn candidate_pair_count(block_sizes: Vec<i64>) -> i64 {
         }
     }
     total as i64
+}
+
+/// Arrow-native roadmap Phase 3 (#625): `dedup_pairs_max_score` over
+/// Arrow C Data Interface arrays.
+///
+/// Reads `id_a`, `id_b` (Int64) and `score` (Float64) directly from the
+/// PyArrow array buffers -- no per-tuple pyo3 marshalling. The same
+/// `BTreeMap<(i64, i64), f64>` reduction as the dict-shaped kernel,
+/// emitted back as three Arrow arrays sorted ascending by `(a, b)`.
+///
+/// The dict-shaped kernel benched at 1.19x speedup vs the Python loop
+/// (capped by per-tuple marshalling); this Arrow path bypasses that
+/// floor entirely. At 200M-pair / 5M-row reference shapes the dict
+/// kernel paid ~80 bytes Python overhead per pair; this path reads the
+/// raw Arrow i64/f64 buffers and pays only the BTreeMap update.
+///
+/// Pairs with `NULL` in any column are silently dropped (defensive --
+/// the upstream pair stream shouldn't contain nulls; we don't want a
+/// null to crash the reduce loop).
+#[pyfunction]
+pub fn dedup_pairs_arrow(
+    id_a: PyArrowType<ArrayData>,
+    id_b: PyArrowType<ArrayData>,
+    score: PyArrowType<ArrayData>,
+) -> PyResult<(PyArrowType<ArrayData>, PyArrowType<ArrayData>, PyArrowType<ArrayData>)> {
+    let id_a_data = id_a.0;
+    let id_b_data = id_b.0;
+    let score_data = score.0;
+
+    if id_a_data.data_type() != &DataType::Int64 {
+        return Err(PyValueError::new_err(format!(
+            "dedup_pairs_arrow: id_a must be int64, got {:?}",
+            id_a_data.data_type()
+        )));
+    }
+    if id_b_data.data_type() != &DataType::Int64 {
+        return Err(PyValueError::new_err(format!(
+            "dedup_pairs_arrow: id_b must be int64, got {:?}",
+            id_b_data.data_type()
+        )));
+    }
+    if score_data.data_type() != &DataType::Float64 {
+        return Err(PyValueError::new_err(format!(
+            "dedup_pairs_arrow: score must be float64, got {:?}",
+            score_data.data_type()
+        )));
+    }
+
+    let id_a = Int64Array::from(id_a_data);
+    let id_b = Int64Array::from(id_b_data);
+    let score = Float64Array::from(score_data);
+
+    let n = id_a.len();
+    if id_b.len() != n || score.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "dedup_pairs_arrow: array lengths differ -- id_a={}, id_b={}, score={}",
+            n, id_b.len(), score.len(),
+        )));
+    }
+
+    // Reduce: same algorithm as dedup_pairs_max_score. Strict `>`
+    // first-occurrence-wins on ties keeps it bit-identical with the
+    // dict-shaped kernel at the output value layer.
+    let mut best: BTreeMap<(i64, i64), f64> = BTreeMap::new();
+    for i in 0..n {
+        if id_a.is_null(i) || id_b.is_null(i) || score.is_null(i) {
+            continue;
+        }
+        let a = id_a.value(i);
+        let b = id_b.value(i);
+        let s = score.value(i);
+        let key = if a <= b { (a, b) } else { (b, a) };
+        match best.get(&key) {
+            Some(&cur) if s <= cur => {}
+            _ => {
+                best.insert(key, s);
+            }
+        }
+    }
+
+    // Emit sorted output as three Arrow arrays. BTreeMap iter yields
+    // ascending key order, so the result is already sorted by (a, b).
+    let n_out = best.len();
+    let mut out_a: Vec<i64> = Vec::with_capacity(n_out);
+    let mut out_b: Vec<i64> = Vec::with_capacity(n_out);
+    let mut out_s: Vec<f64> = Vec::with_capacity(n_out);
+    for ((a, b), s) in best {
+        out_a.push(a);
+        out_b.push(b);
+        out_s.push(s);
+    }
+
+    let a_array = Int64Array::from(out_a);
+    let b_array = Int64Array::from(out_b);
+    let s_array = Float64Array::from(out_s);
+
+    Ok((
+        PyArrowType(a_array.to_data()),
+        PyArrowType(b_array.to_data()),
+        PyArrowType(s_array.to_data()),
+    ))
 }
 
 /// `(count, total_records, max, p50, p95, p99)` over the block-size
