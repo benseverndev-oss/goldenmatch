@@ -1286,6 +1286,58 @@ def find_fuzzy_matches_columnar(
     return pairs_list_to_df(pairs)
 
 
+def _score_one_block_columnar(
+    block: Any,
+    mk: MatchkeyConfig,
+    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
+    across_files_only: bool = False,
+    source_lookup: dict[int, str] | None = None,
+) -> pl.DataFrame:
+    """Columnar twin of :func:`_score_one_block`. Returns a Polars
+    DataFrame with ``PAIR_STREAM_SCHEMA`` shape via
+    ``find_fuzzy_matches_columnar``'s hot-path direct emit
+    (``_emit_dataframe=True``).
+
+    Skips the list-of-tuples accumulation that ``_score_one_block``
+    pays before its caller would re-convert. Across-files filtering is
+    applied as a Polars expression on the result frame, vectorized.
+    """
+    block_df = block.df.collect()
+
+    if across_files_only and source_lookup:
+        sources_in_block = block_df["__source__"].unique().to_list()
+        if len(sources_in_block) < 2:
+            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+
+    pairs_df = find_fuzzy_matches_columnar(
+        block_df, mk,
+        exclude_pairs=exclude_pairs,
+        pre_scored_pairs=block.pre_scored_pairs,
+    )
+
+    if across_files_only and source_lookup and not pairs_df.is_empty():
+        # Vectorized: keep pairs where id_a and id_b have DIFFERENT
+        # source labels. Build a small Polars frame of (row_id ->
+        # source) and join twice; cheap at block scale (block_df is
+        # already collected) and avoids the per-pair Python lookup
+        # the list path does.
+        src_map = pl.DataFrame({
+            "__row_id__": list(source_lookup.keys()),
+            "__src__": list(source_lookup.values()),
+        })
+        pairs_df = (
+            pairs_df
+            .join(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}),
+                  on="id_a", how="left")
+            .join(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}),
+                  on="id_b", how="left")
+            .filter(pl.col("src_a") != pl.col("src_b"))
+            .drop(["src_a", "src_b"])
+        )
+
+    return pairs_df
+
+
 def score_blocks_columnar(
     blocks: list,
     mk: MatchkeyConfig,
@@ -1295,20 +1347,115 @@ def score_blocks_columnar(
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
 ) -> pl.DataFrame:
-    """Columnar wrapper around :func:`score_blocks_parallel`.
+    """Phase 1c-real columnar block scorer. Mirrors
+    :func:`score_blocks_parallel`'s thread-pool structure but uses
+    ``find_fuzzy_matches_columnar`` (with ``_emit_dataframe=True`` on
+    the hot path) at each leaf and ``pl.concat`` at aggregation -- no
+    list-of-tuples intermediate.
 
-    Returns the same ``PAIR_STREAM_SCHEMA`` DataFrame. ``matched_pairs``
-    is mutated in place exactly as the list version does (the side effect
-    is part of the contract — callers rely on it to deduplicate pairs
-    across blocking passes).
+    The 2026-05-31 bench (run 26716412152) showed that the previous
+    wrap-and-convert implementation -- calling ``score_blocks_parallel``
+    then ``pairs_list_to_df`` at the boundary -- was 13% slower at
+    100K and 25% slower at 1M than the list path, because the
+    inner-loop optimization in ``find_fuzzy_matches`` never
+    propagated up. This rewrite makes the columnar path actually
+    columnar end-to-end.
+
+    Args:
+        blocks, mk, matched_pairs, max_workers, across_files_only,
+        source_lookup, target_ids: same semantics as
+        ``score_blocks_parallel``. ``matched_pairs`` is mutated in
+        place as the contract requires.
+
+    Returns:
+        Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape.
     """
-    pairs = score_blocks_parallel(
-        blocks,
-        mk,
-        matched_pairs,
-        max_workers=max_workers,
-        across_files_only=across_files_only,
-        source_lookup=source_lookup,
-        target_ids=target_ids,
+    if max_workers is None:
+        max_workers = _DEFAULT_MAX_WORKERS
+    if not blocks:
+        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+
+    # Small block count: skip thread overhead (mirrors
+    # score_blocks_parallel's <=2 branch).
+    if len(blocks) <= 2:
+        frames: list[pl.DataFrame] = []
+        for block in blocks:
+            df_pairs = _score_one_block_columnar(
+                block, mk, matched_pairs,
+                across_files_only=across_files_only,
+                source_lookup=source_lookup,
+            )
+            if target_ids is not None and not df_pairs.is_empty():
+                df_pairs = _filter_target_ids_df(df_pairs, target_ids)
+            if not df_pairs.is_empty():
+                # Update matched_pairs side effect (per-block, before
+                # concat so order is consistent with the list path).
+                for a, b in zip(
+                    df_pairs["id_a"].to_list(),
+                    df_pairs["id_b"].to_list(),
+                    strict=True,
+                ):
+                    matched_pairs.add((min(a, b), max(a, b)))
+                frames.append(df_pairs)
+        if not frames:
+            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+        return pl.concat(frames)
+
+    # Parallel path: ThreadPoolExecutor, mirroring score_blocks_parallel.
+    # rapidfuzz.cdist + the native scorer release the GIL on the hot
+    # path, so threads give real parallelism.
+    frozen_exclude = frozenset(matched_pairs)
+    frames = []
+    total_blocks = len(blocks)
+    log_interval = max(total_blocks // 10, 1)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {}
+        for i, block in enumerate(blocks):
+            future = executor.submit(
+                _score_one_block_columnar, block, mk, frozen_exclude,
+                across_files_only, source_lookup,
+            )
+            future_to_idx[future] = i
+
+        completed = 0
+        for future in as_completed(future_to_idx):
+            df_pairs = future.result()
+            if target_ids is not None and not df_pairs.is_empty():
+                df_pairs = _filter_target_ids_df(df_pairs, target_ids)
+            if not df_pairs.is_empty():
+                for a, b in zip(
+                    df_pairs["id_a"].to_list(),
+                    df_pairs["id_b"].to_list(),
+                    strict=True,
+                ):
+                    matched_pairs.add((min(a, b), max(a, b)))
+                frames.append(df_pairs)
+            completed += 1
+            if completed % log_interval == 0:
+                # Match the list path's log line shape (without the
+                # exact pair count since aggregation is deferred).
+                logger.info(
+                    "Scoring progress (columnar): %d/%d blocks (%d%%)",
+                    completed, total_blocks,
+                    int(completed / total_blocks * 100),
+                )
+
+    if not frames:
+        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+    return pl.concat(frames)
+
+
+def _filter_target_ids_df(
+    pairs_df: pl.DataFrame, target_ids: set[int],
+) -> pl.DataFrame:
+    """Vectorized equivalent of the list-path's per-pair
+    ``(a in target_ids) != (b in target_ids)`` filter. Match mode
+    keeps only pairs where exactly one of (id_a, id_b) is in
+    ``target_ids``."""
+    if pairs_df.is_empty():
+        return pairs_df
+    target_series = pl.Series("__t__", list(target_ids), dtype=pl.Int64)
+    return pairs_df.filter(
+        pl.col("id_a").is_in(target_series) != pl.col("id_b").is_in(target_series),
     )
-    return pairs_list_to_df(pairs)
