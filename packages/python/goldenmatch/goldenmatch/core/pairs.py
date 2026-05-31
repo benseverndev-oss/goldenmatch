@@ -185,3 +185,49 @@ def dedup_pairs_max_score_columnar(pairs_df):  # pl.DataFrame -> pl.DataFrame
         .rename({"__a__": "id_a", "__b__": "id_b"})
         .select(["id_a", "id_b", "score"])
     )
+
+
+def dedup_pairs_max_score_arrow(pairs_df):  # pl.DataFrame -> pl.DataFrame
+    """Rust-Arrow native dedup. Reads the DataFrame's Arrow buffers
+    directly via the C Data Interface, runs the BTreeMap reduction in
+    Rust, returns the result as a new DataFrame.
+
+    Phase 3 deliverable per the Arrow-native roadmap (#625). The
+    dict-shaped ``dedup_pairs_max_score`` Rust kernel benched at 1.19x
+    (capped by per-tuple pyo3 marshalling); this Arrow path bypasses
+    the marshalling floor entirely -- the i64/f64 arrays are read in
+    place from the Polars frame's Arrow buffers, the BTreeMap reduces
+    them, and the output emits back as Arrow arrays.
+
+    Falls back to ``dedup_pairs_max_score_columnar`` (the Polars
+    expression path) when the native ``pairs`` component is disabled
+    or unavailable, so callers always get a working result.
+
+    Bit-exact contract with the dict-shaped kernel: same canonical
+    ``(min, max)`` orientation, same first-occurrence-wins tie
+    semantics (output values identical regardless).
+    """
+    import polars as _pl
+
+    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+    if not native_enabled("pairs"):
+        return dedup_pairs_max_score_columnar(pairs_df)
+    if pairs_df.is_empty():
+        return _pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+
+    native = native_module()
+    if not hasattr(native, "dedup_pairs_arrow"):
+        # Older native build doesn't have the Arrow kernel yet; degrade
+        # to the Polars columnar path (same correctness, no perf claim).
+        return dedup_pairs_max_score_columnar(pairs_df)
+
+    a_arrow = pairs_df["id_a"].to_arrow()
+    b_arrow = pairs_df["id_b"].to_arrow()
+    s_arrow = pairs_df["score"].to_arrow()
+    a_out, b_out, s_out = native.dedup_pairs_arrow(a_arrow, b_arrow, s_arrow)
+    return _pl.DataFrame({
+        "id_a": _pl.from_arrow(a_out),
+        "id_b": _pl.from_arrow(b_out),
+        "score": _pl.from_arrow(s_out),
+    })
