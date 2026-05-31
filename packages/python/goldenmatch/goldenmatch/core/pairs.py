@@ -115,3 +115,73 @@ def connected_components(
     for a, b, _s in pairs:
         uf.union(a, b)
     return [sorted(c) for c in uf.get_clusters()]
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 3 (#625): columnar dedup_pairs
+# ---------------------------------------------------------------------------
+#
+# Sibling to ``dedup_pairs_max_score`` that accepts the Phase-1 pair-stream
+# DataFrame (``PAIR_STREAM_SCHEMA``: id_a, id_b, score) and returns the same
+# shape. Pure Polars expressions -- canonicalize via ``min_horizontal`` /
+# ``max_horizontal``, then ``group_by(["id_a", "id_b"]).agg(pl.col("score").max())``,
+# then sort.
+#
+# Why this is Phase 3 (not just Phase 1 polish): the existing dict-shaped
+# native kernel benched at 1.19x speedup vs the Python loop -- the per-tuple
+# pyo3 marshalling cost capped the win. The columnar path here bypasses that
+# entirely (zero Python in the inner loop; only Polars expression evaluation
+# in native code). At the 200M-pair / 5M-row reference shape the dict-shaped
+# kernel paid ~80 bytes of Python overhead per pair; this path pays only the
+# Arrow buffer cost (~24 bytes/pair). When the canonical pair stream is
+# already a DataFrame (Phase 1c-real), this is the right kernel to call.
+#
+# Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+
+
+def dedup_pairs_max_score_columnar(pairs_df):  # pl.DataFrame -> pl.DataFrame
+    """Columnar dedup: canonicalize ``(id_a, id_b)`` then keep max ``score``
+    per canonical pair.
+
+    Args:
+        pairs_df: Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape
+            (``id_a: i64``, ``id_b: i64``, ``score: f64``).
+
+    Returns:
+        New DataFrame with the same schema, one row per canonical pair,
+        sorted ascending by ``(id_a, id_b)``. Empty input returns an empty
+        frame with the canonical schema.
+
+    Contract:
+        Equivalent to ``dedup_pairs_max_score(pairs_df_to_list(pairs_df))``
+        then ``pairs_list_to_df(result)``, but vectorized via Polars
+        expressions. On a score tie within a canonical pair, the
+        returned score is the (numerically) maximum -- since the
+        list-path kernel keeps the FIRST-occurrence tie via strict
+        ``>`` but stores the same value, the OUTPUT scores are
+        identical regardless of tie-break semantics.
+    """
+    import polars as _pl
+
+    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+    if pairs_df.is_empty():
+        return _pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+
+    # Canonicalize via Polars min/max horizontal. Build new columns
+    # ``__a__`` and ``__b__`` so the original ``id_a`` / ``id_b`` are
+    # available to the group_by-then-rename step without column name
+    # collisions during the intermediate computation.
+    return (
+        pairs_df
+        .with_columns([
+            _pl.min_horizontal("id_a", "id_b").alias("__a__"),
+            _pl.max_horizontal("id_a", "id_b").alias("__b__"),
+        ])
+        .group_by(["__a__", "__b__"], maintain_order=False)
+        .agg(_pl.col("score").max())
+        .sort(["__a__", "__b__"])
+        .rename({"__a__": "id_a", "__b__": "id_b"})
+        .select(["id_a", "id_b", "score"])
+    )
