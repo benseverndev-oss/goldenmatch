@@ -226,6 +226,13 @@ jobs:
       # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
       # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
       - run: uv run ruff check packages/python/${{ matrix.pkg }}
+      # Arrow-native roadmap Phase 6 (#628): every map_elements call
+      # in prep-stage hot paths must carry a # noqa: GM-MAP-ELEMENTS:
+      # justification comment. Catches accidentally-added per-row
+      # Python before it ships. Lint runs only when goldenmatch is the
+      # matrix package (the gated files are goldenmatch-only).
+      - if: matrix.pkg == 'goldenmatch'
+        run: uv run python scripts/check_map_elements.py
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore

@@ -170,7 +170,7 @@ def build_matchkey_expr(mk: MatchkeyConfig) -> pl.Expr:
             if native_expr is not None:
                 expr = native_expr
             else:
-                # Fall back to map_elements for complex transforms
+                # noqa: GM-MAP-ELEMENTS: transform chain has non-native entry (soundex/metaphone); Arrow Phase 6 / #628
                 expr = pl.col(f.field).map_elements(
                     lambda val, transforms=f.transforms: apply_transforms(val, transforms),
                     return_dtype=pl.Utf8,
