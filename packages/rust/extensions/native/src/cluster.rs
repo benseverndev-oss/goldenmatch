@@ -2,6 +2,10 @@
 //! in `goldenmatch/core/cluster.py`.
 use std::collections::{HashMap, HashSet};
 
+use arrow::array::{Array, ArrayData, BooleanArray, Float64Array, Int64Array};
+use arrow::datatypes::DataType;
+use arrow::pyarrow::PyArrowType;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)` — mirrors
@@ -275,4 +279,191 @@ pub fn build_clusters_native<'py>(
     }
 
     Ok(out)
+}
+
+/// Type alias for the Arrow build_clusters_arrow result tuple. Eight
+/// PyArrowType<ArrayData> fields keep clippy::type_complexity quiet.
+type BuildClustersArrowResult = (
+    PyArrowType<ArrayData>, // assignments.cluster_id
+    PyArrowType<ArrayData>, // assignments.member_id
+    PyArrowType<ArrayData>, // metadata.cluster_id
+    PyArrowType<ArrayData>, // metadata.size
+    PyArrowType<ArrayData>, // metadata.confidence
+    PyArrowType<ArrayData>, // metadata.oversized
+    PyArrowType<ArrayData>, // metadata.bottleneck_pair_a
+    PyArrowType<ArrayData>, // metadata.bottleneck_pair_b
+);
+
+/// Arrow-native roadmap Phase 3 (#625): `build_clusters` over Arrow
+/// pair arrays. Emits two ClusterFrames-shaped Arrow buffer sets:
+/// assignments (cluster_id, member_id) and metadata (cluster_id,
+/// size, confidence, oversized, bottleneck_pair_a, bottleneck_pair_b).
+///
+/// Reuses the existing find() helper + same Union-Find pattern as
+/// `build_clusters_native` (1-based cluster ids, sorted by
+/// min(member)). Confidence + bottleneck via `cluster_confidence`.
+/// Cluster quality and auto-split logic are NOT in this kernel --
+/// callers wrap and post-process for those (matches the Phase 2a
+/// ClusterFrames shape which has a fixed `quality="strong"` until the
+/// downstream weak-cluster downgrade fires).
+///
+/// Output shape matches the Phase 2a ClusterFrames spec exactly so
+/// the Python wrapper just hands the arrays to pl.DataFrame.
+#[pyfunction]
+pub fn build_clusters_arrow(
+    id_a: PyArrowType<ArrayData>,
+    id_b: PyArrowType<ArrayData>,
+    score: PyArrowType<ArrayData>,
+    all_ids: PyArrowType<ArrayData>,
+    max_cluster_size: usize,
+) -> PyResult<BuildClustersArrowResult> {
+    // ---- Type validation. -------------------------------------------------
+    let id_a_data = id_a.0;
+    let id_b_data = id_b.0;
+    let score_data = score.0;
+    let all_ids_data = all_ids.0;
+    for (name, dt, expected) in [
+        ("id_a", id_a_data.data_type(), DataType::Int64),
+        ("id_b", id_b_data.data_type(), DataType::Int64),
+        ("score", score_data.data_type(), DataType::Float64),
+        ("all_ids", all_ids_data.data_type(), DataType::Int64),
+    ] {
+        if dt != &expected {
+            return Err(PyValueError::new_err(format!(
+                "build_clusters_arrow: column {name:?} must be {expected:?}, got {dt:?}"
+            )));
+        }
+    }
+    let id_a = Int64Array::from(id_a_data);
+    let id_b = Int64Array::from(id_b_data);
+    let score = Float64Array::from(score_data);
+    let all_ids = Int64Array::from(all_ids_data);
+
+    let n_pairs = id_a.len();
+    if id_b.len() != n_pairs || score.len() != n_pairs {
+        return Err(PyValueError::new_err(format!(
+            "build_clusters_arrow: pair-stream column lengths differ -- \
+             id_a={}, id_b={}, score={}",
+            n_pairs, id_b.len(), score.len(),
+        )));
+    }
+
+    // ---- Union-Find on Arrow ids (same algorithm as build_clusters_native). -
+    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(
+        all_ids.len() + n_pairs * 2,
+    );
+    for i in 0..all_ids.len() {
+        if !all_ids.is_null(i) {
+            let id = all_ids.value(i);
+            parent.entry(id).or_insert(id);
+        }
+    }
+    for i in 0..n_pairs {
+        let a = id_a.value(i);
+        let b = id_b.value(i);
+        parent.entry(a).or_insert(a);
+        parent.entry(b).or_insert(b);
+    }
+    for i in 0..n_pairs {
+        let a = id_a.value(i);
+        let b = id_b.value(i);
+        let ra = find(&mut parent, a);
+        let rb = find(&mut parent, b);
+        if ra != rb {
+            parent.insert(ra, rb);
+        }
+    }
+
+    // ---- Group + 1-based cluster_id assignment by sort-by-min-member. -------
+    let keys: Vec<i64> = parent.keys().copied().collect();
+    let mut root_to_members: HashMap<i64, Vec<i64>> = HashMap::new();
+    for k in keys {
+        let r = find(&mut parent, k);
+        root_to_members.entry(r).or_default().push(k);
+    }
+    let mut clusters: Vec<Vec<i64>> = root_to_members.into_values().collect();
+    clusters.sort_by_key(|c| *c.iter().min().expect("non-empty by construction"));
+
+    let mut member_to_cid: HashMap<i64, i64> =
+        HashMap::with_capacity(parent.len());
+    for (idx, members) in clusters.iter().enumerate() {
+        let cid = (idx + 1) as i64;
+        for &m in members {
+            member_to_cid.insert(m, cid);
+        }
+    }
+
+    // ---- Bucket input edges per cluster (preserve input order for confidence
+    //      bottleneck tie-break invariant). -----------------------------------
+    let n_clusters = clusters.len();
+    let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> = vec![Vec::new(); n_clusters];
+    for i in 0..n_pairs {
+        let a = id_a.value(i);
+        let s = score.value(i);
+        if let Some(&cid) = member_to_cid.get(&a) {
+            // cid is 1-based; per_cluster_edges is 0-indexed.
+            per_cluster_edges[(cid - 1) as usize].push((a, id_b.value(i), s));
+        }
+    }
+
+    // ---- Assemble Arrow output arrays. --------------------------------------
+    // Assignments: long form, one row per (cluster_id, member_id).
+    let total_members: usize = clusters.iter().map(|c| c.len()).sum();
+    let mut a_cid: Vec<i64> = Vec::with_capacity(total_members);
+    let mut a_mid: Vec<i64> = Vec::with_capacity(total_members);
+    for (idx, members) in clusters.iter().enumerate() {
+        let cid = (idx + 1) as i64;
+        for &m in members {
+            a_cid.push(cid);
+            a_mid.push(m);
+        }
+    }
+
+    // Metadata: one row per cluster.
+    let mut m_cid: Vec<i64> = Vec::with_capacity(n_clusters);
+    let mut m_size: Vec<i64> = Vec::with_capacity(n_clusters);
+    let mut m_conf: Vec<f64> = Vec::with_capacity(n_clusters);
+    let mut m_over: Vec<bool> = Vec::with_capacity(n_clusters);
+    let mut m_bot_a: Vec<i64> = Vec::with_capacity(n_clusters);
+    let mut m_bot_b: Vec<i64> = Vec::with_capacity(n_clusters);
+    for (idx, members) in clusters.iter().enumerate() {
+        let cid = (idx + 1) as i64;
+        let size = members.len();
+        let edges = &per_cluster_edges[idx];
+        let (_min_e, _avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        m_cid.push(cid);
+        m_size.push(size as i64);
+        m_conf.push(conf);
+        m_over.push(size > max_cluster_size);
+        match bn {
+            Some((a, b)) => {
+                m_bot_a.push(a);
+                m_bot_b.push(b);
+            }
+            None => {
+                m_bot_a.push(0);
+                m_bot_b.push(0);
+            }
+        }
+    }
+
+    let assignments_cid = Int64Array::from(a_cid);
+    let assignments_mid = Int64Array::from(a_mid);
+    let metadata_cid = Int64Array::from(m_cid);
+    let metadata_size = Int64Array::from(m_size);
+    let metadata_conf = Float64Array::from(m_conf);
+    let metadata_over = BooleanArray::from(m_over);
+    let metadata_bot_a = Int64Array::from(m_bot_a);
+    let metadata_bot_b = Int64Array::from(m_bot_b);
+
+    Ok((
+        PyArrowType(assignments_cid.to_data()),
+        PyArrowType(assignments_mid.to_data()),
+        PyArrowType(metadata_cid.to_data()),
+        PyArrowType(metadata_size.to_data()),
+        PyArrowType(metadata_conf.to_data()),
+        PyArrowType(metadata_over.to_data()),
+        PyArrowType(metadata_bot_a.to_data()),
+        PyArrowType(metadata_bot_b.to_data()),
+    ))
 }
