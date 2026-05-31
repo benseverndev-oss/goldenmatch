@@ -35,10 +35,17 @@ from pathlib import Path
 import polars as pl
 import psutil
 
-# Reuse the surname-distributed person fixture from the autoconfig
-# regression tests -- per memory/feedback_synthetic_surname_fixtures.md
-# this is the shape that doesn't hang blocking+scoring for hours.
+# Arrow-native roadmap Phase 0 (GH issue #622): use the realistic-person
+# fixture, NOT the legacy 30-surname _person_df from
+# test_autoconfig_regressions. The legacy fixture collapsed every block
+# to oversized regardless of N, so backend wall comparisons measured
+# per-call overhead on a small constant workload (Day-3 bench surfaced
+# 9858 dupes / 171 clusters at BOTH 10K and 100K, runs 26703204480 +
+# 26703713151). realistic_person_df draws ~5K+ distinct surnames from
+# refdata, gives soundex-distributed blocks, and produces dupe counts
+# that scale with N.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from fixtures.realistic_person import realistic_person_df  # noqa: E402
 from goldenmatch import dedupe_df  # noqa: E402
 from goldenmatch.config.schemas import (  # noqa: E402
     BlockingConfig,
@@ -47,7 +54,6 @@ from goldenmatch.config.schemas import (  # noqa: E402
     MatchkeyConfig,
     MatchkeyField,
 )
-from test_autoconfig_regressions import _person_df  # noqa: E402
 
 
 # Spike scope: single-field weighted jaro_winkler on last_name. Matches
@@ -144,7 +150,7 @@ def _run_once(df: pl.DataFrame, backend: str) -> dict:
 def _bench_one_shape(n: int, n_iters: int = 3) -> dict:
     """For a given N, run all three backends n_iters times each."""
     print(f"\n=== n={n:,} (iters={n_iters} per backend) ===")
-    df = _person_df(n)
+    df = realistic_person_df(n)
     print(f"  fixture: height={df.height}, distinct_last_names={df['last_name'].n_unique()}")
 
     results: dict[str, list[dict]] = {}
