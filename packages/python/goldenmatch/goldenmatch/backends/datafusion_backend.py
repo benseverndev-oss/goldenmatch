@@ -144,7 +144,7 @@ def _materialize_blocks_to_arrow(
     field_name: str,
     across_files_only: bool,
     source_lookup: dict[int, str] | None,
-) -> "pa.Table | None":
+) -> pa.Table | None:
     """Flatten all blocks into ONE Arrow table tagged by ``__block_key__``.
 
     This is the architectural pivot for Day-3 v2 / B1.5: instead of
