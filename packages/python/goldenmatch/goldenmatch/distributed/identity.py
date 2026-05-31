@@ -39,19 +39,38 @@ def resolve_identities_distributed(
     pool_min_size: int = 2,
     pool_max_size: int = 8,
 ) -> ResolveSummary:
-    """Resolve identities from clusters that may be a dict or Ray Dataset.
+    """Resolve identities from clusters that may be a dict, Ray Dataset,
+    or ``ClusterFrames`` (Phase 2 columnar shape, #624).
 
     Always runs against a Postgres backend (SQLite is single-process and
     Phase 6's whole point is to lift the single-process constraint).
 
+    Arrow-native roadmap Phase 2b (#624): accepts ``ClusterFrames`` as
+    a third input shape. The frames are converted to the legacy dict
+    via ``cluster_frames_to_dict`` (no perf change today; Phase 5's
+    binding lift is to make ``resolve_clusters`` itself partition-
+    friendly so it consumes the columnar shape directly). The Phase
+    2b API broadening unblocks callers from materializing the dict
+    themselves before calling here.
+
     Returns a ``ResolveSummary`` (same shape as the in-memory resolver).
     """
+    from goldenmatch.core.cluster import ClusterFrames, cluster_frames_to_dict
     from goldenmatch.distributed._utils import is_ray_dataset
     from goldenmatch.identity.pool import get_identity_pool
     from goldenmatch.identity.resolve import resolve_clusters
     from goldenmatch.identity.store import IdentityStore
 
-    if is_ray_dataset(clusters):
+    if isinstance(clusters, ClusterFrames):
+        # Phase 2b: columnar cluster representation. Adapt via the
+        # Phase 2a frames->dict converter; Phase 5 will lift the
+        # resolver to consume the columnar shape directly and drop
+        # this adapter.
+        log.info(
+            "distributed identity: ClusterFrames input -> dict adapter (Phase 2b)"
+        )
+        clusters_dict = cluster_frames_to_dict(clusters)
+    elif is_ray_dataset(clusters):
         # Materialize cluster aggregates back to dict shape so the existing
         # in-memory resolver can consume them. Phase 6 lift goal is to skip
         # this step once the resolver is partition-friendly.
