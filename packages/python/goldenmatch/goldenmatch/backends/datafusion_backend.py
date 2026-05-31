@@ -139,83 +139,60 @@ def _make_score_udf(scorer_name: str, datafusion_mod, native_mod):
     )
 
 
-def _score_one_block_datafusion(
-    block: Any,
+def _materialize_blocks_to_arrow(
+    blocks: list,
     field_name: str,
-    udf_callable_name: str,
-    threshold: float,
-    exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
-    ctx,
-    across_files_only: bool = False,
-    source_lookup: dict[int, str] | None = None,
-) -> list[tuple[int, int, float]]:
-    """Score one block via DataFusion. Returns canonicalized
-    ``(min_id, max_id, score)`` tuples above threshold.
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+) -> pa.Table | None:
+    """Flatten all blocks into ONE Arrow table tagged by ``__block_key__``.
+
+    This is the architectural pivot for Day-3 v2 / B1.5: instead of
+    creating a SessionContext + table + UDF + dropping per block, we
+    register a SINGLE big table once and let DataFusion's hash-join
+    planner partition the (a.block_key = b.block_key AND a.id < b.id)
+    self-join across all CPU cores. That's the query shape DataFusion
+    is designed for and what bucket already does manually with
+    ``partition_by(bucket)`` + per-bucket parallel cdist. Comparing
+    these two is the apples-to-apples test the spec actually wanted.
+
+    Returns ``None`` if no rows survive the per-block filters
+    (across-files-only, height < 2) -- caller short-circuits.
     """
-    block_df = block.df.collect()
-    if block_df.height < 2:
-        return []
+    import polars as _pl  # local import keeps the optional-extra pure
 
-    if across_files_only and source_lookup:
-        sources_in_block = block_df["__source__"].unique().to_list()
-        if len(sources_in_block) < 2:
-            return []
+    block_keys: list[str] = []
+    row_ids_chunks: list[list[int]] = []
+    values_chunks: list[list[str]] = []
 
-    # Build a 2-column Arrow table: __row_id__ (int64), <field> (string).
-    # We deliberately don't ship the whole block_df into DataFusion --
-    # the only columns the spike's scoring SQL needs are the row id
-    # and the field being scored. Extra columns would inflate
-    # serialization cost without affecting the result.
-    import polars as _pl  # local import keeps optional-extra purity
-    row_ids = block_df["__row_id__"].cast(_pl.Int64).to_arrow()
-    values = block_df[field_name].cast(_pl.Utf8).to_arrow()
-    table = pa.table({"__row_id__": row_ids, field_name: values})
-
-    # Per-block table name keeps blocks isolated; we deregister at end
-    # of the call to free DataFusion's internal state.
-    table_name = f"_gm_block_{id(block)}"
-    ctx.register_record_batches(table_name, [table.to_batches()])
-    try:
-        # Self-join on (a.id < b.id) for canonical pair ordering,
-        # score, threshold filter. DataFusion's planner picks the
-        # join strategy (hash vs nested-loop) -- our spike just hands
-        # it the SQL and inspects the result.
-        sql = f"""
-            SELECT
-                a.__row_id__ AS id_a,
-                b.__row_id__ AS id_b,
-                {udf_callable_name}(a.{field_name}, b.{field_name}) AS score
-            FROM {table_name} a
-            JOIN {table_name} b ON a.__row_id__ < b.__row_id__
-            WHERE {udf_callable_name}(a.{field_name}, b.{field_name}) >= {threshold}
-        """
-        df = ctx.sql(sql)
-        result_table = df.to_arrow_table()
-    finally:
-        try:
-            ctx.deregister_table(table_name)
-        except Exception:  # noqa: BLE001 -- best-effort cleanup
-            pass
-
-    if result_table.num_rows == 0:
-        return []
-
-    id_a_arr = result_table.column("id_a").to_pylist()
-    id_b_arr = result_table.column("id_b").to_pylist()
-    score_arr = result_table.column("score").to_pylist()
-
-    pairs: list[tuple[int, int, float]] = []
-    for a, b, s in zip(id_a_arr, id_b_arr, score_arr, strict=True):
-        a_i = int(a)
-        b_i = int(b)
-        key = (a_i, b_i) if a_i < b_i else (b_i, a_i)
-        if key in exclude_pairs:
+    for block in blocks:
+        block_df = block.df.collect()
+        if block_df.height < 2:
             continue
         if across_files_only and source_lookup:
-            if source_lookup.get(a_i) == source_lookup.get(b_i):
+            sources_in_block = block_df["__source__"].unique().to_list()
+            if len(sources_in_block) < 2:
                 continue
-        pairs.append((key[0], key[1], float(s)))
-    return pairs
+        n = block_df.height
+        bk = str(block.block_key)
+        # block_keys is a python list because pa.array(str * n) is faster
+        # than pa.string_array.from_buffers tricks for our shapes.
+        block_keys.extend([bk] * n)
+        row_ids_chunks.append(block_df["__row_id__"].cast(_pl.Int64).to_list())
+        values_chunks.append(block_df[field_name].cast(_pl.Utf8).to_list())
+
+    if not row_ids_chunks:
+        return None
+
+    # Flatten in one pass each (faster than nested extend for >100K total).
+    row_ids: list[int] = [r for chunk in row_ids_chunks for r in chunk]
+    values: list[str | None] = [v for chunk in values_chunks for v in chunk]
+
+    return pa.table({
+        "__block_key__": pa.array(block_keys, type=pa.large_string()),
+        "__row_id__": pa.array(row_ids, type=pa.int64()),
+        "__value__": pa.array(values, type=pa.large_string()),
+    })
 
 
 def score_blocks_datafusion(
@@ -230,10 +207,25 @@ def score_blocks_datafusion(
     ``score_blocks_parallel`` modulo the spike-scope constraints in
     ``_validate_matchkey`` (single-field weighted, supported scorer).
 
-    See module docstring for spike scope. Anything outside that scope
-    raises ``NotImplementedError`` so callers can route to a
-    different backend without silent fallback (which would taint
-    bench numbers).
+    Architecture (Day-3 v2, single-context shape):
+      1. Validate matchkey is in spike scope.
+      2. Flatten all blocks into one Arrow table tagged by block_key.
+      3. Register the table on ONE SessionContext, register one UDF.
+      4. Run ONE SQL query:
+           SELECT a.id, b.id, score(a.v, b.v) FROM data a
+           JOIN data b ON a.block_key = b.block_key AND a.id < b.id
+           WHERE score >= threshold
+         DataFusion's hash-join planner partitions across CPU cores
+         by block_key -- the same parallelism shape ``bucket`` builds
+         manually with ``partition_by(bucket)`` + parallel cdist.
+      5. Apply ``matched_pairs`` / ``source_lookup`` / ``target_ids``
+         filters in Python on the result set.
+
+    Day-1 used per-block SessionContext (bench-day3 measured 2.56x
+    slower than bucket on the 100K fixture, dominated by per-block
+    setup overhead). The single-context shape is what DataFusion is
+    designed for; Day-3 v2 measures the same workload through that
+    lens.
     """
     if not blocks:
         return []
@@ -242,42 +234,68 @@ def score_blocks_datafusion(
     datafusion_mod = _ensure_datafusion()
     native_mod = _ensure_native()
 
-    # One SessionContext + one UDF registration per call. SessionContext
-    # is cheap to create (no daemon, no warm-up), and reusing one across
-    # all blocks of this call lets DataFusion amortize any internal
-    # caches across blocks. Day-3 bench should confirm this isn't a
-    # bottleneck; if it is, the next architectural step is "one
-    # SessionContext, one big Arrow table with all blocks tagged by
-    # __block_key__, one GROUP BY query" -- which is the shape
-    # DataFusion is actually designed for and the spec's secondary
-    # architectural lever.
+    table = _materialize_blocks_to_arrow(
+        blocks, field_name, across_files_only, source_lookup,
+    )
+    if table is None:
+        return []
+
     ctx = datafusion_mod.SessionContext()
     udf = _make_score_udf(scorer_name, datafusion_mod, native_mod)
     ctx.register_udf(udf)
     udf_callable_name = f"_gm_score_{scorer_name}"
+    ctx.register_record_batches("data", [table.to_batches()])
+
+    # Self-join on (block_key, id_a < id_b). The inner SELECT computes
+    # score once per pair; the outer SELECT filters. (DataFusion's
+    # planner does NOT reliably dedup repeated UDF references when the
+    # UDF appears in both SELECT and WHERE on the same query level --
+    # nesting forces single evaluation.)
+    sql = f"""
+        SELECT id_a, id_b, score FROM (
+            SELECT
+                a.__row_id__ AS id_a,
+                b.__row_id__ AS id_b,
+                {udf_callable_name}(a.__value__, b.__value__) AS score
+            FROM data a
+            JOIN data b
+              ON a.__block_key__ = b.__block_key__
+             AND a.__row_id__ < b.__row_id__
+        ) scored
+        WHERE score >= {threshold}
+    """
+    result_table = ctx.sql(sql).to_arrow_table()
+
+    if result_table.num_rows == 0:
+        logger.info(
+            "DataFusion backend: scored %d block(s), emitted 0 pair(s) "
+            "above threshold %.3f using scorer=%s field=%s",
+            len(blocks), threshold, scorer_name, field_name,
+        )
+        return []
+
+    id_a_arr = result_table.column("id_a").to_pylist()
+    id_b_arr = result_table.column("id_b").to_pylist()
+    score_arr = result_table.column("score").to_pylist()
 
     exclude_frozen = frozenset(matched_pairs)
-
     all_pairs: list[tuple[int, int, float]] = []
-    for block in blocks:
-        block_pairs = _score_one_block_datafusion(
-            block,
-            field_name=field_name,
-            udf_callable_name=udf_callable_name,
-            threshold=threshold,
-            exclude_pairs=exclude_frozen,
-            ctx=ctx,
-            across_files_only=across_files_only,
-            source_lookup=source_lookup,
-        )
+    for a, b, s in zip(id_a_arr, id_b_arr, score_arr, strict=True):
+        a_i = int(a)
+        b_i = int(b)
+        key = (a_i, b_i) if a_i < b_i else (b_i, a_i)
+        if key in exclude_frozen:
+            continue
+        if across_files_only and source_lookup:
+            if source_lookup.get(a_i) == source_lookup.get(b_i):
+                continue
         if target_ids is not None:
-            block_pairs = [
-                (a, b, s) for a, b, s in block_pairs
-                if (a in target_ids) != (b in target_ids)
-            ]
-        all_pairs.extend(block_pairs)
-        for a, b, _s in block_pairs:
-            matched_pairs.add((a, b))
+            # Keep pair only if EXACTLY ONE side is in target_ids
+            # (matches score_blocks_parallel's filter semantics).
+            if (a_i in target_ids) == (b_i in target_ids):
+                continue
+        all_pairs.append((key[0], key[1], float(s)))
+        matched_pairs.add(key)
 
     logger.info(
         "DataFusion backend: scored %d block(s), emitted %d pair(s) "
