@@ -17,8 +17,6 @@ harness, not unit tests.
 from __future__ import annotations
 
 import polars as pl
-import pytest
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
@@ -31,7 +29,6 @@ from goldenmatch.core.scorer import (
     score_blocks_columnar,
     score_blocks_parallel,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 

@@ -16,6 +16,8 @@ from goldenmatch.core.complexity_profile import ClusterProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 
 if TYPE_CHECKING:
+    import polars as pl
+
     from goldenmatch.core.memory.store import MemoryStore
 
 _log = logging.getLogger("goldenmatch.memory")
@@ -817,7 +819,7 @@ def unmerge_cluster(
 
 
 def build_clusters_columnar(
-    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    pairs_df: pl.DataFrame,
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
