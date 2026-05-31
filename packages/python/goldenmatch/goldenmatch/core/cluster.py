@@ -868,3 +868,179 @@ def build_clusters_columnar(
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
     )
+
+
+# ---------------------------------------------------------------------------
+# Arrow-native roadmap Phase 2a (#624): cluster representation columnar
+# ---------------------------------------------------------------------------
+#
+# Sibling function that returns the Phase-2 two-frame cluster shape:
+# - assignments: pl.DataFrame({"cluster_id": i64, "member_id": i64}) long form
+# - metadata:    pl.DataFrame({"cluster_id": i64, "size": i64,
+#                              "confidence": f64, "quality": Utf8,
+#                              "oversized": bool,
+#                              "bottleneck_pair_a": i64,
+#                              "bottleneck_pair_b": i64})
+#
+# This is Phase 2a (additive sibling); Phase 2b migrates consumers
+# (identity, web preview, MCP, REST) one at a time; Phase 2c removes
+# the dict-returning build_clusters once all consumers are migrated.
+#
+# Today's implementation delegates to build_clusters and converts the
+# dict to the two-frame shape at the boundary. Same correctness contract
+# as Phase 1a wrappers (the inner clustering math is byte-identical;
+# only the return shape changes).
+#
+# Why the two-frame shape: it eliminates the ~3 GB cluster dict that
+# materialize_cluster_dict collects driver-side at 25M scale, AND it
+# lets distributed identity resolve (Phase 5 / Splink-Spark roadmap
+# Phase 6) run true map_batches over partitions of cluster_assignments
+# instead of collecting everything to the driver.
+#
+# Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
+# (gitignored).
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ClusterFrames:
+    """Two-frame cluster representation (Phase 2a output).
+
+    ``assignments`` is long form: one row per (cluster, member) pair.
+    Iterate via ``df.group_by("cluster_id")`` for per-cluster work, or
+    use as input to a join with the source frame for golden record
+    build (Phase 4).
+
+    ``metadata`` is one row per cluster: size, confidence, quality
+    ("strong" / "weak" / "split"), oversized flag, and the bottleneck
+    pair (the weakest edge inside the cluster — used by unmerge).
+
+    The two frames share ``cluster_id`` as the key. Phase 2c will make
+    this the canonical return shape; today it's an additive sibling.
+    """
+    assignments: object  # pl.DataFrame; not typed to keep this module Polars-lazy at import time
+    metadata: object  # pl.DataFrame
+
+
+def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
+    """Adapter: legacy ``dict[int, dict]`` cluster shape -> two-frame
+    Phase-2 representation. Lossless modulo ``pair_scores`` (which
+    moves to a lazy view computed from the pair stream in Phase 2b).
+    """
+    import polars as _pl
+
+    if not clusters:
+        return ClusterFrames(
+            assignments=_pl.DataFrame(schema={
+                "cluster_id": _pl.Int64(), "member_id": _pl.Int64(),
+            }),
+            metadata=_pl.DataFrame(schema={
+                "cluster_id": _pl.Int64(),
+                "size": _pl.Int64(),
+                "confidence": _pl.Float64(),
+                "quality": _pl.Utf8(),
+                "oversized": _pl.Boolean(),
+                "bottleneck_pair_a": _pl.Int64(),
+                "bottleneck_pair_b": _pl.Int64(),
+            }),
+        )
+
+    assign_rows: list[tuple[int, int]] = []
+    meta_rows: list[dict] = []
+    for cid, cluster in clusters.items():
+        members = cluster.get("members", [])
+        for m in members:
+            assign_rows.append((int(cid), int(m)))
+        bottleneck = cluster.get("bottleneck_pair") or (0, 0)
+        meta_rows.append({
+            "cluster_id": int(cid),
+            "size": int(cluster.get("size", len(members))),
+            "confidence": float(cluster.get("confidence", 0.0)),
+            "quality": str(cluster.get("cluster_quality", "strong")),
+            "oversized": bool(cluster.get("oversized", False)),
+            "bottleneck_pair_a": int(bottleneck[0]) if bottleneck else 0,
+            "bottleneck_pair_b": int(bottleneck[1]) if bottleneck else 0,
+        })
+
+    assignments = _pl.DataFrame(
+        assign_rows,
+        schema={"cluster_id": _pl.Int64(), "member_id": _pl.Int64()},
+        orient="row",
+    )
+    metadata = _pl.DataFrame(meta_rows)
+    return ClusterFrames(assignments=assignments, metadata=metadata)
+
+
+def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
+    """Adapter: two-frame Phase-2 representation -> legacy
+    ``dict[int, dict]`` shape. For migrating consumers during Phase 2b.
+
+    NOTE: ``pair_scores`` is NOT reconstructed (it doesn't live on the
+    cluster frame). Consumers that need pair_scores must look it up via
+    the lazy view against the Phase-1 pair stream — Phase 2b will wire
+    that helper.
+    """
+    assignments = frames.assignments
+    metadata = frames.metadata
+    if assignments.is_empty():
+        return {}
+
+    # Build member lists by cluster_id from the assignments frame.
+    by_cid: dict[int, list[int]] = {}
+    for cid, mid in zip(
+        assignments["cluster_id"].to_list(),
+        assignments["member_id"].to_list(),
+        strict=True,
+    ):
+        by_cid.setdefault(int(cid), []).append(int(mid))
+
+    out: dict[int, dict] = {}
+    for row in metadata.iter_rows(named=True):
+        cid = int(row["cluster_id"])
+        bot = (row["bottleneck_pair_a"], row["bottleneck_pair_b"])
+        out[cid] = {
+            "members": by_cid.get(cid, []),
+            "size": int(row["size"]),
+            "confidence": float(row["confidence"]),
+            "cluster_quality": str(row["quality"]),
+            "oversized": bool(row["oversized"]),
+            "bottleneck_pair": bot if bot != (0, 0) else None,
+            # pair_scores omitted -- consumers that need it use the lazy
+            # view against the Phase-1 pair stream (Phase 2b deliverable).
+            "pair_scores": {},
+        }
+    return out
+
+
+def build_clusters_v2_columnar(
+    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    all_ids: list[int] | None = None,
+    max_cluster_size: int = 100,
+    weak_cluster_threshold: float = 0.3,
+    auto_split: bool = True,
+) -> ClusterFrames:
+    """Phase 2a entry point. Returns the canonical two-frame cluster
+    shape (``ClusterFrames``) instead of the legacy ``dict[int, dict]``.
+
+    Same clustering math as ``build_clusters`` / ``build_clusters_columnar``;
+    only the return shape differs. Phase 2c will make this canonical.
+
+    Args:
+        pairs_df: ``PAIR_STREAM_SCHEMA`` DataFrame (from
+            ``score_blocks_columnar`` etc.).
+        all_ids, max_cluster_size, weak_cluster_threshold, auto_split:
+            Forwarded to ``build_clusters`` unchanged.
+
+    Returns:
+        ``ClusterFrames(assignments, metadata)``.
+    """
+    legacy = build_clusters_columnar(
+        pairs_df,
+        all_ids=all_ids,
+        max_cluster_size=max_cluster_size,
+        weak_cluster_threshold=weak_cluster_threshold,
+        auto_split=auto_split,
+    )
+    return cluster_dict_to_frames(legacy)
