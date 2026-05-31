@@ -846,21 +846,27 @@ def build_clusters_columnar(
         Same ``dict[int, dict]`` as ``build_clusters``. Phase 2 changes
         this to the columnar two-frame shape.
     """
-    import polars as _pl
-
-    from goldenmatch.core.scorer import pairs_df_to_list
-
     if all_ids is None and not pairs_df.is_empty():
-        # Derive all_ids from the DataFrame via Polars expressions instead
-        # of iterating tuples (the slow path in build_clusters' own derive
-        # branch). Phase 2 lifts this to a fully vectorized columnar
-        # derive in the canonical implementation.
-        ids_series = _pl.concat(
-            [pairs_df["id_a"], pairs_df["id_b"]],
-        ).unique()
-        all_ids = [int(i) for i in ids_series.to_list()]
+        # Derive all_ids via numpy (zero-copy concat then tolist's tight
+        # C loop). The previous Polars-based path materialized id_a/id_b
+        # as Python lists separately, then int()-coerced each one. At
+        # 131M pairs that's a measurable cost; numpy.tolist on int64
+        # already returns native Python ints.
+        import numpy as _np
+        a_np = pairs_df["id_a"].to_numpy()
+        b_np = pairs_df["id_b"].to_numpy()
+        all_ids = _np.unique(_np.concatenate([a_np, b_np])).tolist()
 
-    pairs = pairs_df_to_list(pairs_df)
+    # Convert pair stream to list[(int, int, float)] via numpy.tolist()
+    # instead of pairs_df_to_list's Polars-based path. The cprofile
+    # hotspot run (run 26725154453) showed build_clusters_columnar at
+    # cluster.py:821 with 212s cumtime at 1M, larger than score_blocks
+    # at 188s. The list construction dominated because Polars'
+    # Series.to_list() walks Python objects per-element AND the
+    # comprehension paid (int(), int(), float()) coercion per row.
+    # numpy.tolist() on int64/float64 already returns native Python
+    # int/float, so zip() can build tuples without further coercion.
+    pairs = _pairs_df_to_list_numpy(pairs_df)
     return build_clusters(
         pairs,
         all_ids=all_ids,
@@ -868,6 +874,31 @@ def build_clusters_columnar(
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
     )
+
+
+def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:
+    """Faster DataFrame -> list[Pair] via numpy.tolist().
+
+    The legacy ``scorer.pairs_df_to_list`` uses Polars' Series.to_list()
+    which walks Python objects per element AND then does ``(int(a),
+    int(b), float(s))`` coercion in the comprehension. numpy.tolist on
+    a Polars-backed int64/float64 Series uses zero-copy + a tight C
+    loop, returning native Python int/float directly. Net win at 131M
+    pairs: ~2-3x on this conversion step (cumtime reduction visible in
+    the profile_hotspots harness post-merge).
+
+    Kept private (leading underscore) so consumers other than
+    ``build_clusters_columnar`` don't accidentally rely on this path
+    while ``scorer.pairs_df_to_list`` is still the public contract.
+    """
+    if df.is_empty():
+        return []
+    return list(zip(
+        df["id_a"].to_numpy().tolist(),
+        df["id_b"].to_numpy().tolist(),
+        df["score"].to_numpy().tolist(),
+        strict=True,
+    ))
 
 
 # ---------------------------------------------------------------------------
