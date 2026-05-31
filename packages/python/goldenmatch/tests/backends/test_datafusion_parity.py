@@ -22,7 +22,6 @@ datafusion = pytest.importorskip("datafusion")
 native = pytest.importorskip("goldenmatch._native")
 
 import polars as pl
-
 from goldenmatch.backends.datafusion_backend import score_blocks_datafusion
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.blocker import BlockResult

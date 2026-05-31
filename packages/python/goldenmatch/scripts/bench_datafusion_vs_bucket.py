@@ -39,8 +39,6 @@ import psutil
 # regression tests -- per memory/feedback_synthetic_surname_fixtures.md
 # this is the shape that doesn't hang blocking+scoring for hours.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
-from test_autoconfig_regressions import _person_df  # noqa: E402
-
 from goldenmatch import dedupe_df  # noqa: E402
 from goldenmatch.config.schemas import (  # noqa: E402
     BlockingConfig,
@@ -49,6 +47,7 @@ from goldenmatch.config.schemas import (  # noqa: E402
     MatchkeyConfig,
     MatchkeyField,
 )
+from test_autoconfig_regressions import _person_df  # noqa: E402
 
 
 # Spike scope: single-field weighted jaro_winkler on last_name. Matches

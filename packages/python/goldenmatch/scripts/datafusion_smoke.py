@@ -44,7 +44,9 @@ except ImportError:
 # prove-out works even without a built native module. The benchmark
 # itself (Day 3) will assert native is loaded.
 try:
-    from goldenmatch._native import jaro_winkler_similarity as _native_jw  # type: ignore[import-not-found]
+    from goldenmatch._native import (
+        jaro_winkler_similarity as _native_jw,  # type: ignore[import-not-found]
+    )
     _IMPL = "native"
 except ImportError:
     import jellyfish
