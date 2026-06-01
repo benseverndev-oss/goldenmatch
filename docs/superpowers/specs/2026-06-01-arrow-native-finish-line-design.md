@@ -184,6 +184,29 @@ No DataFusion code is written until that bench decides.
   weeks).
 - Total: ~5-7 weeks solo, less if Stage 0 shows several gates already PASS.
 
+## Stage 0 results (2026-06-01)
+
+First sweep run (`arrow-finish-line-sweep.yml`, `large-new-64GB`). Source runs:
+26770239634 (phase1 @ kill, FAILED) + 26770594830 (phase2,3,4,6 @ kill, success)
++ profiler 26759043853 (phase1 @ 1M, from the earlier hotspot run).
+
+| Phase | Verdict | Numbers | Read |
+|---|---|---|---|
+| **1** pair stream | CLOSE (and a hard signal) | 1M profiler: columnar 354.9s vs list 564.3s = **0.63 ratio** (misses 0.50). At **5M kill scale the legacy `list` path OOM'd the 64 GB box** (SIGTERM, ~2.5 min) -- the bench could not produce a baseline. | Cut over. The OOM IS the result: the legacy list pair-stream is untenable at 5M, which is exactly Phase 1's thesis. The 0.63 ratio at 1M means columnar wins but misses the 50% wall target -> optimize wall during cutover. |
+| **3** native kernels | CLOSE | `dedup` **10.59x** (>= 5x PASS); `build_clusters` **1.09x** (< 2x); `fingerprints` **0.71x** (< 3x, i.e. native is SLOWER than Python here); parity OK. | Mixed. dedup is a clean win. build_clusters confirms the dict-floor (matches the original 1.09x failed gate). fingerprints REGRESSED -- needs investigation before any cutover (verify the bench shape + that the kernel actually releases the GIL / uses Arrow zero-copy). |
+| **2** cluster columnar | BLOCKED | no kill-criterion bench wired yet. | Build the 25M cluster-RSS bench as the first step of the Phase 2 cutover. |
+| **4** golden columnar | BLOCKED | no bench wired. | Build the 25M golden bench during Phase 4 cutover. |
+| **6** standardization | BLOCKED | no bench wired. | Build the 10M prep-stage bench during Phase 6 cutover. |
+| 5 identity | BLOCKED (excluded) | not built. | Per-partition `map_batches` not implemented; benches once built. |
+
+**Follow-ups this sweep surfaced:**
+1. **phase1 bench scale**: the driver runs phase1's legacy `list` path at 5M, which OOMs. Lower `PHASE_BENCH_SCALE["phase1"]` to 1M (where legacy still fits) OR cap only the legacy path, so the ratio is measurable. Small driver change.
+2. **phase3 fingerprints 0.71x**: a native kernel slower than Python is a red flag -- confirm it's not a GIL-reacquire / non-zero-copy bug (Risk item in the original Phase 3 spec) before relying on the verdict.
+3. **phase2/4/6 benches**: each phase's cutover must FIRST wire its kill-criterion bench (they don't exist yet); the sweep correctly reports BLOCKED, not a false pass.
+
+**Cutover order decision:** Phase 1 first (substrate + proven-untenable legacy), then Phase 3
+dedup (clean win) while build_clusters/fingerprints get the hold-and-optimize treatment.
+
 ## What this plan explicitly does NOT do
 
 - Re-open the phase definitions or kill criteria (unchanged from the original).
