@@ -120,11 +120,12 @@ jobs:
         # Source of truth depends on the event:
         #
         # - release: read from the git tag. The tag (e.g. `goldenflow-v1.1.5`)
-        #   is the canonical declaration of what's being shipped. PyPI lookup
-        #   would race against the parallel `publish-<pkg>.yml` workflow that
-        #   triggered off the same release event — the prior 1.1.5 release
-        #   hit exactly that bug (workflow saw the prior PyPI version because
-        #   the PyPI publish hadn't completed yet).
+        #   is the canonical declaration of what's being shipped. Reading the
+        #   version from PyPI here would race the parallel `publish-<pkg>.yml`
+        #   workflow off the same release event (the prior 1.1.5 release saw the
+        #   stale PyPI version because the publish hadn't completed). The git
+        #   tag is race-free; the separate "Wait for ... PyPI" step below then
+        #   handles the registry's server-side existence check.
         #
         # - workflow_dispatch: read from pyproject.toml in the package dir.
         #   Race-free; also lets us force-refresh listings without going
@@ -181,6 +182,46 @@ jobs:
           echo "--- ${FILE} (post-injection) ---"
           cat "$FILE"
 
+      - name: Wait for the version to be live on PyPI
+        # The MCP Registry validates SERVER-SIDE that the PyPI package+version
+        # exists at publish time. On `release` events this workflow runs in
+        # PARALLEL with publish-<pkg>.yml, so the wheel may not be uploaded yet
+        # when we publish -> the registry returns 400 "PyPI package not found
+        # (status: 404)". Resolving the version from the git tag (above) fixed
+        # the *version-read* race, but not this server-side validation race.
+        #
+        # Poll PyPI for the exact identifier+version (the registry uses the same
+        # PyPI JSON API) before authenticating, so validate/publish always see a
+        # live release. workflow_dispatch refreshes an already-published version,
+        # so the poll passes on the first attempt. Fail fast here, before
+        # consuming an OIDC token, if the release never lands.
+        shell: bash
+        env:
+          PKG: ${{ matrix.pkg }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          PYPI_NAME=$(jq -r '.packages[] | select(.registryType == "pypi") | .identifier' \
+            "packages/python/${PKG}/server.json" | head -1)
+          if [ -z "$PYPI_NAME" ] || [ "$PYPI_NAME" = "null" ]; then
+            echo "::error::no pypi identifier in packages/python/${PKG}/server.json"
+            exit 1
+          fi
+          URL="https://pypi.org/pypi/${PYPI_NAME}/${V}/json"
+          echo "Waiting for ${PYPI_NAME}==${V} on PyPI (${URL})"
+          # 40 * 15s = ~10 min ceiling; a PyPI publish normally lands in 1-2 min.
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$URL" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "::notice::${PYPI_NAME}==${V} is live on PyPI (attempt ${i})"
+              exit 0
+            fi
+            echo "attempt ${i}/40: HTTP ${code}, not live yet; sleeping 15s"
+            sleep 15
+          done
+          echo "::error::${PYPI_NAME}==${V} did not appear on PyPI within ~10 min"
+          exit 1
+
       - name: Authenticate to MCP Registry (GitHub OIDC)
         working-directory: packages/python/${{ matrix.pkg }}
         run: ../../../mcp-publisher login github-oidc
@@ -200,9 +241,11 @@ jobs:
           PKG: ${{ matrix.pkg }}
           V: ${{ steps.ver.outputs.version }}
         run: |
+          NAME=$(jq -r '.name' "packages/python/${PKG}/server.json")
           {
             echo "## MCP Registry: ${PKG}"
             echo ""
             echo "- Synced version: \`${V}\`"
-            echo "- Listing: https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benzsevern/${PKG}"
+            echo "- Server: \`${NAME}\`"
+            echo "- Listing: https://registry.modelcontextprotocol.io/v0/servers?search=${NAME}"
           } >> "$GITHUB_STEP_SUMMARY"
