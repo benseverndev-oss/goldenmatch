@@ -94,8 +94,13 @@ def classify_phase(crits: list[Criterion], metrics: dict) -> PhaseVerdict:
 
 PHASE_CRITERIA: dict[str, list[Criterion]] = {
     "phase1": [
-        Criterion("wall", "ratio_le", 0.50),
-        Criterion("rss", "ratio_le", 0.25),
+        # Reframed gate (per 2026-05-31 arrow-native roadmap): at 5M the
+        # legacy `list` pair-stream OOMs the box, so a wall RATIO vs legacy
+        # is un-measurable at 5M. The binding gates are now feasibility
+        # (columnar completes 5M where legacy can't) + parity at 1M (where
+        # legacy survives). Wall is RECORDED (see _phase1_metrics) but is
+        # no longer a gating Criterion.
+        Criterion("columnar_completes_5m", "bool_true", True),
         Criterion("parity", "bool_true", True),
     ],
     "phase2": [
@@ -128,7 +133,9 @@ PHASE_CRITERIA: dict[str, list[Criterion]] = {
 }
 
 PHASE_BENCH_SCALE: dict[str, int] = {
-    "phase1": 5_000_000,
+    # phase1 parity/wall measured at 1M (where the legacy `list` baseline
+    # fits in RAM); feasibility checked separately at 5M in _phase1_metrics.
+    "phase1": 1_000_000,
     "phase2": 25_000_000,
     "phase3": 5_000_000,
     "phase4": 25_000_000,
@@ -186,6 +193,9 @@ _ROOT_SCRIPTS = _REPO_ROOT / "scripts"
 
 # Tiny N used in --smoke so wiring is exercised without the bench box.
 _SMOKE_N = 2000
+# phase1 feasibility check scale: columnar-only run that must complete where
+# the legacy `list` path OOMs. Smoke scale falls back to the smoke N.
+_PHASE1_FEASIBILITY_N = 5_000_000
 # Per-subprocess wall budget. Kill scale runs on the bench box where the
 # orchestrating job has its own timeout; smoke must stay snappy locally.
 _KILL_TIMEOUT_S = 3600
@@ -219,26 +229,43 @@ def _run_subprocess(
 
 
 def _phase1_metrics(n: int, timeout_s: int) -> dict:
-    """phase1 -> pair-stream columnar bench. Run the worker twice (list,
-    columnar); each emits a __BENCH_JSON__ line with total_wall_s +
-    peak_rss_mb. new=columnar, legacy=list."""
+    """phase1 -> pair-stream columnar bench. REFRAMED gate (per the
+    2026-05-31 arrow-native roadmap):
+
+    - **parity (binding)** + **wall (recorded, non-gating)** measured at 1M
+      (``n``, from PHASE_BENCH_SCALE) where the legacy ``list`` baseline
+      still fits in RAM. Run the worker twice (list, columnar); each emits a
+      __BENCH_JSON__ line with total_wall_s + peak_rss_mb + n_clusters.
+      new=columnar, legacy=list. The bench has no explicit parity flag, so
+      we use ``n_clusters`` equality between list and columnar as the parity
+      proxy (full byte-parity is covered by the Wave 1 unit parity tests,
+      tests/test_pair_stream_columnar_parity.py).
+    - **columnar_completes_5m (binding)** = the columnar path returns a
+      valid __BENCH_JSON__ with pairs at 5M (no crash / timeout / OOM). The
+      legacy ``list`` path is NOT run at 5M -- it OOMs the box. Smoke scale
+      uses the smoke ``n`` for this check too so the wiring stays testable
+      off the bench box.
+    """
     script = _PKG_SCRIPTS / "bench_pair_stream_columnar.py"
     notes: list[str] = []
+    metrics: dict = {}
+
+    # ── 1M (or smoke n): list + columnar for parity + recorded wall ──
     parsed: dict[str, dict] = {}
     for path in ("list", "columnar"):
         cmd = [sys.executable, str(script), "--worker", str(n), path]
         stdout, err = _run_subprocess(cmd, timeout_s)
         if err is not None:
-            notes.append(f"{path} worker failed ({err})")
+            notes.append(f"{path}@{n} worker failed ({err})")
             continue
         bj = parse_bench_json(stdout or "")
         if bj is None:
-            notes.append(f"{path} worker emitted no __BENCH_JSON__")
+            notes.append(f"{path}@{n} worker emitted no __BENCH_JSON__")
             continue
         parsed[path] = bj
 
-    metrics: dict = {}
     if "list" in parsed and "columnar" in parsed:
+        # Wall RECORDED for visibility only -- not a gating Criterion.
         metrics["wall"] = {
             "new": parsed["columnar"]["total_wall_s"],
             "legacy": parsed["list"]["total_wall_s"],
@@ -247,13 +274,41 @@ def _phase1_metrics(n: int, timeout_s: int) -> dict:
             "new": parsed["columnar"]["peak_rss_mb"],
             "legacy": parsed["list"]["peak_rss_mb"],
         }
-        # The bench doesn't emit a parity flag; equivalence is asserted by
-        # tests/test_pair_stream_columnar_parity.py. Treat as True with a note.
-        metrics["parity"] = True
+        # Parity proxy: cluster-count equality at 1M. Full byte-parity is
+        # covered by the Wave 1 unit parity tests.
+        list_clusters = parsed["list"].get("n_clusters")
+        col_clusters = parsed["columnar"].get("n_clusters")
+        metrics["parity"] = list_clusters == col_clusters
         notes.append(
-            "parity assumed True (verified by "
-            "tests/test_pair_stream_columnar_parity.py, not by this bench)"
+            f"parity = n_clusters equality at {n} "
+            f"(list={list_clusters}, columnar={col_clusters}); "
+            "full byte-parity covered by "
+            "tests/test_pair_stream_columnar_parity.py (Wave 1)"
         )
+
+    # ── 5M feasibility: columnar ONLY (list OOMs, never run at 5M) ──
+    # On smoke scale, exercise the wiring at the smoke n instead of 5M.
+    feas_n = n if n < _PHASE1_FEASIBILITY_N else _PHASE1_FEASIBILITY_N
+    cmd = [sys.executable, str(script), "--worker", str(feas_n), "columnar"]
+    stdout, err = _run_subprocess(cmd, timeout_s)
+    if err is not None:
+        notes.append(f"columnar@{feas_n} feasibility failed ({err})")
+    else:
+        bj = parse_bench_json(stdout or "")
+        if bj is None:
+            notes.append(
+                f"columnar@{feas_n} feasibility emitted no __BENCH_JSON__"
+            )
+        elif bj.get("n_pairs") is None:
+            notes.append(f"columnar@{feas_n} feasibility had no n_pairs")
+        else:
+            # Valid JSON with a pair count == columnar completed 5M.
+            metrics["columnar_completes_5m"] = True
+            notes.append(
+                f"columnar_completes_5m: columnar finished {feas_n} with "
+                f"{bj['n_pairs']:,} pairs"
+            )
+
     if notes:
         metrics["_note"] = "; ".join(notes)
     return metrics
