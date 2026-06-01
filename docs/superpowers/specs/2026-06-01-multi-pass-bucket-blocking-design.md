@@ -163,6 +163,27 @@ produce the same `__block_key__` value re-score that block. Output is still
 correct (pair-level collapse downstream); it is strictly a small amount of extra
 scoring on overlapping-key passes. Not worth block-level dedup machinery for v1.
 
+## Second root cause found during implementation (2026-06-01): ensemble fast-path
+
+Multi-pass blocking was necessary but NOT sufficient for Febrl3 parity. With the
+multi-pass fix alone, bucket reached F1 0.8768 (recall 0.782) vs polars 0.9332
+(recall 0.921) on a SHARED config -- a real backend-only gap. Isolated via
+forced-slow-path: bucket's `find_fuzzy_matches` slow path reached F1 0.9326
+(parity), so the gap was in the bucket FAST path
+(`_score_one_bucket_fast` / `_resolve_score_pair_callable`). Pinned to a single
+scorer: declining the fast path for `ensemble` alone restored F1 0.9326.
+
+Root cause: `_resolve_score_pair_callable`'s per-pair `ensemble` reimplementation
+(`max(jw, ts, sx*0.8)`) scored STRICTER than the matrix ensemble that
+`find_fuzzy_matches` uses, pushing true pairs below threshold (bucket precision
+climbed to 0.998 while recall collapsed). Fix: return `None` for `ensemble` so any
+ensemble matchkey uses the reference `find_fuzzy_matches` slow path. Native already
+declines ensemble (`_NATIVE_SCORER_IDS` = the 4 plain scorers only), and plain-
+scorer configs (the 5M/25M `last_name` jaro_winkler scale path) keep the fast path,
+so scale perf is untouched. Do NOT reintroduce a per-pair ensemble without a
+field-level parity test against `find_fuzzy_matches`. The matrix ensemble in
+`core/scorer.py` is the single source of truth.
+
 ## Testing
 
 - **Unit (parity):** a 2-pass blocking config on a small synthetic df where
