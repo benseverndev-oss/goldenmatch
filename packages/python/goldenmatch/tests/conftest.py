@@ -1,7 +1,13 @@
+import sys
 from pathlib import Path
 
 import polars as pl
 import pytest
+
+# make scripts/ importable as top-level modules (arrow_finish_line_sweep, etc.)
+_SCRIPTS = Path(__file__).parent.parent / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
 
 
 @pytest.fixture(autouse=True)
