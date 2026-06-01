@@ -73,6 +73,40 @@ def test_single_pass_bucket_unchanged():
     assert frozenset({8, 9}) in bucket
 
 
+def test_cross_pass_duplicate_pairs_collapse():
+    # Rows 10/11 share BOTH `city` and `zip`, so the {10,11} pair is emitted by
+    # BOTH the city pass AND the zip pass. The bucket path re-scores each pass
+    # independently and emits the duplicate pair twice; build_clusters'
+    # pair_scores dict collapses the duplicate emissions into ONE cluster. This
+    # locks that collapse (no crash, no doubled cluster state) and that it
+    # matches polars-direct, which dedups the key across passes upstream.
+    rows = [
+        {"name": f"distinct person {i}", "city": f"city{i}", "zip": f"{10000+i}"}
+        for i in range(10)
+    ]
+    rows.append({"name": "john smith", "city": "gamma", "zip": "77777"})  # row 10
+    rows.append({"name": "john smith", "city": "gamma", "zip": "77777"})  # row 11
+    df = pl.DataFrame(rows)
+
+    from goldenmatch.core.autoconfig import auto_configure_df
+    cfg = auto_configure_df(df)
+    cfg.blocking = BlockingConfig(
+        strategy="multi_pass",
+        keys=[BlockingKeyConfig(fields=["city"])],
+        passes=[BlockingKeyConfig(fields=["city"]), BlockingKeyConfig(fields=["zip"])],
+    )
+    cfg.matchkeys = [_name_matchkey()]
+    assert cfg.blocking.passes and len(cfg.blocking.passes) == 2
+
+    bucket = _multi_member_clusters(df, cfg, "bucket")
+    polars = _multi_member_clusters(df, cfg, "polars-direct")
+
+    # (a) duplicate emissions collapse to exactly ONE multi-member cluster
+    assert bucket == {frozenset({10, 11})}
+    # (b) equals polars-direct
+    assert bucket == polars
+
+
 def test_missing_pass_field_is_skipped():
     df = _fixture_df()  # has name/city/zip, NOT 'ssn'
     cfg = _two_pass_config()

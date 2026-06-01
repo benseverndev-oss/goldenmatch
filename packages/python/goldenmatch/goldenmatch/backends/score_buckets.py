@@ -37,7 +37,7 @@ from typing import Any
 
 import polars as pl
 
-from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
 from goldenmatch.core.blocker import _build_block_key_expr
@@ -337,7 +337,16 @@ def score_buckets(
             polars-direct, the exclude set is frozen ONCE across all passes
             and cross-pass duplicate pairs ARE emitted; they collapse
             downstream in build_clusters' pair_scores dict. This is exact
-            parity with polars-direct by construction.
+            parity with polars-direct by construction. Note the DELIBERATE
+            difference from polars-direct: polars-direct dedups identical
+            block keys ACROSS passes (``blocker.py::_build_multi_pass_blocks``
+            via its ``seen_keys`` set), whereas this bucket path re-scores each
+            pass independently and emits cross-pass DUPLICATE PAIRS that
+            collapse in build_clusters' ``pair_scores`` dict. Consequence:
+            ``block_count_scored`` / ``bucket_count`` metrics read HIGHER for
+            bucket than for polars on overlapping-key multi-pass configs --
+            expected, not a bug. Do NOT "fix" this by adding block-key dedup;
+            the duplicate-pair collapse is the parity mechanism.
         mk: Matchkey configuration.
         matched_pairs: Set of already-matched (min_id, max_id) pairs;
             mutated in-place as new pairs are emitted (mirrors
@@ -678,7 +687,7 @@ def score_buckets(
         return local_pairs, local_blocks
 
     def _score_single_pass(
-        key: Any,
+        key: BlockingKeyConfig,
     ) -> tuple[list[tuple[int, int, float]], int, int]:
         """Key, bucket, partition, and score one blocking pass.
 
