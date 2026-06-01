@@ -17,7 +17,11 @@ harness, not unit tests.
 from __future__ import annotations
 
 import polars as pl
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.config.schemas import (
+    MatchkeyConfig,
+    MatchkeyField,
+    NegativeEvidenceField,
+)
 from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
 from goldenmatch.core.scorer import (
@@ -100,16 +104,114 @@ class TestHotPathDirectEmit:
         }
         assert df_set == list_set
 
-    def test_exclude_pairs_path_falls_back_to_list(self):
-        """When ``exclude_pairs`` is non-empty, the function takes a
-        list-building branch above the hot-path emission; the flag is
-        not honored there. ``find_fuzzy_matches_columnar`` handles this
-        via the defensive wrap. Locks the contract."""
+    def test_exclude_pairs_path_emits_dataframe(self):
+        """Task 1.1 (#623): ALL branches honor ``_emit_dataframe=True``.
+        The ``exclude_pairs`` branch now emits a ``pl.DataFrame`` with
+        ``PAIR_STREAM_SCHEMA`` instead of a list. Default
+        (``_emit_dataframe=False``) keeps the list contract for the
+        deprecation window."""
         block_df = _block_df([(1, "John"), (2, "Jon")])
         result = find_fuzzy_matches(
             block_df, _mk(), exclude_pairs={(1, 2)}, _emit_dataframe=True,
         )
-        assert isinstance(result, list)
+        assert isinstance(result, pl.DataFrame)
+        assert result.schema == PAIR_STREAM_SCHEMA
+        # Default still returns a list (deprecation window).
+        as_list = find_fuzzy_matches(block_df, _mk(), exclude_pairs={(1, 2)})
+        assert isinstance(as_list, list)
+
+
+# ── Task 1.1: uniform DataFrame from non-hot branches (#623) ─────────
+
+
+class TestNonHotPathDirectEmit:
+    """Task 1.1 (#623): ``find_fuzzy_matches(..., _emit_dataframe=True)``
+    must emit a ``pl.DataFrame`` from ALL THREE branches (NE-penalty,
+    ``exclude_pairs``, hot path), not just the hot path. Parity is
+    asserted byte-for-byte against the list path via
+    ``pairs_df_to_list``."""
+
+    def test_exclude_pairs_branch_emits_dataframe(self):
+        records = [
+            (1, "John Smith"), (2, "Jon Smith"),
+            (3, "Jane Smith"), (4, "John Smyth"),
+        ]
+        block_df = _block_df(records)
+        mk = _mk()
+        excl = {(1, 2)}
+
+        as_list = find_fuzzy_matches(block_df, mk, exclude_pairs=excl)
+        as_df = find_fuzzy_matches(
+            block_df, mk, exclude_pairs=excl, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.columns == ["id_a", "id_b", "score"]
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_ne_branch_emits_dataframe(self):
+        # name agrees (fuzzy weighted matchkey) but the NE field (city)
+        # disagrees -> NE-penalty branch is exercised.
+        block_df = pl.DataFrame({
+            "__row_id__": [1, 2, 3],
+            "__source__": ["fixture"] * 3,
+            "name": ["John Smith", "Jon Smith", "John Smith"],
+            "city": ["Boston", "Boston", "Seattle"],
+        })
+        mk = MatchkeyConfig(
+            name="test_ne",
+            type="weighted",
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            threshold=0.85,
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="city", scorer="exact", threshold=1.0, penalty=0.5,
+                ),
+            ],
+        )
+
+        as_list = find_fuzzy_matches(block_df, mk)
+        as_df = find_fuzzy_matches(block_df, mk, _emit_dataframe=True)
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_ne_branch_with_exclude_emits_dataframe(self):
+        # NE-penalty AND exclude_pairs together (the nested exclude
+        # filter inside the NE branch).
+        block_df = pl.DataFrame({
+            "__row_id__": [1, 2, 3],
+            "__source__": ["fixture"] * 3,
+            "name": ["John Smith", "Jon Smith", "John Smyth"],
+            "city": ["Boston", "Boston", "Boston"],
+        })
+        mk = MatchkeyConfig(
+            name="test_ne",
+            type="weighted",
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            threshold=0.85,
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="city", scorer="exact", threshold=1.0, penalty=0.1,
+                ),
+            ],
+        )
+        excl = {(1, 2)}
+
+        as_list = find_fuzzy_matches(block_df, mk, exclude_pairs=excl)
+        as_df = find_fuzzy_matches(
+            block_df, mk, exclude_pairs=excl, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_empty_result_emits_empty_dataframe(self):
+        # exclude_pairs removes the only candidate -> empty frame, not [].
+        block_df = _block_df([(1, "John"), (2, "Jon")])
+        as_df = find_fuzzy_matches(
+            block_df, _mk(), exclude_pairs={(1, 2)}, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
 
 
 # ── Adapter round-trip ──────────────────────────────────────────────
