@@ -20,17 +20,25 @@ Per `(scale, engine)`:
 
 ## How it stays honest
 
-- **Same fixture, same machine, same scale** for both engines. `scored_pairs` is
-  reported so any difference in blocking aggressiveness is *visible* rather than
-  hidden — pair count, not row count, drives ER wall-clock.
-- **GoldenMatch can't silently cheat downward**: `run_goldenmatch.py` sets
-  `GOLDENMATCH_NATIVE=1` and asserts `native_enabled("block_scoring")`. If the
-  native Arrow runtime isn't actually loaded, the datapoint fails loudly instead
-  of quietly reporting a pure-Python number as "the optimized backend".
-- **Splink isn't crippled**: it gets an idiomatic settings spec (compound
-  blocking + standard comparisons) mirroring the blocking GoldenMatch's
-  auto-config lands on. Splink has no zero-config mode — that asymmetry is real
-  and noted, not engineered away.
+- **Realistic fixture**: census-weighted surnames (Zipfian — real "Smith/Johnson"
+  frequencies, so realistic hot blocks) and real given names, with single-char
+  typos + nulls on duplicates. Both engines read the identical parquet per scale.
+- **Same machine, same scale.** `scored_pairs` is reported so blocking-aggressiveness
+  differences are *visible* — pair count, not row count, drives ER wall-clock.
+- **Both engines get an explicit, idiomatic, tuned config** (neither auto-config
+  nor a crippled spec):
+  - *GoldenMatch* uses an explicit **bucket + native + Arrow** config (its actual
+    optimized path). `run_goldenmatch.py` sets `GOLDENMATCH_NATIVE=1` and asserts
+    `native_enabled("block_scoring")`, so a pure-Python fallback can never
+    masquerade as "the optimized backend".
+  - *Splink* gets an idiomatic settings spec (compound blocking + standard
+    comparisons + EM training on selective keys).
+- **A real engine asymmetry is surfaced, not hidden**: the bucket backend does
+  **single-key blocking** (one eager bucket pass — that's how it stays fast),
+  whereas Splink **unions multiple blocking rules**. So GoldenMatch is given its
+  best single key (`postcode`, ~0.94 pair coverage here) and Splink its rule union
+  (~0.99). The resulting recall gap is a genuine property of each engine's fast
+  path, reported plainly via the accuracy columns.
 
 ## How it survives OOM on GitHub
 
@@ -76,6 +84,10 @@ python scripts/bench_er_headtohead/orchestrate.py \
 
 ## Known limitations / follow-ups
 
+- **Blocking parity is inherently imperfect**: GoldenMatch's fast bucket path is
+  single-key; Splink unions rules. We give each its best idiomatic config, but
+  the recall ceilings differ by design. A multi-pass (non-bucket) GoldenMatch lane
+  would close recall at a speed cost — a possible follow-up lane.
 - **One fixture shape** (person-like, 5 fields). Other shapes (bibliographic,
   product) would exercise different blocking/scoring behaviour.
 - **Splink comparison spec is fixed**, not tuned per scale; a Splink expert could

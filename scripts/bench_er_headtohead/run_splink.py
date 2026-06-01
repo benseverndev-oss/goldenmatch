@@ -109,8 +109,15 @@ def main() -> None:
             [block_on("surname", "dob")], recall=0.7
         )
         linker.training.estimate_u_using_random_sampling(max_pairs=args.max_pairs)
-        linker.training.estimate_parameters_using_expectation_maximisation(block_on("surname"))
-        linker.training.estimate_parameters_using_expectation_maximisation(block_on("first_name"))
+        # EM blocking rules must be SELECTIVE or training is super-linear at scale
+        # (block_on a single high-frequency field generates enormous comparison
+        # sets). Compound keys keep the EM training set tractable at 5M/25M.
+        linker.training.estimate_parameters_using_expectation_maximisation(
+            block_on("surname", "dob")
+        )
+        linker.training.estimate_parameters_using_expectation_maximisation(
+            block_on("first_name", "dob")
+        )
         train_wall = time.perf_counter() - t0
 
         t0 = time.perf_counter()

@@ -64,10 +64,18 @@ def main() -> None:
         from goldenmatch.core._native_loader import native_enabled, native_module
         from goldenmatch.core.bench import bench_capture
 
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+        )
+
         try:
-            from goldenmatch import auto_configure_df, dedupe_df
-        except ImportError:  # older layouts expose these on _api
-            from goldenmatch._api import auto_configure_df, dedupe_df
+            from goldenmatch import dedupe_df
+        except ImportError:  # older layouts expose this on _api
+            from goldenmatch._api import dedupe_df
 
         native_loaded = native_module() is not None
         result["native_loaded"] = native_loaded
@@ -84,17 +92,39 @@ def main() -> None:
         result["rows_loaded"] = df.height
         load_wall = time.perf_counter() - t0
 
-        # GoldenMatch's realistic optimized path: zero-config controller, then pin
-        # bucket + disable the cross-encoder rerank (avoids a HuggingFace download).
-        config = auto_configure_df(df, confidence_required=False)
-        config.backend = "bucket"
-        if hasattr(config, "rerank"):
-            config.rerank = False
-        for mk in getattr(config, "get_matchkeys", lambda: [])():
-            if getattr(mk, "rerank", None) is not None:
-                mk.rerank = False
-            if getattr(mk, "threshold", None) is not None:
-                mk.threshold = args.threshold
+        # GoldenMatch's MOST-OPTIMIZED path: explicit bucket+native config (not the
+        # zero-config controller, which adds 30s+ overhead and can commit a RED
+        # config on off-distribution data). Mirrors Splink's hand-built spec —
+        # compound blocking + native Jaro-Winkler scoring — for a fair head-to-head.
+        # NOTE: the bucket backend does SINGLE-KEY blocking (one eager bucket pass
+        # — it ignores multi_pass `passes`); that's how it stays fast at scale.
+        # So we give it its best single key. On this fixture, blocking on the
+        # stable, rarely-corrupted `postcode` covers ~0.94 of true pairs with small
+        # blocks, vs ~0.48 for surname+dob (surnames get typo'd). Splink, by
+        # contrast, unions 3 blocking rules (~0.99 coverage) — a real engine
+        # difference the benchmark surfaces rather than hides.
+        config = GoldenMatchConfig(
+            backend="bucket",
+            n_buckets=256,
+            blocking=BlockingConfig(
+                max_block_size=5000,
+                skip_oversized=False,  # rely on the bucket scorer's hot-block split
+                keys=[BlockingKeyConfig(fields=["postcode"], transforms=["strip"])],
+            ),
+            matchkeys=[
+                MatchkeyConfig(
+                    name="person",
+                    type="weighted",
+                    threshold=args.threshold,
+                    rerank=False,  # no cross-encoder -> no HuggingFace download
+                    fields=[
+                        MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.3, transforms=["lowercase"]),
+                        MatchkeyField(field="surname", scorer="jaro_winkler", weight=0.4, transforms=["lowercase"]),
+                        MatchkeyField(field="dob", scorer="jaro_winkler", weight=0.3),
+                    ],
+                )
+            ],
+        )
 
         t0 = time.perf_counter()
         with bench_capture() as bench:
