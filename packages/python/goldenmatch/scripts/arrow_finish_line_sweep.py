@@ -278,7 +278,13 @@ def _phase1_metrics(n: int, timeout_s: int) -> dict:
         # covered by the Wave 1 unit parity tests.
         list_clusters = parsed["list"].get("n_clusters")
         col_clusters = parsed["columnar"].get("n_clusters")
-        metrics["parity"] = list_clusters == col_clusters
+        # Require BOTH counts present: None == None would be a spurious True
+        # that masks a bench emitting no cluster data.
+        metrics["parity"] = (
+            list_clusters is not None
+            and col_clusters is not None
+            and list_clusters == col_clusters
+        )
         notes.append(
             f"parity = n_clusters equality at {n} "
             f"(list={list_clusters}, columnar={col_clusters}); "
@@ -287,8 +293,10 @@ def _phase1_metrics(n: int, timeout_s: int) -> dict:
         )
 
     # ── 5M feasibility: columnar ONLY (list OOMs, never run at 5M) ──
-    # On smoke scale, exercise the wiring at the smoke n instead of 5M.
-    feas_n = n if n < _PHASE1_FEASIBILITY_N else _PHASE1_FEASIBILITY_N
+    # On smoke scale (n == _SMOKE_N) exercise the wiring at the smoke n; on the
+    # kill run (n == 1M) the feasibility check must hit the real 5M -- that is
+    # the whole point of the criterion (columnar completes where legacy can't).
+    feas_n = n if n <= _SMOKE_N else _PHASE1_FEASIBILITY_N
     cmd = [sys.executable, str(script), "--worker", str(feas_n), "columnar"]
     stdout, err = _run_subprocess(cmd, timeout_s)
     if err is not None:
