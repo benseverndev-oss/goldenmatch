@@ -162,20 +162,33 @@ def split_oversized_cluster(
         return [{"members": sorted(members), "size": len(members),
                  "oversized": False, "pair_scores": pair_scores}]
 
-    mst = _build_mst(members, pair_scores)
-    if not mst:
-        return [{"members": sorted(members), "size": len(members),
-                 "oversized": False, "pair_scores": pair_scores}]
+    if native_enabled("clustering"):
+        # Native kernel does MST (Kruskal) + weakest-edge removal + re-union
+        # and returns the post-split subcluster member lists. Edges are passed
+        # in pair_scores iteration order so the native stable score-desc sort
+        # and first-minimum tie-break reproduce the Python path exactly. An
+        # empty return means the MST was empty -> unsplittable (mirrors the
+        # pure-Python `if not mst` early return below).
+        edges = [(a, b, s) for (a, b), s in pair_scores.items()]
+        subclusters: list = native_module().mst_split_components(members, edges)
+        if not subclusters:
+            return [{"members": sorted(members), "size": len(members),
+                     "oversized": False, "pair_scores": pair_scores}]
+    else:
+        mst = _build_mst(members, pair_scores)
+        if not mst:
+            return [{"members": sorted(members), "size": len(members),
+                     "oversized": False, "pair_scores": pair_scores}]
 
-    weakest = min(mst, key=lambda e: e[2])
-    remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
+        weakest = min(mst, key=lambda e: e[2])
+        remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
 
-    uf = UnionFind()
-    uf.add_many(members)
-    for a, b, _s in remaining:
-        uf.union(a, b)
+        uf = UnionFind()
+        uf.add_many(members)
+        for a, b, _s in remaining:
+            uf.union(a, b)
 
-    subclusters = uf.get_clusters()
+        subclusters = uf.get_clusters()
     # Partition pair_scores across the post-split subclusters in a SINGLE
     # pass. The previous shape rebuilt each subcluster's pair dict with a
     # comprehension that re-scanned the FULL pair_scores per subcluster

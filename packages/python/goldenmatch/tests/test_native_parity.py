@@ -571,3 +571,50 @@ def test_auto_uses_native_only_for_gated_components(monkeypatch):
 def test_native_required_mode_uses_native(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
     assert _native_loader.native_enabled("clustering") is True
+
+
+# --- split_oversized_cluster (native mst_split_components kernel) parity ---
+
+# (members, pair_scores) fixtures: clean chain, tie-scored weakest edges
+# (stresses the first-minimum tie-break), dense clique with a non-MST intra
+# edge that must survive the split, and a star.
+_SPLIT_FIXTURES = [
+    ([0, 1, 2, 3], {(0, 1): 0.9, (1, 2): 0.5, (2, 3): 0.8}),
+    ([0, 1, 2, 3], {(0, 1): 0.9, (0, 2): 0.85, (1, 2): 0.88, (2, 3): 0.3}),
+    # Multiple MST edges tie at the minimum score -> tie-break must match.
+    ([0, 1, 2, 3, 4], {(0, 1): 0.7, (1, 2): 0.7, (2, 3): 0.7, (3, 4): 0.9}),
+    # Two dense triangles bridged by one weak edge.
+    (
+        [0, 1, 2, 3, 4, 5],
+        {(0, 1): 0.95, (0, 2): 0.92, (1, 2): 0.9, (3, 4): 0.95,
+         (3, 5): 0.92, (4, 5): 0.9, (2, 3): 0.4},
+    ),
+    ([0, 1, 2, 3, 4], {(0, i): 0.8 for i in range(1, 5)}),  # star
+]
+
+
+def _normalize_split(result: list) -> dict:
+    """Key subclusters by member set so native/Python ordering is irrelevant;
+    value carries the fields the split must preserve identically."""
+    return {
+        frozenset(c["members"]): (
+            c["size"],
+            c["oversized"],
+            tuple(sorted(c["pair_scores"].items())),
+            c.get("bottleneck_pair"),
+            c.get("confidence"),
+        )
+        for c in result
+    }
+
+
+@pytest.mark.parametrize("members,pair_scores", _SPLIT_FIXTURES)
+def test_split_oversized_cluster_parity(monkeypatch, members, pair_scores):
+    from goldenmatch.core.cluster import split_oversized_cluster
+
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    py = split_oversized_cluster(list(members), dict(pair_scores))
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+    native = split_oversized_cluster(list(members), dict(pair_scores))
+
+    assert _normalize_split(py) == _normalize_split(native)
