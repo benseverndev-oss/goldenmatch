@@ -93,33 +93,88 @@ def test_exclude_pairs_branch_emits_dataframe(simple_block_df, weighted_mk):
 
 ## Wave 3: Migrate hot consumers (DataFrame-native)
 
-Each hot consumer currently consumes `score_blocks_parallel`/`find_fuzzy_matches` as a list. Migrate to the columnar entry (`score_blocks_columnar`/`_emit_dataframe=True`) and pass the DataFrame to `build_clusters`. **One task per consumer**, each with a parity test.
+**CRITICAL — do NOT flip the shared `all_pairs` accumulator to a DataFrame.**
+In `core/pipeline.py` the pair accumulator (`all_pairs: list`) is fed by EVERY
+matchkey type via `.extend()` — exact (~:1076), bucket (~:1137), fuzzy
+build_blocks (~:1287), probabilistic (~:1363), chunked (~:2016). Exact /
+probabilistic going columnar is Phase C, OUT OF SCOPE here. Flipping `all_pairs`
+to a DataFrame mid-accumulation would `TypeError` on every un-migrated `.extend()`.
+So `all_pairs` STAYS a list in this plan.
 
-For EACH of: `core/pipeline.py` (the main dedupe/match cluster-ingest), `backends/score_buckets.py:711`, `core/chunked.py:125/367/411`, `backends/ray_backend.py:116`:
+Where the columnar feasibility win actually lands (two places, neither is `all_pairs`):
+1. **The separate eligible columnar branch** (`pipeline.py:~1261`, gated by
+   `_use_columnar`): it already routes `score_blocks_columnar -> build_clusters_columnar`
+   end-to-end as DataFrames, bypassing `all_pairs`. Phase 1 makes the CONTRACT it
+   uses uniform (Waves 1-2) and adds the parity@1M + feasibility@5M tests on THIS
+   path (Wave 5). This is the 5M-no-OOM path. Phase 1 does NOT change when this
+   branch engages (still flag/eligibility-gated — Phase B/C widens that).
+2. **Inside `score_blocks_columnar`** itself: no per-pair Python list during
+   block accumulation (Wave 1.2).
 
-- [ ] **Step 1: Read** the call site + how its result flows into `build_clusters` (or into `scored_pairs`).
-- [ ] **Step 2: Failing/equivalence test** — a test that the consumer produces identical clusters/output via the columnar path vs the list path on a small fixture (reuse existing per-backend tests; add a columnar variant).
-- [ ] **Step 3: Run, verify current state.**
-- [ ] **Step 4: Implement** — switch the call to the columnar entry (`score_blocks_columnar(...)` or `_emit_dataframe=True`), accumulate via `pl.concat` (not `list.extend`), and pass the frame to `build_clusters`. Where the pipeline stores `scored_pairs` for downstream cold consumers, store the DataFrame (cold consumers shim in Wave 4). Mind the `score_blocks_parallel` `max_workers=4` RSS pathology note in `scorer.py:924` — do not raise worker counts.
-- [ ] **Step 5: Run, verify pass. Commit** (`feat(<area>): consume columnar pair stream`).
+For the mixed/ineligible path, the rule is **convert-at-boundary**: a direct
+caller that feeds `all_pairs` calls the scorer then `pairs_df_to_list(...)` once at
+its boundary before `.extend()`. `all_pairs` never sees a DataFrame.
 
-**Gate before Wave 4:** the columnar parity test (Wave 1-2) + each hot consumer's equivalence test green.
+**Per-consumer tasks** (one commit each; each with an equivalence test that
+clusters/output are byte-identical vs the pre-change list path on a small fixture;
+mind the `max_workers=4` RSS guard at `scorer.py:924` — do not raise it):
+
+- [ ] **Task 3.1 `core/pipeline.py` eligible columnar branch (~:1018/:1261).** Read
+  `_use_columnar` routing. Ensure the branch consumes the uniform
+  `score_blocks_columnar` return (Wave 1) and passes the frame straight to
+  `build_clusters`/`build_clusters_columnar` (Wave 2) with NO `pairs_df_to_list`
+  round-trip. Equivalence test: eligible config yields identical clusters via this
+  branch vs the legacy list branch at small N.
+- [ ] **Task 3.2 `core/pipeline.py` mixed/ineligible path.** The non-columnar fuzzy
+  path calls `score_blocks_parallel` and `.extend()`s `all_pairs`. Since Wave 1.2
+  makes `score_blocks_parallel`/`score_blocks_columnar` DataFrame-canonical, convert
+  at the boundary: `all_pairs.extend(pairs_df_to_list(score_blocks_columnar(...)))`
+  (or keep calling a list-returning wrapper). `all_pairs` stays a list. Test: a
+  mixed exact+fuzzy config still produces identical clusters.
+- [ ] **Task 3.3 `backends/score_buckets.py:711`.** NOTE: it calls
+  `find_fuzzy_matches(block_df, mk, ...)` INLINE per bucket-partition (no blocks
+  list) and `local_pairs.extend(pairs)`. It does NOT use `score_blocks_columnar`.
+  Migrate: pass `_emit_dataframe=True`, accumulate per-bucket frames via `pl.concat`,
+  and convert once via `pairs_df_to_list` at the point it hands back to `pipeline.py`
+  (which feeds `all_pairs`). Equivalence test: bucket backend identical clusters.
+- [ ] **Task 3.4 `core/chunked.py:125/367/411`.** Direct `score_blocks_parallel`
+  consumers (inline, no `scored_pairs` var). Convert at boundary (the chunked path
+  is already its own backend; keep `all_pairs`-equivalent list semantics).
+- [ ] **Task 3.5 `backends/ray_backend.py`.** TWO paths: the small-block fallback
+  (~:114) delegates to `score_blocks_parallel`; the main path (~:123) calls
+  `_score_one_block` per Ray remote task. After Wave 1.2 removes the
+  `assert isinstance(pairs, list)`, BOTH the Ray-remote `_score_one_block` call and
+  the fallback must handle the return-type change — convert at the collection
+  boundary (`pairs_df_to_list`) so the Ray driver still accumulates a list. Test the
+  Ray call path, not just the thread-pool path.
+
+**Gate before Wave 4:** Wave 1-2 parity test + each hot consumer's equivalence test green.
 
 ---
 
 ## Wave 4: Cold consumers (boundary shim)
 
-### Task 4.1: Enumerate + classify all `scored_pairs` consumers
+**Reframed by the Wave 3 correction:** because `all_pairs` STAYS a list and the
+pipeline result's `scored_pairs` is therefore still a list, the ~24 DOWNSTREAM
+consumers that read `result.scored_pairs` (lineage, report, dashboard, graph,
+memory/corrections, identity, web/run, mcp, cli, db/sync, api/server, TUI tabs)
+are UNAFFECTED — they keep receiving a list. Wave 4 is mostly a verification, not a
+migration. The only cold consumers that need a shim are those that DIRECTLY call
+the scorer (now DataFrame-returning).
 
-- [ ] **Step 1:** `rg -n "scored_pairs" packages/python/goldenmatch/goldenmatch` → list all 32 files. For each, classify **hot** (touches every pair; should already be migrated in Wave 3) or **cold** (sample, few rows, serialization, or interactive — never N-scaling). Record the classification as a comment block in the PR description / a scratch note. Cold set expected: `core/blocker.py:790` (learned-blocking sample), `tui/engine.py:206`, `tui/tabs/*`, `web/preview.py`, `web/routers/run.py`, `mcp/server.py`, `mcp/agent_tools.py`, `core/lineage.py`, `core/report.py`, `core/dashboard.py`, `core/graph.py`, `core/graph_er.py`, `core/memory/corrections.py`, `cli/*`, `db/sync.py`, `api/server.py`, `identity/*`.
+### Task 4.1: Confirm downstream consumers are unaffected
 
-### Task 4.2: Shim each cold consumer
+- [ ] **Step 1:** `rg -n "scored_pairs" packages/python/goldenmatch/goldenmatch` → 32 files. Confirm each is one of: (a) a Wave-3 direct scorer caller (already handled), or (b) a reader of `result.scored_pairs` / a pipeline-produced list. For (b), confirm the value is still a list after Waves 1-3 (it is, because `all_pairs` stays a list). Record the (a)/(b) split in the PR description.
+- [ ] **Step 2:** Add ONE guard test: `dedupe_df(eligible_fuzzy_df)` and a mixed exact+fuzzy `dedupe_df` both yield a result whose `scored_pairs` is a `list[tuple]` (the public contract is unchanged for downstream consumers). This is the regression net proving Wave 4 is a no-op for (b).
 
-For EACH cold consumer that now receives a DataFrame (because the pipeline stores the frame):
+### Task 4.2: Shim the cold DIRECT-callers only
 
-- [ ] **Step 1: Read** the consumer's use of the pairs.
-- [ ] **Step 2: Test** — the consumer still works given a DataFrame input (its existing test should pass once it calls the shim; add one if missing).
-- [ ] **Step 3: Implement** — at the consumer's boundary, call `pairs_df_to_list(scored_pairs)` once if it received a DataFrame (guard: `if isinstance(scored_pairs, pl.DataFrame): scored_pairs = pairs_df_to_list(scored_pairs)`), or migrate trivially if the consumer is a one-liner. Do NOT push the shim into any per-pair loop.
+The only cold sites that call the scorer directly (so receive a DataFrame after Wave 1): `core/blocker.py:790` (learned-blocking sample) and `tui/engine.py:206`.
+
+- [ ] **Step 1: Read** each.
+- [ ] **Step 2: Test** — the consumer still produces identical output.
+- [ ] **Step 3: Implement** — convert once at the boundary: `pairs = pairs_df_to_list(find_fuzzy_matches(...))` (or `score_blocks_*`). These are sample/interactive (bounded N), so the shim is acceptable per the roadmap rule. Do NOT push the shim into any per-pair loop.
+- [ ] **Step 4: Run, verify pass. Commit** (`refactor(blocker,tui): shim columnar scorer return at cold boundary`).
 - [ ] **Step 4: Run, verify pass. Commit** (`refactor(<area>): shim columnar pairs at cold boundary`).
 
 Batch related cold consumers into one commit where they share a pattern (e.g. all TUI tabs).
@@ -141,7 +196,7 @@ Batch related cold consumers into one commit where they share a pattern (e.g. al
 **Files:** `packages/python/goldenmatch/scripts/arrow_finish_line_sweep.py`
 
 - [ ] **Step 1:** Lower `PHASE_BENCH_SCALE["phase1"]` from 5M to 1M (so the legacy `list` baseline fits and the wall ratio is measurable). Add a unit test asserting the new value.
-- [ ] **Step 2:** Add a separate phase1 feasibility metric: run ONLY the columnar path at 5M (via the bench's `--worker 5000000 columnar` subcommand) and record completion as a `bool_true` criterion `columnar_completes_5m`. Update `PHASE_CRITERIA["phase1"]` to the reframed gate (drop the un-measurable 5M wall ratio; keep wall@1M as secondary/non-gating, add `columnar_completes_5m` bool + parity bool). Update the existing classifier tests for the new phase1 criteria.
+- [ ] **Step 2:** Add a separate phase1 feasibility metric: run ONLY the columnar path at 5M (via the bench's `--worker 5000000 columnar` subcommand) and record completion as a `bool_true` criterion `columnar_completes_5m`. Update `PHASE_CRITERIA["phase1"]` to the reframed gate (drop the un-measurable 5M wall ratio; keep wall@1M as secondary/non-gating, add `columnar_completes_5m` bool + parity bool). First check whether `tests/test_arrow_finish_line_sweep.py` has phase1-specific criterion assertions (e.g. `test_phase1_criteria_match_spec`) to update; if it only has the registry-coverage test, add a new phase1 assertion rather than editing a nonexistent one.
 - [ ] **Step 3: Run** `pytest tests/test_arrow_finish_line_sweep.py -v` green. **Commit** (`fix(sweep): phase1 bench scale 1M + columnar-only 5M feasibility`).
 
 ### Task 5.3: CI lint banning new hot-path list annotations
@@ -150,14 +205,22 @@ Batch related cold consumers into one commit where they share a pattern (e.g. al
 
 - [ ] **Step 1: Read** `scripts/check_map_elements.py` (the model lint + how it's wired in CI).
 - [ ] **Step 2: Failing test** — the lint flags a `scored_pairs: list[tuple[int, int, float]]` (and `list[tuple]`) annotation in a hot module but allows it in cold/boundary modules (allowlist) and allows `pairs_df_to_list` calls.
-- [ ] **Step 3: Implement** the lint (regex over the hot modules: scorer hot path, cluster, bucket, chunked, ray, pipeline cluster-ingest) matching both annotation forms; exit nonzero on a violation. Wire it into the CI lane like `check_map_elements.py`.
+- [ ] **Step 3: Implement** the lint. SCOPE CAREFULLY: it must flag NEW
+  `scored_pairs`/pair-return list annotations only in the scorer's columnar
+  functions and the eligible columnar cluster branch — NOT the pipeline's
+  `all_pairs: list` (intentionally a list here, Phase C territory) nor the public
+  `result.scored_pairs: list` contract (intentionally a list for downstream
+  consumers). Use a small allowlist of the hot columnar functions/regions rather
+  than a blanket repo grep. Match both `list[tuple[int, int, float]]` and
+  `list[tuple]` forms; exit nonzero on a violation. Wire into CI like
+  `check_map_elements.py`.
 - [ ] **Step 4: Run, verify pass. Commit** (`ci(scorer): lint banning hot-path scored_pairs list annotations`).
 
 ---
 
 ## Done when
 
-- `find_fuzzy_matches`/`score_blocks_*` return a uniform `pl.DataFrame`; `build_clusters` ingests it natively; all hot consumers DataFrame-native; cold consumers shimmed.
+- `find_fuzzy_matches`/`score_blocks_*` return a uniform `pl.DataFrame`; `build_clusters` ingests it natively; the eligible columnar branch flows DataFrame end-to-end (no `all_pairs`); the mixed/ineligible direct callers convert at the boundary (`all_pairs` stays a list); downstream `result.scored_pairs` consumers unaffected (still a list); the 2 cold direct-callers shimmed.
 - Parity@1M (Rand 1.0) + feasibility@5M (completes) green on the bench lane.
 - Phase1 sweep gate reframed + measurable; CI lint live.
 - The full goldenmatch suite passes in CI (run the whole suite in GH Actions, never locally — `feedback_avoid_full_suite_oom`).
