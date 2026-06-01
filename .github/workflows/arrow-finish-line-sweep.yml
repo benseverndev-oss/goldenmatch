@@ -1,0 +1,108 @@
+# Arrow finish-line Stage 0 sweep.
+#
+# Runs the sweep driver (packages/python/goldenmatch/scripts/arrow_finish_line_sweep.py)
+# against every requested phase on the bench box, classifies each phase as
+# PASS / CLOSE / BLOCKED, posts the markdown table to the step summary, and
+# uploads the JSON results as an artifact.
+#
+# workflow_dispatch only. Inputs:
+#   phases  - comma-separated phase list (default excludes phase5, which is
+#             BLOCKED-by-design until the distributed bench dataset is present)
+#   scale   - kill (full PHASE_BENCH_SCALE per phase) or smoke (tiny N for
+#             wiring smoke test)
+#
+# Phase 3 needs the native extension built. The "Build native module" step
+# mirrors bench-pair-stream-columnar exactly.
+#
+# Timeout 330 min is under the 6h job cap and covers two 25M phase runs plus
+# reasonable overhead.
+#
+# IMPORTANT: do not run locally past 100K --
+# memory/feedback_avoid_full_suite_oom applies.
+
+name: arrow-finish-line-sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      phases:
+        description: "Comma-separated phases to run"
+        required: false
+        default: "phase1,phase2,phase3,phase4,phase6"
+      scale:
+        description: "kill = full PHASE_BENCH_SCALE; smoke = tiny N wiring check"
+        required: false
+        default: "kill"
+        type: choice
+        options:
+          - kill
+          - smoke
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: large-new-64GB
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Editable install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native module
+        # Native kernels (dedup_pairs, record_fingerprints, build_clusters) are
+        # required for phase3 benchmarks to hit production-grade numbers.
+        # Without this step, all phase3 benches produce BLOCKED verdicts.
+        # Mirrors bench-pair-stream-columnar exactly.
+        run: .venv/bin/python scripts/build_native.py
+
+      - name: Run Arrow finish-line sweep
+        timeout-minutes: 330
+        run: |
+          set -euo pipefail
+          .venv/bin/python \
+            packages/python/goldenmatch/scripts/arrow_finish_line_sweep.py \
+            --phases "${{ inputs.phases }}" \
+            --scale "${{ inputs.scale }}" \
+            --out arrow_finish_line_sweep_results.json \
+            2>&1 | tee arrow_finish_line_sweep_stdout.txt
+
+      - name: Post markdown summary
+        if: always()
+        run: |
+          STDOUT=arrow_finish_line_sweep_stdout.txt
+          if [ ! -f "$STDOUT" ]; then
+            echo "no stdout captured -- earlier step failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Arrow finish-line Stage 0 sweep"
+            echo ""
+            echo "phases: \`${{ inputs.phases }}\`  scale: \`${{ inputs.scale }}\`"
+            echo ""
+            cat "$STDOUT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload sweep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arrow-finish-line-sweep-results
+          path: arrow_finish_line_sweep_results.json
+          if-no-files-found: warn
