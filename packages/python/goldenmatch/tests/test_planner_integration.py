@@ -24,7 +24,7 @@ import goldenmatch as gm
 import polars as pl
 import pytest
 from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
-from goldenmatch.core.autoconfig_planner_rules import _has_ray
+from goldenmatch.core.autoconfig_planner_rules import _has_ray, _scoring_backend
 from goldenmatch.core.runtime_profile import RuntimeProfile
 
 HAS_RAY = _has_ray()
@@ -64,7 +64,7 @@ def test_integration_simple_plan_fires_on_small_df():
     gm.dedupe_df(_small_df())
     _profile, _history, plan = _read_plan()
     assert plan.rule_name == "plan_selected_simple"
-    assert plan.backend == "polars-direct"
+    assert plan.backend == _scoring_backend()
     assert plan.clustering_strategy == "in_memory"
 
 
@@ -74,7 +74,7 @@ def test_integration_postflight_report_renders_plan_line():
     result = gm.dedupe_df(_small_df())
     rendered = str(result.postflight_report)
     assert "Plan: plan_selected_simple" in rendered
-    assert "backend=polars-direct" in rendered
+    assert f"backend={_scoring_backend()}" in rendered
 
 
 def _stub_apply_to(monkeypatch):
@@ -171,7 +171,7 @@ def test_integration_fast_box_plan_fires_at_500k_with_64gb(monkeypatch):
     gm.dedupe_df(_small_df())
     _profile, _history, plan = _read_plan()
     assert plan.rule_name == "plan_selected_fast_box"
-    assert plan.backend == "polars-direct"
+    assert plan.backend == _scoring_backend()
     assert plan.max_workers == 16
 
 
