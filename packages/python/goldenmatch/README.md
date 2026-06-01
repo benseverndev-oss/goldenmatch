@@ -48,11 +48,11 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v1.16.0 — 5M records in 9.94 min, 6.4 GB peak RSS, on one 16-core node** — the new `backend="bucket"` path is now the recommended 5M-on-one-node config. 5x wall reduction and 2x peak RSS reduction vs the v1.15 chunked baseline (~50 min, 11.9 GB), with rock-solid reliability on Linux runners where the chunked path was hanging at 63 GB plateau on the same fixture. PRs #310-#326.
+> **🆕 v1.25.0 — Arrow-native groundwork + leaner large-N runs** — columnar pair-stream / two-frame-cluster entry points and optional Rust/Arrow-C kernels (`build_clusters`, `dedup_pairs`, `record_fingerprints`, MST oversized-split) land behind the `goldenmatch._native` extension, purely additive with the pure-Python + Polars pipeline unchanged as the default and byte-for-byte reference. Plus single-node memory wins (golden -2.6 GB, bucket -3.8 GB peak at 10M; standardize ~25-30s off the prep wall) and fixes for a silently-dropped GoldenCheck quality scan and a prep-cache `id()`-recycle flake. PRs #588-#650.
+>
+> **v1.16.0 — 5M records in 9.94 min, 6.4 GB peak RSS, on one 16-core node** — the new `backend="bucket"` path is now the recommended 5M-on-one-node config. 5x wall reduction and 2x peak RSS reduction vs the v1.15 chunked baseline (~50 min, 11.9 GB), with rock-solid reliability on Linux runners where the chunked path was hanging at 63 GB plateau on the same fixture. PRs #310-#326.
 >
 > **v1.15.0 — 5M records in ~50 min on commodity hardware** — Chunked mode now actually delivers on its "1M to 100M+" promise. The streaming `scan_csv().slice()` reader + Polars-native cross-chunk join (B) + block-keyed bucketed index (C) + DuckDB pair-store backend (D) replace a broken eager-read + Python-double-loop path that OOM-killed at 3h+ on the pre-fix 5M dispatch. **Measured: 5M records, 50 min wall, 11.9 GB peak RSS, 618,817 multi-member clusters, no OOM** on a 4c/16GB GitHub runner. Pass `backend="chunked"` with an explicit blocking config. PRs #233/#234/#235.
->
-> **v1.12.0 — Negative evidence on exact matchkeys (Path Y)** — NE penalties now filter adversarial collision pairs at the `exact_email` level, not just inside the weighted matchkey scoring loop. DQbench composite **91.04** (was 66.99 at v1.11). T2 F1 69.0% → 97.5%, T3 F1 53.8% → 85.5%.
 <!-- README-callouts:end -->
 
 ---
@@ -159,6 +159,7 @@ npm install goldenmatch
 - **Chunked mode** — streaming `scan_csv().slice()` reader + vectorized cross-chunk join + block-keyed index. **Measured: 5M records in ~50 min on a 4c/16GB GitHub runner, 11.9 GB peak, no OOM** (PRs #233/#234/#235, 2026-05-14). Pass `backend="chunked"`. The bucket backend supersedes this for 16-core / 32+ GB Linux; chunked stays as the path for memory-constrained 4c/16GB shapes.
 - **DuckDB backend** — `config.backend="duckdb"` routes block scoring through a DuckDB-backed pair store that can spill to disk via `GOLDENMATCH_DUCKDB_SCORE_DB`. Doesn't replace in-memory scoring matrices yet; the value lands at 50M+ where pair counts hit 10⁸.
 - **Ray distributed backend** — `pip install goldenmatch[ray]` + pass `backend="ray"` explicitly OR set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to let the v3 planner pick it at 50M+ rows. As of v1.16.0 the planner no longer auto-picks ray after the Distributed Plan v1 stack failed the 5M kill criterion on the same workload where bucket succeeded at 6.4 GB peak RSS (PR #318).
+- **Native acceleration (optional, v1.25.0)** — `pip install goldenmatch[native]` pulls a compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) that strips Python-loop overhead from hot paths (record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). Purely additive: the pure-Python + Polars pipeline stays the default and the byte-for-byte reference; the kernels engage only when the wheel is installed and the matching `native_enabled(...)` gate is on.
 - **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
 
 ### Learning Memory (v1.6.0)
