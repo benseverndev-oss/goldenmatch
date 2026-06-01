@@ -21,7 +21,7 @@ on:
       scales:
         description: "Space-separated row counts to sweep"
         required: false
-        default: "100000 1000000 5000000 25000000 100000000"
+        default: "100000 1000000 5000000 25000000"
       engines:
         description: "Engines to run (space-separated): goldenmatch splink"
         required: false
@@ -45,7 +45,7 @@ permissions:
 jobs:
   bench:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
+    timeout-minutes: 600
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
     steps:
