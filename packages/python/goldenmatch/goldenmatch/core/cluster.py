@@ -344,8 +344,22 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
     current_emitter().set_cluster(profile)
 
 
+def _is_pairs_dataframe(pairs: Any) -> bool:
+    """True when ``pairs`` is a Polars DataFrame (the columnar pair stream).
+
+    polars is a hard dependency of goldenmatch but is imported lazily here so
+    cluster.py stays import-light for the list path. The cheap ``is_empty``
+    duck-type check short-circuits the common list input before importing
+    polars; the isinstance check is the actual gate.
+    """
+    if not hasattr(pairs, "is_empty"):
+        return False
+    import polars as pl
+    return isinstance(pairs, pl.DataFrame)
+
+
 def build_clusters(
-    pairs: Any,  # list[tuple[int, int, float]] | ray.data.Dataset
+    pairs: Any,  # list[tuple[int, int, float]] | pl.DataFrame | ray.data.Dataset
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
@@ -378,6 +392,21 @@ def build_clusters(
             weak_cluster_threshold=weak_cluster_threshold,
         )
         return materialize_cluster_dict(clusters_ds, pairs)
+
+    # Arrow Phase 1 (Wave 2): accept a columnar pair stream as a first-class
+    # input. A Polars DataFrame (PAIR_STREAM_SCHEMA: id_a, id_b, score) is
+    # converted via the numpy path -- NOT a Python list comprehension -- to the
+    # list[(int, int, float)] the Union-Find / pair_scores path below consumes.
+    # The return shape is unchanged (dict[int, dict]); Phase 2 changes it to
+    # the two-frame ClusterFrames layout. The list[tuple] branch below stays
+    # for the deprecation window.
+    if _is_pairs_dataframe(pairs):
+        if all_ids is None and not pairs.is_empty():
+            import numpy as _np
+            a_np = pairs["id_a"].to_numpy()
+            b_np = pairs["id_b"].to_numpy()
+            all_ids = _np.unique(_np.concatenate([a_np, b_np])).tolist()
+        pairs = _pairs_df_to_list_numpy(pairs)
 
     # Derive all_ids from pairs when not provided explicitly
     if all_ids is None:
@@ -917,7 +946,7 @@ def build_clusters_columnar(
     )
 
 
-def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:
+def _pairs_df_to_list_numpy(df: pl.DataFrame) -> list[tuple[int, int, float]]:
     """Faster DataFrame -> list[Pair] via numpy.tolist().
 
     The legacy ``scorer.pairs_df_to_list`` uses Polars' Series.to_list()
@@ -1185,7 +1214,7 @@ def build_clusters_v2_columnar(
 
 
 def build_clusters_arrow_native(
-    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    pairs_df: pl.DataFrame,  # PAIR_STREAM_SCHEMA columns
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
 ) -> ClusterFrames:
@@ -1274,7 +1303,7 @@ def build_clusters_arrow_native(
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
-def metadata_height(arrow_array) -> int:
+def metadata_height(arrow_array: Any) -> int:
     """Tiny helper -- get row count from a PyArrow ArrayData/Array
     without materializing the values. Used for the ``quality`` column
     construction in ``build_clusters_arrow_native``."""

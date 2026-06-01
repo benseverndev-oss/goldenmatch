@@ -271,18 +271,31 @@ jobs:
           #
           # For goldenmatch only: also produce coverage.xml in this same
           # pytest run so the floor check (next step) has the artifact
-          # without re-executing the suite. Coverage instrumentation adds
-          # ~30% wall vs ~4x for a second serial pytest pass (pre-2026-05-16
-          # this lane was 105s plain + 406s with cov; combining drops total
-          # to ~140s for the goldenmatch matrix entry).
-          COV_ARGS=""
+          # without re-executing the suite.
+          COV=""
+          COV_REPORT=""
+          SERIAL_HEAVY=""
           if [ "${{ matrix.pkg }}" = "goldenmatch" ]; then
-            COV_ARGS="--cov=goldenmatch --cov-report=xml:packages/python/goldenmatch/coverage.xml --cov-report=term"
+            COV="--cov=goldenmatch"
+            COV_REPORT="--cov-report=xml:packages/python/goldenmatch/coverage.xml --cov-report=term"
+            # test_controller_adaptive_e2e runs the FULL real auto-config
+            # iteration loop -- the suite's heaviest test. Under `-n auto` +
+            # coverage on a 16GB runner its peak OOM-kills an xdist worker
+            # (silent "node down: Not properly terminated", no traceback). Run
+            # it SERIALLY (full runner memory, no worker contention) and combine
+            # coverage via --cov-append so the floor check still sees its lines.
+            SERIAL_HEAVY="packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py"
           fi
-          # --durations=20 surfaces the slowest tests in the CI log so
-          # we can target wall-time investigation (#433). Negligible
-          # cost; only adds a summary block at the end of the pytest run.
-          uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV_ARGS $IGNORE
+          # --durations=20 surfaces the slowest tests in the CI log (#433).
+          if [ -n "$SERIAL_HEAVY" ]; then
+            # Parallel run: everything except the heavy file. Collect coverage
+            # data only; the serial run below appends and writes the xml.
+            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $IGNORE --ignore="$SERIAL_HEAVY"
+            # Serial run for the heavy file: full runner memory, no xdist.
+            uv run pytest "$SERIAL_HEAVY" --timeout=120 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
+          else
+            uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $COV_REPORT $IGNORE
+          fi
       # Per-module coverage gate (goldenmatch only — other packages don't yet
       # have floors defined). Reads the coverage.xml produced by the pytest
       # step above. Fails CI if any tracked module regresses below its floor

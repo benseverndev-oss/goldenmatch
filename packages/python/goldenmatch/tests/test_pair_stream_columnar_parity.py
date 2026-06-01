@@ -17,11 +17,16 @@ harness, not unit tests.
 from __future__ import annotations
 
 import polars as pl
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.config.schemas import (
+    MatchkeyConfig,
+    MatchkeyField,
+    NegativeEvidenceField,
+)
 from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
 from goldenmatch.core.scorer import (
     PAIR_STREAM_SCHEMA,
+    _score_one_block,
     find_fuzzy_matches,
     find_fuzzy_matches_columnar,
     pairs_df_to_list,
@@ -43,6 +48,22 @@ def _block_df(records: list[tuple[int, str]]) -> pl.DataFrame:
 
 def _block(records: list[tuple[int, str]], block_key: str = "k") -> BlockResult:
     return BlockResult(block_key=block_key, df=_block_df(records).lazy())
+
+
+def _block_df_multi(records: list[tuple[int, str, str]]) -> pl.DataFrame:
+    """Block frame with explicit per-row source labels (for the
+    across_files_only / cross-source filter tests)."""
+    return pl.DataFrame({
+        "__row_id__": [r[0] for r in records],
+        "__source__": [r[1] for r in records],
+        "name": [r[2] for r in records],
+    })
+
+
+def _block_multi(
+    records: list[tuple[int, str, str]], block_key: str = "k",
+) -> BlockResult:
+    return BlockResult(block_key=block_key, df=_block_df_multi(records).lazy())
 
 
 def _mk() -> MatchkeyConfig:
@@ -100,16 +121,114 @@ class TestHotPathDirectEmit:
         }
         assert df_set == list_set
 
-    def test_exclude_pairs_path_falls_back_to_list(self):
-        """When ``exclude_pairs`` is non-empty, the function takes a
-        list-building branch above the hot-path emission; the flag is
-        not honored there. ``find_fuzzy_matches_columnar`` handles this
-        via the defensive wrap. Locks the contract."""
+    def test_exclude_pairs_path_emits_dataframe(self):
+        """Task 1.1 (#623): ALL branches honor ``_emit_dataframe=True``.
+        The ``exclude_pairs`` branch now emits a ``pl.DataFrame`` with
+        ``PAIR_STREAM_SCHEMA`` instead of a list. Default
+        (``_emit_dataframe=False``) keeps the list contract for the
+        deprecation window."""
         block_df = _block_df([(1, "John"), (2, "Jon")])
         result = find_fuzzy_matches(
             block_df, _mk(), exclude_pairs={(1, 2)}, _emit_dataframe=True,
         )
-        assert isinstance(result, list)
+        assert isinstance(result, pl.DataFrame)
+        assert result.schema == PAIR_STREAM_SCHEMA
+        # Default still returns a list (deprecation window).
+        as_list = find_fuzzy_matches(block_df, _mk(), exclude_pairs={(1, 2)})
+        assert isinstance(as_list, list)
+
+
+# ── Task 1.1: uniform DataFrame from non-hot branches (#623) ─────────
+
+
+class TestNonHotPathDirectEmit:
+    """Task 1.1 (#623): ``find_fuzzy_matches(..., _emit_dataframe=True)``
+    must emit a ``pl.DataFrame`` from ALL THREE branches (NE-penalty,
+    ``exclude_pairs``, hot path), not just the hot path. Parity is
+    asserted byte-for-byte against the list path via
+    ``pairs_df_to_list``."""
+
+    def test_exclude_pairs_branch_emits_dataframe(self):
+        records = [
+            (1, "John Smith"), (2, "Jon Smith"),
+            (3, "Jane Smith"), (4, "John Smyth"),
+        ]
+        block_df = _block_df(records)
+        mk = _mk()
+        excl = {(1, 2)}
+
+        as_list = find_fuzzy_matches(block_df, mk, exclude_pairs=excl)
+        as_df = find_fuzzy_matches(
+            block_df, mk, exclude_pairs=excl, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.columns == ["id_a", "id_b", "score"]
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_ne_branch_emits_dataframe(self):
+        # name agrees (fuzzy weighted matchkey) but the NE field (city)
+        # disagrees -> NE-penalty branch is exercised.
+        block_df = pl.DataFrame({
+            "__row_id__": [1, 2, 3],
+            "__source__": ["fixture"] * 3,
+            "name": ["John Smith", "Jon Smith", "John Smith"],
+            "city": ["Boston", "Boston", "Seattle"],
+        })
+        mk = MatchkeyConfig(
+            name="test_ne",
+            type="weighted",
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            threshold=0.85,
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="city", scorer="exact", threshold=1.0, penalty=0.5,
+                ),
+            ],
+        )
+
+        as_list = find_fuzzy_matches(block_df, mk)
+        as_df = find_fuzzy_matches(block_df, mk, _emit_dataframe=True)
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_ne_branch_with_exclude_emits_dataframe(self):
+        # NE-penalty AND exclude_pairs together (the nested exclude
+        # filter inside the NE branch).
+        block_df = pl.DataFrame({
+            "__row_id__": [1, 2, 3],
+            "__source__": ["fixture"] * 3,
+            "name": ["John Smith", "Jon Smith", "John Smyth"],
+            "city": ["Boston", "Boston", "Boston"],
+        })
+        mk = MatchkeyConfig(
+            name="test_ne",
+            type="weighted",
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+            threshold=0.85,
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="city", scorer="exact", threshold=1.0, penalty=0.1,
+                ),
+            ],
+        )
+        excl = {(1, 2)}
+
+        as_list = find_fuzzy_matches(block_df, mk, exclude_pairs=excl)
+        as_df = find_fuzzy_matches(
+            block_df, mk, exclude_pairs=excl, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_empty_result_emits_empty_dataframe(self):
+        # exclude_pairs removes the only candidate -> empty frame, not [].
+        block_df = _block_df([(1, "John"), (2, "Jon")])
+        as_df = find_fuzzy_matches(
+            block_df, _mk(), exclude_pairs={(1, 2)}, _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
 
 
 # ── Adapter round-trip ──────────────────────────────────────────────
@@ -235,6 +354,95 @@ class TestScoreBlocksParity:
             "columnar wrapper failed to preserve matched_pairs side effect; "
             f"list_path={list_matched}, df_path={df_matched}"
         )
+
+    def test_across_files_only_parity(self):
+        """The cross-source (``across_files_only``) filter must produce
+        identical pairs via the columnar path vs the list path. The
+        list path filters via a Python comprehension on
+        ``source_lookup``; the columnar path applies a Polars filter on
+        the frame. Both must agree."""
+        # Two sources; only cross-source pairs survive the filter.
+        records = [
+            (1, "src_a", "John Smith"),
+            (2, "src_b", "Jon Smith"),
+            (3, "src_a", "John Smyth"),
+            (4, "src_b", "Jane Smith"),
+        ]
+        b = _block_multi(records)
+        mk = _mk()
+        source_lookup = {r[0]: r[1] for r in records}
+
+        list_pairs = score_blocks_parallel(
+            [b], mk, matched_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        df_pairs = score_blocks_columnar(
+            [b], mk, matched_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        assert sorted(pairs_df_to_list(df_pairs)) == sorted(list_pairs)
+        # And the filter actually fired: no same-source pair survives.
+        for a, b_id, _s in pairs_df_to_list(df_pairs):
+            assert source_lookup[a] != source_lookup[b_id]
+
+
+# ── Task 1.2: _score_one_block DataFrame emit (#623) ─────────────────
+
+
+class TestScoreOneBlockEmit:
+    """Task 1.2 (#623): ``_score_one_block`` threads ``_emit_dataframe``
+    through to ``find_fuzzy_matches`` and applies the across-files
+    filter on the frame (not a Python comprehension) when emitting a
+    DataFrame. Parity is byte-for-byte against the list emit."""
+
+    def test_emit_dataframe_parity(self):
+        records = [(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")]
+        b = _block(records)
+        mk = _mk()
+
+        as_list = _score_one_block(b, mk, exclude_pairs=set())
+        as_df = _score_one_block(b, mk, exclude_pairs=set(), _emit_dataframe=True)
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_emit_dataframe_across_files_parity(self):
+        records = [
+            (1, "src_a", "John Smith"),
+            (2, "src_b", "Jon Smith"),
+            (3, "src_a", "John Smyth"),
+        ]
+        b = _block_multi(records)
+        mk = _mk()
+        source_lookup = {r[0]: r[1] for r in records}
+
+        as_list = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        as_df = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+            _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_emit_dataframe_single_source_short_circuit(self):
+        # across_files_only with a single-source block -> empty frame.
+        records = [(1, "John Smith"), (2, "Jon Smith")]
+        b = _block(records)  # both "fixture" source
+        mk = _mk()
+        source_lookup = {1: "fixture", 2: "fixture"}
+
+        as_df = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+            _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.is_empty()
+        assert as_df.schema == PAIR_STREAM_SCHEMA
 
 
 # ── build_clusters parity ────────────────────────────────────────────

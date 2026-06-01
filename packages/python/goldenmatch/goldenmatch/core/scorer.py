@@ -634,29 +634,47 @@ def find_fuzzy_matches(
         exclude_pairs: Optional set of (min_id, max_id) pairs to skip.
         pre_scored_pairs: Optional pre-computed (id_a, id_b, score) pairs
             from ANN blocking. When set, skip NxN scoring.
-        _emit_dataframe: Arrow-native roadmap Phase 1c hot-path opt-in.
-            When True AND the call is on the hot path (no NE, no
-            ``exclude_pairs``, no ``pre_scored_pairs``), emit a
-            ``pl.DataFrame`` directly from numpy arrays instead of
-            constructing a Python list of tuples. Zero per-pair Python
-            overhead at scale (the bottleneck for 200M-pair / 5M-row runs
-            per the Phase 1 spec). Non-hot-path branches still return
-            ``list[tuple]`` even when True; ``find_fuzzy_matches_columnar``
-            wraps those at the boundary. Default False keeps the existing
-            list contract for backward compat. The arg is positional-only
-            via the ``*`` marker so legacy callers don't accidentally pass
-            it.
+        _emit_dataframe: Arrow-native roadmap Phase 1 opt-in. When True,
+            EVERY return branch (early-empty, ``pre_scored_pairs``,
+            negative-evidence penalty, ``exclude_pairs``, and the hot
+            path) emits a ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA``
+            instead of a Python list of tuples. On the hot path the
+            frame is built directly from numpy arrays (zero per-pair
+            Python overhead — the bottleneck for 200M-pair / 5M-row runs
+            per the Phase 1 spec); the non-hot branches build their
+            filtered result list then convert once at the boundary via
+            ``pairs_list_to_df`` (Task 1.1, #623). Default False keeps
+            the legacy ``list[tuple]`` contract for the one-release
+            deprecation window. The arg is keyword-only via the ``*``
+            marker so legacy callers don't accidentally pass it.
 
     Returns:
         ``list[tuple[int, int, float]]`` by default (legacy contract).
-        ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA`` columns when
-        ``_emit_dataframe=True`` AND the call hits the hot path.
+        ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA`` columns from ALL
+        branches when ``_emit_dataframe=True``.
     """
     # find_fuzzy_matches requires mk.threshold + field weights/scorers set;
     # upstream config validation enforces this. Pyright sees the schema-level
     # Optional, so we narrow once here for clarity.
     assert mk.threshold is not None, "find_fuzzy_matches requires mk.threshold"
     mk_threshold: float = mk.threshold
+
+    # Task 1.1 (#623): emit a uniform return shape across ALL branches.
+    # When ``_emit_dataframe`` is True every branch (early-empty,
+    # pre_scored_pairs, NE-penalty, exclude_pairs, hot path) returns a
+    # ``pl.DataFrame`` with ``PAIR_STREAM_SCHEMA``; otherwise the legacy
+    # ``list[tuple]`` (deprecation window). These two helpers keep the
+    # branch bodies readable and the conversion in one place.
+    def _emit_empty() -> list[tuple[int, int, float]] | pl.DataFrame:
+        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
+
+    def _emit_results(
+        results: list[tuple[int, int, float]],
+    ) -> list[tuple[int, int, float]] | pl.DataFrame:
+        if not _emit_dataframe:
+            return results
+        return pairs_list_to_df(results)
+
     # Fast path: pre-scored pairs from ANN (skip NxN scoring)
     if pre_scored_pairs is not None:
         results = []
@@ -666,11 +684,11 @@ def find_fuzzy_matches(
                 if exclude_pairs and pair_key in exclude_pairs:
                     continue
                 results.append((pair_key[0], pair_key[1], score))
-        return results
+        return _emit_results(results)
 
     n = block_df.height
     if n < 2:
-        return []
+        return _emit_empty()
 
     row_ids = block_df["__row_id__"].to_list()
 
@@ -690,7 +708,7 @@ def find_fuzzy_matches(
 
     total_weight = sum(_w(f) for f in mk.fields)
     if total_weight == 0.0:
-        return []
+        return _emit_empty()
 
     # Phase 1: Score cheap fields (exact + soundex) and build null masks.
     #
@@ -825,7 +843,7 @@ def find_fuzzy_matches(
     rows_idx, cols_idx = np.where(upper >= mk_threshold)
 
     if len(rows_idx) == 0:
-        return []
+        return _emit_empty()
 
     row_id_arr = np.array(row_ids)
     ids_a = row_id_arr[rows_idx]
@@ -854,9 +872,11 @@ def find_fuzzy_matches(
                 pair_key = (min(int(a), int(b)), max(int(a), int(b)))
                 if pair_key not in exclude_pairs:
                     results.append((int(a), int(b), float(s)))
-            return results
-        return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)
-                if s >= mk_threshold]
+            return _emit_results(results)
+        return _emit_results(
+            [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)
+             if s >= mk_threshold]
+        )
 
     if exclude_pairs is not None and len(exclude_pairs) > 0:
         results = []
@@ -864,7 +884,7 @@ def find_fuzzy_matches(
             pair_key = (min(int(a), int(b)), max(int(a), int(b)))
             if pair_key not in exclude_pairs:
                 results.append((int(a), int(b), float(s)))
-        return results
+        return _emit_results(results)
 
     # HOT PATH: no NE, no exclude_pairs, no pre_scored_pairs. ~99% of
     # production block-scoring calls land here. The Phase 1c
@@ -892,24 +912,61 @@ def _score_one_block(
     exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
-) -> list[tuple[int, int, float]]:
-    """Score a single block — safe to call from a thread."""
+    *,
+    _emit_dataframe: bool = False,
+) -> list[tuple[int, int, float]] | pl.DataFrame:
+    """Score a single block — safe to call from a thread.
+
+    Task 1.2 (#623): ``_emit_dataframe`` threads through to
+    ``find_fuzzy_matches`` so the block scorer can be DataFrame-canonical.
+    When True the return is a ``pl.DataFrame`` (``PAIR_STREAM_SCHEMA``)
+    and the ``across_files_only`` cross-source filter is applied via a
+    Polars ``.filter()`` on the frame rather than a Python list
+    comprehension. Default False keeps the legacy list contract for the
+    deprecation window.
+
+    NOTE (Wave 3 convergence): the ``_emit_dataframe=True`` path duplicates the
+    across-files Polars-filter logic in ``_score_one_block_columnar`` below. They
+    are byte-identical today; if you change one, mirror the other until Wave 3
+    retires ``_score_one_block_columnar``.
+    """
     block_df = block.df.collect()
 
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return []
+            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
 
     pairs = find_fuzzy_matches(
         block_df, mk,
         exclude_pairs=exclude_pairs,
         pre_scored_pairs=block.pre_scored_pairs,
+        _emit_dataframe=_emit_dataframe,
     )
-    # _score_one_block never opts into the Phase-1c DataFrame emit
-    # (_emit_dataframe defaults to False); the return is always a list.
-    # Narrow for pyright now that the find_fuzzy_matches return type
-    # includes pl.DataFrame as a union.
+
+    if _emit_dataframe:
+        # find_fuzzy_matches emits a frame in every branch under the flag.
+        assert isinstance(pairs, pl.DataFrame)
+        if across_files_only and source_lookup and not pairs.is_empty():
+            # Vectorized cross-source filter: join row_id -> source on
+            # both endpoints, keep pairs whose sources differ. Avoids the
+            # per-pair Python dict lookup the list path does.
+            src_map = pl.DataFrame({
+                "__row_id__": list(source_lookup.keys()),
+                "__src__": list(source_lookup.values()),
+            })
+            pairs = (
+                pairs
+                .join(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}),
+                      on="id_a", how="left")
+                .join(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}),
+                      on="id_b", how="left")
+                .filter(pl.col("src_a") != pl.col("src_b"))
+                .drop(["src_a", "src_b"])
+            )
+        return pairs
+
+    # Legacy list path (deprecation window).
     assert isinstance(pairs, list)
 
     if across_files_only and source_lookup:
@@ -1274,10 +1331,10 @@ def find_fuzzy_matches_columnar(
             block_df, mk, exclude_pairs, pre_scored_pairs,
             _emit_dataframe=True,
         )
-        # On the hot path the emission branch returns a DataFrame, but
-        # the n < 2 / total_weight == 0 early returns above the hot
-        # path always return ``[]`` regardless of the flag (they
-        # short-circuit before knowing about it). Wrap defensively.
+        # Post Phase-1 Wave 1, find_fuzzy_matches honours _emit_dataframe on
+        # ALL branches (incl. the n<2 / total_weight==0 early returns), so this
+        # is always a DataFrame. The isinstance wrap is a belt-and-suspenders
+        # no-op kept against any future branch that forgets the flag.
         if isinstance(result, pl.DataFrame):
             return result
         return pairs_list_to_df(result)
@@ -1301,6 +1358,10 @@ def _score_one_block_columnar(
     Skips the list-of-tuples accumulation that ``_score_one_block``
     pays before its caller would re-convert. Across-files filtering is
     applied as a Polars expression on the result frame, vectorized.
+
+    NOTE (Wave 3 convergence): the across-files Polars-filter logic here is
+    byte-identical to ``_score_one_block(..., _emit_dataframe=True)``. Mirror any
+    change to both until Wave 3 retires this twin.
     """
     block_df = block.df.collect()
 
