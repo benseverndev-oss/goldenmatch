@@ -126,17 +126,22 @@ mind the `max_workers=4` RSS guard at `scorer.py:924` — do not raise it):
   round-trip. Equivalence test: eligible config yields identical clusters via this
   branch vs the legacy list branch at small N.
 - [ ] **Task 3.2 `core/pipeline.py` mixed/ineligible path.** The non-columnar fuzzy
-  path calls `score_blocks_parallel` and `.extend()`s `all_pairs`. Since Wave 1.2
-  makes `score_blocks_parallel`/`score_blocks_columnar` DataFrame-canonical, convert
-  at the boundary: `all_pairs.extend(pairs_df_to_list(score_blocks_columnar(...)))`
-  (or keep calling a list-returning wrapper). `all_pairs` stays a list. Test: a
-  mixed exact+fuzzy config still produces identical clusters.
+  path resolves `block_scorer = _get_block_scorer(config)` (which returns
+  `score_blocks_parallel` for non-ray configs) and `.extend()`s `all_pairs`. Since
+  Wave 1.2 makes `score_blocks_parallel` DataFrame-canonical, convert at the boundary
+  before extending: `all_pairs.extend(pairs_df_to_list(block_scorer(...)))`.
+  `all_pairs` stays a list. Test: a mixed exact+fuzzy config still produces
+  identical clusters.
 - [ ] **Task 3.3 `backends/score_buckets.py:711`.** NOTE: it calls
   `find_fuzzy_matches(block_df, mk, ...)` INLINE per bucket-partition (no blocks
   list) and `local_pairs.extend(pairs)`. It does NOT use `score_blocks_columnar`.
   Migrate: pass `_emit_dataframe=True`, accumulate per-bucket frames via `pl.concat`,
   and convert once via `pairs_df_to_list` at the point it hands back to `pipeline.py`
-  (which feeds `all_pairs`). Equivalence test: bucket backend identical clusters.
+  (which feeds `all_pairs`). NOTE there are TWO post-scoring list comprehensions at
+  this site (the `across_files_only` filter ~:716-720 and the `target_ids` filter
+  ~:721-725) — these become Polars `.filter()` calls on the accumulated frame (or a
+  single post-concat filter), not list comprehensions. Equivalence test: bucket
+  backend identical clusters, including a cross-source (`across_files_only`) case.
 - [ ] **Task 3.4 `core/chunked.py:125/367/411`.** Direct `score_blocks_parallel`
   consumers (inline, no `scored_pairs` var). Convert at boundary (the chunked path
   is already its own backend; keep `all_pairs`-equivalent list semantics).
