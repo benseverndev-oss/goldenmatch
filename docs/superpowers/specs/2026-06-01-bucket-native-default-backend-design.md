@@ -46,7 +46,7 @@ markers limiting it to the platforms with published abi3 wheels:
 ```toml
 dependencies = [
   ...,
-  "goldenmatch-native>=0.1.0; sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'linux' and platform_machine in 'x86_64 aarch64')",
+  "goldenmatch-native>=0.1.0; sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 ```
 
@@ -92,12 +92,16 @@ Behavior:
   (preserves the proven 5M-25M bucket scale story -- bucket is NOT capped at 750k);
   small boxes route to chunked/distributed as before.
 
-**Implementation guard:** verify `_is_fast_box_eligible` carries a *per-dataset*
-pair-memory-fit check (the docstring claims so). If its only RAM guard is the 32GB
-floor, the implementation MUST add an explicit
+**Implementation guard (CONFIRMED ABSENT -- must ADD, not preserve):** code
+review found `_is_fast_box_eligible`'s ONLY RAM guard is the 32GB floor. The
+existing `estimated_pair_count < SIMPLE_PLAN_MAX_PAIRS` (50M) check is a
+pair-density proxy, NOT a RAM-fit check -- it does not scale by
+`available_ram_gb`, so 49M pair-score tuples would plausibly OOM a 16GB box. The
+implementation therefore MUST ORIGINATE an explicit
 `estimated_pair_bytes <= available_ram_gb * SAFETY_FACTOR` check for the relaxed
-band -- the RAM-fit guard is non-negotiable (it is what distinguishes this from a
-blanket relax and prevents OOM on 16GB).
+<=750k band (treat as a real new feature, not a verification step). The RAM-fit
+guard is non-negotiable -- it is what distinguishes this from a blanket relax and
+prevents OOM on 16GB. Pick `SAFETY_FACTOR` conservatively and bench it.
 
 `GOLDENMATCH_PLANNER_BUCKET=0` opt-out continues to force polars-direct throughout.
 
@@ -109,7 +113,11 @@ blanket relax and prevents OOM on 16GB).
 bucket+native vs polars-direct, recording wall + peak RSS + identical-cluster
 parity. If bucket wins across the band, ship 750k; if it stops winning at e.g.
 500k, lower `BUCKET_SUGGESTED_MAX_ROWS` to the evidence. **The 750k value is
-PROVISIONAL until this bench confirms it.**
+PROVISIONAL until this bench confirms it -- the plan must make the bench a HARD
+GATE on the constant, not advisory: either land the planner relaxation behind the
+constant and SET the constant only after the bench (a follow-up commit), or ship
+the relaxation and constant together in the same PR as the bench run that
+justifies the number. Do not merge a 750k ceiling that no bench has confirmed.**
 
 **Docs.**
 - Scale-envelope / backend-selection docs: "bucket+native is the default-installed,
