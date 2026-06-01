@@ -381,6 +381,12 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     phases = [s.strip() for s in args.phases.split(",") if s.strip()]
+    unknown = [ph for ph in phases if ph not in PHASE_CRITERIA]
+    if unknown:
+        valid = ", ".join(PHASE_CRITERIA)
+        print(f"error: unknown phase(s): {', '.join(unknown)} (valid: {valid})",
+              file=sys.stderr)
+        return 2
     verdicts: dict[str, PhaseVerdict] = {}
     results: dict[str, dict] = {}
     for phase in phases:

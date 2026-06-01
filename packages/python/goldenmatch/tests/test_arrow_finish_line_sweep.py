@@ -1,3 +1,4 @@
+import arrow_finish_line_sweep as afl
 from arrow_finish_line_sweep import (
     PHASE_CRITERIA,
     Criterion,
@@ -6,6 +7,7 @@ from arrow_finish_line_sweep import (
     parse_bench_json,
     parse_native_speedup,
     render_markdown_table,
+    run_phase_bench,
 )
 
 from tests.fixtures.realistic_person import realistic_person_df
@@ -113,6 +115,23 @@ def test_render_markdown_table_has_row_per_phase():
     assert "| phase1 | PASS |" in md
     assert "| phase5 | BLOCKED |" in md
     assert md.startswith("| Phase | Verdict | Detail |")
+
+
+# Task 5 tests: driver failure-isolation (no bench box / native ext needed)
+def test_run_phase_bench_isolates_subprocess_failure(monkeypatch):
+    # a failing bench subprocess must leave gating metrics ABSENT (-> BLOCKED),
+    # never crash the sweep.
+    monkeypatch.setattr(afl, "_run_subprocess", lambda cmd, timeout_s: (None, "injected failure"))
+    metrics = run_phase_bench("phase1", "smoke")
+    assert "wall" not in metrics and "rss" not in metrics
+    assert "_note" in metrics
+    assert classify_phase(PHASE_CRITERIA["phase1"], metrics).verdict == "BLOCKED"
+
+
+def test_run_phase_bench_unknown_phase_raises():
+    import pytest
+    with pytest.raises(ValueError, match="unknown phase"):
+        run_phase_bench("phase99", "smoke")
 
 
 # Task 4 test: fixture smoke
