@@ -116,7 +116,16 @@ def _scan_only(
             # quality-scan warning. The serialized dict keys stay
             # "rule"/"rows_affected" (the MCP scan_quality contract).
             "rule": f.check,
-            "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+            # Severity is goldencheck's IntEnum (INFO=1/WARNING=2/ERROR=3),
+            # so `.value` is an int — but consumers compare against the
+            # lowercase name (the web router does
+            # `i["severity"].lower() == "error"`). Serialize the name, not the
+            # int, so `severity` is always a string like "warning"/"error".
+            "severity": (
+                f.severity.name.lower()
+                if hasattr(f.severity, "name")
+                else str(f.severity).lower()
+            ),
             "column": f.column,
             "message": f.message,
             "rows_affected": f.affected_rows,

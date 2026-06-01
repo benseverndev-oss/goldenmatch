@@ -48,6 +48,9 @@ def test_scan_only_serializes_finding_fields(monkeypatch):
     assert issue["rows_affected"] == 2
     assert issue["column"] == "email"
     assert issue["confidence"] == 0.9
+    # Severity is the lowercase enum NAME (string), not the IntEnum value —
+    # the web /api/v1/quality router does `severity.lower() == "error"`.
+    assert issue["severity"] == "warning"
 
 
 def test_run_quality_check_scan_only_does_not_swallow(monkeypatch):
