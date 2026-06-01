@@ -40,6 +40,11 @@ dependencies = [
     "psutil>=5.9",
     "duckdb>=0.9",
     "pyarrow>=10",
+    # Optional native acceleration runtime, shipped as a marker-guarded default
+    # dependency so `pip install goldenmatch` auto-installs the abi3 kernel on the
+    # platforms where prebuilt wheels exist. Kept ALSO as the `[native]` extra
+    # (back-compat alias). The runtime loader degrades to pure-Python when absent.
+    "goldenmatch-native>=0.1.0; sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 
 [project.urls]

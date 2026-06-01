@@ -10,6 +10,7 @@ from goldenmatch.core.autoconfig_planner import (
     PlannerRule,
     apply_planner_rules,
 )
+from goldenmatch.core.autoconfig_planner_rules import _scoring_backend
 from goldenmatch.core.complexity_profile import (
     BlockingProfile,
     ComplexityProfile,
@@ -153,5 +154,5 @@ def test_controller_run_attaches_execution_plan_to_history():
     # no rule matched. Specific rule selection is covered by
     # test_autoconfig_planner_rules.py + per-phase integration tests.
     assert plan.rule_name is not None
-    # 80-row fixture hits the simple plan (rule 2), preserving polars-direct.
-    assert plan.backend == "polars-direct"
+    # 80-row fixture hits the simple plan (rule 2); backend is the real selector's choice.
+    assert plan.backend == _scoring_backend()

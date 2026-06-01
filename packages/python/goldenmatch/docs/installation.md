@@ -18,6 +18,19 @@ pip install goldenmatch
 
 Requires Python 3.11 or later. Core dependencies: Polars, RapidFuzz, Typer, Pydantic, Textual.
 
+### Native acceleration (default on common platforms)
+
+`pip install goldenmatch` now pulls the compiled `goldenmatch-native` kernel automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). No `[native]` extra is needed; the `[native]` extra still works as a back-compat alias. The kernel accelerates the hot paths (block scoring, record fingerprints, cluster build, dedup-pairs) and lets the v3 planner pick the bucket+native backend as the suggested path up to 750k rows on common boxes.
+
+The pure-Python + Polars pipeline is the byte-for-byte reference and the automatic fallback on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python.
+
+Opt out with environment variables:
+
+```bash
+GOLDENMATCH_NATIVE=0            # disable the native kernel entirely
+GOLDENMATCH_PLANNER_BUCKET=0    # force the polars-direct backend
+```
+
 ### Optional extras
 
 ```bash

@@ -157,6 +157,55 @@ rule_fast_box = PlannerRule(
 )
 
 
+# ── Rule 3b: bucket-suggested band (sub-32GB, up to 750k, RAM-safe) ──────────
+# Extends bucket+native to the average 16GB user for the 100k-750k band, which
+# fast_box's blanket 32GB floor excludes. RAM safety comes from an explicit
+# pair-memory-fit check (fast_box has NO per-dataset RAM check today -- its 50M
+# pair proxy is density, not bytes). 750k is PROVISIONAL pending the 200k-750k
+# bench (Task 3).
+BUCKET_SUGGESTED_MAX_ROWS = 750_000
+_PAIR_SCORE_BYTES = 64          # conservative: a Python (id_a, id_b, score) tuple
+_BUCKET_RAM_SAFETY_FRACTION = 0.5  # leave half of RAM for the rest of the pipeline
+
+
+def _is_bucket_suggested_eligible(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> bool:
+    """Sub-32GB boxes get bucket up to 750k rows IFF the estimated pair memory
+    fits within a safety fraction of available RAM. Fat boxes are handled by
+    rule_fast_box (which fires first), so this requires available_ram_gb < 32."""
+    if n_rows_full < SIMPLE_PLAN_MAX_ROWS or n_rows_full > BUCKET_SUGGESTED_MAX_ROWS:
+        return False
+    if runtime.available_ram_gb >= FAST_BOX_MIN_RAM_GB:
+        return False  # fast_box already covers this
+    if profile.blocking.estimated_pair_count >= SIMPLE_PLAN_MAX_PAIRS:
+        return False
+    est_pair_gb = (profile.blocking.estimated_pair_count * _PAIR_SCORE_BYTES) / (1024 ** 3)
+    return est_pair_gb <= runtime.available_ram_gb * _BUCKET_RAM_SAFETY_FRACTION
+
+
+def _bucket_suggested_plan(
+    profile: ComplexityProfile,
+    runtime: RuntimeProfile,
+    n_rows_full: int,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        backend=_scoring_backend(),
+        max_workers=min(16, runtime.cpu_count),
+        clustering_strategy="in_memory",
+        rule_name="plan_selected_bucket_suggested",
+    )
+
+
+rule_bucket_suggested = PlannerRule(
+    name="plan_selected_bucket_suggested",
+    predicate=_is_bucket_suggested_eligible,
+    action=_bucket_suggested_plan,
+)
+
+
 # ── Rule 4: chunked plan (spec §Rule 4) ─────────────────────────────────────
 
 CHUNKED_MIN_PAIRS = SIMPLE_PLAN_MAX_PAIRS  # 50M
@@ -397,6 +446,7 @@ DEFAULT_RULES: list[PlannerRule] = [
     rule_pathological,
     rule_simple_plan,
     rule_fast_box,
+    rule_bucket_suggested,  # sub-32GB, <=750k, RAM-safe; after fast_box
     rule_chunked,
     rule_ray,            # try first at 50M+; falls through if ray unavailable
     rule_duckdb,         # catch-all for very dense pair counts or low RAM

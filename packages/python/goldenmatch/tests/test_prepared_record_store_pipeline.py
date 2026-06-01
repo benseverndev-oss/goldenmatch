@@ -6,7 +6,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
+
+
+@pytest.fixture(autouse=True)
+def _force_polars_direct(monkeypatch):
+    # These tests exercise the partitioned-block-scoring / prepared-record-store
+    # path, which only runs under polars-direct. Native-by-default would route
+    # to bucket and bypass the machinery under test.
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
 
 
 def _df() -> pl.DataFrame:

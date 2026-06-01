@@ -37,7 +37,7 @@ from typing import Any
 
 import polars as pl
 
-from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
 from goldenmatch.core.blocker import _build_block_key_expr
@@ -100,23 +100,19 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
         from goldenmatch.core.scorer import _jaccard_score_single
         return _jaccard_score_single
     if scorer_name == "ensemble":
-        # The matrix-path ensemble (scorer.py:343-348) is max(jw, ts, sx*0.8)
-        # where sx = soundex_match. None of those needs ML/network -- they're
-        # all pure-string transforms. Per-pair version composes the same
-        # three scorers under max. Bit-equivalent to the matrix path within
-        # rapidfuzz tolerance (the matrix path uses cdist for vectorized
-        # batches; per-pair uses the same rapidfuzz primitives one call at a
-        # time). Unblocks the bucket fast path on matchkeys auto-config
-        # produced via _pick_scorer_for_column's "other -> ensemble" rule.
-        import jellyfish as _jf
-        from rapidfuzz.distance import JaroWinkler as _Jw
-        from rapidfuzz.fuzz import token_sort_ratio as _ts
-        def _ensemble_pair(a: str, b: str) -> float:
-            jw = _Jw.similarity(a, b)
-            ts = _ts(a, b) / 100.0
-            sx = 0.8 if _jf.soundex(a) == _jf.soundex(b) else 0.0
-            return max(jw, ts, sx)
-        return _ensemble_pair
+        # DECLINE the fast path for ensemble (return None -> find_fuzzy_matches
+        # slow path). A prior per-pair reimplementation (max(jw, ts, sx*0.8))
+        # claimed matrix-path equivalence but measurably diverged: on Febrl3
+        # auto-config (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs
+        # polars-direct (F1 0.9332 -> 0.8768), with bucket near-perfect precision
+        # -- i.e. the reimplementation scored STRICTER than the matrix ensemble,
+        # pushing true pairs below threshold. Declining restores parity
+        # (recall 0.9221, F1 0.9326). The matrix ensemble (core/scorer.py) is the
+        # single source of truth; do NOT reintroduce a per-pair ensemble without
+        # a field-level parity test against find_fuzzy_matches. Native already
+        # declines ensemble (_NATIVE_SCORER_IDS covers only the 4 plain scorers),
+        # and plain-scorer configs (the 5M/25M scale path) keep the fast path.
+        return None
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None
@@ -331,9 +327,22 @@ def score_buckets(
         prepared_df: Eager Polars DataFrame, already materialized. Must
             contain ``__row_id__`` and all columns referenced by ``mk`` +
             ``blocking_config``.
-        blocking_config: Source for the block-key expression.
-            ``keys[0]`` is used; multi-key blocking is not supported in
-            bucket mode v1.
+        blocking_config: Source for the block-key expression. Iterates
+            ``blocking_config.passes or blocking_config.keys`` (multi-pass
+            blocking), accumulating pairs across every pass. Like
+            polars-direct, the exclude set is frozen ONCE across all passes
+            and cross-pass duplicate pairs ARE emitted; they collapse
+            downstream in build_clusters' pair_scores dict. This is exact
+            parity with polars-direct by construction. Note the DELIBERATE
+            difference from polars-direct: polars-direct dedups identical
+            block keys ACROSS passes (``blocker.py::_build_multi_pass_blocks``
+            via its ``seen_keys`` set), whereas this bucket path re-scores each
+            pass independently and emits cross-pass DUPLICATE PAIRS that
+            collapse in build_clusters' ``pair_scores`` dict. Consequence:
+            ``block_count_scored`` / ``bucket_count`` metrics read HIGHER for
+            bucket than for polars on overlapping-key multi-pass configs --
+            expected, not a bug. Do NOT "fix" this by adding block-key dedup;
+            the duplicate-pair collapse is the parity mechanism.
         mk: Matchkey configuration.
         matched_pairs: Set of already-matched (min_id, max_id) pairs;
             mutated in-place as new pairs are emitted (mirrors
@@ -351,6 +360,18 @@ def score_buckets(
     if not blocking_config.keys:
         return []
 
+    # Multi-pass blocking: iterate every pass and accumulate pairs. `passes`
+    # is None for static / single-key configs, so fall back to `keys`.
+    pass_keys = blocking_config.passes or blocking_config.keys
+
+    # Oversized-block skip (parity with polars-direct's build_blocks in
+    # core/blocker.py). Read once and close over in the nested scoring
+    # workers. A block is "oversized" when skip_oversized and size >
+    # max_block_size; such blocks are skipped entirely (no pairs emitted),
+    # matching polars' behavior when its _auto_split_block can't recover.
+    skip_oversized = blocking_config.skip_oversized
+    max_block_size = blocking_config.max_block_size
+
     if n_buckets is None:
         n_buckets = _default_n_buckets()
 
@@ -360,9 +381,6 @@ def score_buckets(
     # these prints expose the actual hang line.
     _t0 = time.perf_counter()
     print(f"[score_buckets] entry: prepared_df.height={prepared_df.height} n_buckets={n_buckets}", flush=True)
-
-    key_expr = _build_block_key_expr(blocking_config.keys[0])
-    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: key_expr built", flush=True)
 
     # Slim projection: drop columns no score-worker reads. The audit
     # (2026-05-29) showed every reader in this module touches only
@@ -387,7 +405,7 @@ def score_buckets(
             # Source fields the block-key expression reads. Multi-key blocking
             # (rare today) accumulates fields across every key in the config.
             block_key_sources: set[str] = set()
-            for key in blocking_config.keys:
+            for key in pass_keys:
                 block_key_sources.update(key.fields)
             for col in block_key_sources:
                 if col in prepared_df.columns and col not in keep:
@@ -401,70 +419,14 @@ def score_buckets(
     else:
         slim_df = prepared_df
 
-    with stage("bucket_assign"):
-        _ta = time.perf_counter()
-        keyed = slim_df.with_columns(key_expr)
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
-
-    # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
-    # the hash + partition_by step always collapses to 1 non-empty bucket
-    # (every row hashes into the same bucket-output because most buckets
-    # are empty by pigeonhole). The bookkeeping is pure overhead. Skip
-    # straight to treating `keyed` as the single bucket and scoring.
-    # On the streaming-block sync caller, this hits on every per-block
-    # invocation (block size ~8, n_buckets default 32-128).
-    if prepared_df.height < n_buckets:
-        bucketed = keyed
-        # Wrap in a single-bucket dict to share the scoring path below.
-        buckets_dict: dict[Any, pl.DataFrame] = {0: bucketed}
-        print(
-            f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
-            f"small-block fast path (height={prepared_df.height} < n_buckets={n_buckets}); "
-            f"skipping hash+partition_by. See #422.",
-            flush=True,
-        )
-    else:
-        _tb = time.perf_counter()
-        # Adds an i64 __bucket__ column at 10M rows -- ~80 MB of int64 plus
-        # whatever Polars holds for the hash intermediate. Wrap so the RSS
-        # bench can attribute it instead of pooling it into the unwrapped
-        # gap between bucket_assign and bucket_partition.
-        with stage("bucket_hash_modulo"):
-            bucketed = keyed.with_columns(
-                (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
-                .alias("__bucket__")
-            )
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
-
-        with stage("bucket_partition"):
-            _tp = time.perf_counter()
-            # First-level partition: N eager DataFrames keyed by bucket id.
-            # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
-            # single partition column; unwrap below.
-            buckets_dict = bucketed.partition_by(
-                "__bucket__", as_dict=True,
-            )
-            # Free the pre-partition `keyed` and `bucketed` parents. partition_by
-            # built N independent eager frames; the original contiguous parents
-            # are dead weight from this point forward and would otherwise stay
-            # resident through bucket_score + cluster + golden.
-            del keyed
-            del bucketed
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
-
-    # Both held in RAM simultaneously: buckets_dict (N partitioned frames,
-    # each holding rows + prep columns + key + bucket_id) and the new
-    # non_empty_buckets list (filter view referencing the same frames).
-    # frozen_exclude shadows matched_pairs as a Python frozenset -- at
-    # 10M-bucket-realistic this is the dominant Python-side accumulator. The
-    # marker here separates "partition done" from "ready to score" so the
-    # post-partition resident state shows up as its own line, not bucketed
-    # into bucket_partition or fuzzy_scoring.
-    with stage("bucket_post_partition_setup"):
-        frozen_exclude = frozenset(matched_pairs)
-        non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
-        n_non_empty_buckets = len(non_empty_buckets)
-    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
+    # Freeze the exclude set ONCE across ALL passes (parity with polars-direct,
+    # which freezes its exclude snapshot once and emits cross-pass duplicate
+    # pairs that collapse downstream in build_clusters' pair_scores dict). We
+    # must NOT rebuild this per pass or add an intra-loop matched_pairs skip --
+    # that would diverge from polars. frozen_exclude shadows matched_pairs as a
+    # Python frozenset -- at 10M-bucket-realistic this is the dominant
+    # Python-side accumulator.
+    frozen_exclude = frozenset(matched_pairs)
 
     # Fast-path eligibility: tiny-block workloads (5M-on-one-node, p99 block
     # size ~3 rows) spend most of bucket_score wall in Python orchestration --
@@ -577,10 +539,35 @@ def score_buckets(
         # tests/test_native_parity.py). __row_id__ is cast to Int64 (no-op when
         # already Int64) because the kernel requires int64 buffers.
         if native_scorer_ids is not None:
-            row_ids_arrow = sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
-            field_arrays_arrow = [
-                sorted_df[col].to_arrow() for col, _w, _fn, _name in field_specs
+            # Oversized-block skip on the native path: filter BOTH the per-row
+            # arrow arrays AND the size_list BEFORE handing them to the kernel.
+            # The kernel walks sorted_df rows block-contiguously (it's sorted by
+            # __block_key__), so a per-row mask built by repeating each block's
+            # keep-flag `size` times stays aligned to the rows. keep also folds
+            # in the size<2 no-op (those blocks emit no pairs anyway, but
+            # dropping them keeps kept_size_list and the arrays consistent).
+            # See _score_one_bucket for the polars-direct parity rationale +
+            # auto-split follow-up note.
+            keep = [
+                (s >= 2) and not (skip_oversized and s > max_block_size)
+                for s in size_list
             ]
+            native_sorted_df = sorted_df
+            kept_size_list = size_list
+            if not all(keep):
+                import numpy as np
+
+                row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
+                native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                kept_size_list = [s for s, k in zip(size_list, keep) if k]
+                if not kept_size_list:
+                    return [], 0
+            row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
+            field_arrays_arrow = [
+                native_sorted_df[col].to_arrow()
+                for col, _w, _fn, _name in field_specs
+            ]
+            size_list = kept_size_list
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
             # native_exclude_handle from score_buckets entry). The kernel's
             # exclude= and exclude_set= params are mutually opt-in -- when
@@ -627,6 +614,11 @@ def score_buckets(
         offset = 0
         for size in size_list:
             if size >= 2:
+                # Skip oversized blocks (see _score_one_bucket for rationale /
+                # polars-direct parity + auto-split follow-up note).
+                if skip_oversized and size > max_block_size:
+                    offset += size
+                    continue
                 end = offset + size
                 for i in range(offset, end - 1):
                     ri = row_ids[i]
@@ -702,6 +694,15 @@ def score_buckets(
         offset = 0
         for size in size_list:
             if size >= 2:
+                # Skip oversized blocks, matching polars-direct's build_blocks
+                # (core/blocker.py): when skip_oversized is set and a block
+                # exceeds max_block_size, polars skips it (the common case when
+                # _auto_split_block can't recover). FOLLOW-UP: replicate polars'
+                # auto-split recovery here for parity on splittable hot blocks;
+                # out of scope for this fix.
+                if skip_oversized and size > max_block_size:
+                    offset += size
+                    continue
                 block_df = sorted_df.slice(offset, size)
                 if across_files_only and source_lookup:
                     sources_in_block = block_df["__source__"].unique().to_list()
@@ -728,38 +729,125 @@ def score_buckets(
             offset += size
         return local_pairs, local_blocks
 
+    def _score_single_pass(
+        key: BlockingKeyConfig,
+    ) -> tuple[list[tuple[int, int, float]], int, int]:
+        """Key, bucket, partition, and score one blocking pass.
+
+        Returns (pass_pairs, blocks_scored, n_non_empty_buckets). Builds its
+        own keyed/bucketed frames off the immutable slim_df and `del`s them at
+        partition time so only one pass is resident at a time (preserves peak
+        RSS). Accumulates into a LOCAL pass_pairs -- it must NOT mutate
+        matched_pairs (that happens once, after all passes, in the caller).
+        """
+        key_expr = _build_block_key_expr(key)
+
+        with stage("bucket_assign"):
+            _ta = time.perf_counter()
+            keyed = slim_df.with_columns(key_expr)
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
+
+        # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
+        # the hash + partition_by step always collapses to 1 non-empty bucket
+        # (every row hashes into the same bucket-output because most buckets
+        # are empty by pigeonhole). The bookkeeping is pure overhead. Skip
+        # straight to treating `keyed` as the single bucket and scoring.
+        # On the streaming-block sync caller, this hits on every per-block
+        # invocation (block size ~8, n_buckets default 32-128).
+        if prepared_df.height < n_buckets:
+            bucketed = keyed
+            # Wrap in a single-bucket dict to share the scoring path below.
+            buckets_dict: dict[Any, pl.DataFrame] = {0: bucketed}
+            print(
+                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+                f"small-block fast path (height={prepared_df.height} < n_buckets={n_buckets}); "
+                f"skipping hash+partition_by. See #422.",
+                flush=True,
+            )
+        else:
+            _tb = time.perf_counter()
+            # Adds an i64 __bucket__ column at 10M rows -- ~80 MB of int64 plus
+            # whatever Polars holds for the hash intermediate. Wrap so the RSS
+            # bench can attribute it instead of pooling it into the unwrapped
+            # gap between bucket_assign and bucket_partition.
+            with stage("bucket_hash_modulo"):
+                bucketed = keyed.with_columns(
+                    (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
+                    .alias("__bucket__")
+                )
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
+
+            with stage("bucket_partition"):
+                _tp = time.perf_counter()
+                # First-level partition: N eager DataFrames keyed by bucket id.
+                # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
+                # single partition column; unwrap below.
+                buckets_dict = bucketed.partition_by(
+                    "__bucket__", as_dict=True,
+                )
+                # Free the pre-partition `keyed` and `bucketed` parents.
+                # partition_by built N independent eager frames; the original
+                # contiguous parents are dead weight from this point forward.
+                del keyed
+                del bucketed
+                print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
+
+        with stage("bucket_post_partition_setup"):
+            non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
+            n_non_empty_buckets = len(non_empty_buckets)
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
+
+        pass_pairs: list[tuple[int, int, float]] = []
+        pass_blocks_scored = 0
+        if n_non_empty_buckets == 0:
+            return pass_pairs, pass_blocks_scored, n_non_empty_buckets
+
+        with stage("bucket_score"):
+            # rapidfuzz.cdist releases the GIL inside the scorer, so threads
+            # give real parallelism. Mirror score_blocks_parallel's worker cap.
+            max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
+            _ts = time.perf_counter()
+            worker = _score_one_bucket_fast if fast_path_specs is not None else _score_one_bucket
+            path_label = "fast" if fast_path_specs is not None else "find_fuzzy_matches"
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
+            if max_workers <= 1 or n_non_empty_buckets <= 2:
+                for bucket_df in non_empty_buckets:
+                    pairs, n = worker(bucket_df)
+                    pass_pairs.extend(pairs)
+                    pass_blocks_scored += n
+            else:
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    for pairs, n in pool.map(worker, non_empty_buckets):
+                        pass_pairs.extend(pairs)
+                        pass_blocks_scored += n
+        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {len(pass_pairs)} pairs", flush=True)
+        return pass_pairs, pass_blocks_scored, n_non_empty_buckets
+
     all_pairs: list[tuple[int, int, float]] = []
     total_blocks_scored = 0
-
-    with stage("bucket_score"):
-        # rapidfuzz.cdist releases the GIL inside the scorer, so threads
-        # give real parallelism. Mirror score_blocks_parallel's worker cap.
-        max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
-        _ts = time.perf_counter()
-        worker = _score_one_bucket_fast if fast_path_specs is not None else _score_one_bucket
-        path_label = "fast" if fast_path_specs is not None else "find_fuzzy_matches"
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
-        if max_workers <= 1 or n_non_empty_buckets <= 2:
-            for bucket_df in non_empty_buckets:
-                pairs, n = worker(bucket_df)
-                all_pairs.extend(pairs)
-                total_blocks_scored += n
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for pairs, n in pool.map(worker, non_empty_buckets):
-                    all_pairs.extend(pairs)
-                    total_blocks_scored += n
-        for a, b, _s in all_pairs:
-            matched_pairs.add((min(a, b), max(a, b)))
+    total_non_empty = 0
+    slim_cols = set(slim_df.columns)
+    for key in pass_keys:
+        if not set(key.fields) <= slim_cols:
+            logger.warning(
+                "score_buckets: skipping pass %s -- field(s) %s absent from prepared_df",
+                key.fields, sorted(set(key.fields) - slim_cols),
+            )
+            continue
+        pass_pairs, blocks_scored, n_non_empty = _score_single_pass(key)
+        all_pairs.extend(pass_pairs)
+        total_blocks_scored += blocks_scored
+        total_non_empty += n_non_empty
+    for a, b, _s in all_pairs:
+        matched_pairs.add((min(a, b), max(a, b)))
 
     record_metrics({
-        "bucket_count": n_non_empty_buckets,
+        "bucket_count": total_non_empty,
         "bucket_n_target": n_buckets,
         "block_count_scored": total_blocks_scored,
     })
-    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {total_blocks_scored} blocks, {len(all_pairs)} pairs", flush=True)
     logger.info(
         "score_buckets: %d non-empty buckets (target N=%d), %d blocks scored, %d pairs",
-        n_non_empty_buckets, n_buckets, total_blocks_scored, len(all_pairs),
+        total_non_empty, n_buckets, total_blocks_scored, len(all_pairs),
     )
     return all_pairs
