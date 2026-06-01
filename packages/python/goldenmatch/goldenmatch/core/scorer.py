@@ -924,6 +924,11 @@ def _score_one_block(
     Polars ``.filter()`` on the frame rather than a Python list
     comprehension. Default False keeps the legacy list contract for the
     deprecation window.
+
+    NOTE (Wave 3 convergence): the ``_emit_dataframe=True`` path duplicates the
+    across-files Polars-filter logic in ``_score_one_block_columnar`` below. They
+    are byte-identical today; if you change one, mirror the other until Wave 3
+    retires ``_score_one_block_columnar``.
     """
     block_df = block.df.collect()
 
@@ -1326,10 +1331,10 @@ def find_fuzzy_matches_columnar(
             block_df, mk, exclude_pairs, pre_scored_pairs,
             _emit_dataframe=True,
         )
-        # On the hot path the emission branch returns a DataFrame, but
-        # the n < 2 / total_weight == 0 early returns above the hot
-        # path always return ``[]`` regardless of the flag (they
-        # short-circuit before knowing about it). Wrap defensively.
+        # Post Phase-1 Wave 1, find_fuzzy_matches honours _emit_dataframe on
+        # ALL branches (incl. the n<2 / total_weight==0 early returns), so this
+        # is always a DataFrame. The isinstance wrap is a belt-and-suspenders
+        # no-op kept against any future branch that forgets the flag.
         if isinstance(result, pl.DataFrame):
             return result
         return pairs_list_to_df(result)
@@ -1353,6 +1358,10 @@ def _score_one_block_columnar(
     Skips the list-of-tuples accumulation that ``_score_one_block``
     pays before its caller would re-convert. Across-files filtering is
     applied as a Polars expression on the result frame, vectorized.
+
+    NOTE (Wave 3 convergence): the across-files Polars-filter logic here is
+    byte-identical to ``_score_one_block(..., _emit_dataframe=True)``. Mirror any
+    change to both until Wave 3 retires this twin.
     """
     block_df = block.df.collect()
 
