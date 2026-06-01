@@ -29,6 +29,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import string
 import time
 from pathlib import Path
@@ -39,8 +41,6 @@ import pyarrow.parquet as pq
 
 # Pool sizes chosen so compound blocking (surname + dob-year) yields small blocks
 # at every scale, keeping candidate-pair growth ~linear rather than quadratic.
-N_FIRST = 5_000
-N_SURNAME = 50_000
 N_POSTCODE = 200_000
 N_CITY = 1_000
 DOB_DAYS = 25_000  # ~68 years of distinct birth dates
@@ -48,19 +48,65 @@ DOB_DAYS = 25_000  # ~68 years of distinct birth dates
 _ALPHA = np.array(list(string.ascii_lowercase))
 
 
+def _refdata_dir() -> Path | None:
+    """Locate goldenmatch's bundled reference data, if importable."""
+    try:
+        import goldenmatch  # noqa: PLC0415
+
+        d = Path(goldenmatch.__file__).parent / "refdata" / "data"
+        return d if d.exists() else None
+    except Exception:
+        return None
+
+
 def _syllable_pool(n: int, rng: np.random.Generator, min_len: int, max_len: int) -> list[str]:
-    """Deterministic pronounceable-ish token pool (vectorised draw, join in Python once)."""
+    """Deterministic pronounceable-ish token pool (synthetic fallback only)."""
     cons = list("bcdfghjklmnpqrstvwxyz")
     vows = list("aeiou")
     out: list[str] = []
     for _ in range(n):
         ln = int(rng.integers(min_len, max_len + 1))
-        chars = []
-        for i in range(ln):
-            chars.append(rng.choice(cons) if i % 2 == 0 else rng.choice(vows))
-        s = "".join(chars)
-        out.append(s.capitalize())
+        chars = [rng.choice(cons) if i % 2 == 0 else rng.choice(vows) for i in range(ln)]
+        out.append("".join(chars).capitalize())
     return out
+
+
+def _load_real_names(rng: np.random.Generator):
+    """Census-weighted surnames + real given names. (surnames, cum_weights, first_names).
+
+    Returns frequency-weighted surnames (Zipfian, like real data -> realistic hot
+    blocks) and a pool of real given names. Falls back to synthetic pools if the
+    bundled reference data isn't available.
+    """
+    d = _refdata_dir()
+    if d is None:
+        sur = _syllable_pool(50_000, rng, 4, 9)
+        first = _syllable_pool(5_000, rng, 3, 7)
+        cumw = np.cumsum(np.full(len(sur), 1.0 / len(sur)))
+        return sur, cumw, first
+    # Census surnames: name, rank, count -> frequency-weighted sampling.
+    surnames, counts = [], []
+    with open(d / "census_surnames_2010_top10k.csv") as f:
+        r = csv.reader(f)
+        next(r)
+        for row in r:
+            surnames.append(row[0].capitalize())
+            counts.append(float(row[2]))
+    counts = np.asarray(counts)
+    cumw = np.cumsum(counts / counts.sum())
+    # Given names from the alias table (canonical + variants = a few thousand real ones).
+    first = set()
+    try:
+        gn = json.load(open(d / "given_name_aliases.json"))
+        for canon, variants in (gn.get("aliases") or {}).items():
+            first.add(canon.capitalize())
+            for v in variants:
+                first.add(str(v).capitalize())
+    except Exception:
+        pass
+    if len(first) < 200:
+        first.update(_syllable_pool(2_000, rng, 3, 7))
+    return surnames, cumw, sorted(first)
 
 
 def _typo_variant(s: str, rng: np.random.Generator) -> str:
@@ -78,13 +124,11 @@ def _typo_variant(s: str, rng: np.random.Generator) -> str:
 
 def _build_pools(seed: int):
     rng = np.random.default_rng(seed)
-    first_base = _syllable_pool(N_FIRST, rng, 3, 7)
-    sur_base = _syllable_pool(N_SURNAME, rng, 4, 9)
+    sur_base, sur_cumw, first_base = _load_real_names(rng)
     # Parallel typo arrays: index i -> one typo'd variant of base i. Built once.
     first_typo = [_typo_variant(s, rng) for s in first_base]
     sur_typo = [_typo_variant(s, rng) for s in sur_base]
     cities = [c + " City" for c in _syllable_pool(N_CITY, rng, 4, 8)]
-    # dob pool: YYYY-MM-DD strings over DOB_DAYS distinct dates from 1940-01-01.
     base = np.datetime64("1940-01-01")
     dobs = (base + np.arange(DOB_DAYS).astype("timedelta64[D]")).astype("datetime64[D]")
     dob_pool = np.datetime_as_string(dobs)
@@ -93,6 +137,9 @@ def _build_pools(seed: int):
         # Combined [base | typo] arrays so a single fancy-index picks exact-or-typo.
         "first": np.array(first_base + first_typo, dtype=object),
         "surname": np.array(sur_base + sur_typo, dtype=object),
+        "surname_cumw": sur_cumw,
+        "n_first": len(first_base),
+        "n_surname": len(sur_base),
         "city": np.array(cities, dtype=object),
         "dob": np.asarray(dob_pool, dtype=object),
         "postcode": np.array(postcodes, dtype=object),
@@ -114,6 +161,9 @@ TRUTH_SCHEMA = pa.schema([("record_id", pa.int64()), ("cluster_id", pa.int64())]
 
 def generate(rows: int, dupe_rate: float, out: Path, truth: Path, seed: int, batch: int) -> dict:
     pools = _build_pools(seed)
+    n_first = pools["n_first"]
+    n_surname = pools["n_surname"]
+    sur_cumw = pools["surname_cumw"]
     rng = np.random.default_rng(seed + 1)
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.parent.mkdir(parents=True, exist_ok=True)
@@ -155,17 +205,19 @@ def generate(rows: int, dupe_rate: float, out: Path, truth: Path, seed: int, bat
             n_dupes += int(is_dup.sum())
 
             # Canonical attribute indices per identity, broadcast to rows.
-            fi = np.repeat(rng.integers(0, N_FIRST, len(sizes)), sizes)
-            si = np.repeat(rng.integers(0, N_SURNAME, len(sizes)), sizes)
+            # Surnames are census frequency-weighted (Zipfian -> realistic hot blocks).
+            si_ident = np.searchsorted(sur_cumw, rng.random(len(sizes)))
+            fi = np.repeat(rng.integers(0, n_first, len(sizes)), sizes)
+            si = np.repeat(si_ident, sizes)
             di = np.repeat(rng.integers(0, DOB_DAYS, len(sizes)), sizes)
             pi = np.repeat(rng.integers(0, N_POSTCODE, len(sizes)), sizes)
             ci = np.repeat(rng.integers(0, N_CITY, len(sizes)), sizes)
 
             # Duplicate variation (vectorised masks). Typo => offset into [base|typo] half.
             r = rng.random(total)
-            fi_pick = fi + np.where(is_dup & (r < 0.40), N_FIRST, 0)
+            fi_pick = fi + np.where(is_dup & (r < 0.40), n_first, 0)
             r = rng.random(total)
-            si_pick = si + np.where(is_dup & (r < 0.50), N_SURNAME, 0)
+            si_pick = si + np.where(is_dup & (r < 0.50), n_surname, 0)
 
             first = pools["first"][fi_pick]
             surname = pools["surname"][si_pick]

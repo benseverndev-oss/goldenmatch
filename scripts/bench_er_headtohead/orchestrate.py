@@ -27,12 +27,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# Per-scale subprocess wall-clock cap (seconds). Generous; a real hang still ends.
+# Per-scale subprocess wall-clock cap (seconds). Raised after the first run so a
+# slow-but-progressing datapoint isn't cut off; a true hang still ends eventually.
 TIMEOUT_BY_ROWS = [
-    (1_000_000, 1800),
-    (5_000_000, 3600),
-    (25_000_000, 10800),
-    (100_000_000, 21600),
+    (100_000, 900),
+    (1_000_000, 2400),
+    (5_000_000, 7200),
+    (25_000_000, 14400),
+    (100_000_000, 28800),
 ]
 
 
@@ -40,7 +42,7 @@ def _timeout_for(rows: int) -> int:
     for ceiling, t in TIMEOUT_BY_ROWS:
         if rows <= ceiling:
             return t
-    return 21600
+    return 28800
 
 
 def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
@@ -206,7 +208,7 @@ def render_markdown(results: list[dict], dupe_rate: float) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scales", type=int, nargs="+",
-                    default=[100_000, 1_000_000, 5_000_000, 25_000_000, 100_000_000])
+                    default=[100_000, 1_000_000, 5_000_000, 25_000_000])
     ap.add_argument("--engines", nargs="+", default=["goldenmatch", "splink"])
     ap.add_argument("--workdir", type=Path, default=Path(".bench_er"))
     ap.add_argument("--dupe-rate", type=float, default=0.20)
