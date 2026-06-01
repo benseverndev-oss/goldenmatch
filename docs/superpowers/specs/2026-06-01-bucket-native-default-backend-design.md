@@ -119,6 +119,25 @@ constant and SET the constant only after the bench (a follow-up commit), or ship
 the relaxation and constant together in the same PR as the bench run that
 justifies the number. Do not merge a 750k ceiling that no bench has confirmed.**
 
+**Validation RESULT (2026-06-01, run 26781636345, `bench-fs-stages` on
+`large-new-64GB`, `bench_fs_and_stages.py --ns 200000,500000,750000 --runs 1`):
+GATE PASSED. 750k confirmed; constant stays `BUCKET_SUGGESTED_MAX_ROWS = 750_000`.**
+
+| N       | polars-direct | bucket+native | speedup | clusters identical |
+| ------- | ------------- | ------------- | ------- | ------------------ |
+| 200,000 | 10.75s        | 2.04s         | 5.28x   | True               |
+| 500,000 | 24.97s        | 5.57s         | 4.48x   | True               |
+| 750,000 | 37.49s        | 8.05s         | 4.66x   | True               |
+
+`native ext importable: True`; `_resolve_fast_path` engaged (2x jaro_winkler,
+threshold 0.85). bucket+native wins 4.5-5.3x across the whole band with
+byte-identical clusters at every scale -- bucket is still winning 4.66x at 750k,
+so the ceiling is conservative (big boxes already keep bucket above 750k via
+`fast_box`). Pair counts were modest (54k / 136k / 203k) -- well within the RAM-fit
+guard. Note: this bench captures wall + parity but not peak RSS; the planner's
+`est_pair_gb <= available_ram_gb * 0.5` guard is what bounds RSS, and the pair
+counts here are orders of magnitude under any 16GB ceiling.
+
 **Docs.**
 - Scale-envelope / backend-selection docs: "bucket+native is the default-installed,
   suggested backend up to 750k rows; above that -> chunked/distributed."
