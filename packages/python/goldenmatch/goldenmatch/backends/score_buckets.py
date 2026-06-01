@@ -364,6 +364,14 @@ def score_buckets(
     # is None for static / single-key configs, so fall back to `keys`.
     pass_keys = blocking_config.passes or blocking_config.keys
 
+    # Oversized-block skip (parity with polars-direct's build_blocks in
+    # core/blocker.py). Read once and close over in the nested scoring
+    # workers. A block is "oversized" when skip_oversized and size >
+    # max_block_size; such blocks are skipped entirely (no pairs emitted),
+    # matching polars' behavior when its _auto_split_block can't recover.
+    skip_oversized = blocking_config.skip_oversized
+    max_block_size = blocking_config.max_block_size
+
     if n_buckets is None:
         n_buckets = _default_n_buckets()
 
@@ -531,10 +539,35 @@ def score_buckets(
         # tests/test_native_parity.py). __row_id__ is cast to Int64 (no-op when
         # already Int64) because the kernel requires int64 buffers.
         if native_scorer_ids is not None:
-            row_ids_arrow = sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
-            field_arrays_arrow = [
-                sorted_df[col].to_arrow() for col, _w, _fn, _name in field_specs
+            # Oversized-block skip on the native path: filter BOTH the per-row
+            # arrow arrays AND the size_list BEFORE handing them to the kernel.
+            # The kernel walks sorted_df rows block-contiguously (it's sorted by
+            # __block_key__), so a per-row mask built by repeating each block's
+            # keep-flag `size` times stays aligned to the rows. keep also folds
+            # in the size<2 no-op (those blocks emit no pairs anyway, but
+            # dropping them keeps kept_size_list and the arrays consistent).
+            # See _score_one_bucket for the polars-direct parity rationale +
+            # auto-split follow-up note.
+            keep = [
+                (s >= 2) and not (skip_oversized and s > max_block_size)
+                for s in size_list
             ]
+            native_sorted_df = sorted_df
+            kept_size_list = size_list
+            if not all(keep):
+                import numpy as np
+
+                row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
+                native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                kept_size_list = [s for s, k in zip(size_list, keep) if k]
+                if not kept_size_list:
+                    return [], 0
+            row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
+            field_arrays_arrow = [
+                native_sorted_df[col].to_arrow()
+                for col, _w, _fn, _name in field_specs
+            ]
+            size_list = kept_size_list
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
             # native_exclude_handle from score_buckets entry). The kernel's
             # exclude= and exclude_set= params are mutually opt-in -- when
@@ -581,6 +614,11 @@ def score_buckets(
         offset = 0
         for size in size_list:
             if size >= 2:
+                # Skip oversized blocks (see _score_one_bucket for rationale /
+                # polars-direct parity + auto-split follow-up note).
+                if skip_oversized and size > max_block_size:
+                    offset += size
+                    continue
                 end = offset + size
                 for i in range(offset, end - 1):
                     ri = row_ids[i]
@@ -656,6 +694,15 @@ def score_buckets(
         offset = 0
         for size in size_list:
             if size >= 2:
+                # Skip oversized blocks, matching polars-direct's build_blocks
+                # (core/blocker.py): when skip_oversized is set and a block
+                # exceeds max_block_size, polars skips it (the common case when
+                # _auto_split_block can't recover). FOLLOW-UP: replicate polars'
+                # auto-split recovery here for parity on splittable hot blocks;
+                # out of scope for this fix.
+                if skip_oversized and size > max_block_size:
+                    offset += size
+                    continue
                 block_df = sorted_df.slice(offset, size)
                 if across_files_only and source_lookup:
                     sources_in_block = block_df["__source__"].unique().to_list()

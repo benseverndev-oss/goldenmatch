@@ -107,6 +107,29 @@ def test_cross_pass_duplicate_pairs_collapse():
     assert bucket == polars
 
 
+def test_oversized_block_skipped_matches_polars():
+    """A block larger than max_block_size is skipped, matching polars-direct.
+    bucket and polars-direct must agree, and neither forms a giant cluster from
+    the oversized block."""
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+    from goldenmatch.core.autoconfig import auto_configure_df
+    # 60 rows all sharing one blocking key 'grp' = "A" -> one block of 60.
+    # With max_block_size=10 + skip_oversized, that block is skipped.
+    df = pl.DataFrame({
+        "name": [f"person number {i}" for i in range(60)],
+        "grp": ["A"] * 60,
+    })
+    cfg = auto_configure_df(df)
+    cfg.blocking = BlockingConfig(
+        strategy="static", keys=[BlockingKeyConfig(fields=["grp"])],
+        max_block_size=10, skip_oversized=True,
+    )
+    cfg.matchkeys = [_name_matchkey()]
+    polars = _multi_member_clusters(df, cfg, "polars-direct")
+    bucket = _multi_member_clusters(df, cfg, "bucket")
+    assert bucket == polars  # both skip the 60-row block -> same (likely empty) clusters
+
+
 def test_missing_pass_field_is_skipped():
     df = _fixture_df()  # has name/city/zip, NOT 'ssn'
     cfg = _two_pass_config()
