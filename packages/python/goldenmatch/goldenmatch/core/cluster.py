@@ -379,6 +379,21 @@ def build_clusters(
         )
         return materialize_cluster_dict(clusters_ds, pairs)
 
+    # Arrow Phase 1 (Wave 2): accept a columnar pair stream as a first-class
+    # input. A Polars DataFrame (PAIR_STREAM_SCHEMA: id_a, id_b, score) is
+    # converted via the numpy path -- NOT a Python list comprehension -- to the
+    # list[(int, int, float)] the Union-Find / pair_scores path below consumes.
+    # The return shape is unchanged (dict[int, dict]); Phase 2 changes it to
+    # the two-frame ClusterFrames layout. The list[tuple] branch below stays
+    # for the deprecation window.
+    if _is_pairs_dataframe(pairs):
+        if all_ids is None and not pairs.is_empty():
+            import numpy as _np
+            a_np = pairs["id_a"].to_numpy()
+            b_np = pairs["id_b"].to_numpy()
+            all_ids = _np.unique(_np.concatenate([a_np, b_np])).tolist()
+        pairs = _pairs_df_to_list_numpy(pairs)
+
     # Derive all_ids from pairs when not provided explicitly
     if all_ids is None:
         seen: set[int] = set()
@@ -915,6 +930,20 @@ def build_clusters_columnar(
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
     )
+
+
+def _is_pairs_dataframe(pairs: Any) -> bool:
+    """True when ``pairs`` is a Polars DataFrame (the columnar pair stream).
+
+    polars is a hard dependency of goldenmatch but is imported lazily here so
+    cluster.py stays import-light for the list path. A cheap duck-type guard
+    (``columns`` attr + ``is_empty``) avoids importing polars when the input is
+    obviously a list; the isinstance check confirms it.
+    """
+    if not hasattr(pairs, "is_empty"):
+        return False
+    import polars as pl
+    return isinstance(pairs, pl.DataFrame)
 
 
 def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:

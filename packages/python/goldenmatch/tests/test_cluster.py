@@ -272,3 +272,101 @@ def test_union_find_nodes_returns_added_members():
     uf.union(1, 2)
     nodes = sorted(uf.nodes())
     assert nodes == [1, 2, 3]
+
+
+def _canonical_clusters(result: dict[int, dict]) -> dict:
+    """Re-key a build_clusters result by sorted-member frozenset so the
+    comparison is independent of cluster-id numbering and member order
+    (neither is a contract -- see the v34 note in cluster.py). pair_scores
+    keys are canonicalized to (min, max) tuples and sorted for stable compare.
+    """
+    canon: dict = {}
+    for cinfo in result.values():
+        key = frozenset(cinfo["members"])
+        pair_scores = {
+            (min(a, b), max(a, b)): s for (a, b), s in cinfo["pair_scores"].items()
+        }
+        canon[key] = {
+            "size": cinfo["size"],
+            "oversized": cinfo["oversized"],
+            "confidence": cinfo["confidence"],
+            "cluster_quality": cinfo["cluster_quality"],
+            "bottleneck_pair": (
+                tuple(sorted(cinfo["bottleneck_pair"]))
+                if cinfo["bottleneck_pair"] is not None
+                else None
+            ),
+            "pair_scores": dict(sorted(pair_scores.items())),
+        }
+    return canon
+
+
+class TestBuildClustersColumnar:
+    """Wave 2 (Arrow Phase 1): build_clusters accepts a pl.DataFrame pair stream."""
+
+    def _fixture_pairs(self):
+        # Two multi-member clusters + one singleton:
+        #   {1,2,3} (chain), {10,11,12,13} (mixed-strength), 99 singleton.
+        return [
+            (1, 2, 0.95),
+            (2, 3, 0.88),
+            (10, 11, 0.91),
+            (11, 12, 0.55),
+            (12, 13, 0.93),
+            (10, 13, 0.80),
+        ]
+
+    def _all_ids(self):
+        return [1, 2, 3, 10, 11, 12, 13, 99]
+
+    def test_dataframe_input_matches_list_input(self):
+        """build_clusters(pairs_df) == build_clusters(pairs_list), same content."""
+        import polars as pl
+        from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+        pairs = self._fixture_pairs()
+        all_ids = self._all_ids()
+
+        pairs_df = pl.DataFrame(
+            {
+                "id_a": [p[0] for p in pairs],
+                "id_b": [p[1] for p in pairs],
+                "score": [p[2] for p in pairs],
+            },
+            schema=PAIR_STREAM_SCHEMA,
+        )
+
+        from_list = build_clusters(pairs, all_ids)
+        from_df = build_clusters(pairs_df, all_ids)
+
+        assert _canonical_clusters(from_df) == _canonical_clusters(from_list)
+
+    def test_dataframe_input_derives_all_ids(self):
+        """all_ids=None path works for DataFrame input too (matches list path)."""
+        import polars as pl
+        from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+        pairs = self._fixture_pairs()
+        pairs_df = pl.DataFrame(
+            {
+                "id_a": [p[0] for p in pairs],
+                "id_b": [p[1] for p in pairs],
+                "score": [p[2] for p in pairs],
+            },
+            schema=PAIR_STREAM_SCHEMA,
+        )
+
+        from_list = build_clusters(pairs)  # all_ids derived from pairs
+        from_df = build_clusters(pairs_df)
+
+        assert _canonical_clusters(from_df) == _canonical_clusters(from_list)
+
+    def test_empty_dataframe_input(self):
+        """An empty pair DataFrame yields no clusters (matches empty list)."""
+        import polars as pl
+        from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+        empty_df = pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+        from_df = build_clusters(empty_df)
+        from_list = build_clusters([])
+        assert _canonical_clusters(from_df) == _canonical_clusters(from_list)
