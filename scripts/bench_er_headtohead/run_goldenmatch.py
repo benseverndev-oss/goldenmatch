@@ -41,6 +41,8 @@ def main() -> None:
     ap.add_argument("--input", type=Path, required=True)
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--pred-out", type=Path, default=None,
+                    help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.85)
     ap.add_argument("--require-native", action="store_true", default=True)
     ap.add_argument("--allow-pure-python", dest="require_native", action="store_false")
@@ -98,6 +100,32 @@ def main() -> None:
         with bench_capture() as bench:
             ded = dedupe_df(df, config=config)
         dedupe_wall = time.perf_counter() - t0
+
+        # Per-record cluster assignment for accuracy eval. clusters is
+        # {cid: {"members": [__row_id__...]}} over ALL records; the fixture's
+        # record_id IS the input row index, and GoldenMatch preserves it as
+        # __row_id__, so member row-ids are record-ids directly.
+        if args.pred_out is not None:
+            import numpy as np
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            clusters = getattr(ded, "clusters", None) or {}
+            rids, cids = [], []
+            for cid, c in clusters.items():
+                members = c["members"] if isinstance(c, dict) else c.members
+                rids.extend(members)
+                cids.extend([cid] * len(members))
+            pq.write_table(
+                pa.table(
+                    {
+                        "record_id": pa.array(np.asarray(rids, dtype=np.int64)),
+                        "pred_cluster_id": pa.array(np.asarray(cids, dtype=np.int64)),
+                    }
+                ),
+                args.pred_out,
+                compression="zstd",
+            )
 
         bench_blob = bench.to_dict()
         metrics = bench_blob.get("metrics", {}) if isinstance(bench_blob, dict) else {}

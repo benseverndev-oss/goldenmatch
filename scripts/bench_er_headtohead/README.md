@@ -8,10 +8,15 @@ between these engines (Splink publishes 7M/~2min/1B-pairs; GoldenMatch publishes
 
 ## What it measures
 
-Per `(scale, engine)`: **end-to-end dedupe wall**, **peak RSS**, **scored pair
-count**, **cluster count**. Pairs/sec is derived. Splink's wall includes
-train+predict+cluster; GoldenMatch's includes auto_configure+dedupe — each
-engine's full required workflow, so neither is flattered.
+Per `(scale, engine)`:
+- **Speed/memory**: end-to-end dedupe wall, peak RSS, scored-pair count, resolved
+  cluster count, pairs/sec. Splink's wall includes train+predict+cluster;
+  GoldenMatch's includes auto_configure+dedupe — each engine's full required
+  workflow, so neither is flattered.
+- **Accuracy vs ground truth** (one engine-agnostic evaluator, identical code for
+  both): **pairwise** precision/recall/F1 + confusion matrix (TP/FP/FN/TN), and
+  **B-cubed** (B³) precision/recall/F1. Computed from a DuckDB contingency table
+  (`evaluate.py`) — no pair materialization, so it stays memory-bounded at 25M/100M.
 
 ## How it stays honest
 
@@ -65,13 +70,12 @@ python scripts/bench_er_headtohead/orchestrate.py \
 | `generate_fixture.py` | Streaming, bounded-memory person-shaped parquet generator (+ ground truth). |
 | `run_goldenmatch.py` | One datapoint, GoldenMatch bucket+native+arrow, fails loud if native absent. |
 | `run_splink.py` | One datapoint, Splink 4.x DuckDB dedupe, counts via DuckDB relations (no pandas materialization). |
-| `orchestrate.py` | Subprocess-per-datapoint sweep, OOM-tolerant, aggregates to `summary.md` + `bench_results.json`. |
+| `evaluate.py` | Engine-agnostic accuracy: pairwise P/R/F1 + confusion + B³, via DuckDB contingency table. |
+| `orchestrate.py` | Subprocess-per-datapoint sweep, OOM-tolerant, runs eval, aggregates to `summary.md` + `bench_results.json`. |
 | `../../.github/workflows/bench-er-headtohead.yml` | CI lane (64 GB runner, builds native, installs Splink). |
 
 ## Known limitations / follow-ups
 
-- **F1 / accuracy not yet measured** — ground truth is generated (`*.truth.parquet`)
-  but pairwise F1 scoring is deferred; this round is wall + RSS + pairs + clusters.
 - **One fixture shape** (person-like, 5 fields). Other shapes (bibliographic,
   product) would exercise different blocking/scoring behaviour.
 - **Splink comparison spec is fixed**, not tuned per scale; a Splink expert could

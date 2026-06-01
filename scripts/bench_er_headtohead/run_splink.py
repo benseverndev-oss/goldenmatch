@@ -57,6 +57,8 @@ def main() -> None:
     ap.add_argument("--input", type=Path, required=True)
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--pred-out", type=Path, default=None,
+                    help="write {record_id, pred_cluster_id} parquet for accuracy eval")
     ap.add_argument("--threshold", type=float, default=0.95)
     ap.add_argument("--max-pairs", type=float, default=2e6, help="u-estimation sample size")
     args = ap.parse_args()
@@ -122,6 +124,17 @@ def main() -> None:
         )
         cluster_count = _distinct_clusters(df_clusters)
         cluster_wall = time.perf_counter() - t0
+
+        # Per-record cluster assignment for accuracy eval (DuckDB -> parquet, no
+        # pandas materialization). Splink names the entity column `cluster_id`.
+        if args.pred_out is not None:
+            try:
+                rel = df_clusters.as_duckdbpyrelation()
+                rel.project("record_id, cluster_id AS pred_cluster_id").write_parquet(
+                    str(args.pred_out)
+                )
+            except Exception as e:  # noqa: BLE001 - eval is best-effort
+                result["pred_emit_error"] = f"{type(e).__name__}: {e}"
 
         result.update(
             status="ok",

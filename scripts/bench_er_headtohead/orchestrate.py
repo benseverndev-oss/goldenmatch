@@ -88,13 +88,16 @@ def generate(rows: int, dupe_rate: float, fixtures: Path) -> Path:
 
 
 def run_engine(engine: str, fixture: Path, rows: int, results_dir: Path,
-               threshold: float, allow_pure_python: bool = False) -> dict:
+               threshold: float, allow_pure_python: bool = False) -> tuple[dict, Path]:
     out = results_dir / f"{engine}_{rows}.json"
-    if out.exists():
-        out.unlink()  # stale result from a prior run must not masquerade as fresh
+    pred = results_dir / f"{engine}_{rows}.pred.parquet"
+    for stale in (out, pred):
+        if stale.exists():
+            stale.unlink()  # a stale artifact must not masquerade as fresh
     runner = HERE / (f"run_{engine}.py")
     cmd = [sys.executable, str(runner), "--input", str(fixture),
-           "--rows", str(rows), "--out", str(out), "--threshold", str(threshold)]
+           "--rows", str(rows), "--out", str(out), "--pred-out", str(pred),
+           "--threshold", str(threshold)]
     if engine == "goldenmatch" and allow_pure_python:
         cmd.append("--allow-pure-python")  # local smoke only; CI builds native
     t0 = time.perf_counter()
@@ -102,7 +105,25 @@ def run_engine(engine: str, fixture: Path, rows: int, results_dir: Path,
     wall = round(time.perf_counter() - t0, 1)
     res = _load_or_synthesize(out, rc, how, engine, rows)
     res["orchestrator_wall_seconds"] = wall
-    return res
+    return res, pred
+
+
+def evaluate_datapoint(pred: Path, truth: Path, results_dir: Path, engine: str, rows: int) -> dict | None:
+    """Score a prediction parquet against truth in a separate (bounded) process."""
+    if not pred.exists() or not truth.exists():
+        return None
+    metrics_out = results_dir / f"{engine}_{rows}.metrics.json"
+    rc, _ = _run(
+        [sys.executable, str(HERE / "evaluate.py"),
+         "--pred", str(pred), "--truth", str(truth), "--out", str(metrics_out)],
+        timeout=_timeout_for(rows),
+    )
+    if metrics_out.exists():
+        try:
+            return json.loads(metrics_out.read_text())
+        except Exception:
+            return None
+    return None
 
 
 def _fmt(v) -> str:
@@ -115,6 +136,11 @@ def _fmt(v) -> str:
     return str(v)
 
 
+def _r(v) -> str:
+    """3-decimal formatter for ratio metrics (F1/precision/recall)."""
+    return f"{v:.3f}" if isinstance(v, (int, float)) else "—"
+
+
 def render_markdown(results: list[dict], dupe_rate: float) -> str:
     lines = [
         "# ER head-to-head: Splink (DuckDB) vs GoldenMatch (bucket+native+arrow)",
@@ -124,20 +150,40 @@ def render_markdown(results: list[dict], dupe_rate: float) -> str:
         "auto_configure+dedupe). Peak RSS is the per-process high-water mark. "
         "`scored pairs` is recorded so blocking-aggressiveness differences are visible.",
         "",
-        "| rows | engine | status | dedupe wall (s) | peak RSS (MB) | scored pairs | clusters | pairs/sec |",
-        "|---:|---|---|---:|---:|---:|---:|---:|",
+        "| rows | engine | status | dedupe wall (s) | peak RSS (MB) | scored pairs | clusters | pairs/sec | pairwise F1 | B³ F1 |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in sorted(results, key=lambda x: (x["rows_requested"], x["engine"])):
         wall = r.get("dedupe_wall_seconds")
         pairs = r.get("scored_pairs")
         pps = round(pairs / wall) if (pairs and wall) else None
+        acc = r.get("accuracy") or {}
+        pw = acc.get("pairwise") or {}
+        bc = acc.get("bcubed") or {}
         lines.append(
             "| " + " | ".join([
                 _fmt(r["rows_requested"]), r["engine"], r.get("status", "?"),
                 _fmt(wall), _fmt(r.get("peak_rss_mb")), _fmt(pairs),
                 _fmt(r.get("cluster_count")), _fmt(pps),
+                _r(pw.get("f1")), _r(bc.get("f1")),
             ]) + " |"
         )
+
+    # Accuracy detail: pairwise P/R + B³ P/R + confusion matrix.
+    lines += ["", "## Accuracy (vs ground truth)", "",
+              "| rows | engine | pw P | pw R | pw F1 | B³ P | B³ R | B³ F1 | TP | FP | FN |",
+              "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in sorted(results, key=lambda x: (x["rows_requested"], x["engine"])):
+        acc = r.get("accuracy")
+        if not acc:
+            continue
+        pw, bc, cm = acc["pairwise"], acc["bcubed"], acc["pairwise"]["confusion"]
+        lines.append("| " + " | ".join([
+            _fmt(r["rows_requested"]), r["engine"],
+            _r(pw["precision"]), _r(pw["recall"]), _r(pw["f1"]),
+            _r(bc["precision"]), _r(bc["recall"]), _r(bc["f1"]),
+            _fmt(cm["tp"]), _fmt(cm["fp"]), _fmt(cm["fn"]),
+        ]) + " |")
     # Per-scale head-to-head deltas (only where both engines produced a wall).
     lines += ["", "## Head-to-head (where both completed)", ""]
     by_rows: dict[int, dict[str, dict]] = {}
@@ -188,10 +234,16 @@ def main() -> None:
                                     "status": "fixture_failed", "error": str(e)})
             continue
 
+        truth = fixtures / f"bench_{rows}.truth.parquet"
         for engine in args.engines:
             print(f"[orchestrate] === {engine} @ {rows:,} rows ===")
-            res = run_engine(engine, fixture, rows, results_dir, args.threshold,
-                             allow_pure_python=args.allow_pure_python)
+            res, pred = run_engine(engine, fixture, rows, results_dir, args.threshold,
+                                   allow_pure_python=args.allow_pure_python)
+            # Accuracy eval runs here, BEFORE fixture/pred cleanup below.
+            acc = evaluate_datapoint(pred, truth, results_dir, engine, rows)
+            if acc is not None:
+                res["accuracy"] = acc
+            pred.unlink(missing_ok=True)
             all_results.append(res)
             # Flush the aggregate after EVERY datapoint so a later OOM can't lose
             # earlier results.
