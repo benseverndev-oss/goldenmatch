@@ -140,3 +140,89 @@ def test_columnar_path_empty_pairs_parity():
     )
     assert _partition(cl_list) == _partition(cl_col)
     assert len(cl_list) == len(all_ids)
+
+
+# ── Phase A: wired pipeline (GOLDENMATCH_COLUMNAR_PIPELINE gate) ──────
+
+
+def _explicit_person_df(n: int) -> pl.DataFrame:
+    import random
+
+    rng = random.Random(7)
+    firsts = ["Alice", "Bob", "Carol", "Dave"]
+    lasts = ["Smith", "Jones", "Brown", "Taylor", "Wilson"]
+    return pl.DataFrame(
+        [{"first_name": rng.choice(firsts), "last_name": rng.choice(lasts)} for _ in range(n)]
+    )
+
+
+def test_columnar_eligibility_predicate():
+    """The gate engages only for the narrow proven-safe shape."""
+    from goldenmatch.core.pipeline import _is_columnar_eligible
+
+    base = _cfg()  # single weighted jaro_winkler matchkey + blocking
+    assert _is_columnar_eligible(base, base.get_matchkeys(), across_files_only=False)
+
+    # across_files_only -> ineligible
+    assert not _is_columnar_eligible(base, base.get_matchkeys(), across_files_only=True)
+
+    # two matchkeys -> ineligible
+    two = _cfg()
+    two.matchkeys.append(
+        MatchkeyConfig(name="fn", type="weighted",
+                       fields=[MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0)],
+                       threshold=0.85)
+    )
+    assert not _is_columnar_eligible(two, two.get_matchkeys(), across_files_only=False)
+
+    # exact matchkey -> ineligible (not weighted)
+    exact = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(name="ln", type="exact", fields=[MatchkeyField(field="last_name")])],
+        blocking=base.blocking,
+    )
+    assert not _is_columnar_eligible(exact, exact.get_matchkeys(), across_files_only=False)
+
+    # embedding scorer -> ineligible (needs model bootstrap)
+    emb = _cfg()
+    emb.matchkeys[0].fields[0].scorer = "embedding"
+    assert not _is_columnar_eligible(emb, emb.get_matchkeys(), across_files_only=False)
+
+    # non-default backend -> ineligible
+    ray = _cfg()
+    ray.backend = "ray"
+    assert not _is_columnar_eligible(ray, ray.get_matchkeys(), across_files_only=False)
+
+
+def test_pipeline_columnar_gate_parity(monkeypatch):
+    """End-to-end: dedupe_df with the gate ON produces clusters identical to the
+    default list path, AND the columnar scorer is actually exercised (no silent
+    fallback masking a divergence)."""
+    import goldenmatch as gm
+    import goldenmatch.core.scorer as scorer_mod
+
+    df = _explicit_person_df(800)
+
+    def _result(enabled: bool):
+        monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "1" if enabled else "0")
+        called = {"columnar": False}
+        real = scorer_mod.score_blocks_columnar
+
+        def _spy(*a, **k):
+            called["columnar"] = True
+            return real(*a, **k)
+
+        monkeypatch.setattr(scorer_mod, "score_blocks_columnar", _spy)
+        res = gm.dedupe_df(df, config=_cfg())
+        monkeypatch.setattr(scorer_mod, "score_blocks_columnar", real)
+        part = frozenset(frozenset(c["members"]) for c in res.clusters.values())
+        return part, len(res.clusters), res.dupes.height, res.unique.height, called["columnar"]
+
+    off = _result(False)
+    on = _result(True)
+
+    # Gate ON must actually take the columnar path...
+    assert on[4] is True, "columnar scorer was not invoked under the gate"
+    assert off[4] is False, "columnar scorer ran with the gate OFF"
+    # ...and produce identical clusters + output counts.
+    assert off[0] == on[0]          # membership partition
+    assert off[1:4] == on[1:4]      # n_clusters, dupes, unique
