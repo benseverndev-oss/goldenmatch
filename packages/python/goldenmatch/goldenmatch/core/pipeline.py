@@ -710,7 +710,7 @@ def _run_dedupe_pipeline(
     llm_max_labels: int = 500,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
-    _prep_cache_seed: int | None = None,
+    _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
 ) -> dict:
     """Shared dedupe pipeline logic (post-ingest).
@@ -718,10 +718,12 @@ def _run_dedupe_pipeline(
     This function contains all pipeline steps from auto-fix/validation through
     output. Both run_dedupe() and run_dedupe_df() delegate to this function.
 
-    ``_prep_cache_seed``: optional stable identity (typically ``id(df)`` of
-    the caller's input DataFrame) used as the prep-cache key. Defaults to
-    ``id(combined_lf)`` when None; the seeded form is required for the
-    controller's iteration loop to hit the cache because each iteration
+    ``_prep_cache_seed``: optional stable identity for the prep-cache key —
+    typically ``(id(df), df.height)`` of the caller's input DataFrame. The
+    height component guards against CPython recycling an ``id()`` slot and
+    serving a stale prep across logically distinct inputs of the same schema.
+    Defaults to ``id(combined_lf)`` when None; the seeded form is required for
+    the controller's iteration loop to hit the cache because each iteration
     wraps the same caller-side ``df`` in a fresh LazyFrame.
     """
     memory_store = _open_memory_store(config)
@@ -733,12 +735,14 @@ def _run_dedupe_pipeline(
     # matchkeys/blocking/threshold, so these prep steps produce identical
     # output every time.
     #
-    # Cache key: (id(combined_lf), tuple(columns), prep_config_signature).
-    # The columns tuple is a cheap fingerprint that defends against Python
-    # reusing `id()` slots after GC — without it, a NEW LazyFrame that happens
-    # to land at the same memory address as a previously-cached one would
-    # silently get the stale entry. Column names + the id slot together are
-    # collision-proof in practice.
+    # Cache key: (seed, tuple(columns), prep_config_signature) where seed is
+    # `(id(df), df.height)` from the caller (dedupe_df) or `id(combined_lf)`
+    # for the file path. The columns tuple + height are cheap fingerprints
+    # that defend against Python reusing `id()` slots after GC: without them,
+    # a NEW frame landing at a previously-cached frame's memory address would
+    # silently get the stale entry. Column names defend against a different
+    # schema; height defends against same-schema-different-rows (e.g. an empty
+    # input vs a populated one) — the `test_dedupe_df_empty` flake.
     prep_cache_key = (
         _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
         tuple(combined_lf.collect_schema().names()),
@@ -1656,7 +1660,15 @@ def run_dedupe_df(
     # iteration loop reuses across 5 dedupe_df calls on the same `sample`.
     # Without it, each iteration's freshly-wrapped LazyFrame had a different
     # id() and the cache never hit.
-    cache_seed = id(df)
+    #
+    # `df.height` (O(1) on an eager frame) is folded into the seed so a
+    # recycled id() slot can't serve a stale prep across logically distinct
+    # inputs. The schema-name fingerprint in the key alone does NOT defend
+    # against this: an empty df and a populated df of the same schema share
+    # column names AND can land on the same id() slot after GC, producing a
+    # stale cache HIT (the source of the `test_dedupe_df_empty` `assert 3 == 0`
+    # flake under `pytest -n auto`). Height distinguishes them.
+    cache_seed = (id(df), df.height)
     # Cast all columns to string to prevent schema mismatch errors when
     # mixed-type columns (e.g. birth_year inferred as i64 in some rows,
     # str in others) reach blocking/scoring operations.

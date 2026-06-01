@@ -118,6 +118,46 @@ def test_lru_eviction():
     )
 
 
+def test_cache_seed_encodes_row_height():
+    """The prep-cache seed is ``(id(df), df.height)``, not bare ``id(df)``.
+
+    CPython recycles ``id()`` slots after GC, so a stale cache entry whose
+    key was built from a now-dead frame can collide with a fresh frame that
+    lands on the same address. The schema-name fingerprint in the key does
+    NOT discriminate same-schema inputs, so an empty df and a populated df of
+    the same schema could collide — the ``test_dedupe_df_empty`` flake
+    (`assert 3 == 0`). Folding height into the seed distinguishes them.
+    """
+    _prep_cache_clear()
+    df = pl.DataFrame({
+        "name": ["Alice", "Alice", "Bob"],
+        "email": ["a@x.com", "a@x.com", "b@y.com"],
+    })
+    gm.dedupe_df(df, exact=["email"])
+    seeds = {k[0] for k in _PREP_CACHE}
+    assert (id(df), df.height) in seeds, (
+        f"expected seed (id(df), height={df.height}) in cache seeds {seeds}"
+    )
+
+
+def test_empty_df_does_not_collide_with_populated_prep():
+    """Empty-input dedupe returns 0 rows and its cache seed carries height 0,
+    so a recycled id() slot can never serve it a populated frame's prep.
+
+    Regression for the ``test_dedupe_df_empty`` xdist flake: an empty df and
+    a 3-row df of identical schema/config differ only in height, which the
+    seed now captures.
+    """
+    _prep_cache_clear()
+    empty = pl.DataFrame({"email": []}).cast({"email": pl.Utf8})
+    result = gm.dedupe_df(empty, exact=["email"])
+    assert result.total_records == 0
+    seeds = {k[0] for k in _PREP_CACHE}
+    assert (id(empty), 0) in seeds, (
+        f"expected empty-df seed (id, height=0) in cache seeds {seeds}"
+    )
+
+
 def test_prep_cache_signature_quality_change_misses():
     """Different quality.mode → different signature → cache miss."""
     from goldenmatch.config.schemas import (
