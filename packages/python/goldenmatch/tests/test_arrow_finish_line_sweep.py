@@ -1,9 +1,17 @@
 from arrow_finish_line_sweep import (
+    PHASE_CRITERIA,
     Criterion,
+    PhaseVerdict,
     classify_phase,
+    parse_bench_json,
+    parse_native_speedup,
+    render_markdown_table,
 )
 
+from tests.fixtures.realistic_person import realistic_person_df
 
+
+# Task 1 tests: classifier
 def test_pass_when_all_ratio_criteria_met():
     crits = [
         Criterion(name="wall", kind="ratio_le", target=0.50),
@@ -51,10 +59,15 @@ def test_abs_le():
     assert classify_phase(crits, {"golden_wall_s": 80.0, "parity": True}).verdict == "CLOSE"
 
 
-# Task 2 tests
-from arrow_finish_line_sweep import PHASE_CRITERIA
+def test_unknown_kind_raises():
+    import pytest
+    bad = Criterion(name="x", kind="ratio_le", target=0.5)
+    object.__setattr__(bad, "kind", "bogus")  # frozen dataclass bypass
+    with pytest.raises(ValueError, match="unknown criterion kind"):
+        classify_phase([bad], {"x": {"new": 1.0, "legacy": 2.0}})
 
 
+# Task 2 tests: registry
 def test_registry_covers_phases_1_through_6():
     assert set(PHASE_CRITERIA) == {"phase1", "phase2", "phase3", "phase4", "phase5", "phase6"}
 
@@ -73,10 +86,7 @@ def test_phase3_has_three_speedup_gates():
     assert ("fingerprints", "speedup_ge", 3.0) in kinds
 
 
-# Task 3 tests
-from arrow_finish_line_sweep import parse_bench_json, render_markdown_table
-
-
+# Task 3 tests: parsers + emit
 def test_parse_bench_json_extracts_last_marker_line():
     out = 'noise\n__BENCH_JSON__{"total_wall_s": 12.5, "peak_rss_mb": 800}\nmore'
     d = parse_bench_json(out)
@@ -88,18 +98,15 @@ def test_parse_bench_json_returns_none_when_absent():
 
 
 def test_parse_native_speedup_reads_table_line():
-    from arrow_finish_line_sweep import parse_native_speedup
     out = "  native(Vec) speedup vs python          :     2.41x\n"
     assert parse_native_speedup(out, label="speedup vs python") == 2.41
 
 
 def test_parse_native_speedup_none_when_absent():
-    from arrow_finish_line_sweep import parse_native_speedup
     assert parse_native_speedup("no speedup here", label="speedup vs python") is None
 
 
 def test_render_markdown_table_has_row_per_phase():
-    from arrow_finish_line_sweep import PhaseVerdict
     rows = {"phase1": PhaseVerdict("PASS", ["wall: OK"]),
             "phase5": PhaseVerdict("BLOCKED", ["metric missing"])}
     md = render_markdown_table(rows)
@@ -108,11 +115,10 @@ def test_render_markdown_table_has_row_per_phase():
     assert md.startswith("| Phase | Verdict | Detail |")
 
 
-# Task 4 test
-from tests.fixtures.realistic_person import realistic_person_df
-
-
+# Task 4 test: fixture smoke
 def test_realistic_person_shape_and_identity_ratio():
     df = realistic_person_df(30_000, seed=42)
     assert df.height == 30_000
-    assert df["last_name"].n_unique() >= 1_000
+    # fixture guarantees a wide surname pool (>=5000 distinct at n>=15000);
+    # assert well above the degenerate-block danger zone.
+    assert df["last_name"].n_unique() >= 4_000

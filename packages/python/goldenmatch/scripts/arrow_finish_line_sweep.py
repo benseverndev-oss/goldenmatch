@@ -80,6 +80,11 @@ def classify_phase(crits: list[Criterion], metrics: dict) -> PhaseVerdict:
             else:
                 any_close = True
                 details.append(f"{c.name}: {val} > {c.target} CLOSE")
+        else:
+            # Unreachable for valid CritKind values; guard against a registry
+            # entry adding a new kind without a matching branch (would otherwise
+            # silently skip the criterion and yield a spurious PASS).
+            raise ValueError(f"unknown criterion kind: {c.kind!r}")
     return PhaseVerdict("CLOSE" if any_close else "PASS", details)
 
 
@@ -147,7 +152,9 @@ def parse_bench_json(stdout: str) -> dict | None:
 def parse_native_speedup(stdout: str, label: str) -> float | None:
     """Native kernel benches print a human table, not JSON:
     e.g. `native(Vec) speedup vs python : 2.41x`. Pull the multiple on the
-    line containing `label`. Returns None if absent."""
+    FIRST line containing `label`. Returns None if absent. (First-match is
+    intentional: the native benches print one summary row per label, unlike
+    the repeated-run stdout that parse_bench_json's last-match handles.)"""
     for line in stdout.splitlines():
         if label in line:
             m = re.search(r"([0-9]+\.?[0-9]*)\s*x", line)
