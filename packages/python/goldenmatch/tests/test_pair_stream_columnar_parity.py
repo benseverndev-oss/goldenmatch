@@ -26,6 +26,7 @@ from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
 from goldenmatch.core.scorer import (
     PAIR_STREAM_SCHEMA,
+    _score_one_block,
     find_fuzzy_matches,
     find_fuzzy_matches_columnar,
     pairs_df_to_list,
@@ -47,6 +48,22 @@ def _block_df(records: list[tuple[int, str]]) -> pl.DataFrame:
 
 def _block(records: list[tuple[int, str]], block_key: str = "k") -> BlockResult:
     return BlockResult(block_key=block_key, df=_block_df(records).lazy())
+
+
+def _block_df_multi(records: list[tuple[int, str, str]]) -> pl.DataFrame:
+    """Block frame with explicit per-row source labels (for the
+    across_files_only / cross-source filter tests)."""
+    return pl.DataFrame({
+        "__row_id__": [r[0] for r in records],
+        "__source__": [r[1] for r in records],
+        "name": [r[2] for r in records],
+    })
+
+
+def _block_multi(
+    records: list[tuple[int, str, str]], block_key: str = "k",
+) -> BlockResult:
+    return BlockResult(block_key=block_key, df=_block_df_multi(records).lazy())
 
 
 def _mk() -> MatchkeyConfig:
@@ -337,6 +354,95 @@ class TestScoreBlocksParity:
             "columnar wrapper failed to preserve matched_pairs side effect; "
             f"list_path={list_matched}, df_path={df_matched}"
         )
+
+    def test_across_files_only_parity(self):
+        """The cross-source (``across_files_only``) filter must produce
+        identical pairs via the columnar path vs the list path. The
+        list path filters via a Python comprehension on
+        ``source_lookup``; the columnar path applies a Polars filter on
+        the frame. Both must agree."""
+        # Two sources; only cross-source pairs survive the filter.
+        records = [
+            (1, "src_a", "John Smith"),
+            (2, "src_b", "Jon Smith"),
+            (3, "src_a", "John Smyth"),
+            (4, "src_b", "Jane Smith"),
+        ]
+        b = _block_multi(records)
+        mk = _mk()
+        source_lookup = {r[0]: r[1] for r in records}
+
+        list_pairs = score_blocks_parallel(
+            [b], mk, matched_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        df_pairs = score_blocks_columnar(
+            [b], mk, matched_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        assert sorted(pairs_df_to_list(df_pairs)) == sorted(list_pairs)
+        # And the filter actually fired: no same-source pair survives.
+        for a, b_id, _s in pairs_df_to_list(df_pairs):
+            assert source_lookup[a] != source_lookup[b_id]
+
+
+# ── Task 1.2: _score_one_block DataFrame emit (#623) ─────────────────
+
+
+class TestScoreOneBlockEmit:
+    """Task 1.2 (#623): ``_score_one_block`` threads ``_emit_dataframe``
+    through to ``find_fuzzy_matches`` and applies the across-files
+    filter on the frame (not a Python comprehension) when emitting a
+    DataFrame. Parity is byte-for-byte against the list emit."""
+
+    def test_emit_dataframe_parity(self):
+        records = [(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")]
+        b = _block(records)
+        mk = _mk()
+
+        as_list = _score_one_block(b, mk, exclude_pairs=set())
+        as_df = _score_one_block(b, mk, exclude_pairs=set(), _emit_dataframe=True)
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.schema == PAIR_STREAM_SCHEMA
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_emit_dataframe_across_files_parity(self):
+        records = [
+            (1, "src_a", "John Smith"),
+            (2, "src_b", "Jon Smith"),
+            (3, "src_a", "John Smyth"),
+        ]
+        b = _block_multi(records)
+        mk = _mk()
+        source_lookup = {r[0]: r[1] for r in records}
+
+        as_list = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+        )
+        as_df = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+            _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert pairs_df_to_list(as_df) == as_list
+
+    def test_emit_dataframe_single_source_short_circuit(self):
+        # across_files_only with a single-source block -> empty frame.
+        records = [(1, "John Smith"), (2, "Jon Smith")]
+        b = _block(records)  # both "fixture" source
+        mk = _mk()
+        source_lookup = {1: "fixture", 2: "fixture"}
+
+        as_df = _score_one_block(
+            b, mk, exclude_pairs=set(),
+            across_files_only=True, source_lookup=source_lookup,
+            _emit_dataframe=True,
+        )
+        assert isinstance(as_df, pl.DataFrame)
+        assert as_df.is_empty()
+        assert as_df.schema == PAIR_STREAM_SCHEMA
 
 
 # ── build_clusters parity ────────────────────────────────────────────

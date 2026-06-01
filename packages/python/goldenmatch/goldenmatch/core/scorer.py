@@ -912,24 +912,56 @@ def _score_one_block(
     exclude_pairs: set[tuple[int, int]] | frozenset[tuple[int, int]],
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
-) -> list[tuple[int, int, float]]:
-    """Score a single block — safe to call from a thread."""
+    *,
+    _emit_dataframe: bool = False,
+) -> list[tuple[int, int, float]] | pl.DataFrame:
+    """Score a single block — safe to call from a thread.
+
+    Task 1.2 (#623): ``_emit_dataframe`` threads through to
+    ``find_fuzzy_matches`` so the block scorer can be DataFrame-canonical.
+    When True the return is a ``pl.DataFrame`` (``PAIR_STREAM_SCHEMA``)
+    and the ``across_files_only`` cross-source filter is applied via a
+    Polars ``.filter()`` on the frame rather than a Python list
+    comprehension. Default False keeps the legacy list contract for the
+    deprecation window.
+    """
     block_df = block.df.collect()
 
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return []
+            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
 
     pairs = find_fuzzy_matches(
         block_df, mk,
         exclude_pairs=exclude_pairs,
         pre_scored_pairs=block.pre_scored_pairs,
+        _emit_dataframe=_emit_dataframe,
     )
-    # _score_one_block never opts into the Phase-1c DataFrame emit
-    # (_emit_dataframe defaults to False); the return is always a list.
-    # Narrow for pyright now that the find_fuzzy_matches return type
-    # includes pl.DataFrame as a union.
+
+    if _emit_dataframe:
+        # find_fuzzy_matches emits a frame in every branch under the flag.
+        assert isinstance(pairs, pl.DataFrame)
+        if across_files_only and source_lookup and not pairs.is_empty():
+            # Vectorized cross-source filter: join row_id -> source on
+            # both endpoints, keep pairs whose sources differ. Avoids the
+            # per-pair Python dict lookup the list path does.
+            src_map = pl.DataFrame({
+                "__row_id__": list(source_lookup.keys()),
+                "__src__": list(source_lookup.values()),
+            })
+            pairs = (
+                pairs
+                .join(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}),
+                      on="id_a", how="left")
+                .join(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}),
+                      on="id_b", how="left")
+                .filter(pl.col("src_a") != pl.col("src_b"))
+                .drop(["src_a", "src_b"])
+            )
+        return pairs
+
+    # Legacy list path (deprecation window).
     assert isinstance(pairs, list)
 
     if across_files_only and source_lookup:
