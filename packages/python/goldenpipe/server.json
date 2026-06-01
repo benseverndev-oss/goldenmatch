@@ -4,7 +4,7 @@
   "title": "GoldenPipe",
   "description": "One command to validate, transform, and deduplicate — chain GoldenCheck + Flow + Match.",
   "websiteUrl": "https://benseverndev-oss.github.io/goldenpipe/",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldenpipe",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenpipe",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

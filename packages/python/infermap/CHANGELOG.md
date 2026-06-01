@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-06-01
+
+### Added
+- Identity feeder: `write_aliases_from_mapping(...)` plus the `AliasWriteResult` dataclass, exported at top level. Writes per-record identity aliases into a GoldenMatch `IdentityStore` from an InferMap `MapResult`. Optional and goldenmatch-gated (lazy import; requires `goldenmatch>=1.15.0` only when called).
+- Newly public re-exports: `DomainPackTarget`, `detect_domain`, `detect_domain_detailed`.
+
+### Changed
+- Repository and project URLs rebranded from `benzsevern` to `benseverndev-oss`.
+
 ## [0.3.0] - 2026-04-10
 
 ### Added
