@@ -146,6 +146,55 @@ def test_rule_simple_plan_does_not_fire_over_50m_pairs():
     assert rule_simple_plan.predicate(p, _runtime(), 50_000) is False
 
 
+# ── Rule 3b: bucket-suggested ────────────────────────────────────────────────
+
+
+def test_bucket_suggested_fires_sub32gb_under_750k_when_pairs_fit(monkeypatch):
+    # 16GB box, 300k rows, 20M pairs (~1.3GB at 64B/pair, budget 0.5*16=8GB) -> bucket
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is True
+    plan = pr._bucket_suggested_plan(prof, rt, 300_000)
+    assert plan.backend == "bucket"
+    assert plan.rule_name == "plan_selected_bucket_suggested"
+
+
+def test_bucket_suggested_blocked_when_pairs_wont_fit(monkeypatch):
+    # NOTE: the existing <50M density cap means rejection only bites on a LOW-RAM
+    # box. 4GB box, 49M pairs (~3.1GB) vs budget 0.5*4=2GB -> 3.1 > 2 -> reject.
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    prof = _profile(total_comparisons=49_000_000)
+    rt = _runtime(ram_gb=4.0, cpus=4)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
+
+
+def test_bucket_suggested_blocked_over_750k():
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    prof = _profile(total_comparisons=1_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=1_000_000) is False
+
+
+def test_bucket_suggested_not_needed_on_fat_box():
+    # >=32GB is already covered by fast_box; bucket_suggested requires sub-32GB.
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=64.0, cpus=16)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
+
+
+def test_bucket_suggested_polars_when_native_absent(monkeypatch):
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    monkeypatch.setattr(pr, "native_enabled", lambda component: False)
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    plan = pr._bucket_suggested_plan(prof, rt, 300_000)
+    assert plan.backend == "polars-direct"  # _scoring_backend() fallback
+
+
 def test_default_rules_phase_5_order():
     """Phase 5: user_override first; pathological precedes simple; fast-box,
     chunked, then ray BEFORE duckdb so 50M+ tries ray first and falls
