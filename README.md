@@ -223,7 +223,8 @@ Reproducible end-to-end pipelines running GoldenMatch on public data at scale, e
 GoldenMatch ships fat optional extras so you only pay for what you use:
 
 ```bash
-pip install goldenmatch                    # core (CSV in, CSV out)
+pip install goldenmatch                    # core (CSV in, CSV out) + native acceleration on common platforms
+pip install goldenmatch[native]            # back-compat alias; native is already default on common platforms
 pip install goldenmatch[embeddings]        # + sentence-transformers, FAISS
 pip install goldenmatch[llm]               # + Claude / OpenAI for LLM boost
 pip install goldenmatch[postgres]          # + Postgres sync
