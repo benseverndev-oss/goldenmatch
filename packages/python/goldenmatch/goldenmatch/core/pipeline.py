@@ -116,7 +116,61 @@ def _get_block_scorer(config: GoldenMatchConfig):
         )
         return score_blocks_datafusion
     return score_blocks_parallel
-from goldenmatch.core.cluster import build_clusters
+from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
+
+# ── Columnar pipeline fast-path (Arrow roadmap Phase A) ──────────────
+# Routes the eligible single-fuzzy-matchkey dedupe shape through the
+# columnar pair-stream path (score_blocks_columnar -> build_clusters_columnar)
+# instead of the list path (score_blocks_parallel -> build_clusters). The
+# 1M profile-hotspots run measured the columnar path ~38% faster (359s vs
+# 575s) -- the win is the columnar scorer's direct-DataFrame emit over the
+# pair stream, not the cluster build. Default OFF; eligibility is the narrow
+# shape proven byte-identical to the list path by
+# tests/test_columnar_pipeline_parity.py. Design: docs/columnar-pipeline-wiring.md.
+_COLUMNAR_NON_DEFAULT_BACKENDS = frozenset({
+    "ray", "duckdb", "duckdb-backend", "datafusion", "bucket", "chunked",
+})
+_COLUMNAR_SAFE_SCORERS = frozenset({
+    "jaro_winkler", "levenshtein", "token_sort", "token_set", "ratio",
+    "exact", "soundex_match", "dice", "jaccard", "ensemble",
+})
+
+
+def _columnar_pipeline_enabled() -> bool:
+    """Phase A opt-in via ``GOLDENMATCH_COLUMNAR_PIPELINE`` (default OFF)."""
+    return os.environ.get("GOLDENMATCH_COLUMNAR_PIPELINE", "0").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _is_columnar_eligible(
+    config: GoldenMatchConfig, matchkeys: list, across_files_only: bool,
+) -> bool:
+    """True only for the narrow shape where the columnar fast-path is
+    byte-identical to the list path AND free of the list-coupled optional
+    steps (exact/probabilistic aggregation, postflight signals + threshold
+    filter, rerank, LLM scorer/boost). See docs/columnar-pipeline-wiring.md."""
+    if across_files_only or config.blocking is None:
+        return False
+    if getattr(config, "backend", None) in _COLUMNAR_NON_DEFAULT_BACKENDS:
+        return False
+    # Auto-config postflight consumes the pair LIST (signals + threshold filter).
+    if getattr(config, "_preflight_report", None) is not None:
+        return False
+    if getattr(config, "llm_scorer", None) is not None:
+        return False
+    if getattr(config, "boost", None) is not None:
+        return False
+    if len(matchkeys) != 1:
+        return False
+    mk = matchkeys[0]
+    if getattr(mk, "type", None) != "weighted" or getattr(mk, "rerank", False):
+        return False
+    for f in (getattr(mk, "fields", None) or []):
+        if (getattr(f, "scorer", None) or "") not in _COLUMNAR_SAFE_SCORERS:
+            return False
+    return True
+
 from goldenmatch.core.golden import (
     _polars_native_eligible,
     build_golden_records_batch,
@@ -956,6 +1010,16 @@ def _run_dedupe_pipeline(
     all_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
+    # Arrow roadmap Phase A: when GOLDENMATCH_COLUMNAR_PIPELINE=1 and the config
+    # is eligible (single weighted matchkey, no exact/probabilistic, no
+    # auto-config postflight, default backend), the fuzzy scoring + cluster steps
+    # below route through the columnar pair-stream path. Default OFF -> the list
+    # path runs unchanged. See docs/columnar-pipeline-wiring.md.
+    _use_columnar = _columnar_pipeline_enabled() and _is_columnar_eligible(
+        config, matchkeys, across_files_only,
+    )
+    _columnar_pairs_df: pl.DataFrame | None = None
+
     # Top-line metric: every downstream pair-count ratio depends on N.
     record_metric("record_count", collected_df.height)
     record_metrics({
@@ -1185,6 +1249,28 @@ def _run_dedupe_pipeline(
                     _prep_store.release_connection()
 
                 with stage("fuzzy_score_blocks"):
+                    if _use_columnar:
+                        # Phase A: the columnar scorer emits the pair stream as a
+                        # DataFrame; build_clusters_columnar consumes it at the
+                        # cluster step (no list materialization). Eligibility
+                        # guarantees a single weighted matchkey, so this runs once.
+                        # Any error falls back to the list scorer so the opt-in
+                        # gate can't break an otherwise-eligible run.
+                        try:
+                            from goldenmatch.core.scorer import score_blocks_columnar
+                            _columnar_pairs_df = score_blocks_columnar(
+                                blocks, mk, matched_pairs,
+                            )
+                            fuzzy_pair_count += _columnar_pairs_df.height
+                            continue
+                        except Exception:
+                            logger.warning(
+                                "columnar fast-path scoring failed; falling back "
+                                "to the list path",
+                                exc_info=True,
+                            )
+                            _use_columnar = False
+                            _columnar_pairs_df = None
                     # The **key_mode_kwargs unpack feeds str values
                     # (store_path, signature) to score_blocks_ray; the
                     # parallel/duckdb scorers never see them since the
@@ -1349,14 +1435,29 @@ def _run_dedupe_pipeline(
         if hasattr(config.golden_rules, "auto_split"):
             auto_split = config.golden_rules.auto_split
 
-    record_metric("scored_pair_count", len(all_pairs))
+    record_metric(
+        "scored_pair_count",
+        _columnar_pairs_df.height
+        if (_use_columnar and _columnar_pairs_df is not None)
+        else len(all_pairs),
+    )
     with stage("cluster"):
-        clusters = build_clusters(
-            all_pairs, all_ids,
-            max_cluster_size=max_cluster_size,
-            weak_cluster_threshold=weak_threshold,
-            auto_split=auto_split,
-        )
+        if _use_columnar and _columnar_pairs_df is not None:
+            # Phase A columnar path: same clusters as build_clusters on the
+            # equivalent list (parity: tests/test_columnar_pipeline_parity.py).
+            clusters = build_clusters_columnar(
+                _columnar_pairs_df, all_ids=all_ids,
+                max_cluster_size=max_cluster_size,
+                weak_cluster_threshold=weak_threshold,
+                auto_split=auto_split,
+            )
+        else:
+            clusters = build_clusters(
+                all_pairs, all_ids,
+                max_cluster_size=max_cluster_size,
+                weak_cluster_threshold=weak_threshold,
+                auto_split=auto_split,
+            )
     record_metrics({
         "cluster_count": len(clusters),
         "multi_member_cluster_count": sum(
