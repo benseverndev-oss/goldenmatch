@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1 (2026-06-01)
+
+### Fixed
+
+- The `/validate` API route no longer returns the raw exception/traceback to
+  clients: it now logs the traceback server-side and returns only the first
+  error line, truncated to 200 chars.
+
+### Changed
+
+- Repository and project URLs rebranded from `benzsevern` to `benseverndev-oss`.
+
 ## 1.2.0 (2026-05-13)
 
 **Suite orchestration for Identity Graph.** GoldenPipe gains first-class

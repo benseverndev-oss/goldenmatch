@@ -4,7 +4,7 @@
   "title": "GoldenFlow",
   "description": "Standardize, reshape, and normalize messy data — CSV, Excel, Parquet, S3, databases.",
   "websiteUrl": "https://benseverndev-oss.github.io/goldenflow/",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldenflow",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenflow",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

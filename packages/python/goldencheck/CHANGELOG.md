@@ -2,6 +2,19 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [1.3.0] - 2026-06-01
+
+### Added
+- `scan_dataframe(df, ...)` top-level export: scan an in-memory Polars DataFrame directly, without a CSV round-trip.
+- Identity-safe primary-key preflight (`IdentitySafePkProfiler`): scans now emit a WARNING when a table has no stable primary-key candidate.
+
+### Security
+- SSRF guard on the `goldencheck serve` `/scan-url` endpoint (`_validate_remote_url`): rejects non-HTTP(S) schemes and private/internal IP addresses.
+
+### Changed
+- Scanner perf: cached `n_unique`/`null_count` and vectorized generalization in the column-profile loop (no behavioral change).
+- Repository and project URLs rebranded from `benzsevern` to `benseverndev-oss`.
+
 ## [1.1.0] - 2026-04-03
 
 ### Added

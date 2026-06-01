@@ -1,7 +1,7 @@
 """GoldenCheck — data validation that discovers rules from your data."""
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # Core: scanner + models
 from goldencheck.config.loader import load_config
