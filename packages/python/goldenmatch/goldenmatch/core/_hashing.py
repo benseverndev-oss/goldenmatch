@@ -59,6 +59,15 @@ def _value_bytes(name: str, value: Any) -> bytes:
 
 def _fingerprint_py(record: dict[str, Any]) -> str:
     """Pure-Python reference implementation of canonicalization v1."""
+    # Validate key types up front so a non-string field name raises the same
+    # TypeError the native kernel does (hash.rs: "record field names must be
+    # strings"). Without this, the `k.startswith("__")` filter below raises a
+    # confusing AttributeError ('int' object has no attribute 'startswith')
+    # and sorting mixed-type keys would also fail -- neither matches the spec'd
+    # contract the native kernel enforces.
+    for k in record:
+        if not isinstance(k, str):
+            raise TypeError("record field names must be strings")
     buf = bytearray()
     for name in sorted(k for k in record if not k.startswith("__")):
         buf += name.encode("utf-8")

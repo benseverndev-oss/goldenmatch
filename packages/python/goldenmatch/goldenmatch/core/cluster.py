@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import operator
 import os
 import uuid
 from collections import defaultdict
@@ -137,7 +138,10 @@ def _build_mst(
 ) -> list[tuple[int, int, float]]:
     """Build max-weight spanning tree using Kruskal's algorithm."""
     edges = [(a, b, s) for (a, b), s in pair_scores.items()]
-    edges.sort(key=lambda e: e[2], reverse=True)
+    # operator.itemgetter(2) is a C-level key extractor; the equivalent
+    # `lambda e: e[2]` invokes a Python frame per comparison-key fetch and
+    # showed up as a hotspot in the profile-hotspots cProfile run.
+    edges.sort(key=operator.itemgetter(2), reverse=True)
     uf = UnionFind()
     uf.add_many(members)
     mst: list[tuple[int, int, float]] = []
@@ -158,24 +162,57 @@ def split_oversized_cluster(
         return [{"members": sorted(members), "size": len(members),
                  "oversized": False, "pair_scores": pair_scores}]
 
-    mst = _build_mst(members, pair_scores)
-    if not mst:
+    if native_enabled("clustering"):  # pragma: no cover - exercised by the native CI lane (test_native_parity), not the no-ext python lane
+        # Native kernel does MST (Kruskal) + weakest-edge removal + re-union
+        # and returns the post-split subcluster member lists. Edges are passed
+        # in pair_scores iteration order so the native stable score-desc sort
+        # and first-minimum tie-break reproduce the Python path exactly. An
+        # empty return means the MST was empty -> unsplittable (handled by the
+        # shared guard below, mirroring the pure-Python `if not mst`).
+        edges = [(a, b, s) for (a, b), s in pair_scores.items()]
+        subclusters: list = native_module().mst_split_components(members, edges)
+    else:
+        mst = _build_mst(members, pair_scores)
+        if not mst:
+            subclusters = []
+        else:
+            weakest = min(mst, key=lambda e: e[2])
+            remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
+
+            uf = UnionFind()
+            uf.add_many(members)
+            for a, b, _s in remaining:
+                uf.union(a, b)
+
+            subclusters = uf.get_clusters()
+
+    if not subclusters:
+        # Native MST empty or Python cluster unsplittable -> leave intact.
         return [{"members": sorted(members), "size": len(members),
                  "oversized": False, "pair_scores": pair_scores}]
-
-    weakest = min(mst, key=lambda e: e[2])
-    remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
-
-    uf = UnionFind()
-    uf.add_many(members)
-    for a, b, _s in remaining:
-        uf.union(a, b)
+    # Partition pair_scores across the post-split subclusters in a SINGLE
+    # pass. The previous shape rebuilt each subcluster's pair dict with a
+    # comprehension that re-scanned the FULL pair_scores per subcluster
+    # (O(pairs * subclusters)); on dense oversized clusters that was a
+    # measured hotspot. A member -> subcluster-index map lets us bucket
+    # each pair exactly once (O(pairs)). A pair whose endpoints landed in
+    # different subclusters (the removed weakest edge, plus any cross-cut
+    # edge) belongs to neither bucket -- identical to the old `a in
+    # sc_members and b in sc_members` filter.
+    member_to_sub: dict[int, int] = {}
+    for idx, sc_members in enumerate(subclusters):
+        for m in sc_members:
+            member_to_sub[m] = idx
+    sub_pairs: list[dict[tuple[int, int], float]] = [{} for _ in subclusters]
+    for (a, b), s in pair_scores.items():
+        ia = member_to_sub.get(a)
+        if ia is not None and ia == member_to_sub.get(b):
+            sub_pairs[ia][(a, b)] = s
 
     result = []
-    for sc_members in uf.get_clusters():
+    for idx, sc_members in enumerate(subclusters):
         sc_list = sorted(sc_members)
-        sc_pairs = {(a, b): s for (a, b), s in pair_scores.items()
-                    if a in sc_members and b in sc_members}
+        sc_pairs = sub_pairs[idx]
         size = len(sc_list)
         conf = compute_cluster_confidence(sc_pairs, size)
         result.append({
@@ -526,7 +563,11 @@ def compute_cluster_confidence(
     avg_edge = sum(scores) / len(scores)
     max_possible_edges = size * (size - 1) / 2
     connectivity = len(pair_scores) / max_possible_edges if max_possible_edges > 0 else 0.0
-    bottleneck_pair = min(pair_scores, key=lambda p: pair_scores[p])
+    # `min(pair_scores, key=lambda p: pair_scores[p])` invoked a Python lambda
+    # AND a dict lookup per pair (a profiled hotspot at ~2.9M lambda calls).
+    # Scanning items() with a C-level itemgetter key avoids both; ties resolve
+    # to the same first-minimum key because items() preserves dict order.
+    bottleneck_pair = min(pair_scores.items(), key=operator.itemgetter(1))[0]
 
     # Weighted confidence: weakest link matters most
     confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity
@@ -846,21 +887,27 @@ def build_clusters_columnar(
         Same ``dict[int, dict]`` as ``build_clusters``. Phase 2 changes
         this to the columnar two-frame shape.
     """
-    import polars as _pl
-
-    from goldenmatch.core.scorer import pairs_df_to_list
-
     if all_ids is None and not pairs_df.is_empty():
-        # Derive all_ids from the DataFrame via Polars expressions instead
-        # of iterating tuples (the slow path in build_clusters' own derive
-        # branch). Phase 2 lifts this to a fully vectorized columnar
-        # derive in the canonical implementation.
-        ids_series = _pl.concat(
-            [pairs_df["id_a"], pairs_df["id_b"]],
-        ).unique()
-        all_ids = [int(i) for i in ids_series.to_list()]
+        # Derive all_ids via numpy (zero-copy concat then tolist's tight
+        # C loop). The previous Polars-based path materialized id_a/id_b
+        # as Python lists separately, then int()-coerced each one. At
+        # 131M pairs that's a measurable cost; numpy.tolist on int64
+        # already returns native Python ints.
+        import numpy as _np
+        a_np = pairs_df["id_a"].to_numpy()
+        b_np = pairs_df["id_b"].to_numpy()
+        all_ids = _np.unique(_np.concatenate([a_np, b_np])).tolist()
 
-    pairs = pairs_df_to_list(pairs_df)
+    # Convert pair stream to list[(int, int, float)] via numpy.tolist()
+    # instead of pairs_df_to_list's Polars-based path. The cprofile
+    # hotspot run (run 26725154453) showed build_clusters_columnar at
+    # cluster.py:821 with 212s cumtime at 1M, larger than score_blocks
+    # at 188s. The list construction dominated because Polars'
+    # Series.to_list() walks Python objects per-element AND the
+    # comprehension paid (int(), int(), float()) coercion per row.
+    # numpy.tolist() on int64/float64 already returns native Python
+    # int/float, so zip() can build tuples without further coercion.
+    pairs = _pairs_df_to_list_numpy(pairs_df)
     return build_clusters(
         pairs,
         all_ids=all_ids,
@@ -868,6 +915,31 @@ def build_clusters_columnar(
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
     )
+
+
+def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:
+    """Faster DataFrame -> list[Pair] via numpy.tolist().
+
+    The legacy ``scorer.pairs_df_to_list`` uses Polars' Series.to_list()
+    which walks Python objects per element AND then does ``(int(a),
+    int(b), float(s))`` coercion in the comprehension. numpy.tolist on
+    a Polars-backed int64/float64 Series uses zero-copy + a tight C
+    loop, returning native Python int/float directly. Net win at 131M
+    pairs: ~2-3x on this conversion step (cumtime reduction visible in
+    the profile_hotspots harness post-merge).
+
+    Kept private (leading underscore) so consumers other than
+    ``build_clusters_columnar`` don't accidentally rely on this path
+    while ``scorer.pairs_df_to_list`` is still the public contract.
+    """
+    if df.is_empty():
+        return []
+    return list(zip(
+        df["id_a"].to_numpy().tolist(),
+        df["id_b"].to_numpy().tolist(),
+        df["score"].to_numpy().tolist(),
+        strict=True,
+    ))
 
 
 # ---------------------------------------------------------------------------

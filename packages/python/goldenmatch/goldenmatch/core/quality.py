@@ -109,11 +109,26 @@ def _scan_only(
     issues = []
     for f in findings:
         issues.append({
-            "rule": f.rule_id,
-            "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+            # goldencheck's Finding dataclass exposes `check` and
+            # `affected_rows` (see goldencheck/models/finding.py); the
+            # `rule_id`/`rows_affected` names used previously don't exist
+            # and raised AttributeError, which the caller swallowed as a
+            # quality-scan warning. The serialized dict keys stay
+            # "rule"/"rows_affected" (the MCP scan_quality contract).
+            "rule": f.check,
+            # Severity is goldencheck's IntEnum (INFO=1/WARNING=2/ERROR=3),
+            # so `.value` is an int — but consumers compare against the
+            # lowercase name (the web router does
+            # `i["severity"].lower() == "error"`). Serialize the name, not the
+            # int, so `severity` is always a string like "warning"/"error".
+            "severity": (
+                f.severity.name.lower()
+                if hasattr(f.severity, "name")
+                else str(f.severity).lower()
+            ),
             "column": f.column,
             "message": f.message,
-            "rows_affected": f.rows_affected,
+            "rows_affected": f.affected_rows,
             "confidence": round(f.confidence, 2) if hasattr(f, "confidence") else None,
         })
 

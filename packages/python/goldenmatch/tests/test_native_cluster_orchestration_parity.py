@@ -20,6 +20,7 @@ if not hasattr(native, "build_clusters_native"):
     )
 
 from goldenmatch.core.cluster import build_clusters as py_build_clusters
+from goldenmatch.core.cluster import compute_cluster_confidence
 
 
 def _canon_pair_scores(d):
@@ -59,7 +60,22 @@ def _assert_clusters_equal(py_result, rs_result, *, with_quality_fields=False):
         assert _canon_pair_scores(py_info["pair_scores"]) == _canon_pair_scores(
             rs_info["pair_scores"]
         )
-        assert py_info["confidence"] == pytest.approx(rs_info["confidence"], abs=1e-9)
+        # The native kernel subsumes the loop "through compute_cluster_confidence"
+        # (its docstring) -- i.e. RAW confidence. It deliberately does NOT apply
+        # build_clusters' post-hoc weak-cluster confidence downgrade (a separate
+        # Python step that runs after compute_cluster_confidence and only fires
+        # for weak clusters). So compare the kernel against the RAW formula, not
+        # py_build_clusters' (possibly downgraded) value -- otherwise weak-link
+        # inputs falsely diverge (0.494 raw vs 0.3458 downgraded). For non-weak
+        # clusters the two are identical, so existing cases are unaffected.
+        raw_conf = compute_cluster_confidence(
+            dict(rs_info["pair_scores"]), rs_info["size"],
+        )["confidence"]
+        # abs=1e-5: the kernel accumulates the avg_edge sum in f32, so on large
+        # clusters it diverges from Python's f64 sum by a few 1e-6 (same f32
+        # precision class as the field-matrix kernels' 1e-4 band). Tight enough
+        # to catch a real formula divergence, loose enough for f32 rounding.
+        assert rs_info["confidence"] == pytest.approx(raw_conf, abs=1e-5)
         # bottleneck_pair: either ordering valid (Python's min() is "first min wins";
         # the kernel mirrors the same iteration order, but the BOTTLENECK ITSELF
         # has only one canonical answer per cluster).

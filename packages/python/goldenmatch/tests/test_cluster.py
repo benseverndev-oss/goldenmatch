@@ -61,7 +61,10 @@ class TestBuildClusters:
         assert len(result) == 2
         # Find the cluster containing member 1
         cluster_with_1 = [c for c in result.values() if 1 in c["members"]][0]
-        assert cluster_with_1["members"] == [1, 2, 3]
+        # Member ORDER is not a contract (build_clusters keeps whatever order
+        # the UF kernel returns -- Python dict-insertion vs native hash order
+        # differ; see the v34 note in cluster.py). Assert membership only.
+        assert sorted(cluster_with_1["members"]) == [1, 2, 3]
         assert cluster_with_1["size"] == 3
         assert cluster_with_1["oversized"] is False
         # pair_scores should contain the pairs
@@ -102,13 +105,15 @@ class TestBuildClusters:
         assert cluster["pair_scores"][(10, 20)] == 0.85
         assert cluster["pair_scores"][(20, 30)] == 0.77
 
-    def test_members_sorted(self):
-        """Members list is sorted."""
+    def test_members_complete(self):
+        """A cluster contains exactly its connected members (order-agnostic:
+        build_clusters does not guarantee member order -- native hash order vs
+        Python insertion order differ; readers treat members as a set)."""
         pairs = [(5, 3, 0.9), (3, 1, 0.9)]
         all_ids = [5, 3, 1]
         result = build_clusters(pairs, all_ids)
         cluster_with_all = [c for c in result.values() if c["size"] == 3][0]
-        assert cluster_with_all["members"] == [1, 3, 5]
+        assert sorted(cluster_with_all["members"]) == [1, 3, 5]
 
 
 def test_auto_split_oversized():
@@ -187,6 +192,30 @@ def test_split_chain():
     member_sets = [set(c["members"]) for c in result]
     assert {0, 1} in member_sets
     assert {2, 3} in member_sets
+
+
+def test_split_partitions_pair_scores_correctly():
+    """After splitting, each subcluster keeps EVERY original pair whose two
+    endpoints landed in that subcluster -- including non-MST edges -- and the
+    cut edge appears in no subcluster. Locks the one-pass partition refactor
+    (member -> subcluster map) against the old per-subcluster rescan."""
+    # Triangle {0,1,2} (dense) + weak bridge 2-3. MST keeps 0-1, 1-2, 2-3;
+    # weakest MST edge 2-3 (0.3) is removed -> {0,1,2} and {3}. The non-MST
+    # edge 0-2 (0.85) is WITHIN {0,1,2} and must be retained.
+    pair_scores = {(0, 1): 0.9, (0, 2): 0.85, (1, 2): 0.88, (2, 3): 0.3}
+    result = split_oversized_cluster([0, 1, 2, 3], pair_scores)
+
+    by_members = {frozenset(c["members"]): c for c in result}
+    assert set(by_members) == {frozenset({0, 1, 2}), frozenset({3})}
+
+    triangle = by_members[frozenset({0, 1, 2})]
+    # All three intra-subcluster edges retained (incl. the non-MST 0-2).
+    assert set(triangle["pair_scores"]) == {(0, 1), (0, 2), (1, 2)}
+    # The removed cross-cut edge is dropped from every subcluster.
+    assert all((2, 3) not in c["pair_scores"] for c in result)
+    # bottleneck is the weakest intra-subcluster edge (0,2)=0.85.
+    assert triangle["bottleneck_pair"] == (0, 2)
+    assert by_members[frozenset({3})]["pair_scores"] == {}
 
 
 def test_was_split_not_in_output():

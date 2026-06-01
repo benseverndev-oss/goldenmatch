@@ -60,6 +60,21 @@ def test_native_field_matrix_matches_rapidfuzz(scorer_name: str):
     np.testing.assert_allclose(rs_mat, py_mat, atol=1e-4)
 
 
+def _offdiag(m: np.ndarray) -> np.ndarray:
+    """Zero the diagonal so parity is asserted only on cells the pipeline reads.
+
+    The exact/soundex match matrices diverge ONLY on the diagonal: the native
+    kernel reports self-match = 1.0, while Python's `_exact_score_matrix` only
+    sets 1.0 for hash-groups of size > 1, leaving a singleton value's diagonal
+    at 0.0. That divergence is a documented don't-care -- every consumer
+    extracts pairs via `np.triu(combined, k=1)` (scorer.py), which discards the
+    diagonal before any pair is emitted. Compare the off-diagonal contract.
+    """
+    out = m.astype(np.float64).copy()
+    np.fill_diagonal(out, 0.0)
+    return out
+
+
 def test_native_soundex_matches_jellyfish():
     py_mat = scorer._exact_score_matrix(
         [scorer.jellyfish.soundex(v) if v else None for v in _VALUES]
@@ -67,15 +82,16 @@ def test_native_soundex_matches_jellyfish():
     rs_mat = _native_field_matrix(_VALUES, "soundex_match")
     assert rs_mat is not None
     assert rs_mat.shape == py_mat.shape
-    # soundex is binary 0/1; no tolerance band needed.
-    np.testing.assert_array_equal(rs_mat.astype(np.float64), py_mat)
+    # soundex is binary 0/1; no tolerance band needed. Diagonal excluded
+    # (self-match don't-care; see _offdiag).
+    np.testing.assert_array_equal(_offdiag(rs_mat), _offdiag(py_mat))
 
 
 def test_native_exact_matches_hash_path():
     py_mat = scorer._exact_score_matrix(_VALUES)
     rs_mat = _native_field_matrix(_VALUES, "exact")
     assert rs_mat is not None
-    np.testing.assert_array_equal(rs_mat.astype(np.float64), py_mat)
+    np.testing.assert_array_equal(_offdiag(rs_mat), _offdiag(py_mat))
 
 
 def test_symmetric_self_cdist():
