@@ -118,7 +118,6 @@ def _get_block_scorer(config: GoldenMatchConfig):
     return score_blocks_parallel
 from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
 
-
 # ── Columnar pipeline fast-path (Arrow roadmap Phase A) ──────────────
 # Routes the eligible single-fuzzy-matchkey dedupe shape through the
 # columnar pair-stream path (score_blocks_columnar -> build_clusters_columnar)
