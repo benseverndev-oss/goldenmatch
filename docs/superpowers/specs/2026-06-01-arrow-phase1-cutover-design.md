@@ -33,10 +33,16 @@ The columnar machinery already exists behind opt-in seams:
   default OFF) + `:146` `_is_columnar_eligible` (narrow: single weighted matchkey,
   no exact/probabilistic, no `_preflight_report`, no rerank/LLM/boost, default
   backend, columnar-safe scorers).
-- 32 files reference `scored_pairs`; ~8 are direct scorer callers
-  (`backends/score_buckets.py:711`, `backends/ray_backend.py:116`,
-  `core/chunked.py:125/367/411`, `core/blocker.py:790`, `tui/engine.py:206`,
-  plus `core/pipeline.py` and `scorer.py` internals).
+- 32 files reference a `scored_pairs` variable; SEPARATELY, ~8 sites call the
+  scorer directly and consume its return:
+  - Hot (N-scaling): `backends/score_buckets.py:711`, `backends/ray_backend.py:116`,
+    `core/chunked.py:125/367/411` (these call `score_blocks_parallel(...)` and
+    consume the return INLINE -- no `scored_pairs` variable; the migration is
+    "replace the list consumption with columnar accumulation", not "find
+    `scored_pairs`"), `core/pipeline.py`, and `scorer.py` internals.
+  - Cold: `core/blocker.py:790` is the learned-blocking SAMPLE path (runs once
+    during auto-config on a bounded sample, not per row -> shim, not native);
+    `tui/engine.py:206` is interactive/small -> shim.
 
 ## Scope (the boundary)
 
@@ -68,9 +74,10 @@ existing flag for rollback, then is deleted.
 - **Hot** (touch every pair, scales with row count): bucket / chunked / ray
   scorer accumulation (`pl.concat` of block frames instead of `list.extend`),
   pipeline cluster-ingest, golden. -> DataFrame-native.
-- **Cold** (sample, few rows, or serialization; never N-scaling): web preview,
-  MCP tools, lineage explain, TUI matches/boost tabs, report, dashboard. -> keep
-  ONE `pairs_df_to_list()` call at their boundary. Acceptable per the roadmap's
+- **Cold** (sample, few rows, or serialization; never N-scaling): `core/blocker.py:790`
+  (learned-blocking sample), `tui/engine.py:206`, web preview, MCP tools, lineage
+  explain, TUI matches/boost tabs, report, dashboard. -> keep ONE
+  `pairs_df_to_list()` call at their boundary. Acceptable per the roadmap's
   "no `.to_pylist()` in any path that runs N times with row count" rule.
 
 The implementation plan tags each of the ~32 `scored_pairs` files hot or cold
@@ -110,7 +117,7 @@ The Stage-0 driver runs phase1's legacy path at 5M and OOMs. Phase 1:
 - adds a separate feasibility check that runs ONLY the columnar path at 5M
   (proves completion without a legacy baseline).
 
-Contained change to `scripts/arrow_finish_line_sweep.py`.
+Contained change to `packages/python/goldenmatch/scripts/arrow_finish_line_sweep.py`.
 
 ## Deprecation window (one release)
 
@@ -129,7 +136,9 @@ Contained change to `scripts/arrow_finish_line_sweep.py`.
   local, per `feedback_avoid_full_suite_oom`) that the columnar path completes.
 - **Per-consumer:** each migrated hot consumer gets a test that it produces
   identical clusters/output via the DataFrame path vs the prior list path.
-- **Lint:** the CI guard banning new hot-path `scored_pairs: list[tuple]`.
+- **Lint:** the CI guard banning new hot-path `scored_pairs` list annotations --
+  must match both the full `list[tuple[int, int, float]]` and the abbreviated
+  `list[tuple]` forms (both appear in the codebase).
 
 ## What this does NOT do
 
