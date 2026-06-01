@@ -67,6 +67,16 @@ def _fixture_df() -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
+def _name_matchkey():
+    """The single weighted matchkey on `name`. EXACT construction confirmed
+    against the schema: `name` is REQUIRED; `rerank` defaults to False."""
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    return MatchkeyConfig(
+        name="name_match", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+    )
+
+
 def _two_pass_config():
     """Valid full config from auto-config, then OVERRIDE blocking + matchkey so
     only the multi-pass behavior is under test."""
@@ -77,14 +87,11 @@ def _two_pass_config():
         keys=[BlockingKeyConfig(fields=["city"])],
         passes=[BlockingKeyConfig(fields=["city"]), BlockingKeyConfig(fields=["zip"])],
     )
-    # Replace matchkeys with ONE weighted matchkey on `name`. Build the
-    # MatchkeyConfig the same way the codebase does -- inspect config/schemas.py
-    # for the exact field names (type="weighted", threshold=0.8,
-    # fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)]).
-    # Assign it where cfg.get_matchkeys() reads (cfg.matchkeys or
-    # cfg.match_settings.matchkeys) and VERIFY cfg.get_matchkeys() == [your mk].
-    # Ensure mk.rerank is None/False (offline; no cross-encoder).
-    ...  # construct + assign `mk`; assert len(cfg.get_matchkeys()) == 1
+    # get_matchkeys() reads top-level cfg.matchkeys first (schemas.py:797), which
+    # is where auto_configure_df populates them -- so this assignment both takes
+    # precedence and matches the auto-config surface.
+    cfg.matchkeys = [_name_matchkey()]
+    assert len(cfg.get_matchkeys()) == 1
     return cfg
 
 
@@ -182,8 +189,7 @@ def test_single_pass_bucket_unchanged():
     cfg.blocking = BlockingConfig(
         strategy="static", keys=[BlockingKeyConfig(fields=["zip"])],
     )  # passes defaults to None -> pass_keys == [keys[0]]
-    # one weighted matchkey on `name` (same construction as _two_pass_config)
-    ...  # build + assign mk; rerank off
+    cfg.matchkeys = [_name_matchkey()]
     assert cfg.blocking.passes is None
     polars = _multi_member_clusters(df, cfg, "polars-direct")
     bucket = _multi_member_clusters(df, cfg, "bucket")
