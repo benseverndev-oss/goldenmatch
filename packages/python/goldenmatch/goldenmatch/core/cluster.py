@@ -946,7 +946,7 @@ def build_clusters_columnar(
     )
 
 
-def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:
+def _pairs_df_to_list_numpy(df: pl.DataFrame) -> list[tuple[int, int, float]]:
     """Faster DataFrame -> list[Pair] via numpy.tolist().
 
     The legacy ``scorer.pairs_df_to_list`` uses Polars' Series.to_list()
@@ -1214,7 +1214,7 @@ def build_clusters_v2_columnar(
 
 
 def build_clusters_arrow_native(
-    pairs_df,  # pl.DataFrame with PAIR_STREAM_SCHEMA columns
+    pairs_df: pl.DataFrame,  # PAIR_STREAM_SCHEMA columns
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
 ) -> ClusterFrames:
@@ -1303,7 +1303,7 @@ def build_clusters_arrow_native(
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
-def metadata_height(arrow_array) -> int:
+def metadata_height(arrow_array: Any) -> int:
     """Tiny helper -- get row count from a PyArrow ArrayData/Array
     without materializing the values. Used for the ``quality`` column
     construction in ``build_clusters_arrow_native``."""
