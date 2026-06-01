@@ -197,18 +197,73 @@ def test_bucket_suggested_polars_when_native_absent(monkeypatch):
 
 def test_default_rules_phase_5_order():
     """Phase 5: user_override first; pathological precedes simple; fast-box,
-    chunked, then ray BEFORE duckdb so 50M+ tries ray first and falls
-    through to duckdb when ray isn't installed."""
+    bucket_suggested, chunked, then ray BEFORE duckdb so 50M+ tries ray first
+    and falls through to duckdb when ray isn't installed."""
     rule_names = [r.name for r in DEFAULT_RULES]
     assert rule_names == [
         "plan_user_override",
         "plan_pathological",
         "plan_selected_simple",
         "plan_selected_fast_box",
+        "plan_selected_bucket_suggested",
         "plan_selected_chunked",
         "plan_selected_ray",
         "plan_selected_duckdb",
     ]
+
+
+def test_bucket_suggested_fires_via_dispatcher_sub32gb_300k(monkeypatch):
+    """Full planner: sub-32GB + 300k + fits RAM + native on -> bucket_suggested."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    from goldenmatch.core.autoconfig_planner import apply_planner_rules
+
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    p = _profile(n_rows=300_000, total_comparisons=20_000_000)
+    plan = apply_planner_rules(
+        profile=p,
+        runtime=_runtime(ram_gb=16.0, cpus=8),
+        n_rows_full=300_000,
+        rules=DEFAULT_RULES,
+        context={"user_backend": None},
+    )
+    assert plan.rule_name == "plan_selected_bucket_suggested"
+    assert plan.backend == "bucket"
+
+
+def test_fast_box_still_wins_at_32gb_over_bucket_suggested(monkeypatch):
+    """Precedence: fast_box fires first, so a 32GB + 300k run stays fast_box."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    from goldenmatch.core.autoconfig_planner import apply_planner_rules
+
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    p = _profile(n_rows=300_000, total_comparisons=20_000_000)
+    plan = apply_planner_rules(
+        profile=p,
+        runtime=_runtime(ram_gb=32.0, cpus=16),
+        n_rows_full=300_000,
+        rules=DEFAULT_RULES,
+        context={"user_backend": None},
+    )
+    assert plan.rule_name == "plan_selected_fast_box"
+
+
+def test_bucket_suggested_rejection_falls_to_duckdb(monkeypatch):
+    """4GB box, 49M pairs: bucket_suggested rejects (pairs won't fit), chunked
+    needs >=50M pairs (no), ray needs 50M rows (no), duckdb fires on ram<16."""
+    import goldenmatch.core.autoconfig_planner_rules as pr
+    from goldenmatch.core.autoconfig_planner import apply_planner_rules
+
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    p = _profile(n_rows=300_000, total_comparisons=49_000_000)
+    plan = apply_planner_rules(
+        profile=p,
+        runtime=_runtime(ram_gb=4.0, cpus=4),
+        n_rows_full=300_000,
+        rules=DEFAULT_RULES,
+        context={"user_backend": None},
+    )
+    assert plan.rule_name == "plan_selected_duckdb"
+    assert plan.backend == "duckdb"
 
 
 # ── Rule 3: fast-box ────────────────────────────────────────────────────────

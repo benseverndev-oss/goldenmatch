@@ -446,6 +446,7 @@ DEFAULT_RULES: list[PlannerRule] = [
     rule_pathological,
     rule_simple_plan,
     rule_fast_box,
+    rule_bucket_suggested,  # sub-32GB, <=750k, RAM-safe; after fast_box
     rule_chunked,
     rule_ray,            # try first at 50M+; falls through if ray unavailable
     rule_duckdb,         # catch-all for very dense pair counts or low RAM
