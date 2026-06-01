@@ -292,7 +292,15 @@ jobs:
             # data only; the serial run below appends and writes the xml.
             uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $IGNORE --ignore="$SERIAL_HEAVY"
             # Serial run for the heavy file: full runner memory, no xdist.
-            uv run pytest "$SERIAL_HEAVY" --timeout=120 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
+            # Higher per-test timeout (300s vs 120s): this file's
+            # test_gate_fires_via_real_iteration_loop runs the FULL auto-config
+            # iteration loop on a 100K adversarial fixture (~45s locally; ~2-2.7x
+            # under CI coverage instrumentation). Bucket-native-default + the
+            # multi-pass/oversized parity work legitimately added per-iteration
+            # scoring cost (parity-over-speed, by design), tipping it past the
+            # generic 120s. 300s gives ample headroom while still surfacing a
+            # genuine hang.
+            uv run pytest "$SERIAL_HEAVY" --timeout=300 --timeout-method=thread --durations=20 $COV --cov-append $COV_REPORT
           else
             uv run pytest packages/python/${{ matrix.pkg }} -n auto --timeout=120 --timeout-method=thread --durations=20 $COV $COV_REPORT $IGNORE
           fi
