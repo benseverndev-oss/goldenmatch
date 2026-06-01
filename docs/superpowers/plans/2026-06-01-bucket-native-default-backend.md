@@ -27,6 +27,13 @@
 
 ## Task 1: Planner — `rule_bucket_suggested` (new rule, RAM-safe), TDD
 
+> **Deliberate deviation from the spec's Section 2:** the spec proposed *relaxing*
+> `_is_fast_box_eligible` with an `(available_ram_gb >= 32 OR n_rows <= 750k)`
+> compound. This plan instead adds a SEPARATE `rule_bucket_suggested` after
+> `rule_fast_box` and leaves `fast_box` untouched — lower risk (no change to a
+> tested predicate) and it yields a distinct `rule_name` naturally. Same observable
+> behavior; cleaner blast radius.
+
 **Files:**
 - Modify: `core/autoconfig_planner_rules.py`
 - Modify: `core/autoconfig_planner.py` (rule registration order)
@@ -38,47 +45,60 @@
 
 - [ ] **Step 2: Write failing tests** in the planner test module. Mock/construct a `ComplexityProfile` (with `blocking.estimated_pair_count`) and `RuntimeProfile` (with `available_ram_gb`, `cpu_count`), and force native ON (`_scoring_backend()` returns "bucket"; monkeypatch `native_enabled` to True or set the env so the kill-switch is off — match how existing planner tests control this):
 
+VERIFIED helper names/kwargs from the real test module (`test_autoconfig_planner_rules.py`):
+the module is imported as `import goldenmatch.core.autoconfig_planner_rules as pr`;
+helpers are `_profile(n_rows=..., total_comparisons=<pair_count>)` and
+`_runtime(ram_gb=..., cpus=...)`. `native_enabled` is monkeypatched on `pr`. Confirm
+these before copying (read the top of the test file + the existing
+`test_default_rules_phase_5_order`).
+
 ```python
-# names per the existing test module's helpers; adapt to its fixtures.
+import goldenmatch.core.autoconfig_planner_rules as pr
+
 def test_bucket_suggested_fires_sub32gb_under_750k_when_pairs_fit(monkeypatch):
-    # 16GB box, 300k rows, 20M pairs (~1.3GB at 64B/pair) -> fits -> bucket
-    monkeypatch.setattr(rules, "native_enabled", lambda c: True)
-    prof = make_profile(estimated_pair_count=20_000_000)
-    rt = make_runtime(available_ram_gb=16.0, cpu_count=8)
-    assert rules._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is True
-    plan = rules._bucket_suggested_plan(prof, rt, 300_000)
+    # 16GB box, 300k rows, 20M pairs (~1.3GB at 64B/pair, budget 0.5*16=8GB) -> bucket
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is True
+    plan = pr._bucket_suggested_plan(prof, rt, 300_000)
     assert plan.backend == "bucket"
     assert plan.rule_name == "plan_selected_bucket_suggested"
 
 def test_bucket_suggested_blocked_when_pairs_wont_fit(monkeypatch):
-    monkeypatch.setattr(rules, "native_enabled", lambda c: True)
-    # 16GB box, 300k rows, 49M pairs (~3.1GB) vs 0.5*16=8GB headroom -> still fits;
-    # use a pair count that exceeds the safety budget to force False:
-    prof = make_profile(estimated_pair_count=400_000_000)  # ~24GB > 8GB budget
-    rt = make_runtime(available_ram_gb=16.0, cpu_count=8)
-    assert rules._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
+    # NOTE: the existing <50M density cap means rejection only bites on a LOW-RAM
+    # box. 4GB box, 49M pairs (~3.1GB) vs budget 0.5*4=2GB -> 3.1 > 2 -> reject.
+    monkeypatch.setattr(pr, "native_enabled", lambda component: True)
+    prof = _profile(total_comparisons=49_000_000)
+    rt = _runtime(ram_gb=4.0, cpus=4)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
 
 def test_bucket_suggested_blocked_over_750k():
-    prof = make_profile(estimated_pair_count=1_000_000)
-    rt = make_runtime(available_ram_gb=16.0, cpu_count=8)
-    assert rules._is_bucket_suggested_eligible(prof, rt, n_rows_full=1_000_000) is False
+    prof = _profile(total_comparisons=1_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=1_000_000) is False
 
 def test_bucket_suggested_not_needed_on_fat_box():
-    # >=32GB is already covered by fast_box; bucket_suggested should NOT also fire
-    # (avoid double-coverage) — it requires sub-32GB.
-    prof = make_profile(estimated_pair_count=20_000_000)
-    rt = make_runtime(available_ram_gb=64.0, cpu_count=16)
-    assert rules._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
+    # >=32GB is already covered by fast_box; bucket_suggested requires sub-32GB.
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=64.0, cpus=16)
+    assert pr._is_bucket_suggested_eligible(prof, rt, n_rows_full=300_000) is False
 
 def test_bucket_suggested_polars_when_native_absent(monkeypatch):
-    monkeypatch.setattr(rules, "native_enabled", lambda c: False)
-    prof = make_profile(estimated_pair_count=20_000_000)
-    rt = make_runtime(available_ram_gb=16.0, cpu_count=8)
-    plan = rules._bucket_suggested_plan(prof, rt, 300_000)
+    monkeypatch.setattr(pr, "native_enabled", lambda component: False)
+    prof = _profile(total_comparisons=20_000_000)
+    rt = _runtime(ram_gb=16.0, cpus=8)
+    plan = pr._bucket_suggested_plan(prof, rt, 300_000)
     assert plan.backend == "polars-direct"  # _scoring_backend() fallback
 ```
 
-(If the test module has no `make_profile`/`make_runtime` helpers, read how existing planner tests build these objects and reuse that exactly.)
+NOTE the RAM-fit guard is defensive depth: the existing `< 50M` pair density cap
+already bounds bucket_suggested pairs to ~3.2GB (50M*64B), which fits any >=6.4GB
+box — so the guard only binds on tiny-RAM boxes. That's fine (belt-and-suspenders),
+but it's why `test_bucket_suggested_blocked_when_pairs_wont_fit` uses a 4GB box.
+Confirm `profile.blocking.estimated_pair_count` is the field the predicate reads
+and that `_profile(total_comparisons=N)` sets it (the helper may map
+`total_comparisons` -> `blocking.estimated_pair_count`; verify and adapt).
 
 - [ ] **Step 3: Run, verify they fail** (`_is_bucket_suggested_eligible` not defined).
 
@@ -140,11 +160,11 @@ rule_bucket_suggested = PlannerRule(
 
 ### Task 1.2: register the rule after fast_box
 
-- [ ] **Step 1: Read** the ordered rule list in `autoconfig_planner.py`.
-- [ ] **Step 2: Failing integration test** — a sub-32GB + 300k (fits) profile produces `ExecutionPlan.rule_name == "plan_selected_bucket_suggested"` via the full planner (not just the predicate); a sub-32GB + 300k whose pairs don't fit yields a chunked/other rule (NOT bucket_suggested); a 32GB + 300k still yields `plan_selected_fast_box`.
+- [ ] **Step 1: Read** the ordered rule list in `autoconfig_planner.py` AND the existing `test_default_rules_phase_5_order` in the test module (it asserts the EXACT ordered rule-name list — inserting a rule WILL break it; you must update it in this task).
+- [ ] **Step 2: Failing integration test** — a sub-32GB + 300k (fits RAM, native on) profile produces `ExecutionPlan.rule_name == "plan_selected_bucket_suggested"` via the full planner; a 32GB + 300k still yields `plan_selected_fast_box` (precedence: fast_box fires first). For the "doesn't fit" fallback, use the realistic low-RAM case from Task 1.1 (4GB box, 49M pairs): bucket_suggested rejects -> the planner falls to the **duckdb** rule (its predicate includes `available_ram_gb < 16`), NOT chunked (chunked needs `>= 50M` pairs). Assert the concrete fallback `rule_name` you observe — don't assume chunked.
 - [ ] **Step 3: Run, verify fails.**
-- [ ] **Step 4: Implement** — insert `rule_bucket_suggested` in the rule sequence immediately AFTER `rule_fast_box` and BEFORE the chunked rule.
-- [ ] **Step 5: Run, verify pass. Commit** (`feat(planner): register rule_bucket_suggested after fast_box`).
+- [ ] **Step 4: Implement** — insert `rule_bucket_suggested` in the rule sequence immediately AFTER `rule_fast_box` and BEFORE the chunked rule. **Also update `test_default_rules_phase_5_order`** to include `"plan_selected_bucket_suggested"` between `"plan_selected_fast_box"` and `"plan_selected_chunked"`.
+- [ ] **Step 5: Run, verify pass** (including the updated order test). Commit (`feat(planner): register rule_bucket_suggested after fast_box`).
 
 ---
 
