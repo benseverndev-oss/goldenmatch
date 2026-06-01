@@ -344,8 +344,22 @@ def _emit_cluster_profile(clusters: dict[int, dict]) -> None:
     current_emitter().set_cluster(profile)
 
 
+def _is_pairs_dataframe(pairs: Any) -> bool:
+    """True when ``pairs`` is a Polars DataFrame (the columnar pair stream).
+
+    polars is a hard dependency of goldenmatch but is imported lazily here so
+    cluster.py stays import-light for the list path. The cheap ``is_empty``
+    duck-type check short-circuits the common list input before importing
+    polars; the isinstance check is the actual gate.
+    """
+    if not hasattr(pairs, "is_empty"):
+        return False
+    import polars as pl
+    return isinstance(pairs, pl.DataFrame)
+
+
 def build_clusters(
-    pairs: Any,  # list[tuple[int, int, float]] | ray.data.Dataset
+    pairs: Any,  # list[tuple[int, int, float]] | pl.DataFrame | ray.data.Dataset
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
@@ -930,20 +944,6 @@ def build_clusters_columnar(
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
     )
-
-
-def _is_pairs_dataframe(pairs: Any) -> bool:
-    """True when ``pairs`` is a Polars DataFrame (the columnar pair stream).
-
-    polars is a hard dependency of goldenmatch but is imported lazily here so
-    cluster.py stays import-light for the list path. A cheap duck-type guard
-    (``columns`` attr + ``is_empty``) avoids importing polars when the input is
-    obviously a list; the isinstance check confirms it.
-    """
-    if not hasattr(pairs, "is_empty"):
-        return False
-    import polars as pl
-    return isinstance(pairs, pl.DataFrame)
 
 
 def _pairs_df_to_list_numpy(df) -> list[tuple[int, int, float]]:
