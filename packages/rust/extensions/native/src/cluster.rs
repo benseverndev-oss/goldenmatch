@@ -68,6 +68,85 @@ pub fn connected_components(
     groups.into_values().collect()
 }
 
+/// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
+/// and return the resulting components. Behavior-exact mirror of `_build_mst`
+/// + weakest-edge removal + re-union + `get_clusters` in cluster.py's
+/// `split_oversized_cluster`.
+///
+/// `edges` MUST arrive in `pair_scores` iteration order: the stable
+/// score-descending sort then reproduces Python's Kruskal edge selection, and
+/// the first-minimum scan reproduces `min(mst, key=score)`'s tie-break
+/// (Python `min` keeps the first element achieving the minimum). Component
+/// membership is independent of union strategy, so naive union here matches
+/// the Python union-by-rank grouping. Returns `[]` when the MST is empty
+/// (caller treats that as "unsplittable", same as Python's `if not mst`).
+#[pyfunction]
+pub fn mst_split_components(
+    members: Vec<i64>,
+    edges: Vec<(i64, i64, f64)>,
+) -> Vec<Vec<i64>> {
+    // Kruskal over a max-weight ordering. Vec::sort_by is stable, so equal
+    // scores keep pair_scores insertion order -- matching Python's stable sort.
+    let mut sorted = edges;
+    sorted.sort_by(|a, b| {
+        b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let need = members.len().saturating_sub(1);
+    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(members.len());
+    for &m in &members {
+        parent.entry(m).or_insert(m);
+    }
+    let mut mst: Vec<(i64, i64, f64)> = Vec::with_capacity(need);
+    for &(a, b, s) in &sorted {
+        let ra = find(&mut parent, a);
+        let rb = find(&mut parent, b);
+        if ra != rb {
+            parent.insert(ra, rb);
+            mst.push((a, b, s));
+            if mst.len() == need {
+                break;
+            }
+        }
+    }
+    if mst.is_empty() {
+        return Vec::new();
+    }
+
+    // weakest = first MST edge achieving the minimum score (strict `<` keeps
+    // the first on ties, mirroring Python `min`).
+    let mut weakest = 0usize;
+    for i in 1..mst.len() {
+        if mst[i].2 < mst[weakest].2 {
+            weakest = i;
+        }
+    }
+
+    // Re-union every MST edge except the weakest, over the full member set, so
+    // isolated members surface as singleton components (mirrors add_many).
+    let mut parent2: HashMap<i64, i64> = HashMap::with_capacity(members.len());
+    for &m in &members {
+        parent2.entry(m).or_insert(m);
+    }
+    for (i, &(a, b, _s)) in mst.iter().enumerate() {
+        if i == weakest {
+            continue;
+        }
+        let ra = find(&mut parent2, a);
+        let rb = find(&mut parent2, b);
+        if ra != rb {
+            parent2.insert(ra, rb);
+        }
+    }
+    let keys: Vec<i64> = parent2.keys().copied().collect();
+    let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
+    for k in keys {
+        let r = find(&mut parent2, k);
+        groups.entry(r).or_default().push(k);
+    }
+    groups.into_values().collect()
+}
+
 /// Count edges whose removal splits the cluster into two >= 2-node components
 /// (the "merged by one weak link" pathology). Behavior-exact mirror of
 /// `_severe_bridge_count` in cluster.py:168-200. `edges` are the cluster's
