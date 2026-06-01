@@ -100,23 +100,19 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
         from goldenmatch.core.scorer import _jaccard_score_single
         return _jaccard_score_single
     if scorer_name == "ensemble":
-        # The matrix-path ensemble (scorer.py:343-348) is max(jw, ts, sx*0.8)
-        # where sx = soundex_match. None of those needs ML/network -- they're
-        # all pure-string transforms. Per-pair version composes the same
-        # three scorers under max. Bit-equivalent to the matrix path within
-        # rapidfuzz tolerance (the matrix path uses cdist for vectorized
-        # batches; per-pair uses the same rapidfuzz primitives one call at a
-        # time). Unblocks the bucket fast path on matchkeys auto-config
-        # produced via _pick_scorer_for_column's "other -> ensemble" rule.
-        import jellyfish as _jf
-        from rapidfuzz.distance import JaroWinkler as _Jw
-        from rapidfuzz.fuzz import token_sort_ratio as _ts
-        def _ensemble_pair(a: str, b: str) -> float:
-            jw = _Jw.similarity(a, b)
-            ts = _ts(a, b) / 100.0
-            sx = 0.8 if _jf.soundex(a) == _jf.soundex(b) else 0.0
-            return max(jw, ts, sx)
-        return _ensemble_pair
+        # DECLINE the fast path for ensemble (return None -> find_fuzzy_matches
+        # slow path). A prior per-pair reimplementation (max(jw, ts, sx*0.8))
+        # claimed matrix-path equivalence but measurably diverged: on Febrl3
+        # auto-config (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs
+        # polars-direct (F1 0.9332 -> 0.8768), with bucket near-perfect precision
+        # -- i.e. the reimplementation scored STRICTER than the matrix ensemble,
+        # pushing true pairs below threshold. Declining restores parity
+        # (recall 0.9221, F1 0.9326). The matrix ensemble (core/scorer.py) is the
+        # single source of truth; do NOT reintroduce a per-pair ensemble without
+        # a field-level parity test against find_fuzzy_matches. Native already
+        # declines ensemble (_NATIVE_SCORER_IDS covers only the 4 plain scorers),
+        # and plain-scorer configs (the 5M/25M scale path) keep the fast path.
+        return None
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None
