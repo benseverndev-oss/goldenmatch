@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import operator
 import os
 import uuid
 from collections import defaultdict
@@ -137,7 +138,10 @@ def _build_mst(
 ) -> list[tuple[int, int, float]]:
     """Build max-weight spanning tree using Kruskal's algorithm."""
     edges = [(a, b, s) for (a, b), s in pair_scores.items()]
-    edges.sort(key=lambda e: e[2], reverse=True)
+    # operator.itemgetter(2) is a C-level key extractor; the equivalent
+    # `lambda e: e[2]` invokes a Python frame per comparison-key fetch and
+    # showed up as a hotspot in the profile-hotspots cProfile run.
+    edges.sort(key=operator.itemgetter(2), reverse=True)
     uf = UnionFind()
     uf.add_many(members)
     mst: list[tuple[int, int, float]] = []
@@ -171,11 +175,30 @@ def split_oversized_cluster(
     for a, b, _s in remaining:
         uf.union(a, b)
 
+    subclusters = uf.get_clusters()
+    # Partition pair_scores across the post-split subclusters in a SINGLE
+    # pass. The previous shape rebuilt each subcluster's pair dict with a
+    # comprehension that re-scanned the FULL pair_scores per subcluster
+    # (O(pairs * subclusters)); on dense oversized clusters that was a
+    # measured hotspot. A member -> subcluster-index map lets us bucket
+    # each pair exactly once (O(pairs)). A pair whose endpoints landed in
+    # different subclusters (the removed weakest edge, plus any cross-cut
+    # edge) belongs to neither bucket -- identical to the old `a in
+    # sc_members and b in sc_members` filter.
+    member_to_sub: dict[int, int] = {}
+    for idx, sc_members in enumerate(subclusters):
+        for m in sc_members:
+            member_to_sub[m] = idx
+    sub_pairs: list[dict[tuple[int, int], float]] = [{} for _ in subclusters]
+    for (a, b), s in pair_scores.items():
+        ia = member_to_sub.get(a)
+        if ia is not None and ia == member_to_sub.get(b):
+            sub_pairs[ia][(a, b)] = s
+
     result = []
-    for sc_members in uf.get_clusters():
+    for idx, sc_members in enumerate(subclusters):
         sc_list = sorted(sc_members)
-        sc_pairs = {(a, b): s for (a, b), s in pair_scores.items()
-                    if a in sc_members and b in sc_members}
+        sc_pairs = sub_pairs[idx]
         size = len(sc_list)
         conf = compute_cluster_confidence(sc_pairs, size)
         result.append({
@@ -526,7 +549,11 @@ def compute_cluster_confidence(
     avg_edge = sum(scores) / len(scores)
     max_possible_edges = size * (size - 1) / 2
     connectivity = len(pair_scores) / max_possible_edges if max_possible_edges > 0 else 0.0
-    bottleneck_pair = min(pair_scores, key=lambda p: pair_scores[p])
+    # `min(pair_scores, key=lambda p: pair_scores[p])` invoked a Python lambda
+    # AND a dict lookup per pair (a profiled hotspot at ~2.9M lambda calls).
+    # Scanning items() with a C-level itemgetter key avoids both; ties resolve
+    # to the same first-minimum key because items() preserves dict order.
+    bottleneck_pair = min(pair_scores.items(), key=operator.itemgetter(1))[0]
 
     # Weighted confidence: weakest link matters most
     confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity
