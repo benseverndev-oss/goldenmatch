@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0 (2026-06-01)
+
+New `carceral` domain pack plus a native-Polars (expr-mode) perf migration of the
+transform library. The expr migration is output-preserving: existing test
+assertions are unchanged; only the internal call shape changed.
+
+### Added
+
+- `carceral` domain pack (U.S. prisons / jails / detention): `carceral_org_strip`,
+  `carceral_abbreviate`, `carceral_name_normalize`, and `latlng_pack`, plus the
+  `CARCERAL_OPERATOR_ORGS`, `CARCERAL_BOP_ABBREVIATIONS`, and
+  `CARCERAL_STATE_COMPLEX_ALIASES` constants. Registered as the `carceral` domain.
+
+### Performance
+
+- Native-Polars (expr-mode) rewrites of the currency, percentage, integer,
+  truncate, pad, html, url, emoji, line-ending, number-extract, address, and state
+  transforms. ASCII fast path for `normalize_unicode`; vectorized `date_iso8601`
+  for numeric and 4-digit-string year columns. Outputs are unchanged.
+
+### Changed
+
+- Repository and project URLs rebranded from `benzsevern` to `benseverndev-oss`.
+
 ## 1.1.6 (2026-05-13)
 
 Bug-fix release. Resolves a panic on large datasets surfaced by the
