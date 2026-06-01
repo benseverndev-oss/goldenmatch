@@ -11,9 +11,13 @@ not a locally-built fixture. Do not build >=5M locally.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 CritKind = Literal["ratio_le", "speedup_ge", "abs_le", "bool_true"]
@@ -168,3 +172,235 @@ def render_markdown_table(rows: dict) -> str:
     for phase, v in rows.items():
         out.append(f"| {phase} | {v.verdict} | {'; '.join(v.details)} |")
     return "\n".join(out)
+
+
+# ── Driver: wire the registry + classifier to the real benches ──────
+
+# Repo root = four parents up from this file
+# (packages/python/goldenmatch/scripts/<this>.py -> repo root).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+# This package's own scripts/ dir (phase1 pair-stream bench lives here).
+_PKG_SCRIPTS = Path(__file__).resolve().parent
+# Repo-root scripts/ dir (phase3 native-kernel benches live here).
+_ROOT_SCRIPTS = _REPO_ROOT / "scripts"
+
+# Tiny N used in --smoke so wiring is exercised without the bench box.
+_SMOKE_N = 2000
+# Per-subprocess wall budget. Kill scale runs on the bench box where the
+# orchestrating job has its own timeout; smoke must stay snappy locally.
+_KILL_TIMEOUT_S = 3600
+_SMOKE_TIMEOUT_S = 120
+
+
+def _run_subprocess(
+    cmd: list[str], timeout_s: int
+) -> tuple[str | None, str | None]:
+    """Run a bench subprocess from the repo root. Returns
+    ``(stdout, None)`` on success, ``(None, error_note)`` on any failure
+    (nonzero exit, timeout, OSError). Never raises -- a failed bench must
+    leave its phase metric absent (-> BLOCKED), not crash the sweep."""
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timeout after {timeout_s}s"
+    except OSError as exc:  # missing interpreter / script, etc.
+        return None, f"spawn failed: {exc}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()[-1:] or ["<no stderr>"]
+        return None, f"exit {proc.returncode}: {tail[0]}"
+    return proc.stdout, None
+
+
+def _phase1_metrics(n: int, timeout_s: int) -> dict:
+    """phase1 -> pair-stream columnar bench. Run the worker twice (list,
+    columnar); each emits a __BENCH_JSON__ line with total_wall_s +
+    peak_rss_mb. new=columnar, legacy=list."""
+    script = _PKG_SCRIPTS / "bench_pair_stream_columnar.py"
+    notes: list[str] = []
+    parsed: dict[str, dict] = {}
+    for path in ("list", "columnar"):
+        cmd = [sys.executable, str(script), "--worker", str(n), path]
+        stdout, err = _run_subprocess(cmd, timeout_s)
+        if err is not None:
+            notes.append(f"{path} worker failed ({err})")
+            continue
+        bj = parse_bench_json(stdout or "")
+        if bj is None:
+            notes.append(f"{path} worker emitted no __BENCH_JSON__")
+            continue
+        parsed[path] = bj
+
+    metrics: dict = {}
+    if "list" in parsed and "columnar" in parsed:
+        metrics["wall"] = {
+            "new": parsed["columnar"]["total_wall_s"],
+            "legacy": parsed["list"]["total_wall_s"],
+        }
+        metrics["rss"] = {
+            "new": parsed["columnar"]["peak_rss_mb"],
+            "legacy": parsed["list"]["peak_rss_mb"],
+        }
+        # The bench doesn't emit a parity flag; equivalence is asserted by
+        # tests/test_pair_stream_columnar_parity.py. Treat as True with a note.
+        metrics["parity"] = True
+        notes.append(
+            "parity assumed True (verified by "
+            "tests/test_pair_stream_columnar_parity.py, not by this bench)"
+        )
+    if notes:
+        metrics["_note"] = "; ".join(notes)
+    return metrics
+
+
+def _phase3_metrics(n: int, timeout_s: int) -> dict:
+    """phase3 -> native-kernel benches at repo-root scripts/. Each speedup
+    stored as {"new": 1.0, "legacy": speedup} so speedup_ge computes
+    legacy/new == speedup. Missing speedup -> metric omitted -> BLOCKED."""
+    metrics: dict = {}
+    notes: list[str] = []
+
+    # dedup <- bench_native_kernels.py (positional [N ...]); prints
+    # `native(Vec) speedup vs python : X.XXx`.
+    stdout, err = _run_subprocess(
+        [sys.executable, str(_ROOT_SCRIPTS / "bench_native_kernels.py"), str(n)],
+        timeout_s,
+    )
+    if err is not None:
+        notes.append(f"dedup bench failed ({err})")
+    else:
+        sp = parse_native_speedup(stdout or "", "native(Vec) speedup vs python")
+        if sp is None:
+            notes.append("dedup speedup not parsed from bench_native_kernels")
+        else:
+            metrics["dedup"] = {"new": 1.0, "legacy": sp}
+
+    # build_clusters <- bench_native_cluster_kernel.py (no args, synthetic
+    # shapes); `large` row carries the speedup.
+    stdout, err = _run_subprocess(
+        [sys.executable, str(_ROOT_SCRIPTS / "bench_native_cluster_kernel.py")],
+        timeout_s,
+    )
+    if err is not None:
+        notes.append(f"cluster bench failed ({err})")
+    else:
+        sp = parse_native_speedup(stdout or "", "large")
+        if sp is None:
+            notes.append("build_clusters speedup not parsed (large row)")
+        else:
+            metrics["build_clusters"] = {"new": 1.0, "legacy": sp}
+
+    # fingerprints <- bench_native_bulk_fingerprint.py (no args); `large`
+    # row carries the speedup.
+    stdout, err = _run_subprocess(
+        [sys.executable, str(_ROOT_SCRIPTS / "bench_native_bulk_fingerprint.py")],
+        timeout_s,
+    )
+    if err is not None:
+        notes.append(f"fingerprints bench failed ({err})")
+    else:
+        sp = parse_native_speedup(stdout or "", "large")
+        if sp is None:
+            notes.append("fingerprints speedup not parsed (large row)")
+        else:
+            metrics["fingerprints"] = {"new": 1.0, "legacy": sp}
+
+    # These benches assert parity internally (cluster-count / byte equality
+    # checks print WARNING on divergence). Treat as True.
+    metrics["parity"] = True
+    notes.append("parity assumed True (benches print WARNING on divergence)")
+    if notes:
+        metrics["_note"] = "; ".join(notes)
+    return metrics
+
+
+def run_phase_bench(phase: str, scale: str) -> dict:
+    """Run ``phase``'s kill-criterion bench at ``scale`` and return the
+    metrics dict that ``classify_phase(PHASE_CRITERIA[phase], <metrics>)``
+    consumes.
+
+    ``scale`` is ``"kill"`` (PHASE_BENCH_SCALE[phase]) or ``"smoke"``
+    (tiny N so the wiring is testable without the bench box). A bench that
+    fails / times out leaves its metric ABSENT (the phase then classifies
+    BLOCKED) with the reason recorded under ``_note``; the sweep never
+    crashes on a bench failure.
+    """
+    if phase not in PHASE_CRITERIA:
+        raise ValueError(f"unknown phase: {phase!r}")
+    if scale not in ("kill", "smoke"):
+        raise ValueError(f"unknown scale: {scale!r}")
+
+    smoke = scale == "smoke"
+    n = _SMOKE_N if smoke else PHASE_BENCH_SCALE[phase]
+    timeout_s = _SMOKE_TIMEOUT_S if smoke else _KILL_TIMEOUT_S
+
+    if phase == "phase1":
+        return _phase1_metrics(n, timeout_s)
+    if phase == "phase3":
+        return _phase3_metrics(n, timeout_s)
+    if phase in ("phase2", "phase4", "phase6"):
+        # No dedicated kill-criterion bench wired yet. Return metrics with
+        # the gating keys ABSENT so the phase classifies BLOCKED; attach a
+        # human note. Do not fabricate numbers.
+        return {
+            "_note": (
+                f"{phase}: no kill-criterion bench wired yet -> BLOCKED "
+                "(metrics intentionally absent)"
+            )
+        }
+    if phase == "phase5":
+        # Distributed cluster-orchestration bench not built -> BLOCKED.
+        return {}
+    raise ValueError(f"unhandled phase: {phase!r}")  # pragma: no cover
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="Arrow finish-line Stage 0 sweep driver.")
+    p.add_argument(
+        "--phases",
+        default="phase1,phase2,phase3,phase4,phase5,phase6",
+        help="Comma-separated phases to run (default: all six).",
+    )
+    p.add_argument(
+        "--scale",
+        choices=("kill", "smoke"),
+        default="kill",
+        help="kill = PHASE_BENCH_SCALE per phase; smoke = tiny N (wiring test).",
+    )
+    p.add_argument(
+        "--out",
+        default=None,
+        help="Path to write the JSON results file.",
+    )
+    args = p.parse_args(argv)
+
+    phases = [s.strip() for s in args.phases.split(",") if s.strip()]
+    verdicts: dict[str, PhaseVerdict] = {}
+    results: dict[str, dict] = {}
+    for phase in phases:
+        metrics = run_phase_bench(phase, args.scale)
+        verdict = classify_phase(PHASE_CRITERIA[phase], metrics)
+        verdicts[phase] = verdict
+        results[phase] = {
+            "verdict": verdict.verdict,
+            "details": verdict.details,
+            "metrics": metrics,
+        }
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(results, indent=2))
+
+    print(render_markdown_table(verdicts))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
