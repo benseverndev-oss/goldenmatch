@@ -1,0 +1,99 @@
+# ER head-to-head scaling bench — Splink (DuckDB) vs GoldenMatch (bucket+native+arrow).
+#
+# workflow_dispatch only. Runs both engines over a sweep of scales on ONE machine
+# with an identical per-scale parquet fixture, so wall + peak-RSS are comparable.
+#
+# Memory safety: scripts/bench_er_headtohead/orchestrate.py runs every (scale,
+# engine) datapoint as an isolated subprocess. The OS reclaims each datapoint's
+# memory on exit, and an OOM-killed datapoint is recorded as `OOM` rather than
+# crashing the sweep. The 100M tier is EXPECTED to OOM for GoldenMatch's in-memory
+# bucket backend on a single 64 GB box — that ceiling is itself a result.
+#
+# Fixtures are generated in-job (streaming, bounded memory) and deleted after each
+# scale's engines run, so disk stays bounded too.
+#
+# To run: GitHub -> Actions -> "bench-er-headtohead" -> Run workflow.
+name: bench-er-headtohead
+
+on:
+  workflow_dispatch:
+    inputs:
+      scales:
+        description: "Space-separated row counts to sweep"
+        required: false
+        default: "100000 1000000 5000000 25000000 100000000"
+      engines:
+        description: "Engines to run (space-separated): goldenmatch splink"
+        required: false
+        default: "goldenmatch splink"
+      dupe_rate:
+        description: "Fraction of duplicate rows in each fixture"
+        required: false
+        default: "0.20"
+      threshold:
+        description: "Match threshold"
+        required: false
+        default: "0.85"
+      runner:
+        description: "Runner label (needs 64 GB for the 25M bucket datapoint)"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        # native crate's rust-toolchain.toml pins the exact version.
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (bucket + Arrow kernels)
+        run: uv run python scripts/build_native.py
+
+      - name: Install Splink (competitor engine, not a repo dependency)
+        if: contains(inputs.engines, 'splink')
+        run: uv pip install splink
+
+      - name: Install DuckDB (used by the engine-agnostic accuracy evaluator)
+        run: uv pip install duckdb
+
+      - name: Run head-to-head sweep
+        run: |
+          uv run python scripts/bench_er_headtohead/orchestrate.py \
+            --scales ${{ inputs.scales }} \
+            --engines ${{ inputs.engines }} \
+            --dupe-rate ${{ inputs.dupe_rate }} \
+            --threshold ${{ inputs.threshold }} \
+            --workdir .bench_er
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: er-headtohead-results
+          path: |
+            .bench_er/bench_results.json
+            .bench_er/summary.md
+            .bench_er/results/*.json
+          retention-days: 90
