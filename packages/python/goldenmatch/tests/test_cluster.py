@@ -189,6 +189,30 @@ def test_split_chain():
     assert {2, 3} in member_sets
 
 
+def test_split_partitions_pair_scores_correctly():
+    """After splitting, each subcluster keeps EVERY original pair whose two
+    endpoints landed in that subcluster -- including non-MST edges -- and the
+    cut edge appears in no subcluster. Locks the one-pass partition refactor
+    (member -> subcluster map) against the old per-subcluster rescan."""
+    # Triangle {0,1,2} (dense) + weak bridge 2-3. MST keeps 0-1, 1-2, 2-3;
+    # weakest MST edge 2-3 (0.3) is removed -> {0,1,2} and {3}. The non-MST
+    # edge 0-2 (0.85) is WITHIN {0,1,2} and must be retained.
+    pair_scores = {(0, 1): 0.9, (0, 2): 0.85, (1, 2): 0.88, (2, 3): 0.3}
+    result = split_oversized_cluster([0, 1, 2, 3], pair_scores)
+
+    by_members = {frozenset(c["members"]): c for c in result}
+    assert set(by_members) == {frozenset({0, 1, 2}), frozenset({3})}
+
+    triangle = by_members[frozenset({0, 1, 2})]
+    # All three intra-subcluster edges retained (incl. the non-MST 0-2).
+    assert set(triangle["pair_scores"]) == {(0, 1), (0, 2), (1, 2)}
+    # The removed cross-cut edge is dropped from every subcluster.
+    assert all((2, 3) not in c["pair_scores"] for c in result)
+    # bottleneck is the weakest intra-subcluster edge (0,2)=0.85.
+    assert triangle["bottleneck_pair"] == (0, 2)
+    assert by_members[frozenset({3})]["pair_scores"] == {}
+
+
 def test_was_split_not_in_output():
     """_was_split sentinel must not leak into final cluster dicts."""
     pairs = [(0, 1, 0.9), (1, 2, 0.5), (2, 3, 0.8)]
