@@ -6,6 +6,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-06-01
+
+<!-- README-callout
+**Arrow-native groundwork + leaner large-N runs** — columnar pair-stream / two-frame-cluster entry points and optional Rust/Arrow-C kernels (`build_clusters`, `dedup_pairs`, `record_fingerprints`, MST oversized-split) land behind the `goldenmatch._native` extension, purely additive with the pure-Python + Polars pipeline unchanged as the default and byte-for-byte reference. Plus single-node memory wins (golden -2.6 GB, bucket -3.8 GB peak at 10M; standardize ~25-30s off the prep wall) and fixes for a silently-dropped GoldenCheck quality scan and a prep-cache `id()`-recycle flake. PRs #588-#650.
+-->
+
+This release lands the **Arrow-native pipeline groundwork** (roadmap Phases 0-6), a
+batch of single-node memory/wall optimizations, an optional native Rust kernel for
+the cluster oversized-split path, and several user-facing bug fixes. All Arrow /
+native work is **additive and opt-in** — the default pure-Python + Polars pipeline is
+behavior-unchanged; the columnar entry points and `goldenmatch._native` kernels are
+exercised by the bench/profiler harnesses and wired in behind follow-up parity work.
+
+### Added
+
+- **Arrow-native pipeline groundwork (roadmap Phases 0-6).** Columnar pair-stream
+  scorer entry points (#631) with a native columnar inner loop for `score_blocks_columnar`
+  (#634, #639); a two-frame `ClusterFrames` cluster representation (#632) + numpy-backed
+  `cluster_dict_to_frames` (#635); golden (#636), identity (#638), and a hash-by-cluster_id
+  partitioner (#642) that consume `ClusterFrames` directly; columnar `dedup_pairs_max_score`
+  (#641). These are new entry points alongside the existing path, not a default swap.
+- **Native (Rust / Arrow-C) kernels** in the optional `goldenmatch._native` extension:
+  Arrow-C kernels for `build_clusters` (#645), `record_fingerprints` (#644), and
+  `dedup_pairs` (#643); a max-weight-spanning-tree oversized-split kernel (#649); and
+  `build_clusters_native` (#610) / `record_fingerprints_batch` (#612) prototypes. Pure
+  Python remains the default and the byte-for-byte reference; the kernels run only when
+  the extension is built and the relevant `native_enabled(...)` gate is on.
+- **Profiling + bench harnesses.** A GitHub Actions hotspot profiler (pyinstrument +
+  cProfile) over the pair-stream / cluster path (#646); a pair-stream columnar-vs-list
+  bench at 100K/1M/5M (#633); per-(shape, path) subprocess isolation (#637); and a
+  native-kernel decision-gate workflow (#611).
+- **`map_elements` justification lint** — prep-stage `map_elements` calls now require a
+  `# noqa: GM-MAP-ELEMENTS:` rationale comment, gating accidental per-row Python before
+  it ships (#640).
+- **Experimental backends/infra** (not on the default install path): a DataFusion backend
+  spike (#620, #621) and an ephemeral GCE Ray-cluster bench harness (#608-#619).
+
+### Performance
+
+- **Standardization native Polars chains.** `name_proper` (#601) and `address` (#602,
+  ~25-30s off the prep wall on the QIS shape) drop their per-row Python UDFs for
+  Polars-native chains.
+- **Golden + bucket memory slimming (default ON).** Slim `multi_df` before
+  `attach_cluster_id` (-2.6 GB, #595/#596); slim projection before `bucket_assign`
+  (-3.8 GB peak at 10M, #590); close the rechunk lane + free partition parents after
+  `partition_by` (#593); rechunk after `precompute_matchkey_transforms` (#591).
+- **Clustering.** Drop the non-load-bearing `sorted(members)` in `result_dict_init`
+  (#594); numpy-backed `pairs_df_to_list` in `build_clusters_columnar` (#647); one-pass
+  O(pairs) `pair_scores` partition + `operator.itemgetter` keys in the oversized-split
+  path (~6% on `build_clusters_columnar` at 100K, #648).
+
+### Fixed
+
+- **GoldenCheck quality scan silently dropped every finding** in the scan-only path
+  (`_scan_only`, used by the MCP `scan_quality` tool, the A2A quality skill, and the web
+  `/api/v1/quality` route): it read `Finding.rule_id` / `rows_affected` (the dataclass
+  exposes `check` / `affected_rows`) and the resulting `AttributeError` was swallowed as a
+  warning. Findings now serialize correctly, with `severity` as a lowercase string (it was
+  the raw `IntEnum`, which then broke the web consumer's `.lower()`) (#647).
+- **Prep-cache `id()` recycle.** The in-memory prep cache keyed on `id(df)` + schema, so a
+  garbage-collected frame's recycled address could serve a stale prepared frame to a
+  same-schema input (e.g. an empty DataFrame received a populated one — the
+  `test_dedupe_df_empty` `pytest -n auto` flake). The key now folds in `df.height` (#647).
+- **`record_fingerprint` raised `AttributeError` on a non-string field name** instead of
+  the spec'd `TypeError`; the pure-Python reference now validates key types up front,
+  matching the native kernel (#650).
+- **Native-vs-Python parity test baselines** corrected for cluster-confidence (raw vs
+  post-downgrade) and soundex/exact (diagonal don't-care) (#650).
+
 ## [1.24.0] - 2026-05-29
 
 ### Performance
