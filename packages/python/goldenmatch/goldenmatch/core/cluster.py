@@ -416,6 +416,48 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
+    # SP1 (columnar cluster-build core): when enabled, build the same
+    # ``dict[int, dict]`` via the columnar Arrow path. Default OFF; the output
+    # is byte-identical to the dict path (parity gate
+    # tests/test_columnar_cluster_build_parity.py), differing only in member
+    # LIST ORDER (a separate Union-Find -> compared as a set). Gate goes AFTER
+    # the Ray short-circuit, the DataFrame branch, and the all_ids derivation so
+    # it never intercepts Ray and always has a concrete pairs list + all_ids.
+    if _columnar_cluster_build_enabled():
+        return _build_clusters_via_frames(
+            pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+        )
+
+    return _build_clusters_dict_path(
+        pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
+
+
+def _columnar_cluster_build_enabled() -> bool:
+    """Columnar cluster-build core for ``build_clusters`` (SP1): build the
+    ``dict[int, dict]`` via the two-frame columnar path
+    (``_build_clusters_via_frames``) instead of the list/dict Union-Find path.
+    Default OFF -- byte-identical to the dict path on OUTPUT (member list order
+    aside; a separate UF runs so order legitimately differs but membership is
+    identical). Kill-switch ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=0`` (the
+    default) restores the dict path. Mirrors the identity
+    ``_batch_fingerprint_enabled`` gate."""
+    return os.environ.get(
+        "GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "0"
+    ).strip() != "0"
+
+
+def _build_clusters_dict_path(
+    pairs: Any,
+    all_ids: list[int],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Legacy list/dict Union-Find cluster build. Verbatim extraction of the
+    original ``build_clusters`` body (UF stage -> emit); behavior is unchanged.
+    The columnar path (``_build_clusters_via_frames``) shares the tail via
+    ``_finalize_clusters``."""
     with stage("cluster_connected_components"):
         if native_enabled("clustering"):
             # Native Union-Find (component membership is identical to the Python
@@ -480,6 +522,25 @@ def build_clusters(
             cinfo["confidence"] = conf["confidence"]
             cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
 
+    return _finalize_clusters(
+        result, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
+
+
+def _finalize_clusters(
+    result: dict[int, dict],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Shared cluster-build tail: auto-split oversized clusters, assign
+    ``cluster_quality`` (+ weak confidence downgrade), then emit the profile.
+
+    Reads only ``result`` (the pre-split per-cluster dict with members/size/
+    oversized/pair_scores/confidence/bottleneck_pair) plus the three params. Both
+    the dict path and the columnar path call this so split/quality/emit are
+    byte-identical. OWNS the ``_emit_cluster_profile`` call -- callers must NOT
+    emit again."""
     # Auto-split oversized clusters (when enabled). See _split_edge_work_budget:
     # the per-pass single-weakest-edge split degrades to O(nodes * edges) on a
     # large dense cluster, so two guards keep the loop terminating without
@@ -510,6 +571,14 @@ def build_clusters(
             cinfo["oversized"] = cinfo["size"] > max_cluster_size
             result[cid] = cinfo
             continue
+        # Deterministic cluster-id assignment. The native mst_split_components
+        # kernel returns sub-clusters in Rust HashMap iteration order
+        # (nondeterministic per call), which made split-cluster ids vary
+        # run-to-run -- and diverge between the dict and columnar build paths,
+        # which call this independently. Sort by min member so next_cid below is
+        # assigned stably. The partition content is already deterministic; this
+        # only pins the labels, the durability invariant identity ids depend on.
+        sub_clusters.sort(key=lambda sc: min(sc["members"]))
         next_cid = max(result.keys(), default=0) + 1
         for sc in sub_clusters:
             sc["oversized"] = sc["size"] > max_cluster_size
@@ -547,6 +616,143 @@ def build_clusters(
 
     _emit_cluster_profile(result)
     return result
+
+
+def _build_clusters_via_frames(
+    pairs: Any,
+    all_ids: list[int],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Columnar cluster-build core (SP1). Builds the same pre-split ``result``
+    dict the dict path produces (members/size/oversized/pair_scores/confidence/
+    bottleneck_pair), then shares the auto-split/quality/emit tail via
+    ``_finalize_clusters`` so split/quality/emit are byte-identical.
+
+    Union-Find source differs native vs off-native:
+      * Native + the Arrow kernel present: ``build_clusters_arrow_native`` runs
+        UF in Rust (UF-ONLY, pre-split) and the raw member sets come from
+        ``frames.assignments``.
+      * Off-native (or the Arrow kernel absent): UF membership comes DIRECTLY
+        from ``connected_components`` (when exposed) or the pure-Python
+        ``UnionFind`` -- the SAME pre-split UF the dict path uses. We do NOT call
+        ``build_clusters_arrow_native`` in that case: its
+        ``build_clusters_v2_columnar`` fallback re-runs the FULL ``build_clusters``
+        (including auto-split), which would hand us POST-split frames.
+
+    Confidence + bottleneck are computed on the PRE-split clusters via
+    ``compute_cluster_confidence`` on the materialized ``pair_scores`` in BOTH
+    branches. Per spec this is bit-identical to the native metadata by
+    construction and sidesteps re-aligning the kernel's raw cluster_id labels to
+    our sorted-by-min-member ids; the native-metadata path is CI-only anyway.
+    """
+    import polars as _pl
+
+    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+    pairs_list = list(pairs)
+    pairs_df = _pl.DataFrame(
+        {
+            "id_a": [p[0] for p in pairs_list],
+            "id_b": [p[1] for p in pairs_list],
+            "score": [p[2] for p in pairs_list],
+        },
+        schema=PAIR_STREAM_SCHEMA,
+    )
+
+    # --- Step 1: Union-Find member sets (PRE-split). -----------------------
+    native = native_module() if native_enabled("clustering") else None
+    arrow_fn = getattr(native, "build_clusters_arrow", None) if native else None
+
+    member_sets: list[set[int]]
+    if native is not None and arrow_fn is not None:
+        # Native Arrow kernel: UF-ONLY assignments (pre-split). Derive raw
+        # member sets per UF component from the assignments frame.
+        with stage("cluster_connected_components"):
+            frames = build_clusters_arrow_native(
+                pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
+            )
+            by_kernel_cid: dict[int, set[int]] = {}
+            for kcid, mid in zip(
+                frames.assignments["cluster_id"].to_list(),
+                frames.assignments["member_id"].to_list(),
+                strict=True,
+            ):
+                by_kernel_cid.setdefault(int(kcid), set()).add(int(mid))
+            member_sets = list(by_kernel_cid.values())
+    else:
+        # Off-native: source UF DIRECTLY (same pre-split UF as the dict path).
+        with stage("cluster_connected_components"):
+            if native is not None:
+                # connected_components is exposed even when the Arrow kernel
+                # isn't (returns list[list[int]]).
+                member_sets = [
+                    set(c)
+                    for c in native.connected_components(pairs_list, all_ids)
+                ]
+            else:
+                uf = UnionFind()
+                uf.add_many(all_ids)
+                for id_a, id_b, _score in pairs_list:
+                    uf.union(id_a, id_b)
+                member_sets = uf.get_clusters()
+                del uf
+
+    # --- Step 2: build the SAME pre-split result dict as the dict path. ----
+    with stage("cluster_sort_clusters"):
+        sorted_clusters = sorted(member_sets, key=lambda s: min(s))
+        del member_sets
+
+    with stage("cluster_member_to_cid"):
+        member_to_cid: dict[int, int] = {}
+        for cluster_id, members in enumerate(sorted_clusters, start=1):
+            for m in members:
+                member_to_cid[m] = cluster_id
+
+    with stage("cluster_result_dict_init"):
+        result: dict[int, dict] = {}
+        for cluster_id, members in enumerate(sorted_clusters, start=1):
+            size = len(members)
+            result[cluster_id] = {
+                "members": list(members),
+                "size": size,
+                "oversized": size > max_cluster_size,
+                "pair_scores": {},
+            }
+
+    # --- Step 3: pair_scores (ORDER-PRESERVING -- NOT a join). -------------
+    # A Polars join would reorder rows and break the sequential-sum +
+    # first-occurrence bottleneck tie-break parity. replace_strict maps id_a ->
+    # cluster_id in place; iterate the frame IN ROW ORDER (= pairs order).
+    # Duplicate canonical pairs overwrite (last wins), matching the dict path.
+    with stage("cluster_pair_scores_fill"):
+        if not pairs_df.is_empty():
+            tagged = pairs_df.with_columns(
+                _pl.col("id_a").replace_strict(member_to_cid).alias("__cid__"),
+            )
+            for id_a, id_b, score, cid in zip(
+                tagged["id_a"].to_list(),
+                tagged["id_b"].to_list(),
+                tagged["score"].to_list(),
+                tagged["__cid__"].to_list(),
+                strict=True,
+            ):
+                result[int(cid)]["pair_scores"][(id_a, id_b)] = score
+        del member_to_cid
+        del sorted_clusters
+
+    # --- Step 4: confidence + bottleneck on PRE-split clusters. ------------
+    with stage("cluster_compute_confidence"):
+        for cid, cinfo in result.items():
+            conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
+            cinfo["confidence"] = conf["confidence"]
+            cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
+
+    # --- Steps 5-7: auto-split + cluster_quality + emit (shared tail). -----
+    return _finalize_clusters(
+        result, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
 
 
 def compute_cluster_confidence(
