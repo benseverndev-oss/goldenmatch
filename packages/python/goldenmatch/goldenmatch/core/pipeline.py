@@ -1722,7 +1722,12 @@ def _run_dedupe_pipeline(
         from goldenmatch.core.cluster import _columnar_cluster_build_enabled
         if _columnar_cluster_build_enabled():
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            pair_score_view = ClusterPairScores.from_cluster_dict(clusters)
+            # SP4: the columnar build returns pair_scores={}, so build the view
+            # from the RAW input pairs (input-order, last-wins == the dict path's
+            # per-cluster pair_scores) + final cluster membership. NOT from
+            # results["scored_pairs"] (max-score deduped, differs on dup-scored
+            # pairs).
+            pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters, collected_df, all_pairs, matchkeys, config, run_name,

@@ -35,3 +35,27 @@ def test_score_for_bottleneck_lookup():
     view = ClusterPairScores.from_cluster_dict(_clusters())
     assert view.score_for(3, 5, 3) == 0.6   # canonical (min,max) regardless of arg order
     assert view.score_for(3, 9, 9) is None
+
+
+def test_from_pairs_reproduces_cluster_pair_scores():
+    # from_pairs(raw pairs, clusters) == each cluster's pair_scores (the SP4 path).
+    clusters = _clusters()
+    pairs = [(a, b, s) for c in clusters.values() for (a, b), s in c["pair_scores"].items()]
+    view = ClusterPairScores.from_pairs(pairs, clusters)
+    for cid, info in clusters.items():
+        assert view.for_cluster(cid) == info["pair_scores"]
+
+
+def test_from_pairs_last_wins_and_excludes_cross_cluster():
+    clusters = {
+        1: {"members": [0, 1], "size": 2, "pair_scores": {}},
+        2: {"members": [2, 3], "size": 2, "pair_scores": {}},
+    }
+    pairs = [
+        (0, 1, 0.5), (0, 1, 0.9),   # last-wins -> 0.9
+        (2, 3, 0.7),
+        (1, 2, 0.4),                # cross-cluster (1 in c1, 2 in c2) -> excluded
+    ]
+    view = ClusterPairScores.from_pairs(pairs, clusters)
+    assert view.for_cluster(1) == {(0, 1): 0.9}
+    assert view.for_cluster(2) == {(2, 3): 0.7}

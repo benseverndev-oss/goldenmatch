@@ -50,7 +50,10 @@ def _adversarial_pairs():
 
 
 def _norm(cinfo: dict) -> dict:
-    out = {k: v for k, v in cinfo.items() if k not in ("members", "_was_split")}
+    # SP4: the columnar path drops per-cluster pair_scores (returns {}); strip it
+    # from the comparison (the dedicated byte-identical-except-pair_scores gate is
+    # tests/test_columnar_drop_pairscores_parity.py). members compared as a SET.
+    out = {k: v for k, v in cinfo.items() if k not in ("members", "pair_scores", "_was_split")}
     out["members"] = frozenset(cinfo["members"])
     return out
 

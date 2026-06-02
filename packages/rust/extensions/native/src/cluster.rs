@@ -371,6 +371,8 @@ type BuildClustersArrowResult = (
     PyArrowType<ArrayData>, // metadata.oversized
     PyArrowType<ArrayData>, // metadata.bottleneck_pair_a
     PyArrowType<ArrayData>, // metadata.bottleneck_pair_b
+    PyArrowType<ArrayData>, // metadata.min_edge
+    PyArrowType<ArrayData>, // metadata.avg_edge
 );
 
 /// Arrow-native roadmap Phase 3 (#625): `build_clusters` over Arrow
@@ -472,16 +474,32 @@ pub fn build_clusters_arrow(
         }
     }
 
-    // ---- Bucket input edges per cluster (preserve input order for confidence
-    //      bottleneck tie-break invariant). -----------------------------------
+    // ---- Bucket input edges per cluster, with ORDERED LAST-WINS dedup by
+    //      (id_a, id_b): keep the FIRST-occurrence position, overwrite with the
+    //      LAST score. This is byte-identical to the Python dict path's
+    //      `result[cid]["pair_scores"][(a, b)] = s` (a dict keeps insertion order
+    //      and last-wins value), so the metadata confidence/bottleneck/min/avg
+    //      below are computed over the SAME deduped edge set the dict path uses --
+    //      letting SP4 read them off frames.metadata bit-identically instead of
+    //      re-materializing per-cluster pair_scores dicts. (Each pair belongs to
+    //      exactly one cluster -- a's cluster -- so (a, b) is a global key.)
     let n_clusters = clusters.len();
     let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> = vec![Vec::new(); n_clusters];
+    let mut edge_pos: HashMap<(i64, i64), (usize, usize)> = HashMap::with_capacity(n_pairs);
     for i in 0..n_pairs {
         let a = id_a.value(i);
+        let b = id_b.value(i);
         let s = score.value(i);
         if let Some(&cid) = member_to_cid.get(&a) {
             // cid is 1-based; per_cluster_edges is 0-indexed.
-            per_cluster_edges[(cid - 1) as usize].push((a, id_b.value(i), s));
+            let cidx = (cid - 1) as usize;
+            if let Some(&(ci, ei)) = edge_pos.get(&(a, b)) {
+                per_cluster_edges[ci][ei].2 = s; // last-wins, same position
+            } else {
+                let ei = per_cluster_edges[cidx].len();
+                per_cluster_edges[cidx].push((a, b, s));
+                edge_pos.insert((a, b), (cidx, ei));
+            }
         }
     }
 
@@ -505,15 +523,22 @@ pub fn build_clusters_arrow(
     let mut m_over: Vec<bool> = Vec::with_capacity(n_clusters);
     let mut m_bot_a: Vec<i64> = Vec::with_capacity(n_clusters);
     let mut m_bot_b: Vec<i64> = Vec::with_capacity(n_clusters);
+    let mut m_min: Vec<f64> = Vec::with_capacity(n_clusters);
+    let mut m_avg: Vec<f64> = Vec::with_capacity(n_clusters);
     for (idx, members) in clusters.iter().enumerate() {
         let cid = (idx + 1) as i64;
         let size = members.len();
         let edges = &per_cluster_edges[idx];
-        let (_min_e, _avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        // min_e/avg_e were previously discarded; SP4 emits them on metadata so the
+        // Python weak-quality test (avg_edge - min_edge > threshold) stays
+        // byte-identical without per-cluster pair_scores dicts.
+        let (min_e, avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
         m_cid.push(cid);
         m_size.push(size as i64);
         m_conf.push(conf);
         m_over.push(size > max_cluster_size);
+        m_min.push(min_e.unwrap_or(0.0));
+        m_avg.push(avg_e.unwrap_or(0.0));
         match bn {
             Some((a, b)) => {
                 m_bot_a.push(a);
@@ -534,6 +559,8 @@ pub fn build_clusters_arrow(
     let metadata_over = BooleanArray::from(m_over);
     let metadata_bot_a = Int64Array::from(m_bot_a);
     let metadata_bot_b = Int64Array::from(m_bot_b);
+    let metadata_min = Float64Array::from(m_min);
+    let metadata_avg = Float64Array::from(m_avg);
 
     Ok((
         PyArrowType(assignments_cid.to_data()),
@@ -544,5 +571,7 @@ pub fn build_clusters_arrow(
         PyArrowType(metadata_over.to_data()),
         PyArrowType(metadata_bot_a.to_data()),
         PyArrowType(metadata_bot_b.to_data()),
+        PyArrowType(metadata_min.to_data()),
+        PyArrowType(metadata_avg.to_data()),
     ))
 }
