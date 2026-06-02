@@ -532,15 +532,27 @@ def _finalize_clusters(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    *,
+    raw_pairs: list[tuple[int, int, float]] | None = None,
+    weak_stats: dict[int, tuple[float, float]] | None = None,
 ) -> dict[int, dict]:
     """Shared cluster-build tail: auto-split oversized clusters, assign
     ``cluster_quality`` (+ weak confidence downgrade), then emit the profile.
 
-    Reads only ``result`` (the pre-split per-cluster dict with members/size/
-    oversized/pair_scores/confidence/bottleneck_pair) plus the three params. Both
-    the dict path and the columnar path call this so split/quality/emit are
+    Reads ``result`` (the pre-split per-cluster dict) plus the params. Both the
+    dict path and the columnar path call this so split/quality/emit are
     byte-identical. OWNS the ``_emit_cluster_profile`` call -- callers must NOT
-    emit again."""
+    emit again.
+
+    Columnar path (SP4): the dict path passes its full per-cluster ``pair_scores``;
+    the columnar path passes ``pair_scores={}`` plus ``raw_pairs`` (the flat input
+    pairs) + ``weak_stats`` ({cid: (min_edge, avg_edge)} for multi-member
+    clusters). When ``raw_pairs`` is given: the MST split materializes an oversized
+    cluster's ``pair_scores`` on demand (input order, last-wins == the dict path's
+    fill) BEFORE the edge-budget meter, and ALL ``pair_scores`` are reset to ``{}``
+    after the split loop. When ``weak_stats`` is given, the weak test reads min/avg
+    from it instead of ``pair_scores``. With both ``None`` (dict path) behavior is
+    UNCHANGED."""
     # Auto-split oversized clusters (when enabled). See _split_edge_work_budget:
     # the per-pass single-weakest-edge split degrades to O(nodes * edges) on a
     # large dense cluster, so two guards keep the loop terminating without
@@ -559,6 +571,14 @@ def _finalize_clusters(
     while to_split:
         cid = to_split.pop()
         cinfo = result.pop(cid)
+        # Columnar path: materialize this oversized cluster's pair_scores on demand
+        # from the raw input pairs (input order, last-wins == the dict path's fill)
+        # so the MST split + edge-budget meter behave identically. Rare (oversized).
+        if raw_pairs is not None and not cinfo["pair_scores"]:
+            _ms = set(cinfo["members"])
+            cinfo["pair_scores"] = {
+                (a, b): s for a, b, s in raw_pairs if a in _ms and b in _ms
+            }
         edge_work += len(cinfo["pair_scores"])
         if edge_work > edge_budget:
             cinfo["oversized"] = True
@@ -596,11 +616,31 @@ def _finalize_clusters(
             edge_budget, n_oversized,
         )
 
+    # Columnar path: the per-oversized materialization above transiently put real
+    # pair_scores on clusters processed in the split loop; reset ALL pair_scores to
+    # {} so the returned dict is uniformly score-free (scores are served by the
+    # pipeline view). The weak step below reads weak_stats, not pair_scores.
+    if raw_pairs is not None:
+        for cinfo in result.values():
+            cinfo["pair_scores"] = {}
+
     # Assign cluster_quality and apply confidence downgrade
     with stage("cluster_quality_assignment"):
         for cid, cinfo in result.items():
             if cinfo.get("_was_split"):
                 cinfo["cluster_quality"] = "split"
+            elif weak_stats is not None:
+                # Columnar path: weak test reads min/avg from weak_stats (split
+                # sub-clusters hit "_was_split" above; absent cid = no edges).
+                if cinfo["size"] > 1 and cid in weak_stats:
+                    min_edge, avg_edge = weak_stats[cid]
+                    if avg_edge - min_edge > weak_cluster_threshold:
+                        cinfo["cluster_quality"] = "weak"
+                        cinfo["confidence"] *= 0.7
+                    else:
+                        cinfo["cluster_quality"] = "strong"
+                else:
+                    cinfo["cluster_quality"] = "strong"
             elif cinfo["size"] > 1 and cinfo.get("pair_scores"):
                 scores = list(cinfo["pair_scores"].values())
                 min_edge = min(scores)
@@ -625,27 +665,35 @@ def _build_clusters_via_frames(
     weak_cluster_threshold: float,
     auto_split: bool,
 ) -> dict[int, dict]:
-    """Columnar cluster-build core (SP1). Builds the same pre-split ``result``
-    dict the dict path produces (members/size/oversized/pair_scores/confidence/
-    bottleneck_pair), then shares the auto-split/quality/emit tail via
-    ``_finalize_clusters`` so split/quality/emit are byte-identical.
+    """Columnar cluster-build core. Returns the dict path's shape EXCEPT
+    ``pair_scores`` is ``{}`` on every cluster (SP4: the eager per-cluster dict --
+    the SP1 bench loss -- is dropped; scores are served by a ``ClusterPairScores``
+    view built at the pipeline level from the scored-pair stream). Everything else
+    (members/size/oversized/confidence/bottleneck/cluster_quality/ids) is
+    byte-identical; the shared ``_finalize_clusters`` tail does auto-split/quality/
+    emit.
 
     Union-Find source differs native vs off-native:
       * Native + the Arrow kernel present: ``build_clusters_arrow_native`` runs
-        UF in Rust (UF-ONLY, pre-split) and the raw member sets come from
-        ``frames.assignments``.
+        UF in Rust (UF-ONLY, pre-split); member sets come from
+        ``frames.assignments``. Confidence/bottleneck/min_edge/avg_edge are read
+        DIRECTLY from ``frames.metadata`` keyed by ``cluster_id`` (the kernel sorts
+        components by min-member + enumerates start=1, identical to our re-sort, so
+        the cid mapping is direct). NO per-cluster ``pair_scores`` fill.
       * Off-native (or the Arrow kernel absent): UF membership comes DIRECTLY
         from ``connected_components`` (when exposed) or the pure-Python
-        ``UnionFind`` -- the SAME pre-split UF the dict path uses. We do NOT call
-        ``build_clusters_arrow_native`` in that case: its
+        ``UnionFind``. Confidence + min/avg come from a TRANSIENT per-cluster fill
+        in PAIRS-INPUT ORDER (matching the dict path's float-sum order exactly)
+        which is then DISCARDED -- the returned dict's ``pair_scores`` stays ``{}``.
+        We do NOT call ``build_clusters_arrow_native`` here (its
         ``build_clusters_v2_columnar`` fallback re-runs the FULL ``build_clusters``
-        (including auto-split), which would hand us POST-split frames.
+        incl. auto-split -> POST-split frames).
 
-    Confidence + bottleneck are computed on the PRE-split clusters via
-    ``compute_cluster_confidence`` on the materialized ``pair_scores`` in BOTH
-    branches. Per spec this is bit-identical to the native metadata by
-    construction and sidesteps re-aligning the kernel's raw cluster_id labels to
-    our sorted-by-min-member ids; the native-metadata path is CI-only anyway.
+    Both states are STRICT byte-identical to the dict path on everything but
+    ``pair_scores`` (the kernel's metadata and the off-native transient fill are
+    both pairs-input order). ``raw_pairs`` + ``weak_stats`` are threaded into
+    ``_finalize_clusters`` for the per-oversized split materialization + the weak
+    test.
     """
     import polars as _pl
 
@@ -666,6 +714,9 @@ def _build_clusters_via_frames(
     arrow_fn = getattr(native, "build_clusters_arrow", None) if native else None
 
     member_sets: list[set[int]]
+    # Native path: per-cluster confidence/bottleneck/min/avg from frames.metadata
+    # (keyed by kernel cluster_id == our canonical cid). None off-native.
+    metadata_by_cid: dict[int, dict] | None = None
     if native is not None and arrow_fn is not None:
         # Native Arrow kernel: UF-ONLY assignments (pre-split). Derive raw
         # member sets per UF component from the assignments frame.
@@ -681,6 +732,28 @@ def _build_clusters_via_frames(
             ):
                 by_kernel_cid.setdefault(int(kcid), set()).add(int(mid))
             member_sets = list(by_kernel_cid.values())
+            # Retain the kernel's per-cluster metadata (pairs-input order ->
+            # bit-identical to compute_cluster_confidence). (0,0) bottleneck -> None.
+            md = frames.metadata
+            metadata_by_cid = {}
+            for cid_v, conf_v, ba_v, bb_v, mn_v, av_v in zip(
+                md["cluster_id"].to_list(),
+                md["confidence"].to_list(),
+                md["bottleneck_pair_a"].to_list(),
+                md["bottleneck_pair_b"].to_list(),
+                md["min_edge"].to_list(),
+                md["avg_edge"].to_list(),
+                strict=True,
+            ):
+                metadata_by_cid[int(cid_v)] = {
+                    "confidence": conf_v,
+                    "bottleneck_pair": (
+                        None if (int(ba_v), int(bb_v)) == (0, 0)
+                        else (int(ba_v), int(bb_v))
+                    ),
+                    "min_edge": mn_v,
+                    "avg_edge": av_v,
+                }
     else:
         # Off-native: source UF DIRECTLY (same pre-split UF as the dict path).
         with stage("cluster_connected_components"):
@@ -721,37 +794,58 @@ def _build_clusters_via_frames(
                 "pair_scores": {},
             }
 
-    # --- Step 3: pair_scores (ORDER-PRESERVING -- NOT a join). -------------
-    # A Polars join would reorder rows and break the sequential-sum +
-    # first-occurrence bottleneck tie-break parity. replace_strict maps id_a ->
-    # cluster_id in place; iterate the frame IN ROW ORDER (= pairs order).
-    # Duplicate canonical pairs overwrite (last wins), matching the dict path.
-    with stage("cluster_pair_scores_fill"):
-        if not pairs_df.is_empty():
-            tagged = pairs_df.with_columns(
-                _pl.col("id_a").replace_strict(member_to_cid).alias("__cid__"),
-            )
-            for id_a, id_b, score, cid in zip(
-                tagged["id_a"].to_list(),
-                tagged["id_b"].to_list(),
-                tagged["score"].to_list(),
-                tagged["__cid__"].to_list(),
-                strict=True,
-            ):
-                result[int(cid)]["pair_scores"][(id_a, id_b)] = score
+    # --- Steps 3-4: confidence/bottleneck/min/avg -- NO eager pair_scores fill on
+    # `result` (SP4: pair_scores stays {}; scores are served by the pipeline view).
+    # Native reads them off frames.metadata (deduped, pairs-input order).
+    # Off-native uses a TRANSIENT pairs-input-order fill (replace_strict in row
+    # order, dict last-wins -- matching the dict path) that feeds confidence + min/
+    # avg, then is DISCARDED. `weak_stats[cid] = (min_edge, avg_edge)` per
+    # multi-member cluster feeds the weak test in _finalize_clusters.
+    weak_stats: dict[int, tuple[float, float]] = {}
+    if metadata_by_cid is not None:
         del member_to_cid
         del sorted_clusters
-
-    # --- Step 4: confidence + bottleneck on PRE-split clusters. ------------
-    with stage("cluster_compute_confidence"):
-        for cid, cinfo in result.items():
-            conf = compute_cluster_confidence(cinfo["pair_scores"], cinfo["size"])
-            cinfo["confidence"] = conf["confidence"]
-            cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
+        with stage("cluster_compute_confidence"):
+            for cid, cinfo in result.items():
+                md_c = metadata_by_cid[cid]
+                cinfo["confidence"] = md_c["confidence"]
+                cinfo["bottleneck_pair"] = md_c["bottleneck_pair"]
+                if cinfo["size"] > 1:
+                    weak_stats[cid] = (md_c["min_edge"], md_c["avg_edge"])
+    else:
+        transient: dict[int, dict[tuple[int, int], float]] = {}
+        with stage("cluster_pair_scores_fill"):
+            if not pairs_df.is_empty():
+                tagged = pairs_df.with_columns(
+                    _pl.col("id_a").replace_strict(member_to_cid).alias("__cid__"),
+                )
+                for id_a, id_b, score, cid in zip(
+                    tagged["id_a"].to_list(),
+                    tagged["id_b"].to_list(),
+                    tagged["score"].to_list(),
+                    tagged["__cid__"].to_list(),
+                    strict=True,
+                ):
+                    transient.setdefault(int(cid), {})[(id_a, id_b)] = score
+            del member_to_cid
+            del sorted_clusters
+        with stage("cluster_compute_confidence"):
+            for cid, cinfo in result.items():
+                ps = transient.get(cid, {})
+                conf = compute_cluster_confidence(ps, cinfo["size"])
+                cinfo["confidence"] = conf["confidence"]
+                cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
+                if cinfo["size"] > 1 and ps:
+                    _vals = list(ps.values())
+                    weak_stats[cid] = (min(_vals), sum(_vals) / len(_vals))
 
     # --- Steps 5-7: auto-split + cluster_quality + emit (shared tail). -----
+    # raw_pairs lets _finalize materialize per-OVERSIZED pair_scores (input order,
+    # last-wins) for the MST split; weak_stats feeds the weak test. The returned
+    # dict's pair_scores is {} on every cluster.
     return _finalize_clusters(
         result, max_cluster_size, weak_cluster_threshold, auto_split,
+        raw_pairs=pairs_list, weak_stats=weak_stats,
     )
 
 
