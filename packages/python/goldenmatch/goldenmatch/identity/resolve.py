@@ -86,15 +86,17 @@ _NOT_BATCHED = object()
 
 
 def _batch_fingerprint_enabled() -> bool:
-    """Opt-in batch fingerprinting for ``resolve_clusters``: when
-    ``GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1``, no-PK record h1 hashes are
-    computed once via ``batch_fingerprints(df)`` instead of per-row inside the
-    cluster loop. Default OFF (``0``) -- byte-identical to the per-row path, so
-    the gate is a no-op on output. Default-on is pending a perf bench. See
-    ``_id_scheme`` for the sibling content-hash kill-switch."""
+    """Batch fingerprinting for ``resolve_clusters``: no-PK record h1 hashes are
+    computed once via ``batch_fingerprints(df)`` (Arrow kernel) instead of per-row
+    inside the cluster loop. Default ON -- byte-identical to the per-row path
+    (verified across the full identity suite + the real Arrow path in CI), so it
+    is a no-op on OUTPUT, only faster. Bench (run 26793348836, fresh native, 1M/5M
+    no-PK): 2.6x on the fingerprinting step (5.54s->2.13s @1M, 27.5s->10.5s @5M).
+    Kill-switch ``GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=0`` restores the per-row
+    path. See ``_id_scheme`` for the sibling content-hash kill-switch."""
     return os.environ.get(
-        "GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", "0"
-    ).strip() == "1"
+        "GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", "1"
+    ).strip() != "0"
 
 
 def _id_scheme() -> str:
