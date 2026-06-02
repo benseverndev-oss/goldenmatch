@@ -1,0 +1,48 @@
+name: bench-cluster-frames-out
+
+# SP-A build-stage bench (workflow_dispatch only), RECORDED DATA not a kill gate.
+# Builds the native ext fresh so the columnar build hits the real Arrow kernel,
+# then benches build_cluster_frames (frames-out, GOLDENMATCH_CLUSTER_FRAMES_OUT=1)
+# vs the score-free dict (build_clusters, GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1) at
+# scale on the bulk-RSS axis (k=5, no oversized clusters). Parity
+# (cluster_frames_to_dict == score-free dict, except members/pair_scores) is
+# asserted before any perf.
+on:
+  workflow_dispatch:
+    inputs:
+      np:
+        description: "Comma-separated target pair counts"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native extension (exposes build_clusters_arrow)
+        run: uv run python scripts/build_native.py
+      - name: Bench cluster frames-out (frames vs score-free dict)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_cluster_frames_out.py \
+            --np "${{ inputs.np }}" --runs "${{ inputs.runs }}" \
+            --output .profile_tmp/cluster_frames_out.json | tee /tmp/cluster_frames_out.txt
+          { echo '## bench-cluster-frames-out'; echo '```'; cat /tmp/cluster_frames_out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: cluster-frames-out
+          path: .profile_tmp/cluster_frames_out.json
+          retention-days: 30
