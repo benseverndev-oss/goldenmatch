@@ -1283,6 +1283,8 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
                 "oversized": _pl.Boolean(),
                 "bottleneck_pair_a": _pl.Int64(),
                 "bottleneck_pair_b": _pl.Int64(),
+                "min_edge": _pl.Float64(),
+                "avg_edge": _pl.Float64(),
             }),
         )
 
@@ -1304,6 +1306,8 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
     m_oversized = _np.empty(n_clusters, dtype=_np.bool_)
     m_bot_a = _np.empty(n_clusters, dtype=_np.int64)
     m_bot_b = _np.empty(n_clusters, dtype=_np.int64)
+    m_min = _np.empty(n_clusters, dtype=_np.float64)
+    m_avg = _np.empty(n_clusters, dtype=_np.float64)
 
     a_idx = 0
     for m_idx, (cid, cluster) in enumerate(clusters.items()):
@@ -1325,6 +1329,10 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
         m_oversized[m_idx] = bool(cluster.get("oversized", False))
         m_bot_a[m_idx] = bottleneck[0] if bottleneck else 0
         m_bot_b[m_idx] = bottleneck[1] if bottleneck else 0
+        _ps = cluster.get("pair_scores") or {}
+        _scores = list(_ps.values())
+        m_min[m_idx] = min(_scores) if _scores else 0.0
+        m_avg[m_idx] = (sum(_scores) / len(_scores)) if _scores else 0.0
 
     assignments = _pl.DataFrame({
         "cluster_id": a_cid,
@@ -1338,6 +1346,8 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
         "oversized": m_oversized,
         "bottleneck_pair_a": m_bot_a,
         "bottleneck_pair_b": m_bot_b,
+        "min_edge": m_min,
+        "avg_edge": m_avg,
     })
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
@@ -1506,7 +1516,7 @@ def build_clusters_arrow_native(
 
     (
         a_cid, a_mid,
-        m_cid, m_size, m_conf, m_over, m_bot_a, m_bot_b,
+        m_cid, m_size, m_conf, m_over, m_bot_a, m_bot_b, m_min, m_avg,
     ) = arrow_fn(a_arrow, b_arrow, s_arrow, all_ids_arrow, max_cluster_size)
 
     assignments = _pl.DataFrame({
@@ -1523,6 +1533,8 @@ def build_clusters_arrow_native(
         "oversized":        _pl.from_arrow(m_over),
         "bottleneck_pair_a": _pl.from_arrow(m_bot_a),
         "bottleneck_pair_b": _pl.from_arrow(m_bot_b),
+        "min_edge":         _pl.from_arrow(m_min),
+        "avg_edge":         _pl.from_arrow(m_avg),
     })
     return ClusterFrames(assignments=assignments, metadata=metadata)
 

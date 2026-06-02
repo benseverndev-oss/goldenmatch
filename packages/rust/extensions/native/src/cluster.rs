@@ -371,6 +371,8 @@ type BuildClustersArrowResult = (
     PyArrowType<ArrayData>, // metadata.oversized
     PyArrowType<ArrayData>, // metadata.bottleneck_pair_a
     PyArrowType<ArrayData>, // metadata.bottleneck_pair_b
+    PyArrowType<ArrayData>, // metadata.min_edge
+    PyArrowType<ArrayData>, // metadata.avg_edge
 );
 
 /// Arrow-native roadmap Phase 3 (#625): `build_clusters` over Arrow
@@ -505,15 +507,22 @@ pub fn build_clusters_arrow(
     let mut m_over: Vec<bool> = Vec::with_capacity(n_clusters);
     let mut m_bot_a: Vec<i64> = Vec::with_capacity(n_clusters);
     let mut m_bot_b: Vec<i64> = Vec::with_capacity(n_clusters);
+    let mut m_min: Vec<f64> = Vec::with_capacity(n_clusters);
+    let mut m_avg: Vec<f64> = Vec::with_capacity(n_clusters);
     for (idx, members) in clusters.iter().enumerate() {
         let cid = (idx + 1) as i64;
         let size = members.len();
         let edges = &per_cluster_edges[idx];
-        let (_min_e, _avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        // min_e/avg_e were previously discarded; SP4 emits them on metadata so the
+        // Python weak-quality test (avg_edge - min_edge > threshold) stays
+        // byte-identical without per-cluster pair_scores dicts.
+        let (min_e, avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
         m_cid.push(cid);
         m_size.push(size as i64);
         m_conf.push(conf);
         m_over.push(size > max_cluster_size);
+        m_min.push(min_e.unwrap_or(0.0));
+        m_avg.push(avg_e.unwrap_or(0.0));
         match bn {
             Some((a, b)) => {
                 m_bot_a.push(a);
@@ -534,6 +543,8 @@ pub fn build_clusters_arrow(
     let metadata_over = BooleanArray::from(m_over);
     let metadata_bot_a = Int64Array::from(m_bot_a);
     let metadata_bot_b = Int64Array::from(m_bot_b);
+    let metadata_min = Float64Array::from(m_min);
+    let metadata_avg = Float64Array::from(m_avg);
 
     Ok((
         PyArrowType(assignments_cid.to_data()),
@@ -544,5 +555,7 @@ pub fn build_clusters_arrow(
         PyArrowType(metadata_over.to_data()),
         PyArrowType(metadata_bot_a.to_data()),
         PyArrowType(metadata_bot_b.to_data()),
+        PyArrowType(metadata_min.to_data()),
+        PyArrowType(metadata_avg.to_data()),
     ))
 }
