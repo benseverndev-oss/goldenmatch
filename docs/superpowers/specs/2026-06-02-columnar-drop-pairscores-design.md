@@ -183,3 +183,26 @@ switch `=0`) — the roadmap payoff. If it does NOT win, keep gated and record w
   + `scored_pairs` capture + identity.
 - Related: [[project_663_arrow_kernels]], [[project_arrow_native_finish_line]],
   [[project_identity_graph_v2]].
+
+## Measure-first result (2026-06-02, run 26839439258, main, native kernel real)
+
+Parity OK (gate ON byte-identical to OFF except `pair_scores`). `build_clusters`
+gate-OFF (dict) vs gate-ON (columnar, `pair_scores={}`), median of 3, `large-new-64GB`:
+
+| pairs | off (s) | on (s) | speedup | off RSS MB | on RSS MB |
+|------:|--------:|-------:|--------:|-----------:|-----------:|
+| 1,000,000 | 1.822 | 1.705 | 1.07x | 506.8 | 641.2 |
+| 5,000,000 | 10.889 | 10.393 | 1.05x | 2035.7 | 2645.8 |
+
+**Decision: do NOT flip `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` default-ON. Stays gated.**
+
+- Wall win is 1.05-1.07x, far below the roadmap's projected 2.4-3.1x. Dropping the
+  eager `pair_scores` dicts removed the SP1 loss but did not unlock a real win at
+  1M/5M.
+- Peak RSS REGRESSES ~27-30% on the columnar+native path (Arrow assignment/metadata
+  frames + kernel buffers cost more than the dict path even with `pair_scores={}`).
+  Trading +30% RSS for +6% wall is the wrong direction against the tracked RSS
+  constraint (hold wall+accuracy, drop peak RSS).
+
+The SP1-SP4 decoupling all shipped (consumers off the dict adapter; the build *can*
+drop `pair_scores`); the gate remains an opt-in escape hatch rather than the default.
