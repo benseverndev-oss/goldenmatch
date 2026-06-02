@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from goldenmatch.core.cluster_pairscores import ClusterPairScores
     from goldenmatch.distributed.record_store import PreparedRecordStore
 
 import polars as pl
@@ -1841,21 +1842,28 @@ def _run_dedupe_pipeline(
             logger.warning("Lineage generation failed: %s", e)
 
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
-    # When the columnar-cluster-build gate is ON, feed the identity evidence-edge
-    # consumer from a ClusterPairScores view (byte-identical to the dict path,
-    # built once here). Gate via _columnar_cluster_build_enabled
-    # (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD) -- NOT the _use_columnar pipeline flag,
-    # which is a different env var.
-    pair_score_view = None
+    # Feed the identity evidence-edge consumer from a ClusterPairScores view
+    # (byte-identical to the dict path, built once here) whenever the dict that
+    # reaches identity carries EMPTY per-cluster pair_scores. Two gates produce
+    # such a dict:
+    #   - _columnar_cluster_build_enabled (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD):
+    #     the columnar build returns pair_scores={};
+    #   - _cluster_frames_out_enabled (GOLDENMATCH_CLUSTER_FRAMES_OUT, SP-B): the
+    #     lazily-rebuilt dict from cluster_frames_to_dict also has pair_scores={}.
+    # In BOTH cases resolve_clusters' info.get("pair_scores") fallback would yield
+    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (neither env set)
+    # leaves the dict carrying real pair_scores and pair_score_view stays None --
+    # byte-identical to today.
+    pair_score_view: ClusterPairScores | None = None
     if isinstance(clusters, dict):
         from goldenmatch.core.cluster import _columnar_cluster_build_enabled
-        if _columnar_cluster_build_enabled():
+        if _columnar_cluster_build_enabled() or _cluster_frames_out_enabled():
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            # SP4: the columnar build returns pair_scores={}, so build the view
-            # from the RAW input pairs (input-order, last-wins == the dict path's
-            # per-cluster pair_scores) + final cluster membership. NOT from
-            # results["scored_pairs"] (max-score deduped, differs on dup-scored
-            # pairs).
+            # SP4 / SP-B: the dict reaching identity has pair_scores={}, so build
+            # the view from the RAW input pairs (input-order, last-wins == the
+            # dict path's per-cluster pair_scores) + final cluster membership. NOT
+            # from results["scored_pairs"] (max-score deduped, differs on
+            # dup-scored pairs).
             pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(

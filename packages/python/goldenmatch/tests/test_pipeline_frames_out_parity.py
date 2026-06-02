@@ -200,3 +200,143 @@ def test_frames_out_pipeline_parity_provenance_slow(monkeypatch, native):
     assert _cluster_stats(on) == _cluster_stats(off)
     assert _dupe_row_ids(on) == _dupe_row_ids(off)
     assert _golden_as_setrows(on) == _golden_as_setrows(off)
+
+
+# ── SP-B Task 3: identity-enabled parity ──────────────────────────────────
+#
+# With identity ENABLED and GOLDENMATCH_CLUSTER_FRAMES_OUT ON, the dict that
+# reaches resolve_clusters is rebuilt from the frames (cluster_frames_to_dict)
+# and carries pair_scores={}. Without Task 3's ClusterPairScores view that dict
+# yields ZERO evidence edges, so ResolveSummary.edges_added / conflicts_flagged
+# diverge from the gate-OFF dict path. This test is the gate that catches that:
+# it runs the pipeline gate-ON vs gate-OFF against identical seeded stores and
+# asserts (a) the record->entity PARTITION is identical and (b) the
+# ResolveSummary key counts match.
+
+
+def _identity_df():
+    """People shape with a strong 2-member cluster + a weak-bottleneck chain.
+
+    - Alice/Alyce Smith: strong fuzzy pair (same email) -> 2-member identity.
+    - Carl / Carla / Karl Carter: a 3-member chain where the Carl<->Karl edge
+      is the weak link (bottleneck), so the resolver flags a conflict edge --
+      exercising both the evidence-edge AND the weak-bottleneck pair_scores
+      lookups that fall back to info.get("pair_scores") when the view is absent.
+    - Dave Singleton: lone record (singleton identity).
+
+    ``source_pk_column="id"`` makes record ids deterministic (``src:<id>``),
+    so the partition can be compared across two runs without depending on the
+    random UUIDv7 entity-ids.
+    """
+    import polars as pl
+
+    return pl.DataFrame({
+        "id":    ["1", "2", "3", "4", "5", "6"],
+        "name":  [
+            "Alice Smith", "Alyce Smith",
+            "Carl Carter", "Carla Carter", "Karl Carter",
+            "Dave Singleton",
+        ],
+        "email": [
+            "a@x.com", "a@x.com",
+            "c@y.com", "c@y.com", "c@y.com",
+            "d@z.com",
+        ],
+        "zip":   ["10001", "10001", "20002", "20002", "20002", "30003"],
+    })
+
+
+def _identity_config(identity_path: str, run_name: str):
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        IdentityConfig,
+    )
+
+    return GoldenMatchConfig(
+        output=OutputConfig(run_name=run_name),
+        matchkeys=[MatchkeyConfig(
+            name="people_fuzzy",
+            type="weighted",
+            threshold=0.7,
+            fields=[
+                MatchkeyField(field="name",  scorer="jaro_winkler", weight=0.7),
+                MatchkeyField(field="email", scorer="exact",        weight=0.3),
+            ],
+        )],
+        blocking=BlockingConfig(strategy="static", keys=[
+            BlockingKeyConfig(fields=["zip"]),
+        ]),
+        identity=IdentityConfig(
+            enabled=True, path=identity_path, source_pk_column="id",
+            dataset="people-test",
+        ),
+    )
+
+
+def _record_partition(db_path: str, source: str, ids: list[str]):
+    """record->entity PARTITION as a set of frozensets of record-ids.
+
+    Entity-ids are random UUIDv7 (``new_entity_id``), so we never compare them
+    literally across runs -- we group record-ids by their resolved entity and
+    compare the resulting partition.
+    """
+    from goldenmatch.identity import IdentityStore
+
+    groups: dict[str, set[str]] = {}
+    with IdentityStore(path=db_path) as s:
+        for rid in ids:
+            record_id = f"{source}:{rid}"
+            eid = s.find_entity_by_record(record_id)
+            if eid is None:
+                continue
+            groups.setdefault(eid, set()).add(record_id)
+    return {frozenset(members) for members in groups.values()}
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
+    """Identity partition + ResolveSummary key counts identical, gate ON vs OFF.
+
+    This is the Task 3 gate: catches the empty-evidence-edge bug on frames-out.
+    """
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    _skip_if_no_native(native)
+
+    df = _identity_df()
+    ids = ["1", "2", "3", "4", "5", "6"]
+    source = "src"
+
+    # Gate OFF: identity off the dict path (real per-cluster pair_scores).
+    off_db = str(tmp_path / "identity_off.db")
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    off = run_dedupe_df(
+        df, _identity_config(off_db, "off"), source_name=source,
+    )
+
+    # Gate ON: identity off the frames-rebuilt dict (pair_scores={} -> needs the
+    # ClusterPairScores view that Task 3 builds).
+    on_db = str(tmp_path / "identity_on.db")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    on = run_dedupe_df(
+        df, _identity_config(on_db, "on"), source_name=source,
+    )
+
+    assert off["identity_summary"] is not None
+    assert on["identity_summary"] is not None
+
+    # Primary gate: the record->entity PARTITION is identical (frozensets of
+    # record-ids; entity-ids themselves are random and not compared).
+    off_part = _record_partition(off_db, source, ids)
+    on_part = _record_partition(on_db, source, ids)
+    assert on_part == off_part
+    # The fixture must actually produce a multi-member identity (else the
+    # evidence-edge path is never exercised).
+    assert any(len(g) > 1 for g in off_part), "fixture produced no multi-member identity"
+
+    # Secondary gate: ResolveSummary key counts match. edges_added +
+    # conflicts_flagged are the counts that collapse to 0 under the bug.
+    assert on["identity_summary"] == off["identity_summary"]
+    assert off["identity_summary"]["edges_added"] >= 1, (
+        "fixture produced no evidence edges"
+    )
