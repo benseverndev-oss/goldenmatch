@@ -67,12 +67,15 @@ def _perrow(row: dict) -> str | None:
 
 
 def _adversarial_df() -> pl.DataFrame:
-    # Every routing-table case from the spec. Columns are record fields.
+    # The BATCHABLE + row-level-mask cases (no column-level-fallback dtypes here --
+    # a single bytes/Duration/Decimal column would force the WHOLE frame to per-row
+    # and this fixture would stop testing the batch path). Column-level-fallback
+    # dtypes get their own focused fixtures below.
     return pl.DataFrame({
         "s": ["alice", "bob", None, "x"],
         "i64": [1, 2, 3, 4],
         "f_finite": [1.5, 2.0, 3.25, 0.1],
-        "f_mixed": [1.5, float("nan"), float("inf"), -2.0],   # row-level fallback
+        "f_mixed": [1.5, float("nan"), float("inf"), -2.0],   # row-level mask
         "b": [True, False, None, True],
         "d": [dt.date(2020, 1, 2), dt.date(1999, 12, 31), None, dt.date(2000, 2, 29)],
         "dt_us": [dt.datetime(2020, 1, 2, 3, 4, 5, 123000),    # .123000 -> catches %.f bug
@@ -82,8 +85,11 @@ def _adversarial_df() -> pl.DataFrame:
         "i32": pl.Series([10, 20, 30, 40], dtype=pl.Int32),
         "f32": pl.Series([0.1, 0.2, 0.3, 0.4], dtype=pl.Float32),
         "allnull": pl.Series([None, None, None, None]),        # bare Null dtype
-        "dec": [Decimal("2.00"), Decimal("3.5"), None, Decimal("0")],
     })
+```
+
+(The `Decimal` import is still needed for the focused Decimal fixture below.)
+```python  # (focused single-column fixtures use the same _perrow reference)
 
 
 def test_batch_fingerprints_parity():
@@ -91,7 +97,7 @@ def test_batch_fingerprints_parity():
     assert batch_fingerprints(df) == [_perrow(r) for r in df.to_dicts()]
 ```
 
-Add separate focused fixtures + tests for the column-level fallback dtypes that need special construction: a `Duration` column, a `Time`-with-microseconds column, a tz-aware Datetime, a non-`us` (`ms`) Datetime, a `bytes` column, a `UInt64` column with a value `> 2**63`. Each asserts `batch_fingerprints(df) == [_perrow(r) for r in df.to_dicts()]`.
+Add separate focused fixtures + tests for the column-level fallback dtypes that need special construction: a `Duration` column, a `Time`-with-microseconds column, a tz-aware Datetime, a non-`us` (`ms`) Datetime, a `bytes` column, a `Decimal` column, and a `UInt64` column with a value `> 2**63`. Each asserts `batch_fingerprints(df) == [_perrow(r) for r in df.to_dicts()]`. (Note: `Decimal` columns normalize to one scale on construction -- `Decimal("3.5")` reads back as `Decimal("3.50")` if another cell has scale 2 -- which is fine since both sides read the normalized `to_dicts()`.) At least one of these single-column fixtures (e.g. the bytes or Duration column) MUST exercise the **all-rows-fallback** path where `canonicalize_records_df` returns `(None, [True]*height)` -- assert it still matches per-row, confirming the `batch_df is None` branch.
 
 - [ ] **Step 3: Run it — verify FAIL**
 
@@ -140,13 +146,27 @@ def batch_fingerprints(df) -> list:
     return out
 ```
 
-Key correctness points to get right (cite the spec): temporal recipe
-`dt.to_string("%Y-%m-%dT%H:%M:%S%.6f").str.replace(r"\.000000$", "")` (Date via
-`%Y-%m-%d`); `Float32->Float64`, `Int8/16/32`+`UInt8/16/32 -> Int64`; bare-`Null`
-dtype `cast(Utf8)`; row mask over EVERY float col's `is_finite` + UInt64>2**63;
-column-level fallback (return `(None, all-True)`) for bytes/Duration/tz/non-`us`
-Datetime/un-reproducible object. The `batch_df` rows MUST stay in original order so
-the scatter-back is a simple sequential fill.
+Key correctness points to get right (cite the spec):
+- **Temporal recipe** `dt.to_string("%Y-%m-%dT%H:%M:%S%.6f").str.replace(r"\.000000$", "")`
+  (Date via `%Y-%m-%d`).
+- **Up-casts** `Float32->Float64`, `Int8/16/32`+`UInt8/16/32 -> Int64`.
+- **bare-`Null` dtype** `cast(Utf8)`.
+- **Row-level masks** (mask only the offending rows, column stays in `batch_df`):
+  every Float col's `~is_finite` cells; UInt64 cells `> 2**63 - 1`. **ORDER MATTERS
+  for UInt64:** compute the overflow mask FIRST (`col > (2**63 - 1)`), exclude those
+  rows from `batch_df`, and cast Int64 only on the remaining rows -- casting a
+  UInt64 overflow cell raises `InvalidOperationError` which is NOT in
+  `except (TypeError, ValueError)` and would crash the whole batch.
+- **Column-level fallback** (return `(None, [True]*height)` -- the column is in
+  every row's hash and has no parity-preserving cast): bytes, `Duration`, `Time`,
+  tz-aware Datetime, non-`us` Datetime, **`Decimal`** (rejected by the kernel; a
+  Float64 cast would hash tag `f` not `s` and lose trailing zeros -- `str(Decimal(
+  "2.00"))=="2.00"`), and any un-reproducible object (list/struct/Array). For
+  Categorical/Enum, `cast(Utf8)` reproduces `str(value)` -- batchable; verify in the
+  fixture. (`Time` could in principle use the `%.6f` recipe but route it per-row for
+  simplicity -- the parity test gates either choice.)
+The `batch_df` rows MUST stay in original order so the scatter-back is a simple
+sequential fill.
 
 - [ ] **Step 5: Run the parity tests — verify PASS**
 
@@ -182,7 +202,17 @@ The candidate ordering + `_id_scheme()` logic is otherwise unchanged.
 
 - [ ] **Step 3: Batch-compute no-PK hashes in `resolve_clusters` + thread in**
 
-Behind the gate flag (Step 4), BEFORE the `for row in rows:` loop: build the no-PK subset (rows where `source_pk_col` is unset or the pk cell is null), call `batch_fingerprints` on `df` (or the no-PK sub-frame — keep row_id alignment), producing `h1_by_rowid: dict[int, str | None]`. In the loop, pass `precomputed_h1=h1_by_rowid.get(irid, _NOT_BATCHED)` (PK rows aren't in the dict -> `_NOT_BATCHED` -> unchanged path). When the gate is off, pass nothing (per-row path, byte-identical to today).
+Behind the gate flag (Step 4), BEFORE the `for row in rows:` loop: call
+`batch_fingerprints` on the **FULL `df`** (NOT a filtered sub-frame -- the output is
+mapped back positionally, so a sub-frame would misalign `hashes[row_index]` with
+`rows[row_index]` and silently move entity ids). The PK-vs-no-PK distinction is
+applied when POPULATING the dict, not when calling: only insert `h1_by_rowid[irid]`
+for no-PK rows (rows where `source_pk_col` is unset or the pk cell is null); PK rows
+are simply not inserted, so the loop's `.get(irid, _NOT_BATCHED)` leaves them on the
+unchanged path. (PK rows cost a wasted hash this way -- acceptable; correctness over
+the marginal waste.) Produce `h1_by_rowid: dict[int, str | None]`. In the loop, pass
+`precomputed_h1=h1_by_rowid.get(irid, _NOT_BATCHED)`. When the gate is off, pass
+nothing (per-row path, byte-identical to today).
 
 NOTE on alignment: `batch_fingerprints(df)` returns a list aligned to `df` rows in order; map it back to `__row_id__` via the same `rows` iteration so `h1_by_rowid[irid] = hashes[row_index]`. Only populate the dict for no-PK rows.
 
@@ -208,7 +238,7 @@ Commit: `feat(identity): wire batch_fingerprints into resolve_clusters behind GO
 
 - [ ] **Step 1: Bench script**
 
-`bench_identity_fingerprint.py`: generate a no-PK-heavy person-shaped frame at `--ns 1000000,5000000` (reuse `tests/generate_synthetic.py` / `_person_df` helpers); time `resolve_clusters` (or just the fingerprint step) with the gate ON vs OFF; report wall + peak RSS per N, plus the no-PK fraction. Print a markdown table to `$GITHUB_STEP_SUMMARY`. ASCII only.
+`bench_identity_fingerprint.py`: generate a no-PK-heavy person-shaped frame at `--ns 1000000,5000000` (reuse the synthetic-person fixture helper `_person_df` -- it lives in `tests/test_autoconfig_regressions.py`, NOT `generate_synthetic.py`; or `tests/fixtures/realistic_person.py`); time `resolve_clusters` (or just the fingerprint step) with the gate ON vs OFF; report wall + peak RSS per N, plus the no-PK fraction. Print a markdown table to `$GITHUB_STEP_SUMMARY`. ASCII only.
 
 - [ ] **Step 2: Workflow**
 
