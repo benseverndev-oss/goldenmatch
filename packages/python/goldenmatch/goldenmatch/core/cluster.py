@@ -563,7 +563,7 @@ def build_cluster_frames(
                 int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
                 for cid in oversized
             }
-            next_cid = int(metadata["cluster_id"].max())   # +1 inside loop
+            next_cid = metadata.height   # contiguous 1..n_clusters pre-split => height == max cid
             split_assign_rows = []
             split_meta_rows = []
             drop_cids = set()
