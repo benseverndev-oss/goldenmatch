@@ -48,40 +48,41 @@ branch -- AFTER the Ray-Dataset short-circuit at the top of `build_clusters`
 1. **Arrow Union-Find** -> `ClusterFrames` (assignments `cluster_id <-> member_id`;
    metadata `size`, `oversized`). The 2.4-3.1x kernel (`build_clusters_arrow_native`,
    already built; falls back to `build_clusters_v2_columnar` off-native).
-2. **Columnar `pair_scores`** -- join `pairs_df` to the member->cluster assignment
-   (from ClusterFrames.assignments) to get a per-cluster edge frame
-   `(cluster_id, id_a, id_b, score)`. Canonical `(min,max)` orientation already
-   holds upstream. Replaces the Python loop at :468-471.
-3. **Confidence + bottleneck via a BATCH-NATIVE kernel (decision 2026-06-02).**
-   `compute_cluster_confidence` computes `avg_edge = sum(scores)/len` as a
-   SEQUENTIAL left-fold in pair order; the existing native `cluster_confidence`
-   kernel deliberately replicates that exact float order. A vectorized Polars
-   `group_by().mean()` uses SIMD/pairwise summation -> a different float (~1e-13)
-   -> NOT byte-identical on `confidence` (and a measure-zero weak/strong flip).
-   To keep STRICT byte-identical AND remove the per-cluster Python overhead, add a
-   NEW native batch kernel **`cluster_confidence_batch`** that does per-cluster
-   sequential sums in Rust (bit-identical to the existing per-cluster
-   `cluster_confidence`) for ALL clusters in ONE call:
-   - Input: the edge frame as Arrow arrays (`cluster_id`, `id_a`, `id_b`, `score`,
-     IN pair-fill order) + per-cluster `size`. Output: per-cluster `(min_edge,
-     avg_edge, connectivity, bottleneck_pair=(a,b), confidence)`.
-   - Per cluster, Rust reproduces EXACTLY: size<=1 -> `connectivity=1.0,
-     confidence=1.0`, others `None`; else `min_edge`, `avg_edge` (sequential sum in
-     the input edge order), `connectivity = n_edges/(size*(size-1)/2)`,
-     `bottleneck_pair` = the argmin-score edge with STRICT `<` (first-occurrence in
-     input order, matching Python `min()` and the existing kernel cluster.rs:206-214),
-     `confidence = 0.4*min + 0.3*avg + 0.3*connectivity`.
-   - **Edge order into the kernel MUST be the pair-fill order** (same order
-     `pair_scores` was populated = `pairs` iteration order), so both the sequential
-     sum and the bottleneck tie-break match the dict path. The columnar edge frame
-     must preserve that order (do NOT reorder by group).
-   - Python wrapper `cluster_confidence_batch(...)` with dispatch: native ->
-     the kernel; **off-native -> the existing per-cluster `compute_cluster_confidence`
-     loop** (bit-identical, the slow path -- off-native is the non-perf path anyway).
-     STRICT byte-identical in BOTH states; no float tolerance.
-   - `bottleneck_pair` sentinel: the kernel/ClusterFrames carry `(0,0)` for
+2. **`pair_scores` (ORDER-PRESERVING, no join)** -- map `cluster_id` onto
+   `pairs_df` via `pl.col("id_a").replace_strict(member_to_cid)` in a
+   `with_columns` (NOT a Polars `join` -- a join does not preserve left-frame row
+   order, which would silently break the sequential-sum + bottleneck tie-break
+   parity). Both endpoints share a cluster post-UF, so keying on `id_a` matches the
+   dict path (:470) and the Rust kernel (cluster.rs:482). The result is a flat
+   `(cluster_id, id_a, id_b, score)` frame IN PAIR-FILL ORDER. The adapter
+   materializes per-cluster `pair_scores` dicts from it (order preserved).
+3. **Confidence + bottleneck -- REUSE the batched confidence the Arrow kernel
+   ALREADY emits (no new kernel; decision 2026-06-02 refined by spec-review).**
+   `compute_cluster_confidence`'s `avg_edge = sum/len` is a SEQUENTIAL left-fold;
+   a vectorized Polars `group_by().mean()` (SIMD/pairwise) differs by ~1e-13 and
+   breaks byte-identical. The fix does NOT need a new kernel: the EXISTING
+   `build_clusters_arrow` Rust kernel (cluster.rs:392-548) ALREADY computes
+   per-cluster confidence + bottleneck in Rust, in pair-INPUT order, via the same
+   `cluster_confidence` logic (cluster.rs:478-486 buckets edges per cluster by a
+   single-pass push -- NOT a group_by/sort -- then folds), and returns them on
+   `ClusterFrames.metadata` (`confidence`, `bottleneck_pair_a/b`). That IS the
+   batched-native, bit-identical confidence we want.
+   - **Native path:** take `confidence` + `bottleneck_pair` straight off the
+     `ClusterFrames.metadata` that step 1's `build_clusters_arrow_native` already
+     produced. No second computation, no new kernel.
+   - **Off-native path:** `build_clusters_arrow_native` falls back to
+     `build_clusters_v2_columnar`; compute confidence via the existing per-cluster
+     `compute_cluster_confidence` loop (Python, bit-identical; off-native is the
+     non-perf path). STRICT byte-identical in BOTH states; no float tolerance.
+   - `bottleneck_pair` sentinel: `ClusterFrames.metadata` carries `(0,0)` for
      "no bottleneck"; the adapter maps `(0,0) <-> None`. No real edge is `(0,0)`
-     (a pair has two distinct ids), so the sentinel is collision-free.
+     (a pair has two distinct ids), so it is collision-free.
+   - **Verify at plan time:** that the metadata `confidence`/`bottleneck` from
+     `build_clusters_arrow` are bit-identical to the dict path on the parity
+     fixture (the kernel uses the same `cluster_confidence` in input order, so they
+     should be -- the parity gate proves it). If a gap is found, the fallback is a
+     `cluster_confidence_batch` kernel, but reusing the existing metadata is the
+     first choice (no new native surface).
 4. **Auto-split (UNCHANGED, oversized-only)** -- for clusters with
    `size > max_cluster_size` (when `auto_split`), materialize that cluster's
    `members` + `pair_scores` DICT and call the existing
@@ -169,15 +170,15 @@ read in `build_clusters`, mirroring the `GOLDENMATCH_NATIVE`/identity env patter
 
 ## Scope boundary (YAGNI)
 
-- `core/cluster.py` (`build_clusters` internals + the `_build_clusters_via_frames`
-  columnar core + dict adapter + gate) AND the new `cluster_confidence_batch` Rust
-  kernel (`packages/rust/extensions/native/src/cluster.rs` + Python wrapper in
-  `core/cluster.py`, mirroring the existing `cluster_confidence` kernel pattern).
-  NO consumer changes (SP2+). NO new auto-split algorithm (reuse
-  `split_oversized_cluster`). Reuse the existing Arrow UF (`build_clusters_arrow_native`).
-  Don't change the `ClusterFrames` schema. (The batch kernel is the one new native
-  surface, added deliberately to keep STRICT byte-identical confidence floats while
-  removing the per-cluster Python overhead -- decision 2026-06-02.)
+- ONLY `core/cluster.py` (`build_clusters` internals + the `_build_clusters_via_frames`
+  columnar core + dict adapter + gate). **NO new native kernel** -- the existing
+  `build_clusters_arrow` already emits batched bit-identical confidence/bottleneck
+  on `ClusterFrames.metadata`; reuse it. NO consumer changes (SP2+). NO new
+  auto-split algorithm (reuse `split_oversized_cluster`). Reuse the existing Arrow
+  UF (`build_clusters_arrow_native`). Don't change the `ClusterFrames` schema. (If
+  plan-time parity testing finds the metadata confidence is NOT bit-identical, the
+  fallback is a `cluster_confidence_batch` kernel -- but reusing existing infra is
+  the design.)
 
 ## References
 
