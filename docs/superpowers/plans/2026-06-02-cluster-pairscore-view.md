@@ -197,6 +197,8 @@ Use the loop's `cluster_id` (NOT `cid`). Behavior is byte-identical because `for
 
 In `core/pipeline.py`, after the cluster-build `if/else` block closes (after ~`:1460`, where `clusters` is the dict), and before `_resolve_identities` (`:1714`): when `_columnar_cluster_build_enabled()` (import from `core.cluster`), build `view = ClusterPairScores.from_cluster_dict(clusters)`; else `view = None`. Thread `view` through `_resolve_identities` (`:245`) into its `resolve_clusters(...)` call (~`:308`) as `pair_score_view=view`. Build the view ONCE; reuse if other call sites need it later (SP3+).
 
+**Gate trap (IMPORTANT):** `pipeline.py` has TWO live columnar gates. Use `_columnar_cluster_build_enabled()` (from `core.cluster`, reads `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD`) for the view — the SAME gate that drives the columnar `build_clusters`. Do NOT reuse the in-scope local `_use_columnar` flag (pipeline.py:1445, reads the DIFFERENT `GOLDENMATCH_COLUMNAR_PIPELINE` via `_columnar_pipeline_enabled()`); that's an unrelated gate and wiring the view to it would mis-gate the migration.
+
 - [ ] **Step 5: Run — verify PASS (both native states)**
 
 Run: `../../../.venv/Scripts/python.exe -m pytest tests/test_cluster_pairscore_view_parity.py -v`
