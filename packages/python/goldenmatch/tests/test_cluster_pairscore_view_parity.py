@@ -16,6 +16,14 @@ stable across the two resolves.
 
 Parametrized over ``GOLDENMATCH_NATIVE`` in {"1","0"}; native=1 skips when the
 native cluster kernel is absent (validated in CI's fresh native build).
+
+Scope: this test exercises the CONSUMER swap (``resolve_clusters`` reading from
+the view vs the dict) by passing ``pair_score_view=`` directly. The pipeline
+WIRING that builds the view and threads it in (``_run_dedupe_pipeline`` ->
+``_resolve_identities``, gated on ``_columnar_cluster_build_enabled()`` +
+``isinstance(clusters, dict)``) is exercised end-to-end by the existing
+``tests/identity/`` suite run with ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1``
+(no new failures vs gate OFF).
 """
 from __future__ import annotations
 
@@ -62,7 +70,9 @@ def _normalized_edges(store: IdentityStore) -> list[tuple]:
     canonical list EXCLUDING entity_id (per-run UUID). Compares the durable
     edge structure: record_a, record_b, kind, score."""
     edges = []
-    for node in store.list_identities():
+    # Explicit high limit: list_identities() defaults to 100; a silent truncation
+    # would make the parity assertion a false pass (both sides truncate alike).
+    for node in store.list_identities(limit=10_000):
         for e in store.edges_for_entity(node.entity_id):
             edges.append((e.record_a_id, e.record_b_id, e.kind, e.score))
     return sorted(edges, key=lambda t: (t[0], t[1], t[2], -1.0 if t[3] is None else t[3]))
