@@ -1116,8 +1116,9 @@ def build_golden_records_from_frames(
         populated, mirroring the dict pipeline's fast/slow decision:
 
         - FAST path (``not provenance`` AND
-          ``_polars_native_eligible(rules, quality_scores=None)``):
-          returns ``(golden_df, [])`` where ``golden_df`` is the
+          ``_polars_native_eligible(rules, quality_scores=quality_scores)``,
+          i.e. no quality_scores -- they'd be dropped by the columnar
+          builder): returns ``(golden_df, [])`` where ``golden_df`` is the
           columnar ``pl.DataFrame`` from ``build_golden_records_df``.
         - SLOW path (provenance requested OR quality_scores present OR
           custom field rules): returns ``(None, golden_records)`` where
