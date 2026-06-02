@@ -447,12 +447,16 @@ def _columnar_cluster_build_enabled() -> bool:
     ).strip() != "0"
 
 
-def _cluster_frames_out_enabled() -> bool:
+def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]
     """SP-A frames-out path gate. When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is set
     (non-``0``), ``build_cluster_frames`` returns the two-frame ``ClusterFrames``
     columnar representation directly, WITHOUT materializing the per-cluster
     ``dict[int, dict]`` for non-oversized clusters. Default OFF. Independent of
-    ``build_clusters`` and all its consumers, which are untouched."""
+    ``build_clusters`` and all its consumers, which are untouched.
+
+    Not consumed in SP-A; the pipeline wires this gate in SP-B to choose
+    build_cluster_frames vs build_clusters. The pyright-ignore drops the
+    reportUnusedFunction false-positive until then."""
     return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0").strip() != "0"
 
 
