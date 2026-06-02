@@ -569,16 +569,19 @@ def build_cluster_frames(
                 int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
                 for cid in oversized
             }
-            # live_cids mirrors _finalize_clusters's `result.keys()`: cids 1..n
-            # pre-split. next_cid is recomputed as max(live)+1 AFTER discarding the
-            # split cid -- so when the cid being split is the current max, its slot
-            # is REUSED, exactly as _finalize's `result.pop(cid); max(result.keys())+1`.
-            # A running counter from metadata.height does NOT reclaim that slot and
-            # shifts every split cid, breaking the partition labels.
+            # Mirror _finalize_clusters's SINGLE `result` dict for split clusters.
+            # split_result holds sub-clusters by cid; an intermediate sub that
+            # re-splits is POPPED (del split_result[cid]) so it can't be emitted
+            # twice. Rows are materialized ONLY at the end, from the FINAL entries.
+            # (Eagerly appending rows + relying on drop_cids -- which only filters
+            # the ORIGINAL bulk frame -- duplicated re-split intermediates: an
+            # invalid overlapping partition.)
+            # live_cids mirrors result.keys() (cids 1..n pre-split + split cids);
+            # next_cid = max(live)+1 AFTER discarding the split cid REUSES a freed
+            # max slot, exactly as _finalize's `result.pop(cid); max(result.keys())+1`.
             live_cids = set(range(1, metadata.height + 1))
-            split_assign_rows = []
-            split_meta_rows = []
-            drop_cids = set()
+            split_result: dict[int, dict] = {}
+            drop_cids = set()                      # ORIGINAL cids that split
             to_split = list(oversized)
             edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(), False
             while to_split:
@@ -589,37 +592,49 @@ def build_cluster_frames(
                 edge_work += len(ps)
                 if edge_work > edge_budget:
                     budget_tripped = True
-                    break  # leave cid (and queued) oversized: do NOT drop them
+                    break  # leave cid (+ queued) oversized: don't drop / don't pop
                 subs = split_oversized_cluster(members, ps)
                 if len(subs) <= 1:
-                    continue  # unsplittable: keep original row as-is
+                    continue  # unsplittable: original row / split_result entry stays
                 subs.sort(key=lambda sc: min(sc["members"]))
-                drop_cids.add(cid)
+                # Remove the cid being split (post-pop, like _finalize's result.pop):
+                # an intermediate split sub leaves split_result; an original cid is
+                # filtered from the bulk frame via drop_cids.
+                if cid in split_result:
+                    del split_result[cid]
+                else:
+                    drop_cids.add(cid)
                 live_cids.discard(cid)
                 next_cid = max(live_cids, default=0) + 1   # mirror _finalize (post-pop)
                 for sc in subs:
-                    sc_over = sc["size"] > max_cluster_size
-                    for m in sc["members"]:
-                        split_assign_rows.append((next_cid, m))
-                    _sv = list(sc["pair_scores"].values())
-                    _bot = sc["bottleneck_pair"] or (0, 0)
-                    split_meta_rows.append({
-                        "cluster_id": next_cid, "size": sc["size"],
-                        "confidence": sc["confidence"], "quality": "split",
-                        "oversized": sc_over,
-                        "bottleneck_pair_a": int(_bot[0]),
-                        "bottleneck_pair_b": int(_bot[1]),
-                        "min_edge": min(_sv) if _sv else 0.0,            # schema-fill, unused
-                        "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
-                    })
+                    split_result[next_cid] = sc
                     live_cids.add(next_cid)
-                    if sc_over:
+                    if sc["size"] > max_cluster_size:
                         members_by_cid[next_cid] = sc["members"]
                         to_split.append(next_cid)
                     next_cid += 1
             if budget_tripped:
-                _clog.warning("build_clusters: auto-split edge-work budget (%d) "
+                _clog.warning("build_cluster_frames: auto-split edge-work budget (%d) "
                               "exhausted; clusters left oversized.", edge_budget)
+            # Materialize the FINAL split sub-clusters into frame rows. split rows
+            # carry quality="split" so the Step-3 when(quality=="split") short-circuit
+            # preserves them. min/avg are schema-fill (unused: split skips the weak test).
+            split_assign_rows = []
+            split_meta_rows = []
+            for ncid, sc in split_result.items():
+                for m in sc["members"]:
+                    split_assign_rows.append((ncid, m))
+                _sv = list(sc["pair_scores"].values())
+                _bot = sc["bottleneck_pair"] or (0, 0)
+                split_meta_rows.append({
+                    "cluster_id": ncid, "size": sc["size"],
+                    "confidence": sc["confidence"], "quality": "split",
+                    "oversized": sc["size"] > max_cluster_size,
+                    "bottleneck_pair_a": int(_bot[0]),
+                    "bottleneck_pair_b": int(_bot[1]),
+                    "min_edge": min(_sv) if _sv else 0.0,
+                    "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
+                })
             if drop_cids:
                 assignments = assignments.filter(~_pl.col("cluster_id").is_in(drop_cids))
                 metadata = metadata.filter(~_pl.col("cluster_id").is_in(drop_cids))
