@@ -673,13 +673,24 @@ class IdentityStore:
         ids = list(record_ids)
         if not ids:
             return {}
-        placeholders = ",".join("?" * len(ids))
-        rows = self._fetchall(
-            f"SELECT record_id, entity_id FROM source_records "
-            f"WHERE record_id IN ({placeholders}) AND entity_id IS NOT NULL",
-            tuple(ids),
-        )
-        return {r["record_id"]: r["entity_id"] for r in rows}
+        # SQLite caps host parameters per statement (SQLITE_MAX_VARIABLE_NUMBER;
+        # 999 on older builds). A single IN-list over the full candidate set
+        # raised "too many SQL variables" at 1M+ records (#670). Chunk the
+        # IN-list and union the results -- each record_id is unique so chunks
+        # never overlap; behavior is identical to the single-query form.
+        out: dict[str, str] = {}
+        _CHUNK = 900
+        for i in range(0, len(ids), _CHUNK):
+            chunk = ids[i:i + _CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._fetchall(
+                f"SELECT record_id, entity_id FROM source_records "
+                f"WHERE record_id IN ({placeholders}) AND entity_id IS NOT NULL",
+                tuple(chunk),
+            )
+            for r in rows:
+                out[r["record_id"]] = r["entity_id"]
+        return out
 
     def add_edge(self, edge: EvidenceEdge) -> int | None:
         if self._backend == "mongo":
