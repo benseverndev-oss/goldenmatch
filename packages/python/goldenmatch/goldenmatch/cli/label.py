@@ -36,13 +36,10 @@ def label_cmd(
 
     console.print("[bold]Running pipeline to generate candidate pairs...[/bold]")
     result = run_dedupe(file_specs, cfg)
-    clusters = result["clusters"]
 
-    # Extract all scored pairs from clusters
-    all_pairs = []
-    for cid, cinfo in clusters.items():
-        for (a, b), score in cinfo.get("pair_scores", {}).items():
-            all_pairs.append((a, b, score))
+    # Candidate pairs come from the pipeline's scored-pair stream (SP3), not a
+    # reconstruction from cluster pair_scores.
+    all_pairs = result.get("scored_pairs", [])
 
     if not all_pairs:
         console.print("[yellow]No pairs found. Check your config.[/yellow]")

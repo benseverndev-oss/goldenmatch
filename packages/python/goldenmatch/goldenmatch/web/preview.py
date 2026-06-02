@@ -181,11 +181,9 @@ def run_preview(
 
     clusters: dict[int, dict] = result.get("clusters") or {}
 
-    # run_dedupe_df does not return scored_pairs; derive from cluster pair_scores.
-    scored_pairs: list[tuple[int, int, float]] = []
-    for cinfo in clusters.values():
-        for (a, b), score in cinfo.get("pair_scores", {}).items():
-            scored_pairs.append((int(a), int(b), float(score)))
+    # The pipeline returns the full scored-pair stream (SP3); read it directly
+    # instead of reconstructing from cluster pair_scores.
+    scored_pairs: list[tuple[int, int, float]] = result.get("scored_pairs") or []
 
     # Re-attach __row_id__ so build_lineage can resolve pair indices. The pipeline
     # adds __row_id__ on its working copy; reconstruct the same column here.

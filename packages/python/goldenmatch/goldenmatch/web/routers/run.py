@@ -123,10 +123,7 @@ def _execute_run(
         result = run_dedupe_df(df, config, output_clusters=True)
 
     clusters: dict[int, dict] = result.get("clusters") or {}
-    scored_pairs: list[tuple[int, int, float]] = []
-    for cinfo in clusters.values():
-        for (a, b), score in cinfo.get("pair_scores", {}).items():
-            scored_pairs.append((int(a), int(b), float(score)))
+    scored_pairs: list[tuple[int, int, float]] = result.get("scored_pairs") or []
 
     enriched = df.with_columns(pl.int_range(0, df.height, dtype=pl.Int64).alias("__row_id__"))
     matchkeys = (config or GoldenMatchConfig()).get_matchkeys()
