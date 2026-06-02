@@ -1,0 +1,47 @@
+name: bench-identity-fingerprint
+
+# Measure-first harness for the GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT gate.
+# Compares batch_fingerprints (Arrow kernel) vs per-row record_fingerprint loop
+# inside resolve_clusters at scale. Run this before flipping the gate default
+# to "1". Not part of PR gating.
+on:
+  workflow_dispatch:
+    inputs:
+      ns:
+        description: "Row counts to sweep (comma-separated)"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median reported)"
+        default: "3"
+
+jobs:
+  bench:
+    # Beefy box so the profile is not starved (matches the suite bench default).
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native extension (required for the Arrow fingerprint kernel)
+        # Without a fresh build the Arrow kernel is unavailable and the bench
+        # exercises only the dict-fallback path. The script reports
+        # native_available() so you can verify which path ran.
+        run: uv run python scripts/build_native.py
+      - name: Bench identity fingerprint (batch vs per-row)
+        run: |
+          uv run python packages/python/goldenmatch/scripts/bench_identity_fingerprint.py \
+            --ns "${{ inputs.ns }}" \
+            --runs "${{ inputs.runs }}" \
+            --output bench_identity_fingerprint.json
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-identity-fingerprint-results
+          path: bench_identity_fingerprint.json
