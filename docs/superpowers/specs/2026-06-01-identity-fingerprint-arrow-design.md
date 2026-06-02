@@ -62,10 +62,14 @@ speed). Three concrete cases the review pinned down:
   `dt.to_string("%Y-%m-%dT%H:%M:%S%.6f").str.replace(r"\.000000$", "")` (same for
   Time with `%H:%M:%S%.6f` + strip) -- byte-equal to `isoformat()` across usec
   `{0, 1, 123000, 123456, 500000}`. Date already matches both ways (`2020-01-02`).
-  **Timezone-aware Datetimes and non-`us` time units route to the per-row
-  fallback** (isoformat emits the `+00:00` offset which the format string drops;
-  `ms`/`ns` units render differently under `%.6f`). Per-row is safe -- `to_dicts()`
-  yields a real `datetime` and `_canonical_payload` calls its `.isoformat()`.
+  **Timezone-aware Datetimes, non-`us` time units, and `Duration` columns route to
+  the per-row fallback.** tz-aware: isoformat emits the `+00:00` offset the format
+  string drops; `ms`/`ns`: render differently under `%.6f`. `Duration`: a timedelta
+  has no `isoformat` so `_canonical_payload` does `str()` (`'0:00:05'`), but Polars
+  `cast(Utf8)` on Duration RAISES `InvalidOperationError` (NOT in resolve.py:133's
+  `except (TypeError, ValueError)`, so it would crash the whole batch) -- Duration
+  must go per-row, never a columnar cast. Per-row is safe -- `to_dicts()` yields a
+  real `datetime`/`timedelta` and `_canonical_payload` calls `.isoformat()`/`str()`.
 - **Narrow / unsigned ints and Float32: up-cast, with one fallback.** The kernel's
   `ArrayKind::from_data` accepts ONLY Int64/Float64/Utf8/LargeUtf8/Boolean and
   RAISES on others. `_canonicalize_records_df` must up-cast `Int8/16/32` and
@@ -92,7 +96,14 @@ speed). Three concrete cases the review pinned down:
   `str()` must equal the `else: str(v)` output); if not provably reproducible,
   fall back.
 - Null cells -> `FpValue::Null` already matches per-row `None`. An all-null column
-  still appears in BOTH paths and must NOT be dropped by canonicalize.
+  still appears in BOTH paths and must NOT be dropped by canonicalize. BUT a bare
+  `Null`-DTYPE column (untyped all-null, e.g. `pl.Series([None, None])` -> Arrow
+  `null` type) is REJECTED by the kernel (`ArrayKind::from_data` raises "unsupported
+  dtype Null") -> `_canonicalize_records_df` must `cast(Utf8)` such columns (the
+  kernel's Utf8 `value_at` returns `FpValue::Null` for null cells, preserving
+  parity with per-row `None`). A TYPED all-null column (e.g. Float64 all-null) is
+  already accepted -> no cast needed. The parity fixture's all-null column must be
+  UNTYPED to gate this.
 
 The legacy-fallback for un-fingerprintable rows (`:hash:` id) is preserved.
 
@@ -140,7 +151,9 @@ exists -- "assemble a frame" is trivial.
   column), Date, Datetime with usec in `{0, 123000, 500000, 123456}` (the
   `.123000`/`.500000` values are what catch the chrono `%.f`-vs-isoformat bug; a
   fixture with only sub-second + usec==0 would PASS the buggy recipe and miss it),
-  a tz-aware Datetime + a non-`us` (`ms`) Datetime, Time with microseconds,
+  a tz-aware Datetime + a non-`us` (`ms`) Datetime, Time with microseconds, a
+  `Duration` column, an UNTYPED all-null column (`pl.Series([None, None])`, bare
+  `Null` dtype -- a typed all-null column would pass and miss the bug),
   Int32 / UInt32 / Float32, a `UInt64` value > 2**63, Decimal, Categorical, a
   list/struct object column, and bytes. Assert the batched path
   (`_canonicalize_records_df` -> batch, with marked rows routed per-row) returns
