@@ -35,61 +35,80 @@ ids are computed in one vectorized batch instead of a per-row loop, with
 **byte-identical** fingerprints (entity ids must not move) and an end-to-end
 measured win.
 
-## The parity crux (the core design risk)
+## The parity crux
 
-`record_fingerprints_batch_arrow` hashes the frame's columns directly (supported
-dtypes: Utf8/LargeUtf8/Int64/Float64/Boolean; null -> `FpValue::Null`; `__`-cols
-dropped). But the per-row path hashes `_canonical_payload(payload)`, which
-COERCES (resolve.py:89):
+**Confirmed by spec review (de-risks the design):** the single-record kernel
+(`record_fingerprint`, hash.rs:64) and the batch-arrow kernel
+(`record_fingerprints_batch_arrow`, hash.rs:148) BOTH build `Vec<(String,
+FpValue)>` and call the SAME `goldenmatch_fingerprint_core::fingerprint_fields`
+(fingerprint-core/src/lib.rs:54) -- shared field ordering, type tags
+(`n/b/i/f/s/y`), separators, null handling, `-0.0`->`0.0` collapse. So a CLEAN
+all-primitive frame (Int64 / finite Float64 / Bool / Utf8 / Null) is byte-identical
+to the per-row path FOR FREE. There is no kernel-level canonicalization mismatch.
 
-- non-finite floats (`nan`/`inf`/`-inf`) -> their `repr()` token STRING;
-- temporals / other non-primitives -> `isoformat()` or `str()`;
-- None/bool/int/float/str/bytes -> as-is.
+The REAL risk is narrower: `record_fingerprints_batch_arrow` reads columns
+directly (Utf8/LargeUtf8/Int64/Float64/Boolean; null -> `FpValue::Null`; `__`-cols
+dropped), but the per-row path hashes `_canonical_payload(payload)`, which COERCES
+(resolve.py:89) -- and the coercions do NOT all have a clean columnar equivalent.
+A vectorized `_canonicalize_records_df` reproduces the coercible ones; rows that
+can't be reproduced columnarly ROUTE TO THE PER-ROW FALLBACK (correctness over
+speed). Three concrete cases the review pinned down:
 
-So feeding the RAW records frame to the Arrow kernel would NOT match the per-row
-hashes (a Date column hashes as a date, not its ISO string; a float `nan` hashes
-as a float, not `"nan"`). Entity ids would silently change -- a durability
-disaster (the identity graph keys stable `entity_id`s off these fingerprints).
+- **Temporals (Date/Datetime/Time):** per-row uses Python `isoformat()`. Polars
+  `dt.to_string()` / `cast(Utf8)` does NOT match: Datetime uses a SPACE separator
+  (`2020-01-02 03:04:05`) vs isoformat's `T`; Time `cast` DROPS microseconds. The
+  canonicalize step MUST reproduce `isoformat()` exactly -- Datetime via
+  `dt.to_string("%Y-%m-%dT%H:%M:%S%.f")` AND handle the microsecond==0 case
+  (Python `isoformat()` omits the fractional part entirely when usec==0; `%.f`
+  must be verified/trimmed to match). Date already matches both ways (`2020-01-02`).
+  The parity fixture gates this with both sub-second and zero-microsecond values.
+- **Mixed finite/non-finite float columns: NO columnar equivalent -> per-row
+  fallback.** A Polars column is single-dtype. If any cell is non-finite, casting
+  the column to Utf8 also turns the FINITE cells into strings -> they'd hash as
+  `FpValue::Str("1.5")` (tag `s`) instead of `FpValue::Float` (tag `f`) -> diverge.
+  The per-row path is per-cell (finite stays float, non-finite -> `repr` string)
+  and cannot be reproduced columnarly. Therefore: any row containing a non-finite
+  float in any float column routes to the per-row fallback. (A float column with
+  ONLY finite values stays Float64 and hashes identically -- no fallback needed.)
+- **bytes columns: NO columnar equivalent -> per-row fallback.** The kernel
+  rejects Binary (hash.rs ArrayKind::from_data); the per-row path hashes bytes as
+  `FpValue::Bytes` (tag `y`). Casting to Utf8 changes the tag `y`->`s` and breaks
+  parity. Bytes-bearing rows route to the per-row fallback.
+- Non-primitive object columns (lists/structs/decimals) -> `str()` per cell,
+  matching `_canonical_payload`'s `else` branch; if not provably reproducible,
+  fall back.
+- Null cells -> `FpValue::Null` already matches per-row `None`.
 
-**Therefore the core deliverable is a vectorized `_canonicalize_records_df`** that
-reproduces `_canonical_payload`'s per-row coercion in Polars expressions BEFORE
-the batch call, so the frame fed to the kernel yields byte-identical hashes:
-
-- Temporal columns (Date/Datetime/Time/Duration) -> Utf8 via the SAME format
-  `isoformat()` produces (verify exact format: Polars `dt.to_string` /
-  `str()` of the python temporal -- the test gates this).
-- Float columns -> replace non-finite cells with their token strings
-  (`"nan"`/`"inf"`/`"-inf"`), which forces the column to Utf8 only if non-finite
-  values are present (finite floats stay Float64 and hash identically).
-- Non-primitive object columns (lists, structs, decimals, etc.) -> `str()` per
-  cell (vectorized via `map_elements` only where unavoidable; these are the rare
-  case `_canonical_payload`'s `else` branch handles).
-- bytes columns -> the kernel dtype list omits Binary; either cast to the same
-  representation the per-row path uses, OR route bytes-bearing rows to the
-  per-row fallback (decide by test).
-- Null cells -> `FpValue::Null` already matches the per-row `None`.
-
-If a column or row cannot be canonicalized to a kernel-supported dtype with
-provable parity, that row falls back to the per-row path (correctness over
-speed). The legacy-fallback for un-fingerprintable rows (`:hash:` id) is preserved.
+The legacy-fallback for un-fingerprintable rows (`:hash:` id) is preserved.
 
 ## Approach (vectorized canonicalize -> batch arrow -> per-record id logic)
 
-1. In `resolve_clusters` (or a new helper), assemble the no-PK records as a
-   Polars DataFrame (they already originate from the deduped frame; confirm the
-   data shape at plan time -- if records are dict rows, reassemble a frame once).
-2. `_canonicalize_records_df(df)` -> a frame whose `__`-stripped columns
-   reproduce `_canonical_payload` per row (the parity crux above).
+`resolve_clusters` already receives `df: pl.DataFrame` and does `rows =
+df.to_dicts()` (resolve.py:218) then loops per row (`:227`), so the frame already
+exists -- "assemble a frame" is trivial.
+
+1. **Partition rows into the no-PK subset** (the only rows that fingerprint).
+   When `source_pk_col` is set and present+non-null, `_record_id_candidates`
+   returns `source:pk` WITHOUT hashing (resolve.py:125-128). The batch path
+   computes fingerprints ONLY for the no-PK subset; PK rows keep their cheap path.
+2. **`_canonicalize_records_df(df)`** -> a frame whose `__`-stripped columns
+   reproduce `_canonical_payload` per row (the parity crux above). Rows that hit
+   the no-columnar-equivalent cases (non-finite float, bytes, un-reproducible
+   object) are MARKED for the per-row fallback rather than canonicalized.
+   `_canonicalize_records_df` MUST run before the wrapper in ALL modes (native
+   on AND off): the off-native fallback inside the wrapper calls
+   `record_fingerprint` on raw dicts, which RAISES on raw temporals / non-finite
+   floats (`_hashing.py:139-141` does NOT apply `_canonical_payload`). Feeding it
+   the canonicalized frame is what keeps the off-native path correct.
 3. `record_fingerprints_batch_arrow(canonical_df)` -> `list[str]` hashes aligned
-   to rows (it already falls back to the dict path when native is absent --
-   correctness preserved off-native).
-4. Build ids vectorized: `h1_id = f"{source}:h1:{hash[:12]}"`, apply the
-   `h1`/`hash` scheme (`_id_scheme()`) and the legacy candidate ordering exactly
-   as `_record_id_candidates` does today. PK records (`source:pk`) skip
-   fingerprinting entirely.
-5. The per-row `_record_id_candidates` stays as the fallback path (rows that
-   can't be canonicalized; and the whole batch path is gated so it can be
-   disabled).
+   to the no-PK rows.
+4. Build ids: `h1_id = f"{src}:h1:{hash[:12]}"` where `src` is **per-row**
+   (`str(row.get("__source__", "dataframe"))`, resolve.py:232) -- zip the hashes
+   with the per-row source, NOT a scalar. Apply the `h1`/`hash` scheme
+   (`_id_scheme()`) and the legacy candidate ordering exactly as
+   `_record_id_candidates` does today.
+5. The per-row `_record_id_candidates` stays as the fallback path (the marked
+   rows from step 2; and the whole batch path is gated so it can be disabled).
 
 ### Rejected alternatives
 - **Dict batch kernel (`record_fingerprints_batch`):** safe parity (uses the same
@@ -100,23 +119,29 @@ speed). The legacy-fallback for un-fingerprintable rows (`:hash:` id) is preserv
 
 ## Testing
 
-- **Parity gate (HARD, the safety net):** an adversarial fixture frame covering
-  every supported + coercion dtype -- Utf8, Int64, Float64 (incl. nan/inf/-inf),
-  Boolean, Null, Date, Datetime, a list/struct object column, bytes. Assert the
-  batched path (`_canonicalize_records_df` -> `record_fingerprints_batch_arrow`)
-  returns BYTE-IDENTICAL hashes to `[record_fingerprint(_canonical_payload(r))
-  for r in df.to_dicts()]`, row for row. Any mismatch fails. This is the entity-id
-  durability guarantee.
+- **Parity gate (HARD, the safety net):** an adversarial fixture frame that MUST
+  include the cases the review pinned -- Utf8, Int64, Float64 finite, a float
+  column with mixed finite + nan/inf/-inf, Boolean, Null, Date, Datetime with
+  sub-second AND with usec==0, Time with microseconds, a list/struct object
+  column, bytes. Assert the batched path (`_canonicalize_records_df` -> batch,
+  with marked rows routed per-row) returns BYTE-IDENTICAL hashes to
+  `[record_fingerprint(_canonical_payload(r)) for r in df.to_dicts()]`, row for
+  row. Any mismatch fails -- this is the entity-id durability guarantee. The
+  datetime separator (`T` vs space), Time microseconds, mixed-float fallback, and
+  bytes fallback are the specific things this fixture catches.
+- **Off-native parity (run the SAME fixture with `GOLDENMATCH_NATIVE=0`):** the
+  canonicalized frame must produce identical ids on the dict/per-row fallback too.
+  Critically, this confirms `_canonicalize_records_df` runs before the wrapper in
+  off-native mode (else the raw-dict fallback raises on temporals/non-finite).
 - **Identity end-to-end parity:** run `resolve_clusters` on a fixture both ways
   (batch path on, per-row path) and assert the resulting `entity_id`s / record
-  ids are identical.
-- **Off-native correctness:** with `GOLDENMATCH_NATIVE=0`, the path degrades to
-  the dict/per-row fallback and still produces identical ids.
+  ids are identical, including a no-PK + PK mix.
 - **Measure-first (gate on shipping default-on):** bench identity resolution
   end-to-end at 1M-5M deduped records (wall + peak RSS) batch vs per-row on
-  `large-new-64GB`. Ship default-on only if it wins meaningfully; otherwise keep
-  it gated and record the finding (per the repo perf-audit lesson -- measure
-  wall-clock on the real shape before trusting the microbench).
+  `large-new-64GB`. The fixture must be **no-PK-heavy** -- PK rows bypass
+  fingerprinting entirely, so a PK-backed frame under-reads the kernel's value.
+  Ship default-on only if it wins meaningfully; otherwise keep it gated and record
+  the finding (repo perf-audit lesson -- measure wall-clock on the real shape).
 - **Legacy-fallback preserved:** a row whose payload can't be fingerprinted still
   yields the `:hash:` legacy id + candidate ordering unchanged.
 
