@@ -35,13 +35,27 @@ def _flat(clusters):
     return out
 
 
+def _norm(clusters):
+    # members LIST order is native-UF-arbitrary (PR #598: build_clusters, which
+    # unmerge_record calls internally to re-cluster, does not sort members and the
+    # native HashMap order varies per call). Compare members as a SET; everything
+    # else (cid, size, oversized, pair_scores, confidence, bottleneck, quality) is
+    # strict-equal -- the byte-identical durability invariant.
+    return {
+        cid: {**c, "members": frozenset(c["members"])}
+        for cid, c in clusters.items()
+    }
+
+
 def test_scored_pairs_matches_dict_path_for_each_record():
     base = _clusters()
     flat = _flat(base)
     for rid in [0, 1, 2, 3, 4, 5, 99]:
         from_dict = unmerge_record(rid, copy.deepcopy(base))
         from_flat = unmerge_record(rid, copy.deepcopy(base), scored_pairs=flat)
-        assert from_flat == from_dict, f"record {rid}: {from_flat} != {from_dict}"
+        assert _norm(from_flat) == _norm(from_dict), (
+            f"record {rid}: {from_flat} != {from_dict}"
+        )
 
 
 def test_recluster_from_scored_pairs_without_dict_pair_scores():
