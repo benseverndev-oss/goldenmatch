@@ -571,6 +571,14 @@ def _finalize_clusters(
             cinfo["oversized"] = cinfo["size"] > max_cluster_size
             result[cid] = cinfo
             continue
+        # Deterministic cluster-id assignment. The native mst_split_components
+        # kernel returns sub-clusters in Rust HashMap iteration order
+        # (nondeterministic per call), which made split-cluster ids vary
+        # run-to-run -- and diverge between the dict and columnar build paths,
+        # which call this independently. Sort by min member so next_cid below is
+        # assigned stably. The partition content is already deterministic; this
+        # only pins the labels, the durability invariant identity ids depend on.
+        sub_clusters.sort(key=lambda sc: min(sc["members"]))
         next_cid = max(result.keys(), default=0) + 1
         for sc in sub_clusters:
             sc["oversized"] = sc["size"] > max_cluster_size
