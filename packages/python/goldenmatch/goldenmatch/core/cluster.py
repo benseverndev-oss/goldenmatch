@@ -550,10 +550,71 @@ def build_cluster_frames(
         "avg_edge": m_avg,
     })
 
-    if auto_split and metadata.filter(_pl.col("oversized")).height > 0:
-        # TASK 2 inserts the frames-native split here (mutates assignments +
-        # metadata: oversized rows -> MST sub-clusters, quality="split").
-        pass
+    if auto_split:
+        # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
+        # confined to the rare oversized MINORITY. Mirrors _finalize_clusters's
+        # split loop EXACTLY (next_cid from max-existing +1 before use, edge-work
+        # budget + no-progress guards, deterministic sub.sort, re-enqueue still-
+        # oversized). split rows carry quality="split" so the Step-3 vectorized
+        # weak/quality block's when(quality=="split") short-circuit preserves them.
+        oversized = metadata.filter(_pl.col("oversized"))["cluster_id"].to_list()
+        if oversized:
+            members_by_cid = {
+                int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
+                for cid in oversized
+            }
+            next_cid = int(metadata["cluster_id"].max())   # +1 inside loop
+            split_assign_rows = []
+            split_meta_rows = []
+            drop_cids = set()
+            to_split = list(oversized)
+            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(), False
+            while to_split:
+                cid = to_split.pop()
+                members = members_by_cid.pop(cid)
+                ms = set(members)
+                ps = {(a, b): s for a, b, s in pairs_list if a in ms and b in ms}
+                edge_work += len(ps)
+                if edge_work > edge_budget:
+                    budget_tripped = True
+                    break  # leave cid (and queued) oversized: do NOT drop them
+                subs = split_oversized_cluster(members, ps)
+                if len(subs) <= 1:
+                    continue  # unsplittable: keep original row as-is
+                subs.sort(key=lambda sc: min(sc["members"]))
+                drop_cids.add(cid)
+                for sc in subs:
+                    next_cid += 1
+                    sc_over = sc["size"] > max_cluster_size
+                    for m in sc["members"]:
+                        split_assign_rows.append((next_cid, m))
+                    _sv = list(sc["pair_scores"].values())
+                    _bot = sc["bottleneck_pair"] or (0, 0)
+                    split_meta_rows.append({
+                        "cluster_id": next_cid, "size": sc["size"],
+                        "confidence": sc["confidence"], "quality": "split",
+                        "oversized": sc_over,
+                        "bottleneck_pair_a": int(_bot[0]),
+                        "bottleneck_pair_b": int(_bot[1]),
+                        "min_edge": min(_sv) if _sv else 0.0,            # schema-fill, unused
+                        "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
+                    })
+                    if sc_over:
+                        members_by_cid[next_cid] = sc["members"]
+                        to_split.append(next_cid)
+            if budget_tripped:
+                _clog.warning("build_clusters: auto-split edge-work budget (%d) "
+                              "exhausted; clusters left oversized.", edge_budget)
+            if drop_cids:
+                assignments = assignments.filter(~_pl.col("cluster_id").is_in(drop_cids))
+                metadata = metadata.filter(~_pl.col("cluster_id").is_in(drop_cids))
+            if split_assign_rows:
+                assignments = _pl.concat([assignments, _pl.DataFrame(
+                    split_assign_rows, schema=["cluster_id", "member_id"], orient="row")])
+                metadata = _pl.concat(
+                    [metadata, _pl.DataFrame(split_meta_rows, schema=metadata.schema)],
+                    how="vertical",
+                )
 
     # Step 3: vectorized weak/quality (excludes "split" rows -- none in Task 1).
     # Reproduces the dict path's _finalize_clusters weak/quality logic.
