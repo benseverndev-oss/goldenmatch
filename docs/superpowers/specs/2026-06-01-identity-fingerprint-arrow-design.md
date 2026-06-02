@@ -56,28 +56,43 @@ speed). Three concrete cases the review pinned down:
 
 - **Temporals (Date/Datetime/Time):** per-row uses Python `isoformat()`. Polars
   `dt.to_string()` / `cast(Utf8)` does NOT match: Datetime uses a SPACE separator
-  (`2020-01-02 03:04:05`) vs isoformat's `T`; Time `cast` DROPS microseconds. The
-  canonicalize step MUST reproduce `isoformat()` exactly -- Datetime via
-  `dt.to_string("%Y-%m-%dT%H:%M:%S%.f")` AND handle the microsecond==0 case
-  (Python `isoformat()` omits the fractional part entirely when usec==0; `%.f`
-  must be verified/trimmed to match). Date already matches both ways (`2020-01-02`).
-  The parity fixture gates this with both sub-second and zero-microsecond values.
+  vs isoformat's `T`; Time `cast` DROPS microseconds. AND chrono's `%.f` trims
+  trailing zeros to 3/6/9-digit groups (`.123000` -> `.123`) while `isoformat()`
+  emits exactly 0 or 6 digits. **Verified-correct recipe:**
+  `dt.to_string("%Y-%m-%dT%H:%M:%S%.6f").str.replace(r"\.000000$", "")` (same for
+  Time with `%H:%M:%S%.6f` + strip) -- byte-equal to `isoformat()` across usec
+  `{0, 1, 123000, 123456, 500000}`. Date already matches both ways (`2020-01-02`).
+  **Timezone-aware Datetimes and non-`us` time units route to the per-row
+  fallback** (isoformat emits the `+00:00` offset which the format string drops;
+  `ms`/`ns` units render differently under `%.6f`). Per-row is safe -- `to_dicts()`
+  yields a real `datetime` and `_canonical_payload` calls its `.isoformat()`.
+- **Narrow / unsigned ints and Float32: up-cast, with one fallback.** The kernel's
+  `ArrayKind::from_data` accepts ONLY Int64/Float64/Utf8/LargeUtf8/Boolean and
+  RAISES on others. `_canonicalize_records_df` must up-cast `Int8/16/32` and
+  `UInt8/16/32` -> Int64, and `Float32` -> Float64 (verified byte-identical to the
+  `to_dicts()` value). **Exception:** a `UInt64` value > `i64::MAX` raises on
+  `cast(Int64)` -> those rows route to the per-row fallback (per-row handles a
+  Python int via `str()`).
 - **Mixed finite/non-finite float columns: NO columnar equivalent -> per-row
-  fallback.** A Polars column is single-dtype. If any cell is non-finite, casting
-  the column to Utf8 also turns the FINITE cells into strings -> they'd hash as
-  `FpValue::Str("1.5")` (tag `s`) instead of `FpValue::Float` (tag `f`) -> diverge.
-  The per-row path is per-cell (finite stays float, non-finite -> `repr` string)
-  and cannot be reproduced columnarly. Therefore: any row containing a non-finite
-  float in any float column routes to the per-row fallback. (A float column with
-  ONLY finite values stays Float64 and hashes identically -- no fallback needed.)
+  fallback (via a row mask).** A Polars column is single-dtype; one non-finite
+  cell forces the whole column to Utf8, turning the FINITE cells into `FpValue::Str`
+  (tag `s`) instead of `FpValue::Float` (tag `f`) -> diverge. The per-row path is
+  per-cell. Mechanism: build an `is_finite` mask over EVERY Float column; the UNION
+  of rows with any non-finite float goes to the per-row path; the complement stays
+  in the batch frame; re-merge by row index preserving order (the same split must
+  preserve the no-PK row alignment used to zip hashes back -- see Approach step 4).
+  A float column with ONLY finite values stays Float64 and hashes identically.
 - **bytes columns: NO columnar equivalent -> per-row fallback.** The kernel
-  rejects Binary (hash.rs ArrayKind::from_data); the per-row path hashes bytes as
-  `FpValue::Bytes` (tag `y`). Casting to Utf8 changes the tag `y`->`s` and breaks
-  parity. Bytes-bearing rows route to the per-row fallback.
-- Non-primitive object columns (lists/structs/decimals) -> `str()` per cell,
-  matching `_canonical_payload`'s `else` branch; if not provably reproducible,
+  rejects Binary; the per-row path hashes bytes as `FpValue::Bytes` (tag `y`).
+  Casting to Utf8 changes the tag `y`->`s` and breaks parity. Bytes-bearing rows
+  route to the per-row fallback.
+- Non-primitive object columns (lists/structs/Decimal/Categorical/Enum) -> `str()`
+  per cell, matching `_canonical_payload`'s `else` branch. Verify each at plan time
+  against `to_dicts()` (a `Decimal` row yields a Python `decimal.Decimal` whose
+  `str()` must equal the `else: str(v)` output); if not provably reproducible,
   fall back.
-- Null cells -> `FpValue::Null` already matches per-row `None`.
+- Null cells -> `FpValue::Null` already matches per-row `None`. An all-null column
+  still appears in BOTH paths and must NOT be dropped by canonicalize.
 
 The legacy-fallback for un-fingerprintable rows (`:hash:` id) is preserved.
 
@@ -121,14 +136,17 @@ exists -- "assemble a frame" is trivial.
 
 - **Parity gate (HARD, the safety net):** an adversarial fixture frame that MUST
   include the cases the review pinned -- Utf8, Int64, Float64 finite, a float
-  column with mixed finite + nan/inf/-inf, Boolean, Null, Date, Datetime with
-  sub-second AND with usec==0, Time with microseconds, a list/struct object
-  column, bytes. Assert the batched path (`_canonicalize_records_df` -> batch,
-  with marked rows routed per-row) returns BYTE-IDENTICAL hashes to
-  `[record_fingerprint(_canonical_payload(r)) for r in df.to_dicts()]`, row for
-  row. Any mismatch fails -- this is the entity-id durability guarantee. The
-  datetime separator (`T` vs space), Time microseconds, mixed-float fallback, and
-  bytes fallback are the specific things this fixture catches.
+  column with mixed finite + nan/inf/-inf, Boolean, Null (incl. an all-null
+  column), Date, Datetime with usec in `{0, 123000, 500000, 123456}` (the
+  `.123000`/`.500000` values are what catch the chrono `%.f`-vs-isoformat bug; a
+  fixture with only sub-second + usec==0 would PASS the buggy recipe and miss it),
+  a tz-aware Datetime + a non-`us` (`ms`) Datetime, Time with microseconds,
+  Int32 / UInt32 / Float32, a `UInt64` value > 2**63, Decimal, Categorical, a
+  list/struct object column, and bytes. Assert the batched path
+  (`_canonicalize_records_df` -> batch, with marked rows routed per-row) returns
+  BYTE-IDENTICAL hashes to `[record_fingerprint(_canonical_payload(r)) for r in
+  df.to_dicts()]`, row for row. Any mismatch fails -- this is the entity-id
+  durability guarantee.
 - **Off-native parity (run the SAME fixture with `GOLDENMATCH_NATIVE=0`):** the
   canonicalized frame must produce identical ids on the dict/per-row fallback too.
   Critically, this confirms `_canonicalize_records_df` runs before the wrapper in
@@ -163,7 +181,10 @@ exists -- "assemble a frame" is trivial.
 - Python: `core/_hashing.py` (`record_fingerprint`, `record_fingerprints_batch`,
   `record_fingerprints_batch_arrow`); `identity/resolve.py`
   (`_record_id_candidates`, `_canonical_payload`, `_id_scheme`, `resolve_clusters`).
-- Rust: `packages/rust/extensions/native/src/hash.rs::record_fingerprints_batch_arrow`.
+- Rust: `packages/rust/extensions/native/src/hash.rs::record_fingerprints_batch_arrow`
+  (both the single + batch kernels delegate to
+  `packages/rust/extensions/fingerprint-core/src/lib.rs::fingerprint_fields` --
+  note the crate is at `extensions/fingerprint-core/`, NOT under `native/`).
 - Proven pattern: `score_block_pairs_arrow` (the wired, default Arrow kernel).
 - Durability invariant: identity-graph design
   (`docs/superpowers/specs/2026-05-12-identity-graph-design.md`); record-hash
