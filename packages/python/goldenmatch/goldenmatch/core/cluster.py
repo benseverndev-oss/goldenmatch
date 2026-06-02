@@ -447,6 +447,290 @@ def _columnar_cluster_build_enabled() -> bool:
     ).strip() != "0"
 
 
+def _cluster_frames_out_enabled() -> bool:  # pyright: ignore[reportUnusedFunction]
+    """SP-A frames-out path gate. When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is set
+    (non-``0``), ``build_cluster_frames`` returns the two-frame ``ClusterFrames``
+    columnar representation directly, WITHOUT materializing the per-cluster
+    ``dict[int, dict]`` for non-oversized clusters. Default OFF. Independent of
+    ``build_clusters`` and all its consumers, which are untouched.
+
+    Not consumed in SP-A; the pipeline wires this gate in SP-B to choose
+    build_cluster_frames vs build_clusters. The pyright-ignore drops the
+    reportUnusedFunction false-positive until then."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_FRAMES_OUT", "0").strip() != "0"
+
+
+def build_cluster_frames(
+    pairs: Any,
+    all_ids: list[int] | None = None,
+    *,
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> ClusterFrames:
+    """SP-A frames-out entry point (gated ``GOLDENMATCH_CLUSTER_FRAMES_OUT``).
+
+    Returns the two-frame ``ClusterFrames`` columnar representation
+    (``assignments`` + 9-col ``metadata``) WITHOUT building the per-cluster
+    ``dict[int, dict]`` for non-oversized clusters. ``build_clusters`` and all
+    its consumers stay UNTOUCHED.
+
+    The BULK path (non-oversized clusters) is the shared pre-split Union-Find
+    (via ``_columnar_presplit``) + vectorized weak/quality + emit. Oversized
+    clusters are auto-split frames-natively (the dict is materialized ONLY for
+    that rare minority), reusing ``split_oversized_cluster`` and mirroring
+    ``_finalize_clusters``.
+
+    ``cluster_frames_to_dict(build_cluster_frames(...))`` round-trips to
+    ``build_clusters(...)`` gate-ON (the score-free dict): members-as-set,
+    ``pair_scores`` stripped, everything else byte-identical.
+    """
+    import numpy as _np
+    import polars as _pl
+
+    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
+
+    pairs_list = list(pairs)
+    if all_ids is None:                       # mirror build_clusters (:411-417)
+        seen: set[int] = set()
+        for a, b, _s in pairs_list:
+            seen.add(a)
+            seen.add(b)
+        all_ids = list(seen)
+
+    pairs_df = _pl.DataFrame(
+        {
+            "id_a": [p[0] for p in pairs_list],
+            "id_b": [p[1] for p in pairs_list],
+            "score": [p[2] for p in pairs_list],
+        },
+        schema=PAIR_STREAM_SCHEMA,
+    )
+    sorted_clusters, metadata_by_cid, _weak = _columnar_presplit(
+        pairs_list, pairs_df, all_ids, max_cluster_size,
+    )
+
+    # Pre-split frames -- build the SAME 9-col metadata + 2-col assignments
+    # schema cluster_dict_to_frames emits, DIRECTLY (numpy fills). Carry min/avg
+    # from metadata_by_cid (NOT cluster_dict_to_frames, which zeros them from the
+    # empty pair_scores). quality="strong" placeholder; Step-3 overwrites.
+    n_clusters = len(sorted_clusters)
+    total_members = sum(len(s) for s in sorted_clusters)
+    a_cid = _np.empty(total_members, dtype=_np.int64)
+    a_mid = _np.empty(total_members, dtype=_np.int64)
+    m_cid = _np.empty(n_clusters, dtype=_np.int64)
+    m_size = _np.empty(n_clusters, dtype=_np.int64)
+    m_conf = _np.empty(n_clusters, dtype=_np.float64)
+    m_over = _np.empty(n_clusters, dtype=_np.bool_)
+    m_bot_a = _np.empty(n_clusters, dtype=_np.int64)
+    m_bot_b = _np.empty(n_clusters, dtype=_np.int64)
+    m_min = _np.empty(n_clusters, dtype=_np.float64)
+    m_avg = _np.empty(n_clusters, dtype=_np.float64)
+    a_idx = 0
+    for i, members in enumerate(sorted_clusters):
+        cid = i + 1
+        n = len(members)
+        a_cid[a_idx:a_idx + n] = cid
+        a_mid[a_idx:a_idx + n] = list(members)
+        a_idx += n
+        md = metadata_by_cid[cid]
+        bot = md["bottleneck_pair"] or (0, 0)
+        m_cid[i] = cid
+        m_size[i] = n
+        m_conf[i] = md["confidence"]
+        m_over[i] = n > max_cluster_size
+        m_bot_a[i] = bot[0]
+        m_bot_b[i] = bot[1]
+        m_min[i] = md["min_edge"]   # coalesced 0.0, never None
+        m_avg[i] = md["avg_edge"]
+    assignments = _pl.DataFrame({"cluster_id": a_cid, "member_id": a_mid})
+    metadata = _pl.DataFrame({
+        "cluster_id": m_cid,
+        "size": m_size,
+        "confidence": m_conf,
+        "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
+        "oversized": m_over,
+        "bottleneck_pair_a": m_bot_a,
+        "bottleneck_pair_b": m_bot_b,
+        "min_edge": m_min,
+        "avg_edge": m_avg,
+    })
+
+    if auto_split:
+        # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
+        # confined to the rare oversized MINORITY. Mirrors _finalize_clusters's
+        # split loop EXACTLY (next_cid from max-existing +1 before use, edge-work
+        # budget + no-progress guards, deterministic sub.sort, re-enqueue still-
+        # oversized). split rows carry quality="split" so the Step-3 vectorized
+        # weak/quality block's when(quality=="split") short-circuit preserves them.
+        oversized = metadata.filter(_pl.col("oversized"))["cluster_id"].to_list()
+        if oversized:
+            members_by_cid = {
+                int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
+                for cid in oversized
+            }
+            # Mirror _finalize_clusters's SINGLE `result` dict for split clusters.
+            # split_result holds sub-clusters by cid; an intermediate sub that
+            # re-splits is POPPED (del split_result[cid]) so it can't be emitted
+            # twice. Rows are materialized ONLY at the end, from the FINAL entries.
+            # (Eagerly appending rows + relying on drop_cids -- which only filters
+            # the ORIGINAL bulk frame -- duplicated re-split intermediates: an
+            # invalid overlapping partition.)
+            # live_cids mirrors result.keys() (cids 1..n pre-split + split cids);
+            # next_cid = max(live)+1 AFTER discarding the split cid REUSES a freed
+            # max slot, exactly as _finalize's `result.pop(cid); max(result.keys())+1`.
+            live_cids = set(range(1, metadata.height + 1))
+            split_result: dict[int, dict] = {}
+            drop_cids = set()                      # ORIGINAL cids that split
+            to_split = list(oversized)
+            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(), False
+            while to_split:
+                cid = to_split.pop()
+                members = members_by_cid.pop(cid)
+                ms = set(members)
+                ps = {(a, b): s for a, b, s in pairs_list if a in ms and b in ms}
+                edge_work += len(ps)
+                if edge_work > edge_budget:
+                    budget_tripped = True
+                    break  # leave cid (+ queued) oversized: don't drop / don't pop
+                subs = split_oversized_cluster(members, ps)
+                if len(subs) <= 1:
+                    continue  # unsplittable: original row / split_result entry stays
+                subs.sort(key=lambda sc: min(sc["members"]))
+                # Remove the cid being split (post-pop, like _finalize's result.pop):
+                # an intermediate split sub leaves split_result; an original cid is
+                # filtered from the bulk frame via drop_cids.
+                if cid in split_result:
+                    del split_result[cid]
+                else:
+                    drop_cids.add(cid)
+                live_cids.discard(cid)
+                next_cid = max(live_cids, default=0) + 1   # mirror _finalize (post-pop)
+                for sc in subs:
+                    split_result[next_cid] = sc
+                    live_cids.add(next_cid)
+                    if sc["size"] > max_cluster_size:
+                        members_by_cid[next_cid] = sc["members"]
+                        to_split.append(next_cid)
+                    next_cid += 1
+            if budget_tripped:
+                _clog.warning("build_cluster_frames: auto-split edge-work budget (%d) "
+                              "exhausted; clusters left oversized.", edge_budget)
+            # Materialize the FINAL split sub-clusters into frame rows. split rows
+            # carry quality="split" so the Step-3 when(quality=="split") short-circuit
+            # preserves them. min/avg are schema-fill (unused: split skips the weak test).
+            split_assign_rows = []
+            split_meta_rows = []
+            for ncid, sc in split_result.items():
+                for m in sc["members"]:
+                    split_assign_rows.append((ncid, m))
+                _sv = list(sc["pair_scores"].values())
+                _bot = sc["bottleneck_pair"] or (0, 0)
+                split_meta_rows.append({
+                    "cluster_id": ncid, "size": sc["size"],
+                    "confidence": sc["confidence"], "quality": "split",
+                    "oversized": sc["size"] > max_cluster_size,
+                    "bottleneck_pair_a": int(_bot[0]),
+                    "bottleneck_pair_b": int(_bot[1]),
+                    "min_edge": min(_sv) if _sv else 0.0,
+                    "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
+                })
+            if drop_cids:
+                assignments = assignments.filter(~_pl.col("cluster_id").is_in(drop_cids))
+                metadata = metadata.filter(~_pl.col("cluster_id").is_in(drop_cids))
+            if split_assign_rows:
+                assignments = _pl.concat([assignments, _pl.DataFrame(
+                    split_assign_rows, schema=["cluster_id", "member_id"], orient="row")])
+                metadata = _pl.concat(
+                    [metadata, _pl.DataFrame(split_meta_rows, schema=metadata.schema)],
+                    how="vertical",
+                )
+
+    # Step 3: vectorized weak/quality (excludes "split" rows -- none in Task 1).
+    # Reproduces the dict path's _finalize_clusters weak/quality logic.
+    metadata = metadata.with_columns(
+        _pl.when(_pl.col("quality") == "split").then(_pl.col("quality"))
+        .when(
+            (_pl.col("size") > 1)
+            & ((_pl.col("avg_edge") - _pl.col("min_edge")) > weak_cluster_threshold)
+        )
+        .then(_pl.lit("weak")).otherwise(_pl.lit("strong")).alias("quality"),
+    ).with_columns(
+        _pl.when(_pl.col("quality") == "weak")
+        .then(_pl.col("confidence") * 0.7).otherwise(_pl.col("confidence"))
+        .alias("confidence"),
+    )
+
+    _emit_cluster_profile_frames(metadata, assignments)
+    return ClusterFrames(assignments=assignments, metadata=metadata)
+
+
+def _emit_cluster_profile_frames(metadata: Any, assignments: Any) -> None:
+    """Frames-path twin of ``_emit_cluster_profile``. Telemetry only -- no-op
+    when no capture is active. Builds the ``ClusterProfile`` from the metadata +
+    assignments frames as closely as the columnar shape allows (no per-cluster
+    pair_scores on this path, so the transitivity threshold falls back to 0.5,
+    same as ``_emit_cluster_profile`` when ``aggregated_scores`` is empty)."""
+    import math
+
+    if not _emitter_stack.get():
+        return  # fast path: no capture active
+
+    import polars as _pl
+
+    if metadata.is_empty():
+        current_emitter().set_cluster(ClusterProfile())
+        return
+
+    sizes = sorted(metadata["size"].to_list())
+
+    def percentile(xs: list, q: float) -> int:
+        if not xs:
+            return 0
+        idx = max(0, min(len(xs) - 1, int(math.ceil(q * len(xs))) - 1))
+        return xs[idx]
+
+    confidences = sorted(
+        v for v in metadata["confidence"].to_list() if v is not None
+    )
+
+    members_by_cluster: dict[int, list[int]] = {}
+    if not assignments.is_empty():
+        for cid, mid in zip(
+            assignments["cluster_id"].to_list(),
+            assignments["member_id"].to_list(),
+            strict=True,
+        ):
+            members_by_cluster.setdefault(int(cid), []).append(int(mid))
+
+    # No per-cluster pair_scores on the frames path -> empty aggregate ->
+    # transitivity threshold falls back to 0.5 (same as _emit_cluster_profile).
+    aggregated_scores: dict[tuple[int, int], float] = {}
+    threshold = 0.5
+
+    oversized_count = int(
+        metadata.filter(_pl.col("oversized")).height
+    )
+
+    profile = ClusterProfile(
+        n_clusters=metadata.height,
+        cluster_size_p50=percentile(sizes, 0.50),
+        cluster_size_p99=percentile(sizes, 0.99),
+        cluster_size_max=sizes[-1] if sizes else 0,
+        transitivity_rate=transitivity_rate(
+            members_by_cluster, aggregated_scores, threshold,
+        ),
+        edge_confidence_p50=(
+            confidences[len(confidences) // 2] if confidences else 0.0
+        ),
+        edge_confidence_min=confidences[0] if confidences else 0.0,
+        oversized_cluster_count=oversized_count,
+        bridge_edge_count=0,
+        measured_bridge_risk=0.0,
+    )
+    current_emitter().set_cluster(profile)
+
+
 def _build_clusters_dict_path(
     pairs: Any,
     all_ids: list[int],
@@ -709,6 +993,65 @@ def _build_clusters_via_frames(
         schema=PAIR_STREAM_SCHEMA,
     )
 
+    sorted_clusters, metadata_by_cid, weak_stats = _columnar_presplit(
+        pairs_list, pairs_df, all_ids, max_cluster_size,
+    )
+
+    # --- Build the SAME pre-split result dict as the dict path. ------------
+    # confidence/bottleneck come from metadata_by_cid (native: kernel metadata;
+    # off-native: the discarded transient fill, bit-identical to
+    # compute_cluster_confidence). pair_scores stays {} (SP4: served by the view).
+    with stage("cluster_result_dict_init"):
+        result: dict[int, dict] = {}
+        for cluster_id, members in enumerate(sorted_clusters, start=1):
+            size = len(members)
+            md_c = metadata_by_cid[cluster_id]
+            result[cluster_id] = {
+                "members": list(members),
+                "size": size,
+                "oversized": size > max_cluster_size,
+                "pair_scores": {},
+                "confidence": md_c["confidence"],
+                "bottleneck_pair": md_c["bottleneck_pair"],
+            }
+
+    # --- Steps 5-7: auto-split + cluster_quality + emit (shared tail). -----
+    # raw_pairs lets _finalize materialize per-OVERSIZED pair_scores (input order,
+    # last-wins) for the MST split; weak_stats feeds the weak test. The returned
+    # dict's pair_scores is {} on every cluster.
+    return _finalize_clusters(
+        result, max_cluster_size, weak_cluster_threshold, auto_split,
+        raw_pairs=pairs_list, weak_stats=weak_stats,
+    )
+
+
+def _columnar_presplit(
+    pairs_list: list[tuple[int, int, float]],
+    pairs_df: Any,
+    all_ids: list[int],
+    max_cluster_size: int,
+) -> tuple[list[set[int]], dict[int, dict], dict[int, tuple[float, float]]]:
+    """Shared pre-split Union-Find + per-cluster confidence source.
+
+    Returns ``(sorted_clusters, metadata_by_cid, weak_stats)``.
+
+    - ``sorted_clusters``: member sets sorted by min member (cid = index+1,
+      start=1).
+    - ``metadata_by_cid``: ``{cid: {confidence, bottleneck_pair, min_edge,
+      avg_edge}}`` for EVERY cid. min/avg are COALESCED to ``0.0`` (never None)
+      so the frames-out path can write them directly into the metadata frame.
+      Native path: from the Arrow kernel metadata (pairs-input order ->
+      bit-identical to ``compute_cluster_confidence``). Off-native: from the
+      transient pairs-input-order fill (also bit-identical), discarded after.
+    - ``weak_stats``: ``{cid: (min_edge, avg_edge)}`` ONLY for multi-member cids
+      that HAVE in-cluster edges. Off-native guard ``size>1 and ps``; native
+      ``size>1``. Edgeless multi-member cids ABSENT. Carries the RAW (non-
+      coalesced) min/avg the dict path uses for the weak test; membership must
+      EXACTLY match the current ``_build_clusters_via_frames`` so SP4 parity
+      (tests/test_columnar_drop_pairscores_parity.py) doesn't regress.
+    """
+    import polars as _pl
+
     # --- Step 1: Union-Find member sets (PRE-split). -----------------------
     native = native_module() if native_enabled("clustering") else None
     arrow_fn = getattr(native, "build_clusters_arrow", None) if native else None
@@ -716,7 +1059,7 @@ def _build_clusters_via_frames(
     member_sets: list[set[int]]
     # Native path: per-cluster confidence/bottleneck/min/avg from frames.metadata
     # (keyed by kernel cluster_id == our canonical cid). None off-native.
-    metadata_by_cid: dict[int, dict] | None = None
+    kernel_md_by_cid: dict[int, dict] | None = None
     if native is not None and arrow_fn is not None:
         # Native Arrow kernel: UF-ONLY assignments (pre-split). Derive raw
         # member sets per UF component from the assignments frame.
@@ -735,7 +1078,7 @@ def _build_clusters_via_frames(
             # Retain the kernel's per-cluster metadata (pairs-input order ->
             # bit-identical to compute_cluster_confidence). (0,0) bottleneck -> None.
             md = frames.metadata
-            metadata_by_cid = {}
+            kernel_md_by_cid = {}
             for cid_v, conf_v, ba_v, bb_v, mn_v, av_v in zip(
                 md["cluster_id"].to_list(),
                 md["confidence"].to_list(),
@@ -745,7 +1088,7 @@ def _build_clusters_via_frames(
                 md["avg_edge"].to_list(),
                 strict=True,
             ):
-                metadata_by_cid[int(cid_v)] = {
+                kernel_md_by_cid[int(cid_v)] = {
                     "confidence": conf_v,
                     "bottleneck_pair": (
                         None if (int(ba_v), int(bb_v)) == (0, 0)
@@ -772,7 +1115,7 @@ def _build_clusters_via_frames(
                 member_sets = uf.get_clusters()
                 del uf
 
-    # --- Step 2: build the SAME pre-split result dict as the dict path. ----
+    # --- Step 2: sort + member->cid map. ----------------------------------
     with stage("cluster_sort_clusters"):
         sorted_clusters = sorted(member_sets, key=lambda s: min(s))
         del member_sets
@@ -783,34 +1126,30 @@ def _build_clusters_via_frames(
             for m in members:
                 member_to_cid[m] = cluster_id
 
-    with stage("cluster_result_dict_init"):
-        result: dict[int, dict] = {}
-        for cluster_id, members in enumerate(sorted_clusters, start=1):
-            size = len(members)
-            result[cluster_id] = {
-                "members": list(members),
-                "size": size,
-                "oversized": size > max_cluster_size,
-                "pair_scores": {},
-            }
+    sizes_by_cid: dict[int, int] = {
+        cluster_id: len(members)
+        for cluster_id, members in enumerate(sorted_clusters, start=1)
+    }
 
-    # --- Steps 3-4: confidence/bottleneck/min/avg -- NO eager pair_scores fill on
-    # `result` (SP4: pair_scores stays {}; scores are served by the pipeline view).
-    # Native reads them off frames.metadata (deduped, pairs-input order).
-    # Off-native uses a TRANSIENT pairs-input-order fill (replace_strict in row
-    # order, dict last-wins -- matching the dict path) that feeds confidence + min/
-    # avg, then is DISCARDED. `weak_stats[cid] = (min_edge, avg_edge)` per
-    # multi-member cluster feeds the weak test in _finalize_clusters.
+    # --- Steps 3-4: confidence/bottleneck/min/avg for EVERY cid. ----------
+    # Native reads off frames.metadata (deduped, pairs-input order). Off-native
+    # uses a TRANSIENT pairs-input-order fill (replace_strict in row order, dict
+    # last-wins -- matching the dict path) that feeds confidence + min/avg, then
+    # is DISCARDED. weak_stats[cid] = (min_edge, avg_edge) per multi-member
+    # cluster WITH edges (raw, non-coalesced) feeds the weak test downstream.
+    metadata_by_cid: dict[int, dict] = {}
     weak_stats: dict[int, tuple[float, float]] = {}
-    if metadata_by_cid is not None:
-        del member_to_cid
-        del sorted_clusters
+    if kernel_md_by_cid is not None:
         with stage("cluster_compute_confidence"):
-            for cid, cinfo in result.items():
-                md_c = metadata_by_cid[cid]
-                cinfo["confidence"] = md_c["confidence"]
-                cinfo["bottleneck_pair"] = md_c["bottleneck_pair"]
-                if cinfo["size"] > 1:
+            for cid in sizes_by_cid:
+                md_c = kernel_md_by_cid[cid]
+                metadata_by_cid[cid] = {
+                    "confidence": md_c["confidence"],
+                    "bottleneck_pair": md_c["bottleneck_pair"],
+                    "min_edge": (md_c["min_edge"] or 0.0),
+                    "avg_edge": (md_c["avg_edge"] or 0.0),
+                }
+                if sizes_by_cid[cid] > 1:
                     weak_stats[cid] = (md_c["min_edge"], md_c["avg_edge"])
     else:
         transient: dict[int, dict[tuple[int, int], float]] = {}
@@ -828,25 +1167,23 @@ def _build_clusters_via_frames(
                 ):
                     transient.setdefault(int(cid), {})[(id_a, id_b)] = score
             del member_to_cid
-            del sorted_clusters
         with stage("cluster_compute_confidence"):
-            for cid, cinfo in result.items():
+            for cid, size in sizes_by_cid.items():
                 ps = transient.get(cid, {})
-                conf = compute_cluster_confidence(ps, cinfo["size"])
-                cinfo["confidence"] = conf["confidence"]
-                cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
-                if cinfo["size"] > 1 and ps:
+                conf = compute_cluster_confidence(ps, size)
+                metadata_by_cid[cid] = {
+                    "confidence": conf["confidence"],
+                    "bottleneck_pair": conf["bottleneck_pair"],
+                    # compute_cluster_confidence returns None for size<=1 / no
+                    # edges -> coalesce to 0.0 for the frames metadata.
+                    "min_edge": (conf["min_edge"] or 0.0),
+                    "avg_edge": (conf["avg_edge"] or 0.0),
+                }
+                if size > 1 and ps:
                     _vals = list(ps.values())
                     weak_stats[cid] = (min(_vals), sum(_vals) / len(_vals))
 
-    # --- Steps 5-7: auto-split + cluster_quality + emit (shared tail). -----
-    # raw_pairs lets _finalize materialize per-OVERSIZED pair_scores (input order,
-    # last-wins) for the MST split; weak_stats feeds the weak test. The returned
-    # dict's pair_scores is {} on every cluster.
-    return _finalize_clusters(
-        result, max_cluster_size, weak_cluster_threshold, auto_split,
-        raw_pairs=pairs_list, weak_stats=weak_stats,
-    )
+    return sorted_clusters, metadata_by_cid, weak_stats
 
 
 def compute_cluster_confidence(
