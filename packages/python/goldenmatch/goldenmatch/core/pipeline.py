@@ -116,7 +116,14 @@ def _get_block_scorer(config: GoldenMatchConfig):
         )
         return score_blocks_datafusion
     return score_blocks_parallel
-from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
+from goldenmatch.core.cluster import (
+    ClusterFrames,
+    _cluster_frames_out_enabled,
+    build_cluster_frames,
+    build_clusters,
+    build_clusters_columnar,
+    cluster_frames_to_dict,
+)
 
 # ── Columnar pipeline fast-path (Arrow roadmap Phase A) ──────────────
 # Routes the eligible single-fuzzy-matchkey dedupe shape through the
@@ -1443,6 +1450,16 @@ def _run_dedupe_pipeline(
         if (_use_columnar and _columnar_pairs_df is not None)
         else len(all_pairs),
     )
+    # SP-B: frames-out path (gate GOLDENMATCH_CLUSTER_FRAMES_OUT, default OFF).
+    # When ON, build the two-frame ClusterFrames representation and consume it
+    # for GOLDEN + STATS + DUPES below. `clusters` is rebuilt from the frames via
+    # cluster_frames_to_dict so every remaining dict consumer (report,
+    # output_clusters, lineage, identity, results["clusters"]) stays byte-
+    # identical. Identity stays on the dict here; Task 3 wires its boundary
+    # rebuild. The frames-out path is additive -- the dict path (gate OFF) below
+    # is untouched. Mutually exclusive with the columnar pair-stream branch
+    # (frames-out only fires on the non-columnar list build site).
+    cluster_frames: ClusterFrames | None = None
     with stage("cluster"):
         if _use_columnar and _columnar_pairs_df is not None:
             # Phase A columnar path: same clusters as build_clusters on the
@@ -1453,6 +1470,16 @@ def _run_dedupe_pipeline(
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
             )
+        elif _cluster_frames_out_enabled():
+            cluster_frames = build_cluster_frames(
+                all_pairs, all_ids,
+                max_cluster_size=max_cluster_size,
+                weak_cluster_threshold=weak_threshold,
+                auto_split=auto_split,
+            )
+            # Rebuild the dict so stats / dupes / report / output_clusters /
+            # lineage / identity / results all see the unchanged shape.
+            clusters = cluster_frames_to_dict(cluster_frames)
         else:
             clusters = build_clusters(
                 all_pairs, all_ids,
@@ -1521,7 +1548,27 @@ def _run_dedupe_pipeline(
     #   4. partition by cluster_id → dict of small DataFrames,
     #   5. call build_golden_record on each pre-filtered partition.
     # Total: O(N + sum-of-cluster-sizes) which is O(N), independent of K.
-    with stage("golden"):
+    #
+    # SP-B frames-out: when build_cluster_frames ran (gate ON), build golden
+    # directly from the ClusterFrames via the Task-1 helper, which DEMUXes into
+    # the same golden_df / golden_records slots the dict path uses (fast ->
+    # golden_df set + golden_records=[]; slow -> golden_records set, golden_df
+    # rebuilt by the shared block below). quality_scores is always None in this
+    # pipeline (matching the dict path's _polars_native_eligible(..., None)
+    # gate); provenance mirrors config.output.lineage_provenance.
+    if cluster_frames is not None:
+        with stage("golden"):
+            from goldenmatch.core.golden import build_golden_records_from_frames
+            _provenance_on = config.output.lineage_provenance
+            golden_df, golden_records = build_golden_records_from_frames(
+                collected_df,
+                cluster_frames,
+                golden_rules,
+                quality_scores=None,
+                provenance=_provenance_on,
+            )
+    else:
+      with stage("golden"):
         with stage("golden_eligible_filter"):
             eligible: list[tuple[int, dict[str, Any]]] = [
                 (cid, info) for cid, info in clusters.items()
