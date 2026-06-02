@@ -469,3 +469,119 @@ def test_frames_out_identity_consumes_cluster_frames_directly(
     assert on_call["clusters_is_dict"] is False
     assert isinstance(on_call["cluster_frames"], ClusterFrames)
     assert on_call["pair_score_view"] is not None
+
+
+# ── SP-C Task 3b: deferred dict rebuild past the identity stage ────────────
+#
+# Task 3b makes the eager `clusters = _clusters_dict()` at the OUTPUT block go
+# away: each remaining dict consumer (output_clusters rows, lineage,
+# golden_provenance, results["clusters"]) now calls `_clusters_dict()` at its
+# OWN consumption site, so on the frames-out hot path (identity ON, output OFF)
+# the dict materializes for the FIRST time at results["clusters"] -- AFTER the
+# identity stage. This leg turns the deferred output_clusters + lineage
+# consumers ON (output_clusters=True, output_golden=True) so the deferral is
+# actually exercised on the frames-out path, and asserts the gate-ON dict the
+# deferred consumers produce is byte-identical to the gate-OFF dict.
+
+
+def _config_with_output(directory: str, *, max_cluster_size: int):
+    """`_config` variant pointing output at a tmp directory (provenance ON).
+
+    provenance=True so the lineage block's golden_provenance consumer
+    (`golden_records_to_provenance(..., _clusters_dict(), ...)`) also fires --
+    a third deferred `_clusters_dict()` call site beyond output_clusters rows
+    and `build_lineage`.
+    """
+    cfg = _config(max_cluster_size=max_cluster_size, provenance=True)
+    cfg.output.directory = directory
+    return cfg
+
+
+def _clusters_partition(results):
+    """results["clusters"] as an order-independent partition + per-cluster shape.
+
+    Cluster-ids are not compared across runs (the rebuild can renumber); we
+    compare the membership PARTITION (frozensets of member ids) plus the
+    (size, oversized) shape multiset, which is what every deferred dict
+    consumer reads.
+    """
+    clusters = results["clusters"]
+    partition = {frozenset(int(m) for m in c["members"]) for c in clusters.values()}
+    shapes = sorted((c["size"], bool(c["oversized"])) for c in clusters.values())
+    return partition, shapes
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_frames_out_output_on_deferred_dict_parity(monkeypatch, tmp_path, native):
+    """Deferred output_clusters + lineage consumers: gate-ON dict == gate-OFF.
+
+    Turns the opt-in output consumers ON so the deferred `_clusters_dict()`
+    calls (output_clusters rows, build_lineage, golden_provenance) actually run
+    on the frames-out path. Asserts (a) both runs succeed and write output, and
+    (b) the gate-ON vs gate-OFF results["clusters"] partition is identical --
+    proving the deferred-build consumers produce the same dict the eager rebuild
+    used to.
+    """
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    _skip_if_no_native(native)
+
+    off_dir = tmp_path / "off"
+    on_dir = tmp_path / "on"
+    off_dir.mkdir()
+    on_dir.mkdir()
+
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    off = run_dedupe_df(
+        _fixture_df(),
+        _config_with_output(str(off_dir), max_cluster_size=4),
+        source_name="t",
+        output_golden=True,
+        output_clusters=True,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    on = run_dedupe_df(
+        _fixture_df(),
+        _config_with_output(str(on_dir), max_cluster_size=4),
+        source_name="t",
+        output_golden=True,
+        output_clusters=True,
+    )
+
+    # Deferred-build dict parity (the core SP-C 3b invariant): the dict the
+    # deferred output_clusters + lineage + results consumers produce on the
+    # frames-out path matches the gate-OFF dict.
+    assert _clusters_partition(on) == _clusters_partition(off)
+    # Also keep the existing golden/dupes/stats parity locked with output on.
+    assert _cluster_stats(on) == _cluster_stats(off)
+    assert _dupe_row_ids(on) == _dupe_row_ids(off)
+    assert _golden_as_setrows(on) == _golden_as_setrows(off)
+
+    # The deferred output_clusters consumer actually wrote the clusters file on
+    # both gate paths (proves the deferral didn't skip the consumer). The
+    # written clusters partition must also match across gates.
+    on_clusters = _read_written_clusters(on_dir)
+    off_clusters = _read_written_clusters(off_dir)
+    assert on_clusters is not None and off_clusters is not None
+    assert on_clusters == off_clusters
+
+
+def _read_written_clusters(directory):
+    """Read the written `clusters` CSV back into a member->cluster partition.
+
+    Returns None if no clusters file was written. The cluster-id labels differ
+    across runs (rebuild renumbering), so we compare the partition of
+    __row_id__ grouped by __cluster_id__, not the raw ids.
+    """
+    import glob
+
+    import polars as pl
+
+    matches = glob.glob(str(directory / "*clusters*"))
+    if not matches:
+        return None
+    df = pl.read_csv(matches[0])
+    groups: dict[object, set[int]] = {}
+    for row in df.iter_rows(named=True):
+        groups.setdefault(row["__cluster_id__"], set()).add(int(row["__row_id__"]))
+    return {frozenset(v) for v in groups.values()}

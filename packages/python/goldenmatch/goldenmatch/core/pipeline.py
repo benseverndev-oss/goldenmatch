@@ -1470,12 +1470,15 @@ def _run_dedupe_pipeline(
     # When ON, build the two-frame ClusterFrames representation and consume it
     # DIRECTLY for GOLDEN + STATS + DUPES + REPORT below (no dict). The legacy
     # `clusters` dict is rebuilt LAZILY via `_clusters_dict()` -- at most once,
-    # as late as the OUTPUT block -- only for the remaining dict consumers
-    # (adaptive refiner if enabled, output_clusters rows, lineage, identity,
-    # results["clusters"]). Keeping golden + stats + dupes dict-free is the SP-B
-    # prerequisite for the SP-C RSS win: once identity + results stop needing the
-    # dict, the lazy rebuild simply never fires on the hot path. Identity still
-    # RECEIVES a (rebuilt) dict here; Task 3 wires its ClusterPairScores view.
+    # and each remaining dict consumer calls it at its OWN consumption site
+    # (SP-C): adaptive refiner if enabled, output_clusters rows, lineage,
+    # golden_provenance, results["clusters"]. Identity NO LONGER consumes the
+    # dict on this path -- Task 3 feeds it `cluster_frames` + a ClusterPairScores
+    # view built from the frames. So on the hot path (identity ON, output OFF)
+    # the FIRST and ONLY `_clusters_dict()` call is results["clusters"], AFTER
+    # the identity stage: cluster->golden->identity runs fully dict-free, which
+    # is the SP-C RSS win. Keeping golden + stats + dupes dict-free was the SP-B
+    # prerequisite.
     # The frames-out path is additive -- the dict path (gate OFF) below is
     # untouched and byte-identical. Mutually exclusive with the columnar
     # pair-stream branch (frames-out only fires on the non-columnar list build
@@ -1817,14 +1820,17 @@ def _run_dedupe_pipeline(
         )
 
     # ── Step 7: OUTPUT ──
-    # SP-B: from here down the remaining dict consumers (output_clusters rows,
-    # lineage, identity wiring, results["clusters"]) need the legacy dict shape.
-    # Rebuild it LAZILY now -- once -- via the cache helper. On the frames-out
-    # branch this is the FIRST and ONLY materialization; golden + stats + dupes
-    # above ran entirely off the frames. results["clusters"] forces the build
-    # unconditionally today; SP-C removes that last dict consumer so the rebuild
-    # can be skipped when no output/identity needs it.
-    clusters = _clusters_dict()
+    # SP-C: do NOT rebuild the dict eagerly here. The remaining dict consumers
+    # (output_clusters rows, lineage, golden_provenance, results["clusters"])
+    # each call `_clusters_dict()` at their OWN consumption site, so the rebuild
+    # is deferred until one actually runs. On the frames-out hot path (identity
+    # ON, output flags OFF) the FIRST `_clusters_dict()` call is now the
+    # `results["clusters"]` assignment -- AFTER the `stage("identity_resolve")`
+    # block -- so cluster->golden->identity runs with NO dict materialized
+    # (identity reads `cluster_frames`, not the dict). With output flags ON the
+    # dict builds at the first opt-in consumer (output_clusters / lineage). On
+    # gate-OFF / columnar, `_clusters_dict()` returns the already-bound real
+    # `clusters` dict cheaply -- byte-identical, no extra work.
     run_name = config.output.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
     fmt = config.output.format or "csv"
     directory = config.output.directory or config.output.path or "."
@@ -1835,7 +1841,7 @@ def _run_dedupe_pipeline(
     if output_clusters:
         # Build clusters DataFrame
         cluster_rows = []
-        for cid, cinfo in clusters.items():
+        for cid, cinfo in _clusters_dict().items():
             for member_id in cinfo["members"]:
                 cluster_rows.append({
                     "__cluster_id__": cid,
@@ -1857,12 +1863,14 @@ def _run_dedupe_pipeline(
     if output_golden or output_clusters or output_dupes:
         try:
             from goldenmatch.core.lineage import build_lineage, save_lineage
-            lineage = build_lineage(all_pairs, collected_df, matchkeys, clusters)
+            lineage = build_lineage(
+                all_pairs, collected_df, matchkeys, _clusters_dict()
+            )
             golden_provenance = None
             if config.output.lineage_provenance and golden_records:
                 from goldenmatch.core.golden import golden_records_to_provenance
                 golden_provenance = golden_records_to_provenance(
-                    golden_records, clusters, golden_rules,
+                    golden_records, _clusters_dict(), golden_rules,
                 )
             save_lineage(
                 lineage, directory, run_name, golden_provenance=golden_provenance,
@@ -1929,7 +1937,7 @@ def _run_dedupe_pipeline(
         scored_pairs = dedup_pairs_max_score(all_pairs)
 
     results = {
-        "clusters": clusters,
+        "clusters": _clusters_dict(),
         "golden": golden_df,
         "unique": unique_df,
         "dupes": dupes_df,
