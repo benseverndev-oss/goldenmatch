@@ -416,6 +416,48 @@ def build_clusters(
             seen.add(id_b)
         all_ids = list(seen)
 
+    # SP1 (columnar cluster-build core): when enabled, build the same
+    # ``dict[int, dict]`` via the columnar Arrow path. Default OFF; the output
+    # is byte-identical to the dict path (parity gate
+    # tests/test_columnar_cluster_build_parity.py), differing only in member
+    # LIST ORDER (a separate Union-Find -> compared as a set). Gate goes AFTER
+    # the Ray short-circuit, the DataFrame branch, and the all_ids derivation so
+    # it never intercepts Ray and always has a concrete pairs list + all_ids.
+    if _columnar_cluster_build_enabled():
+        return _build_clusters_via_frames(
+            pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+        )
+
+    return _build_clusters_dict_path(
+        pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
+
+
+def _columnar_cluster_build_enabled() -> bool:
+    """Columnar cluster-build core for ``build_clusters`` (SP1): build the
+    ``dict[int, dict]`` via the two-frame columnar path
+    (``_build_clusters_via_frames``) instead of the list/dict Union-Find path.
+    Default OFF -- byte-identical to the dict path on OUTPUT (member list order
+    aside; a separate UF runs so order legitimately differs but membership is
+    identical). Kill-switch ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=0`` (the
+    default) restores the dict path. Mirrors the identity
+    ``_batch_fingerprint_enabled`` gate."""
+    return os.environ.get(
+        "GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "0"
+    ).strip() != "0"
+
+
+def _build_clusters_dict_path(
+    pairs: Any,
+    all_ids: list[int],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Legacy list/dict Union-Find cluster build. Verbatim extraction of the
+    original ``build_clusters`` body (UF stage -> emit); behavior is unchanged.
+    The columnar path (``_build_clusters_via_frames``) shares the tail via
+    ``_finalize_clusters``."""
     with stage("cluster_connected_components"):
         if native_enabled("clustering"):
             # Native Union-Find (component membership is identical to the Python
@@ -480,6 +522,25 @@ def build_clusters(
             cinfo["confidence"] = conf["confidence"]
             cinfo["bottleneck_pair"] = conf["bottleneck_pair"]
 
+    return _finalize_clusters(
+        result, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
+
+
+def _finalize_clusters(
+    result: dict[int, dict],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Shared cluster-build tail: auto-split oversized clusters, assign
+    ``cluster_quality`` (+ weak confidence downgrade), then emit the profile.
+
+    Reads only ``result`` (the pre-split per-cluster dict with members/size/
+    oversized/pair_scores/confidence/bottleneck_pair) plus the three params. Both
+    the dict path and the columnar path call this so split/quality/emit are
+    byte-identical. OWNS the ``_emit_cluster_profile`` call -- callers must NOT
+    emit again."""
     # Auto-split oversized clusters (when enabled). See _split_edge_work_budget:
     # the per-pass single-weakest-edge split degrades to O(nodes * edges) on a
     # large dense cluster, so two guards keep the loop terminating without
@@ -547,6 +608,21 @@ def build_clusters(
 
     _emit_cluster_profile(result)
     return result
+
+
+def _build_clusters_via_frames(
+    pairs: Any,
+    all_ids: list[int],
+    max_cluster_size: int,
+    weak_cluster_threshold: float,
+    auto_split: bool,
+) -> dict[int, dict]:
+    """Columnar cluster-build core (SP1). Step 3 stub: delegates to the dict
+    path so the gate is a verified no-op refactor. Step 4 replaces this body
+    with the real columnar build."""
+    return _build_clusters_dict_path(
+        pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+    )
 
 
 def compute_cluster_confidence(
