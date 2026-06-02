@@ -113,6 +113,13 @@ def test_parity_uint64_overflow_column():
     _assert_parity(df)
 
 
+def test_parity_all_internal_columns_frame():
+    # Every column is __-prefixed, so keep_cols is empty after the drop. The whole
+    # frame routes to per-row; each row hashes the empty payload {} (a fixed hash).
+    df = pl.DataFrame({"__row_id__": [0, 1, 2], "__source__": ["a", "b", "c"]})
+    assert batch_fingerprints(df) == [_perrow(r) for r in df.to_dicts()]
+
+
 def test_batch_fingerprints_parity_off_native(monkeypatch):
     # GOLDENMATCH_NATIVE=0 forces the pure-Python / dict-fallback wrapper path.
     # native_enabled reads os.environ per call so the monkeypatch takes effect.

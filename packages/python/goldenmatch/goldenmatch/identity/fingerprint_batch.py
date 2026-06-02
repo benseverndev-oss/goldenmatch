@@ -85,7 +85,11 @@ def canonicalize_records_df(df: pl.DataFrame):
     height = df.height
     # Drop __-prefixed columns (both kernels + per-row payload exclude them).
     keep_cols = [c for c in df.columns if not c.startswith("__")]
-    sub = df.select(keep_cols) if keep_cols else df.select([])
+    if not keep_cols:
+        # No content fields after dropping __-cols: route the whole frame to per-row
+        # (each row hashes the empty payload {} -> a fixed hash). Cheap + parity-safe.
+        return None, [True] * height
+    sub = df.select(keep_cols)
 
     # Column-level un-batchable -> whole frame per-row.
     for col in keep_cols:
@@ -129,6 +133,7 @@ def canonicalize_records_df(df: pl.DataFrame):
         elif dtype == pl.Float32:
             exprs.append(pl.col(col).cast(pl.Float64))
         elif isinstance(dtype, _INT_UPCAST) or dtype == pl.UInt64:
+            # UInt64 handled here not in _INT_UPCAST: its overflow rows are already masked out above
             exprs.append(pl.col(col).cast(pl.Int64))
         elif isinstance(dtype, (pl.Categorical, pl.Enum)):
             exprs.append(pl.col(col).cast(pl.Utf8))
@@ -159,6 +164,7 @@ def batch_fingerprints(df: pl.DataFrame) -> list[str | None]:
     batch_df, mask = canonicalize_records_df(df)
     if batch_df is not None and batch_df.height:
         hashes = record_fingerprints_batch_arrow(batch_df)  # aligned to batch rows
+        # batch_df.height == count(not m for m in mask), guaranteed by survivors = sub.filter(~mask)
         bi = 0
         for i in range(df.height):
             if not mask[i]:
