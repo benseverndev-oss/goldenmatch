@@ -73,7 +73,10 @@ class DedupeResult:
         dupes: DataFrame of duplicate records.
         unique: DataFrame of unique (non-duplicate) records.
         stats: Summary statistics (total_records, total_clusters, match_rate, etc.).
-        scored_pairs: List of (id_a, id_b, score) tuples for all matched pairs.
+        scored_pairs: All scored pairs as canonical (min_id, max_id, score),
+            sorted by id pair, max-score deduped. The full scored set -- includes
+            pairs that auto-split later removed from clusters (a superset of the
+            per-cluster pair_scores when oversized clusters split).
         config: The GoldenMatchConfig used for this run.
     """
     golden: pl.DataFrame | None = None
@@ -297,7 +300,7 @@ def dedupe(
         dupes=result.get("dupes"),
         unique=result.get("unique"),
         stats=_extract_stats(result),
-        scored_pairs=_extract_pairs(result),
+        scored_pairs=result.get("scored_pairs", []),
         config=cfg,
         postflight_report=_attach_memory_to_postflight(
             result.get("postflight_report"), _mem
@@ -470,7 +473,7 @@ def dedupe_df(
         dupes=result.get("dupes"),
         unique=result.get("unique"),
         stats=_extract_stats(result),
-        scored_pairs=_extract_pairs(result),
+        scored_pairs=result.get("scored_pairs", []),
         config=config,
         postflight_report=pf,
         memory_stats=_mem,
@@ -1130,12 +1133,3 @@ def memory_stats(path: str | None = None) -> dict:
         }
     finally:
         store.close()
-
-
-def _extract_pairs(result: dict) -> list:
-    """Extract scored pairs from cluster pair_scores."""
-    pairs = []
-    for _cid, cinfo in result.get("clusters", {}).items():
-        for (a, b), score in cinfo.get("pair_scores", {}).items():
-            pairs.append((a, b, score))
-    return pairs

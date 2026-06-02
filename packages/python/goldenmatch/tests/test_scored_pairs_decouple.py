@@ -1,0 +1,60 @@
+"""Phase 2 SP3: DedupeResult.scored_pairs is sourced from the pre-cluster
+scored-pair stream (normalized canonical + max-score deduped + sorted), NOT
+reconstructed from cluster pair_scores. Documented behavior change: scored_pairs
+is the FULL scored set (a superset of the post-split cluster pair_scores when
+oversized clusters split), in canonical sorted order.
+"""
+import polars as pl
+from goldenmatch import dedupe_df
+
+
+def _cluster_pair_keys(result_clusters) -> set:
+    keys = set()
+    for cinfo in result_clusters.values():
+        for (a, b) in cinfo.get("pair_scores", {}):
+            keys.add((min(a, b), max(a, b)))
+    return keys
+
+
+def _dup_df():
+    return pl.DataFrame({
+        "name": ["Jon Smith", "Jon Smith", "Jane Doe", "Jane Doe", "Bob Lee"],
+        "city": ["NYC", "NYC", "LA", "LA", "SF"],
+    })
+
+
+def test_scored_pairs_canonical_set_matches_clusters_no_split():
+    res = dedupe_df(_dup_df(), exact=["name", "city"])
+    sp_keys = {(min(a, b), max(a, b)) for (a, b, _s) in res.scored_pairs}
+    assert sp_keys == _cluster_pair_keys(res.clusters)
+    assert all(0.0 <= s <= 1.0 for (_a, _b, s) in res.scored_pairs)
+
+
+def test_scored_pairs_sorted_and_deduped():
+    res = dedupe_df(_dup_df(), exact=["name", "city"])
+    pairs = [(a, b) for (a, b, _s) in res.scored_pairs]
+    assert pairs == sorted(pairs)              # sorted by (a, b)
+    assert len(pairs) == len(set(pairs))       # canonical-deduped
+
+
+def test_cluster_pairs_are_subset_of_scored_pairs():
+    # The decouple invariant that ALWAYS holds: every cluster pair_scores key is
+    # present in scored_pairs (which is the full scored set). On no-split fixtures
+    # they are equal; when an oversized cluster splits, scored_pairs is a strict
+    # superset (it keeps the cross-cut edges auto-split removes from clusters).
+    # (A strict-superset split fixture is omitted here: tuning a real auto-split
+    # via the public API offline is fiddly, and the subset relation is the robust,
+    # always-true form of the same invariant.)
+    res = dedupe_df(_dup_df(), exact=["name", "city"])
+    sp_keys = {(min(a, b), max(a, b)) for (a, b, _s) in res.scored_pairs}
+    assert _cluster_pair_keys(res.clusters) <= sp_keys
+
+
+def test_scored_pairs_columnar_equals_list(monkeypatch):
+    # Both pipeline paths normalize via dedup_pairs_max_score -> identical set.
+    df = _dup_df()
+    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "0")
+    off = dedupe_df(df, exact=["name", "city"])
+    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "1")
+    on = dedupe_df(df, exact=["name", "city"])
+    assert set(off.scored_pairs) == set(on.scored_pairs)

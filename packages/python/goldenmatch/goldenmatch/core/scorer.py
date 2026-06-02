@@ -1283,8 +1283,8 @@ def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
 def pairs_df_to_list(df: pl.DataFrame) -> list[tuple[int, int, float]]:
     """Adapter: DataFrame pair stream -> legacy list shape.
 
-    For migrating call sites that need the list shape during the Phase 1b
-    window. Removed in Phase 1c.
+    Live dependency of the columnar pipeline's scored_pairs capture (Phase 2 SP3,
+    `core/pipeline.py`), in addition to migrating call sites needing the list shape.
     """
     if df.is_empty():
         return []

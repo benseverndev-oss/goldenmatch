@@ -650,19 +650,6 @@ class TestExtractHelpers:
         assert stats["total_clusters"] == 1  # only size > 1
         assert stats["matched_records"] == 2
 
-    def test_extract_pairs(self):
-        from goldenmatch._api import _extract_pairs
-        clusters = {
-            0: {"pair_scores": {(1, 2): 0.95, (1, 3): 0.90}},
-        }
-        pairs = _extract_pairs({"clusters": clusters})
-        assert len(pairs) == 2
-
-    def test_extract_pairs_empty(self):
-        from goldenmatch._api import _extract_pairs
-        pairs = _extract_pairs({})
-        assert pairs == []
-
 
 class TestScoreStringsEdgeCases:
     def test_token_sort(self):
