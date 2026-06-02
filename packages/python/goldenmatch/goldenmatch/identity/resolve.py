@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 
 if TYPE_CHECKING:
+    from goldenmatch.core.cluster import ClusterFrames
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
 
 from goldenmatch.core._hashing import record_fingerprint
@@ -209,13 +210,58 @@ def _cluster_confidence(cluster_info: dict[str, Any]) -> float | None:
         return None
 
 
+def _frames_iter(
+    cluster_frames: ClusterFrames,
+) -> list[tuple[int, dict[str, Any]]]:
+    """Yield ``(cluster_id, info)`` pairs from a ``ClusterFrames`` in
+    ASCENDING cluster_id order, where ``info`` carries ONLY the keys the
+    resolution body reads: ``members``, ``confidence``, ``bottleneck_pair``.
+
+    Ascending cluster_id reproduces the dict path's insertion order (build
+    emits 1..N, splits append higher cids), so brand-new clusters mint entity
+    ids in the identical order. ``bottleneck_pair`` maps ``(a, b) == (0, 0)``
+    to ``None`` EXACTLY as ``cluster_frames_to_dict`` does (``cluster.py``) --
+    a raw ``(0, 0)`` 2-tuple would wrongly trip the weak-conflict guard.
+    """
+    assignments = cluster_frames.assignments
+    metadata = cluster_frames.metadata
+
+    # members per cid (assignments is one row per (cluster_id, member_id)).
+    members_by_cid: dict[int, list[int]] = {}
+    if not assignments.is_empty():
+        grouped = assignments.group_by("cluster_id").agg(
+            pl.col("member_id")
+        )
+        for cid, mids in zip(
+            grouped["cluster_id"].to_list(),
+            grouped["member_id"].to_list(),
+            strict=True,
+        ):
+            members_by_cid[int(cid)] = [int(m) for m in mids]
+
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for row in metadata.iter_rows(named=True):
+        cid = int(row["cluster_id"])
+        bot = (int(row["bottleneck_pair_a"]), int(row["bottleneck_pair_b"]))
+        rows.append((
+            cid,
+            {
+                "members": members_by_cid.get(cid, []),
+                "confidence": float(row["confidence"]),
+                "bottleneck_pair": bot if bot != (0, 0) else None,
+            },
+        ))
+    rows.sort(key=lambda kv: kv[0])
+    return rows
+
+
 def resolve_clusters(
-    clusters: dict[int, dict],
-    df: pl.DataFrame,
-    scored_pairs: list[tuple[int, int, float]],
-    matchkey_name: str | None,
-    store: IdentityStore,
-    run_name: str,
+    clusters: dict[int, dict] | None = None,
+    df: pl.DataFrame | None = None,
+    scored_pairs: list[tuple[int, int, float]] | None = None,
+    matchkey_name: str | None = None,
+    store: IdentityStore | None = None,
+    run_name: str = "",
     *,
     dataset: str | None = None,
     source_pk_col: str | None = None,
@@ -223,14 +269,51 @@ def resolve_clusters(
     emit_singletons: bool = True,
     weak_confidence_threshold: float = 0.6,
     pair_score_view: ClusterPairScores | None = None,
+    cluster_frames: ClusterFrames | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
 
+    The cluster partition is supplied EITHER as the legacy ``clusters``
+    ``dict[int, dict]`` OR as the SP-A ``cluster_frames`` two-frame
+    ``ClusterFrames`` (exactly one). The frames path lets the pipeline stop
+    rebuilding the dict; it iterates the same ``(cluster_id, info)`` pairs in
+    ascending-cluster_id order (= the dict's insertion order) and runs the
+    UNCHANGED resolution body. When ``cluster_frames`` is given,
+    ``pair_score_view`` MUST be supplied -- the frames carry no per-cluster
+    ``pair_scores``, so without the view every evidence edge would be empty.
+
     See module docstring for high-level flow.
     """
+    if (clusters is None) == (cluster_frames is None):
+        raise ValueError(
+            "resolve_clusters requires exactly one of `clusters` / "
+            "`cluster_frames`"
+        )
+    if cluster_frames is not None and pair_score_view is None:
+        raise ValueError(
+            "resolve_clusters(cluster_frames=...) requires `pair_score_view` "
+            "(the frames carry no per-cluster pair_scores; evidence edges "
+            "would be empty otherwise)"
+        )
+    if df is None or store is None:
+        raise ValueError("resolve_clusters requires `df` and `store`")
+    if scored_pairs is None:
+        scored_pairs = []
+
     summary = ResolveSummary()
     if df.is_empty():
         return summary
+
+    # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
+    # For the dict path this is ``clusters.items()`` (insertion order = build's
+    # ascending 1..N, splits appended higher). For the frames path we rebuild
+    # the same ascending-cid stream from the two frames (see ``_frames_iter``)
+    # so brand-new clusters mint entity ids in the identical order.
+    cluster_items: Any = (
+        clusters.items()
+        if clusters is not None
+        else _frames_iter(cluster_frames)  # type: ignore[arg-type]
+    )
 
     # 1. Build row_id -> record_id mapping + ensure source_records are upserted.
     #
@@ -334,7 +417,7 @@ def resolve_clusters(
     bulk_cluster_ids: set = set()
 
     # 3. Iterate clusters.
-    for cluster_id, info in clusters.items():
+    for cluster_id, info in cluster_items:
         members: list[int] = list(info.get("members") or [])
         if not members:
             continue
