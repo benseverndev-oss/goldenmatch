@@ -1,9 +1,13 @@
 """SP-B Task 2: in-memory dedupe pipeline frames-out parity.
 
 When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is ON, ``_run_dedupe_pipeline``
-consumes the SP-A ``ClusterFrames`` for the GOLDEN + STATS + DUPES legs
-(identity stays on the dict -- Task 3). This file locks that the gate-ON
-output is byte-identical to the gate-OFF (dict) path on those legs.
+consumes the SP-A ``ClusterFrames`` for the GOLDEN + STATS + DUPES legs.
+SP-C extends this so IDENTITY also consumes the frames directly
+(``resolve_clusters(cluster_frames=...)``) -- the dict materializes only at
+the OUTPUT block, after the cluster->golden->identity stage. This file locks
+that the gate-ON output is byte-identical to the gate-OFF (dict) path on those
+legs (golden + dupes + stats + identity) and that the SP-C wiring actually
+feeds identity the frames (not a rebuilt dict).
 
 Asserted byte-identical (gate ON vs OFF), on a fixture that exercises
 singletons, a 2-member cluster, a weak chain, and an oversized cluster
@@ -376,3 +380,208 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
     assert off["identity_summary"]["conflicts_flagged"] >= 1, (
         "fixture did not trip the weak-bottleneck branch (score_for not exercised)"
     )
+
+
+# ── SP-C Task 3: identity consumes ClusterFrames DIRECTLY ─────────────────
+#
+# SP-B (Task 3 above) fed identity a dict REBUILT from the frames
+# (cluster_frames_to_dict) + a from_pairs view. SP-C changes the frames-out
+# branch so identity receives the `cluster_frames` directly (clusters=None) and
+# the view is built via `ClusterPairScores.from_frames(assignments, all_pairs)`
+# -- so the cluster->golden->identity stage never forces `_clusters_dict()`.
+# These two legs prove (a) the full public pipeline's frames-path identity is
+# byte-identical end to end and (b) resolve_clusters is actually called with
+# `cluster_frames=` (not a dict) on the frames-out branch.
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_frames_out_identity_consumes_cluster_frames_directly(
+    monkeypatch, tmp_path, native
+):
+    """SP-C: on frames-out, resolve_clusters gets cluster_frames= (clusters=None).
+
+    Spies on ``goldenmatch.identity.resolve_clusters`` (the symbol
+    ``_resolve_identities`` imports) and asserts the frames-out call passes a
+    ``ClusterFrames`` via ``cluster_frames=`` with ``clusters`` None + a
+    non-None ``pair_score_view``, while the gate-OFF call passes a dict via
+    ``clusters`` and no frames. The byte-identical end-to-end partition is
+    already locked by ``test_frames_out_identity_parity``; this leg pins the
+    SP-C wiring so a regression to the dict-rebuild path is caught directly.
+    """
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    _skip_if_no_native(native)
+
+    from goldenmatch.core.cluster import ClusterFrames
+
+    df = _identity_df()
+    source = "src"
+
+    captured: dict[str, dict] = {}
+
+    import goldenmatch.identity as identity_mod
+
+    real_resolve = identity_mod.resolve_clusters
+
+    def _spy(clusters=None, *args, **kwargs):
+        # Record the shape identity was called with for this leg, then defer to
+        # the real resolver so the partition/summary still materialize.
+        leg = captured["leg"]
+        captured[leg] = {
+            "clusters_is_none": clusters is None,
+            "clusters_is_dict": isinstance(clusters, dict),
+            "cluster_frames": kwargs.get("cluster_frames"),
+            "pair_score_view": kwargs.get("pair_score_view"),
+        }
+        return real_resolve(clusters, *args, **kwargs)
+
+    # ``_resolve_identities`` does ``from goldenmatch.identity import
+    # resolve_clusters`` at call time, so patching the package attribute is
+    # sufficient.
+    monkeypatch.setattr(identity_mod, "resolve_clusters", _spy)
+
+    # Gate OFF -> dict path.
+    captured["leg"] = "off"
+    off_db = str(tmp_path / "sp_c_off.db")
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    off = run_dedupe_df(df, _identity_config(off_db, "off"), source_name=source)
+
+    # Gate ON -> frames-out path.
+    captured["leg"] = "on"
+    on_db = str(tmp_path / "sp_c_on.db")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    on = run_dedupe_df(df, _identity_config(on_db, "on"), source_name=source)
+
+    assert off["identity_summary"] is not None
+    assert on["identity_summary"] is not None
+    # End-to-end summary parity (anti-vacuous: real evidence edges exist).
+    assert on["identity_summary"] == off["identity_summary"]
+    assert off["identity_summary"]["edges_added"] >= 1
+
+    off_call = captured["off"]
+    on_call = captured["on"]
+
+    # Gate-OFF: dict in, no frames.
+    assert off_call["clusters_is_dict"] is True
+    assert off_call["cluster_frames"] is None
+
+    # Gate-ON (SP-C): frames in, clusters None, view supplied.
+    assert on_call["clusters_is_none"] is True
+    assert on_call["clusters_is_dict"] is False
+    assert isinstance(on_call["cluster_frames"], ClusterFrames)
+    assert on_call["pair_score_view"] is not None
+
+
+# ── SP-C Task 3b: deferred dict rebuild past the identity stage ────────────
+#
+# Task 3b makes the eager `clusters = _clusters_dict()` at the OUTPUT block go
+# away: each remaining dict consumer (output_clusters rows, lineage,
+# golden_provenance, results["clusters"]) now calls `_clusters_dict()` at its
+# OWN consumption site, so on the frames-out hot path (identity ON, output OFF)
+# the dict materializes for the FIRST time at results["clusters"] -- AFTER the
+# identity stage. This leg turns the deferred output_clusters + lineage
+# consumers ON (output_clusters=True, output_golden=True) so the deferral is
+# actually exercised on the frames-out path, and asserts the gate-ON dict the
+# deferred consumers produce is byte-identical to the gate-OFF dict.
+
+
+def _config_with_output(directory: str, *, max_cluster_size: int):
+    """`_config` variant pointing output at a tmp directory (provenance ON).
+
+    provenance=True so the lineage block's golden_provenance consumer
+    (`golden_records_to_provenance(..., _clusters_dict(), ...)`) also fires --
+    a third deferred `_clusters_dict()` call site beyond output_clusters rows
+    and `build_lineage`.
+    """
+    cfg = _config(max_cluster_size=max_cluster_size, provenance=True)
+    cfg.output.directory = directory
+    return cfg
+
+
+def _clusters_partition(results):
+    """results["clusters"] as an order-independent partition + per-cluster shape.
+
+    Cluster-ids are not compared across runs (the rebuild can renumber); we
+    compare the membership PARTITION (frozensets of member ids) plus the
+    (size, oversized) shape multiset, which is what every deferred dict
+    consumer reads.
+    """
+    clusters = results["clusters"]
+    partition = {frozenset(int(m) for m in c["members"]) for c in clusters.values()}
+    shapes = sorted((c["size"], bool(c["oversized"])) for c in clusters.values())
+    return partition, shapes
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_frames_out_output_on_deferred_dict_parity(monkeypatch, tmp_path, native):
+    """Deferred output_clusters + lineage consumers: gate-ON dict == gate-OFF.
+
+    Turns the opt-in output consumers ON so the deferred `_clusters_dict()`
+    calls (output_clusters rows, build_lineage, golden_provenance) actually run
+    on the frames-out path. Asserts (a) both runs succeed and write output, and
+    (b) the gate-ON vs gate-OFF results["clusters"] partition is identical --
+    proving the deferred-build consumers produce the same dict the eager rebuild
+    used to.
+    """
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    _skip_if_no_native(native)
+
+    off_dir = tmp_path / "off"
+    on_dir = tmp_path / "on"
+    off_dir.mkdir()
+    on_dir.mkdir()
+
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    off = run_dedupe_df(
+        _fixture_df(),
+        _config_with_output(str(off_dir), max_cluster_size=4),
+        source_name="t",
+        output_golden=True,
+        output_clusters=True,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    on = run_dedupe_df(
+        _fixture_df(),
+        _config_with_output(str(on_dir), max_cluster_size=4),
+        source_name="t",
+        output_golden=True,
+        output_clusters=True,
+    )
+
+    # Deferred-build dict parity (the core SP-C 3b invariant): the dict the
+    # deferred output_clusters + lineage + results consumers produce on the
+    # frames-out path matches the gate-OFF dict.
+    assert _clusters_partition(on) == _clusters_partition(off)
+    # Also keep the existing golden/dupes/stats parity locked with output on.
+    assert _cluster_stats(on) == _cluster_stats(off)
+    assert _dupe_row_ids(on) == _dupe_row_ids(off)
+    assert _golden_as_setrows(on) == _golden_as_setrows(off)
+
+    # The deferred output_clusters consumer actually wrote the clusters file on
+    # both gate paths (proves the deferral didn't skip the consumer). The
+    # written clusters partition must also match across gates.
+    on_clusters = _read_written_clusters(on_dir)
+    off_clusters = _read_written_clusters(off_dir)
+    assert on_clusters is not None and off_clusters is not None
+    assert on_clusters == off_clusters
+
+
+def _read_written_clusters(directory):
+    """Read the written `clusters` CSV back into a member->cluster partition.
+
+    Returns None if no clusters file was written. The cluster-id labels differ
+    across runs (rebuild renumbering), so we compare the partition of
+    __row_id__ grouped by __cluster_id__, not the raw ids.
+    """
+    import glob
+
+    import polars as pl
+
+    matches = glob.glob(str(directory / "*clusters*"))
+    if not matches:
+        return None
+    df = pl.read_csv(matches[0])
+    groups: dict[object, set[int]] = {}
+    for row in df.iter_rows(named=True):
+        groups.setdefault(row["__cluster_id__"], set()).add(int(row["__row_id__"]))
+    return {frozenset(v) for v in groups.values()}
