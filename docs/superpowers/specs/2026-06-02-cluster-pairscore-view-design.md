@@ -54,11 +54,15 @@ dict` is UNCHANGED for all other consumers (SP3+).
 ### Component 1: `ClusterPairScores` (the lazy view)
 
 Backed by a **cluster-tagged pair frame** `(cluster_id, id_a, id_b, score)`.
-SP1's `_build_clusters_via_frames` ALREADY computes exactly this frame at
-`cluster.py` step 3: `tagged = pairs_df.with_columns(pl.col("id_a").
-replace_strict(member_to_cid).alias("__cid__"))`, then iterates it to fill
-per-cluster dicts. SP2 RETAINS that `tagged` frame (in pairs-input row order)
-and STOPS materializing the per-cluster dicts on the columnar path. New module
+SP1's `_build_clusters_via_frames` already builds a structurally-identical frame
+at `cluster.py` step 3 (`tagged = pairs_df.with_columns(pl.col("id_a").
+replace_strict(member_to_cid).alias("__cid__"))`) — that is the **shape
+precedent** ONLY. SP2 does NOT plumb that transient pre-split frame out (it is
+keyed by PRE-split cluster_id and is `del`'d inside the columnar core); SP2
+SOURCES the view from the FINAL post-split `result` partition instead (see
+"Post-split keying" below — this is byte-identical-load-bearing, not cosmetic).
+The win is that the CONSUMERS stop holding N per-cluster `pair_scores` dicts, not
+that the build stops computing the partition. New module
 `core/cluster_pairscores.py` (keep `cluster.py` from growing):
 
 - `ClusterPairScores(tagged_frame)` — wraps the frame; cheap to construct.
@@ -97,9 +101,13 @@ dict. Migrate the columnar path to consume `ClusterPairScores`:
 `pair_scores` to `build_golden_records_batch` (slow path) which forwards to
 `_confidence_majority`. Migrate the columnar path to source each cluster's
 `pair_scores` from `view.for_cluster(cid)` instead of `cluster["pair_scores"]`.
-The narrow surface: ONLY the `confidence_majority` strategy reads pair_scores;
-the columnar `build_golden_records_df` fast path is untouched. **Hard gate:**
-byte-identical golden records on a `confidence_majority` fixture, gate ON vs OFF.
+The narrow surface: among built-in strategies ONLY `confidence_majority` reads
+pair_scores; the columnar `build_golden_records_df` fast path is untouched.
+(`custom:` plugin strategies are ALSO forwarded `pair_scores` at `golden.py:82,
+:345` — they are covered transparently: the view feeds the SAME per-cluster dict
+via `for_cluster(cid)`, so any pair_scores-reading strategy is byte-identical
+without per-strategy work.) **Hard gate:** byte-identical golden records on a
+`confidence_majority` fixture, gate ON vs OFF.
 
 ### Post-split keying (correctness invariant)
 
@@ -116,6 +124,12 @@ final partition — the columnar win is removing the eager dict from the
 CONSUMERS, while the build still computes the canonical partition. (If profiling
 shows the final-dict flatten is itself the cost, a later SP pushes the split
 partition fully columnar; out of scope for SP2.)
+
+**Construction point (pin for the planner):** the view is built at the
+`build_clusters` call site / pipeline level FROM the `_finalize_clusters` output
+(the returned `result` dict's per-cluster `pair_scores`), NOT by reaching into
+`_build_clusters_via_frames` internals (which `del`s its tagged frame and is
+pre-split). This keeps view-construction post-split and out of the columnar core.
 
 ## Measure-first
 
