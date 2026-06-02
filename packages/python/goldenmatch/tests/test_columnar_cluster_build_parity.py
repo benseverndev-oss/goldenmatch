@@ -84,6 +84,25 @@ def test_columnar_build_byte_identical(monkeypatch, native):
                         weak_cluster_threshold=0.3, auto_split=True)
     assert calls, "columnar path (_build_clusters_via_frames) did not run with gate ON"
 
-    assert on.keys() == off.keys()
+    if on.keys() != off.keys():
+        def _digest(d: dict) -> dict:
+            return {
+                cid: {
+                    "members": sorted(c["members"]),
+                    "size": c["size"],
+                    "oversized": c["oversized"],
+                    "quality": c.get("cluster_quality"),
+                }
+                for cid, c in d.items()
+            }
+        only_on = sorted(set(on) - set(off))
+        only_off = sorted(set(off) - set(on))
+        raise AssertionError(
+            f"cluster-id sets differ (native={native}):\n"
+            f"  n_on={len(on)} n_off={len(off)}\n"
+            f"  only_on={only_on}\n  only_off={only_off}\n"
+            f"  ON  digest={_digest(on)}\n"
+            f"  OFF digest={_digest(off)}"
+        )
     for cid in off:
         assert _norm(on[cid]) == _norm(off[cid]), f"cluster {cid} differs:\n on={on[cid]}\n off={off[cid]}"
