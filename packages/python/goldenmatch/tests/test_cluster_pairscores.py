@@ -46,6 +46,45 @@ def test_from_pairs_reproduces_cluster_pair_scores():
         assert view.for_cluster(cid) == info["pair_scores"]
 
 
+def test_from_frames_equals_from_pairs():
+    # from_frames(assignments, raw pairs) must be BYTE-IDENTICAL to
+    # from_pairs(raw pairs, clusters) for every cid -- incl. singletons and
+    # auto-split sub-clusters. Native is irrelevant (off-native build is fine).
+    from goldenmatch.core.cluster import build_clusters, cluster_dict_to_frames
+
+    # Adversarial pair set:
+    #  - singleton (id 9, no edge) -> appears only as an assignments row
+    #  - multi-member cluster (1,2,3)
+    #  - duplicate canonical pair (4,5) with DIFFERENT scores -> locks last-wins
+    #  - a dense star that build_clusters will auto-split when oversized
+    pairs = [
+        (1, 2, 0.91),
+        (2, 3, 0.88),
+        (4, 5, 0.40),   # first write
+        (4, 5, 0.95),   # last-wins -> 0.95
+        (5, 6, 0.82),
+        # dense star around 10 to trigger oversize+split
+        (10, 11, 0.9), (10, 12, 0.9), (10, 13, 0.9), (10, 14, 0.9),
+        (10, 15, 0.9), (10, 16, 0.9), (11, 12, 0.5), (13, 14, 0.5),
+        (15, 16, 0.5),
+    ]
+    # ensure a true singleton exists in the assignments frame
+    clusters = build_clusters(pairs, auto_split=True)
+    # inject a singleton cluster (no pairs) so assignments carries a lone member
+    next_cid = (max(clusters) + 1) if clusters else 0
+    clusters[next_cid] = {
+        "members": [9], "size": 1, "oversized": False,
+        "pair_scores": {}, "confidence": 0.0, "bottleneck_pair": None,
+        "cluster_quality": "strong",
+    }
+    frames = cluster_dict_to_frames(clusters)
+
+    v_pairs = ClusterPairScores.from_pairs(pairs, clusters)
+    v_frames = ClusterPairScores.from_frames(frames.assignments, pairs)
+    for cid in clusters:
+        assert v_frames.for_cluster(cid) == v_pairs.for_cluster(cid)
+
+
 def test_from_pairs_last_wins_and_excludes_cross_cluster():
     clusters = {
         1: {"members": [0, 1], "size": 2, "pair_scores": {}},
