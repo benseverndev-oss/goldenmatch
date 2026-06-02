@@ -70,15 +70,18 @@ def _adversarial_pairs():
     return pairs, all_ids
 
 
-def _run(pairs, all_ids, gate, native):
-    import goldenmatch.core.cluster as _c
-    # Build twice with identical args; only the env differs.
-    return build_clusters(pairs, all_ids=all_ids, max_cluster_size=5,
-                          weak_cluster_threshold=0.3, auto_split=True)
+def _norm(cinfo: dict) -> dict:
+    # members compared as a SET (order is hash-arbitrary + the columnar path runs a
+    # separate UF -> list order legitimately differs; see spec). Everything else
+    # byte-identical, incl. confidence float.
+    out = {k: v for k, v in cinfo.items() if k not in ("members", "_was_split")}
+    out["members"] = frozenset(cinfo["members"])
+    return out
 
 
 @pytest.mark.parametrize("native", ["1", "0"])
 def test_columnar_build_byte_identical(monkeypatch, native):
+    import goldenmatch.core.cluster as _cmod
     pairs, all_ids = _adversarial_pairs()
     monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
 
@@ -86,19 +89,25 @@ def test_columnar_build_byte_identical(monkeypatch, native):
     off = build_clusters(pairs, all_ids=all_ids, max_cluster_size=5,
                          weak_cluster_threshold=0.3, auto_split=True)
 
+    # Spy to prove the columnar path actually runs with the gate ON (the RED in
+    # Step 2/3: pre-impl the spy is never called).
+    calls = []
+    real = _cmod._build_clusters_via_frames
+    monkeypatch.setattr(_cmod, "_build_clusters_via_frames",
+                        lambda *a, **k: (calls.append(1), real(*a, **k))[1])
     monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
     on = build_clusters(pairs, all_ids=all_ids, max_cluster_size=5,
                         weak_cluster_threshold=0.3, auto_split=True)
+    assert calls, "columnar path (_build_clusters_via_frames) did not run with gate ON"
 
     assert on.keys() == off.keys()
     for cid in off:
-        assert on[cid] == off[cid], f"cluster {cid} differs: {on[cid]} vs {off[cid]}"
-    # Belt-and-suspenders on the float-sensitive field:
-    for cid in off:
-        assert on[cid].get("confidence") == off[cid].get("confidence")
+        assert _norm(on[cid]) == _norm(off[cid]), f"cluster {cid} differs:\n on={on[cid]}\n off={off[cid]}"
 ```
 
-(Cluster ids may renumber after split; the test compares the full dicts key-for-key, so the columnar path MUST produce the same id numbering. If the fixture's split makes id comparison fragile, compare a canonicalized view: a set of `(frozenset(members), size, oversized, cluster_quality, round(confidence,12), bottleneck_pair, frozenset(pair_scores.items()))` per cluster — but prefer exact dict equality and only fall back if the dict path's own id numbering is non-deterministic, which it is NOT.)
+(Cluster ids are deterministic and identical gate-on/off: both sort by `min(members)` + enumerate(start=1) pre-split, and splits assign `max(result.keys())+1` -- so `on.keys() == off.keys()`. The only legitimately-differing field is `members` LIST order, which `_norm` collapses to a set. `pair_scores`, `confidence`, `bottleneck_pair`, `cluster_quality`, `oversized` are compared exactly.)
+
+ALSO add a **can't-split oversized cluster** to `_adversarial_pairs` (spec requires it): a DENSE oversized clique (e.g. 7 members 30..36 with ALL pairs at 0.99, no weak bridge) -> `split_oversized_cluster` returns it unchanged -> left `oversized`, quality stays (not "split"). This exercises the no-progress guard (:508-512).
 
 - [ ] **Step 2: Run it — verify FAIL**
 
@@ -111,20 +120,50 @@ Add `_columnar_cluster_build_enabled()` (env `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD
 
 - [ ] **Step 4: Implement the real `_build_clusters_via_frames`**
 
-Per the spec routing. Build the `pairs_df` (PAIR_STREAM_SCHEMA) from `pairs`. Then:
-1. **UF:** `frames = build_clusters_arrow_native(pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size)` -> `ClusterFrames`. Derive `member_to_cid` from `frames.assignments` AND the cluster ids from the SAME sort-by-min-member + enumerate(start=1) the dict path uses, so ids match. `members` per cluster in the assignments' member order (which equals the dict path's UF order — verified in spec).
+Per the spec routing. Build `pairs_df` from `pairs` using the canonical schema:
+`import` `PAIR_STREAM_SCHEMA` from `goldenmatch.core.scorer` (columns `id_a:i64,
+id_b:i64, score:f64`) -- the kernel validates these dtypes (cluster.rs) and raises
+on mismatch. Then:
+1. **UF (source differs native vs off-native -- ISSUE 3):**
+   - **Native** (`native_enabled("clustering")` and the arrow kernel is exposed):
+     `frames = build_clusters_arrow_native(pairs_df, all_ids=all_ids,
+     max_cluster_size=max_cluster_size)` -> `ClusterFrames`. The kernel does UF ONLY
+     (no auto-split, verified) -> assignments + metadata are PRE-split. Get raw
+     member sets per UF-component from `frames.assignments`.
+   - **Off-native:** do NOT call `build_clusters_arrow_native` -- its
+     `build_clusters_v2_columnar` fallback runs the FULL `build_clusters` incl.
+     auto-split (POST-split frames). Instead source UF membership DIRECTLY from
+     `connected_components(list(pairs), all_ids)` (or the Python `UnionFind`), the
+     same pre-split UF the dict path uses (:419-434).
+   Then, for BOTH: build the SAME pre-split `result` dict the dict path has at :466
+   -- sort the UF member sets by `min(members)`, enumerate(start=1) for cluster ids,
+   `members = list(members)` (set/UF order; the parity gate compares members as a
+   SET so order need not match the dict path), `size`, `oversized = size >
+   max_cluster_size`, `pair_scores = {}`. `member_to_cid` from this.
 2. **pair_scores (ORDER-PRESERVING):** add a `cluster_id` column to `pairs_df` via `pl.col("id_a").replace_strict(member_to_cid)` (NOT a join). Iterate the resulting frame IN ORDER to build per-cluster `pair_scores` dicts (same as the dict path's :468-471, in pairs order). Duplicate canonical pairs overwrite (last wins) exactly as the dict path's `result[cid]["pair_scores"][(a,b)] = score`.
 3. **confidence + bottleneck:** native -> read `confidence` + `(bottleneck_pair_a, bottleneck_pair_b)` from `frames.metadata` per cluster_id (map `(0,0) -> None`). off-native -> call `compute_cluster_confidence(pair_scores, size)` per cluster (bit-identical). Compute these on the ORIGINAL (pre-split) clusters, matching the dict path's ordering (confidence at :477-481 is BEFORE auto-split at :494).
 4. **auto-split:** identical to the dict path's :494-528 loop, reusing `split_oversized_cluster(members, pair_scores)` + the edge-work-budget / no-progress guards. (The simplest correct approach: build the SAME `result` dict shape the dict path has just before :494, then run the dict path's auto-split + quality code verbatim. This guarantees parity for the split/quality logic — the columnar win is in steps 1-3.)
 5. **cluster_quality:** identical to :531-546 (split if `_was_split`; else weak if `avg_edge - min_edge > weak_cluster_threshold` with `confidence *= 0.7`; else strong). Reuse the dict path's code.
-6. **adapter / emit:** the `result` dict IS the byte-identical output. Call `_emit_cluster_profile(result)` (:548) and return.
+6. **adapter / emit:** `result` IS the byte-identical output. `_finalize_clusters`
+   (below) already calls `_emit_cluster_profile(result)` (it's at :548, inside the
+   extracted range) -- do NOT call it again here (would double-emit). Just return
+   what `_finalize_clusters` returns.
 
-KEY: steps 4-5-6 should literally REUSE the dict path's code (extract :494-548 into a shared `_finalize_clusters(result, max_cluster_size, weak_cluster_threshold, auto_split)` helper that both paths call). The columnar path only changes HOW `result` is built up to :493 (UF + pair_scores + confidence). This minimizes the parity surface to steps 1-3.
+KEY: steps 4-5-6 should literally REUSE the dict path's code (extract :494-548 --
+the auto-split loop + cluster_quality + the `_emit_cluster_profile(result)` call --
+into a shared `_finalize_clusters(result, max_cluster_size, weak_cluster_threshold,
+auto_split) -> result` helper that BOTH the dict path and the columnar path call).
+The extraction is clean: :494-548 reads only `result` + the 3 params + module-level
+helpers (`member_to_cid`/`sorted_clusters`/`pairs` are already `del`'d at :474-475).
+The columnar path only changes HOW `result` is built up to :493 (UF + pair_scores +
+confidence). This minimizes the parity surface to steps 1-3.
 
 - [ ] **Step 5: Run the parity test — verify PASS (both native states)**
 
 Run: `../../../.venv/Scripts/python.exe -m pytest tests/test_columnar_cluster_build_parity.py -v`
-Expected: PASS for `native=1` AND `native=0`. If a cluster differs, PRINT `on[cid]` vs `off[cid]` and fix the columnar build for that field — do NOT relax the assertion (byte-identical is the durability invariant feeding golden/identity). Likely culprits: pair_scores order (must be pairs order), member order, confidence (native metadata vs dict), id numbering, the `(0,0)` sentinel.
+Expected: PASS for `native=1` AND `native=0`. If a cluster differs (other than members-set), PRINT `on[cid]` vs `off[cid]` and fix the columnar build for that field — do NOT relax the assertion beyond the members-set already in `_norm` (byte-identical on the rest is the durability invariant feeding golden/identity). Likely culprits: pair_scores order (must be pairs order), confidence (native metadata vs dict), id numbering, the `(0,0)` sentinel.
+
+**LOCAL NATIVE CAVEAT (ISSUE 2):** the in-tree `_native.pyd` is STALE -- it lacks `build_clusters_arrow` (and `mst_split_components`), and it CANNOT be rebuilt locally (the pinned Rust toolchain is unavailable, `build_native.py` fails). So LOCALLY, `build_clusters_arrow_native` falls back to the columnar path even with `native=1`, meaning the `native=1` parity run exercises the OFF-NATIVE source, NOT the real Arrow kernel. The real native kernel path is validated ONLY in CI (fresh native build). Confirm `getattr(native_module(), "build_clusters_arrow", None)` locally; if None, note in your report that the native-kernel path is CI-only-validated. Do NOT block on it locally.
 
 - [ ] **Step 6: Run the existing cluster tests with the gate ON (regression)**
 

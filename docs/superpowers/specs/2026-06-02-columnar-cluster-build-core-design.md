@@ -146,7 +146,26 @@ read in `build_clusters`, mirroring the `GOLDENMATCH_NATIVE`/identity env patter
 
 ## Testing
 
-- **Byte-identical dict gate (HARD, STRICT -- no float tolerance):** an adversarial
+- **`members` parity = SET-equality (decision 2026-06-02, plan-review).** The
+  columnar path runs a SEPARATE Union-Find (`build_clusters_arrow_native`) from the
+  dict path's `connected_components`; two independent UF groupings iterate set/HashMap
+  in DIFFERENT member order, and the dict path itself does NOT sort members (PR #598
+  removed it for perf). So byte-identical `members` LIST order is unachievable
+  without re-sorting both paths (re-incurring the #598 cost). The gate compares
+  `members` as a SET (`frozenset`); EVERYTHING ELSE (`pair_scores`, `confidence`,
+  `bottleneck_pair`, `cluster_quality`, `oversized`, cluster ids) stays STRICT
+  byte-identical. Safe: every consumer treats members as a set / re-sorts, and the
+  dict path's order is already hash-arbitrary.
+- **Off-native UF sourcing (plan-review ISSUE 3):** off-native,
+  `build_clusters_arrow_native` falls back to `build_clusters_v2_columnar` which runs
+  the FULL `build_clusters` INCLUDING auto-split -> its frames are POST-split. The
+  columnar path needs PRE-split UF membership. So off-native, source UF membership
+  from `connected_components(pairs, all_ids)` (or the Python `UnionFind`) DIRECTLY --
+  NOT `build_clusters_arrow_native` -- then columnar pair_scores + per-cluster
+  `compute_cluster_confidence` + `_finalize_clusters` (which does the single
+  auto-split). Native: `build_clusters_arrow_native` is UF-only (the kernel does NOT
+  split, verified), so its assignments/metadata are pre-split -- use them.
+- **Byte-identical dict gate (HARD, STRICT -- no float tolerance, members as SET):** an adversarial
   cluster fixture -- singletons (incl. id `0`), multi-member, a fully-connected
   cluster, a weak chain (triggers `weak`), an oversized cluster that splits
   (triggers `split` + new ids), an oversized cluster that CAN'T split
