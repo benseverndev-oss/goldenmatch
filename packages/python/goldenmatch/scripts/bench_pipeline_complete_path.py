@@ -401,10 +401,15 @@ def main() -> int:
             row: dict[str, Any] = {"n_pairs": n}
 
             if columnar.get("oom"):
-                # Columnar OOM at this scale is itself a verdict (Phase-2 didn't
-                # land the feasibility win).
-                row["columnar"] = {"oom": True,
-                                   "returncode": columnar.get("returncode")}
+                # rc in (-9, 137) is a real OOM (SIGKILL). Any other non-zero is a
+                # CODE ERROR -- surface the child stderr so it isn't mislabeled.
+                _rc = columnar.get("returncode")
+                _kind = "OOM" if _rc in (-9, 137) else "ERROR"
+                row["columnar"] = {"oom": True, "returncode": _rc, "kind": _kind}
+                print(f"    pairs={n:,}  columnar {_kind} (rc={_rc})", flush=True)
+                if _kind == "ERROR":
+                    print(f"--- columnar child stderr ---\n"
+                          f"{columnar.get('stderr_tail', '')}", flush=True)
             else:
                 row["n_pairs"] = columnar["n_pairs"]
                 row["columnar"] = {
@@ -415,10 +420,13 @@ def main() -> int:
                 }
 
             if legacy.get("oom"):
-                row["legacy"] = {"oom": True,
-                                 "returncode": legacy.get("returncode")}
-                print(f"    pairs={n:,}  legacy OOM "
-                      f"(rc={legacy.get('returncode')})", flush=True)
+                _rc = legacy.get("returncode")
+                _kind = "OOM" if _rc in (-9, 137) else "ERROR"
+                row["legacy"] = {"oom": True, "returncode": _rc, "kind": _kind}
+                print(f"    pairs={n:,}  legacy {_kind} (rc={_rc})", flush=True)
+                if _kind == "ERROR":
+                    print(f"--- legacy child stderr ---\n"
+                          f"{legacy.get('stderr_tail', '')}", flush=True)
             else:
                 row["legacy"] = {
                     "build_s": statistics.median(legacy["build_walls"]),
