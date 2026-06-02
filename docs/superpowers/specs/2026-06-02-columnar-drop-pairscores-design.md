@@ -62,8 +62,21 @@ cost); (step 4) `compute_cluster_confidence` per cluster; (step 5)
   (= exactly its scores, the #681 single-cluster argument), split, then RESET the
   resulting sub-clusters' `pair_scores` to `{}` so the final dict is uniformly
   score-free. Oversized clusters are rare (size > 100 default), so this is cheap.
-  The quality (weak/split) step reuses the kernel min/avg or
-  `compute_cluster_confidence` values already available — it does NOT need the dict.
+- **Weak-quality `min_edge`/`avg_edge` (Rust extension — decided 2026-06-02).** The
+  `_finalize_clusters` weak test (`cluster.py:604-610`) computes
+  `min_edge`/`avg_edge` from `cinfo["pair_scores"].values()` for EVERY multi-member
+  cluster (a flipped `weak` changes `cluster_quality` AND `confidence *= 0.7`, which
+  feed golden/identity -> must be EXACT). The native kernel ALREADY computes these
+  (`cluster.rs` `cluster_confidence` returns `min_e, avg_e`) but DISCARDS them
+  (`build_clusters_arrow` binds `_min_e, _avg_e`). SP4 un-discards them and adds
+  `min_edge` + `avg_edge` columns to `frames.metadata` (and the
+  `build_clusters_arrow_native` wrapper + `ClusterFrames.metadata` schema). The
+  native columnar path reads `min_edge`/`avg_edge`/`confidence`/`bottleneck` from
+  metadata; the weak test uses them -> byte-identical (kernel sums avg in
+  pairs-input order). Off-native gets `min_edge`/`avg_edge` from the SAME transient
+  pairs-order fill it already does for confidence (no extra cost). This is a MINIMAL
+  Rust change (un-discard 2 already-computed values + 2 columns), NOT a new kernel
+  function; it must build + validate in CI (local can't build native).
 
 The `_finalize_clusters` auto-split loop is shared with the dict path; SP4 must NOT
 change the dict-path (gate-OFF) behavior. The cleanest split: the columnar caller
@@ -115,9 +128,13 @@ switch `=0`) — the roadmap payoff. If it does NOT win, keep gated and record w
 - **View carries the dropped scores:** assert
   `view.for_cluster(cid) == off_gate_dict[cid]["pair_scores"]` for every cluster
   (the view built `from_scored_pairs` reproduces exactly what the dict dropped).
-- **Confidence from metadata == compute_cluster_confidence:** a unit test that the
-  native `frames.metadata` confidence/bottleneck equals `compute_cluster_confidence`
-  per cluster on the fixture (bit-identical; the thing SP1 deferred). CI-native.
+- **Metadata == per-cluster compute (CI-native):** a unit test that the native
+  `frames.metadata` `confidence`/`bottleneck` AND the newly-exposed
+  `min_edge`/`avg_edge` equal `compute_cluster_confidence`'s values (and
+  `min(scores)` / `sum(scores)/len(scores)`) per cluster on the fixture
+  (bit-identical, incl. the weak-test inputs). Plus a Rust unit test (in
+  `packages/rust/extensions/native`) that the kernel emits min/avg matching its own
+  per-cluster fold.
 - **Consumer suites green gate-ON:** `tests/identity/`, `test_golden.py`,
   `tests/test_unmerge_scored_pairs.py`, `test_scored_pairs_decouple.py` — all pass
   with `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1` (they consume the view / scored_pairs,
@@ -146,8 +163,10 @@ switch `=0`) — the roadmap payoff. If it does NOT win, keep gated and record w
 
 - `core/cluster.py` columnar internals (steps 3-5 of `_build_clusters_via_frames` +
   the oversized-only split materialization), `core/cluster_pairscores.py`
-  (`from_scored_pairs`), the pipeline view-construction switch, the bench. NO new
-  Rust kernel (reuse the existing `build_clusters_arrow` metadata). NO dict-path
+  (`from_scored_pairs`), the pipeline view-construction switch, the bench. A
+  MINIMAL Rust extension to the EXISTING `build_clusters_arrow` (un-discard the
+  already-computed `min_edge`/`avg_edge` onto `frames.metadata` + wrapper + schema)
+  -- NO new kernel function. NO dict-path
   (gate-OFF) behavior change. NO graceful-degrader migration (tui/explain stay
   tolerant; later SP). **#5 (distributed `materialize_cluster_dict` pair_scores)
   DEFERRED** — separate path/gate, parallel. NO ClusterFrames schema change.
