@@ -258,6 +258,7 @@ def _resolve_identities(
     config: GoldenMatchConfig,
     run_name: str,
     pair_score_view: Any = None,
+    cluster_frames: ClusterFrames | None = None,
 ) -> dict | None:
     """Run identity resolution as a post-cluster step. Best-effort: failures
     log a warning and return None without affecting dedupe output.
@@ -266,6 +267,14 @@ def _resolve_identities(
     - ``dict[int, dict]`` -> in-memory resolver (default).
     - ``ray.data.Dataset`` -> distributed dispatch (Phase 6). Requires
       ``config.identity.backend == 'postgres'``.
+
+    SP-C: when ``cluster_frames`` is supplied (frames-out path), ``clusters``
+    is ``None`` and the in-memory resolver consumes the two-frame
+    ``ClusterFrames`` directly via ``resolve_clusters(cluster_frames=...)`` --
+    no dict is rebuilt for identity. ``pair_score_view`` is REQUIRED in that
+    case (the frames carry no per-cluster pair_scores). The distributed/Ray
+    branch is unreachable on the frames path (``clusters`` is ``None``, so
+    ``is_ray_dataset`` is False) and stays byte-identical.
     """
     if not config.identity or not config.identity.enabled:
         return None
@@ -314,14 +323,20 @@ def _resolve_identities(
     try:
         from goldenmatch.identity import resolve_clusters
         mk_name = matchkeys[0].name if matchkeys else None
+        # SP-C: on the frames-out path pass `cluster_frames=` (clusters is None)
+        # so resolve_clusters iterates the frames directly; otherwise pass the
+        # `clusters` dict positionally. resolve_clusters asserts exactly one of
+        # the two is supplied, so the two are mutually exclusive here.
         summary = resolve_clusters(
-            clusters, df, scored_pairs, mk_name, store,
+            None if cluster_frames is not None else clusters,
+            df, scored_pairs, mk_name, store,
             run_name=run_name,
             dataset=config.identity.dataset,
             source_pk_col=config.identity.source_pk_column,
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
             pair_score_view=pair_score_view,
+            cluster_frames=cluster_frames,
         )
         return summary.as_dict()
     except Exception as e:
@@ -1868,21 +1883,37 @@ def _run_dedupe_pipeline(
     # ZERO evidence edges, so we MUST supply the view. Gate-OFF (neither env set)
     # leaves the dict carrying real pair_scores and pair_score_view stays None --
     # byte-identical to today.
+    # SP-C: on the frames-out path build the view from the FRAMES (assignments
+    # frame + RAW all_pairs) and feed identity the `cluster_frames` directly --
+    # NOT the rebuilt dict -- so the cluster->golden->identity stage never calls
+    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` is byte-identical
+    # to the columnar branch's `from_pairs(all_pairs, clusters)` (same input-order
+    # last-wins bucketing, same final membership). The columnar-build and gate-OFF
+    # branches are UNCHANGED: columnar builds the view from the dict + pairs and
+    # passes the dict; gate-OFF leaves the view None and passes the real-pair_scores
+    # dict. resolve_clusters' exactly-one assertion keeps the two mutually exclusive.
     pair_score_view: ClusterPairScores | None = None
-    if isinstance(clusters, dict):
+    if cluster_frames is not None:
+        from goldenmatch.core.cluster_pairscores import ClusterPairScores
+        pair_score_view = ClusterPairScores.from_frames(
+            cluster_frames.assignments, all_pairs
+        )
+    elif isinstance(clusters, dict):
         from goldenmatch.core.cluster import _columnar_cluster_build_enabled
-        if _columnar_cluster_build_enabled() or _cluster_frames_out_enabled():
+        if _columnar_cluster_build_enabled():
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            # SP4 / SP-B: the dict reaching identity has pair_scores={}, so build
-            # the view from the RAW input pairs (input-order, last-wins == the
+            # SP4: the columnar-build dict reaching identity has pair_scores={}, so
+            # build the view from the RAW input pairs (input-order, last-wins == the
             # dict path's per-cluster pair_scores) + final cluster membership. NOT
             # from results["scored_pairs"] (max-score deduped, differs on
             # dup-scored pairs).
             pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
-            clusters, collected_df, all_pairs, matchkeys, config, run_name,
+            clusters if cluster_frames is None else None,
+            collected_df, all_pairs, matchkeys, config, run_name,
             pair_score_view=pair_score_view,
+            cluster_frames=cluster_frames,
         )
 
     # SP3: source scored_pairs from the pre-cluster stream, decoupled from cluster

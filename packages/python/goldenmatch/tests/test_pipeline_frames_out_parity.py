@@ -1,9 +1,13 @@
 """SP-B Task 2: in-memory dedupe pipeline frames-out parity.
 
 When ``GOLDENMATCH_CLUSTER_FRAMES_OUT`` is ON, ``_run_dedupe_pipeline``
-consumes the SP-A ``ClusterFrames`` for the GOLDEN + STATS + DUPES legs
-(identity stays on the dict -- Task 3). This file locks that the gate-ON
-output is byte-identical to the gate-OFF (dict) path on those legs.
+consumes the SP-A ``ClusterFrames`` for the GOLDEN + STATS + DUPES legs.
+SP-C extends this so IDENTITY also consumes the frames directly
+(``resolve_clusters(cluster_frames=...)``) -- the dict materializes only at
+the OUTPUT block, after the cluster->golden->identity stage. This file locks
+that the gate-ON output is byte-identical to the gate-OFF (dict) path on those
+legs (golden + dupes + stats + identity) and that the SP-C wiring actually
+feeds identity the frames (not a rebuilt dict).
 
 Asserted byte-identical (gate ON vs OFF), on a fixture that exercises
 singletons, a 2-member cluster, a weak chain, and an oversized cluster
@@ -376,3 +380,92 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
     assert off["identity_summary"]["conflicts_flagged"] >= 1, (
         "fixture did not trip the weak-bottleneck branch (score_for not exercised)"
     )
+
+
+# ── SP-C Task 3: identity consumes ClusterFrames DIRECTLY ─────────────────
+#
+# SP-B (Task 3 above) fed identity a dict REBUILT from the frames
+# (cluster_frames_to_dict) + a from_pairs view. SP-C changes the frames-out
+# branch so identity receives the `cluster_frames` directly (clusters=None) and
+# the view is built via `ClusterPairScores.from_frames(assignments, all_pairs)`
+# -- so the cluster->golden->identity stage never forces `_clusters_dict()`.
+# These two legs prove (a) the full public pipeline's frames-path identity is
+# byte-identical end to end and (b) resolve_clusters is actually called with
+# `cluster_frames=` (not a dict) on the frames-out branch.
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_frames_out_identity_consumes_cluster_frames_directly(
+    monkeypatch, tmp_path, native
+):
+    """SP-C: on frames-out, resolve_clusters gets cluster_frames= (clusters=None).
+
+    Spies on ``goldenmatch.identity.resolve_clusters`` (the symbol
+    ``_resolve_identities`` imports) and asserts the frames-out call passes a
+    ``ClusterFrames`` via ``cluster_frames=`` with ``clusters`` None + a
+    non-None ``pair_score_view``, while the gate-OFF call passes a dict via
+    ``clusters`` and no frames. The byte-identical end-to-end partition is
+    already locked by ``test_frames_out_identity_parity``; this leg pins the
+    SP-C wiring so a regression to the dict-rebuild path is caught directly.
+    """
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
+    _skip_if_no_native(native)
+
+    from goldenmatch.core.cluster import ClusterFrames
+
+    df = _identity_df()
+    source = "src"
+
+    captured: dict[str, dict] = {}
+
+    import goldenmatch.identity as identity_mod
+
+    real_resolve = identity_mod.resolve_clusters
+
+    def _spy(clusters=None, *args, **kwargs):
+        # Record the shape identity was called with for this leg, then defer to
+        # the real resolver so the partition/summary still materialize.
+        leg = captured["leg"]
+        captured[leg] = {
+            "clusters_is_none": clusters is None,
+            "clusters_is_dict": isinstance(clusters, dict),
+            "cluster_frames": kwargs.get("cluster_frames"),
+            "pair_score_view": kwargs.get("pair_score_view"),
+        }
+        return real_resolve(clusters, *args, **kwargs)
+
+    # ``_resolve_identities`` does ``from goldenmatch.identity import
+    # resolve_clusters`` at call time, so patching the package attribute is
+    # sufficient.
+    monkeypatch.setattr(identity_mod, "resolve_clusters", _spy)
+
+    # Gate OFF -> dict path.
+    captured["leg"] = "off"
+    off_db = str(tmp_path / "sp_c_off.db")
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    off = run_dedupe_df(df, _identity_config(off_db, "off"), source_name=source)
+
+    # Gate ON -> frames-out path.
+    captured["leg"] = "on"
+    on_db = str(tmp_path / "sp_c_on.db")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    on = run_dedupe_df(df, _identity_config(on_db, "on"), source_name=source)
+
+    assert off["identity_summary"] is not None
+    assert on["identity_summary"] is not None
+    # End-to-end summary parity (anti-vacuous: real evidence edges exist).
+    assert on["identity_summary"] == off["identity_summary"]
+    assert off["identity_summary"]["edges_added"] >= 1
+
+    off_call = captured["off"]
+    on_call = captured["on"]
+
+    # Gate-OFF: dict in, no frames.
+    assert off_call["clusters_is_dict"] is True
+    assert off_call["cluster_frames"] is None
+
+    # Gate-ON (SP-C): frames in, clusters None, view supplied.
+    assert on_call["clusters_is_none"] is True
+    assert on_call["clusters_is_dict"] is False
+    assert isinstance(on_call["cluster_frames"], ClusterFrames)
+    assert on_call["pair_score_view"] is not None
