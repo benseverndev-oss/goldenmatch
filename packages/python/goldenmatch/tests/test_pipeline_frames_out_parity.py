@@ -79,7 +79,12 @@ def _fixture_df():
 
 
 def _config(*, max_cluster_size: int, provenance: bool):
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
     return GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["zip"])]
+        ),
         matchkeys=[
             MatchkeyConfig(
                 name="fuzzy_name_zip",
