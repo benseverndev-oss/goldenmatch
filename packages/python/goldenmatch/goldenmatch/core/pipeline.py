@@ -1606,8 +1606,22 @@ def _run_dedupe_pipeline(
         with stage("golden"):
             from goldenmatch.core.golden import build_golden_records_from_frames
             _provenance_on = config.output.lineage_provenance
+            # Mirror the dict path's slim projection (below): drop internal
+            # __xform_*__ / __mk_*__ / __block_key__ / __bucket__ columns that
+            # survivorship never reads, BEFORE the join, so golden records carry
+            # the same columns as the dict path (byte-identical golden). Keep
+            # __row_id__ (the from-frames join needs it). Same env opt-out.
+            _golden_source = collected_df
+            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
+                _internal_prefixes = (
+                    "__xform_", "__mk_", "__block_key__", "__bucket__",
+                )
+                _golden_source = collected_df.select([
+                    c for c in collected_df.columns
+                    if not any(c.startswith(p) for p in _internal_prefixes)
+                ])
             golden_df, golden_records = build_golden_records_from_frames(
-                collected_df,
+                _golden_source,
                 cluster_frames,
                 golden_rules,
                 quality_scores=None,

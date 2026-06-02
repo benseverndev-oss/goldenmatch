@@ -121,7 +121,11 @@ def _config(*, max_cluster_size: int, provenance: bool):
             default=GoldenFieldRule(strategy="most_complete"),
             max_cluster_size=max_cluster_size,
             weak_cluster_threshold=0.85,
-            auto_split=True,
+            # auto_split OFF so the dense 8-row block stays a persistent
+            # oversized cluster -> exercises the golden oversized-EXCLUSION
+            # (size>1 and not oversized) on both gate paths. With auto_split on
+            # the block splits into <=max sub-clusters and 0 oversized remain.
+            auto_split=False,
         ),
     )
 
