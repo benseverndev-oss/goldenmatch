@@ -474,16 +474,32 @@ pub fn build_clusters_arrow(
         }
     }
 
-    // ---- Bucket input edges per cluster (preserve input order for confidence
-    //      bottleneck tie-break invariant). -----------------------------------
+    // ---- Bucket input edges per cluster, with ORDERED LAST-WINS dedup by
+    //      (id_a, id_b): keep the FIRST-occurrence position, overwrite with the
+    //      LAST score. This is byte-identical to the Python dict path's
+    //      `result[cid]["pair_scores"][(a, b)] = s` (a dict keeps insertion order
+    //      and last-wins value), so the metadata confidence/bottleneck/min/avg
+    //      below are computed over the SAME deduped edge set the dict path uses --
+    //      letting SP4 read them off frames.metadata bit-identically instead of
+    //      re-materializing per-cluster pair_scores dicts. (Each pair belongs to
+    //      exactly one cluster -- a's cluster -- so (a, b) is a global key.)
     let n_clusters = clusters.len();
     let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> = vec![Vec::new(); n_clusters];
+    let mut edge_pos: HashMap<(i64, i64), (usize, usize)> = HashMap::with_capacity(n_pairs);
     for i in 0..n_pairs {
         let a = id_a.value(i);
+        let b = id_b.value(i);
         let s = score.value(i);
         if let Some(&cid) = member_to_cid.get(&a) {
             // cid is 1-based; per_cluster_edges is 0-indexed.
-            per_cluster_edges[(cid - 1) as usize].push((a, id_b.value(i), s));
+            let cidx = (cid - 1) as usize;
+            if let Some(&(ci, ei)) = edge_pos.get(&(a, b)) {
+                per_cluster_edges[ci][ei].2 = s; // last-wins, same position
+            } else {
+                let ei = per_cluster_edges[cidx].len();
+                per_cluster_edges[cidx].push((a, b, s));
+                edge_pos.insert((a, b), (cidx, ei));
+            }
         }
     }
 
