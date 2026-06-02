@@ -81,3 +81,12 @@ def test_columnar_drop_pairscores_byte_identical(monkeypatch, native):
         )
         # SP4: the columnar dict drops per-cluster pair_scores.
         assert on[cid]["pair_scores"] == {}, f"cluster {cid} pair_scores not empty"
+
+    # The view (built from the RAW pairs + final membership) carries EXACTLY what
+    # the columnar dict dropped: view.for_cluster(cid) == the dict path's pair_scores.
+    from goldenmatch.core.cluster_pairscores import ClusterPairScores
+    view = ClusterPairScores.from_pairs(pairs, on)
+    for cid in off:
+        assert view.for_cluster(cid) == off[cid]["pair_scores"], (
+            f"view cluster {cid}: {view.for_cluster(cid)} != {off[cid]['pair_scores']}"
+        )
