@@ -44,10 +44,17 @@ cost); (step 4) `compute_cluster_confidence` per cluster; (step 5)
   `cluster_id`. The kernel's sort-by-min-member `cluster_id` equals the Python
   canonical cid (both sort-by-min, enumerate start=1), so the mapping is direct;
   `(0,0)` bottleneck sentinel -> `None` as in SP1. **Off-native** (no kernel /
-  v2 fallback): compute confidence per cluster via `compute_cluster_confidence` on
-  a `scored_pairs`-member-filtered map (built on the fly per cluster — the non-perf
-  path; no eager full materialization, correctness only). STRICT byte-identical in
-  both states.
+  v2 fallback): compute confidence via a TRANSIENT per-cluster `pair_scores` fill in
+  PAIRS-INPUT ORDER (the SP1 step-3 fill) + `compute_cluster_confidence`, then
+  DISCARD that fill (the returned dict still carries `pair_scores={}`). **Do NOT
+  compute off-native confidence from a `scored_pairs`-member-filtered map:**
+  `compute_cluster_confidence`'s `avg_edge = sum/len` is a sequential left-fold, and
+  `scored_pairs` is sorted by `(a,b)` (SP3 `dedup_pairs_max_score`) — a different
+  iteration order would drift the float sum ~1e-13 and break EXACT-float parity. The
+  pairs-input-order transient fill matches the dict path's order exactly. Off-native
+  is the non-perf path, so paying the transient fill there is fine. Native's metadata
+  confidence is ALSO pairs-input order (the kernel buckets edges by `id_a` in input
+  order), so both states are STRICT byte-identical to the dict path.
 - **Step 5 — auto-split materializes dicts ONLY for oversized clusters.** The
   shared `_finalize_clusters` auto-split needs a per-cluster `pair_scores` dict for
   `split_oversized_cluster` (MST). For each cluster with `size > max_cluster_size`,
@@ -64,6 +71,12 @@ passes the oversized-only materialized `pair_scores` into the split, while the d
 path keeps its full dicts. (Plan-time: extract the per-oversized materialization so
 the dict path is untouched — or pass `scored_pairs` into `_finalize_clusters` and
 have it materialize per-oversized only when the cluster's `pair_scores` is empty.)
+**FOOTGUN (sequencing):** the auto-split loop meters `edge_work += len(cinfo
+["pair_scores"])` (the #661 dense-cluster budget guard) and passes `pair_scores`
+into `split_oversized_cluster`. The per-oversized materialization MUST happen
+BEFORE that `edge_work` line (else, with an empty dict, `edge_work` is always 0 and
+the budget guard never trips on a dense cluster — a behavior change vs the dict
+path). Materialize the oversized cluster's `pair_scores` first, then meter + split.
 
 ### Component 2: ClusterPairScores view at the pipeline level
 
@@ -76,6 +89,11 @@ the view from the result's `scored_pairs` (SP3) + `clusters`, and passes it to
 identity as `pair_score_view` (replacing SP2's `from_cluster_dict(clusters)`, which
 would now yield an EMPTY view since the dict's `pair_scores` is `{}`). Off-gate,
 identity keeps reading `cluster["pair_scores"]` (the dict path still fills it).
+**FOOTGUN (sequencing):** `scored_pairs` is currently computed AFTER the identity
+block in `_run_dedupe_pipeline` (~:1737-1742), but the `pair_score_view` is built
+BEFORE identity (~:1720-1725). The plan MUST move the `scored_pairs` computation
+ABOVE the view build so the gate-on branch has `scored_pairs` available to build
+`from_scored_pairs`.
 
 ### Component 3: measure-first + gate flip
 
