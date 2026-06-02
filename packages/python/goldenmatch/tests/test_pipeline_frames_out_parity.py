@@ -215,13 +215,22 @@ def test_frames_out_pipeline_parity_provenance_slow(monkeypatch, native):
 
 
 def _identity_df():
-    """People shape with a strong 2-member cluster + a weak-bottleneck chain.
+    """People shape with a strong 2-member cluster + a weak-bottleneck cluster.
 
     - Alice/Alyce Smith: strong fuzzy pair (same email) -> 2-member identity.
-    - Carl / Carla / Karl Carter: a 3-member chain where the Carl<->Karl edge
-      is the weak link (bottleneck), so the resolver flags a conflict edge --
-      exercising both the evidence-edge AND the weak-bottleneck pair_scores
-      lookups that fall back to info.get("pair_scores") when the view is absent.
+    - Carl / Carla / Karl Carter: a 3-member cluster anchored by a shared email
+      (``c@y.com``, exact -> 0.3 of the weighted score) plus similar-but-NOT-
+      identical names (Carl/Carla/Karl), so the in-cluster edges all clear the
+      0.7 matchkey threshold (the cluster reliably forms) yet the cluster
+      confidence (0.4*min_edge + 0.3*avg_edge + 0.3*connectivity) is strictly
+      below 1.0 because no name pair is identical. Paired with the config's
+      raised ``weak_confidence_threshold=0.99`` (see ``_identity_config``), that
+      sub-1.0 confidence trips the resolver's weak-bottleneck branch, which
+      emits a CONFLICTS_WITH edge (``conflicts_flagged >= 1``). That branch is
+      the SECOND view-read site on frames-out: it calls
+      ``pair_score_view.score_for(...)`` to fetch the bottleneck score (falling
+      back to ``info["pair_scores"]`` only when the view is absent, i.e. the
+      gate-OFF dict path).
     - Dave Singleton: lone record (singleton identity).
 
     ``source_pk_column="id"`` makes record ids deterministic (``src:<id>``),
@@ -270,6 +279,16 @@ def _identity_config(identity_path: str, run_name: str):
         identity=IdentityConfig(
             enabled=True, path=identity_path, source_pk_column="id",
             dataset="people-test",
+            # Raised so the weak-bottleneck branch fires reliably: any
+            # multi-member cluster whose confidence (0.4*min_edge +
+            # 0.3*avg_edge + 0.3*connectivity) is below this trips it. With the
+            # matchkey threshold pinned at 0.7, in-cluster edges can't fall
+            # below ~0.7, so the default 0.6 threshold is effectively
+            # unreachable here. 0.99 makes the Carter cluster confidently
+            # below-threshold (its confidence is strictly < 1.0 because the
+            # Carl/Carla/Karl names are not identical), so the resolver's
+            # weak-bottleneck `score_for(...)` view-read runs on frames-out.
+            weak_confidence_threshold=0.99,
         ),
     )
 
@@ -339,4 +358,12 @@ def test_frames_out_identity_parity(monkeypatch, tmp_path, native):
     assert on["identity_summary"] == off["identity_summary"]
     assert off["identity_summary"]["edges_added"] >= 1, (
         "fixture produced no evidence edges"
+    )
+    # The fixture must also exercise the resolver's weak-bottleneck branch (the
+    # SECOND view-consumption site on frames-out, via pair_score_view.score_for).
+    # Assert on the gate-OFF side -- the bug-free dict reference -- so the gate
+    # catches a frames-out view that mishandles the bottleneck score lookup.
+    # (on == off above already locks the gate-ON count to this same value.)
+    assert off["identity_summary"]["conflicts_flagged"] >= 1, (
+        "fixture did not trip the weak-bottleneck branch (score_for not exercised)"
     )
