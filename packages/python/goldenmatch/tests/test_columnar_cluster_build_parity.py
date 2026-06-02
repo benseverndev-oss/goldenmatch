@@ -61,6 +61,16 @@ def test_columnar_build_byte_identical(monkeypatch, native):
     pairs, all_ids = _adversarial_pairs()
     monkeypatch.setenv("GOLDENMATCH_NATIVE", native)
 
+    if native == "1":
+        from goldenmatch.core._native_loader import native_module
+        nm = native_module()
+        if nm is None or getattr(nm, "build_clusters_arrow", None) is None:
+            pytest.skip(
+                "native cluster kernel (build_clusters_arrow/mst_split_components) "
+                "absent in this environment; native=1 parity is validated in CI's "
+                "fresh native build"
+            )
+
     monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "0")
     off = build_clusters(pairs, all_ids=all_ids, max_cluster_size=5,
                          weak_cluster_threshold=0.3, auto_split=True)
