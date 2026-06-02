@@ -50,11 +50,20 @@ def test_cluster_pairs_are_subset_of_scored_pairs():
     assert _cluster_pair_keys(res.clusters) <= sp_keys
 
 
-def test_scored_pairs_columnar_equals_list(monkeypatch):
-    # Both pipeline paths normalize via dedup_pairs_max_score -> identical set.
-    df = _dup_df()
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "0")
-    off = dedupe_df(df, exact=["name", "city"])
-    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "1")
-    on = dedupe_df(df, exact=["name", "city"])
-    assert set(off.scored_pairs) == set(on.scored_pairs)
+def test_columnar_and_list_capture_normalize_identically():
+    # The pipeline's two scored_pairs capture branches are
+    #   list path:     dedup_pairs_max_score(all_pairs)
+    #   columnar path: dedup_pairs_max_score(pairs_df_to_list(_columnar_pairs_df))
+    # For the same scored pairs they MUST produce the identical normalized list.
+    # Test that equivalence directly (independent of _is_columnar_eligible, which
+    # an exact-matchkey fixture wouldn't trigger).
+    import polars as pl
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+    from goldenmatch.core.scorer import pairs_df_to_list
+
+    pairs = [(2, 1, 0.9), (1, 2, 0.95), (3, 4, 0.8), (3, 4, 0.7)]
+    df = pl.DataFrame(
+        {"id_a": [2, 1, 3, 3], "id_b": [1, 2, 4, 4], "score": [0.9, 0.95, 0.8, 0.7]},
+        schema={"id_a": pl.Int64, "id_b": pl.Int64, "score": pl.Float64},
+    )
+    assert dedup_pairs_max_score(pairs) == dedup_pairs_max_score(pairs_df_to_list(df))
