@@ -1,0 +1,55 @@
+name: bench-pipeline-complete-path
+
+# SP-C complete-path verdict bench (workflow_dispatch only), BINDING Phase-2
+# payoff measurement. Builds the native ext fresh so the columnar build hits the
+# real Arrow kernel, then benches the COMPLETE cluster -> golden -> identity
+# stage end-to-end, legacy (frames-out OFF, dict) vs columnar (frames-out ON,
+# A+B+C dict-free), segmenting wall into build/golden/identity + overall peak
+# RSS. The pair-score view + identity store I/O + df.to_dicts() are shared on
+# both variants and frames-invariant (the >=30% RSS criterion applies to the
+# cluster-representation delta, not the store).
+#
+# NOTE: the binding 25M (RSS-delta leg) and 100M (feasibility point) scales are
+# dispatched EXPLICITLY via the `np` input (e.g. np="25000000" or
+# np="100000000"). At 100M the legacy variant is EXPECTED to OOM -- the bench
+# catches the legacy child's non-zero exit and records "legacy OOM" rather than
+# crashing, so the columnar feasibility point still reports.
+on:
+  workflow_dispatch:
+    inputs:
+      np:
+        description: "Comma-separated target pair counts (dispatch 25000000 / 100000000 for the verdict)"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native extension (exposes build_clusters_arrow)
+        run: uv run python scripts/build_native.py
+      - name: Bench pipeline complete-path (legacy dict vs columnar A+B+C)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_pipeline_complete_path.py \
+            --np "${{ inputs.np }}" --runs "${{ inputs.runs }}" \
+            --output .profile_tmp/pipeline_complete_path.json | tee /tmp/pipeline_complete_path.txt
+          { echo '## bench-pipeline-complete-path'; echo '```'; cat /tmp/pipeline_complete_path.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: pipeline-complete-path
+          path: .profile_tmp/pipeline_complete_path.json
+          retention-days: 30
