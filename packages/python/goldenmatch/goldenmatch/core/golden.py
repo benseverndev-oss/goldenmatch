@@ -1155,7 +1155,7 @@ def build_golden_records_from_frames(
     # so it's only valid when BOTH are absent.
     fast_eligible = (
         not provenance
-        and _polars_native_eligible(rules, quality_scores=None)
+        and _polars_native_eligible(rules, quality_scores=quality_scores)
     )
     if fast_eligible:
         golden_df = build_golden_records_df(multi_df, rules)
