@@ -49,11 +49,19 @@ re-clustering input is identical → byte-identical output.
      set(cinfo["members"])`. (Canonical keys to match the cluster-dict convention;
      dedup last-wins is irrelevant since `scored_pairs` is already deduped, but use
      a dict so duplicates collapse safely.)
-   - `scored_pairs is None`: `pair_scores = cinfo.get("pair_scores") or {}` (replaces
-     the current direct `cinfo["pair_scores"]` reads at `:980`/`:994` — also makes
-     the None-path tolerant instead of KeyError, a safe strict-improvement).
-   The remaining re-clustering + record-removal + result-dict logic is UNCHANGED;
-   it just consumes the locally-built `pair_scores`.
+   - `scored_pairs is None`: `pair_scores = cinfo.get("pair_scores") or {}`. (NOTE:
+     the re-cluster extraction at `:994` is the DIRECT `cinfo["pair_scores"]`
+     subscript — the actual KeyError blocker. The memory-correction loop at `:980`
+     is ALREADY tolerant `cinfo.get("pair_scores", {})` and only runs under
+     `if memory_store is not None`. The None-path `.get(...) or {}` makes `:994`
+     tolerant too — a safe strict-improvement.)
+   **Both** consumers — the memory-correction loop (`:980`, which scans for
+   `(record_id, other)` edges) AND the re-cluster extraction (`:994`) — must read
+   from the ONE locally-built `pair_scores` map, so the memory corrections recorded
+   are byte-identical on the `scored_pairs` path (the member-filtered map carries
+   the same `(record_id, other)` edge set as `cinfo["pair_scores"]`). The remaining
+   re-clustering + record-removal + result-dict logic is UNCHANGED; it just
+   consumes the locally-built `pair_scores`.
 2. **`tui/engine.py::unmerge_record`** (`:408`) — pass
    `scored_pairs=self._last_result.scored_pairs` to the core call.
    `EngineResult.scored_pairs` already exists (`:40`, populated at `:320`). This
