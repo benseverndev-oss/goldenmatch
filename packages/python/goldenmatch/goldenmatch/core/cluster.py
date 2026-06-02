@@ -569,7 +569,13 @@ def build_cluster_frames(
                 int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
                 for cid in oversized
             }
-            next_cid = metadata.height   # contiguous 1..n_clusters pre-split => height == max cid
+            # live_cids mirrors _finalize_clusters's `result.keys()`: cids 1..n
+            # pre-split. next_cid is recomputed as max(live)+1 AFTER discarding the
+            # split cid -- so when the cid being split is the current max, its slot
+            # is REUSED, exactly as _finalize's `result.pop(cid); max(result.keys())+1`.
+            # A running counter from metadata.height does NOT reclaim that slot and
+            # shifts every split cid, breaking the partition labels.
+            live_cids = set(range(1, metadata.height + 1))
             split_assign_rows = []
             split_meta_rows = []
             drop_cids = set()
@@ -589,8 +595,9 @@ def build_cluster_frames(
                     continue  # unsplittable: keep original row as-is
                 subs.sort(key=lambda sc: min(sc["members"]))
                 drop_cids.add(cid)
+                live_cids.discard(cid)
+                next_cid = max(live_cids, default=0) + 1   # mirror _finalize (post-pop)
                 for sc in subs:
-                    next_cid += 1
                     sc_over = sc["size"] > max_cluster_size
                     for m in sc["members"]:
                         split_assign_rows.append((next_cid, m))
@@ -605,9 +612,11 @@ def build_cluster_frames(
                         "min_edge": min(_sv) if _sv else 0.0,            # schema-fill, unused
                         "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
                     })
+                    live_cids.add(next_cid)
                     if sc_over:
                         members_by_cid[next_cid] = sc["members"]
                         to_split.append(next_cid)
+                    next_cid += 1
             if budget_tripped:
                 _clog.warning("build_clusters: auto-split edge-work budget (%d) "
                               "exhausted; clusters left oversized.", edge_budget)
