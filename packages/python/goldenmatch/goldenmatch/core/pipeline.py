@@ -1729,6 +1729,18 @@ def _run_dedupe_pipeline(
             pair_score_view=pair_score_view,
         )
 
+    # SP3: source scored_pairs from the pre-cluster stream, decoupled from cluster
+    # pair_scores. Normalized canonical (min,max) + max-score deduped + sorted via
+    # dedup_pairs_max_score. Documented behavior change: this is the FULL scored set
+    # (a superset of the post-split cluster pair_scores when oversized clusters
+    # split). Both pipeline paths normalize identically.
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+    if _use_columnar and _columnar_pairs_df is not None:
+        from goldenmatch.core.scorer import pairs_df_to_list
+        scored_pairs = dedup_pairs_max_score(pairs_df_to_list(_columnar_pairs_df))
+    else:
+        scored_pairs = dedup_pairs_max_score(all_pairs)
+
     results = {
         "clusters": clusters,
         "golden": golden_df,
@@ -1739,6 +1751,7 @@ def _run_dedupe_pipeline(
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
+        "scored_pairs": scored_pairs,
     }
 
     try:
