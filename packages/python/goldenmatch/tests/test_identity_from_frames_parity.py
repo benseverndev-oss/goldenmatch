@@ -129,6 +129,25 @@ def _partition(rec_to_eid: dict[str, str]) -> set[frozenset]:
     return {frozenset(v) for v in by_eid.values()}
 
 
+def _assert_nonvacuous(summary, partition: set[frozenset]) -> None:
+    """Guard the durability gate against a vacuous pass.
+
+    ``part_a == part_b`` / ``sum_a == sum_b`` are byte-equal even when BOTH
+    runs degenerate to all-singletons or empty stores. Assert the REFERENCE
+    (dict-path) run actually produced a multi-record entity AND did real
+    resolution work, so a fixture regression can't make the gate pass empty.
+
+    ``ResolveSummary.edges_added`` is the evidence-edge count -- this fixture
+    seeds a merge ({0,1}), an absorb ({2,3}), a weak-bottleneck chain
+    ({4,5,6}), and an oversized barbell that auto-splits, so every multi-member
+    cluster contributes >= 1 edge. edges_added is reliably well >= 1.
+    """
+    assert any(len(s) > 1 for s in partition), \
+        "fixture produced no multi-record entity"
+    assert summary.edges_added >= 1, \
+        f"reference run did no resolution work: {summary.as_dict()}"
+
+
 def _make_store(tmp_path, name):
     return IdentityStore(path=str(tmp_path / name))
 
@@ -163,6 +182,9 @@ def test_frames_path_partition_matches_dict_path(tmp_path, monkeypatch, native):
     finally:
         store_b.close()
 
+    # Anti-vacuous: the reference run must be non-trivial (multi-record entity
+    # + real resolution work), else two degenerate runs pass byte-equal.
+    _assert_nonvacuous(sum_a, part_a)
     assert part_a == part_b, f"partition diverged:\n dict={part_a}\n frames={part_b}"
     # Summary counts (no entity-id literals) must match too.
     assert sum_a == sum_b
@@ -213,6 +235,9 @@ def test_frames_path_literal_identical_under_deterministic_mint(
     finally:
         store_b.close()
 
+    # Anti-vacuous: reference run must be non-trivial (multi-record entity +
+    # real resolution work) so the literal-map equality can't pass empty.
+    _assert_nonvacuous(sum_a, _partition(map_a))
     assert map_a == map_b, (
         "literal record->entity map diverged under deterministic mint:\n"
         f" only dict={set(map_a.items()) - set(map_b.items())}\n"

@@ -229,6 +229,11 @@ def _frames_iter(
     # members per cid (assignments is one row per (cluster_id, member_id)).
     members_by_cid: dict[int, list[int]] = {}
     if not assignments.is_empty():
+        # group_by does NOT preserve member order, and that's intentional:
+        # the resolution body is member-order-independent (members compared
+        # as a set, per PR #598), so do NOT "fix" this into a sorted agg. The
+        # ascending-cid ``rows.sort`` below IS load-bearing (mint order) and
+        # must stay.
         grouped = assignments.group_by("cluster_id").agg(
             pl.col("member_id")
         )
