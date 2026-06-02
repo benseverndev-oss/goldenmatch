@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 from collections import Counter
 from dataclasses import dataclass
@@ -25,6 +24,7 @@ from typing import Any
 import polars as pl
 
 from goldenmatch.core._hashing import record_fingerprint
+from goldenmatch.identity.fingerprint_batch import _canonical_payload
 from goldenmatch.identity.model import (
     EdgeKind,
     EventKind,
@@ -84,27 +84,6 @@ def _id_scheme() -> str:
     return "hash" if os.environ.get(
         "GOLDENMATCH_IDENTITY_ID_SCHEME", "h1"
     ).strip().lower() == "hash" else "h1"
-
-
-def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Coerce a row payload to the primitives ``record_fingerprint`` accepts.
-
-    Temporals -> ISO-8601; non-finite floats -> their token string; other
-    non-primitives -> ``str()``. v1 of the canonical spec is primitive-only;
-    these coercions are a documented v1.1 follow-up (pinned in the kernel +
-    mirrored across surfaces when a second write surface adopts the C ABI). For
-    now they keep ingest working on real data (date columns etc.) while clean
-    str/int/float/bool/None records get a fully cross-surface fingerprint."""
-    out: dict[str, Any] = {}
-    for k, v in payload.items():
-        if isinstance(v, float) and not math.isfinite(v):
-            out[k] = repr(v)  # "nan" / "inf" / "-inf" as a stable token
-        elif v is None or isinstance(v, (bool, int, float, str, bytes)):
-            out[k] = v
-        else:
-            iso = getattr(v, "isoformat", None)
-            out[k] = iso() if callable(iso) else str(v)
-    return out
 
 
 def _record_id_candidates(
