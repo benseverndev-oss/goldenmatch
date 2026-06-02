@@ -104,6 +104,17 @@ def test_frames_out_roundtrips_to_dict_full(monkeypatch, native):
     ref = build_clusters(pairs, **kw)
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     got = cluster_frames_to_dict(build_cluster_frames(pairs, **kw))
+    # DIAGNOSTIC (temporary): surface exactly how the cid sets / partitions differ.
+    if got.keys() != ref.keys():
+        ref_part = {frozenset(c["members"]) for c in ref.values()}
+        got_part = {frozenset(c["members"]) for c in got.values()}
+        print("ONLY-IN-GOT cids:", sorted(set(got) - set(ref)))
+        print("ONLY-IN-REF cids:", sorted(set(ref) - set(got)))
+        print("PARTITIONS EQUAL (label-only divergence)?", ref_part == got_part)
+        print("ONLY-IN-GOT partition:", sorted(map(sorted, got_part - ref_part)))
+        print("ONLY-IN-REF partition:", sorted(map(sorted, ref_part - got_part)))
+        print("REF  cid->members:", {k: sorted(v["members"]) for k, v in sorted(ref.items())})
+        print("GOT  cid->members:", {k: sorted(v["members"]) for k, v in sorted(got.items())})
     assert got.keys() == ref.keys()
     for cid in ref:
         assert _norm(got[cid]) == _norm(ref[cid]), f"cid {cid}: {got[cid]} vs {ref[cid]}"
