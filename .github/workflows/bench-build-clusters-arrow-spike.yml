@@ -1,0 +1,45 @@
+name: bench-build-clusters-arrow-spike
+
+# #663-B decision spike (workflow_dispatch only). Builds the native ext fresh so
+# build_clusters_arrow_native hits the real Arrow C kernel (not the columnar
+# fallback), then benches it vs the dict-shaped build_clusters at scale. Decides
+# whether the Arrow path clears the 1.09x dict-floor before any cutover.
+on:
+  workflow_dispatch:
+    inputs:
+      np:
+        description: "Comma-separated target pair counts"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native extension (exposes build_clusters_arrow)
+        run: uv run python scripts/build_native.py
+      - name: Spike bench (arrow vs dict build_clusters)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_build_clusters_arrow_spike.py \
+            --np "${{ inputs.np }}" --runs "${{ inputs.runs }}" \
+            --output .profile_tmp/build_clusters_arrow_spike.json | tee /tmp/spike.txt
+          { echo '## bench-build-clusters-arrow-spike'; echo '```'; cat /tmp/spike.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: build-clusters-arrow-spike
+          path: .profile_tmp/build_clusters_arrow_spike.json
+          retention-days: 30
