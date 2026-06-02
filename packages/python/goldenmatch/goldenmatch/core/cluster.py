@@ -475,9 +475,11 @@ def build_cluster_frames(
     ``dict[int, dict]`` for non-oversized clusters. ``build_clusters`` and all
     its consumers stay UNTOUCHED.
 
-    Task 1 = the BULK path (non-oversized clusters): shared pre-split Union-Find
-    (via ``_columnar_presplit``) + vectorized weak/quality + emit. Auto-split of
-    oversized clusters is Task 2 (the stub below).
+    The BULK path (non-oversized clusters) is the shared pre-split Union-Find
+    (via ``_columnar_presplit``) + vectorized weak/quality + emit. Oversized
+    clusters are auto-split frames-natively (the dict is materialized ONLY for
+    that rare minority), reusing ``split_oversized_cluster`` and mirroring
+    ``_finalize_clusters``.
 
     ``cluster_frames_to_dict(build_cluster_frames(...))`` round-trips to
     ``build_clusters(...)`` gate-ON (the score-free dict): members-as-set,
@@ -546,7 +548,7 @@ def build_cluster_frames(
         "cluster_id": m_cid,
         "size": m_size,
         "confidence": m_conf,
-        "quality": ["strong"] * n_clusters,
+        "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
         "oversized": m_over,
         "bottleneck_pair_a": m_bot_a,
         "bottleneck_pair_b": m_bot_b,
