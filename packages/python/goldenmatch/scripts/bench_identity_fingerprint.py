@@ -240,22 +240,25 @@ def main() -> int:
                     help="Repetitions per measurement (median reported, default: 3)")
     ap.add_argument("--output", default=None,
                     help="JSON output path (optional)")
+    ap.add_argument("--mode", choices=["auto", "end-to-end", "fingerprint-only"],
+                    default="auto",
+                    help="auto (default): try end-to-end per N, fall back to "
+                         "fingerprint-only on error (e.g. SQLite var limit at scale). "
+                         "fingerprint-only isolates the actual gate delta (store I/O "
+                         "is identical on/off, so it cancels).")
     args = ap.parse_args()
 
     ns = [int(x.strip()) for x in args.ns.split(",") if x.strip()]
     runs = max(1, args.runs)
 
-    # Choose mode: prefer end-to-end, fall back to fingerprint-only.
     try:
         from goldenmatch.identity import IdentityStore, resolve_clusters  # noqa: F401
-        mode = "end-to-end"
-        bench_fn = _bench_end_to_end
+        _e2e_available = True
     except Exception as exc:
-        print(f"[bench] WARNING: resolve_clusters unavailable ({exc!r}); falling back to fingerprint-only mode", flush=True)
-        mode = "fingerprint-only"
-        bench_fn = _bench_fingerprint_only
+        print(f"[bench] WARNING: resolve_clusters unavailable ({exc!r}); fingerprint-only only", flush=True)
+        _e2e_available = False
 
-    print(f"ns={ns}  runs={runs}  mode={mode}", flush=True)
+    print(f"ns={ns}  runs={runs}  mode={args.mode}", flush=True)
 
     from goldenmatch.core._native_loader import native_available
     print(f"native ext importable: {native_available()}", flush=True)
@@ -263,22 +266,35 @@ def main() -> int:
     results = []
     for n in ns:
         print(f"  N={n:,} ...", flush=True)
-        try:
-            row = bench_fn(n, runs)
-            results.append(row)
-            speedup_s = f"{row['speedup']:.2f}x" if row['speedup'] == row['speedup'] else "n/a"
-            print(f"    per-row={row['wall_off_s']:.3f}s  batch={row['wall_on_s']:.3f}s  speedup={speedup_s}", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  N={n:,}  ERROR {type(exc).__name__}: {exc}", flush=True)
+        row = None
+        # End-to-end first (unless mode forces fingerprint-only); fall back to the
+        # fingerprint-only microbench on any error so we always get the gate delta.
+        if args.mode in ("auto", "end-to-end") and _e2e_available:
+            try:
+                row = _bench_end_to_end(n, runs)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  N={n:,}  end-to-end ERROR {type(exc).__name__}: {exc}", flush=True)
+                if args.mode == "end-to-end":
+                    continue  # caller demanded end-to-end; don't silently switch
+        if row is None:
+            try:
+                row = _bench_fingerprint_only(n, runs)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  N={n:,}  fingerprint-only ERROR {type(exc).__name__}: {exc}", flush=True)
+                continue
+        results.append(row)
+        speedup_s = f"{row['speedup']:.2f}x" if row['speedup'] == row['speedup'] else "n/a"
+        print(f"    [{row['mode']}] per-row={row['wall_off_s']:.3f}s  batch={row['wall_on_s']:.3f}s  speedup={speedup_s}", flush=True)
 
-    _print_table(results, mode)
+    table_mode = results[0]["mode"] if results else args.mode
+    _print_table(results, table_mode)
 
     # Append to GITHUB_STEP_SUMMARY if set.
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
             with open(summary_path, "a", encoding="utf-8") as fh:
-                fh.write(f"\n## bench-identity-fingerprint [{mode}]\n\n")
+                fh.write(f"\n## bench-identity-fingerprint [{table_mode}]\n\n")
                 fh.write(
                     f"| {'N':>10} | {'per-row (s)':>12} | {'batch (s)':>10} | "
                     f"{'speedup':>9} | {'no-PK %':>8} | {'peak RSS MB':>12} |\n"
@@ -300,7 +316,7 @@ def main() -> int:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump({"mode": mode, "results": results}, fh, indent=2)
+            json.dump({"mode": table_mode, "results": results}, fh, indent=2)
         print(f"[bench] JSON written to {out_path}", flush=True)
 
     return 0
