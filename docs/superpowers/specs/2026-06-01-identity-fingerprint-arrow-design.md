@@ -173,6 +173,27 @@ exists -- "assemble a frame" is trivial.
   fingerprinting entirely, so a PK-backed frame under-reads the kernel's value.
   Ship default-on only if it wins meaningfully; otherwise keep it gated and record
   the finding (repo perf-audit lesson -- measure wall-clock on the real shape).
+
+  **RESULT (2026-06-02, run 26793348836, fresh native build, no-PK 1M/5M):
+  DEFAULT-ON.** End-to-end `resolve_clusters` could NOT complete -- the SQLite
+  `IdentityStore` raised `OperationalError: too many SQL variables` bulk-upserting
+  1M+ records (a SQLite-store-scaling artifact, NOT the feature; production scale
+  uses the Postgres store w/ bulk COPY). So the bench fell back to the
+  fingerprint-only microbench, which isolates the gate's actual delta (store I/O is
+  identical on/off and cancels):
+
+  | N  | per-row | batch (Arrow) | speedup | peak RSS |
+  | -- | ------- | ------------- | ------- | -------- |
+  | 1M | 5.54s   | 2.13s         | 2.60x   | 2.2 GB   |
+  | 5M | 27.52s  | 10.55s        | 2.61x   | 10.2 GB  |
+
+  2.6x consistent on the real Arrow kernel, byte-identical ids (79 identity tests
+  pass with the gate default-on AND with the `=0` kill-switch). Flipped default-on
+  (`_batch_fingerprint_enabled` default `1`, kill-switch `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=0`).
+  Caveat: the end-to-end PERCENTAGE win is unmeasured (resolve is store-bound at
+  scale); the change is never a regression and saves real absolute time
+  (3.4s@1M / 17s@5M on the fingerprinting step). FOLLOW-UP: the SQLite store's
+  bulk-upsert variable-limit at 1M+ is a separate scaling bug worth filing.
 - **Legacy-fallback preserved:** a row whose payload can't be fingerprinted still
   yields the `:hash:` legacy id + candidate ordering unchanged.
 

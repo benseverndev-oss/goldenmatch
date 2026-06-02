@@ -110,8 +110,31 @@ def test_batch_path_is_exercised_when_gate_on(tmp_path, monkeypatch):
     assert calls, "batch_fingerprints was not called with the gate on"
 
 
-def test_batch_not_called_when_gate_off(tmp_path, monkeypatch):
-    """Default OFF: ``batch_fingerprints`` is never invoked."""
+def test_batch_not_called_with_kill_switch(tmp_path, monkeypatch):
+    """Kill-switch ``=0`` restores the per-row path: ``batch_fingerprints`` is
+    never invoked. (Default is now ON, so this needs the explicit ``=0``.)"""
+    import goldenmatch.identity.resolve as resolve_mod
+
+    calls: list[int] = []
+    real = resolve_mod.batch_fingerprints
+    monkeypatch.setattr(
+        resolve_mod, "batch_fingerprints",
+        lambda df: (calls.append(df.height), real(df))[1],
+    )
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", "0")
+
+    store = IdentityStore(path=str(tmp_path / "off.db"))
+    try:
+        df = _df([{"name": "Alice"}, {"name": "Alyce"}])
+        _resolve_once(store, df, {0: _cluster([0, 1])}, [(0, 1, 0.95)])
+    finally:
+        store.close()
+
+    assert not calls, "batch_fingerprints must not run with the kill-switch =0"
+
+
+def test_batch_called_by_default(tmp_path, monkeypatch):
+    """Default (no env var) is ON: ``batch_fingerprints`` runs."""
     import goldenmatch.identity.resolve as resolve_mod
 
     calls: list[int] = []
@@ -122,14 +145,14 @@ def test_batch_not_called_when_gate_off(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", raising=False)
 
-    store = IdentityStore(path=str(tmp_path / "off.db"))
+    store = IdentityStore(path=str(tmp_path / "default.db"))
     try:
         df = _df([{"name": "Alice"}, {"name": "Alyce"}])
         _resolve_once(store, df, {0: _cluster([0, 1])}, [(0, 1, 0.95)])
     finally:
         store.close()
 
-    assert not calls, "batch_fingerprints must not run with the gate off"
+    assert calls, "batch_fingerprints must run by default (gate default-on)"
 
 
 def test_record_ids_byte_identical_batch_vs_per_row_no_pk(tmp_path, monkeypatch):
