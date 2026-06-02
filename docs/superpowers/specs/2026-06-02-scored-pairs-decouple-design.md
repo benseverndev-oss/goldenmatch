@@ -69,19 +69,31 @@ lists, lineage explanations). It is a documented behavior change to the public
 ## Architecture
 
 1. **Pipeline capture (`core/pipeline.py`, `_run_dedupe_pipeline`).** After the
-   cluster stage, store the scored-pair stream on the `results` dict as
-   `scored_pairs: list[tuple[int,int,float]]`:
-   - list path: `all_pairs` (already `list[(a,b,score)]`).
-   - columnar path: materialize `_columnar_pairs_df` to the same list shape
-     (`zip(id_a, id_b, score)`), matching the list path.
-   Set it once, near where `results` is assembled (`:1732`). The match pipeline
-   builds no clusters and is unchanged (returns no `scored_pairs`).
+   cluster stage, store a NORMALIZED scored-pair stream on the `results` dict as
+   `scored_pairs: list[tuple[int,int,float]]`. The raw stream is NOT canonical or
+   deduped (see the invariant note below), so normalize it via
+   `dedup_pairs_max_score` (`core/pairs.py:35` — canonicalizes to `(min,max)`,
+   keeps the max score per canonical pair, sorts ascending by `(a,b)`):
+   - list path: `dedup_pairs_max_score(all_pairs)`.
+   - columnar path: `dedup_pairs_max_score(pairs_df_to_list(_columnar_pairs_df))`
+     (reuse `scorer.pairs_df_to_list`; do NOT hand-roll the `zip`).
+   Applying `dedup_pairs_max_score` to BOTH paths makes them produce the IDENTICAL
+   normalized list (idempotent on an already-canonical/deduped stream), which is
+   what the "columnar == list" test needs. Set it once, near where `results` is
+   assembled (`:1732`); both `all_pairs` and `_columnar_pairs_df` are verified
+   in-scope there (not `del`'d after the cluster stage). The match pipeline builds
+   no clusters and is unchanged (returns no `scored_pairs`).
 2. **`_api.py`.** Replace `scored_pairs=_extract_pairs(result)` at `:300`
    (`dedupe`) and `:473` (`dedupe_df`) with
-   `scored_pairs=result.get("scored_pairs", [])`. Keep `_extract_pairs` ONLY as a
-   fallback for results that predate the field (or remove if no other caller).
-   Update the `DedupeResult.scored_pairs` field docstring (`:76`,`:84`) to note it
-   is the full scored-pair set in scoring order.
+   `scored_pairs=result.get("scored_pairs", [])` (the `.get` default covers the
+   empty-result case; the pipeline always sets the field now). `_extract_pairs`
+   has no other caller (grep: only `:300`/`:473`) — REMOVE it. Update the
+   `DedupeResult.scored_pairs` field docstring (`:76`,`:84`) to note it is the full
+   canonical scored-pair set (sorted by `(a,b)`, max-score deduped), not the
+   post-split cluster-grouped reconstruction. NOTE: `scorer.pairs_df_to_list`
+   (used by the columnar capture in step 1) carries a "Removed in Phase 1c"
+   docstring — SP3 makes it a live dependency, so update that docstring (or keep
+   the function and drop the stale note).
 3. **Consumer reads.**
    - `cli/label.py:43-45`: read `result.get("scored_pairs", [])` (or
      `DedupeResult.scored_pairs`) instead of looping `cinfo["pair_scores"]`.
@@ -96,16 +108,29 @@ lists, lineage explanations). It is a documented behavior change to the public
   contents (the columnar path already asserts cluster parity with the list path
   via `tests/test_columnar_pipeline_parity.py`; the scored-pair stream is the same
   input, so materializing `_columnar_pairs_df` matches `all_pairs`).
-- **Duplicate canonical pairs:** the pre-cluster stream is already canonicalized
-  `(min,max)` + deduped upstream (`dedup_pairs`); store it as-is.
+- **The raw stream is NOT canonical/deduped (must normalize):** exact pairs are
+  appended to `all_pairs` in RAW orientation `(ids_a, ids_b, 1.0)`
+  (`pipeline.py:1078`), not canonical `(min,max)`; and with multiple exact
+  matchkeys the same canonical pair is appended once per matching matchkey, while
+  cluster `pair_scores` (a dict keyed on the canonical pair) collapses these
+  last-wins. So storing the raw stream would NOT multiset-match cluster
+  `pair_scores`. Normalize via `dedup_pairs_max_score` (canonical + max-score
+  dedup) before storing. NOTE: dedup uses MAX score; cluster `pair_scores` uses
+  last-wins — these differ ONLY for a canonical pair scored by multiple matchkeys
+  with different scores (rare), and that score divergence is part of the accepted
+  diff (dedup-max is the more defensible value).
 - **`DedupeResult.clusters` unchanged:** still carries `pair_scores`; unmerge (#1)
   + graceful degraders keep working off it. SP3 does NOT drop it.
 
 ## Testing
 
-- **No-split multiset parity:** on a fixture with NO oversized clusters, assert
-  the new `result["scored_pairs"]` multiset-equals the legacy `_extract_pairs`
-  output (same `(a,b,score)` set). Locks "common case unchanged."
+- **No-split canonical-pair parity:** on a fixture with NO oversized clusters
+  (and no single canonical pair scored by multiple matchkeys at different scores),
+  assert the SET of canonical `(a,b)` pairs in `result["scored_pairs"]` equals the
+  set of cluster `pair_scores` keys, AND the per-pair scores match. Locks "common
+  case: same pairs, same scores." (The canonical-pair SET is the robust invariant;
+  scores diverge only in the documented multi-matchkey-collision case, which the
+  fixture avoids.)
 - **Split superset:** on an oversized-splitting fixture, assert `scored_pairs`
   INCLUDES the cross-cut edges that auto-split drops from cluster `pair_scores`
   (the documented new behavior) — i.e. `scored_pairs` ⊋ flattened cluster
