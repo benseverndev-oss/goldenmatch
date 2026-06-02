@@ -405,7 +405,10 @@ class MatchEngine:
 
         from goldenmatch.core.cluster import unmerge_record
 
-        clusters = unmerge_record(record_id, self._last_result.clusters, threshold)
+        clusters = unmerge_record(
+            record_id, self._last_result.clusters, threshold,
+            scored_pairs=self._last_result.scored_pairs,
+        )
         stats = self._compute_stats(clusters, self._data.height)
 
         self._last_result = EngineResult(

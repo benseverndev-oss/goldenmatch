@@ -945,6 +945,7 @@ def unmerge_record(
     *,
     memory_store: MemoryStore | None = None,
     dataset: str | None = None,
+    scored_pairs: list[tuple[int, int, float]] | None = None,
 ) -> dict[int, dict]:
     """Remove a record from its cluster and re-cluster remaining members.
 
@@ -974,10 +975,27 @@ def unmerge_record(
     if cinfo["size"] <= 1:
         return clusters  # Already a singleton
 
+    # Source the affected cluster's pair scores from the explicit scored_pairs
+    # stream (filtered to this cluster's members -> exactly its within-member edges,
+    # equal to cinfo["pair_scores"]; cross-cut edges are excluded by the member
+    # filter, so the single-cluster filter is byte-identical) when provided, else
+    # the stored cluster dict. Lets unmerge survive a build that drops pair_scores.
+    # Both consumers below (the memory-correction loop and the re-cluster
+    # extraction) read this one local map.
+    if scored_pairs is not None:
+        member_set = set(cinfo["members"])
+        pair_scores: dict[tuple[int, int], float] = {
+            (min(a, b), max(a, b)): s
+            for a, b, s in scored_pairs
+            if a in member_set and b in member_set
+        }
+    else:
+        pair_scores = cinfo.get("pair_scores") or {}
+
     # Memory: reject correction for every pair (record_id, other) in this cluster.
     if memory_store is not None:
         unmerge_pairs: list[tuple[int, int]] = []
-        for (a, b) in cinfo.get("pair_scores", {}).keys():
+        for (a, b) in pair_scores.keys():
             if a == record_id and b != record_id:
                 unmerge_pairs.append((a, b))
             elif b == record_id and a != record_id:
@@ -991,7 +1009,7 @@ def unmerge_record(
     remaining_members = [m for m in cinfo["members"] if m != record_id]
     remaining_pairs = [
         (a, b, s)
-        for (a, b), s in cinfo["pair_scores"].items()
+        for (a, b), s in pair_scores.items()
         if a != record_id and b != record_id and s >= threshold
     ]
 
