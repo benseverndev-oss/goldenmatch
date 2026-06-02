@@ -1,0 +1,47 @@
+name: bench-pipeline-frames-out
+
+# SP-B residual bench (workflow_dispatch only), RECORDED DATA not a kill gate.
+# Builds the native ext fresh so the columnar build hits the real Arrow kernel,
+# then benches the identity dict-rebuild residual: cluster_frames_to_dict(
+# build_cluster_frames(..., GOLDENMATCH_CLUSTER_FRAMES_OUT=1)). Isolates the
+# frames build wall from the dict-rebuild wall (the cost SP-C removes) plus peak
+# RSS, at scale on the bulk-RSS axis (k=5, no oversized clusters).
+on:
+  workflow_dispatch:
+    inputs:
+      np:
+        description: "Comma-separated target pair counts"
+        default: "1000000,5000000"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native extension (exposes build_clusters_arrow)
+        run: uv run python scripts/build_native.py
+      - name: Bench pipeline frames-out (identity dict-rebuild residual)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_pipeline_frames_out.py \
+            --np "${{ inputs.np }}" --runs "${{ inputs.runs }}" \
+            --output .profile_tmp/pipeline_frames_out.json | tee /tmp/pipeline_frames_out.txt
+          { echo '## bench-pipeline-frames-out'; echo '```'; cat /tmp/pipeline_frames_out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: pipeline-frames-out
+          path: .profile_tmp/pipeline_frames_out.json
+          retention-days: 30

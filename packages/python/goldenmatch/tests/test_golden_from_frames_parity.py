@@ -24,6 +24,16 @@ from goldenmatch.core.golden import (
 )
 
 
+def _cids_from_frames_result(result) -> list[int]:
+    """Pull the __cluster_id__ set out of whichever slot the new
+    tuple return populated (golden_df fast path or golden_records slow
+    path)."""
+    golden_df, golden_records = result
+    if golden_df is not None:
+        return sorted(golden_df["__cluster_id__"].to_list())
+    return sorted(r["__cluster_id__"] for r in golden_records)
+
+
 def _make_source() -> pl.DataFrame:
     """Tiny 6-row people frame; 2 multi-member clusters + 1 singleton."""
     return pl.DataFrame({
@@ -84,13 +94,13 @@ class TestGoldenFromFramesParity:
             _manual_multi_df(source, frames), rules,
         )
 
+        new_cids = _cids_from_frames_result(new)
+        old_cids = sorted(r["__cluster_id__"] for r in old)
         # Same number of golden records (one per multi-member cluster)
-        assert len(new) == len(old), (
-            f"record count differs: new={len(new)}, old={len(old)}"
+        assert len(new_cids) == len(old_cids), (
+            f"record count differs: new={len(new_cids)}, old={len(old_cids)}"
         )
         # Same set of __cluster_id__ values
-        new_cids = sorted(r["__cluster_id__"] for r in new)
-        old_cids = sorted(r["__cluster_id__"] for r in old)
         assert new_cids == old_cids, (
             f"cluster ids differ: new={new_cids}, old={old_cids}"
         )
@@ -103,7 +113,7 @@ class TestGoldenFromFramesParity:
         rules = GoldenRulesConfig(default_strategy="most_complete")
 
         new = build_golden_records_from_frames(source, frames, rules)
-        cids = {r["__cluster_id__"] for r in new}
+        cids = set(_cids_from_frames_result(new))
 
         assert 100 in cids
         assert 101 in cids
@@ -119,7 +129,9 @@ class TestGoldenFromFramesParity:
         })
         frames = _make_frames()
         rules = GoldenRulesConfig(default_strategy="most_complete")
-        assert build_golden_records_from_frames(empty_source, frames, rules) == []
+        assert build_golden_records_from_frames(empty_source, frames, rules) == (
+            None, [],
+        )
 
     def test_empty_assignments(self):
         source = _make_source()
@@ -139,7 +151,9 @@ class TestGoldenFromFramesParity:
             }),
         )
         rules = GoldenRulesConfig(default_strategy="most_complete")
-        assert build_golden_records_from_frames(source, empty_frames, rules) == []
+        assert build_golden_records_from_frames(source, empty_frames, rules) == (
+            None, [],
+        )
 
     def test_missing_row_id_raises(self):
         source_no_rowid = pl.DataFrame({
@@ -165,7 +179,7 @@ class TestGoldenFromFramesParity:
         rules = GoldenRulesConfig(default_strategy="most_complete")
 
         new = build_golden_records_from_frames(source, frames, rules)
-        cids = {r["__cluster_id__"] for r in new}
+        cids = set(_cids_from_frames_result(new))
 
         # Cluster 100 (1, 2, 3) is fully present -> included
         assert 100 in cids

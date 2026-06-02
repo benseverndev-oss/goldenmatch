@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from goldenmatch.core.cluster_pairscores import ClusterPairScores
     from goldenmatch.distributed.record_store import PreparedRecordStore
 
 import polars as pl
@@ -116,7 +117,14 @@ def _get_block_scorer(config: GoldenMatchConfig):
         )
         return score_blocks_datafusion
     return score_blocks_parallel
-from goldenmatch.core.cluster import build_clusters, build_clusters_columnar
+from goldenmatch.core.cluster import (
+    ClusterFrames,
+    _cluster_frames_out_enabled,
+    build_cluster_frames,
+    build_clusters,
+    build_clusters_columnar,
+    cluster_frames_to_dict,
+)
 
 # ── Columnar pipeline fast-path (Arrow roadmap Phase A) ──────────────
 # Routes the eligible single-fuzzy-matchkey dedupe shape through the
@@ -1443,6 +1451,27 @@ def _run_dedupe_pipeline(
         if (_use_columnar and _columnar_pairs_df is not None)
         else len(all_pairs),
     )
+    # SP-B: frames-out path (gate GOLDENMATCH_CLUSTER_FRAMES_OUT, default OFF).
+    # When ON, build the two-frame ClusterFrames representation and consume it
+    # DIRECTLY for GOLDEN + STATS + DUPES + REPORT below (no dict). The legacy
+    # `clusters` dict is rebuilt LAZILY via `_clusters_dict()` -- at most once,
+    # as late as the OUTPUT block -- only for the remaining dict consumers
+    # (adaptive refiner if enabled, output_clusters rows, lineage, identity,
+    # results["clusters"]). Keeping golden + stats + dupes dict-free is the SP-B
+    # prerequisite for the SP-C RSS win: once identity + results stop needing the
+    # dict, the lazy rebuild simply never fires on the hot path. Identity still
+    # RECEIVES a (rebuilt) dict here; Task 3 wires its ClusterPairScores view.
+    # The frames-out path is additive -- the dict path (gate OFF) below is
+    # untouched and byte-identical. Mutually exclusive with the columnar
+    # pair-stream branch (frames-out only fires on the non-columnar list build
+    # site).
+    cluster_frames: ClusterFrames | None = None
+    # `clusters` is bound to the real dict on the gate-OFF and columnar branches;
+    # on the frames-out branch it stays {} until the lazy rebuild at OUTPUT time
+    # (the {} is never read -- every earlier dict consumer is guarded by
+    # `cluster_frames is None`). Explicit init keeps pyright from seeing it as
+    # possibly-unbound.
+    clusters: dict[int, dict] = {}
     with stage("cluster"):
         if _use_columnar and _columnar_pairs_df is not None:
             # Phase A columnar path: same clusters as build_clusters on the
@@ -1453,6 +1482,21 @@ def _run_dedupe_pipeline(
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
             )
+        elif _cluster_frames_out_enabled():
+            cluster_frames = build_cluster_frames(
+                all_pairs, all_ids,
+                max_cluster_size=max_cluster_size,
+                weak_cluster_threshold=weak_threshold,
+                auto_split=auto_split,
+            )
+            # SP-B: do NOT rebuild the dict eagerly. stats + dupes (always-run
+            # hot path) are computed directly from the frame aggregates below;
+            # the dict is rebuilt LAZILY, only when a remaining dict consumer
+            # (adaptive refiner / lineage / identity / results / output_clusters)
+            # actually needs it, via `_clusters_dict()`. Keeping golden + stats +
+            # dupes dict-free is what lets the SP-C RSS win land once identity
+            # drops its dict use. `clusters` stays the empty-dict init on this
+            # branch until the lazy rebuild at OUTPUT time.
         else:
             clusters = build_clusters(
                 all_pairs, all_ids,
@@ -1460,15 +1504,44 @@ def _run_dedupe_pipeline(
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
             )
-    record_metrics({
-        "cluster_count": len(clusters),
-        "multi_member_cluster_count": sum(
-            1 for c in clusters.values() if c.get("size", 0) > 1
-        ),
-        "oversized_cluster_count": sum(
-            1 for c in clusters.values() if c.get("oversized")
-        ),
-    })
+    # SP-B lazy dict rebuild. On the frames-out branch `clusters` is unbound;
+    # the remaining dict consumers (adaptive refiner, lineage, identity,
+    # results["clusters"], output_clusters report/rows) go through this helper,
+    # which builds the dict from the frames AT MOST ONCE and caches it. The hot
+    # path (stats + dupes) never calls it -- those read the metadata/assignments
+    # frames directly -- so golden + stats + dupes stay dict-free.
+    _clusters_cache: list[dict[int, dict]] = []
+
+    def _clusters_dict() -> dict[int, dict]:
+        if cluster_frames is None:
+            # Gate-OFF / columnar paths bound `clusters` eagerly above.
+            return clusters
+        if not _clusters_cache:
+            _clusters_cache.append(cluster_frames_to_dict(cluster_frames))
+        return _clusters_cache[0]
+
+    if cluster_frames is not None:
+        # Stats from frame aggregates (no dict materialization). Matches the
+        # dict path's len(clusters) / size>1 / oversized counts exactly.
+        record_metrics({
+            "cluster_count": cluster_frames.metadata.height,
+            "multi_member_cluster_count": cluster_frames.metadata.filter(
+                pl.col("size") > 1
+            ).height,
+            "oversized_cluster_count": cluster_frames.metadata.filter(
+                pl.col("oversized")
+            ).height,
+        })
+    else:
+        record_metrics({
+            "cluster_count": len(clusters),
+            "multi_member_cluster_count": sum(
+                1 for c in clusters.values() if c.get("size", 0) > 1
+            ),
+            "oversized_cluster_count": sum(
+                1 for c in clusters.values() if c.get("oversized")
+            ),
+        })
 
     # ── Step 5: GOLDEN ──
     golden_records: list[dict] = []
@@ -1496,7 +1569,7 @@ def _run_dedupe_pipeline(
             )
             golden_rules = refine_golden_rules(
                 base_rules=golden_rules,
-                clusters=clusters,
+                clusters=_clusters_dict(),
                 prepared_df=collected_df,
                 column_profiles=_profiles_for_refiner,
                 memory_store=memory_store,
@@ -1521,97 +1594,136 @@ def _run_dedupe_pipeline(
     #   4. partition by cluster_id → dict of small DataFrames,
     #   5. call build_golden_record on each pre-filtered partition.
     # Total: O(N + sum-of-cluster-sizes) which is O(N), independent of K.
-    with stage("golden"):
-        with stage("golden_eligible_filter"):
-            eligible: list[tuple[int, dict[str, Any]]] = [
-                (cid, info) for cid, info in clusters.items()
-                if info["size"] > 1 and not info["oversized"]
-            ]
-        if eligible:
-            with stage("golden_row_to_cluster_dict"):
-                # row_id → cluster_id mapping. Members are int row IDs; one row
-                # belongs to at most one cluster, so the map is unambiguous.
-                row_to_cluster: dict[int, int] = {}
-                for cid, info in eligible:
-                    for mid in info["members"]:
-                        row_to_cluster[mid] = cid
-                member_ids_all = list(row_to_cluster.keys())
-
-            with stage("golden_multi_df_filter"):
-                multi_df = collected_df.filter(
-                    pl.col("__row_id__").is_in(member_ids_all)
-                )
-
-            # Slim projection (PR #595). v32 attribution localized the
-            # +9 GB peak jump entirely to golden_attach_cluster_id's
-            # with_columns COW -- multi_df carries every column from
-            # collected_df including __xform_*__ / __mk_*__ / __block_key__
-            # / __bucket__ internals that survivorship never reads. Drop
-            # them BEFORE the with_columns so the COW runs over a smaller
-            # frame.
-            #
-            # v33 measured: -2.6 GB peak vs v32 baseline, F1 invariant,
-            # wall flat. Default ON; opt out via
-            # GOLDENMATCH_GOLDEN_SLIM_MULTIDF=0 if any downstream golden
-            # path ever needs an internal column.
-            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
-                with stage("golden_slim_multidf"):
-                    _internal_prefixes = (
-                        "__xform_", "__mk_", "__block_key__", "__bucket__",
-                    )
-                    multi_df = multi_df.select([
-                        c for c in multi_df.columns
-                        if not any(c.startswith(p) for p in _internal_prefixes)
-                    ])
-
-            with stage("golden_attach_cluster_id"):
-                # Attach __cluster_id__ via replace_strict. The old keys/new
-                # vals lists are tiny (1 entry per member); the join itself
-                # is linear in `multi_df.height`.
-                multi_df = multi_df.with_columns(
-                    pl.col("__row_id__").replace_strict(
-                        list(row_to_cluster.keys()),
-                        list(row_to_cluster.values()),
-                        return_dtype=pl.Int64,
-                    ).alias("__cluster_id__")
-                )
-            # Batch builder: sorts by __cluster_id__ once and pre-extracts
-            # each user column to a Python list ONCE. At 5M / 1.67M
-            # multi-member clusters the previous partition_by(as_dict=True)
-            # + per-cluster build_golden_record loop allocated 1.67M tiny
-            # eager DataFrames AND called cluster_df[col].to_list() ~6.7M
-            # times. New path: 4 to_list() calls + Python list slicing.
-            # Measured: golden stage 307s -> ~30s at 5M.
-            # provenance=True (opt-in) enriches each field with source_row_id
-            # for the lineage sidecar; the golden_df builder below ignores the
-            # extra key, so the same records feed both paths (no double build).
-            #
-            # Fast path (provenance=False + uniform strategy + no quality_scores
-            # + no field_rules + no cluster_overrides): bypass the list[dict]
-            # intermediate entirely. At 10M / 2M multi-member clusters that
-            # intermediate allocates ~14 GB of CPython dict overhead;
-            # build_golden_records_df does the whole compute columnar in Polars
-            # at ~0.8 GB. Provenance + non-fast strategies still go through the
-            # list[dict] path so the existing semantics (per-field source_row_id,
-            # custom merge_field rules) stay intact.
+    #
+    # SP-B frames-out: when build_cluster_frames ran (gate ON), build golden
+    # directly from the ClusterFrames via the Task-1 helper, which DEMUXes into
+    # the same golden_df / golden_records slots the dict path uses (fast ->
+    # golden_df set + golden_records=[]; slow -> golden_records set, golden_df
+    # rebuilt by the shared block below). quality_scores is always None in this
+    # pipeline (matching the dict path's _polars_native_eligible(..., None)
+    # gate); provenance mirrors config.output.lineage_provenance.
+    if cluster_frames is not None:
+        with stage("golden"):
+            from goldenmatch.core.golden import build_golden_records_from_frames
             _provenance_on = config.output.lineage_provenance
-            _fast_eligible = (
-                not _provenance_on
-                and _polars_native_eligible(golden_rules, quality_scores=None)
+            # Mirror the dict path's slim projection (below): drop internal
+            # __xform_*__ / __mk_*__ / __block_key__ / __bucket__ columns that
+            # survivorship never reads, BEFORE the join, so golden records carry
+            # the same columns as the dict path (byte-identical golden). Keep
+            # __row_id__ (the from-frames join needs it). Same env opt-out.
+            _golden_source = collected_df
+            if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
+                _internal_prefixes = (
+                    "__xform_", "__mk_", "__block_key__", "__bucket__",
+                )
+                _golden_source = collected_df.select([
+                    c for c in collected_df.columns
+                    if not any(c.startswith(p) for p in _internal_prefixes)
+                ])
+            golden_df, golden_records = build_golden_records_from_frames(
+                _golden_source,
+                cluster_frames,
+                golden_rules,
+                quality_scores=None,
+                provenance=_provenance_on,
             )
-            if _fast_eligible:
-                with stage("golden_build_records_df_fast"):
-                    golden_df = build_golden_records_df(multi_df, golden_rules)
-                # Leave golden_records empty: the provenance branch below
-                # (gated on `if config.output.lineage_provenance and golden_records`)
-                # is a no-op when provenance is off, so no metadata is lost.
-                golden_records = []
-            else:
-                with stage("golden_build_records_batch_slow"):
-                    golden_records = build_golden_records_batch(
-                        multi_df, golden_rules,
-                        provenance=_provenance_on,
+    else:
+        with stage("golden"):
+            with stage("golden_eligible_filter"):
+                eligible: list[tuple[int, dict[str, Any]]] = [
+                    (cid, info) for cid, info in clusters.items()
+                    if info["size"] > 1 and not info["oversized"]
+                ]
+            if eligible:
+                with stage("golden_row_to_cluster_dict"):
+                    # row_id → cluster_id mapping. Members are int row IDs; one
+                    # row belongs to at most one cluster, so the map is
+                    # unambiguous.
+                    row_to_cluster: dict[int, int] = {}
+                    for cid, info in eligible:
+                        for mid in info["members"]:
+                            row_to_cluster[mid] = cid
+                    member_ids_all = list(row_to_cluster.keys())
+
+                with stage("golden_multi_df_filter"):
+                    multi_df = collected_df.filter(
+                        pl.col("__row_id__").is_in(member_ids_all)
                     )
+
+                # Slim projection (PR #595). v32 attribution localized the
+                # +9 GB peak jump entirely to golden_attach_cluster_id's
+                # with_columns COW -- multi_df carries every column from
+                # collected_df including __xform_*__ / __mk_*__ / __block_key__
+                # / __bucket__ internals that survivorship never reads. Drop
+                # them BEFORE the with_columns so the COW runs over a smaller
+                # frame.
+                #
+                # v33 measured: -2.6 GB peak vs v32 baseline, F1 invariant,
+                # wall flat. Default ON; opt out via
+                # GOLDENMATCH_GOLDEN_SLIM_MULTIDF=0 if any downstream golden
+                # path ever needs an internal column.
+                if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
+                    with stage("golden_slim_multidf"):
+                        _internal_prefixes = (
+                            "__xform_", "__mk_", "__block_key__", "__bucket__",
+                        )
+                        multi_df = multi_df.select([
+                            c for c in multi_df.columns
+                            if not any(c.startswith(p) for p in _internal_prefixes)
+                        ])
+
+                with stage("golden_attach_cluster_id"):
+                    # Attach __cluster_id__ via replace_strict. The old keys/new
+                    # vals lists are tiny (1 entry per member); the join itself
+                    # is linear in `multi_df.height`.
+                    multi_df = multi_df.with_columns(
+                        pl.col("__row_id__").replace_strict(
+                            list(row_to_cluster.keys()),
+                            list(row_to_cluster.values()),
+                            return_dtype=pl.Int64,
+                        ).alias("__cluster_id__")
+                    )
+                # Batch builder: sorts by __cluster_id__ once and pre-extracts
+                # each user column to a Python list ONCE. At 5M / 1.67M
+                # multi-member clusters the previous partition_by(as_dict=True)
+                # + per-cluster build_golden_record loop allocated 1.67M tiny
+                # eager DataFrames AND called cluster_df[col].to_list() ~6.7M
+                # times. New path: 4 to_list() calls + Python list slicing.
+                # Measured: golden stage 307s -> ~30s at 5M.
+                # provenance=True (opt-in) enriches each field with source_row_id
+                # for the lineage sidecar; the golden_df builder below ignores
+                # the extra key, so the same records feed both paths (no double
+                # build).
+                #
+                # Fast path (provenance=False + uniform strategy + no
+                # quality_scores + no field_rules + no cluster_overrides): bypass
+                # the list[dict] intermediate entirely. At 10M / 2M multi-member
+                # clusters that intermediate allocates ~14 GB of CPython dict
+                # overhead; build_golden_records_df does the whole compute
+                # columnar in Polars at ~0.8 GB. Provenance + non-fast strategies
+                # still go through the list[dict] path so the existing semantics
+                # (per-field source_row_id, custom merge_field rules) stay intact.
+                _provenance_on = config.output.lineage_provenance
+                _fast_eligible = (
+                    not _provenance_on
+                    and _polars_native_eligible(golden_rules, quality_scores=None)
+                )
+                if _fast_eligible:
+                    with stage("golden_build_records_df_fast"):
+                        golden_df = build_golden_records_df(
+                            multi_df, golden_rules
+                        )
+                    # Leave golden_records empty: the provenance branch below
+                    # (gated on `if config.output.lineage_provenance and
+                    # golden_records`) is a no-op when provenance is off, so no
+                    # metadata is lost.
+                    golden_records = []
+                else:
+                    with stage("golden_build_records_batch_slow"):
+                        golden_records = build_golden_records_batch(
+                            multi_df, golden_rules,
+                            provenance=_provenance_on,
+                        )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
@@ -1641,12 +1753,25 @@ def _run_dedupe_pipeline(
         golden_df = pl.DataFrame(golden_rows, schema_overrides=schema_overrides)
 
     # Classify records
-    multi_cluster_ids = [
-        cid for cid, cinfo in clusters.items() if cinfo["size"] > 1
-    ]
-    dupe_row_ids = set()
-    for cid in multi_cluster_ids:
-        dupe_row_ids.update(clusters[cid]["members"])
+    if cluster_frames is not None:
+        # SP-B: dupe row ids from the frame aggregates -- members of every
+        # size>1 cluster. OVERSIZED-INCLUDED to match the dict path (which
+        # filters size>1 only; oversized clusters' members are still dupes).
+        dupe_row_ids = set(
+            cluster_frames.assignments.join(
+                cluster_frames.metadata.filter(pl.col("size") > 1).select(
+                    "cluster_id"
+                ),
+                on="cluster_id",
+            )["member_id"].to_list()
+        )
+    else:
+        multi_cluster_ids = [
+            cid for cid, cinfo in clusters.items() if cinfo["size"] > 1
+        ]
+        dupe_row_ids = set()
+        for cid in multi_cluster_ids:
+            dupe_row_ids.update(clusters[cid]["members"])
     unique_row_ids = set(all_ids) - dupe_row_ids
 
     dupes_df = collected_df.filter(pl.col("__row_id__").is_in(list(dupe_row_ids)))
@@ -1655,17 +1780,36 @@ def _run_dedupe_pipeline(
     # ── Step 6: REPORT ──
     report = None
     if output_report:
-        cluster_sizes = [c["size"] for c in clusters.values()]
-        oversized_count = sum(1 for c in clusters.values() if c["oversized"])
+        if cluster_frames is not None:
+            # SP-B: report stats from the metadata frame -- no dict build.
+            cluster_sizes = cluster_frames.metadata["size"].to_list()
+            oversized_count = cluster_frames.metadata.filter(
+                pl.col("oversized")
+            ).height
+            total_clusters = cluster_frames.metadata.height
+        else:
+            cluster_sizes = [c["size"] for c in clusters.values()]
+            oversized_count = sum(
+                1 for c in clusters.values() if c["oversized"]
+            )
+            total_clusters = len(clusters)
         report = generate_dedupe_report(
             total_records=len(collected_df),
-            total_clusters=len(clusters),
+            total_clusters=total_clusters,
             cluster_sizes=cluster_sizes,
             oversized_clusters=oversized_count,
             matchkeys_used=[mk.name for mk in matchkeys],
         )
 
     # ── Step 7: OUTPUT ──
+    # SP-B: from here down the remaining dict consumers (output_clusters rows,
+    # lineage, identity wiring, results["clusters"]) need the legacy dict shape.
+    # Rebuild it LAZILY now -- once -- via the cache helper. On the frames-out
+    # branch this is the FIRST and ONLY materialization; golden + stats + dupes
+    # above ran entirely off the frames. results["clusters"] forces the build
+    # unconditionally today; SP-C removes that last dict consumer so the rebuild
+    # can be skipped when no output/identity needs it.
+    clusters = _clusters_dict()
     run_name = config.output.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
     fmt = config.output.format or "csv"
     directory = config.output.directory or config.output.path or "."
@@ -1712,21 +1856,28 @@ def _run_dedupe_pipeline(
             logger.warning("Lineage generation failed: %s", e)
 
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
-    # When the columnar-cluster-build gate is ON, feed the identity evidence-edge
-    # consumer from a ClusterPairScores view (byte-identical to the dict path,
-    # built once here). Gate via _columnar_cluster_build_enabled
-    # (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD) -- NOT the _use_columnar pipeline flag,
-    # which is a different env var.
-    pair_score_view = None
+    # Feed the identity evidence-edge consumer from a ClusterPairScores view
+    # (byte-identical to the dict path, built once here) whenever the dict that
+    # reaches identity carries EMPTY per-cluster pair_scores. Two gates produce
+    # such a dict:
+    #   - _columnar_cluster_build_enabled (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD):
+    #     the columnar build returns pair_scores={};
+    #   - _cluster_frames_out_enabled (GOLDENMATCH_CLUSTER_FRAMES_OUT, SP-B): the
+    #     lazily-rebuilt dict from cluster_frames_to_dict also has pair_scores={}.
+    # In BOTH cases resolve_clusters' info.get("pair_scores") fallback would yield
+    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (neither env set)
+    # leaves the dict carrying real pair_scores and pair_score_view stays None --
+    # byte-identical to today.
+    pair_score_view: ClusterPairScores | None = None
     if isinstance(clusters, dict):
         from goldenmatch.core.cluster import _columnar_cluster_build_enabled
-        if _columnar_cluster_build_enabled():
+        if _columnar_cluster_build_enabled() or _cluster_frames_out_enabled():
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            # SP4: the columnar build returns pair_scores={}, so build the view
-            # from the RAW input pairs (input-order, last-wins == the dict path's
-            # per-cluster pair_scores) + final cluster membership. NOT from
-            # results["scored_pairs"] (max-score deduped, differs on dup-scored
-            # pairs).
+            # SP4 / SP-B: the dict reaching identity has pair_scores={}, so build
+            # the view from the RAW input pairs (input-order, last-wins == the
+            # dict path's per-cluster pair_scores) + final cluster membership. NOT
+            # from results["scored_pairs"] (max-score deduped, differs on
+            # dup-scored pairs).
             pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
