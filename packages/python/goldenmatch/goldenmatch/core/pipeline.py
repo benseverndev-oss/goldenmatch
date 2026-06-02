@@ -249,6 +249,7 @@ def _resolve_identities(
     matchkeys: list,
     config: GoldenMatchConfig,
     run_name: str,
+    pair_score_view: Any = None,
 ) -> dict | None:
     """Run identity resolution as a post-cluster step. Best-effort: failures
     log a warning and return None without affecting dedupe output.
@@ -312,6 +313,7 @@ def _resolve_identities(
             source_pk_col=config.identity.source_pk_column,
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
+            pair_score_view=pair_score_view,
         )
         return summary.as_dict()
     except Exception as e:
@@ -1710,9 +1712,21 @@ def _run_dedupe_pipeline(
             logger.warning("Lineage generation failed: %s", e)
 
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
+    # When the columnar-cluster-build gate is ON, feed the identity evidence-edge
+    # consumer from a ClusterPairScores view (byte-identical to the dict path,
+    # built once here). Gate via _columnar_cluster_build_enabled
+    # (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD) -- NOT the _use_columnar pipeline flag,
+    # which is a different env var.
+    pair_score_view = None
+    if isinstance(clusters, dict):
+        from goldenmatch.core.cluster import _columnar_cluster_build_enabled
+        if _columnar_cluster_build_enabled():
+            from goldenmatch.core.cluster_pairscores import ClusterPairScores
+            pair_score_view = ClusterPairScores.from_cluster_dict(clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
-            clusters, collected_df, all_pairs, matchkeys, config, run_name
+            clusters, collected_df, all_pairs, matchkeys, config, run_name,
+            pair_score_view=pair_score_view,
         )
 
     results = {

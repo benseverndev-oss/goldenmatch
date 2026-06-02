@@ -19,9 +19,12 @@ import os
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from goldenmatch.core.cluster_pairscores import ClusterPairScores
 
 from goldenmatch.core._hashing import record_fingerprint
 from goldenmatch.identity.fingerprint_batch import (
@@ -219,6 +222,7 @@ def resolve_clusters(
     controller_snapshot: dict[str, Any] | None = None,
     emit_singletons: bool = True,
     weak_confidence_threshold: float = 0.6,
+    pair_score_view: ClusterPairScores | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
 
@@ -393,7 +397,11 @@ def resolve_clusters(
                     "last_seen_at": now,
                 })
                 summary.records_upserted += 1
-            pair_scores = info.get("pair_scores") or {}
+            pair_scores = (
+                pair_score_view.for_cluster(cluster_id)
+                if pair_score_view is not None
+                else (info.get("pair_scores") or {})
+            )
             for pair_key, score in pair_scores.items():
                 if isinstance(pair_key, tuple) and len(pair_key) == 2:
                     a, b = pair_key
@@ -556,7 +564,11 @@ def resolve_clusters(
             summary.records_upserted += 1
 
         # 3d. Record evidence edges for every scored within-cluster pair.
-        pair_scores = info.get("pair_scores") or {}
+        pair_scores = (
+            pair_score_view.for_cluster(cluster_id)
+            if pair_score_view is not None
+            else (info.get("pair_scores") or {})
+        )
         for pair_key, score in pair_scores.items():
             if isinstance(pair_key, tuple) and len(pair_key) == 2:
                 a, b = pair_key
@@ -599,7 +611,9 @@ def resolve_clusters(
             ra = rowid_to_recid.get(int(ba))
             rb = rowid_to_recid.get(int(bb))
             bottleneck_score = (
-                info.get("pair_scores", {}).get((min(int(ba), int(bb)), max(int(ba), int(bb))))
+                pair_score_view.score_for(cluster_id, int(ba), int(bb))
+                if pair_score_view is not None
+                else info.get("pair_scores", {}).get((min(int(ba), int(bb)), max(int(ba), int(bb))))
             )
             if ra and rb:
                 store.add_edge(EvidenceEdge(
