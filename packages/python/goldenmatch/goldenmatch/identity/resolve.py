@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 from collections import Counter
 from dataclasses import dataclass
@@ -25,6 +24,10 @@ from typing import Any
 import polars as pl
 
 from goldenmatch.core._hashing import record_fingerprint
+from goldenmatch.identity.fingerprint_batch import (
+    _canonical_payload,
+    batch_fingerprints,
+)
 from goldenmatch.identity.model import (
     EdgeKind,
     EventKind,
@@ -75,6 +78,25 @@ def _hash_payload(payload: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+# Sentinel: ``_record_id_candidates`` was called WITHOUT a precomputed batch
+# hash, so it must compute the fingerprint per-row (the legacy default path).
+# Distinct from ``None``, which means the batch *determined* this row is
+# un-fingerprintable (-> legacy-only id).
+_NOT_BATCHED = object()
+
+
+def _batch_fingerprint_enabled() -> bool:
+    """Opt-in batch fingerprinting for ``resolve_clusters``: when
+    ``GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1``, no-PK record h1 hashes are
+    computed once via ``batch_fingerprints(df)`` instead of per-row inside the
+    cluster loop. Default OFF (``0``) -- byte-identical to the per-row path, so
+    the gate is a no-op on output. Default-on is pending a perf bench. See
+    ``_id_scheme`` for the sibling content-hash kill-switch."""
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT", "0"
+    ).strip() == "1"
+
+
 def _id_scheme() -> str:
     """Primary content-hash record-id scheme: ``"h1"`` (canonical
     cross-surface fingerprint, the default) or ``"hash"`` (legacy json.dumps).
@@ -86,41 +108,31 @@ def _id_scheme() -> str:
     ).strip().lower() == "hash" else "h1"
 
 
-def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Coerce a row payload to the primitives ``record_fingerprint`` accepts.
-
-    Temporals -> ISO-8601; non-finite floats -> their token string; other
-    non-primitives -> ``str()``. v1 of the canonical spec is primitive-only;
-    these coercions are a documented v1.1 follow-up (pinned in the kernel +
-    mirrored across surfaces when a second write surface adopts the C ABI). For
-    now they keep ingest working on real data (date columns etc.) while clean
-    str/int/float/bool/None records get a fully cross-surface fingerprint."""
-    out: dict[str, Any] = {}
-    for k, v in payload.items():
-        if isinstance(v, float) and not math.isfinite(v):
-            out[k] = repr(v)  # "nan" / "inf" / "-inf" as a stable token
-        elif v is None or isinstance(v, (bool, int, float, str, bytes)):
-            out[k] = v
-        else:
-            iso = getattr(v, "isoformat", None)
-            out[k] = iso() if callable(iso) else str(v)
-    return out
-
-
 def _record_id_candidates(
     row: dict[str, Any],
     source: str,
     source_pk_col: str | None,
+    *,
+    precomputed_h1: object = _NOT_BATCHED,
 ) -> tuple[str, list[str]]:
     """Return ``(primary_id, lookup_candidates)`` for a record row.
 
-    Natural PK -> ``("{source}:{pk}", ["{source}:{pk}"])`` (unchanged).
+    Natural PK -> ``("{source}:{pk}", ["{source}:{pk}"])`` (unchanged; never
+    touches ``precomputed_h1``).
     No PK -> a content-hash id. The primary is the canonical cross-surface
     fingerprint (``"{source}:h1:{12}"``); the legacy json.dumps id
     (``"{source}:hash:{12}"``) is kept as an additional *lookup candidate* so
     records ingested before the cutover keep resolving to the same entity (no
     rewrite, no split). Candidates are ordered primary-first. A record whose
     values the canonical spec can't yet fingerprint stays on the legacy scheme.
+
+    ``precomputed_h1`` (keyword-only) lets a caller supply the FULL 64-char h1
+    hash computed in bulk via ``batch_fingerprints`` (the
+    ``GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT`` path), skipping the per-row
+    ``record_fingerprint`` call. ``_NOT_BATCHED`` (default) -> compute per-row.
+    A ``str`` -> use it as the full h1 hash. ``None`` -> the batch determined
+    the row un-fingerprintable, take the legacy-only path (byte-identical to
+    the per-row ``except`` branch).
     """
     if source_pk_col and source_pk_col in row and row[source_pk_col] is not None:
         pk = str(row[source_pk_col])
@@ -128,12 +140,20 @@ def _record_id_candidates(
         return rid, [rid]
     payload = _row_to_payload(row)
     legacy_id = f"{source}:hash:{_hash_payload(payload)[:12]}"
-    try:
-        h1_id = f"{source}:h1:{record_fingerprint(_canonical_payload(payload))[:12]}"
-    except (TypeError, ValueError):
-        # Belt-and-suspenders: anything the canonical spec can't handle stays
-        # legacy-only (still fully resolvable). Should be rare after coercion.
+    if precomputed_h1 is _NOT_BATCHED:
+        try:
+            full_h1 = record_fingerprint(_canonical_payload(payload))
+        except (TypeError, ValueError):
+            # Belt-and-suspenders: anything the canonical spec can't handle
+            # stays legacy-only (still fully resolvable). Rare after coercion.
+            return legacy_id, [legacy_id]
+    elif precomputed_h1 is None:
+        # Batch flagged this row un-fingerprintable -> legacy-only (matches the
+        # per-row except branch byte-for-byte).
         return legacy_id, [legacy_id]
+    else:
+        full_h1 = precomputed_h1  # type: ignore[assignment]
+    h1_id = f"{source}:h1:{full_h1[:12]}"
     if _id_scheme() == "hash":
         return legacy_id, [legacy_id, h1_id]
     return h1_id, [h1_id, legacy_id]
@@ -224,13 +244,41 @@ def resolve_clusters(
     _rowid_primary: dict[int, str] = {}
     _rowid_candidates: dict[int, list[str]] = {}
 
+    # Optional batch fingerprinting (GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1):
+    # compute every no-PK row's h1 hash once via the Arrow batch kernel instead
+    # of per-row inside the loop. ``batch_fingerprints`` returns FULL 64-char
+    # hashes positionally aligned to ``df`` rows (None = un-fingerprintable),
+    # so it MUST run on the full df (not a sub-frame) to stay aligned with
+    # ``enumerate(rows)``. Only NO-PK rows get a precomputed hash -- the
+    # PK-detection here mirrors ``_record_id_candidates`` exactly, so a PK row
+    # never receives one (it would be ignored anyway) and a no-PK row always
+    # does. Gate off -> ``h1_by_rowid`` empty -> every row falls to _NOT_BATCHED
+    # -> byte-identical to the per-row path.
+    h1_by_rowid: dict[int, str | None] = {}
+    if _batch_fingerprint_enabled():
+        h1_list = batch_fingerprints(df)
+        for i, row in enumerate(rows):
+            rid = row.get("__row_id__")
+            if rid is None:
+                continue
+            has_pk = (
+                source_pk_col is not None
+                and source_pk_col in row
+                and row[source_pk_col] is not None
+            )
+            if not has_pk:
+                h1_by_rowid[int(rid)] = h1_list[i]
+
     for row in rows:
         rid = row.get("__row_id__")
         if rid is None:
             continue
         irid = int(rid)
         source = str(row.get("__source__", "dataframe"))
-        primary_id, candidates = _record_id_candidates(row, source, source_pk_col)
+        primary_id, candidates = _record_id_candidates(
+            row, source, source_pk_col,
+            precomputed_h1=h1_by_rowid.get(irid, _NOT_BATCHED),
+        )
         _rowid_primary[irid] = primary_id
         _rowid_candidates[irid] = candidates
         rowid_to_payload[irid] = _row_to_payload(row)
