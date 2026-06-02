@@ -1046,13 +1046,53 @@ def build_golden_record_with_provenance(
 # (gitignored).
 
 
+def _multi_df_from_frames(
+    source_df: pl.DataFrame,
+    frames,  # cluster.ClusterFrames
+) -> pl.DataFrame:
+    """Join the assignments frame onto the source df, keeping only
+    rows that belong to a multi-member, NON-oversized cluster.
+
+    Returns a ``multi_df`` with a ``__cluster_id__`` column, the same
+    shape the per-column golden aggregation runs on. Returns an empty
+    frame (height 0) when there are no eligible clusters/rows.
+
+    The cluster selection mirrors the dict pipeline's golden filter in
+    ``pipeline.py`` (``info["size"] > 1 and not info["oversized"]``):
+    oversized clusters are EXCLUDED, exactly like the legacy path.
+    """
+    # Singleton + oversized drop via the metadata frame. NOTE the
+    # parentheses: Polars ``&`` binds tighter than ``>``, so the
+    # unparenthesized ``pl.col("size") > 1 & ~pl.col("oversized")``
+    # is a different (wrong) predicate.
+    multi_cluster_ids = (
+        frames.metadata
+        .filter((pl.col("size") > 1) & ~pl.col("oversized"))
+        .select("cluster_id")
+    )
+
+    # Vectorized join: attach __cluster_id__ to each source row whose
+    # __row_id__ appears in the assignments frame. ``inner`` join
+    # drops rows that aren't members of any eligible cluster.
+    assignments_multi = frames.assignments.join(
+        multi_cluster_ids, on="cluster_id", how="inner",
+    ).rename({"cluster_id": "__cluster_id__"})
+
+    return source_df.join(
+        assignments_multi,
+        left_on="__row_id__",
+        right_on="member_id",
+        how="inner",
+    )
+
+
 def build_golden_records_from_frames(
     source_df: pl.DataFrame,
     frames,  # cluster.ClusterFrames; imported lazily to keep golden.py independent
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
     provenance: bool = False,
-) -> list[dict]:
+) -> tuple[pl.DataFrame | None, list[dict]]:
     """Phase 4 entry point: build golden records from a Phase-2
     ``ClusterFrames`` plus the source DataFrame.
 
@@ -1065,25 +1105,37 @@ def build_golden_records_from_frames(
             ``cluster.build_clusters_v2_columnar`` (or equivalent). The
             ``assignments`` frame must have ``cluster_id`` (i64) and
             ``member_id`` (i64) columns. The ``metadata`` frame is read
-            to filter singletons via the ``size`` column.
-        rules: forwarded to ``build_golden_records_batch`` unchanged.
+            to filter singletons (``size``) AND oversized clusters
+            (``oversized``) -- matching the dict pipeline's golden
+            selection ``size > 1 and not oversized``.
+        rules: forwarded to the golden builder unchanged.
         quality_scores, provenance: forwarded unchanged.
 
     Returns:
-        Same shape as ``build_golden_records_batch`` -- list of golden
-        record dicts, one per multi-member cluster, sorted by
-        ``__cluster_id__``.
+        A ``(golden_df, golden_records)`` tuple. Exactly one slot is
+        populated, mirroring the dict pipeline's fast/slow decision:
 
-    Empty cases:
-        - empty ``source_df`` -> ``[]``.
-        - empty ``assignments`` -> ``[]``.
-        - assignments contains member_ids absent from ``source_df`` ->
-          those clusters are silently dropped (consistent with how the
-          existing pipeline drops rows whose __row_id__ isn't in the
-          source).
+        - FAST path (``not provenance`` AND
+          ``_polars_native_eligible(rules, quality_scores=None)``):
+          returns ``(golden_df, [])`` where ``golden_df`` is the
+          columnar ``pl.DataFrame`` from ``build_golden_records_df``.
+        - SLOW path (provenance requested OR quality_scores present OR
+          custom field rules): returns ``(None, golden_records)`` where
+          ``golden_records`` is the ``list[dict]`` from
+          ``build_golden_records_batch``.
+
+        The fast path DROPS quality_scores/provenance, so it fires ONLY
+        when both are absent (same gate as ``pipeline.py``).
+
+    Empty cases (both slots empty):
+        - empty ``source_df`` -> ``(None, [])``.
+        - empty ``assignments`` -> ``(None, [])``.
+        - assignments contains only member_ids absent from
+          ``source_df`` -> ``(None, [])`` (those clusters are silently
+          dropped, consistent with the existing pipeline).
     """
     if source_df.height == 0 or frames.assignments.is_empty():
-        return []
+        return None, []
 
     if "__row_id__" not in source_df.columns:
         raise ValueError(
@@ -1093,39 +1145,27 @@ def build_golden_records_from_frames(
             "frame doesn't have one.",
         )
 
-    # Drop singleton clusters via the metadata.size filter -- golden
-    # only processes multi-member clusters per the existing
-    # ``build_golden_records_batch`` contract. This filter is cheap
-    # (Polars filter on a small metadata frame) and avoids feeding
-    # singleton clusters through the per-column group_by pipeline.
-    multi_cluster_ids = (
-        frames.metadata
-        .filter(pl.col("size") > 1)
-        .select("cluster_id")
-    )
-
-    # Vectorized join: attach __cluster_id__ to each source row whose
-    # __row_id__ appears in the assignments frame. ``inner`` join
-    # drops rows that aren't members of any multi-member cluster (the
-    # "rows NOT referenced ... are silently dropped" contract above).
-    assignments_multi = frames.assignments.join(
-        multi_cluster_ids, on="cluster_id", how="inner",
-    ).rename({"cluster_id": "__cluster_id__"})
-
-    multi_df = source_df.join(
-        assignments_multi,
-        left_on="__row_id__",
-        right_on="member_id",
-        how="inner",
-    )
+    multi_df = _multi_df_from_frames(source_df, frames)
 
     if multi_df.height == 0:
-        return []
+        return None, []
 
-    return build_golden_records_batch(
+    # Preserve the dict pipeline's fast/slow decision (pipeline.py
+    # ~:1598). The fast columnar path drops quality_scores + provenance,
+    # so it's only valid when BOTH are absent.
+    fast_eligible = (
+        not provenance
+        and _polars_native_eligible(rules, quality_scores=None)
+    )
+    if fast_eligible:
+        golden_df = build_golden_records_df(multi_df, rules)
+        return golden_df, []
+
+    golden_records = build_golden_records_batch(
         multi_df,
         rules,
         quality_scores=quality_scores,
         provenance=provenance,
     )
+    return None, golden_records
 
