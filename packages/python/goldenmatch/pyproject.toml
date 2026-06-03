@@ -130,7 +130,7 @@ ray = [
 # config.backend="datafusion". Apache Arrow query engine; pairs with
 # goldenmatch-native for zero-Python-loop scoring.
 datafusion = [
-    "datafusion>=44",
+    "datafusion>=53,<54",
 ]
 agent = [
     "aiohttp>=3.9",
