@@ -506,55 +506,77 @@ def build_cluster_frames(
         },
         schema=PAIR_STREAM_SCHEMA,
     )
-    sorted_clusters, metadata_by_cid, _weak = _columnar_presplit(
-        pairs_list, pairs_df, all_ids, max_cluster_size,
-    )
-
-    # Pre-split frames -- build the SAME 9-col metadata + 2-col assignments
-    # schema cluster_dict_to_frames emits, DIRECTLY (numpy fills). Carry min/avg
-    # from metadata_by_cid (NOT cluster_dict_to_frames, which zeros them from the
-    # empty pair_scores). quality="strong" placeholder; Step-3 overwrites.
-    n_clusters = len(sorted_clusters)
-    total_members = sum(len(s) for s in sorted_clusters)
-    a_cid = _np.empty(total_members, dtype=_np.int64)
-    a_mid = _np.empty(total_members, dtype=_np.int64)
-    m_cid = _np.empty(n_clusters, dtype=_np.int64)
-    m_size = _np.empty(n_clusters, dtype=_np.int64)
-    m_conf = _np.empty(n_clusters, dtype=_np.float64)
-    m_over = _np.empty(n_clusters, dtype=_np.bool_)
-    m_bot_a = _np.empty(n_clusters, dtype=_np.int64)
-    m_bot_b = _np.empty(n_clusters, dtype=_np.int64)
-    m_min = _np.empty(n_clusters, dtype=_np.float64)
-    m_avg = _np.empty(n_clusters, dtype=_np.float64)
-    a_idx = 0
-    for i, members in enumerate(sorted_clusters):
-        cid = i + 1
-        n = len(members)
-        a_cid[a_idx:a_idx + n] = cid
-        a_mid[a_idx:a_idx + n] = list(members)
-        a_idx += n
-        md = metadata_by_cid[cid]
-        bot = md["bottleneck_pair"] or (0, 0)
-        m_cid[i] = cid
-        m_size[i] = n
-        m_conf[i] = md["confidence"]
-        m_over[i] = n > max_cluster_size
-        m_bot_a[i] = bot[0]
-        m_bot_b[i] = bot[1]
-        m_min[i] = md["min_edge"]   # coalesced 0.0, never None
-        m_avg[i] = md["avg_edge"]
-    assignments = _pl.DataFrame({"cluster_id": a_cid, "member_id": a_mid})
-    metadata = _pl.DataFrame({
-        "cluster_id": m_cid,
-        "size": m_size,
-        "confidence": m_conf,
-        "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
-        "oversized": m_over,
-        "bottleneck_pair_a": m_bot_a,
-        "bottleneck_pair_b": m_bot_b,
-        "min_edge": m_min,
-        "avg_edge": m_avg,
-    })
+    # BULK pre-split frames. Two paths, IDENTICAL output schema/shape (the SP-A
+    # parity test runs both native=1 and native=0):
+    #   - Native: the Arrow kernel ALREADY returns canonical (assignments,
+    #     metadata) -- cids sorted by min-member, enumerate start=1 (== the
+    #     Python re-sort SP-A asserts). Use them DIRECTLY; skip the Python
+    #     member-set round-trip + numpy re-fill that _columnar_presplit's native
+    #     branch did (it rebuilt member-sets off frames.assignments only to
+    #     re-emit the same frames -- ~5s of pure waste at 5M). The kernel's
+    #     metadata is the SAME 9-col schema in the SAME order the rest of this
+    #     function + cluster_frames_to_dict expect; only min/avg need a null
+    #     coalesce (kernel emits null for edgeless/singleton clusters, where the
+    #     numpy path coalesced via metadata_by_cid -> 0.0).
+    #   - Off-native (no kernel): _columnar_presplit + numpy-fill, VERBATIM (the
+    #     only correct path without the kernel). quality="strong" placeholder;
+    #     Step-3 below overwrites it on BOTH paths.
+    native = native_module() if native_enabled("clustering") else None
+    arrow_fn = getattr(native, "build_clusters_arrow", None) if native else None
+    if native is not None and arrow_fn is not None:
+        frames0 = build_clusters_arrow_native(
+            pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
+        )
+        assignments = frames0.assignments
+        metadata = frames0.metadata.with_columns(
+            _pl.col("min_edge").fill_null(0.0),
+            _pl.col("avg_edge").fill_null(0.0),
+        )
+    else:
+        sorted_clusters, metadata_by_cid, _weak = _columnar_presplit(
+            pairs_list, pairs_df, all_ids, max_cluster_size,
+        )
+        n_clusters = len(sorted_clusters)
+        total_members = sum(len(s) for s in sorted_clusters)
+        a_cid = _np.empty(total_members, dtype=_np.int64)
+        a_mid = _np.empty(total_members, dtype=_np.int64)
+        m_cid = _np.empty(n_clusters, dtype=_np.int64)
+        m_size = _np.empty(n_clusters, dtype=_np.int64)
+        m_conf = _np.empty(n_clusters, dtype=_np.float64)
+        m_over = _np.empty(n_clusters, dtype=_np.bool_)
+        m_bot_a = _np.empty(n_clusters, dtype=_np.int64)
+        m_bot_b = _np.empty(n_clusters, dtype=_np.int64)
+        m_min = _np.empty(n_clusters, dtype=_np.float64)
+        m_avg = _np.empty(n_clusters, dtype=_np.float64)
+        a_idx = 0
+        for i, members in enumerate(sorted_clusters):
+            cid = i + 1
+            n = len(members)
+            a_cid[a_idx:a_idx + n] = cid
+            a_mid[a_idx:a_idx + n] = list(members)
+            a_idx += n
+            md = metadata_by_cid[cid]
+            bot = md["bottleneck_pair"] or (0, 0)
+            m_cid[i] = cid
+            m_size[i] = n
+            m_conf[i] = md["confidence"]
+            m_over[i] = n > max_cluster_size
+            m_bot_a[i] = bot[0]
+            m_bot_b[i] = bot[1]
+            m_min[i] = md["min_edge"]   # coalesced 0.0, never None
+            m_avg[i] = md["avg_edge"]
+        assignments = _pl.DataFrame({"cluster_id": a_cid, "member_id": a_mid})
+        metadata = _pl.DataFrame({
+            "cluster_id": m_cid,
+            "size": m_size,
+            "confidence": m_conf,
+            "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
+            "oversized": m_over,
+            "bottleneck_pair_a": m_bot_a,
+            "bottleneck_pair_b": m_bot_b,
+            "min_edge": m_min,
+            "avg_edge": m_avg,
+        })
 
     if auto_split:
         # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
