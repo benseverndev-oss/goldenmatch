@@ -140,7 +140,7 @@ def _inmemory_comparand(blocks, config):
     the SAME frames-out tail the spine runs -- the semantic reference.
     Returns ``(golden_df, assignments, raw_pairs)``.
     """
-    from goldenmatch.backends.datafusion_backend import score_blocks_datafusion
+    import polars as pl
     from goldenmatch.backends.datafusion_spine import (
         _all_ids_from_blocks,
         _golden_rules_knobs,
@@ -148,16 +148,31 @@ def _inmemory_comparand(blocks, config):
     )
     from goldenmatch.core.cluster import build_cluster_frames
     from goldenmatch.core.golden import build_golden_records_from_frames
+    from rapidfuzz.distance import JaroWinkler
 
+    # Independent reference scorer: brute-force within-block pairs via python
+    # rapidfuzz jaro_winkler (== the spine's FFI jaro_winkler UDF;
+    # test_native_parity / test_datafusion_ffi_udf prove rapidfuzz-equal at
+    # 1e-9). NO _native, NO DataFusion -> any pair/cluster divergence is a
+    # spine score+dedup orchestration bug. Block on `zip`, no transforms, so
+    # the scored field is the RAW matchkey column (same value the spine's
+    # self-join scores).
     mk = config.get_matchkeys()[0]
-    matched_pairs: set = set()
-    raw_pairs = score_blocks_datafusion(blocks, mk, matched_pairs)
-    # Canonicalize to (min, max) -- score_blocks_datafusion already returns
-    # canonical (a<b) tuples; keep an explicit pass for symmetry with the
-    # spine's join predicate.
-    raw_pairs = [
-        (a, b, s) if a < b else (b, a, s) for a, b, s in raw_pairs
-    ]
+    field = mk.fields[0].column
+    threshold = mk.threshold
+    best: dict[tuple[int, int], float] = {}  # canonical (a<b) -> MAX score
+    for b in blocks:
+        bdf = b.df.collect() if isinstance(b.df, pl.LazyFrame) else b.df
+        ids = bdf["__row_id__"].cast(pl.Int64).to_list()
+        vals = bdf[field].to_list()
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                s = JaroWinkler.normalized_similarity(vals[i] or "", vals[j] or "")
+                if s >= threshold:
+                    a, c = (ids[i], ids[j]) if ids[i] < ids[j] else (ids[j], ids[i])
+                    if (a, c) not in best or s > best[(a, c)]:
+                        best[(a, c)] = s
+    raw_pairs = [(a, c, s) for (a, c), s in best.items()]
 
     # all_ids via the SAME helper the spine uses (LazyFrame-robust + identical
     # on both sides for parity).
