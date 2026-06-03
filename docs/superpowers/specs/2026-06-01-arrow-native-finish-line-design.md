@@ -468,6 +468,66 @@ handoff): the perf verdict recorded + determinism verified.
   oversized clusters — denser fixture needed if that artifact matters).
 - 1M/5M: PENDING (re-dispatched with `confidence_required=False`).
 
+## Stage E — out-of-core spill verdict (2026-06-03): HONEST-NULL on one-box survival
+
+**Verdict: the relational stages spill correctly, but the one-box "spine survives
+where in-memory OOMs" thesis does NOT bind with a one-box workload — the
+non-relational UF break is the binding constraint, exactly as this spec's Risk
+("Spill may still not bind") and the engine-portability map (the UF holdout)
+anticipated.** Measured on `large-new-64GB`, `bench-datafusion-spine-spill.yml`,
+run `26911207018` (driver `scripts/bench_datafusion_spine_spill.py`, 3 variants:
+in-memory `bucket` / `spine_nospill` / `spine_spill`).
+
+**Measured @ 200K rows, soundex-on-`last_name` blocking, jw≥0.85, pool 2048 MB:**
+
+| variant | wall | peak RSS | pairs (raw) / dupes | clusters |
+|---|---|---|---|---|
+| bucket (in-memory) | 17.6s | 3572 MB | 199,979 (dupes) | 5628 |
+| spine_nospill | 108.1s | 4765 MB | 5,203,861 (raw pairs) | 5606 |
+| spine_spill (pool 2 GB) | 111.0s | 4820 MB | 5,203,861 (raw pairs) | 5606 |
+
+**@ 1M rows:** the spine process was OOM-killed (job exit 143, runner-level OOM)
+during the run — see mechanism below.
+
+**What binds and what doesn't:**
+1. **The relational spill path is CORRECT.** `spine_spill` produced output
+   byte-identical to `spine_nospill` (5,203,861 raw pairs, 5606 clusters) at a
+   bounded ~4.8 GB peak RSS — the `fair_spill_pool` (2 GB) routes score+dedup
+   through the OS disk manager without changing results. The engine-portability
+   claim (these stages plan + spill on DataFusion, and would distribute on Sail)
+   holds.
+2. **One-box survival does NOT bind.** The spine emits ~5.2M RAW above-threshold
+   pairs at 200K rows (~26/row) and collects them to a driver-side Python list to
+   feed `build_cluster_frames` (the UF break) — the in-memory island the spill
+   pool does NOT cover (this spec's UF holdout). With soundex blocking that island
+   grows ~O(N²) in block size, so it OOMs the 64 GB box at ~1M rows — BEFORE the
+   in-memory `bucket` comparand (only 3.5 GB at 200K) would. The spine's own
+   non-relational UF collection is the binding constraint.
+3. **The asymmetry is architecturally precluded on one box for this workload.**
+   `bucket` OOMs only when blocks are large (its O(block²) within-block score
+   matrix), but large blocks ALSO explode the spine's above-threshold pair set →
+   the UF island OOMs first. You cannot make in-memory OOM without making the
+   spine's pair-collection island OOM sooner. So no reachable sub-50M-pair one-box
+   scale shows "in-memory dies, spine survives" with realistic_person-shape data.
+   More billable runs cannot change this; it is the spec's anticipated honest-null.
+
+**Implication (consistent with the gate reframe below):** the spine's value is
+**engine portability**, not one-box survival. Removing the UF island — routing the
+cluster build to distributed label-prop at Sail scale (the existing ≥50M path) —
+is precisely what unlocks beyond-one-box scale; that is the Sail tier, OUT of this
+spec. **Do NOT flip the `mode` default on a one-box survival claim** (the sign-off
+gate is not met for one-box survival; it IS met for relational-spill correctness +
+determinism). Recommend: keep `mode="scale"` opt-in; revisit the default when the
+Sail tier removes the island.
+
+**Follow-ups (scoped, not done here):** (a) a relational-stages-ONLY spill bench
+(score+dedup under a cgroup `MemoryMax` cap, excluding the UF collection) to show
+the relational spill survival crisply in isolation; (b) a large-but-SPARSE-block
+workload (big soundex blocks of dissimilar surnames, most pairs below threshold)
+where in-memory matrices OOM while the spine's above-threshold output stays small —
+the only one-box shape that could bind, and only if such a workload is
+representative. Both are deferred.
+
 ## Gate reframe: engine portability, not one-box RSS (2026-06-03, supersedes the RSS gate for this track)
 
 **The Arrow-native arc's destination is engine portability** — making every
