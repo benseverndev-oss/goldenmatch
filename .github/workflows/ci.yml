@@ -259,12 +259,14 @@ jobs:
         if: matrix.pkg == 'goldenmatch'
         run: |
           uv pip install 'datafusion>=53,<54'
-          # maturin develop drops the compiled goldenmatch_datafusion_udf ext
-          # straight into the active uv venv (mirrors how the standalone
-          # datafusion-ffi-example is built). --uv keeps it inside the venv uv
-          # manages; abi3 means one ext spans 3.11-3.13.
-          uv run --with maturin maturin develop --release \
-            --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --uv
+          # Build a wheel, then `uv pip install` it into the project .venv (the
+          # env `uv run pytest` uses). `maturin develop` under `uv run --with
+          # maturin` installs into maturin's EPHEMERAL --with overlay env, NOT
+          # .venv -> ModuleNotFound at test time. Mirror the native_wheel lane:
+          # build the abi3 wheel, then install it into .venv.
+          uv run --with maturin maturin build --release \
+            --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
+          uv pip install dist-dfudf/*.whl
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
