@@ -55,6 +55,10 @@ jobs:
               # tests/test_datafusion_ffi_udf.py. A crate-only change must
               # re-trigger that lane so the FFI feasibility gate re-runs.
               - 'packages/rust/extensions/datafusion-udf/**'
+              # Stage B: the FFI scorer UDFs delegate to the shared score-core
+              # crate. A score-core-only change must re-trigger this lane so the
+              # FFI scorer-parity test (vs native) re-runs.
+              - 'packages/rust/extensions/score-core/**'
             python_goldenmatch_postgres:
               - 'packages/python/goldenmatch/tests/test_db.py'
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
@@ -128,6 +132,10 @@ jobs:
               # the Python files it's wired into + the build script.
               - 'packages/rust/extensions/native/**'
               - 'packages/rust/extensions/fingerprint-core/**'
+              # Stage B: the native scorers are now thin shims over the shared
+              # score-core crate. A score-core change alters native behavior, so
+              # re-run the native build + parity suite.
+              - 'packages/rust/extensions/score-core/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/_hashing.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
@@ -238,15 +246,18 @@ jobs:
       # matrix package (the gated files are goldenmatch-only).
       - if: matrix.pkg == 'goldenmatch'
         run: uv run python scripts/check_map_elements.py
-      # DataFusion FFI ScalarUDF feasibility gate (Stage A). Build the
-      # standalone `datafusion-udf` crate into the project venv and install
-      # the Python `datafusion` runtime so tests/test_datafusion_ffi_udf.py can
-      # register the add_one UDF via the PyCapsule FFI bridge. The test HARD-
-      # imports goldenmatch_datafusion_udf (no importorskip), so a build break
-      # here surfaces as a test FAILURE, not a skip — that's the loud guard for
-      # the whole DataFusion spine. goldenmatch-only (the only lane with the
-      # test) and a Rust compile, not a Python import, so it can't trip the
-      # box's import-hang.
+      # DataFusion FFI ScalarUDF gate (Stage B). Build the standalone
+      # `datafusion-udf` crate into the project venv and install the Python
+      # `datafusion` runtime so tests/test_datafusion_ffi_udf.py can register the
+      # native string-scorer UDFs (jaro_winkler / token_sort / levenshtein) via
+      # the PyCapsule FFI bridge and diff them against the `goldenmatch._native`
+      # per-pair scorers (both delegate to the shared score-core crate). The test
+      # HARD-imports goldenmatch_datafusion_udf (no importorskip), so a build
+      # break here surfaces as a test FAILURE, not a skip — that's the loud guard
+      # for the whole DataFusion spine. goldenmatch-only (the only lane with the
+      # test) and a Rust compile, not a Python import, so it can't trip the box's
+      # import-hang. The in-tree `_native` ext (which the parity test HARD-
+      # asserts) is built in a follow-on step below.
       - if: matrix.pkg == 'goldenmatch'
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -267,6 +278,15 @@ jobs:
           uv run --with maturin maturin build --release \
             --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
           uv pip install dist-dfudf/*.whl
+      # Stage B: tests/test_datafusion_ffi_udf.py diffs the FFI string scorers
+      # against the per-pair `goldenmatch._native` scorers (both delegate to the
+      # shared score-core crate). The test HARD-asserts native_available(), so
+      # this lane must ALSO build the in-tree `_native` ext — without it the
+      # parity test FAILS (by design). goldenmatch-only; a Rust compile, not a
+      # Python import, so it can't trip the box's import-hang.
+      - name: Build the in-tree native ext for the FFI scorer-parity test (goldenmatch only)
+        if: matrix.pkg == 'goldenmatch'
+        run: uv run python scripts/build_native.py
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
