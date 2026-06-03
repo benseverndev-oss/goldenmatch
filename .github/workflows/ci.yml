@@ -33,6 +33,7 @@ jobs:
       native: ${{ steps.filter.outputs.native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       distributed: ${{ steps.filter.outputs.distributed }}
+      sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -164,6 +165,13 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_distributed_*.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
               - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
+            sail:
+              # Sail tier (distributed, Spark Connect). The main `python` job
+              # installs without the `sail` extra, so tests/test_sail_*.py SKIP
+              # there (pytest.importorskip). The `sail` job installs
+              # goldenmatch[sail] (pysail + pyspark[connect]) so they run.
+              - 'packages/python/goldenmatch/goldenmatch/sail/**'
+              - 'packages/python/goldenmatch/tests/test_sail_*.py'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -889,6 +897,43 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
             --timeout=300 --durations=20 -v
 
+  # Sail tier (distributed, Spark Connect). The Sail tier re-expresses the
+  # one-box DataFusion spine's relational plan against PySpark/Spark Connect.
+  # This lane installs goldenmatch[sail] (pysail + pyspark[connect]) and runs
+  # tests/test_sail_*.py against an in-process Sail Spark Connect server (they
+  # SKIP everywhere else via pytest.importorskip). Spec:
+  # docs/superpowers/specs/2026-06-03-sail-tier-design.md (Stage S1).
+  sail:
+    needs: changes
+    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # Sail (Spark Connect) optional stack. NO Java: pyspark[connect] is a
+      # pure-gRPC client (no py4j/JVM launch) and the Sail server is Rust.
+      # Install VIA THE EXTRA so the pyproject [sail] entry is exercised.
+      - name: Install sail extra
+        run: uv pip install -e 'packages/python/goldenmatch[sail]'
+      # Run with the venv python directly (NOT `uv run`): the Sail server
+      # spawns in-process; mirror the ray lane's venv-python discipline.
+      - name: Sail connectivity gate (blocking)
+        run: |
+          .venv/bin/python -c "import pysail, pyspark; print('pyspark', pyspark.__version__)"
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_connectivity.py -v --timeout=300
+      # GATE (blocking): the S1 score/dedup pair-set parity vs a python-rapidfuzz
+      # reference -- the reason this lane exists at S1.
+      - name: Sail score/dedup parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
+
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
@@ -1128,6 +1173,7 @@ jobs:
       - native_wheel
       - goldenembed
       - distributed
+      - sail
       - pyright
       - readme_callouts
     if: always()
