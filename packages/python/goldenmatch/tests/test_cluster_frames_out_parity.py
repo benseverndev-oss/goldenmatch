@@ -6,12 +6,14 @@ metadata; off-native the transient fill. Native leg SKIPS locally, runs in CI.
 """
 from __future__ import annotations
 
+import polars as pl
 import pytest
 from goldenmatch.core.cluster import (
     build_cluster_frames,
     build_clusters,
     cluster_frames_to_dict,
 )
+from goldenmatch.core.cluster_pairscores import ClusterPairScores
 
 
 def _norm(cinfo: dict) -> dict:
@@ -122,3 +124,132 @@ def test_step3_quality_matches_dict_loop(monkeypatch):
     for cid in ref:
         assert got[cid]["cluster_quality"] == ref[cid]["cluster_quality"]
         assert got[cid]["confidence"] == ref[cid]["confidence"]  # EXACT
+
+
+# --- Stage-1: ClusterPairScores.from_frames vectorized-join parity --------------
+#
+# from_frames now builds _by_cid via a Polars join instead of the Python
+# _bucket_pairs loop. It MUST stay byte-identical to from_pairs(all_pairs,
+# clusters): same kept-pair set, same key insertion order (first-occurrence),
+# same value (LAST-occurrence score), reversed keys distinct, self-pairs kept,
+# cross-cut/absent endpoints dropped. The fixture below encodes every one of
+# those invariants by construction so the parity gate is a real verifier.
+
+
+def _stage1_join_fixture():
+    """Tiny hand-verifiable fixture for the from_frames join.
+
+    Final cids (a cascading auto-split shape: a parent cluster that split into
+    children and a child that re-split, modeled directly as multiple distinct
+    final cids that share a pre-split member id space):
+
+      cid 10: members {1, 2, 3, 7}
+      cid 20: members {4, 5, 8}
+      cid 30: members {9}          (singleton, no kept pair)
+
+    Raw pairs (index : row):
+      0  (1, 2, 0.90)   kept@10 ; first occurrence of key (1,2)
+      1  (1, 2, 0.40)   kept@10 ; LATER dup, LOWER score -> LAST-WINS=0.40
+                                  (MAX would wrongly give 0.90 -> catches .max())
+      2  (7, 3, 0.70)   kept@10 ; key (7,3)
+      3  (3, 7, 0.80)   kept@10 ; key (3,7) -- DISTINCT from (7,3), NOT canonicalized
+      4  (1, 1, 0.55)   kept@10 ; self-pair, 1 in cid -> KEPT
+      5  (2, 4, 0.60)   DROPPED ; cross-cut (2 in cid10, 4 in cid20)
+      6  (4, 5, 0.95)   kept@20
+      7  (5, 99, 0.30)  DROPPED ; endpoint 99 absent from assignments
+      8  (8, 4, 0.66)   kept@20 ; NON-CANONICAL-only key (8>4), NO (4,8) reverse
+                                  -> score_for canonicalizes to (4,8) -> genuine MISS
+
+    Expected (byte-identical to from_pairs), key order = first occurrence:
+      cid 10: {(1,2): 0.40, (7,3): 0.70, (3,7): 0.80, (1,1): 0.55}
+      cid 20: {(4,5): 0.95, (8,4): 0.66}
+      cid 30: {}   (singleton, no kept pair)
+    """
+    pairs = [
+        (1, 2, 0.90),
+        (1, 2, 0.40),
+        (7, 3, 0.70),
+        (3, 7, 0.80),
+        (1, 1, 0.55),
+        (2, 4, 0.60),
+        (4, 5, 0.95),
+        (5, 99, 0.30),
+        (8, 4, 0.66),
+    ]
+    clusters = {
+        10: {"members": [1, 2, 3, 7], "size": 4, "pair_scores": {}},
+        20: {"members": [4, 5, 8], "size": 3, "pair_scores": {}},
+        30: {"members": [9], "size": 1, "pair_scores": {}},
+    }
+    # one row per (cluster_id, member_id); singletons included
+    assignments = pl.DataFrame(
+        {
+            "cluster_id": [10, 10, 10, 10, 20, 20, 20, 30],
+            "member_id": [1, 2, 3, 7, 4, 5, 8, 9],
+        }
+    )
+    return pairs, clusters, assignments
+
+
+def test_from_frames_join_byte_identical_to_from_pairs():
+    pairs, clusters, assignments = _stage1_join_fixture()
+
+    # Join fan-out guard: a duplicated member_id would silently multiply rows.
+    assert assignments["member_id"].is_unique().all()
+
+    v_frames = ClusterPairScores.from_frames(assignments, pairs)
+    v_pairs = ClusterPairScores.from_pairs(pairs, clusters)
+
+    # EXACT per-cid parity: keys, key ORDER, and values.
+    for cid in clusters:
+        got = list(v_frames.for_cluster(cid).items())
+        ref = list(v_pairs.for_cluster(cid).items())
+        assert got == ref, f"cid {cid}: from_frames={got} from_pairs={ref}"
+
+    # iter_clusters parity (cid order + emitted rows).
+    assert list(v_frames.iter_clusters()) == list(v_pairs.iter_clusters())
+
+
+def test_from_frames_score_for_byte_identical_to_from_pairs():
+    """score_for parity, including the genuine reversed-orientation MISS.
+
+    score_for canonicalizes ONLY the query to (min,max) and looks it up against
+    AS-GIVEN stored keys. The pair (8,4) is stored non-canonically (8>4) with NO
+    (4,8) reverse, so the canonical (4,8) query can NEVER reach it:
+      - score_for(20, 8, 4) -> (4,8) query -> stored only (8,4) MISS -> None
+      - score_for(20, 4, 8) -> (4,8) query -> stored only (8,4) MISS -> None
+    By contrast (7,3) AND (3,7) are BOTH stored, so the canonical (3,7) query
+    always HITS the (3,7) entry (0.80) regardless of the query orientation.
+    Both views MUST agree on every case, including the None misses.
+    """
+    pairs, clusters, assignments = _stage1_join_fixture()
+    v_frames = ClusterPairScores.from_frames(assignments, pairs)
+    v_pairs = ClusterPairScores.from_pairs(pairs, clusters)
+
+    queries = [
+        (10, 7, 3),    # canonical (3,7) -> HIT (3,7) stored -> 0.80
+        (10, 3, 7),    # canonical (3,7) -> HIT -> 0.80
+        (10, 2, 1),    # canonical (1,2) -> HIT -> 0.40 (last-wins)
+        (10, 1, 2),    # canonical (1,2) -> HIT -> 0.40
+        (10, 1, 1),    # self-pair stored (1,1) -> 0.55
+        (20, 4, 5),    # canonical (4,5) -> HIT -> 0.95
+        (20, 5, 4),    # canonical (4,5) -> HIT -> 0.95
+        (20, 8, 4),    # canonical (4,8) -> stored only (8,4) -> MISS -> None
+        (20, 4, 8),    # canonical (4,8) -> MISS -> None
+        (30, 9, 9),    # singleton, no pairs -> None
+        (10, 99, 1),   # absent endpoint -> None
+    ]
+    for cid, a, b in queries:
+        gf = v_frames.score_for(cid, a, b)
+        gp = v_pairs.score_for(cid, a, b)
+        assert gf == gp, f"score_for({cid},{a},{b}): frames={gf} pairs={gp}"
+
+    # Genuine reversed-orientation MISS (non-canonically-stored (8,4)),
+    # preserved as None on BOTH views.
+    assert v_frames.score_for(20, 8, 4) is None
+    assert v_pairs.score_for(20, 8, 4) is None
+    assert v_frames.score_for(20, 4, 8) is None
+    assert v_pairs.score_for(20, 4, 8) is None
+    # A normal HIT returns the stored float on BOTH.
+    assert v_frames.score_for(10, 3, 7) == 0.80
+    assert v_pairs.score_for(10, 3, 7) == 0.80

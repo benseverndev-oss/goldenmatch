@@ -246,6 +246,55 @@ def test_frames_path_literal_identical_under_deterministic_mint(
     assert sum_a == sum_b
 
 
+def test_frames_backed_view_evidence_edges_match_dict_view(monkeypatch):
+    """Stage-2 frame-backed view parity at the evidence-edge layer.
+
+    Resolve sources aside, the evidence edges a cluster emits are driven entirely
+    by ``view.for_cluster(cid)`` (per-pair SAME_AS edges) and
+    ``view.score_for(cid, a, b)`` (the weak-bottleneck CONFLICTS_WITH score).
+    Build the SAME clusters' view two ways -- frame-backed (from_frames) and
+    dict-backed (from_pairs) -- and assert both accessors are byte-identical for
+    every cid, INCLUDING a reversed-orientation bottleneck query that must return
+    None on BOTH (the preserved score_for miss -> CONFLICTS_WITH edge score=None).
+    """
+    frames, clusters_dict, frame_view, pairs = _build(monkeypatch, "0")
+    # Dict-backed view over the SAME final membership + same raw pairs.
+    dict_view = ClusterPairScores.from_pairs(pairs, clusters_dict)
+
+    # Per-cid SAME_AS evidence-edge tuples must match exactly (keys, order, vals).
+    for cid in clusters_dict:
+        gf = list(frame_view.for_cluster(cid).items())
+        gp = list(dict_view.for_cluster(cid).items())
+        assert gf == gp, f"cid {cid}: frames={gf} dict={gp}"
+
+    # iter_clusters parity (the columnar evidence-edge iteration source).
+    assert list(frame_view.iter_clusters()) == list(dict_view.iter_clusters())
+
+    # Weak-bottleneck score_for parity, both orientations, across every cid.
+    # The {4,5,6} weak chain's bottleneck is the (5,6)/(6,5) edge; whichever
+    # orientation it's queried in, frame and dict views MUST agree (incl. None).
+    for cid, ps in frame_view.iter_clusters():
+        for a, b, _s in ps:
+            assert frame_view.score_for(cid, a, b) == dict_view.score_for(cid, a, b)
+            # Reversed-orientation query: identical (None or float) on both views.
+            assert frame_view.score_for(cid, b, a) == dict_view.score_for(cid, b, a)
+
+    # Explicit reversed-orientation MISS: store a pair, query it reversed, assert
+    # BOTH views return None (the conflict edge would emit score=None on both).
+    # Find any stored non-canonical or self-distinct pair to exercise the miss;
+    # the weak chain guarantees at least the (5,6) edge exists in some cid.
+    reversed_miss_seen = False
+    for cid, ps in dict_view.iter_clusters():
+        for a, b, _s in ps:
+            if a > b:  # stored key is non-canonical -> canonical query MISSES
+                assert frame_view.score_for(cid, a, b) is None
+                assert dict_view.score_for(cid, a, b) is None
+                reversed_miss_seen = True
+    # Not asserting reversed_miss_seen is True (membership-order dependent), but
+    # the loop proves frame==dict on the miss path wherever it occurs.
+    _ = reversed_miss_seen
+
+
 def test_frames_path_requires_pair_score_view(tmp_path, monkeypatch):
     frames, _clusters_dict, _view, pairs = _build(monkeypatch, "0")
     df = _df()
