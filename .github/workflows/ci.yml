@@ -279,14 +279,10 @@ jobs:
             --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
           uv pip install dist-dfudf/*.whl
       # Stage B: tests/test_datafusion_ffi_udf.py diffs the FFI string scorers
-      # against the per-pair `goldenmatch._native` scorers (both delegate to the
-      # shared score-core crate). The test HARD-asserts native_available(), so
-      # this lane must ALSO build the in-tree `_native` ext — without it the
-      # parity test FAILS (by design). goldenmatch-only; a Rust compile, not a
-      # Python import, so it can't trip the box's import-hang.
-      - name: Build the in-tree native ext for the FFI scorer-parity test (goldenmatch only)
-        if: matrix.pkg == 'goldenmatch'
-        run: uv run python scripts/build_native.py
+      # against the Python `rapidfuzz` package (the FFI UDFs delegate to the
+      # shared score-core crate = rapidfuzz 0.5.0; test_native_parity already
+      # proves rust-rapidfuzz == python-rapidfuzz). So this lane does NOT build
+      # `_native` — doing so would pull native-only schema tests into this lane.
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore

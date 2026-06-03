@@ -1,34 +1,28 @@
 """Stage B parity gate: the native string scorers, exposed as Rust-crate FFI
 ScalarUDFs, register into the Python ``datafusion`` SessionContext via
-datafusion-ffi (PyCapsule) and score byte-identically to the per-pair
-``goldenmatch._native`` scorers.
+datafusion-ffi (PyCapsule) and score correctly.
 
-``pyarrow`` and ``datafusion`` are soft deps (skip if absent), but
-``goldenmatch_datafusion_udf`` is a HARD import on purpose: the CI lane builds
-that crate before pytest, so an import failure here means the build broke and
-MUST surface as a test FAILURE, not a silent skip. This is the loud guard for
-the whole DataFusion spine.
+``pyarrow``/``datafusion`` are soft deps (skip if absent), but
+``goldenmatch_datafusion_udf`` is a HARD import: the CI lane builds that crate
+before pytest, so an import failure means the build broke and MUST surface as a
+test FAILURE, not a silent skip. This is the loud guard for the DataFusion spine.
 
-The native ext is ALSO required (not importorskip): the FFI UDFs and the native
-per-pair scorers both delegate to the shared ``goldenmatch-score-core`` crate,
-so the whole point of this test is to diff the two surfaces. If ``_native`` is
-missing the parity assertion is meaningless, so we FAIL rather than skip — the
-CI lane builds ``_native`` (``scripts/build_native.py``) before pytest.
+The FFI UDFs delegate to the shared ``goldenmatch-score-core`` crate
+(rapidfuzz 0.5.0) -- the SAME algorithms the Python ``rapidfuzz`` package wraps --
+so we diff the FFI scores against ``rapidfuzz`` directly (``test_native_parity``
+already proves rust-rapidfuzz == python-rapidfuzz at 1e-9). This needs no
+``_native`` build, so it does not pull native-only tests into this lane.
 """
 
 import pytest
 
 pa = pytest.importorskip("pyarrow")
 datafusion = pytest.importorskip("datafusion")
+rapidfuzz = pytest.importorskip("rapidfuzz")  # noqa: F841  core dep; present
 import goldenmatch_datafusion_udf  # noqa: E402,F401  HARD import (loud guard, no importorskip)
-from goldenmatch.core import _native_loader  # noqa: E402
 
-# HARD requirement (not importorskip): the parity diff is meaningless without
-# the native scorers to diff against. The native CI lane builds the ext.
-assert _native_loader.native_available() is True, (
-    "goldenmatch._native must be built for the FFI scorer-parity test "
-    "(build via scripts/build_native.py)"
-)
+from rapidfuzz import fuzz  # noqa: E402
+from rapidfuzz.distance import JaroWinkler, Levenshtein  # noqa: E402
 
 # Fixture covering: identical, single-char typo, reordered tokens, empty string,
 # NULL (None -> "" convention), unicode, and fully-disjoint strings.
@@ -49,12 +43,9 @@ def _pairs_table():
     return pa.table({"a": pa.array(a, pa.string()), "b": pa.array(b, pa.string())})
 
 
-def test_ffi_string_scorers_match_native():
+def test_ffi_string_scorers_match_rapidfuzz():
     from datafusion import SessionContext, udf
     from goldenmatch_datafusion_udf import JaroWinklerUDF, LevenshteinUDF, TokenSortUDF
-
-    native = _native_loader.native_module()
-    assert native is not None
 
     ctx = SessionContext()
     ctx.register_udf(udf(JaroWinklerUDF()))
@@ -63,7 +54,7 @@ def test_ffi_string_scorers_match_native():
     ctx.from_arrow(_pairs_table(), name="pairs")
 
     # Row order is not guaranteed across collect(); carry the inputs through so
-    # we compare each FFI row against the native score for the SAME pair.
+    # we compare each FFI row against the rapidfuzz score for the SAME pair.
     batches = ctx.sql(
         "SELECT a, b, "
         "jaro_winkler(a, b) AS jw, "
@@ -81,18 +72,19 @@ def test_ffi_string_scorers_match_native():
     assert len(rows) == len(PAIRS)
 
     for a, b, jw, ts, lev in rows:
-        # NULL -> "" convention, matching both the FFI UDF and native.py's gate.
+        # NULL -> "" convention, matching the FFI UDF (and native.py's gate).
         sa = "" if a is None else a
         sb = "" if b is None else b
 
-        # jaro_winkler / levenshtein are [0, 1] on both sides.
+        # score-core jaro_winkler / levenshtein are normalized_similarity [0, 1];
+        # the FFI UDF returns [0, 1] -> compare to rapidfuzz directly.
         assert jw == pytest.approx(
-            native.jaro_winkler_similarity(sa, sb), abs=1e-6
+            JaroWinkler.normalized_similarity(sa, sb), abs=1e-6
         ), f"jaro_winkler mismatch for {(a, b)!r}"
         assert lev == pytest.approx(
-            native.levenshtein_similarity(sa, sb), abs=1e-6
+            Levenshtein.normalized_similarity(sa, sb), abs=1e-6
         ), f"levenshtein mismatch for {(a, b)!r}"
-        # native token_sort_ratio is 0-100; the FFI token_sort is 0-1.
+        # FFI token_sort is [0, 1]; rapidfuzz fuzz.token_sort_ratio is [0, 100].
         assert ts == pytest.approx(
-            native.token_sort_ratio(sa, sb) / 100.0, abs=1e-6
+            fuzz.token_sort_ratio(sa, sb) / 100.0, abs=1e-6
         ), f"token_sort mismatch for {(a, b)!r}"
