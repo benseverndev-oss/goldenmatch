@@ -144,7 +144,7 @@ def _stage1_join_fixture():
     final cids that share a pre-split member id space):
 
       cid 10: members {1, 2, 3, 7}
-      cid 20: members {4, 5}
+      cid 20: members {4, 5, 8}
       cid 30: members {9}          (singleton, no kept pair)
 
     Raw pairs (index : row):
@@ -157,10 +157,12 @@ def _stage1_join_fixture():
       5  (2, 4, 0.60)   DROPPED ; cross-cut (2 in cid10, 4 in cid20)
       6  (4, 5, 0.95)   kept@20
       7  (5, 99, 0.30)  DROPPED ; endpoint 99 absent from assignments
+      8  (8, 4, 0.66)   kept@20 ; NON-CANONICAL-only key (8>4), NO (4,8) reverse
+                                  -> score_for canonicalizes to (4,8) -> genuine MISS
 
     Expected (byte-identical to from_pairs), key order = first occurrence:
       cid 10: {(1,2): 0.40, (7,3): 0.70, (3,7): 0.80, (1,1): 0.55}
-      cid 20: {(4,5): 0.95}
+      cid 20: {(4,5): 0.95, (8,4): 0.66}
       cid 30: {}   (singleton, no kept pair)
     """
     pairs = [
@@ -172,17 +174,18 @@ def _stage1_join_fixture():
         (2, 4, 0.60),
         (4, 5, 0.95),
         (5, 99, 0.30),
+        (8, 4, 0.66),
     ]
     clusters = {
         10: {"members": [1, 2, 3, 7], "size": 4, "pair_scores": {}},
-        20: {"members": [4, 5], "size": 2, "pair_scores": {}},
+        20: {"members": [4, 5, 8], "size": 3, "pair_scores": {}},
         30: {"members": [9], "size": 1, "pair_scores": {}},
     }
     # one row per (cluster_id, member_id); singletons included
     assignments = pl.DataFrame(
         {
-            "cluster_id": [10, 10, 10, 10, 20, 20, 30],
-            "member_id": [1, 2, 3, 7, 4, 5, 9],
+            "cluster_id": [10, 10, 10, 10, 20, 20, 20, 30],
+            "member_id": [1, 2, 3, 7, 4, 5, 8, 9],
         }
     )
     return pairs, clusters, assignments
@@ -208,12 +211,15 @@ def test_from_frames_join_byte_identical_to_from_pairs():
 
 
 def test_from_frames_score_for_byte_identical_to_from_pairs():
-    """score_for parity, including the REVERSED-orientation miss.
+    """score_for parity, including the genuine reversed-orientation MISS.
 
-    Stored key (7,3) (raw row index 2). score_for canonicalizes ONLY the query
-    to (min,max) and looks it up against AS-GIVEN stored keys, so:
-      - score_for(10, 7, 3) -> (3,7) query -> stored (7,3) MISS -> None
-      - score_for(10, 3, 7) -> (3,7) query -> stored (3,7) HIT  -> 0.80
+    score_for canonicalizes ONLY the query to (min,max) and looks it up against
+    AS-GIVEN stored keys. The pair (8,4) is stored non-canonically (8>4) with NO
+    (4,8) reverse, so the canonical (4,8) query can NEVER reach it:
+      - score_for(20, 8, 4) -> (4,8) query -> stored only (8,4) MISS -> None
+      - score_for(20, 4, 8) -> (4,8) query -> stored only (8,4) MISS -> None
+    By contrast (7,3) AND (3,7) are BOTH stored, so the canonical (3,7) query
+    always HITS the (3,7) entry (0.80) regardless of the query orientation.
     Both views MUST agree on every case, including the None misses.
     """
     pairs, clusters, assignments = _stage1_join_fixture()
@@ -221,13 +227,15 @@ def test_from_frames_score_for_byte_identical_to_from_pairs():
     v_pairs = ClusterPairScores.from_pairs(pairs, clusters)
 
     queries = [
-        (10, 7, 3),    # reversed query of stored (7,3) -> canonical (3,7) MISS -> None
-        (10, 3, 7),    # matches stored (3,7) -> 0.80
-        (10, 2, 1),    # reversed query of stored (1,2) -> canonical (1,2) HIT -> 0.40 (last-wins)
-        (10, 1, 2),    # matches stored (1,2) -> 0.40
+        (10, 7, 3),    # canonical (3,7) -> HIT (3,7) stored -> 0.80
+        (10, 3, 7),    # canonical (3,7) -> HIT -> 0.80
+        (10, 2, 1),    # canonical (1,2) -> HIT -> 0.40 (last-wins)
+        (10, 1, 2),    # canonical (1,2) -> HIT -> 0.40
         (10, 1, 1),    # self-pair stored (1,1) -> 0.55
-        (20, 4, 5),    # 0.95
-        (20, 5, 4),    # canonical (4,5) HIT -> 0.95
+        (20, 4, 5),    # canonical (4,5) -> HIT -> 0.95
+        (20, 5, 4),    # canonical (4,5) -> HIT -> 0.95
+        (20, 8, 4),    # canonical (4,8) -> stored only (8,4) -> MISS -> None
+        (20, 4, 8),    # canonical (4,8) -> MISS -> None
         (30, 9, 9),    # singleton, no pairs -> None
         (10, 99, 1),   # absent endpoint -> None
     ]
@@ -236,9 +244,12 @@ def test_from_frames_score_for_byte_identical_to_from_pairs():
         gp = v_pairs.score_for(cid, a, b)
         assert gf == gp, f"score_for({cid},{a},{b}): frames={gf} pairs={gp}"
 
-    # Explicit reversed-orientation miss on BOTH views (the preserved None).
-    assert v_frames.score_for(10, 7, 3) is None
-    assert v_pairs.score_for(10, 7, 3) is None
-    # And the matching orientation returns the stored float on BOTH.
+    # Genuine reversed-orientation MISS (non-canonically-stored (8,4)),
+    # preserved as None on BOTH views.
+    assert v_frames.score_for(20, 8, 4) is None
+    assert v_pairs.score_for(20, 8, 4) is None
+    assert v_frames.score_for(20, 4, 8) is None
+    assert v_pairs.score_for(20, 4, 8) is None
+    # A normal HIT returns the stored float on BOTH.
     assert v_frames.score_for(10, 3, 7) == 0.80
     assert v_pairs.score_for(10, 3, 7) == 0.80
