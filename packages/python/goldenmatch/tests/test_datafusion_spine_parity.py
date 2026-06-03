@@ -123,21 +123,16 @@ def _prepared_blocks(df, config):
     matchkey: add ``__row_id__``, precompute matchkey transforms, then
     ``build_blocks`` over the static blocking config. Returns the block
     list both the spine and the comparand consume (identical input)."""
-    import polars as pl
     from goldenmatch.core.blocker import build_blocks
     from goldenmatch.core.matchkey import precompute_matchkey_transforms
 
     with_ids = df.with_row_index("__row_id__")
     matchkeys = config.get_matchkeys()
     augmented = precompute_matchkey_transforms(with_ids, matchkeys)
-    blocks = build_blocks(augmented.lazy(), config.blocking)
-    # Collect each block to an eager frame so both consumers see stable
-    # frames (run_spine / _materialize_blocks_to_arrow collect internally;
-    # the comparand reads block.df below).
-    for b in blocks:
-        if isinstance(b.df, pl.LazyFrame):
-            b.df = b.df.collect()
-    return blocks
+    # Keep blocks LAZY (the production BlockResult.df shape). Both the spine
+    # (_materialize_blocks_to_arrow / _all_ids_from_blocks / _slim_golden_source)
+    # and the comparand collect internally / via the robust helpers.
+    return build_blocks(augmented.lazy(), config.blocking)
 
 
 def _inmemory_comparand(blocks, config):
@@ -145,9 +140,9 @@ def _inmemory_comparand(blocks, config):
     the SAME frames-out tail the spine runs -- the semantic reference.
     Returns ``(golden_df, assignments, raw_pairs)``.
     """
-    import polars as pl
     from goldenmatch.backends.datafusion_backend import score_blocks_datafusion
     from goldenmatch.backends.datafusion_spine import (
+        _all_ids_from_blocks,
         _golden_rules_knobs,
         _slim_golden_source,
     )
@@ -164,14 +159,9 @@ def _inmemory_comparand(blocks, config):
         (a, b, s) if a < b else (b, a, s) for a, b, s in raw_pairs
     ]
 
-    # all_ids: deduped __row_id__ union across blocks as list[int] (matches
-    # pipeline.py:1451 + build_cluster_frames's list[int] signature).
-    parts: list[pl.Series] = []
-    for b in blocks:
-        parts.append(b.df["__row_id__"].cast(pl.Int64))
-    all_ids = (
-        pl.concat(parts).unique(maintain_order=True).to_list() if parts else []
-    )
+    # all_ids via the SAME helper the spine uses (LazyFrame-robust + identical
+    # on both sides for parity).
+    all_ids = _all_ids_from_blocks(blocks)
 
     max_cs, weak, auto_split, golden_rules = _golden_rules_knobs(config)
     frames = build_cluster_frames(
