@@ -313,41 +313,85 @@ pub fn score_block_pairs_arrow(
         offset += size;
     }
 
-    Ok(py.allow_threads(|| {
-        spans
-            .par_iter()
-            .flat_map_iter(|&(offset, size)| {
-                let mut local: Vec<(i64, i64, f64)> = Vec::new();
-                if size >= 2 {
-                    let end = offset + size;
-                    for i in offset..end - 1 {
-                        let ri = row_ids.value(i);
-                        for j in (i + 1)..end {
-                            let rj = row_ids.value(j);
-                            let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
-                            if exclude_ref.contains(&pair_key) {
-                                continue;
-                            }
-                            let mut score_sum = 0.0_f64;
-                            let mut weight_sum = 0.0_f64;
-                            for f in 0..n_fields {
-                                if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
-                                    score_sum += score_one(scorer_ids[f], a, b) * weights[f];
-                                    weight_sum += weights[f];
-                                }
-                            }
-                            if weight_sum > 0.0 {
-                                let combined = score_sum / total_weight;
-                                if combined >= threshold {
-                                    local.push((pair_key.0, pair_key.1, combined));
-                                }
-                            }
+    // Per-block scorer, shared by the sequential and rayon paths so the two can
+    // never diverge. Borrows only Sync data (the arrow arrays, the exclude set,
+    // the weight/scorer slices) and holds no mutable state, so it is safe to
+    // call from rayon workers AND from a plain sequential loop.
+    let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
+        let mut local: Vec<(i64, i64, f64)> = Vec::new();
+        if size >= 2 {
+            let end = offset + size;
+            for i in offset..end - 1 {
+                let ri = row_ids.value(i);
+                for j in (i + 1)..end {
+                    let rj = row_ids.value(j);
+                    let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                    if exclude_ref.contains(&pair_key) {
+                        continue;
+                    }
+                    let mut score_sum = 0.0_f64;
+                    let mut weight_sum = 0.0_f64;
+                    for f in 0..n_fields {
+                        if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
+                            score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                            weight_sum += weights[f];
+                        }
+                    }
+                    if weight_sum > 0.0 {
+                        let combined = score_sum / total_weight;
+                        if combined >= threshold {
+                            local.push((pair_key.0, pair_key.1, combined));
                         }
                     }
                 }
-                local
-            })
-            .collect()
+            }
+        }
+        local
+    };
+
+    // issue #688: rayon's blocking `collect` parks the calling thread on a
+    // `LockLatch` futex that makes near-zero forward progress on some Linux
+    // runners (ubuntu-latest-xlarge / EPYC) -- a sub-second scoring job turned
+    // into ~190s of futex wait with zero CPU. The kernel's internal rayon is
+    // also redundant in the common case: the Python caller (`score_buckets`)
+    // already fans buckets across a ThreadPoolExecutor with the GIL released
+    // here, so each kernel call is one of N concurrent calls. So score
+    // small/medium calls in the CALLING thread (no rayon, no latch), and only
+    // dispatch to rayon when a single call carries enough intra-call work that
+    // the parallel speedup outweighs the dispatch (the rare few-huge-buckets
+    // shape). Gate on the candidate-pair count; tune/override via
+    // GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS (default 20M, 0 = always rayon, a very
+    // large value = always sequential). Both paths walk spans in order, so the
+    // emitted (min,max) pair sequence is byte-identical either way (parity
+    // asserted in tests/test_native_block_seq_parity.py).
+    let total_pairs: u128 = block_sizes
+        .iter()
+        .map(|&s| {
+            let s = s as u128;
+            if s >= 2 {
+                s * (s - 1) / 2
+            } else {
+                0
+            }
+        })
+        .sum();
+    let rayon_min_pairs: u128 = std::env::var("GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20_000_000);
+
+    Ok(py.allow_threads(|| {
+        if total_pairs >= rayon_min_pairs {
+            spans
+                .par_iter()
+                .flat_map_iter(|&(offset, size)| score_span(offset, size))
+                .collect()
+        } else {
+            spans
+                .iter()
+                .flat_map(|&(offset, size)| score_span(offset, size))
+                .collect()
+        }
     }))
 }
 
