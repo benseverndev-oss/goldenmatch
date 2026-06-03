@@ -20,7 +20,6 @@ pa = pytest.importorskip("pyarrow")
 datafusion = pytest.importorskip("datafusion")
 rapidfuzz = pytest.importorskip("rapidfuzz")  # noqa: F841  core dep; present
 import goldenmatch_datafusion_udf  # noqa: E402,F401  HARD import (loud guard, no importorskip)
-
 from rapidfuzz import fuzz  # noqa: E402
 from rapidfuzz.distance import JaroWinkler, Levenshtein  # noqa: E402
 
