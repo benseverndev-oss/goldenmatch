@@ -327,9 +327,11 @@ def run_spine(
         target_partitions: pins ``SessionConfig.with_target_partitions``.
 
     Returns:
-        ``(golden_df, assignments_df)`` where ``assignments_df`` is
-        ``cluster_frames.assignments`` (one row per ``(cluster_id,
-        member_id)``, singletons included).
+        ``(golden_df, assignments_df, raw_pairs)`` where ``assignments_df``
+        is ``cluster_frames.assignments`` (one row per ``(cluster_id,
+        member_id)``, singletons included) and ``raw_pairs`` is the RAW
+        above-threshold ``(a, b, score)`` list (a < b) the identity stage
+        rebuilds the id_prep view from.
     """
     from goldenmatch.core.cluster import build_cluster_frames
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
