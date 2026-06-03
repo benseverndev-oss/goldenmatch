@@ -528,6 +528,13 @@ where in-memory matrices OOM while the spine's above-threshold output stays smal
 the only one-box shape that could bind, and only if such a workload is
 representative. Both are deferred.
 
+**The real next step (specced 2026-06-03):** the **Sail tier** —
+`docs/superpowers/specs/2026-06-03-sail-tier-design.md`. A Sail-native (Spark Connect)
+distributed pipeline that re-expresses the spine's relational plan across nodes, computes
+connected components distributed (removing the one-box UF island), and replaces the Ray
+distributed stack. Staged S1-S4 with WCC-on-Sail as the gate; binding criterion = 100M+
+multi-node completes where one-box can't.
+
 ## Gate reframe: engine portability, not one-box RSS (2026-06-03, supersedes the RSS gate for this track)
 
 **The Arrow-native arc's destination is engine portability** — making every
