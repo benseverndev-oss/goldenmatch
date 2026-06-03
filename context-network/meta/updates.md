@@ -2,6 +2,13 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-03 — Sail tier Stage S3 (golden) shipped
+- S3 golden merged (PR #714): distributed survivorship on Sail (collect_list + merge_field UDF),
+  content-parity green. SCOPE DECISION: S3 scoped to golden only; identity split to its own next
+  stage (stateful graph subsystem, not a relational op). Updated
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). Identity-on-Sail is next, then S4 (real cluster).
+
 ## 2026-06-03 — Sail tier Stage S2 shipped (make-or-break gate)
 - S2 merged (PR #712): WCC on Sail via min-label propagation, partition-parity green. The
   existential "WCC-on-Sail at all" risk is CLOSED. Marked S2 done in
