@@ -132,6 +132,14 @@ ray = [
 datafusion = [
     "datafusion>=53,<54",
 ]
+# Sail tier (distributed, Spark Connect). Spec: docs/superpowers/specs/
+# 2026-06-03-sail-tier-design.md. Sail is programmed via PySpark/Spark
+# Connect (NOT datafusion-python). pyspark may need pinning to pysail's
+# targeted Spark Connect protocol version -- see the S1 plan.
+sail = [
+    "pysail>=0.6",
+    "pyspark[connect]>=3.5",
+]
 agent = [
     "aiohttp>=3.9",
 ]

@@ -393,3 +393,26 @@ def test_golden_rules_cluster_quality_defaults():
     assert config.auto_split is True
     assert config.quality_weighting is True
     assert config.weak_cluster_threshold == 0.3
+
+
+# ── mode field (Stage D: scale-mode contract) ───────────────────────────────
+
+
+def test_config_mode_defaults_to_standard():
+    cfg = GoldenMatchConfig()
+    assert cfg.mode == "standard"
+
+
+def test_config_mode_accepts_scale():
+    cfg = GoldenMatchConfig(mode="scale")
+    assert cfg.mode == "scale"
+
+
+def test_config_mode_rejects_unknown_value():
+    with pytest.raises(ValidationError):
+        GoldenMatchConfig(mode="turbo")
+
+
+def test_config_mode_round_trips_through_model_dump():
+    cfg = GoldenMatchConfig(mode="scale")
+    assert GoldenMatchConfig(**cfg.model_dump()).mode == "scale"

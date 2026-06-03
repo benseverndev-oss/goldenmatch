@@ -13,10 +13,9 @@ use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
 use numpy::{IntoPyArray, PyArray2};
+use goldenmatch_score_core::score_one;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rapidfuzz::distance::{jaro_winkler, levenshtein};
-use rapidfuzz::fuzz;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -66,59 +65,31 @@ pub fn build_exclude_set(pairs: Vec<(i64, i64)>) -> ExcludeSet {
     ExcludeSet { set: Arc::new(set) }
 }
 
-/// `rapidfuzz.fuzz.token_sort_ratio` preprocessing: split on whitespace, sort
-/// the tokens, rejoin with a single space. (Then `fuzz::ratio` on the result.)
-fn token_sort_string(s: &str) -> String {
-    let mut toks: Vec<&str> = s.split_whitespace().collect();
-    toks.sort_unstable();
-    toks.join(" ")
-}
-
 // ---- PyO3 surface (scale matches score_buckets._resolve_score_pair_callable:
 //      jaro_winkler/levenshtein on 0-1, token_sort_ratio on 0-100) ----
+//
+// The scorers + token_sort preprocessing + `score_one` dispatch live in the
+// pyo3-free `goldenmatch-score-core` crate (one source of truth shared with the
+// DataFusion FFI UDFs). These are thin #[pyfunction] SHIMS delegating into it —
+// a bare `use` of the core fns won't satisfy lib.rs's `wrap_pyfunction!`, so the
+// shims are required. `score_one` is re-imported verbatim above (no shim: it's
+// called only from Rust by score_block_pairs / score_block_pairs_arrow /
+// score_field_matrix, which stay in this crate).
 
 #[pyfunction]
 pub fn jaro_winkler_similarity(a: &str, b: &str) -> f64 {
-    // rapidfuzz JaroWinkler default prefix_weight = 0.1.
-    jaro_winkler::normalized_similarity(a.chars(), b.chars())
+    goldenmatch_score_core::jaro_winkler_similarity(a, b)
 }
 
 #[pyfunction]
 pub fn levenshtein_similarity(a: &str, b: &str) -> f64 {
-    // rapidfuzz Levenshtein default uniform weights (1, 1, 1).
-    levenshtein::normalized_similarity(a.chars(), b.chars())
+    goldenmatch_score_core::levenshtein_similarity(a, b)
 }
 
 /// token_sort_ratio on the 0-100 scale (score_field divides by 100).
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
-    let sa = token_sort_string(a);
-    let sb = token_sort_string(b);
-    // rapidfuzz-rs fuzz::ratio returns [0, 1]; Python fuzz.ratio is [0, 100].
-    fuzz::ratio(sa.chars(), sb.chars()) * 100.0
-}
-
-/// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
-/// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact.
-fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
-    match scorer_id {
-        0 => jaro_winkler::normalized_similarity(a.chars(), b.chars()),
-        1 => levenshtein::normalized_similarity(a.chars(), b.chars()),
-        2 => {
-            let sa = token_sort_string(a);
-            let sb = token_sort_string(b);
-            fuzz::ratio(sa.chars(), sb.chars())
-        }
-        3 => {
-            if a == b {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        _ => 0.0,
-    }
+    goldenmatch_score_core::token_sort_ratio(a, b)
 }
 
 /// Native port of `score_buckets._score_one_bucket_fast`'s per-pair loop.

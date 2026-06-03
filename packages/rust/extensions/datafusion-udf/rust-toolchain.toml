@@ -1,0 +1,8 @@
+# Pin the toolchain so CI reproduces the environment this crate was verified
+# against. The datafusion 53 / arrow 58 crates use Rust edition 2024, which
+# requires rustc >= 1.85; 1.94.1 matches the sibling `native` crate's pin and
+# is comfortably past that floor. Bump deliberately (and re-verify) rather than
+# floating @stable, whose newer clippy can flag code under -D warnings.
+[toolchain]
+channel = "1.94.1"
+components = ["clippy"]

@@ -33,6 +33,7 @@ jobs:
       native: ${{ steps.filter.outputs.native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       distributed: ${{ steps.filter.outputs.distributed }}
+      sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -50,6 +51,15 @@ jobs:
               - 'uv.lock'
             python_goldenmatch:
               - 'packages/python/goldenmatch/**'
+              # Stage A: the standalone datafusion-ffi UDF crate is built into
+              # the goldenmatch venv in the `python` lane and exercised by
+              # tests/test_datafusion_ffi_udf.py. A crate-only change must
+              # re-trigger that lane so the FFI feasibility gate re-runs.
+              - 'packages/rust/extensions/datafusion-udf/**'
+              # Stage B: the FFI scorer UDFs delegate to the shared score-core
+              # crate. A score-core-only change must re-trigger this lane so the
+              # FFI scorer-parity test (vs native) re-runs.
+              - 'packages/rust/extensions/score-core/**'
             python_goldenmatch_postgres:
               - 'packages/python/goldenmatch/tests/test_db.py'
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
@@ -123,6 +133,10 @@ jobs:
               # the Python files it's wired into + the build script.
               - 'packages/rust/extensions/native/**'
               - 'packages/rust/extensions/fingerprint-core/**'
+              # Stage B: the native scorers are now thin shims over the shared
+              # score-core crate. A score-core change alters native behavior, so
+              # re-run the native build + parity suite.
+              - 'packages/rust/extensions/score-core/**'
               - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
               - 'packages/python/goldenmatch/goldenmatch/core/_hashing.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
@@ -151,6 +165,13 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_distributed_*.py'
               - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
               - 'packages/python/goldenmatch/goldenmatch/backends/ray_backend.py'
+            sail:
+              # Sail tier (distributed, Spark Connect). The main `python` job
+              # installs without the `sail` extra, so tests/test_sail_*.py SKIP
+              # there (pytest.importorskip). The `sail` job installs
+              # goldenmatch[sail] (pysail + pyspark[connect]) so they run.
+              - 'packages/python/goldenmatch/goldenmatch/sail/**'
+              - 'packages/python/goldenmatch/tests/test_sail_*.py'
             action:
               - 'packages/actions/**'
             readme_callouts:
@@ -241,6 +262,43 @@ jobs:
       # matrix package (the gated files are goldenmatch-only).
       - if: matrix.pkg == 'goldenmatch'
         run: uv run python scripts/check_map_elements.py
+      # DataFusion FFI ScalarUDF gate (Stage B). Build the standalone
+      # `datafusion-udf` crate into the project venv and install the Python
+      # `datafusion` runtime so tests/test_datafusion_ffi_udf.py can register the
+      # native string-scorer UDFs (jaro_winkler / token_sort / levenshtein) via
+      # the PyCapsule FFI bridge and diff them against the `goldenmatch._native`
+      # per-pair scorers (both delegate to the shared score-core crate). The test
+      # HARD-imports goldenmatch_datafusion_udf (no importorskip), so a build
+      # break here surfaces as a test FAILURE, not a skip — that's the loud guard
+      # for the whole DataFusion spine. goldenmatch-only (the only lane with the
+      # test) and a Rust compile, not a Python import, so it can't trip the box's
+      # import-hang. The in-tree `_native` ext (which the parity test HARD-
+      # asserts) is built in a follow-on step below.
+      - if: matrix.pkg == 'goldenmatch'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - if: matrix.pkg == 'goldenmatch'
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/datafusion-udf
+      - name: Install the datafusion runtime + build the FFI UDF crate (goldenmatch only)
+        if: matrix.pkg == 'goldenmatch'
+        run: |
+          uv pip install 'datafusion>=53,<54'
+          # Build a wheel, then `uv pip install` it into the project .venv (the
+          # env `uv run pytest` uses). `maturin develop` under `uv run --with
+          # maturin` installs into maturin's EPHEMERAL --with overlay env, NOT
+          # .venv -> ModuleNotFound at test time. Mirror the native_wheel lane:
+          # build the abi3 wheel, then install it into .venv.
+          uv run --with maturin maturin build --release \
+            --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --out dist-dfudf
+          uv pip install dist-dfudf/*.whl
+      # Stage B: tests/test_datafusion_ffi_udf.py diffs the FFI string scorers
+      # against the Python `rapidfuzz` package (the FFI UDFs delegate to the
+      # shared score-core crate = rapidfuzz 0.5.0; test_native_parity already
+      # proves rust-rapidfuzz == python-rapidfuzz). So this lane does NOT build
+      # `_native` — doing so would pull native-only schema tests into this lane.
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
@@ -847,6 +905,43 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_distributed_clustering.py \
             --timeout=300 --durations=20 -v
 
+  # Sail tier (distributed, Spark Connect). The Sail tier re-expresses the
+  # one-box DataFusion spine's relational plan against PySpark/Spark Connect.
+  # This lane installs goldenmatch[sail] (pysail + pyspark[connect]) and runs
+  # tests/test_sail_*.py against an in-process Sail Spark Connect server (they
+  # SKIP everywhere else via pytest.importorskip). Spec:
+  # docs/superpowers/specs/2026-06-03-sail-tier-design.md (Stage S1).
+  sail:
+    needs: changes
+    if: needs.changes.outputs.sail == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      # Sail (Spark Connect) optional stack. NO Java: pyspark[connect] is a
+      # pure-gRPC client (no py4j/JVM launch) and the Sail server is Rust.
+      # Install VIA THE EXTRA so the pyproject [sail] entry is exercised.
+      - name: Install sail extra
+        run: uv pip install -e 'packages/python/goldenmatch[sail]'
+      # Run with the venv python directly (NOT `uv run`): the Sail server
+      # spawns in-process; mirror the ray lane's venv-python discipline.
+      - name: Sail connectivity gate (blocking)
+        run: |
+          .venv/bin/python -c "import pysail, pyspark; print('pyspark', pyspark.__version__)"
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_connectivity.py -v --timeout=300
+      # GATE (blocking): the S1 score/dedup pair-set parity vs a python-rapidfuzz
+      # reference -- the reason this lane exists at S1.
+      - name: Sail score/dedup parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
+
   action:
     needs: changes
     if: needs.changes.outputs.action == 'true' || needs.changes.outputs.ci_workflow == 'true'
@@ -1086,6 +1181,7 @@ jobs:
       - native_wheel
       - goldenembed
       - distributed
+      - sail
       - pyright
       - readme_callouts
     if: always()

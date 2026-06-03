@@ -8,25 +8,26 @@ that decides whether Phase-2's columnar cutover lands the RSS win.
 Two variants, each in its OWN subprocess (clean peak RSS):
 
   * ``columnar`` (GOLDENMATCH_CLUSTER_FRAMES_OUT=1): build pairs ->
-    ``build_cluster_frames`` -> ``build_golden_records_from_frames`` ->
-    ``resolve_clusters(cluster_frames=..., pair_score_view=ClusterPairScores
-    .from_frames(...))``. No per-cluster ``dict[int, dict]`` is materialized in
-    the stage.
+    ``build_cluster_frames`` -> ``build_golden_records_from_frames`` -> identity
+    cluster-rep prep (``ClusterPairScores.from_frames`` + per-cluster member iter
+    via ``assignments.group_by``). No per-cluster ``dict[int, dict]`` is
+    materialized in the stage.
 
   * ``legacy`` (no gate): build pairs -> ``build_clusters`` (dict) ->
-    ``build_golden_records_batch`` -> ``resolve_clusters(clusters_dict, ...,
-    pair_score_view=ClusterPairScores.from_pairs(...))``. The dict is live for
-    the whole stage.
+    ``build_golden_records_batch`` -> identity cluster-rep prep
+    (``ClusterPairScores.from_pairs`` + ``clusters.items()`` iter). The dict is
+    live for the whole stage.
 
-CONFOUND CONTROL (from the SP-C spec). The pair-score view
-(``from_pairs`` / ``from_frames``) AND the identity store I/O + ``df.to_dicts()``
-inside ``resolve_clusters`` are present on BOTH variants and are
-frames-INVARIANT -- they don't bias the columnar-vs-legacy DELTA but they can
-DOMINATE/MASK it. We therefore segment the stage wall into build / golden /
-identity and report each, plus the overall peak RSS, and print a note that the
-store I/O + view are shared. The >=30% RSS criterion applies to the
-cluster-representation delta (build + golden + identity cluster-iteration), NOT
-the store.
+CONFOUND CONTROL (from the SP-C spec). The ``id_prep`` segment measures ONLY the
+identity CLUSTER-REPRESENTATION work SP-C changed (the view + the per-cluster
+member iteration the resolver loop drives). The full ``resolve_clusters`` +
+``IdentityStore`` resolution is DELIBERATELY EXCLUDED: its store I/O is a shared,
+frames-invariant confound that DOMINATES wall (a near-quadratic SQLite upsert
+path -- it ran ~20 min at 1M before this reshape) and would MASK the
+cluster-representation delta. Identity byte-identical parity is already proven by
+the SP-C gates; the verdict axis here is the peak RSS over build + golden +
+id_prep (where the dict-vs-frames representation delta lives), plus the 100M
+feasibility (does columnar complete where the legacy dict OOMs).
 
 At 100M the ``legacy`` variant is EXPECTED to OOM. The legacy child's non-zero
 exit / OOM is CAUGHT and recorded as ``"legacy OOM"`` in the table rather than
@@ -62,20 +63,22 @@ def _make_pairs_df(n_pairs_target: int):
     oversized) is identical -- this exercises the bulk-RSS axis, which is where
     the dict-vs-frames cluster representation delta lives.
     """
+    import numpy as np
     import polars as pl
 
     k = 5
     per = k * (k - 1) // 2  # 10
     m = max(1, n_pairs_target // per)
-    a_col: list[int] = []
-    b_col: list[int] = []
-    for c in range(m):
-        base = c * k
-        for i in range(k):
-            for j in range(i + 1, k):
-                a_col.append(base + i)
-                b_col.append(base + j)
-    s_col = [0.95] * len(a_col)
+    # VECTORIZED (the pure-Python c*i*j loop was ~20 min at 100M). The 10 within-
+    # cluster upper-triangle (i,j) offsets, in the SAME cluster-major order the
+    # loop emitted, broadcast over `base = arange(m)*k` -> byte-identical pair
+    # order to the loop, no Python iteration.
+    ioff = np.array([i for i in range(k) for _j in range(i + 1, k)], dtype=np.int64)
+    joff = np.array([j for i in range(k) for j in range(i + 1, k)], dtype=np.int64)
+    base = (np.arange(m, dtype=np.int64) * k)[:, None]
+    a_col = (base + ioff[None, :]).ravel()
+    b_col = (base + joff[None, :]).ravel()
+    s_col = np.full(m * per, 0.95, dtype=np.float64)
     return pl.DataFrame(
         {"id_a": a_col, "id_b": b_col, "score": s_col},
         schema={"id_a": pl.Int64, "id_b": pl.Int64, "score": pl.Float64},
@@ -134,10 +137,12 @@ def _golden_rules():
     return GoldenRulesConfig(default_strategy="most_complete")
 
 
-def _run_child(variant: str, n_pairs: int, runs: int) -> int:
+def _run_child(variant: str, n_pairs: int, runs: int, profile: bool = False) -> int:
     """Drive the real cluster -> golden -> identity stage for one variant, once
-    per measured run, segmenting the wall into build / golden / identity."""
-    import tempfile
+    per measured run, segmenting the wall into build / golden / id_prep.
+
+    profile=True: cProfile a single _one_run and dump the top cumulative- and
+    self-time functions instead of the perf loop (hotspot hunting)."""
 
     import polars as pl  # noqa: F401
     from goldenmatch.core.cluster import (
@@ -149,8 +154,13 @@ def _run_child(variant: str, n_pairs: int, runs: int) -> int:
         build_golden_records_batch,
         build_golden_records_from_frames,
     )
-    from goldenmatch.identity.resolve import resolve_clusters
-    from goldenmatch.identity.store import IdentityStore
+    # NOTE: identity is measured as its CLUSTER-REPRESENTATION prep only -- the
+    # ClusterPairScores view (from_frames vs from_pairs) + the per-cluster member
+    # iteration SP-C changed. The full resolve_clusters store I/O is DELIBERATELY
+    # excluded: it's a shared, frames-invariant confound that dominates wall (near-
+    # quadratic SQLite upserts at scale) and masks the cluster-representation RSS
+    # delta this bench measures. Identity byte-identical parity is already proven by
+    # the SP-C gates; here we only need the representation cost.
 
     pairs_df = _make_pairs_df(n_pairs)
     pairs_list = _pairs_list_from_df(pairs_df)
@@ -167,105 +177,106 @@ def _run_child(variant: str, n_pairs: int, runs: int) -> int:
         os.environ.pop("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", None)
 
     def _one_run() -> tuple[float, float, float]:
-        """Returns (build_s, golden_s, identity_s) for a single stage pass.
+        """Returns (build_s, golden_s, id_prep_s) for a single stage pass.
 
-        A fresh tmp SQLite IdentityStore per pass so identity write I/O is
-        measured the same way on both variants and runs don't accumulate state.
+        id_prep = the identity CLUSTER-REPRESENTATION work SP-C changed: the
+        ClusterPairScores view (from_frames vs from_pairs) + the per-cluster
+        member iteration the resolver loop drives (frames group_by vs
+        clusters.items()). NO IdentityStore / resolve_clusters: the store I/O is a
+        shared, frames-invariant confound (near-quadratic SQLite upserts at scale)
+        that masks the representation delta. Peak RSS over build+golden+id_prep is
+        the cluster-representation cost -- the verdict axis.
         """
-        store_dir = tempfile.mkdtemp(prefix="gm_bench_id_")
-        store_path = os.path.join(store_dir, "identity.db")
-        store = IdentityStore(backend="sqlite", path=store_path)
-        try:
-            if columnar:
-                # --- build (frames) ---
-                t0 = time.perf_counter()
-                frames = build_cluster_frames(
-                    pairs_list,
-                    all_ids=None,
-                    max_cluster_size=100,
-                    weak_cluster_threshold=0.3,
-                    auto_split=True,
-                )
-                build_s = time.perf_counter() - t0
+        if columnar:
+            # --- build (frames) ---
+            t0 = time.perf_counter()
+            frames = build_cluster_frames(
+                pairs_list,
+                all_ids=None,
+                max_cluster_size=100,
+                weak_cluster_threshold=0.3,
+                auto_split=True,
+            )
+            build_s = time.perf_counter() - t0
 
-                # --- golden (from frames) ---
-                t1 = time.perf_counter()
-                build_golden_records_from_frames(
-                    source_df, frames, rules,
-                    quality_scores=None, provenance=False,
-                )
-                golden_s = time.perf_counter() - t1
+            # --- golden (from frames) ---
+            t1 = time.perf_counter()
+            build_golden_records_from_frames(
+                source_df, frames, rules,
+                quality_scores=None, provenance=False,
+            )
+            golden_s = time.perf_counter() - t1
 
-                # --- identity (frames + from_frames view) ---
-                # The view + store I/O + df.to_dicts() are SHARED with legacy and
-                # frames-invariant (confound control note in the module docstring).
-                view = ClusterPairScores.from_frames(
-                    frames.assignments, pairs_list,
-                )
-                t2 = time.perf_counter()
-                resolve_clusters(
-                    cluster_frames=frames,
-                    df=source_df,
-                    store=store,
-                    run_name="bench",
-                    pair_score_view=view,
-                )
-                identity_s = time.perf_counter() - t2
-            else:
-                # --- build (dict) ---
-                t0 = time.perf_counter()
-                clusters = build_clusters(
-                    pairs_list,
-                    max_cluster_size=100,
-                    weak_cluster_threshold=0.3,
-                    auto_split=True,
-                )
-                build_s = time.perf_counter() - t0
+            # --- identity cluster-rep prep (view + per-cluster member iter) ---
+            t2 = time.perf_counter()
+            view = ClusterPairScores.from_frames(frames.assignments, pairs_list)
+            _agg = frames.assignments.group_by("cluster_id").agg(pl.col("member_id"))
+            members_by_cid = dict(
+                zip(_agg["cluster_id"].to_list(), _agg["member_id"].to_list())
+            )
+            id_prep_s = time.perf_counter() - t2
+            _keepalive = (frames, view, members_by_cid)  # hold the rep for peak RSS
+            del _keepalive
+        else:
+            # --- build (dict) ---
+            t0 = time.perf_counter()
+            clusters = build_clusters(
+                pairs_list,
+                max_cluster_size=100,
+                weak_cluster_threshold=0.3,
+                auto_split=True,
+            )
+            build_s = time.perf_counter() - t0
 
-                # --- golden (dict -> multi_df) ---
-                t1 = time.perf_counter()
-                eligible = [
-                    (cid, info) for cid, info in clusters.items()
-                    if info["size"] > 1 and not info["oversized"]
-                ]
-                row_to_cluster: dict[int, int] = {}
-                for cid, info in eligible:
-                    for mid in info["members"]:
-                        row_to_cluster[mid] = cid
-                if row_to_cluster:
-                    multi_df = source_df.filter(
-                        pl.col("__row_id__").is_in(list(row_to_cluster.keys()))
-                    ).with_columns(
-                        pl.col("__row_id__").replace_strict(
-                            list(row_to_cluster.keys()),
-                            list(row_to_cluster.values()),
-                            return_dtype=pl.Int64,
-                        ).alias("__cluster_id__")
-                    )
-                    build_golden_records_batch(
-                        multi_df, rules, provenance=False,
-                    )
-                golden_s = time.perf_counter() - t1
-
-                # --- identity (dict + from_pairs view) ---
-                view = ClusterPairScores.from_pairs(pairs_list, clusters)
-                t2 = time.perf_counter()
-                resolve_clusters(
-                    clusters=clusters,
-                    df=source_df,
-                    store=store,
-                    run_name="bench",
-                    pair_score_view=view,
+            # --- golden (dict -> multi_df) ---
+            t1 = time.perf_counter()
+            eligible = [
+                (cid, info) for cid, info in clusters.items()
+                if info["size"] > 1 and not info["oversized"]
+            ]
+            row_to_cluster: dict[int, int] = {}
+            for cid, info in eligible:
+                for mid in info["members"]:
+                    row_to_cluster[mid] = cid
+            if row_to_cluster:
+                multi_df = source_df.filter(
+                    pl.col("__row_id__").is_in(list(row_to_cluster.keys()))
+                ).with_columns(
+                    pl.col("__row_id__").replace_strict(
+                        list(row_to_cluster.keys()),
+                        list(row_to_cluster.values()),
+                        return_dtype=pl.Int64,
+                    ).alias("__cluster_id__")
                 )
-                identity_s = time.perf_counter() - t2
-            return build_s, golden_s, identity_s
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+                build_golden_records_batch(multi_df, rules, provenance=False)
+            golden_s = time.perf_counter() - t1
+
+            # --- identity cluster-rep prep (view + clusters.items() iter) ---
+            t2 = time.perf_counter()
+            view = ClusterPairScores.from_pairs(pairs_list, clusters)
+            members_by_cid = {cid: info["members"] for cid, info in clusters.items()}
+            id_prep_s = time.perf_counter() - t2
+            _keepalive = (clusters, view, members_by_cid)  # hold the rep for peak RSS
+            del _keepalive
+        return build_s, golden_s, id_prep_s
 
     _one_run()  # warm
+
+    if profile:
+        import cProfile
+        import io
+        import pstats
+        pr = cProfile.Profile()
+        pr.enable()
+        _one_run()
+        pr.disable()
+        for sort, n in (("cumulative", 35), ("tottime", 25)):
+            s = io.StringIO()
+            pstats.Stats(pr, stream=s).sort_stats(sort).print_stats(n)
+            print(f"=== PROFILE [{variant}] np={actual_pairs:,} ({sort}) ===",
+                  flush=True)
+            print(s.getvalue(), flush=True)
+        return 0
 
     build_walls: list[float] = []
     golden_walls: list[float] = []
@@ -356,6 +367,9 @@ def main() -> int:
     ap.add_argument("--output", default=None)
     ap.add_argument("--child", choices=["legacy", "columnar"], default=None,
                     help="Internal: run a single variant in this process")
+    ap.add_argument("--profile", action="store_true",
+                    help="cProfile both variants at np[0] + dump top "
+                         "cumulative/self-time functions (hotspot hunting).")
     args = ap.parse_args()
 
     runs = max(1, args.runs)
@@ -363,7 +377,16 @@ def main() -> int:
     if args.child is not None:
         nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
         n = nps[0] if nps else 1000000
-        return _run_child(args.child, n, runs)
+        return _run_child(args.child, n, runs, profile=args.profile)
+
+    if args.profile:
+        nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
+        n = nps[0] if nps else 5000000
+        print(f"=== HOTSPOT PROFILE @ np={n:,} (columnar then legacy) ===",
+              flush=True)
+        _run_child("columnar", n, 1, profile=True)
+        _run_child("legacy", n, 1, profile=True)
+        return 0
 
     nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
 
@@ -375,10 +398,11 @@ def main() -> int:
 
     print("recorded DATA; binding Phase-2 verdict (legacy dict vs columnar "
           "A+B+C complete path).", flush=True)
-    print("NOTE: the pair-score view + identity store I/O + df.to_dicts() are "
-          "SHARED on both variants and frames-invariant; the >=30% RSS "
-          "criterion applies to the cluster-representation delta (build + "
-          "golden + identity cluster-iteration), not the store.", flush=True)
+    print("NOTE: id_prep = identity cluster-rep prep (view + per-cluster iter) "
+          "ONLY; the full resolve_clusters + IdentityStore I/O is EXCLUDED "
+          "(shared, frames-invariant, near-quadratic at scale). The >=30% RSS "
+          "criterion applies to the cluster-representation delta (build + golden "
+          "+ id_prep), plus the 100M legacy-OOM feasibility.", flush=True)
 
     sane_n = 2000
     print(f"membership sanity (np={sane_n:,}) ...", flush=True)
@@ -401,10 +425,15 @@ def main() -> int:
             row: dict[str, Any] = {"n_pairs": n}
 
             if columnar.get("oom"):
-                # Columnar OOM at this scale is itself a verdict (Phase-2 didn't
-                # land the feasibility win).
-                row["columnar"] = {"oom": True,
-                                   "returncode": columnar.get("returncode")}
+                # rc in (-9, 137) is a real OOM (SIGKILL). Any other non-zero is a
+                # CODE ERROR -- surface the child stderr so it isn't mislabeled.
+                _rc = columnar.get("returncode")
+                _kind = "OOM" if _rc in (-9, 137) else "ERROR"
+                row["columnar"] = {"oom": True, "returncode": _rc, "kind": _kind}
+                print(f"    pairs={n:,}  columnar {_kind} (rc={_rc})", flush=True)
+                if _kind == "ERROR":
+                    print(f"--- columnar child stderr ---\n"
+                          f"{columnar.get('stderr_tail', '')}", flush=True)
             else:
                 row["n_pairs"] = columnar["n_pairs"]
                 row["columnar"] = {
@@ -415,10 +444,13 @@ def main() -> int:
                 }
 
             if legacy.get("oom"):
-                row["legacy"] = {"oom": True,
-                                 "returncode": legacy.get("returncode")}
-                print(f"    pairs={n:,}  legacy OOM "
-                      f"(rc={legacy.get('returncode')})", flush=True)
+                _rc = legacy.get("returncode")
+                _kind = "OOM" if _rc in (-9, 137) else "ERROR"
+                row["legacy"] = {"oom": True, "returncode": _rc, "kind": _kind}
+                print(f"    pairs={n:,}  legacy {_kind} (rc={_rc})", flush=True)
+                if _kind == "ERROR":
+                    print(f"--- legacy child stderr ---\n"
+                          f"{legacy.get('stderr_tail', '')}", flush=True)
             else:
                 row["legacy"] = {
                     "build_s": statistics.median(legacy["build_walls"]),
@@ -454,11 +486,12 @@ def main() -> int:
 
     lines = [
         "\n## bench-pipeline-complete-path\n",
-        "Per-variant stage wall (build / golden / identity seconds) + overall "
-        "peak RSS. legacy = dict; columnar = frames-out (A+B+C). The view + "
-        "store I/O + df.to_dicts() are shared/frames-invariant.\n",
+        "Per-variant stage wall (build / golden / id_prep seconds) + overall "
+        "peak RSS. legacy = dict; columnar = frames-out (A+B+C). id_prep = "
+        "identity cluster-rep prep (view + iter); full store resolution "
+        "EXCLUDED (shared, frames-invariant, near-quadratic).\n",
         f"| {'pairs':>12} | {'variant':>8} | {'build s':>9} | {'golden s':>9} "
-        f"| {'identity s':>10} | {'peak RSS MB':>12} |",
+        f"| {'id_prep s':>10} | {'peak RSS MB':>12} |",
         f"| {'-'*12} | {'-'*8} | {'-'*9} | {'-'*9} | {'-'*10} | {'-'*12} |",
     ]
     for r in results:

@@ -1,0 +1,26 @@
+# goldenmatch-datafusion-udf — the datafusion-ffi ScalarUDF feasibility gate,
+# shipped as a maturin/abi3 extension module (mirrors the sibling `native`
+# crate's packaging and the canonical datafusion-ffi-example's maturin backend).
+# This crate IS the package (no cross-tree problem), so maturin is the backend.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenmatch-datafusion-udf"
+version = "0.1.0"
+description = "DataFusion FFI ScalarUDFs (native string scorers) for GoldenMatch"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[tool.maturin]
+# Pure-Rust layout: the compiled abi3 ext lands at goldenmatch_datafusion_udf
+# (pymodule name == [lib] name, so no Rust rename is needed). extension-module
+# (no libpython link) is set explicitly to match the canonical example.
+module-name = "goldenmatch_datafusion_udf"
+features = ["pyo3/extension-module"]
