@@ -63,20 +63,22 @@ def _make_pairs_df(n_pairs_target: int):
     oversized) is identical -- this exercises the bulk-RSS axis, which is where
     the dict-vs-frames cluster representation delta lives.
     """
+    import numpy as np
     import polars as pl
 
     k = 5
     per = k * (k - 1) // 2  # 10
     m = max(1, n_pairs_target // per)
-    a_col: list[int] = []
-    b_col: list[int] = []
-    for c in range(m):
-        base = c * k
-        for i in range(k):
-            for j in range(i + 1, k):
-                a_col.append(base + i)
-                b_col.append(base + j)
-    s_col = [0.95] * len(a_col)
+    # VECTORIZED (the pure-Python c*i*j loop was ~20 min at 100M). The 10 within-
+    # cluster upper-triangle (i,j) offsets, in the SAME cluster-major order the
+    # loop emitted, broadcast over `base = arange(m)*k` -> byte-identical pair
+    # order to the loop, no Python iteration.
+    ioff = np.array([i for i in range(k) for _j in range(i + 1, k)], dtype=np.int64)
+    joff = np.array([j for i in range(k) for j in range(i + 1, k)], dtype=np.int64)
+    base = (np.arange(m, dtype=np.int64) * k)[:, None]
+    a_col = (base + ioff[None, :]).ravel()
+    b_col = (base + joff[None, :]).ravel()
+    s_col = np.full(m * per, 0.95, dtype=np.float64)
     return pl.DataFrame(
         {"id_a": a_col, "id_b": b_col, "score": s_col},
         schema={"id_a": pl.Int64, "id_b": pl.Int64, "score": pl.Float64},
