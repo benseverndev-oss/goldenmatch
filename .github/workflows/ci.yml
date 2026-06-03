@@ -933,6 +933,11 @@ jobs:
       - name: Sail score/dedup parity gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
+      # GATE (blocking): connected-components partition parity -- the make-or-
+      # break S2 gate (the Union-Find holdout, computed distributed on Sail).
+      - name: Sail WCC parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_clustering_parity.py -v --timeout=300
 
   action:
     needs: changes
