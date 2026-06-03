@@ -722,6 +722,13 @@ class GoldenMatchConfig(BaseModel):
     llm_auto: bool = False
     domain: DomainConfig | None = None
     backend: str | None = None  # None (default Polars), "ray", "duckdb"
+    # Execution mode. "standard" (default) = the in-memory/Ray pipeline,
+    # bit-identical artifacts. "scale" = the DataFusion spine (out-of-core,
+    # deterministic + semantically correct but NOT bit-identical to standard;
+    # MAX dedup, reduced feature surface). The spine entry
+    # (backends/datafusion_spine.run_spine) enforces the scale-mode feature
+    # gate; this field is the opt-in signal.
+    mode: Literal["standard", "scale"] = "standard"
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
     exclude_columns: list[str] = Field(

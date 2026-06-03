@@ -148,6 +148,69 @@ def _golden_rules_knobs(config) -> tuple[int, float, bool, Any]:
     return max_cluster_size, weak_threshold, auto_split, golden_rules
 
 
+def _validate_scale_mode_supported(config) -> None:
+    """Hard-gate the scale-mode feature surface. Raise EXPLICITLY (never
+    silently ignore) when ``mode="scale"`` is paired with an unsupported
+    feature, so a customer never gets a silently-degraded result. Mirrors
+    ``datafusion_backend._validate_matchkey``'s NotImplementedError-on-
+    out-of-scope contract.
+
+    Supported scale-mode surface: a single-field ``weighted`` matchkey with
+    a supported scorer (jaro_winkler / levenshtein / token_sort), static
+    blocking, golden rules. Everything below is OUT and errors.
+    """
+    if getattr(config, "mode", "standard") != "scale":
+        raise ValueError(
+            "DataFusion spine requires mode='scale' (the opt-in to the "
+            "out-of-core, MAX-dedup, reduced-feature path). Set "
+            "config.mode='scale' to use run_spine; standard mode runs the "
+            "in-memory pipeline."
+        )
+
+    if getattr(config, "llm_boost", False):
+        raise NotImplementedError(
+            "DataFusion spine (mode='scale') does not support LLM boost "
+            "(config.llm_boost=True). Drop it or use standard mode."
+        )
+    if getattr(config, "llm_auto", False):
+        raise NotImplementedError(
+            "DataFusion spine (mode='scale') does not support LLM auto "
+            "(config.llm_auto=True). Drop it or use standard mode."
+        )
+    llm_scorer = getattr(config, "llm_scorer", None)
+    if llm_scorer is not None and getattr(llm_scorer, "enabled", False):
+        raise NotImplementedError(
+            "DataFusion spine (mode='scale') does not support the LLM "
+            "scorer/cluster (config.llm_scorer.enabled=True). Drop it or "
+            "use standard mode."
+        )
+    domain = getattr(config, "domain", None)
+    if domain is not None and getattr(domain, "enabled", False):
+        raise NotImplementedError(
+            "DataFusion spine (mode='scale') does not support domain "
+            "extraction / exotic domain matchkeys (config.domain.enabled="
+            "True). Drop it or use standard mode."
+        )
+
+    for mk in config.get_matchkeys():
+        if getattr(mk, "type", None) != "weighted":
+            raise NotImplementedError(
+                "DataFusion spine (mode='scale') supports only single-field "
+                f"weighted matchkeys; matchkey {mk.name!r} has "
+                f"type={mk.type!r} (probabilistic/exact/exotic out of scope)."
+            )
+        if getattr(mk, "rerank", False):
+            raise NotImplementedError(
+                "DataFusion spine (mode='scale') does not support "
+                f"rerank/cross-encoder (matchkey {mk.name!r} rerank=True)."
+            )
+        if getattr(mk, "negative_evidence", None):
+            raise NotImplementedError(
+                "DataFusion spine (mode='scale') does not support "
+                f"negative-evidence post-filters (matchkey {mk.name!r})."
+            )
+
+
 def _resolve_single_weighted_matchkey(config) -> Any:
     """Pick the single weighted matchkey the spine scores. The spine
     scope mirrors ``score_blocks_datafusion`` (single-field weighted,
@@ -264,13 +327,18 @@ def run_spine(
         target_partitions: pins ``SessionConfig.with_target_partitions``.
 
     Returns:
-        ``(golden_df, assignments_df)`` where ``assignments_df`` is
-        ``cluster_frames.assignments`` (one row per ``(cluster_id,
-        member_id)``, singletons included).
+        ``(golden_df, assignments_df, raw_pairs)`` where ``assignments_df``
+        is ``cluster_frames.assignments`` (one row per ``(cluster_id,
+        member_id)``, singletons included) and ``raw_pairs`` is the RAW
+        above-threshold ``(a, b, score)`` list (a < b) the identity stage
+        rebuilds the id_prep view from.
     """
     from goldenmatch.core.cluster import build_cluster_frames
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
     from goldenmatch.core.golden import build_golden_records_from_frames
+
+    # ── Stage D: scale-mode feature gate (error, never silently ignore) ─
+    _validate_scale_mode_supported(config)
 
     # ── C1: ctx + score + dedup ───────────────────────────────────────
     mk = _resolve_single_weighted_matchkey(config)

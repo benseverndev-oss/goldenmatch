@@ -84,6 +84,7 @@ def _config(*, max_cluster_size: int) -> GoldenMatchConfig:
     ``zip`` so each archetype lands in its own block.
     """
     return GoldenMatchConfig(
+        mode="scale",
         blocking=BlockingConfig(
             strategy="static", keys=[BlockingKeyConfig(fields=["zip"])],
         ),
@@ -317,3 +318,52 @@ def test_spine_idprep_edge_parity(monkeypatch, native):
     spine_edges = _edge_sets_by_partition(spine[1], spine[2])
     comp_edges = _edge_sets_by_partition(comp[1], comp[2])
     assert spine_edges == comp_edges
+
+
+# ── Stage D: determinism across target_partitions ────────────────────────────
+
+
+def _run_spine_tp(blocks, config, target_partitions):
+    from goldenmatch.backends.datafusion_spine import run_spine
+    return run_spine(blocks, config, target_partitions=target_partitions)
+
+
+def test_spine_deterministic_across_target_partitions():
+    """Stage D gate: the emitted pair SET, the cluster PARTITION, and the
+    id_prep edge sets are identical across target_partitions {1,3,17}.
+
+    Compared as SETS/PARTITIONS (label- and order-independent), NOT raw f32
+    float equality. The fixture's within-block strings are identical, so every
+    pair scores exactly 1.0 (threshold 0.85 -> 0.15 margin): no pair is within
+    1e-6 of the cutoff, so this measures partition determinism, not threshold
+    flapping (spec Stage D). avg_edge is intentionally NOT asserted: run_spine
+    does not return cluster metadata, and with uniform 1.0 scores avg_edge is a
+    deterministic function of the (proven-identical) edge sets, so it cannot
+    drift independently.
+    """
+    df = _fixture_df()
+    config = _config(max_cluster_size=100)
+
+    results = {}
+    for tp in (1, 3, 17):
+        # Rebuild blocks per run so each run is independent (build_blocks may
+        # yield a lazy frame consumed once).
+        blocks_tp = _prepared_blocks(df, config)
+        _golden, assign, raw_pairs = _run_spine_tp(blocks_tp, config, tp)
+        results[tp] = {
+            "pairset": frozenset((min(a, b), max(a, b)) for a, b, _ in raw_pairs),
+            "partition": _partition(assign),
+            "edges": _edge_sets_by_partition(assign, raw_pairs),
+        }
+
+    base = results[1]
+    for tp in (3, 17):
+        assert results[tp]["pairset"] == base["pairset"], (
+            f"pair set diverged at target_partitions={tp}"
+        )
+        assert results[tp]["partition"] == base["partition"], (
+            f"cluster partition diverged at target_partitions={tp}"
+        )
+        assert results[tp]["edges"] == base["edges"], (
+            f"id_prep edge sets diverged at target_partitions={tp}"
+        )
