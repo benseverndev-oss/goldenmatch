@@ -205,3 +205,40 @@ def test_from_frames_join_byte_identical_to_from_pairs():
 
     # iter_clusters parity (cid order + emitted rows).
     assert list(v_frames.iter_clusters()) == list(v_pairs.iter_clusters())
+
+
+def test_from_frames_score_for_byte_identical_to_from_pairs():
+    """score_for parity, including the REVERSED-orientation miss.
+
+    Stored key (7,3) (raw row index 2). score_for canonicalizes ONLY the query
+    to (min,max) and looks it up against AS-GIVEN stored keys, so:
+      - score_for(10, 7, 3) -> (3,7) query -> stored (7,3) MISS -> None
+      - score_for(10, 3, 7) -> (3,7) query -> stored (3,7) HIT  -> 0.80
+    Both views MUST agree on every case, including the None misses.
+    """
+    pairs, clusters, assignments = _stage1_join_fixture()
+    v_frames = ClusterPairScores.from_frames(assignments, pairs)
+    v_pairs = ClusterPairScores.from_pairs(pairs, clusters)
+
+    queries = [
+        (10, 7, 3),    # reversed query of stored (7,3) -> canonical (3,7) MISS -> None
+        (10, 3, 7),    # matches stored (3,7) -> 0.80
+        (10, 2, 1),    # reversed query of stored (1,2) -> canonical (1,2) HIT -> 0.40 (last-wins)
+        (10, 1, 2),    # matches stored (1,2) -> 0.40
+        (10, 1, 1),    # self-pair stored (1,1) -> 0.55
+        (20, 4, 5),    # 0.95
+        (20, 5, 4),    # canonical (4,5) HIT -> 0.95
+        (30, 9, 9),    # singleton, no pairs -> None
+        (10, 99, 1),   # absent endpoint -> None
+    ]
+    for cid, a, b in queries:
+        gf = v_frames.score_for(cid, a, b)
+        gp = v_pairs.score_for(cid, a, b)
+        assert gf == gp, f"score_for({cid},{a},{b}): frames={gf} pairs={gp}"
+
+    # Explicit reversed-orientation miss on BOTH views (the preserved None).
+    assert v_frames.score_for(10, 7, 3) is None
+    assert v_pairs.score_for(10, 7, 3) is None
+    # And the matching orientation returns the stored float on BOTH.
+    assert v_frames.score_for(10, 3, 7) == 0.80
+    assert v_pairs.score_for(10, 3, 7) == 0.80
