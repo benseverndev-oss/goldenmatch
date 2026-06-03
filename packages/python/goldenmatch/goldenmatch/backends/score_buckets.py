@@ -44,6 +44,35 @@ from goldenmatch.core.blocker import _build_block_key_expr
 
 logger = logging.getLogger(__name__)
 
+# One-time guard so the stale-native-wheel warning (issue #688) fires at most
+# once per process instead of once per score_buckets call.
+_WARNED_STALE_NATIVE_WHEEL = False
+
+
+def _warn_stale_native_wheel_once(n_exclude: int) -> None:
+    """Warn (once) when the loaded native wheel predates build_exclude_set.
+
+    The published ``goldenmatch-native 0.1.0`` wheel (2026-05-27) shipped one
+    day before ``build_exclude_set`` / ``ExcludeSet`` landed (#552, 2026-05-28),
+    so any env that pip-installs it instead of building in-tree hits the legacy
+    exclude path. Surface the skew instead of silently degrading -- this was the
+    root cause of issue #688's 44x bucket_score slowdown.
+    """
+    global _WARNED_STALE_NATIVE_WHEEL
+    if _WARNED_STALE_NATIVE_WHEEL:
+        return
+    _WARNED_STALE_NATIVE_WHEEL = True
+    logger.warning(
+        "goldenmatch-native is loaded but lacks build_exclude_set (pre-#552 "
+        "wheel; the published goldenmatch-native 0.1.0 is such a wheel). The "
+        "block scorer is using its exclude-set fallback (empty exclude + Python "
+        "post-filter over %d excluded pairs) -- still fast, but upgrading "
+        "goldenmatch-native or rebuilding in-tree (scripts/build_native.py) "
+        "restores the native Arc-handle path. See issue #688.",
+        n_exclude,
+    )
+
+
 # Scorers the native fast-path kernel (goldenmatch._native.score_block_pairs)
 # implements, with the ids it expects. A field whose scorer isn't here forces
 # the Python per-pair loop for that bucket.
@@ -487,6 +516,10 @@ def score_buckets(
                 f"{time.perf_counter()-_t_eb:.2f}s",
                 flush=True,
             )
+        elif _build is None and frozen_exclude:
+            # Stale/old native wheel: no Arc-handle path available. The worker
+            # falls back to empty-exclude + Python post-filter (see below).
+            _warn_stale_native_wheel_once(len(frozen_exclude))
 
     def _apply_match_mode_filter(
         pairs: list[tuple[int, int, float]],
@@ -582,11 +615,29 @@ def score_buckets(
                     exclude_set=native_exclude_handle,
                 )
             else:
+                # Legacy/stale native wheel (pre-#552: no build_exclude_set, so
+                # native_exclude_handle is None). Passing the full exclude as a
+                # fresh Vec on EVERY bucket call makes the kernel rebuild a
+                # HashSet per call -- O(buckets * |exclude|), the #552 pathology
+                # and the root cause of issue #688's 44x slowdown on the
+                # published goldenmatch-native 0.1.0 wheel. Pass an EMPTY exclude
+                # and drop excluded pairs in Python after emit instead: the
+                # kernel emits only >= threshold pairs (few), so the post-filter
+                # is O(emitted), and the wasted scoring of excluded intra-block
+                # pairs is cheap rapidfuzz-rs work. The emitted ids are canonical
+                # (min, max) (kernel pair_key), matching frozen_exclude's keying,
+                # so the output pair set is identical to the handle path: a pair
+                # in frozen_exclude that scores >= threshold is emitted then
+                # removed here; one that scores < threshold is dropped either way.
                 pairs = native_module().score_block_pairs_arrow(
                     row_ids_arrow, field_arrays_arrow, size_list,
                     native_scorer_ids, weights, total_weight, threshold,
-                    list(frozen_exclude),
+                    [],
                 )
+                if frozen_exclude:
+                    pairs = [
+                        p for p in pairs if (p[0], p[1]) not in frozen_exclude
+                    ]
             local_blocks = sum(1 for s in size_list if s >= 2)
             # Match-mode post-filter (native path doesn't know about
             # source_lookup or target_ids; apply in Python after emit).
