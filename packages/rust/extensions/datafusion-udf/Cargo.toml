@@ -1,0 +1,44 @@
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the `bridge` crate's `auto-initialize` feature — the
+# two are mutually incompatible (ext-module must NOT link libpython; embedding
+# must). Same isolation rationale as the sibling `native` crate.
+[workspace]
+
+[package]
+name = "goldenmatch-datafusion-udf"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "DataFusion FFI ScalarUDF feasibility gate (add_one) for GoldenMatch"
+publish = false
+
+[lib]
+# Produces lib_goldenmatch_datafusion_udf; the #[pymodule] is
+# `goldenmatch_datafusion_udf`, so the init symbol is
+# PyInit_goldenmatch_datafusion_udf. cdylib only (imported BY CPython).
+name = "goldenmatch_datafusion_udf"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Versions mirror apache/datafusion-python @ 53.0.0's workspace pins verbatim:
+# datafusion-* = 53, arrow stack = 58, pyo3 = 0.28. These are the exact
+# versions the canonical datafusion-ffi-example compiles against, so the
+# FFI_ScalarUDF / ScalarUDFImpl / PyCapsule contract lines up by construction.
+datafusion-common = { version = "53", default-features = false }
+datafusion-expr = "53"
+datafusion-ffi = "53"
+arrow = { version = "58", features = ["ffi"] }
+arrow-array = "58"
+arrow-schema = "58"
+# extension-module: don't link libpython (this .so is imported BY CPython).
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13 (matches the
+# sibling `native` crate; the example uses abi3-py310 but we floor at 3.11).
+pyo3 = { version = "0.28", features = ["extension-module", "abi3", "abi3-py311"] }
+
+[build-dependencies]
+pyo3-build-config = "0.28"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
