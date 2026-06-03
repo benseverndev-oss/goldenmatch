@@ -84,6 +84,7 @@ def _config(*, max_cluster_size: int) -> GoldenMatchConfig:
     ``zip`` so each archetype lands in its own block.
     """
     return GoldenMatchConfig(
+        mode="scale",
         blocking=BlockingConfig(
             strategy="static", keys=[BlockingKeyConfig(fields=["zip"])],
         ),
