@@ -1,0 +1,63 @@
+name: bench-df-cluster-edges
+
+# 3-way cluster-edge view bench (workflow_dispatch only): legacy dict
+# (ClusterPairScores) vs embedded DataFusion cid-sorted edge stream vs Polars
+# lazy, on a HEAVY-TAILED cluster partition (most clusters 2-5, long tail, a few
+# oversized >100; sparse connectivity; ~1% duplicate (a,b) pairs at a different
+# score). Each variant runs in its OWN subprocess so peak RSS is per-variant; a
+# child OOM (non-zero / -9 / 137 exit) is recorded as an infeasibility point, not
+# a crash. The DataFusion leg consumes the cid-ORDERED stream contiguously (no
+# global {cid: {(a,b): score}} dict). Also reports the bottleneck-divergence rate
+# (DataFusion MAX-dedup tie-break vs legacy LAST-WINS).
+#
+# NOTE: the binding 25M / 100M scales are dispatched EXPLICITLY via the `np`
+# input. At 100M the legacy variant may OOM -- the bench catches it and records
+# OOM so the DataFusion + Polars feasibility points still report.
+on:
+  workflow_dispatch:
+    inputs:
+      np:
+        description: "Comma-separated target pair counts"
+        default: "25000000,100000000"
+      memory_limit:
+        description: "DataFusion spill-pool byte budget (empty = unbounded)"
+        default: ""
+      variants:
+        description: "Comma-separated subset of legacy,datafusion,polars"
+        default: "legacy,datafusion,polars"
+      runs:
+        description: "Repetitions per measurement (median)"
+        default: "3"
+
+jobs:
+  bench:
+    runs-on: large-new-64GB
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Install datafusion (embedded Arrow query engine)
+        run: uv pip install 'datafusion>=53,<54'
+      - name: Build native extension
+        run: uv run python scripts/build_native.py
+      - name: Bench cluster-edge view (legacy dict vs DataFusion stream vs Polars)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_df_cluster_edges.py \
+            --np "${{ inputs.np }}" --memory-limit "${{ inputs.memory_limit }}" \
+            --variants "${{ inputs.variants }}" --runs "${{ inputs.runs }}" \
+            --output .profile_tmp/df_cluster_edges.json | tee /tmp/df_cluster_edges.txt
+          { echo '## bench-df-cluster-edges'; echo '```'; cat /tmp/df_cluster_edges.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: df-cluster-edges
+          path: .profile_tmp/df_cluster_edges.json
+          retention-days: 30
