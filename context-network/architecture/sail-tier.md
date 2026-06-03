@@ -6,9 +6,10 @@ programmed via **Spark Connect / PySpark**) to run across nodes, computes connec
 components distributed (removing the one-box UF island), and ultimately retires the
 existing Ray distributed stack.
 
-**Status:** S1 SHIPPED 2026-06-03 (PR #709); S2 next. **Spec:**
-`docs/superpowers/specs/2026-06-03-sail-tier-design.md`. **S1 plan:**
-`docs/superpowers/plans/2026-06-03-sail-tier-stage-s1.md`.
+**Status:** S1+S2 SHIPPED 2026-06-03 (PRs #709, #712); S3 next. The
+make-or-break WCC-on-Sail risk is CLOSED. **Spec:**
+`docs/superpowers/specs/2026-06-03-sail-tier-design.md`. **Plans:**
+`docs/superpowers/plans/2026-06-03-sail-tier-stage-{s1,s2}.md`.
 **Why it matters:** Stage E showed one-box spill-survival is non-binding
 ([../decisions/0003-stage-e-spill-honest-null.md](../decisions/0003-stage-e-spill-honest-null.md))
 — the distributed path is where the value is.
@@ -43,7 +44,13 @@ algorithm** in a new `goldenmatch.sail` package, with native scorers rebound as 
   UDF + GROUP BY max). New path-filtered `sail` CI lane (in-process Sail server). Green gates:
   Spark Connect connectivity + score/dedup pair-set parity vs python-rapidfuzz. NO Java needed
   (pyspark[connect] is pure gRPC); open-ended versions worked.
-- **S2 — NEXT (the gate):** WCC on Sail.  S3: golden + identity.  S4: 100M+ bench + Ray retire.
+- **S2 — SHIPPED (PR #712), the make-or-break gate.** `clustering.connected_components` computes
+  the Union-Find holdout DISTRIBUTED on Sail via min-label propagation (pure Spark Connect joins),
+  partition-parity-green vs reference UF (chain + junction + singleton). Existential "WCC-on-Sail"
+  risk CLOSED. Deliberate spec deviation: led with label-prop (correctness gate); large-star/
+  small-star is an S4 prerequisite (label-prop is O(diameter) on 100M chains).
+- **S3 — NEXT:** golden (incl. custom rules) + identity on Sail.  **S4:** 100M+ bench +
+  large-star/small-star swap + Ray retire.
 
 ## Verification
 - CI smoke: a local Sail Spark Connect server (`pysail.spark.SparkConnectServer`) runs the same
