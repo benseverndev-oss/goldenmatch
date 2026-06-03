@@ -20,13 +20,13 @@ engine:
   (c) id_prep -- ``ClusterPairScores.from_frames(assignments, raw_pairs)``
       yields identical ``for_cluster(cid)`` edge sets per cluster.
 
-The comparand scores via ``score_blocks_datafusion`` (the Stage-B backend
-reference, B1 native UDF) while the spine scores via the Stage-B FFI
-ScalarUDFs. The fixture uses ``jaro_winkler`` only, whose FFI form
-(goldenmatch-score-core) and native form are both rapidfuzz-equal
-(``test_native_parity`` / ``test_datafusion_ffi_udf`` prove 1e-9), so the
-RAW pair sets are identical and any partition/golden/edge divergence is a
-spine-orchestration bug -- exactly what this gate must catch.
+The comparand scores via python ``rapidfuzz`` (brute-force within-block,
+_native-free) while the spine scores via the Stage-B FFI ScalarUDFs. The
+fixture uses ``jaro_winkler`` only, whose FFI form (goldenmatch-score-core)
+and python ``rapidfuzz`` are rapidfuzz-equal (``test_native_parity`` /
+``test_datafusion_ffi_udf`` prove 1e-9), so the RAW pair sets are identical
+and any partition/golden/edge divergence is a spine-orchestration bug --
+exactly what this gate must catch.
 
 ``pyarrow`` + ``datafusion`` are soft deps (skip if absent);
 ``goldenmatch_datafusion_udf`` is importorskip too so the file SKIPS where
@@ -268,20 +268,12 @@ def _build_both(max_cluster_size):
     spine_blocks = _prepared_blocks(df, config)
     comp_blocks = _prepared_blocks(df, config)
 
-    spine_golden, spine_assign = _run_spine(spine_blocks, config)
+    # run_spine returns the spine's ACTUAL raw pairs (3rd element) -- use them
+    # directly for the id_prep edge view (no re-derivation, no _native).
+    spine_golden, spine_assign, spine_pairs = _run_spine(spine_blocks, config)
     comp_golden, comp_assign, comp_pairs = _inmemory_comparand(
         comp_blocks, config
     )
-    # The spine's raw pairs are needed for the spine-side id_prep edge view;
-    # re-derive them deterministically via the same backend over the spine
-    # blocks (FFI vs native are jaro_winkler-equal, so identical to what the
-    # spine ctx produced).
-    from goldenmatch.backends.datafusion_backend import score_blocks_datafusion
-
-    spine_pairs = score_blocks_datafusion(spine_blocks, config.get_matchkeys()[0], set())
-    spine_pairs = [
-        (a, b, s) if a < b else (b, a, s) for a, b, s in spine_pairs
-    ]
     return (
         (spine_golden, spine_assign, spine_pairs),
         (comp_golden, comp_assign, comp_pairs),

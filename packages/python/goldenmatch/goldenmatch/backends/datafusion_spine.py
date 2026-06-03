@@ -335,7 +335,10 @@ def run_spine(
         provenance=config.output.lineage_provenance,
     )
 
-    return golden_df, cluster_frames.assignments
+    # Return the RAW scored pairs too: the identity stage builds the id_prep
+    # ClusterPairScores view from (assignments, raw_pairs), so callers need
+    # them. (Also lets the parity test diff the spine's ACTUAL pairs.)
+    return golden_df, cluster_frames.assignments, all_pairs
 
 
 def _all_ids_from_blocks(blocked_candidates: list) -> list[int]:
