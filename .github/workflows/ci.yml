@@ -928,6 +928,11 @@ jobs:
         run: |
           .venv/bin/python -c "import pysail, pyspark; print('pyspark', pyspark.__version__)"
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_connectivity.py -v --timeout=300
+      # GATE (blocking): the S1 score/dedup pair-set parity vs a python-rapidfuzz
+      # reference -- the reason this lane exists at S1.
+      - name: Sail score/dedup parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
 
   action:
     needs: changes
