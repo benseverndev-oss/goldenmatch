@@ -22,8 +22,9 @@ island), and ultimately REPLACES the Ray distributed stack. See
 [../architecture/sail-tier.md](../architecture/sail-tier.md) +
 [../decisions/0004-sail-tier-scope.md](../decisions/0004-sail-tier-scope.md).
 Spec: `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. Staged, each a gate:
-- **S1** — Sail harness + scorer Arrow UDF + score/dedup (parity vs one-box spine).
-- **S2** — **WCC on Sail** (port two-phase WCC to Spark Connect) — THE GATE.
+- **S1 — SHIPPED (PR #709, 2026-06-03)** — Sail harness + scorer pandas UDF + score/dedup,
+  connectivity + pair-set parity gates green on the new `sail` CI lane.
+- **S2** — **WCC on Sail** (port two-phase WCC to Spark Connect) — THE GATE. **← next.**
 - **S3** — golden (incl. custom rules) + identity on Sail.
 - **S4** — binding 100M+ multi-node bench + Ray retirement. Kill criterion: completes
   where one-box can't, per-node RSS bounded, wall scales with nodes.

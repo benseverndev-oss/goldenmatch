@@ -2,6 +2,12 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-03 — Sail tier Stage S1 shipped
+- S1 merged (PR #709): the `goldenmatch.sail` harness + scorer pandas UDF + score/dedup,
+  parity-green on a new `sail` CI lane. Marked S1 done in
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). S2 (WCC on Sail) is the next gate.
+
 ## 2026-06-03 — Sail tier specced + roadmapped
 - Added the Sail-tier design (`docs/superpowers/specs/2026-06-03-sail-tier-design.md`,
   spec-reviewer approved) — the distributed Sail-native pipeline that replaces Ray.
