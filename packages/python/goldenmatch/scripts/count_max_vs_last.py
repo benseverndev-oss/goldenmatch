@@ -68,7 +68,12 @@ def _run_dedupe_and_capture(n: int) -> None:
     # it doesn't change how often duplicate canonical pairs occur. Mirrors
     # tests/test_autoconfig_regressions.py
     # (test_dedupe_df_interaction_all_three_fixes_together).
-    config = auto_configure_df(df)
+    # confidence_required=False: at n>=100k the controller raises
+    # ControllerNotConfidentError on a RED commit (the realistic fixture trips
+    # the cluster sub-profile at 1M). This is a measurement run, not a production
+    # commit -- relax it on BOTH auto_configure_df and dedupe_df so the realistic
+    # pipeline completes and we capture all_pairs + the partition.
+    config = auto_configure_df(df, confidence_required=False)
     for mk in config.get_matchkeys():
         if getattr(mk, "rerank", False):
             mk.rerank = False
