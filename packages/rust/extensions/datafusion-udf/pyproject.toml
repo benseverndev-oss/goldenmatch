@@ -9,7 +9,7 @@ build-backend = "maturin"
 [project]
 name = "goldenmatch-datafusion-udf"
 version = "0.1.0"
-description = "DataFusion FFI ScalarUDF feasibility gate (add_one) for GoldenMatch"
+description = "DataFusion FFI ScalarUDFs (native string scorers) for GoldenMatch"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
