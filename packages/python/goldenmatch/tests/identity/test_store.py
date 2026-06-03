@@ -89,6 +89,19 @@ def test_lookup_entity_ids_bulk(store: IdentityStore):
     assert out == {"a:1": e1, "a:2": e2}
 
 
+def test_lookup_entity_ids_chunks_beyond_sqlite_var_limit(store: IdentityStore):
+    # #670: a single IN-list over >999 ids raised sqlite3 "too many SQL
+    # variables". lookup_entity_ids must chunk the IN-list. Seed 2500 records
+    # (spanning multiple 900-id chunks) and look them all up in one call.
+    n = 2500
+    e = new_entity_id()
+    store.upsert_identity(IdentityNode(entity_id=e))
+    for i in range(n):
+        store.upsert_record(SourceRecord(f"a:{i}", "a", str(i), "h", entity_id=e))
+    out = store.lookup_entity_ids([f"a:{i}" for i in range(n)] + ["a:missing"])
+    assert out == {f"a:{i}": e for i in range(n)}
+
+
 def test_records_for_entity(store: IdentityStore):
     e = new_entity_id()
     store.upsert_identity(IdentityNode(entity_id=e))
