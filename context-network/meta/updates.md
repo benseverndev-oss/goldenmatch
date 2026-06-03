@@ -2,6 +2,12 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-03 — Sail tier Stage S2 shipped (make-or-break gate)
+- S2 merged (PR #712): WCC on Sail via min-label propagation, partition-parity green. The
+  existential "WCC-on-Sail at all" risk is CLOSED. Marked S2 done in
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). S3 (golden + identity on Sail) is next.
+
 ## 2026-06-03 — Sail tier Stage S1 shipped
 - S1 merged (PR #709): the `goldenmatch.sail` harness + scorer pandas UDF + score/dedup,
   parity-green on a new `sail` CI lane. Marked S1 done in
