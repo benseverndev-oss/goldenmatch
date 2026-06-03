@@ -164,13 +164,13 @@ def _inmemory_comparand(blocks, config):
         (a, b, s) if a < b else (b, a, s) for a, b, s in raw_pairs
     ]
 
-    # all_ids: deduped __row_id__ union across blocks (Arrow-backed Series).
+    # all_ids: deduped __row_id__ union across blocks as list[int] (matches
+    # pipeline.py:1451 + build_cluster_frames's list[int] signature).
     parts: list[pl.Series] = []
     for b in blocks:
         parts.append(b.df["__row_id__"].cast(pl.Int64))
     all_ids = (
-        pl.concat(parts).unique(maintain_order=True)
-        if parts else pl.Series("__row_id__", [], dtype=pl.Int64)
+        pl.concat(parts).unique(maintain_order=True).to_list() if parts else []
     )
 
     max_cs, weak, auto_split, golden_rules = _golden_rules_knobs(config)

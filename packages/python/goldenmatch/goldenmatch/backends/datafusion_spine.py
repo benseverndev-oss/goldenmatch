@@ -338,14 +338,17 @@ def run_spine(
     return golden_df, cluster_frames.assignments
 
 
-def _all_ids_from_blocks(blocked_candidates: list):
+def _all_ids_from_blocks(blocked_candidates: list) -> list[int]:
     """Build the ``all_ids`` argument for ``build_cluster_frames`` as a
-    Polars int64 Series (an Arrow-array-like, NOT a Python ``list[int]``
-    rehydration) over the UNION of ``__row_id__`` across every block.
+    ``list[int]`` over the UNION of ``__row_id__`` across every block.
 
-    Mirrors ``collected_df["__row_id__"]`` in the in-memory path: every
-    record id in the universe, so singletons surface as size-1 clusters.
-    Deduped (a row can land in multiple blocks under multi-pass blocking).
+    EXACTLY mirrors ``pipeline.py:1451`` (``all_ids =
+    collected_df["__row_id__"].to_list()``) and ``build_cluster_frames``'s
+    ``all_ids: list[int] | None`` signature. all_ids is record-count-sized
+    (NOT pair-count), so a list is the one-box convention here -- the
+    "no list[int]" caution is the DISTRIBUTED-WCC lesson, not this path.
+    Every record id in the universe, so singletons surface as size-1
+    clusters. Deduped (a row can land in multiple blocks under multi-pass).
     """
     import polars as pl
 
@@ -356,8 +359,8 @@ def _all_ids_from_blocks(blocked_candidates: list):
             df = df.collect()
         series_parts.append(df["__row_id__"].cast(pl.Int64))
     if not series_parts:
-        return pl.Series("__row_id__", [], dtype=pl.Int64)
-    return pl.concat(series_parts).unique(maintain_order=True)
+        return []
+    return pl.concat(series_parts).unique(maintain_order=True).to_list()
 
 
 def _slim_golden_source(blocked_candidates: list):
