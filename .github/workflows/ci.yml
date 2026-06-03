@@ -50,6 +50,11 @@ jobs:
               - 'uv.lock'
             python_goldenmatch:
               - 'packages/python/goldenmatch/**'
+              # Stage A: the standalone datafusion-ffi UDF crate is built into
+              # the goldenmatch venv in the `python` lane and exercised by
+              # tests/test_datafusion_ffi_udf.py. A crate-only change must
+              # re-trigger that lane so the FFI feasibility gate re-runs.
+              - 'packages/rust/extensions/datafusion-udf/**'
             python_goldenmatch_postgres:
               - 'packages/python/goldenmatch/tests/test_db.py'
               - 'packages/python/goldenmatch/tests/test_reconcile.py'
@@ -233,6 +238,33 @@ jobs:
       # matrix package (the gated files are goldenmatch-only).
       - if: matrix.pkg == 'goldenmatch'
         run: uv run python scripts/check_map_elements.py
+      # DataFusion FFI ScalarUDF feasibility gate (Stage A). Build the
+      # standalone `datafusion-udf` crate into the project venv and install
+      # the Python `datafusion` runtime so tests/test_datafusion_ffi_udf.py can
+      # register the add_one UDF via the PyCapsule FFI bridge. The test HARD-
+      # imports goldenmatch_datafusion_udf (no importorskip), so a build break
+      # here surfaces as a test FAILURE, not a skip — that's the loud guard for
+      # the whole DataFusion spine. goldenmatch-only (the only lane with the
+      # test) and a Rust compile, not a Python import, so it can't trip the
+      # box's import-hang.
+      - if: matrix.pkg == 'goldenmatch'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - if: matrix.pkg == 'goldenmatch'
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/datafusion-udf
+      - name: Install the datafusion runtime + build the FFI UDF crate (goldenmatch only)
+        if: matrix.pkg == 'goldenmatch'
+        run: |
+          uv pip install 'datafusion>=53,<54'
+          # maturin develop drops the compiled goldenmatch_datafusion_udf ext
+          # straight into the active uv venv (mirrors how the standalone
+          # datafusion-ffi-example is built). --uv keeps it inside the venv uv
+          # manages; abi3 means one ext spans 3.11-3.13.
+          uv run --with maturin maturin develop --release \
+            --manifest-path packages/rust/extensions/datafusion-udf/Cargo.toml --uv
       # Per-package --ignore lists mirror the pre-fold tuning each repo had
       # (documented in each package's own CLAUDE.md). Without these, packages with
       # known-skip tests would make CI perpetually red and train people to ignore
