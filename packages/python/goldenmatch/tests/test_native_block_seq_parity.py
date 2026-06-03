@@ -10,6 +10,13 @@ rayon, huge = always sequential), which lets this test exercise BOTH paths on
 the same input and assert they agree -- and that both agree with the Python
 slow path (the source of truth).
 
+The fixture is a SINGLE block (constant blocking key) with mixed similar /
+dissimilar names. score_buckets rebuilds __block_key__ from the blocking config,
+so a constant key puts every row in one block -> the block is the whole frame,
+directly comparable to find_fuzzy_matches (which scores the whole frame). Names
+differ within the block so scoring is non-trivial and the threshold actually
+filters.
+
 Requires the native kernel; skipped on pure-Python.
 """
 from __future__ import annotations
@@ -37,21 +44,16 @@ pytestmark = pytest.mark.skipif(
 
 
 def _prepared() -> pl.DataFrame:
-    # Three blocks of near-duplicate names so each block emits several pairs,
-    # plus a few non-matches so the threshold actually filters.
+    # One block (constant "blk") of mixed names: alice/alica/alise are mutually
+    # similar (jw > 0.7 -> pairs), robert/robbert pair, xavier matches nobody.
     field = MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)
     col = _xform_sig(field)
-    names = [
-        "alice", "alica", "alise",      # block A (similar -> pairs)
-        "robert", "robbert", "rupert",  # block B
-        "xavier", "yvonne", "zelda",    # block C (dissimilar -> few/no pairs)
-    ]
-    blocks = ["A", "A", "A", "B", "B", "B", "C", "C", "C"]
+    names = ["alice", "alica", "alise", "robert", "robbert", "xavier"]
     return pl.DataFrame({
         "__row_id__": list(range(len(names))),
         "name": names,
         col: names,
-        "__block_key__": blocks,
+        "blk": ["X"] * len(names),
     })
 
 
@@ -63,7 +65,8 @@ def _mk() -> MatchkeyConfig:
 
 
 def _blocking() -> BlockingConfig:
-    return BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["name"])])
+    # Block on the constant column so the whole frame is one block.
+    return BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])])
 
 
 def _run(monkeypatch, min_pairs: str) -> list[tuple[int, int, float]]:
@@ -76,8 +79,9 @@ def _keys(pairs):
 
 
 def test_sequential_and_rayon_paths_agree(monkeypatch):
-    rayon = _run(monkeypatch, "0")          # 0 -> always rayon
+    rayon = _run(monkeypatch, "0")           # 0 -> always rayon
     seq = _run(monkeypatch, "100000000000")  # huge -> always sequential
+    assert _keys(rayon), "fixture must emit pairs or the parity check is vacuous"
     assert _keys(seq) == _keys(rayon), (
         f"seq vs rayon pair-set mismatch:\n  seq={seq}\n  rayon={rayon}"
     )
@@ -88,9 +92,13 @@ def test_sequential_and_rayon_paths_agree(monkeypatch):
 
 
 def test_both_paths_match_slow_path(monkeypatch):
-    """Both kernel paths must match find_fuzzy_matches (the source of truth)."""
-    df = _prepared()
-    slow = find_fuzzy_matches(df, _mk(), exclude_pairs=frozenset(), pre_scored_pairs=None)
+    """Both kernel paths must match find_fuzzy_matches (the source of truth).
+    Valid here because the single-block fixture makes score_buckets score the
+    whole frame, exactly what find_fuzzy_matches does."""
+    slow = find_fuzzy_matches(
+        _prepared(), _mk(), exclude_pairs=frozenset(), pre_scored_pairs=None
+    )
     slow_keys = _keys(slow)
+    assert slow_keys, "fixture must emit pairs or the parity check is vacuous"
     assert _keys(_run(monkeypatch, "0")) == slow_keys
     assert _keys(_run(monkeypatch, "100000000000")) == slow_keys
