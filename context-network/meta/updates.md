@@ -2,6 +2,13 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-03 — Sail tier specced + roadmapped
+- Added the Sail-tier design (`docs/superpowers/specs/2026-06-03-sail-tier-design.md`,
+  spec-reviewer approved) — the distributed Sail-native pipeline that replaces Ray.
+- New nodes: [../architecture/sail-tier.md](../architecture/sail-tier.md),
+  [../decisions/0004-sail-tier-scope.md](../decisions/0004-sail-tier-scope.md); promoted
+  the Sail tier in [../planning/roadmap.md](../planning/roadmap.md) (S1-S4, WCC as the gate).
+
 ## 2026-06-03 — Network created
 - Seeded the context network and the root `.context-network.md` discovery file.
 - Captured the DataFusion-spine workstream end-to-end: Stages A-E status
