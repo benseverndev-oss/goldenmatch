@@ -29,21 +29,26 @@ def _bucket_pairs(
 
 
 class ClusterPairScores:
-    __slots__ = ("_by_cid", "_partitions")
+    __slots__ = ("_by_cid", "_agg_frame", "_cid_to_row")
 
     def __init__(
         self,
         by_cid: dict[int, dict[tuple[int, int], float]] | None = None,
-        partitions: dict[int, Any] | None = None,
+        agg_frame: Any | None = None,
+        cid_to_row: dict[int, int] | None = None,
     ):
         # Two backings, mutually exclusive in practice:
         #  - _by_cid: legacy resident dict-of-dicts (from_pairs/from_cluster_dict)
-        #  - _partitions: Stage-2 frame-backed, one small Polars frame per cid;
-        #    accessors build the per-cid dict on demand so the global
-        #    100M-entry dict-of-dicts is NEVER resident.
-        # __slots__ raises on unset access, so set BOTH every time.
+        #  - _agg_frame + _cid_to_row: engine-plannable frame-backed view. ONE
+        #    group_by("cid").agg(...) frame (one row per cid, edges as list-columns
+        #    in first-occurrence order) PLUS a cheap cid->row-index dict
+        #    (num_clusters entries). Accessors slice the row and build the per-cid
+        #    dict on demand, so the global 100M-entry dict-of-dicts is NEVER
+        #    resident and no per-cid frame partition is materialized at build time.
+        # __slots__ raises on unset access, so set ALL three every time.
         self._by_cid = by_cid
-        self._partitions = partitions
+        self._agg_frame = agg_frame
+        self._cid_to_row = cid_to_row
 
     @classmethod
     def from_cluster_dict(cls, clusters: dict[int, dict]) -> ClusterPairScores:
@@ -101,11 +106,18 @@ class ClusterPairScores:
         canonical pairs.
 
         Stage-1: vectorized via a Polars join instead of the ``_bucket_pairs``
-        Python loop (10x faster at 100M pairs). Builds the SAME ``_by_cid`` dict:
+        Python loop (10x faster at 100M pairs). Selects the SAME kept edges:
         a pair is kept iff BOTH endpoints map to the same cid; key is ``(a, b)``
         EXACTLY as given (NEVER canonicalized); key insertion order = first
         occurrence; value = score at the LAST occurrence (LAST-WINS, NOT max);
         self-pairs ``(a, a)`` are kept.
+
+        Stage-2: the VIEW BUILD is a single engine-plannable
+        ``group_by("cid").agg(...)`` producing ONE frame -- one row per cid, edges
+        as list-columns in first-occurrence order -- plus a cheap
+        ``cid -> row-index`` dict. Per-cluster dict materialization is DEFERRED to
+        the accessors (built on demand, O(cluster size)). The global dict-of-dicts
+        is NEVER resident.
         """
         # all_pairs is the raw list[(a,b,s)] AS-GIVEN. NEVER canonicalize.
         a_col, b_col, s_col = [], [], []
@@ -138,43 +150,52 @@ class ClusterPairScores:
                 pl.col("__i__").min().alias("first_i"),
                 # LAST-WINS: score at the last occurrence by input order.
                 # NEVER pl.col("s").max().
-                pl.col("s").sort_by("__i__").last().alias("last_score"),
+                pl.col("s").sort_by("__i__").last().alias("last_s"),
             )
             # REQUIRED: group_by output order is undefined; first-occurrence
             # insertion order is part of the byte-identical contract.
             .sort("cid", "first_i")
         )
-        # Stage-2: STOP materializing the global dict-of-dicts. Keep one small
-        # Polars frame per cid; the accessors build the per-cid dict on demand.
-        # ``g`` is already deduped (group_by) + ordered (sort cid, first_i), so
-        # dropping first_i and partitioning by cid preserves first-occurrence
-        # row order and last-wins scores -- byte-identical to Stage-1 / from_pairs.
-        view_df = g.select("cid", "a", "b", pl.col("last_score").alias("s"))
-        raw = view_df.partition_by("cid", as_dict=True)
-        # Normalize key shape across Polars versions (current=tuple (cid,),
-        # older=scalar cid) so lookups always use a scalar int cid.
-        partitions = {
-            int(k[0] if isinstance(k, tuple) else k): v for k, v in raw.items()
-        }
-        return cls(partitions=partitions)
+        # Stage-2 (engine-plannable): collapse the per-pair rows into ONE frame,
+        # one row per cid, edges as list-columns. ``maintain_order=True`` preserves
+        # the prior ``sort("cid", "first_i")`` row order, so within each cid the
+        # a/b/last_s lists are in first-occurrence order -- byte-identical to
+        # Stage-1 / from_pairs. The BUILD cost is just this group_by + a small
+        # cid->row index; the per-cid dict is built lazily in the accessors. The
+        # global dict-of-dicts is NEVER resident and NO per-cid frame partition is
+        # materialized.
+        agg = g.group_by("cid", maintain_order=True).agg(
+            pl.col("a"), pl.col("b"), pl.col("last_s")
+        )
+        # num_clusters ints (cheap). Do NOT .to_list() the edge list-columns here;
+        # the accessors slice them on demand.
+        cid_to_row = dict(zip(agg["cid"].to_list(), range(agg.height)))
+        return cls(agg_frame=agg, cid_to_row=cid_to_row)
+
+    def _row_edges(self, row: int) -> tuple[list, list, list]:
+        # Slice ONE row of the agg frame and pull its three edge list-columns.
+        # The lists are in first-occurrence order (maintain_order=True at build).
+        r = self._agg_frame.row(row, named=True)
+        return r["a"], r["b"], r["last_s"]
 
     def for_cluster(self, cid: int) -> dict[tuple[int, int], float]:
-        if self._partitions is not None:
-            f = self._partitions.get(int(cid))
-            if f is None:
+        if self._agg_frame is not None:
+            row = self._cid_to_row.get(int(cid))
+            if row is None:
                 return {}
-            d: dict[tuple[int, int], float] = {}
-            for a, b, s in f.select("a", "b", "s").iter_rows():
-                d[(int(a), int(b))] = float(s)
-            return d
+            al, bl, sl = self._row_edges(row)
+            # list order == first-occurrence order; last value within a key
+            # already collapsed by the build (last-wins).
+            return {(int(a), int(b)): float(s) for a, b, s in zip(al, bl, sl)}
         return self._by_cid.get(cid, {})
 
     def iter_clusters(self) -> Iterator[tuple[int, Iterable[tuple[int, int, float]]]]:
-        if self._partitions is not None:
-            for cid, f in self._partitions.items():
+        if self._agg_frame is not None:
+            for cid, al, bl, sl in self._agg_frame.select(
+                "cid", "a", "b", "last_s"
+            ).iter_rows():
                 yield int(cid), [
-                    (int(a), int(b), float(s))
-                    for a, b, s in f.select("a", "b", "s").iter_rows()
+                    (int(a), int(b), float(s)) for a, b, s in zip(al, bl, sl)
                 ]
         else:
             for cid, ps in self._by_cid.items():
@@ -182,7 +203,7 @@ class ClusterPairScores:
 
     def score_for(self, cid: int, a: int, b: int) -> float | None:
         key = (min(a, b), max(a, b))
-        if self._partitions is not None:
+        if self._agg_frame is not None:
             # Canonical QUERY key vs AS-GIVEN stored keys: a pair stored (7,3)
             # is intentionally MISSED by score_for(cid, 3, 7) -> None. Preserved.
             return self.for_cluster(cid).get(key)
