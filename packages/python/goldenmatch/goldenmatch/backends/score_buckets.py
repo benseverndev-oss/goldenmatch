@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -411,6 +412,20 @@ def score_buckets(
     _t0 = time.perf_counter()
     print(f"[score_buckets] entry: prepared_df.height={prepared_df.height} n_buckets={n_buckets}", flush=True)
 
+    # Verbose per-bucket timing breakdown (issue #688 diagnosis aid). OFF by
+    # default; set GOLDENMATCH_BUCKET_DEBUG=1 to split every native bucket call
+    # into prep (sort + group_by + to_arrow) vs kernel (score_block_pairs_arrow)
+    # vs post-filter, accumulated across all buckets and printed once at the end.
+    # This is the split that localizes "Polars wrapping vs the Rust kernel" --
+    # e.g. it shows the kernel call dominating when rayon parks on a futex
+    # (issue #688). Zero cost when off (one env read + a couple of branches).
+    _bucket_debug = os.environ.get("GOLDENMATCH_BUCKET_DEBUG", "0") not in (
+        "0", "", "false", "False", "no", "off",
+    )
+    _dbg_lock = threading.Lock()
+    # rows: (prep_s, kernel_s, postfilter_s, n_blocks, n_pairs_emitted)
+    _dbg_rows: list[tuple[float, float, float, int, int]] = []
+
     # Slim projection: drop columns no score-worker reads. The audit
     # (2026-05-29) showed every reader in this module touches only
     # __row_id__ / __source__ / __block_key__ / __xform_*__ plus the
@@ -551,6 +566,7 @@ def score_buckets(
         # actual rapidfuzz work.
         assert fast_path_specs is not None  # gated by dispatcher
         threshold, total_weight, field_specs, ne_specs = fast_path_specs
+        _te = time.perf_counter() if _bucket_debug else 0.0
         sorted_df = bucket_df.sort("__block_key__")
         sizes = (
             sorted_df.lazy()
@@ -601,6 +617,7 @@ def score_buckets(
                 for col, _w, _fn, _name in field_specs
             ]
             size_list = kept_size_list
+            _tk0 = time.perf_counter() if _bucket_debug else 0.0
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
             # native_exclude_handle from score_buckets entry). The kernel's
             # exclude= and exclude_set= params are mutually opt-in -- when
@@ -638,11 +655,18 @@ def score_buckets(
                     pairs = [
                         p for p in pairs if (p[0], p[1]) not in frozen_exclude
                     ]
+            _tk1 = time.perf_counter() if _bucket_debug else 0.0
             local_blocks = sum(1 for s in size_list if s >= 2)
             # Match-mode post-filter (native path doesn't know about
             # source_lookup or target_ids; apply in Python after emit).
             if across_files_only or target_ids is not None:
                 pairs = _apply_match_mode_filter(pairs)
+            if _bucket_debug:
+                _tk2 = time.perf_counter()
+                with _dbg_lock:
+                    _dbg_rows.append(
+                        (_tk0 - _te, _tk1 - _tk0, _tk2 - _tk1, local_blocks, len(pairs))
+                    )
             return pairs, local_blocks
 
         # Python per-pair fallback: materialize the columns as lists.
@@ -901,4 +925,27 @@ def score_buckets(
         "score_buckets: %d non-empty buckets (target N=%d), %d blocks scored, %d pairs",
         total_non_empty, n_buckets, total_blocks_scored, len(all_pairs),
     )
+    if _bucket_debug and _dbg_rows:
+        n_calls = len(_dbg_rows)
+        prep_s = sum(r[0] for r in _dbg_rows)
+        kern_s = sum(r[1] for r in _dbg_rows)
+        post_s = sum(r[2] for r in _dbg_rows)
+        n_blocks = sum(r[3] for r in _dbg_rows)
+        n_pairs = sum(r[4] for r in _dbg_rows)
+        tot_s = prep_s + kern_s + post_s
+        slowest = max(_dbg_rows, key=lambda r: r[1]) if _dbg_rows else (0, 0, 0, 0, 0)
+
+        def _pct(x: float) -> float:
+            return (100.0 * x / tot_s) if tot_s > 0 else 0.0
+
+        print(
+            "[score_buckets][DEBUG] native bucket-call breakdown over "
+            f"{n_calls} calls / {n_blocks} blocks / {n_pairs} pairs "
+            f"(set GOLDENMATCH_BUCKET_DEBUG=0 to silence):\n"
+            f"  prep   (sort+group_by+to_arrow): {prep_s:7.3f}s ({_pct(prep_s):5.1f}%)\n"
+            f"  kernel (score_block_pairs_arrow): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
+            f"  post   (match-mode filter):       {post_s:7.3f}s ({_pct(post_s):5.1f}%)\n"
+            f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
+            flush=True,
+        )
     return all_pairs
