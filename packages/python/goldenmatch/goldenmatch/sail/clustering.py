@@ -97,3 +97,92 @@ def connected_components(
     return labels.select(
         F.col("label").alias("cluster_id"), F.col("node").alias("member_id")
     )
+
+
+def connected_components_scale(
+    pairs_df: Any,
+    ids_df: Any,
+    *,
+    id_col: str = "__row_id__",
+    max_rounds: int = 40,
+) -> Any:
+    """Chain-robust O(log n) weakly-connected components via min-label
+    propagation with POINTER-JUMPING (Shiloach-Vishkin shortcutting). Pure
+    Spark Connect. The scale algorithm for the 100M bench (label-prop is
+    O(diameter) on long chains; the pointer-jump halves the distance to the
+    root each round -> O(log n)).
+
+    Same output as ``connected_components``: ``(cluster_id, member_id)`` where
+    cluster_id is the component's min member id. Isolated nodes (singletons)
+    seeded from the DISTRIBUTED ``ids_df`` (the rehydration-OOM trap).
+
+    Each round: (1) PROPAGATE -- each node adopts min(own label, min neighbor
+    label); (2) SHORTCUT -- ``label[v] = label[label[v]]`` (jump to the label's
+    label). Early-exit when labels stop changing. NOTE for the real run:
+    cache/checkpoint ``labels`` each round (Spark Connect lineage grows) + a
+    cheaper change-counter; the gate runs tiny fixtures.
+
+    HAND TRACE (2-node, edges=[(0,1)], seed {0:0,1:1}):
+      r1 propagate: node0 min(0,lbl[1]=1)=0; node1 min(1,lbl[0]=0)=0 -> {0:0,1:0}
+         shortcut: lbl[0]=lbl[0]=0; lbl[1]=lbl[lbl[1]=0]=0 -> {0:0,1:0}
+      r2: no change -> CONVERGED {0:0,1:0}.  ONE component. CORRECT.
+    HAND TRACE (3-chain, edges=[(0,1),(1,2)], seed {0:0,1:1,2:2}):
+      r1 propagate: 0->min(0,1)=0; 1->min(1,min(0,2)=0)=0; 2->min(2,1)=1 -> {0:0,1:0,2:1}
+         shortcut: 0->lbl[0]=0; 1->lbl[0]=0; 2->lbl[1]=0 -> {0:0,1:0,2:0}
+      r2: no change -> CONVERGED all 0.  ONE component. CORRECT.
+    """
+    from pyspark.sql import functions as F
+
+    # Symmetric edges (node, nbr) so labels flow both ways.
+    fwd = pairs_df.select(F.col("a").alias("node"), F.col("b").alias("nbr"))
+    rev = pairs_df.select(F.col("b").alias("node"), F.col("a").alias("nbr"))
+    edges = fwd.unionByName(rev)
+
+    # Labels seeded from the DISTRIBUTED universe (singletons -> own label).
+    labels = ids_df.select(
+        F.col(id_col).cast("long").alias("node")
+    ).withColumn("label", F.col("node"))
+
+    # Spark Connect discipline: join on a SHARED NAME, other side renamed; no
+    # df["col"] cross-handle refs (the S2 AMBIGUOUS_REFERENCE lesson).
+    for _ in range(max_rounds):
+        # (1) PROPAGATE: each node adopts min(own, min neighbor label).
+        lab_for_nbr = labels.select(
+            F.col("node").alias("nbr"), F.col("label").alias("nbr_label")
+        )
+        nbr_min = (
+            edges.join(lab_for_nbr, on="nbr", how="inner")
+            .groupBy("node")
+            .agg(F.min("nbr_label").alias("nbr_min"))
+        )
+        propagated = labels.join(nbr_min, on="node", how="left").select(
+            F.col("node"),
+            F.least(
+                F.col("label"), F.coalesce(F.col("nbr_min"), F.col("label"))
+            ).alias("label"),
+        )
+        # (2) SHORTCUT (pointer-jump): label[v] = label[label[v]].
+        lab_target = propagated.select(
+            F.col("node").alias("label"), F.col("label").alias("grandlabel")
+        )
+        jumped = propagated.join(lab_target, on="label", how="left").select(
+            F.col("node"),
+            F.coalesce(F.col("grandlabel"), F.col("label")).alias("label"),
+        )
+        # Convergence: any label changed vs the previous round?
+        prev_r = labels.select(
+            F.col("node"), F.col("label").alias("prev_label")
+        )
+        changed = (
+            jumped.join(prev_r, on="node", how="inner")
+            .where(F.col("label") != F.col("prev_label"))
+            .limit(1)
+            .count()
+        )
+        labels = jumped
+        if changed == 0:
+            break
+
+    return labels.select(
+        F.col("label").alias("cluster_id"), F.col("node").alias("member_id")
+    )
