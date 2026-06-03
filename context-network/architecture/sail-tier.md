@@ -6,8 +6,9 @@ programmed via **Spark Connect / PySpark**) to run across nodes, computes connec
 components distributed (removing the one-box UF island), and ultimately retires the
 existing Ray distributed stack.
 
-**Status:** specced 2026-06-03 (approved, pre-build). **Spec:**
-`docs/superpowers/specs/2026-06-03-sail-tier-design.md`.
+**Status:** S1 SHIPPED 2026-06-03 (PR #709); S2 next. **Spec:**
+`docs/superpowers/specs/2026-06-03-sail-tier-design.md`. **S1 plan:**
+`docs/superpowers/plans/2026-06-03-sail-tier-stage-s1.md`.
 **Why it matters:** Stage E showed one-box spill-survival is non-binding
 ([../decisions/0003-stage-e-spill-honest-null.md](../decisions/0003-stage-e-spill-honest-null.md))
 — the distributed path is where the value is.
@@ -36,9 +37,17 @@ algorithm** in a new `goldenmatch.sail` package, with native scorers rebound as 
 - Reuses the algorithm of `distributed/clustering.py::two_phase_wcc` (re-expressed) and
   the `score-core` kernel (rebound as an Arrow UDF).
 
+## Stage status
+- **S1 — SHIPPED (PR #709).** `goldenmatch[sail]` extra; `goldenmatch.sail` (session.connect,
+  scorers.make_scorer_udf = rapidfuzz pandas_udf, scoring.score_and_dedup = block self-join +
+  UDF + GROUP BY max). New path-filtered `sail` CI lane (in-process Sail server). Green gates:
+  Spark Connect connectivity + score/dedup pair-set parity vs python-rapidfuzz. NO Java needed
+  (pyspark[connect] is pure gRPC); open-ended versions worked.
+- **S2 — NEXT (the gate):** WCC on Sail.  S3: golden + identity.  S4: 100M+ bench + Ray retire.
+
 ## Verification
-- CI smoke: a local `sail spark server` runs the same plan single-process for small-scale
-  parity (deps: `pysail` + `pyspark` client).
+- CI smoke: a local Sail Spark Connect server (`pysail.spark.SparkConnectServer`) runs the same
+  plan single-process for small-scale parity (deps: `pysail` + `pyspark[connect]`).
 - Binding bench (S4): BYO multi-node cluster via a `SAIL_REMOTE` secret (docs-not-bootstrap,
   mirrors the Ray phase5 `RAY_ADDRESS` posture); 100M dataset from the phase5 generator.
 
