@@ -1,0 +1,23 @@
+# Standalone workspace so this pyo3-free core can be a path dependency of BOTH
+# the `native` crate (its own workspace, extension-module) and the
+# `datafusion-udf` crate (its own workspace, extension-module) without either
+# workspace claiming it. Same isolation rationale as the sibling
+# `fingerprint-core` crate. NO rust-toolchain.toml here on purpose: the crate
+# inherits each parent crate's toolchain when built as a path dep.
+[workspace]
+
+[package]
+name = "goldenmatch-score-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Canonical string scorers (jaro_winkler / levenshtein / token_sort, no pyo3) shared across the native ext and the DataFusion FFI UDFs"
+
+[lib]
+name = "goldenmatch_score_core"
+
+[dependencies]
+# Same pin the `native` crate uses, so the scorers are byte-identical across the
+# native ext and the FFI UDFs (parity by construction — one source of truth).
+rapidfuzz = "0.5.0"
