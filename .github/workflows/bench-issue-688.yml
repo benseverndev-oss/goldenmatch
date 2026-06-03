@@ -1,0 +1,106 @@
+# Issue #688 A/B bench -- workflow_dispatch only.
+#
+# Builds the native kernel from `source_ref` and runs the #688 repro
+# (scripts/bench_issue_688.py) twice on the same build:
+#   - sequential (GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=huge) = the #688 fix
+#   - rayon      (GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=0)     = the old LockLatch park
+# so the rayon-vs-sequential wall difference is on the record, not a local run.
+#
+# Dispatch against the fix branch:
+#   gh workflow run bench-issue-688.yml --ref main \
+#     -f source_ref=fix/688-kernel-sequential-path
+#
+# Runner defaults to ubuntu-latest-xlarge (the env where #688 reproduces 100%).
+name: bench-issue-688
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch/ref to build + bench (has the kernel + scripts/bench_issue_688.py)"
+        required: true
+        default: "main"
+      rows:
+        description: "Row count for the synthetic repro"
+        required: false
+        default: "100000"
+      runner:
+        description: "Runner label (the #688 repro env)"
+        required: false
+        default: "ubuntu-latest-xlarge"
+      rayon_cap_seconds:
+        description: "Hard cap on the rayon (old-path) run so the park can't blow the job budget"
+        required: false
+        default: "900"
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (from source_ref)
+        run: uv run python scripts/build_native.py
+
+      - name: A/B -- sequential (fix) then rayon (old park)
+        run: |
+          ROWS="${{ inputs.rows }}"
+          CAP="${{ inputs.rayon_cap_seconds }}"
+          {
+            echo "## issue #688 A/B"
+            echo ""
+            echo "- ref: \`${{ inputs.source_ref }}\`"
+            echo "- rows: \`$ROWS\`  runner: \`${{ inputs.runner }}\`"
+            echo ""
+            echo "| native block path | RAYON_MIN_PAIRS | dedupe wall (s) |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::group::sequential (the #688 fix)"
+          GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=999999999999 \
+            uv run python scripts/bench_issue_688.py --rows "$ROWS" | tee seq.log
+          echo "::endgroup::"
+          SEQ=$(grep -oE 'DEDUPE_WALL_SECONDS=[0-9.]+' seq.log | tail -1 | cut -d= -f2)
+          echo "| sequential (fix) | 999999999999 | ${SEQ:-FAILED} |" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::group::rayon (old path, capped at ${CAP}s)"
+          GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=0 \
+            timeout "$CAP" uv run python scripts/bench_issue_688.py --rows "$ROWS" | tee rayon.log \
+            || echo "rayon run hit the ${CAP}s cap (park reproduced)"
+          echo "::endgroup::"
+          RAY=$(grep -oE 'DEDUPE_WALL_SECONDS=[0-9.]+' rayon.log | tail -1 | cut -d= -f2)
+          echo "| rayon (old) | 0 | ${RAY:-\">${CAP} (park)\"} |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: issue-688-ab-logs
+          path: |
+            seq.log
+            rayon.log
+          retention-days: 30
