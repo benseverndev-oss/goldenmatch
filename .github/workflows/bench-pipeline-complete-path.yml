@@ -23,6 +23,9 @@ on:
       runs:
         description: "Repetitions per measurement (median)"
         default: "3"
+      prof:
+        description: "true = cProfile both variants at np[0] (hotspot hunting; no perf table)"
+        default: "false"
 
 jobs:
   bench:
@@ -45,6 +48,7 @@ jobs:
           set -o pipefail
           uv run python packages/python/goldenmatch/scripts/bench_pipeline_complete_path.py \
             --np "${{ inputs.np }}" --runs "${{ inputs.runs }}" \
+            ${{ inputs.prof == 'true' && '--profile' || '' }} \
             --output .profile_tmp/pipeline_complete_path.json | tee /tmp/pipeline_complete_path.txt
           { echo '## bench-pipeline-complete-path'; echo '```'; cat /tmp/pipeline_complete_path.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

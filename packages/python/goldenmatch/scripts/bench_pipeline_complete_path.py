@@ -135,9 +135,12 @@ def _golden_rules():
     return GoldenRulesConfig(default_strategy="most_complete")
 
 
-def _run_child(variant: str, n_pairs: int, runs: int) -> int:
+def _run_child(variant: str, n_pairs: int, runs: int, profile: bool = False) -> int:
     """Drive the real cluster -> golden -> identity stage for one variant, once
-    per measured run, segmenting the wall into build / golden / identity."""
+    per measured run, segmenting the wall into build / golden / id_prep.
+
+    profile=True: cProfile a single _one_run and dump the top cumulative- and
+    self-time functions instead of the perf loop (hotspot hunting)."""
 
     import polars as pl  # noqa: F401
     from goldenmatch.core.cluster import (
@@ -257,6 +260,22 @@ def _run_child(variant: str, n_pairs: int, runs: int) -> int:
 
     _one_run()  # warm
 
+    if profile:
+        import cProfile
+        import io
+        import pstats
+        pr = cProfile.Profile()
+        pr.enable()
+        _one_run()
+        pr.disable()
+        for sort, n in (("cumulative", 35), ("tottime", 25)):
+            s = io.StringIO()
+            pstats.Stats(pr, stream=s).sort_stats(sort).print_stats(n)
+            print(f"=== PROFILE [{variant}] np={actual_pairs:,} ({sort}) ===",
+                  flush=True)
+            print(s.getvalue(), flush=True)
+        return 0
+
     build_walls: list[float] = []
     golden_walls: list[float] = []
     identity_walls: list[float] = []
@@ -346,6 +365,9 @@ def main() -> int:
     ap.add_argument("--output", default=None)
     ap.add_argument("--child", choices=["legacy", "columnar"], default=None,
                     help="Internal: run a single variant in this process")
+    ap.add_argument("--profile", action="store_true",
+                    help="cProfile both variants at np[0] + dump top "
+                         "cumulative/self-time functions (hotspot hunting).")
     args = ap.parse_args()
 
     runs = max(1, args.runs)
@@ -353,7 +375,16 @@ def main() -> int:
     if args.child is not None:
         nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
         n = nps[0] if nps else 1000000
-        return _run_child(args.child, n, runs)
+        return _run_child(args.child, n, runs, profile=args.profile)
+
+    if args.profile:
+        nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
+        n = nps[0] if nps else 5000000
+        print(f"=== HOTSPOT PROFILE @ np={n:,} (columnar then legacy) ===",
+              flush=True)
+        _run_child("columnar", n, 1, profile=True)
+        _run_child("legacy", n, 1, profile=True)
+        return 0
 
     nps = [int(x.strip()) for x in args.np.split(",") if x.strip()]
 
