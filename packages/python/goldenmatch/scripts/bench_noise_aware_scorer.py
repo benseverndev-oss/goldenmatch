@@ -229,6 +229,14 @@ def _fmt(res: dict) -> str:
 
 
 def main() -> None:
+    # Disable the controller's cross-run memory for the WHOLE sweep. It is keyed
+    # by dataset signature (NOT the scorer env), so with it ON the first scorer
+    # run persists a committed config that the other runs reload verbatim --
+    # making all three settings produce byte-identical results regardless of the
+    # scorer swap. Disabling it forces each run to rebuild its config under its
+    # own scorer env, which is the only way the sweep measures the swap at all.
+    os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
+
     scorers = ["token_sort", "jaro_winkler", "ensemble"]
     datasets = {
         "ncvr_high": run_ncvr_high,
