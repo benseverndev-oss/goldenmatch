@@ -85,3 +85,31 @@ def test_aggregate_warning_counts_identifier(caplog):
         build_matchkeys(profiles, df=_df_with(["npi", "name"]))
     msgs = " ".join(r.message for r in caplog.records)
     assert "exact-eligible" in msgs and "npi" in msgs
+
+
+def test_healthcare_shape_commits_exact_matchkey_and_blocking():
+    """#715 regression: healthcare-provider shape must auto-configure to a
+    config with >= 1 exact matchkey on an identifier-ish column AND a bounded
+    blocking key -- not the fuzzy-only, mega-block collapse."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from repro_issue_715 import make_healthcare_df
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    df = make_healthcare_df(15_000)  # above old Guard 1 (10000), fast
+    cfg = auto_configure_df(df, confidence_required=False)
+
+    mks = cfg.get_matchkeys()
+    exact_fields = {
+        f.field for mk in mks if mk.type == "exact" for f in mk.fields
+    }
+    assert exact_fields & {"npi", "email", "phone_number"}, (
+        f"expected an exact matchkey on an identifier column, got {exact_fields}"
+    )
+
+    # Component 2 verification: blocking retained and present.
+    blocking = cfg.blocking
+    assert blocking is not None and blocking.keys, (
+        "expected blocking to be retained, got none"
+    )
