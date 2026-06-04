@@ -23,3 +23,43 @@ def test_project_max_block_size_clamped_to_full_n():
 def test_project_max_block_size_degenerate_inputs():
     assert project_max_block_size(0, 0, 100) == 0
     assert project_max_block_size(10, 100, 0) == 10  # full_n <= sample_n -> identity
+
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+
+def _proj_block(df, cols, full_n):
+    from goldenmatch.core.blocking_candidates import project_max_block_size
+    mb = int(df.group_by(cols).len().get_column("len").max() or 0)
+    return project_max_block_size(mb, df.height, full_n)
+
+
+def test_no_emitted_blocking_pass_exceeds_cap_sparse_zip():
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from repro_issue_715 import make_healthcare_df
+
+    # matching_id is the ground-truth record id (`not used for config`), so the
+    # real pipeline never feeds it to build_blocking; drop it here too.
+    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")  # sparse zip5
+    profiles = profile_columns(df)
+    full_n = 1_000_000  # simulate scale; v0 path uses full df but we assert projected
+    blk = build_blocking(profiles, df, n_rows_full=full_n)
+    cap = blk.max_block_size or 5000
+    for k in (blk.keys or []):
+        assert _proj_block(df, k.fields, full_n) <= cap, f"key {k.fields} oversized"
+    for p in (blk.passes or []):
+        assert _proj_block(df, p.fields, full_n) <= cap, f"pass {p.fields} oversized"
+
+
+def test_dense_zip_still_picks_bounded_compound():
+    # regression: the good (dense-zip) shape must still get a bounded compound.
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from repro_issue_715 import make_healthcare_df
+
+    df = make_healthcare_df(30_000, zip_present=0.95).drop("matching_id")
+    profiles = profile_columns(df)
+    blk = build_blocking(profiles, df, n_rows_full=df.height)
+    assert blk.keys, "expected a blocking key on the dense-zip shape"

@@ -1229,6 +1229,25 @@ def _pick_date_blocking_col(
     return None
 
 
+def _degenerate_blocking_config(max_safe_block: int) -> BlockingConfig:
+    """Empty-keys blocking config: the #715 degenerate signal.
+
+    Emitted when every candidate blocking key/pass projects oversized at
+    full N. Empty ``keys`` is exactly what the controller's #417 degenerate
+    guard inspects (``not blocking.keys`` at ``>= REFUSE_AT_N``), so it
+    refuses loudly rather than shipping a candidate-pair bomb. ``auto_suggest``
+    keeps the model valid (the validator bypasses the keys-required check for
+    auto_suggest) and matches the established empty-keys pattern used by the
+    CLI / preview paths.
+    """
+    return BlockingConfig(
+        keys=[],
+        auto_suggest=True,
+        max_block_size=max_safe_block,
+        skip_oversized=True,
+    )
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -1354,6 +1373,66 @@ def build_blocking(
     # practical OOM ceiling on a 16 GB runner.
     max_safe_block = max(1000, min(10_000, int(df.height) // 200))
 
+    # #715: gate every emitted blocking key/pass by its PROJECTED full-N max
+    # block size. build_blocking runs on a sample (or, in the v0 path, the
+    # full df) and the emitted single-column soundex(name) passes had no
+    # block-size guard. On a sparse-zip5 healthcare shape, zip5 reclassifies
+    # to `identifier` and drops out of the compound, leaving single-name
+    # passes whose max block projects to ~50K rows at 1M -> ~39.6M candidate
+    # pairs -> an 18-min run. project_max_block_size with full_n == df.height
+    # is the identity (v0 path uses exact block sizes -> correct).
+    from goldenmatch.core.blocking_candidates import project_max_block_size
+
+    def _projected_block(fields: list[str]) -> int:
+        try:
+            sample_mb = int(
+                df.group_by(fields).len().get_column("len").max() or 0
+            )  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+        except Exception:  # pragma: no cover -- defensive
+            return 0
+        return project_max_block_size(sample_mb, df.height, effective_n_full)
+
+    def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
+        return _projected_block(key.fields) <= max_safe_block
+
+    def _gate_passes(
+        primary: BlockingKeyConfig,
+        passes: list[BlockingKeyConfig],
+    ) -> tuple[BlockingKeyConfig | None, list[BlockingKeyConfig]]:
+        """Drop oversized passes; pick a bounded primary key (#715).
+
+        Returns ``(primary_or_None, surviving_passes)``. The chosen primary is
+        the original primary if it is bounded, else the first bounded pass.
+        When NOTHING is bounded, the primary is ``None`` (caller emits an
+        empty/degenerate config so the controller refuses rather than
+        shipping a candidate-pair bomb).
+        """
+        bounded = [p for p in passes if _pass_is_bounded(p)]
+        dropped = [p for p in passes if not _pass_is_bounded(p)]
+        if dropped:
+            logger.info(
+                "Dropping %d oversized blocking pass(es) by projected full-N "
+                "block size (> %d, full_n=%d): %s. See #715.",
+                len(dropped), max_safe_block, effective_n_full,
+                [(p.fields, p.transforms) for p in dropped],
+            )
+        if _pass_is_bounded(primary):
+            return primary, bounded
+        if bounded:
+            logger.info(
+                "Primary blocking key %s projects oversized (> %d); promoting "
+                "first bounded pass %s to primary. See #715.",
+                primary.fields, max_safe_block, bounded[0].fields,
+            )
+            return bounded[0], bounded
+        logger.warning(
+            "All name-fallback blocking keys/passes project oversized at "
+            "full_n=%d (> %d max_safe_block); emitting empty (degenerate) "
+            "blocking config so the controller refuses. See #715.",
+            effective_n_full, max_safe_block,
+        )
+        return None, []
+
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
@@ -1476,15 +1555,22 @@ def build_blocking(
                     fields=[date_block_col],
                     transforms=["lowercase", "strip"],
                 ))
+            geo_primary = BlockingKeyConfig(
+                fields=[best_geo, best_name], transforms=["lowercase", "strip"]
+            )
+            geo_passes = [
+                BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"]),
+                BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "substring:0:5"]),
+                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
+                *extra_passes,
+            ]
+            primary, gated_passes = _gate_passes(geo_primary, geo_passes)
+            if primary is None:
+                return _degenerate_blocking_config(max_safe_block)
             return BlockingConfig(
-                keys=[BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"])],
+                keys=[primary],
                 strategy="multi_pass",
-                passes=[
-                    BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"]),
-                    BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "substring:0:5"]),
-                    BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
-                    *extra_passes,
-                ],
+                passes=gated_passes,
                 max_block_size=max_safe_block,
                 skip_oversized=True,
             )
@@ -1504,15 +1590,22 @@ def build_blocking(
                 fields=[date_block_col],
                 transforms=["lowercase", "strip"],
             ))
+        name_primary = BlockingKeyConfig(
+            fields=[best_name], transforms=["lowercase", "soundex"]
+        )
+        name_passes = [
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "substring:0:5"]),
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
+            *extra_passes,
+        ]
+        primary, gated_passes = _gate_passes(name_primary, name_passes)
+        if primary is None:
+            return _degenerate_blocking_config(max_safe_block)
         return BlockingConfig(
-            keys=[BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"])],
+            keys=[primary],
             strategy="multi_pass",
-            passes=[
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "substring:0:5"]),
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
-                *extra_passes,
-            ],
+            passes=gated_passes,
             max_block_size=max_safe_block,
             skip_oversized=True,
         )

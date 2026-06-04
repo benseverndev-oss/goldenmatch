@@ -49,7 +49,9 @@ LAST_NAMES = [
 ]
 
 
-def make_healthcare_df(n: int, seed: int = 715) -> pl.DataFrame:
+def make_healthcare_df(
+    n: int, seed: int = 715, zip_present: float = 0.95
+) -> pl.DataFrame:
     """Synthetic healthcare-provider shape, mirroring the #715 description:
 
     - source: categorical, 15 values
@@ -82,7 +84,7 @@ def make_healthcare_df(n: int, seed: int = 715) -> pl.DataFrame:
                 "phone_number": maybe(phone, 0.50),
                 "first_name": maybe(fn, 0.98),
                 "last_name": maybe(ln, 0.98),
-                "zip5": maybe(zip5, 0.95),
+                "zip5": maybe(zip5, zip_present),
                 "matching_id": f"rec_{i}",
             }
         )
