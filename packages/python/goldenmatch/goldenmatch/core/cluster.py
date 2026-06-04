@@ -713,8 +713,15 @@ def build_cluster_frames(
                     live_cids.add(next_cid)
                     next_cid += 1
             if budget_tripped:
-                _clog.warning("build_cluster_frames: auto-split edge-work budget (%d) "
-                              "exhausted; clusters left oversized.", edge_budget)
+                n_oversized = sum(1 for c in oversized if int(c) not in drop_cids)
+                _clog.warning(
+                    "build_cluster_frames: auto-split edge-work budget (%d) "
+                    "exhausted; %d cluster(s) left OVERSIZED and flagged (kept in "
+                    "output, excluded from golden downstream). Raise "
+                    "GoldenRulesConfig.split_edge_budget or env "
+                    "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET to split them.",
+                    edge_budget, n_oversized,
+                )
             # Materialize the FINAL split sub-clusters into frame rows. split rows
             # carry quality="split" so the Step-3 when(quality=="split") short-circuit
             # preserves them. min/avg are schema-fill (unused: split skips the weak test).
@@ -986,8 +993,9 @@ def _finalize_clusters(
         n_oversized = sum(1 for c in result.values() if c.get("oversized"))
         _clog.warning(
             "build_clusters: auto-split edge-work budget (%d) exhausted; %d "
-            "cluster(s) left oversized (dense, no clean weak-bridge split). "
-            "Oversized clusters are excluded from golden downstream.",
+            "cluster(s) left OVERSIZED and flagged (kept in output, excluded "
+            "from golden downstream). Raise GoldenRulesConfig.split_edge_budget "
+            "or env GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET to split them.",
             edge_budget, n_oversized,
         )
 

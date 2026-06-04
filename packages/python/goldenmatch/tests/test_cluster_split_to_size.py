@@ -121,3 +121,32 @@ def test_golden_rules_config_has_split_edge_budget():
         .split_edge_budget
         == 999
     )
+
+
+def test_budget_exhaustion_warns_and_keeps_clusters(monkeypatch, caplog):
+    """#726: tiny budget + a dense cluster -> WARNING names the knob AND the
+    oversized clusters stay in the output, flagged (NOT dropped)."""
+    import logging
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "1")  # exhaust immediately
+    from goldenmatch.core.cluster import build_clusters
+    members = list(range(200, 215))
+    pairs = [(a, b, 0.99) for i, a in enumerate(members) for b in members[i + 1:]]
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.cluster"):
+        clusters = build_clusters(pairs, all_ids=members, max_cluster_size=5)
+    assert any(c["oversized"] for c in clusters.values())
+    assert sum(c["size"] for c in clusters.values()) == len(members)
+    msg = " ".join(r.message for r in caplog.records)
+    assert "split_edge_budget" in msg and "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET" in msg
+
+
+def test_budget_invalid_env_falls_through_to_autoscale(monkeypatch):
+    from goldenmatch.core.cluster import _split_edge_work_budget
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "not-an-int")
+    assert _split_edge_work_budget(2_000_000) == 10_000_000  # autoscale, no crash
+
+
+def test_budget_override_zero_or_negative_clamps_to_one():
+    from goldenmatch.core.cluster import _split_edge_work_budget
+    assert _split_edge_work_budget(1000, override=0) == 1
+    assert _split_edge_work_budget(1000, override=-5) == 1
