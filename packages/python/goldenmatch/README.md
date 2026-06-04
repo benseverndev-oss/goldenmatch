@@ -7,6 +7,8 @@
 
 *Zero-config entity resolution for Python & TypeScript — with a self-verifying auto-config that tells you when it's unsure.*
 
+**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.** ([how →](#scaling-to-100m))
+
 <br>
 
 <!-- Packages -->
@@ -719,6 +721,10 @@ Files/DB → Ingest → Standardize → Block → Score → Cluster → Golden R
 
 ## Config Reference
 
+> 📁 **Copy-paste-ready configs live in [`configs/`](configs/)** — a robust
+> [`customers.yaml`](configs/customers.yaml), a [`distributed-100m.yaml`](configs/distributed-100m.yaml),
+> and a [walkthrough README](configs/README.md) explaining every knob.
+
 ```yaml
 matchkeys:
   - name: exact_email
@@ -1030,7 +1036,48 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interv
 - Progressive embedding: computes 100K embeddings per run, ANN improves over time
 - Persistent clusters with golden record versioning
 
-**Scale:** Tested to 10M+ records in Postgres. For 100M+, use larger chunk sizes and dedicated Postgres infrastructure.
+**Scale:** Tested to 10M+ records in Postgres. For 100M+ on a cluster, use distributed mode below.
+
+## Scaling to 100M
+
+GoldenMatch runs the same matching policy from a CSV on your laptop up to 100M+
+rows on a [Ray](https://www.ray.io/) cluster. **Verified:** a full
+**100,000,000-row** dedupe in **213 s** on a 4-worker `e2-standard-16` cluster
+(64 worker CPU) producing **20,000,000 golden records**, with the driver process
+peaking at **0.30 GB RSS**.
+
+The distributed pipeline is **driver-collect-free** — every stage runs on the
+workers and nothing funnels back to a single node, which is what makes it scale:
+
+```
+score  ->  per-partition local connected-components  ->  distributed join
+       ->  distributed golden build  ->  distributed write
+```
+
+**Run it:**
+
+1. Stand up a Ray cluster. Run the **head as a pure driver** so shuffle data
+   never lands on it; the workers supply all the compute:
+   ```bash
+   # head node
+   ray start --head --num-cpus=0 --object-store-memory=20000000000
+   # each worker
+   ray start --address=<head-ip>:6379 --num-cpus=16 --object-store-memory=20000000000
+   ```
+2. Make sure your input carries a **global `__row_id__`** column (0..N-1, unique
+   across the whole dataset). Without it, partition-local ids collide and
+   unrelated clusters get merged.
+3. Drive it through the fully-distributed pipeline:
+   ```bash
+   export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+   export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
+   export RAY_ADDRESS=auto
+   ```
+
+- **Config:** [`configs/distributed-100m.yaml`](configs/distributed-100m.yaml) (matching policy + the full recipe).
+- **Runnable demo** (Ray local mode, no cluster): [`examples/distributed_pipeline.py`](examples/distributed_pipeline.py).
+- **The exact 100M assembly:** [`scripts/bench_phase5_explicit.py`](scripts/bench_phase5_explicit.py).
+- **Background:** [`docs/scale-100m-ray-vs-spark.md`](docs/scale-100m-ray-vs-spark.md).
 
 ## Interactive TUI
 

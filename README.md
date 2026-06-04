@@ -7,6 +7,8 @@
 
 *GoldenCheck profiles → GoldenFlow standardizes → GoldenMatch deduplicates → GoldenPipe orchestrates. With InferMap for schema mapping and a Rust extension layer for Postgres / DuckDB.*
 
+**⚡ GoldenMatch scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.**
+
 <br>
 
 <!-- Headline package: goldenmatch -->
@@ -366,6 +368,8 @@ Published GoldenMatch numbers (DQbench composite 91.04, DBLP-ACM 0.9641 F1, Febr
 ## Scale envelope
 
 "How big can this handle?" is answered in [`docs/scale-envelope.md`](docs/scale-envelope.md): per-backend ranges (Polars in-memory < 500K, DuckDB out-of-core 500K - 50M, Ray distributed >= 50M), block-size failure modes, candidate-pair math, and a single-page decision tree for picking a backend.
+
+**Verified at the top end:** a full **100,000,000-row** GoldenMatch dedupe on a 4-worker Ray cluster (`e2-standard-16`, 64 worker CPU) in **213 s**, 20,000,000 golden records, driver process peak **0.30 GB RSS** — the distributed pipeline is driver-collect-free end to end. Recipe in [`packages/python/goldenmatch/configs/distributed-100m.yaml`](packages/python/goldenmatch/configs/distributed-100m.yaml).
 
 ---
 
