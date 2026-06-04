@@ -94,8 +94,8 @@ def test_healthcare_shape_commits_exact_matchkey_and_blocking():
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    from repro_issue_715 import make_healthcare_df
     from goldenmatch.core.autoconfig import auto_configure_df
+    from repro_issue_715 import make_healthcare_df
 
     df = make_healthcare_df(15_000)  # above old Guard 1 (10000), fast
     cfg = auto_configure_df(df, confidence_required=False)
