@@ -6,54 +6,9 @@
 
 from __future__ import annotations
 
-import logging
-
 import polars as pl
 import pytest
 from goldenmatch.core.autoconfig_history import PolicyDecision
-
-# ---------------------------------------------------------------------------
-# #124: telemetry log line on rule_demote_clustered_identity
-# ---------------------------------------------------------------------------
-
-
-def test_demote_telemetry_silent_without_env_var(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
-):
-    """Without GOLDENMATCH_TELEMETRY_DEMOTE_RULE=1, the rule's telemetry
-    log line MUST NOT emit. (Production users opt in; bench / CI machines
-    don't.)
-    """
-    monkeypatch.delenv("GOLDENMATCH_TELEMETRY_DEMOTE_RULE", raising=False)
-    # We can't easily fire the rule directly here without a full IndicatorContext
-    # setup; the unit guarantee is "no log line emitted when env is unset."
-    # Run any code path; assert no TELEMETRY rule_demote_... entries appear.
-    with caplog.at_level(logging.INFO, logger="goldenmatch.core.autoconfig_rules"):
-        # No-op pass; the test pins the contract that the rule's log line
-        # ONLY emits when the env var is set. Direct invocation tested in
-        # test_demote_telemetry_logs_when_env_var_set below.
-        pass
-    telemetry_logs = [
-        r.getMessage() for r in caplog.records
-        if "TELEMETRY rule_demote_clustered_identity" in r.getMessage()
-    ]
-    assert telemetry_logs == []
-
-
-def test_demote_telemetry_log_line_exists_in_source():
-    """Structural check: the env-gated log line is present in
-    rule_demote_clustered_identity. Source-level pin so the telemetry
-    can't be silently removed before Wave C verifies non-firing."""
-    import inspect
-
-    from goldenmatch.core.autoconfig_rules import rule_demote_clustered_identity
-
-    src = inspect.getsource(rule_demote_clustered_identity)
-    assert "GOLDENMATCH_TELEMETRY_DEMOTE_RULE" in src, (
-        "telemetry env-var gate missing from rule source (#124)"
-    )
-    assert "TELEMETRY rule_demote_clustered_identity FIRED" in src
-
 
 # ---------------------------------------------------------------------------
 # #125: ExpandSample(2.0) action

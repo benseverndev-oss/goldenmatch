@@ -31,11 +31,10 @@ def t3_clean_df():
 def test_t3_synthetic_recovers_precision(t3_synthetic_df):
     """v1.11 should:
     1. promote_negative_evidence ran → committed config has NE on phone+address
-    2. rule_demote_clustered_identity fired → no standalone exact_email matchkey
-    3. precision ≥ 0.80 (catches < 80% as a regression)
+    2. precision ≥ 0.80 (catches < 80% as a regression)
 
-    rule_demote_clustered_identity is now at position 7 (before generic refit rules),
-    so it fires before rule_cross_blocking_disagreement can exhaust the iteration budget.
+    v1.12 Path Y (negative evidence on exact matchkeys) splits collision
+    pairs, so the cluster count stays high even on collision-prone T3 data.
     """
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     from goldenmatch import dedupe_df
@@ -73,7 +72,7 @@ def test_t3_synthetic_recovers_precision(t3_synthetic_df):
         # Cluster count >= 200 means collisions are at least somewhat split
         assert n_clusters >= 200, (
             f"cluster count {n_clusters} suggests collisions are still merged "
-            f"(expected >=200 when rule_demote_clustered_identity fires correctly)"
+            f"(expected >=200 when Path Y splits collision pairs correctly)"
         )
 
 
@@ -143,7 +142,7 @@ def test_t3_synthetic_path_y_filters_collision_pairs(t3_synthetic_df):
 
 def test_t3_clean_compat_no_lever_overapply(t3_clean_df):
     """v1.11 should not over-apply on clean data:
-    - rule_demote_clustered_identity does NOT fire
+    - the demote_clustered_identity lever does NOT fire (removed in #458)
     - precision is unchanged from v1.10 baseline (no regression)"""
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     from goldenmatch import dedupe_df
@@ -154,15 +153,16 @@ def test_t3_clean_compat_no_lever_overapply(t3_clean_df):
     assert last is not None
     profile, history = last
 
-    # Inspect committed config: rule_demote_clustered_identity should NOT have fired
+    # Inspect committed config: the demote_clustered_identity lever should
+    # NOT have fired (the rule was removed from DEFAULT_RULES in #458).
     best = history.pick_committed(precision_collapse_floor=0.9)
     assert best is not None
     # Walk history.entries; ensure no "demote_clustered_identity" decision
     for entry in history.entries:
         if entry.decision is not None:
             assert entry.decision.rule_name != "demote_clustered_identity", (
-                f"rule_demote_clustered_identity should not fire on clean data; "
-                f"fired at iteration {entry.iteration}"
+                f"the demote_clustered_identity lever should not fire on clean "
+                f"data; fired at iteration {entry.iteration}"
             )
 
     # Cluster count: 50 dup pairs → 50 clusters, 100 singletons → 100, total ~150

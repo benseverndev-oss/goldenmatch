@@ -16,7 +16,6 @@ from typing import Any
 import polars as pl
 
 from goldenmatch.core.complexity_profile import (
-    CollisionSignal,
     ColumnPrior,
     SparsityVerdict,
 )
@@ -307,83 +306,3 @@ def dispatch_estimate_sparse_match_signal(
         from goldenmatch.distributed.indicators import estimate_sparse_match_signal_distributed
         return estimate_sparse_match_signal_distributed(df_or_ds, exact_columns=exact_columns)
     return estimate_sparse_match_signal(df_or_ds, exact_columns=exact_columns)
-
-
-BUDGET_COLLISION = 8.0
-
-
-def compute_identity_collision_signal(
-    df: pl.DataFrame,
-    identity_col: str,
-    witness_cols: list[str],
-) -> CollisionSignal:
-    """Detect whether an identity column is shared across distinct entities.
-
-    For each multi-record group (rows sharing the same `identity_col` value),
-    compute the max pairwise divergence (1 - similarity) on `witness_cols`.
-    Returns the fraction of multi-record groups where max-divergence > 0.5.
-
-    A high rate indicates the identity column is NOT a reliable identity
-    anchor (T3's adversarial pattern: same email used for distinct people
-    with different addresses, phones, cities).
-
-    Budget: BUDGET_COLLISION seconds. On exhaustion, returns
-    CollisionSignal(rate=0.0, witness_used="") sentinel.
-    """
-    start = time.time()
-    if BUDGET_COLLISION <= 0.0:
-        return CollisionSignal(rate=0.0, witness_used="")
-    if not witness_cols or df.is_empty() or identity_col not in df.columns:
-        return CollisionSignal(rate=0.0, witness_used="")
-    valid_witnesses = [c for c in witness_cols if c in df.columns]
-    if not valid_witnesses:
-        return CollisionSignal(rate=0.0, witness_used="")
-
-    try:
-        # Group by identity_col; only multi-record groups matter
-        groups = (
-            df.group_by(identity_col)
-            .agg(pl.len().alias("__n__"))
-            .filter(pl.col("__n__") > 1)
-        )
-        if (time.time() - start) > BUDGET_COLLISION:
-            return CollisionSignal(rate=0.0, witness_used="")
-        if groups.is_empty():
-            return CollisionSignal(rate=0.0, witness_used="")
-
-        n_groups = groups.height
-        n_high_divergence = 0
-        winning_witness = ""
-        max_observed_div = 0.0
-
-        # Use rapidfuzz for similarity computation
-        from rapidfuzz import fuzz
-
-        for group_value in groups[identity_col].to_list():
-            if (time.time() - start) > BUDGET_COLLISION:
-                return CollisionSignal(rate=0.0, witness_used="")
-            group_df = df.filter(pl.col(identity_col) == group_value)
-            n = group_df.height
-            if n < 2:
-                continue
-            max_div_in_group = 0.0
-            for witness in valid_witnesses:
-                vals = group_df[witness].cast(str).fill_null("").to_list()
-                # max pairwise divergence
-                for i in range(n):
-                    for j in range(i + 1, n):
-                        sim = fuzz.token_sort_ratio(vals[i], vals[j]) / 100.0
-                        div = 1.0 - sim
-                        if div > max_div_in_group:
-                            max_div_in_group = div
-                            if div > max_observed_div:
-                                max_observed_div = div
-                                winning_witness = witness
-            if max_div_in_group > 0.5:
-                n_high_divergence += 1
-
-        rate = n_high_divergence / n_groups if n_groups > 0 else 0.0
-        return CollisionSignal(rate=rate, witness_used=winning_witness)
-    except Exception as exc:
-        logger.warning("compute_identity_collision_signal failed: %s", exc)
-        return CollisionSignal(rate=0.0, witness_used="")
