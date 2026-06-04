@@ -2,6 +2,14 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-04 — Sail tier S4 harness shipped (buildable tier COMPLETE)
+- S4 harness merged (PR #717): chain-robust O(log n) WCC via pointer-jumping (the blind
+  large-star/small-star attempt was wrong, caught by plan-review hand-trace + replaced),
+  `run_sail_pipeline` end-to-end, and the 100M bench scaffold. The `sail` lane has 6 green gates.
+  The BUILDABLE Sail tier is COMPLETE; only the real 100M cluster run + Ray retirement remain
+  (need a BYO Sail cluster). Updated [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md).
+
 ## 2026-06-03 — Sail tier Stage S3 (golden) shipped
 - S3 golden merged (PR #714): distributed survivorship on Sail (collect_list + merge_field UDF),
   content-parity green. SCOPE DECISION: S3 scoped to golden only; identity split to its own next

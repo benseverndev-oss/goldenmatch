@@ -30,9 +30,13 @@ Spec: `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. Staged, each a ga
 - **S3 (golden) — SHIPPED (PR #714, 2026-06-03)** — distributed survivorship via
   `collect_list` + a scalar pandas UDF calling the one-box `merge_field`; content-parity green.
   Scoped to golden; identity split to its own stage.
-- **Identity on Sail — next** (split from S3; stateful entity store, not a relational op).
-- **S4 — binding 100M+ multi-node bench (REAL BYO cluster) + large-star/small-star WCC swap +
-  Ray retirement.** The only stage needing a real cluster.
+- **S4 harness — SHIPPED (PR #717, 2026-06-04)** — chain-robust O(log n) WCC (pointer-jumping;
+  the blind large-star attempt was wrong, caught by plan-review hand-trace), `run_sail_pipeline`
+  end-to-end, and the 100M bench scaffold. The `sail` lane has 6 green gates. The BUILDABLE Sail
+  tier is COMPLETE.
+- **Remaining (needs a BYO cluster):** the real 100M multi-node run (`SAIL_REMOTE` secret) → the
+  binding verdict + Ray retirement. The only thing left, and it needs real infrastructure.
+- **Identity on Sail** — split off; its own stateful stage, not yet done.
 - **S3** — golden (incl. custom rules) + identity on Sail.
 - **S4** — binding 100M+ multi-node bench + Ray retirement. Kill criterion: completes
   where one-box can't, per-node RSS bounded, wall scales with nodes.
