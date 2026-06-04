@@ -33,12 +33,13 @@ fn npy_data(buf: &[u8]) -> Result<&[u8]> {
     } else {
         10 + u16::from_le_bytes([buf[8], buf[9]]) as usize
     };
-    buf.get(data_start..).ok_or_else(|| anyhow!("truncated .npy"))
+    buf.get(data_start..)
+        .ok_or_else(|| anyhow!("truncated .npy"))
 }
 
 fn read_zip_entry(zip_path: &Path, name: &str) -> Result<Option<Vec<u8>>> {
-    let file = std::fs::File::open(zip_path)
-        .with_context(|| format!("opening {}", zip_path.display()))?;
+    let file =
+        std::fs::File::open(zip_path).with_context(|| format!("opening {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(file)?;
     let result = match archive.by_name(name) {
         Ok(mut entry) => {
@@ -63,7 +64,9 @@ pub fn compute_model_id(dir: &Path, dim: usize) -> Result<String> {
         hasher.update(npy_data(&bias)?);
     }
     let mut out = [0u8; 8];
-    hasher.finalize_variable(&mut out).expect("8-byte output fits");
+    hasher
+        .finalize_variable(&mut out)
+        .expect("8-byte output fits");
     Ok(format!("inhouse:d{dim}:{}", hex(&out)))
 }
 
