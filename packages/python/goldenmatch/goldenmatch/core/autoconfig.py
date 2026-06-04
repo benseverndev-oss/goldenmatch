@@ -531,6 +531,43 @@ _DOMAIN_SCORER_MAP = {
 }
 
 
+def _is_short_code(p: ColumnProfile) -> bool:
+    """#491: detect short alphanumeric *code* columns (SKU, part-no, plan-code).
+
+    These collapse under the generic string scorers (``token_sort`` token-bag
+    similarity is meaningless on a 6-char opaque code), so they get routed to
+    the char-n-gram ``qgram`` scorer instead. Deliberately conservative — a
+    real name/word column must NOT match, or we'd silently swap proven name
+    scoring for qgram. The letter+digit-mix requirement is the main guard:
+    English names/words are letters-only, so they fail it.
+    """
+    if not (3 <= p.avg_len <= 12):
+        return False
+    if p.cardinality_ratio < 0.3:
+        return False
+    # Only generic string-ish columns are candidates; named identity types
+    # (name/email/phone/zip/geo/date/numeric) keep their tuned scorers.
+    if p.col_type not in ("string", "identifier"):
+        return False
+
+    samples = [s for s in (p.sample_values or []) if s]
+    if not samples:
+        return False
+
+    # Code-like signal: the value carries BOTH a letter and a digit
+    # (e.g. ``A1B2C3``, ``SKU-9921``). This is the discriminating test that
+    # excludes pure-alpha names/words and pure-numeric IDs (already handled
+    # as identifiers/numeric upstream). Require a clear majority to look
+    # code-like before overriding.
+    def _is_code_like(s: str) -> bool:
+        has_alpha = any(c.isalpha() for c in s)
+        has_digit = any(c.isdigit() for c in s)
+        return has_alpha and has_digit
+
+    code_like = sum(1 for s in samples if _is_code_like(s))
+    return code_like >= max(1, (len(samples) + 1) // 2)
+
+
 def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
     """Compute threshold based on field types in the matchkey."""
     exact_scorers = {"exact"}
@@ -607,6 +644,14 @@ def build_matchkeys(
         scorer, transforms = _refdata_refine_matchkey_field(
             p.name, scorer, transforms, p.col_type,
         )
+
+        # #491: short opaque codes (SKU, part-no) score badly under the
+        # generic string scorers — token_sort/ensemble assume word-ish text.
+        # Route them to the char-n-gram qgram scorer instead. Gated on
+        # _is_short_code (letter+digit mix, short, high-cardinality) so real
+        # names/words/identifiers keep their tuned scorers untouched.
+        if scorer in ("token_sort", "ensemble") and _is_short_code(p):
+            scorer = "qgram"
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
@@ -1357,6 +1402,40 @@ def build_blocking(
     effective_n_full = n_rows_full if n_rows_full is not None else df.height
     sample_n = max(df.height, 1)
 
+    # #491: ANN blocking is a FALLBACK, not a preempt. ANN is emitted ONLY
+    # when an embedding-bearing column exists, the dataset is at scale, AND no
+    # bounded exact blocking key is available. A strong exact identifier still
+    # wins over ANN when present — we evaluate the exact/safe-exact path first
+    # (below) and only fall through to ANN when that path produced no usable
+    # key, before the name/compound fallback.
+    #
+    # STRICT invariant preserved: ANN is never emitted without an embedding-
+    # bearing column. ANNBlocker needs a vector column (blocker.py raises
+    # ValueError if ``ann_column`` is unset). The embedding signal is a profile
+    # with ``col_type == "description"`` — those columns become
+    # ``record_embedding`` scorers in build_matchkeys (line ~852) and carry the
+    # vectors ANN embeds. No embedding column => never ann.
+    #
+    # ANN_MIN_ROWS default 100_000; env-overridable via
+    # GOLDENMATCH_ANN_MIN_ROWS (mirrors the env-threshold pattern used by
+    # GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD below).
+    _ANN_MIN_ROWS_DEFAULT = 100_000
+    _ann_raw = os.environ.get("GOLDENMATCH_ANN_MIN_ROWS")
+    if _ann_raw is not None:
+        try:
+            ann_min_rows = int(_ann_raw)
+        except ValueError:
+            logger.warning(
+                "GOLDENMATCH_ANN_MIN_ROWS=%r is not an int; ignoring and "
+                "using default %d.", _ann_raw, _ANN_MIN_ROWS_DEFAULT,
+            )
+            ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+    else:
+        ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+
+    _embedding_cols = [p for p in profiles if p.col_type == "description"]
+    _ann_eligible = bool(_embedding_cols) and effective_n_full >= ann_min_rows
+
     def _projected_ratio(p: ColumnProfile) -> float:
         """Sample-corrected cardinality_ratio for the gate."""
         if effective_n_full <= sample_n:
@@ -1508,6 +1587,20 @@ def build_blocking(
             "falling through to name-based blocking",
             max_safe_block,
         )
+
+    # #491: ANN fallback. We only reach here when no bounded exact blocking
+    # key was found (the exact path above returns whenever it had a usable
+    # safe_exact key). If embeddings are present at scale, prefer ANN over the
+    # name/compound fallback below.
+    if _ann_eligible:
+        ann_col = _embedding_cols[0].name
+        logger.info(
+            "Auto-selecting ANN blocking (fallback): no bounded exact "
+            "blocking key available, embedding column %r present and "
+            "n_rows=%d >= ANN_MIN_ROWS=%d. See #491.",
+            ann_col, effective_n_full, ann_min_rows,
+        )
+        return BlockingConfig(strategy="ann", ann_column=ann_col)
 
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else

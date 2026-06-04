@@ -21,7 +21,7 @@ VALID_SIMPLE_TRANSFORMS = frozenset({
 VALID_SCORERS = frozenset({
     "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
     "embedding", "record_embedding", "ensemble",
-    "dice", "jaccard",
+    "dice", "jaccard", "qgram",
 })
 
 VALID_STRATEGIES = frozenset({
