@@ -41,3 +41,29 @@ def test_qgram_scorer_matrix_matches_single():
                 single = score_field(vals[i], vals[j], "qgram")
                 assert single is not None
                 assert abs(m[i, j] - single) < 1e-9
+
+
+# ── Task 1: short-code columns route to qgram in build_matchkeys ────────────
+
+
+def _df_with(cols: list[str]):
+    import polars as pl
+
+    return pl.DataFrame({c: ["x", "y", "z"] for c in cols})
+
+
+def test_short_code_column_gets_qgram():
+    from goldenmatch.core.autoconfig import ColumnProfile, build_matchkeys
+
+    profiles = [
+        ColumnProfile("sku", "Utf8", "string", 0.9,
+                      sample_values=["A1B2C3", "X9Y8Z7", "Q2W3E4"],
+                      null_rate=0.0, cardinality_ratio=0.7, avg_len=6.0),
+        ColumnProfile("first_name", "Utf8", "name", 0.9,
+                      sample_values=["james", "mary", "john"],
+                      null_rate=0.0, cardinality_ratio=0.02, avg_len=5.0),
+    ]
+    mks = build_matchkeys(profiles, df=_df_with(["sku", "first_name"]))
+    scorers = {f.field: f.scorer for mk in mks for f in mk.fields}
+    assert scorers.get("sku") == "qgram"
+    assert scorers.get("first_name") != "qgram"

@@ -531,6 +531,43 @@ _DOMAIN_SCORER_MAP = {
 }
 
 
+def _is_short_code(p: ColumnProfile) -> bool:
+    """#491: detect short alphanumeric *code* columns (SKU, part-no, plan-code).
+
+    These collapse under the generic string scorers (``token_sort`` token-bag
+    similarity is meaningless on a 6-char opaque code), so they get routed to
+    the char-n-gram ``qgram`` scorer instead. Deliberately conservative — a
+    real name/word column must NOT match, or we'd silently swap proven name
+    scoring for qgram. The letter+digit-mix requirement is the main guard:
+    English names/words are letters-only, so they fail it.
+    """
+    if not (3 <= p.avg_len <= 12):
+        return False
+    if p.cardinality_ratio < 0.3:
+        return False
+    # Only generic string-ish columns are candidates; named identity types
+    # (name/email/phone/zip/geo/date/numeric) keep their tuned scorers.
+    if p.col_type not in ("string", "identifier"):
+        return False
+
+    samples = [s for s in (p.sample_values or []) if s]
+    if not samples:
+        return False
+
+    # Code-like signal: the value carries BOTH a letter and a digit
+    # (e.g. ``A1B2C3``, ``SKU-9921``). This is the discriminating test that
+    # excludes pure-alpha names/words and pure-numeric IDs (already handled
+    # as identifiers/numeric upstream). Require a clear majority to look
+    # code-like before overriding.
+    def _is_code_like(s: str) -> bool:
+        has_alpha = any(c.isalpha() for c in s)
+        has_digit = any(c.isdigit() for c in s)
+        return has_alpha and has_digit
+
+    code_like = sum(1 for s in samples if _is_code_like(s))
+    return code_like >= max(1, (len(samples) + 1) // 2)
+
+
 def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
     """Compute threshold based on field types in the matchkey."""
     exact_scorers = {"exact"}
@@ -607,6 +644,14 @@ def build_matchkeys(
         scorer, transforms = _refdata_refine_matchkey_field(
             p.name, scorer, transforms, p.col_type,
         )
+
+        # #491: short opaque codes (SKU, part-no) score badly under the
+        # generic string scorers — token_sort/ensemble assume word-ish text.
+        # Route them to the char-n-gram qgram scorer instead. Gated on
+        # _is_short_code (letter+digit mix, short, high-cardinality) so real
+        # names/words/identifiers keep their tuned scorers untouched.
+        if scorer in ("token_sort", "ensemble") and _is_short_code(p):
+            scorer = "qgram"
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
