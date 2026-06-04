@@ -93,6 +93,6 @@ mod tests {
         assert_eq!(got, EXPECTED_BIAS);
     }
 
-    const EXPECTED_NO_BIAS: &str = "PLACEHOLDER_NO_BIAS";
-    const EXPECTED_BIAS: &str = "PLACEHOLDER_BIAS";
+    const EXPECTED_NO_BIAS: &str = "inhouse:d8:c09e143c23039cd0";
+    const EXPECTED_BIAS: &str = "inhouse:d8:f172a652f52b5c81";
 }
