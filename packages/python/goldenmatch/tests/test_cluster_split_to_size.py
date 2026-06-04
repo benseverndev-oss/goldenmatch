@@ -74,3 +74,19 @@ def test_single_mst_build_per_top_level_cluster(monkeypatch):
     subs = cl.split_oversized_cluster_to_size(members, ps, max_size=5)
     assert calls["n"] == 1
     assert all(s["size"] <= 5 or s["oversized"] for s in subs)
+
+
+def test_caller_invokes_batch_once_per_top_level_cluster(monkeypatch):
+    """#661: the build path calls split_oversized_cluster_to_size exactly once
+    per oversized TOP-LEVEL cluster (no per-pass re-call)."""
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    import goldenmatch.core.cluster as cl
+    calls = {"n": 0}
+    orig = cl.split_oversized_cluster_to_size
+    monkeypatch.setattr(cl, "split_oversized_cluster_to_size",
+                        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1])
+    # ONE oversized top-level cluster (15-node clique) -> exactly ONE batch call.
+    members = list(range(100, 115))
+    pairs = [(a, b, 0.99) for i, a in enumerate(members) for b in members[i + 1:]]
+    cl.build_clusters(pairs, all_ids=members, max_cluster_size=5)
+    assert calls["n"] == 1
