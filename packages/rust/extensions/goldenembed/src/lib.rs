@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 mod featurizer;
 pub use featurizer::FeaturizerConfig;
+pub mod model_id;
 
 #[derive(Debug, Deserialize)]
 struct ModelConfig {
