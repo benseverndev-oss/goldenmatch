@@ -930,6 +930,13 @@ def _build_compound_blocking(
     #     whose only large block is the null bucket);
     #   - relax the single-key null ceiling to 0.6 for the component role so a
     #     ~50%-null zip5 qualifies.
+    # NOTE: `_nonnull_ratio` / `_max_block_size` are computed on `df` directly.
+    # On the v0 non-distributed path `df` IS the full dataset (controller passes
+    # the full frame to `_initial_config`), so these are exact. If a SAMPLED df
+    # is ever fed here (distributed path), the unprojected non-null ratio is
+    # sample-inflated and would wrongly reject a mid-cardinality column -- such a
+    # caller must Chao1-project the ratio (see scale_cardinality_ratio_to_full_population).
+    # Tracked as a distributed-path follow-up; out of scope for #715 (single-node).
     from goldenmatch.core.blocking_candidates import _blocking_max_ratio
     _grouping_ratio_max = _blocking_max_ratio()
     _component_null_ceiling = max(max_null_rate, 0.6)
