@@ -61,6 +61,19 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Assert pincer resolved
+        working-directory: packages/python/goldenmatch
+        run: |
+          if grep -q "PINCER PRESENT" repro715.log; then
+            echo "::error::#715 pincer still present -- identifier columns produced no exact matchkeys"
+            exit 1
+          fi
+          if grep -q "PINCER RESOLVED" repro715.log; then
+            echo "pincer resolved"
+          else
+            echo "::warning::inconclusive verdict"
+          fi
+
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

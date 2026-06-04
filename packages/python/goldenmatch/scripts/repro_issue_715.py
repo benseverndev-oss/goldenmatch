@@ -128,25 +128,30 @@ def main() -> None:
     print()
 
     # -- Verdict --
+    def _exact_fields(mks):
+        return {f.field for mk in mks if mk.type == "exact" for f in mk.fields}
+
     exact_mks = [mk for mk in matchkeys if mk.type == "exact"]
+    exact_fields = _exact_fields(matchkeys)
     has_blocking = bool(blocking and blocking.keys)
-    identifier_cols = [p.name for p in profiles if p.col_type == "identifier"]
-    exact_eligible = [
+    identifier_eligible = [
         p.name for p in profiles
-        if p.col_type in ("email", "phone", "zip", "geo")
+        if p.col_type in ("identifier", "email", "phone")
+        and 0.5 <= p.cardinality_ratio < 1.0
     ]
     print("=== PINCER VERDICT ===")
-    print(f"  identifier-typed cols (skipped from matchkeys): {identifier_cols}")
-    print(f"  exact-eligible cols (email/phone/zip/geo):       {exact_eligible}")
-    print(f"  exact matchkeys produced:                        {len(exact_mks)}")
-    print(f"  blocking keys produced:                          {has_blocking}")
-    pincer = (len(exact_mks) == 0) and (not has_blocking)
+    print(f"  identifier-eligible cols (identifier/email/phone, card 0.5-1.0): {identifier_eligible}")
+    print(f"  exact matchkeys produced: {len(exact_mks)}  fields={sorted(exact_fields)}")
+    print(f"  blocking keys present:    {has_blocking}")
     print()
-    if pincer:
-        print("  >>> PINCER CONFIRMED: zero exact matchkeys AND zero blocking keys.")
-        print("  >>> High-cardinality identifiers fell out of BOTH paths.")
+    if identifier_eligible and len(exact_mks) == 0:
+        print("  >>> PINCER PRESENT: identifier-eligible columns produced zero exact matchkeys.")
+        print("  >>> High-cardinality identifiers fell out of BOTH candidate paths.")
+    elif identifier_eligible and len(exact_mks) > 0:
+        print("  >>> PINCER RESOLVED: identifier-eligible columns now back exact matchkeys.")
+        print(f"  >>> Exact matchkey fields: {sorted(exact_fields)}")
     else:
-        print("  >>> Pincer NOT reproduced at this shape/scale.")
+        print("  >>> inconclusive: no identifier-eligible columns found at this shape/scale.")
 
 
 if __name__ == "__main__":
