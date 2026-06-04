@@ -551,9 +551,12 @@ def _noise_aware_target_scorer() -> str:
 
 def _noise_aware_scorers_enabled() -> bool:
     """Whether to upgrade noise-fragile token_sort assignments. Opt-in via
-    GOLDENMATCH_NOISE_AWARE_SCORERS=1. Lands default OFF (#662 Component 1);
-    Component 3 flips this after benchmark validation."""
-    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "") == "1"
+    GOLDENMATCH_NOISE_AWARE_SCORERS=1 (or "true"/"enabled", case-insensitive --
+    matches the GOLDENMATCH_AUTOCONFIG_LLM gate convention). Lands default OFF
+    (#662 Component 1); Component 3 flips this after benchmark validation."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "0").lower() in (
+        "1", "true", "enabled",
+    )
 
 
 def _noise_aware_scorer(col_type: str, scorer: str) -> str:

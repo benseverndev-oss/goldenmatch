@@ -53,6 +53,20 @@ def test_default_is_off(monkeypatch):
     assert _noise_aware_scorers_enabled() is False
 
 
+@pytest.mark.parametrize("val", ["1", "true", "TRUE", "enabled"])
+def test_enabled_accepts_house_truthy_values(monkeypatch, val):
+    """The gate matches the module's case-insensitive value-set convention
+    (GOLDENMATCH_AUTOCONFIG_LLM), so `=true` doesn't silently no-op."""
+    monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", val)
+    assert _noise_aware_scorers_enabled() is True
+
+
+@pytest.mark.parametrize("val", ["0", "false", "disabled", ""])
+def test_enabled_rejects_falsy_values(monkeypatch, val):
+    monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", val)
+    assert _noise_aware_scorers_enabled() is False
+
+
 def _address_profile() -> ColumnProfile:
     return ColumnProfile(
         name="res_street_address", dtype="str", col_type="address",
