@@ -257,7 +257,9 @@ def test_rule_skips_small_or_healthy():
 def _profiles_with_embeddings():
     """Profiles that carry an embedding signal: a ``description`` column
     (becomes a ``record_embedding`` scorer / ANN-eligible vector column),
-    plus an ordinary name column."""
+    plus an ordinary name column. Crucially there is NO bounded exact
+    blocking column here, so ANN is genuinely the best blocking option and
+    the fallback gate (#491) lets it fire."""
     from goldenmatch.core.autoconfig import ColumnProfile
 
     return [
@@ -269,6 +271,37 @@ def _profiles_with_embeddings():
                 "radiology technician regional medical center",
             ],
             null_rate=0.0, cardinality_ratio=0.95, avg_len=42.0,
+        ),
+        ColumnProfile(
+            "last_name", "Utf8", "name", 0.9,
+            sample_values=["smith", "jones", "garcia"],
+            null_rate=0.0, cardinality_ratio=0.3, avg_len=5.0,
+        ),
+    ]
+
+
+def _profiles_with_embeddings_and_exact():
+    """Profiles that carry BOTH an embedding signal (a ``description``
+    column) AND a strong, bounded exact blocking column (a moderate-
+    cardinality ``identifier``). Under the #491 fallback gate the exact
+    blocking key must win — ANN only fires when no bounded exact key
+    exists."""
+    from goldenmatch.core.autoconfig import ColumnProfile
+
+    return [
+        ColumnProfile(
+            "bio", "Utf8", "description", 0.9,
+            sample_values=[
+                "senior cardiologist at mercy hospital",
+                "pediatric nurse practitioner downtown clinic",
+                "radiology technician regional medical center",
+            ],
+            null_rate=0.0, cardinality_ratio=0.95, avg_len=42.0,
+        ),
+        ColumnProfile(
+            "member_id", "Utf8", "identifier", 0.9,
+            sample_values=["m-100", "m-101", "m-102"],
+            null_rate=0.0, cardinality_ratio=0.5, avg_len=5.0,
         ),
         ColumnProfile(
             "last_name", "Utf8", "name", 0.9,
@@ -331,3 +364,26 @@ def test_no_ann_below_scale():
     df = _ann_df(["bio", "last_name"])
     blk = build_blocking(profiles, df, n_rows_full=1_000)
     assert blk.strategy != "ann"
+
+
+def test_exact_blocking_wins_over_ann_when_available():
+    # #491 fallback gate: a strong, bounded exact blocking column wins over
+    # ANN even when an embedding column is present and the dataset is at
+    # scale. ANN is a FALLBACK, not a preempt.
+    import polars as pl
+    from goldenmatch.core.autoconfig import build_blocking
+
+    profiles = _profiles_with_embeddings_and_exact()
+    # Distinct member_id per row -> singleton (bounded) exact blocks.
+    df = pl.DataFrame(
+        {
+            "bio": ["a", "b", "c", "d"],
+            "member_id": ["m-100", "m-101", "m-102", "m-103"],
+            "last_name": ["smith", "jones", "garcia", "lee"],
+        }
+    )
+    blk = build_blocking(profiles, df, n_rows_full=200_000)
+    assert blk.strategy != "ann"
+    # The exact key on member_id should be the chosen primary.
+    fields = [f for k in (blk.keys or []) for f in k.fields]
+    assert "member_id" in fields
