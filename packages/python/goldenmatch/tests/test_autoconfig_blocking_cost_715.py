@@ -63,3 +63,25 @@ def test_dense_zip_still_picks_bounded_compound():
     profiles = profile_columns(df)
     blk = build_blocking(profiles, df, n_rows_full=df.height)
     assert blk.keys, "expected a blocking key on the dense-zip shape"
+
+
+def test_sparse_zip_gets_bounded_compound_not_degenerate():
+    """B2: with sparse zip5 (reclassified identifier, ~45% null), the compound
+    search must still reach a BOUNDED compound (e.g. zip5+last_name) so blocking
+    is non-empty -- not degenerate. zip5 must be usable as a compound component
+    despite high null + identifier type."""
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+    from repro_issue_715 import make_healthcare_df
+
+    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")
+    profiles = profile_columns(df)
+    blk = build_blocking(profiles, df, n_rows_full=df.height)
+    # Non-degenerate: has at least one real blocking key.
+    assert blk.keys, "expected a bounded compound key, got degenerate/empty blocking"
+    # The bounding column (zip5) should appear in the chosen key/passes.
+    all_fields = set()
+    for k in (blk.keys or []):
+        all_fields.update(k.fields)
+    for p in (blk.passes or []):
+        all_fields.update(p.fields)
+    assert "zip5" in all_fields, f"expected zip5 to bound the compound, got {all_fields}"

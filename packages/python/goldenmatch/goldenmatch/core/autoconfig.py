@@ -901,13 +901,59 @@ def _build_compound_blocking(
     def _null_rate(col_name: str) -> float:
         return df[col_name].null_count() / df.height if df.height > 0 else 0.0
 
-    # Build unified candidate pool (excludes numeric, date, identifier)
-    candidates = [
-        p for p in profiles
-        if p.col_type not in ("numeric", "date", "identifier")
-        and _null_rate(p.name) <= max_null_rate
-        and _check_source_overlap(df, p.name) > 0.0
-    ]
+    def _max_block_size(col_name: str) -> int:
+        """Largest group size when blocking on this column."""
+        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
+
+    def _nonnull_ratio(col_name: str) -> float:
+        """Distinct/non-null ratio -- the TRUE per-record uniqueness, not the
+        null-deflated ColumnProfile.cardinality_ratio. A near-1.0 value means a
+        surrogate-key-like column (npi/phone/email) whose only big "block" is
+        its null bucket -- useless as a blocking component."""
+        nn = df[col_name].drop_nulls()
+        n = nn.len()
+        return (nn.n_unique() / n) if n > 0 else 1.0
+
+    # #715: judge compound COMPONENTS by whether they BOUND block size (i.e.
+    # actually group records) and aren't surrogate keys -- NOT by col_type.
+    # A sparse zip5 reclassifies `numeric -> identifier` and (at ~50% null)
+    # exceeds the single-key null ceiling, so the old col_type/null filters
+    # doubly excluded it, leaving only oversized name columns. As a compound
+    # COMPONENT, a high-null column is fine: the multi_pass config's other
+    # passes cover the null rows. So:
+    #   - keep `numeric`/`date` excluded;
+    #   - admit `identifier` (and the high-cardinality `email`/`phone` types)
+    #     ONLY when the column genuinely GROUPS records: non-singleton blocks
+    #     (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a non-null
+    #     distinct ratio below the blocking gate (rejects surrogate keys like
+    #     npi/phone/email whose non-null values are ~unique per record and
+    #     whose only large block is the null bucket);
+    #   - relax the single-key null ceiling to 0.6 for the component role so a
+    #     ~50%-null zip5 qualifies.
+    from goldenmatch.core.blocking_candidates import _blocking_max_ratio
+    _grouping_ratio_max = _blocking_max_ratio()
+    _component_null_ceiling = max(max_null_rate, 0.6)
+    _high_card_types = ("identifier", "email", "phone")
+
+    def _is_admissible(p: ColumnProfile) -> bool:
+        if p.col_type in ("numeric", "date"):
+            return False
+        if _check_source_overlap(df, p.name) <= 0.0:
+            return False
+        if p.col_type in _high_card_types:
+            # Surrogate-key / near-unique guard: must actually group records.
+            if not (
+                _max_block_size(p.name) > 1
+                and p.cardinality_ratio < 1.0
+                and _nonnull_ratio(p.name) < _grouping_ratio_max
+            ):
+                return False
+            # High-null is OK for a compound component (other passes cover nulls).
+            return _null_rate(p.name) <= _component_null_ceiling
+        # Low-cardinality types (name/string/geo/...): keep the stricter ceiling.
+        return _null_rate(p.name) <= max_null_rate
+
+    candidates = [p for p in profiles if _is_admissible(p)]
     if len(candidates) < 2:
         return None
 
@@ -1457,14 +1503,28 @@ def build_blocking(
         )
 
     # ── Check if name-based fallback would also be oversized ──
+    # #715: the name path picks ONE primary name column (pattern_names[0], else
+    # name_cols[0]) and blocks on it. If THAT primary is oversized, single-name
+    # blocking is degraded (it gets demoted to soundex/secondary or dropped) --
+    # so we should try a bounded compound first, even if some OTHER name column
+    # happens to be bounded on its own. Gating on "is the name path's primary
+    # oversized" (by the projected full-N size, consistent with _gate_passes)
+    # rather than "is EVERY name col oversized" lets the sparse-zip shape reach
+    # zip5+last_name instead of degrading to a bare last_name block.
+    def _name_path_primary() -> str | None:
+        if not name_cols:
+            return None
+        pattern_names = [p for p in name_cols if _classify_by_name(p.name) == "name"]
+        return (pattern_names[0] if pattern_names else name_cols[0]).name
+
+    _primary_name = _name_path_primary()
     _all_single_oversized = True
-    for p in name_cols:
+    if _primary_name is not None:
         try:
-            if _max_block_size(p.name) <= max_safe_block:
+            if _projected_block([_primary_name]) <= max_safe_block:
                 _all_single_oversized = False
-                break
         except Exception:
-            continue
+            pass
 
     if _all_single_oversized and (name_cols or text_cols):
         # All single columns produce oversized blocks — try compound blocking
@@ -1477,9 +1537,32 @@ def build_blocking(
 
         compound_config = _build_compound_blocking(profiles, df, max_safe_block, max_null_rate)
         if compound_config is not None:
-            return compound_config
-
-        logger.info("Compound blocking failed — falling through to single-column fallbacks")
+            # #715: project the compound's keys/passes to full N before emitting.
+            # _build_compound_blocking selects on SAMPLE block size, but a
+            # high-null component (e.g. a ~50%-null zip5) hides a large null
+            # bucket that scales linearly: zip5+last_name is ~323/block on a
+            # 30K sample but projects to ~10K at 1M. Gate it through the same
+            # projected guard as the name path; if nothing survives, fall
+            # through to single-column fallbacks rather than ship a bomb.
+            c_primary = (compound_config.keys or [None])[0]
+            c_passes = compound_config.passes or list(compound_config.keys or [])
+            if c_primary is not None:
+                gated_primary, gated_passes = _gate_passes(c_primary, c_passes)
+                if gated_primary is not None:
+                    return BlockingConfig(
+                        keys=[gated_primary],
+                        strategy="multi_pass",
+                        passes=gated_passes,
+                        max_block_size=max_safe_block,
+                        skip_oversized=True,
+                    )
+            logger.info(
+                "Compound blocking config projects oversized at full_n=%d -- "
+                "falling through to single-column fallbacks. See #715.",
+                effective_n_full,
+            )
+        else:
+            logger.info("Compound blocking failed — falling through to single-column fallbacks")
 
     # Name columns: use multi-pass with soundex + substring
     # Prefer columns matched by name pattern (person names) over data-profiled names
