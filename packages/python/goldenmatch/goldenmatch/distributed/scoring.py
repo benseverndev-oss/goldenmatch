@@ -110,12 +110,34 @@ def score_blocks_distributed(
     )
 
 
+def _dedup_num_partitions() -> int:
+    """Hash-shuffle partition count for the distributed pair dedup. Mirrors
+    the golden build's `min(256, max(4, cpu*4))` heuristic: enough partitions
+    for parallelism, capped so shuffle coordination stays cheap."""
+    cpu = os.cpu_count() or 16
+    return min(256, max(4, cpu * 4))
+
+
 def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
     """Cross-partition pair dedup. Canonicalizes (id_a, id_b) to (min, max)
     and keeps the maximum score per canonical pair.
 
-    Note: Ray's groupby column-output naming varies by version. Output
-    schema is {id_a, id_b, score}; normalization handled inline.
+    Fully distributed -- no driver collect. The prior implementation
+    (v42c cheat-line) collected ALL canonical pairs to the driver via
+    `list(canonical.iter_rows())`, deduped in Polars, and round-tripped
+    back. At 5M-realistic that's ~18M pairs (~tolerable); at 100M it's the
+    primary head-wedge -- hundreds of millions of Python dict rows on the
+    driver (proven on a real 4-node GCP cluster: workers idle, head OOM).
+
+    The fix is the hash-shuffle the old comment said was "the right
+    architectural answer": after canonicalization, `id_a == min(pair)`, so
+    every copy of a given canonical pair shares the SAME `id_a`. Hash-
+    partitioning on `id_a` (`repartition(keys=["id_a"])`) co-locates all
+    copies of each pair in one partition, and a per-partition Polars
+    `group_by(["id_a","id_b"]).max()` then dedups locally -- the same
+    co-location trick `build_golden_records_distributed` uses on
+    `__cluster_id__`, avoiding Ray's single-partition `groupby().max()`
+    HashAggregate hang. Output schema {id_a, id_b, score}.
     """
 
     def _canonicalize(batch: Any) -> Any:  # batch: pa.Table -> pa.Table
@@ -130,34 +152,28 @@ def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
 
     canonical = pairs_ds.map_batches(_canonicalize, batch_format="pyarrow")
 
-    # v42c (2026-05-30) surfaced that Ray Dataset's `groupby([keys]).max(col)`
-    # defaults to a single-partition output HashAggregate. At 5M-realistic
-    # the scorer produces ~18M pairs and the aggregation hangs indefinitely
-    # serializing the shuffle to one worker. CLAUDE.md documents the same
-    # pathology at 25M (run 26131602938) and on the Phase 4 design path.
-    #
-    # Pragmatic cheat-line: collect canonicalized pairs to the driver,
-    # dedup in Polars (vectorized groupby is fast at this scale), and
-    # round-trip back to a Ray Dataset. At 18M pairs (~150 MB Arrow) this
-    # is bounded driver-side work -- faster than a hung Ray shuffle.
-    #
-    # This is NOT the right architectural answer. The right fix is to
-    # configure Ray Dataset's groupby num_partitions or use a hash-shuffle
-    # repartition before the aggregation. Deferred to a follow-up PR in
-    # this lane once we have a real Ray cluster + a working v42 to
-    # benchmark against.
-    import polars as pl  # noqa: PLC0415
-    import ray.data as _rd  # noqa: PLC0415
+    # Hash-partition on id_a so identical canonical pairs co-locate, then
+    # dedup within each partition. No driver materialization.
+    repartitioned = canonical.repartition(
+        _dedup_num_partitions(), keys=["id_a"],
+    )
 
-    rows = list(canonical.iter_rows())
-    if not rows:
-        return _rd.from_items([])
-    df = pl.from_dicts(rows).group_by(["id_a", "id_b"]).max()
-    # Polars group_by(...).max() keeps key columns and aggregates the rest.
-    # Normalize the score column name if Polars renamed it on aggregation.
-    if "score" not in df.columns:
-        for c in df.columns:
-            if c not in ("id_a", "id_b"):
-                df = df.rename({c: "score"})
-                break
-    return _rd.from_arrow(df.to_arrow())
+    def _dedup_within_partition(batch: Any) -> Any:  # pa.Table -> pa.Table
+        import polars as pl
+        df = pl.from_arrow(batch)
+        assert isinstance(df, pl.DataFrame)
+        if df.height == 0:
+            return df.to_arrow()
+        out = df.group_by(["id_a", "id_b"]).max()
+        # Polars group_by(...).max() keeps key columns and aggregates the
+        # rest. Normalize the score column name if Polars renamed it.
+        if "score" not in out.columns:
+            for c in out.columns:
+                if c not in ("id_a", "id_b"):
+                    out = out.rename({c: "score"})
+                    break
+        return out.to_arrow()
+
+    return repartitioned.map_batches(
+        _dedup_within_partition, batch_format="pyarrow",
+    )
