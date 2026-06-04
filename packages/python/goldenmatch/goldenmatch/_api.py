@@ -322,6 +322,7 @@ def dedupe_df(
     backend: str | None = None,
     source_name: str = "dataframe",
     confidence_required: bool = True,
+    allow_red_config: bool = False,
     exclude_columns: list[str] | None = None,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
@@ -389,6 +390,7 @@ def dedupe_df(
                         llm_auto=llm_auto,
                         _skip_finalize=True,
                         confidence_required=confidence_required,
+                        allow_red_config=allow_red_config,
                     )
                 _used_controller = True
 
@@ -491,6 +493,7 @@ def match_df(
     threshold: float | None = None,
     backend: str | None = None,
     confidence_required: bool = True,
+    allow_red_config: bool = False,
     exclude_columns: list[str] | None = None,
 ) -> MatchResult:
     """Match a target DataFrame against a reference DataFrame (no file I/O).
@@ -546,6 +549,7 @@ def match_df(
                 config = _self_api.auto_configure_df(
                     target, reference=reference, _skip_finalize=True,
                     confidence_required=confidence_required,
+                    allow_red_config=allow_red_config,
                 )
                 _used_controller = True
 

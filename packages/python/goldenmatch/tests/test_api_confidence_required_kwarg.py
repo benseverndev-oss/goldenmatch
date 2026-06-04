@@ -62,9 +62,14 @@ def test_dedupe_df_default_raises_at_scale_on_red(monkeypatch):
         gm.dedupe_df(_df(REFUSE_AT_N))
 
 
-def test_dedupe_df_confidence_required_false_short_circuits(monkeypatch):
+def test_dedupe_df_allow_red_config_short_circuits(monkeypatch):
+    # #715 reopened: a RED commit now raises by default regardless of
+    # confidence_required; allow_red_config=True is the escape hatch that
+    # restores today's warn-and-run.
     _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    result = gm.dedupe_df(_df(REFUSE_AT_N), confidence_required=False)
+    result = gm.dedupe_df(
+        _df(REFUSE_AT_N), confidence_required=False, allow_red_config=True
+    )
     assert result is not None
 
 
@@ -76,11 +81,13 @@ def test_auto_configure_df_default_raises_at_scale_on_red(monkeypatch):
         auto_configure_df(_df(REFUSE_AT_N))
 
 
-def test_auto_configure_df_confidence_required_false_returns_v0(monkeypatch):
+def test_auto_configure_df_allow_red_config_returns_v0(monkeypatch):
     from goldenmatch.core.autoconfig import auto_configure_df
 
     _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
-    cfg = auto_configure_df(_df(REFUSE_AT_N), confidence_required=False)
+    cfg = auto_configure_df(
+        _df(REFUSE_AT_N), confidence_required=False, allow_red_config=True
+    )
     assert cfg is not None
 
 
@@ -92,9 +99,11 @@ def test_match_df_default_raises_at_scale_on_red(monkeypatch):
         gm.match_df(target, reference)
 
 
-def test_match_df_confidence_required_false_short_circuits(monkeypatch):
+def test_match_df_allow_red_config_short_circuits(monkeypatch):
     _force_red_history(monkeypatch, n_rows_in_df=REFUSE_AT_N)
     target = _df(REFUSE_AT_N)
     reference = _df(100)
-    result = gm.match_df(target, reference, confidence_required=False)
+    result = gm.match_df(
+        target, reference, confidence_required=False, allow_red_config=True
+    )
     assert result is not None

@@ -288,7 +288,8 @@ class ControllerNotConfidentError(Exception):
             f"stop_reason: {stop_reason}). Running this config would produce "
             f"degenerate dedupe; passing it back instead of running. "
             f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
-            f"threshold, or re-call with confidence_required=False. See "
+            f"threshold, or re-call with allow_red_config=True (runs the "
+            f"degenerate config anyway) / confidence_required=False. See "
             f"{self.DOCS_URL}."
         )
 
@@ -478,6 +479,7 @@ class AutoConfigController:
         v0_kwargs: dict | None = None,
         skip_finalize: bool = False,
         confidence_required: bool = True,
+        allow_red_config: bool = False,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -842,8 +844,12 @@ class AutoConfigController:
             # the all-iterations-errored path is the same user-facing
             # pathology as a RED committed entry -- caller would run the
             # full pipeline on the _RED_PROFILE sentinel and produce
-            # degenerate output. Refuse loudly at scale.
-            if confidence_required and n_rows >= REFUSE_AT_N:
+            # degenerate output. Refuse loudly.
+            #
+            # #715 reopened: the _RED_PROFILE sentinel is a genuine give-up,
+            # so refuse by DEFAULT (independent of confidence_required AND
+            # REFUSE_AT_N) unless allow_red_config=True restores warn-and-run.
+            if not allow_red_config:
                 raise ControllerNotConfidentError(
                     n_rows=n_rows,
                     failing_sub_profile="data",  # n_errored=all means data path itself failed
@@ -853,16 +859,50 @@ class AutoConfigController:
                 )
             return config_v0, _RED_PROFILE, history
 
-        # Confidence gate (Phase 3 of controller-budget pathology spec).
-        # When the controller committed a RED entry on a large input,
-        # running the full pipeline would produce ~26-min degenerate
-        # dedupe. Refuse loudly instead. Spec §Design / Confidence gate.
-        if (
-            confidence_required
-            and n_rows >= REFUSE_AT_N
-            and best_entry.profile.health() == HealthVerdict.RED
-        ):
-            failing = _identify_failing_subprofile(best_entry.profile)
+        # RED-refuse gate (reconciled #715-reopened + Phase 3 confidence gate
+        # + #417 degenerate-blocking guard into a SINGLE raise site).
+        #
+        # Invariant: a committed RED config raises ControllerNotConfidentError
+        # unless allow_red_config=True. A non-RED config never raises here.
+        #
+        # #715 reopened: the RED-refuse fires by DEFAULT -- independent of
+        # confidence_required AND REFUSE_AT_N (so a small-N RED also raises).
+        # The legacy ``confidence_required and n_rows >= REFUSE_AT_N`` gate is
+        # a strict SUBSET of ``not allow_red_config``-default-True, so its
+        # callers keep raising. allow_red_config=True restores warn-and-run.
+        #
+        # This site supersedes the old Phase-3 RED-health raise here AND the
+        # RED-keyed branches of the #417 guard below: it runs FIRST, so any
+        # committed-RED entry is refused here with the most-specific
+        # failing_sub_profile. The #417 guard below stays for its NON-RED
+        # blocking-degenerate estimator role (gated, as before, on
+        # confidence_required + REFUSE_AT_N).
+        #
+        # The gate is simply ``_committed_red and not allow_red_config``:
+        # allow_red_config=True is the SINGLE escape hatch (restores
+        # warn-and-run). confidence_required no longer gates the RED-refuse
+        # (the spec makes the refuse independent of it) -- a caller that
+        # previously used confidence_required=False to keep warn-and-run on a
+        # RED commit must now pass allow_red_config=True instead.
+        _committed_red = best_entry.profile.health() == HealthVerdict.RED
+        if _committed_red and not allow_red_config:
+            # Pick the most-specific failing sub-profile. When the committed
+            # config has no blocking keys, the downstream sync degenerates to
+            # a single mega-block -- surface that as the blocking-degenerate
+            # stop_reason (#417). Otherwise fall back to the generic
+            # priority-ordered failing sub-profile.
+            _blocking = best_entry.config.blocking
+            _no_blocking_keys = (
+                _blocking is None or not getattr(_blocking, "keys", None)
+            )
+            if _no_blocking_keys:
+                failing = "blocking"
+                _stop_reason = StopReason.BLOCKING_DEGENERATE.name
+            else:
+                failing = _identify_failing_subprofile(best_entry.profile)
+                _stop_reason = (
+                    history.stop_reason.name if history.stop_reason else "unset"
+                )
             # ``_LAST_CONTROLLER_RUN`` here is the CONTROLLER-LOCAL ContextVar
             # defined at the top of this file (line ~45), NOT the
             # ``(profile, history)`` tuple ContextVar in ``autoconfig.py``.
@@ -872,11 +912,7 @@ class AutoConfigController:
             raise ControllerNotConfidentError(
                 n_rows=n_rows,
                 failing_sub_profile=failing,
-                stop_reason=(
-                    history.stop_reason.name
-                    if history.stop_reason
-                    else "unset"
-                ),
+                stop_reason=_stop_reason,
             )
 
         # #408: blocking-degenerate gate. Independent of the RED-health
@@ -897,7 +933,16 @@ class AutoConfigController:
         # Trigger only when confidence_required (default True) -- caller
         # opts out via confidence_required=False to keep today's
         # "warn-and-run" behavior on degenerate blocking.
-        if confidence_required and n_rows >= REFUSE_AT_N:
+        #
+        # #715 reopened: this guard now handles ONLY the NON-RED
+        # degenerate-blocking case. Every committed-RED entry (including
+        # RED + no-blocking-keys) is already decided by the reconciled
+        # RED-refuse gate ABOVE -- which either raised (default) or, when
+        # allow_red_config=True, deliberately let the RED config through to
+        # warn-and-run. Re-raising here on a RED entry would (a) double-gate
+        # and (b) ignore allow_red_config. So skip this block entirely when
+        # the committed profile is RED.
+        if confidence_required and n_rows >= REFUSE_AT_N and not _committed_red:
             from goldenmatch.core.blocking_candidates import (
                 degenerate_guard_max_avg_block_size,
                 degenerate_guard_threshold,
