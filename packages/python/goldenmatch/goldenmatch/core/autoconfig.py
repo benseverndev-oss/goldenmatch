@@ -1239,6 +1239,11 @@ def _degenerate_blocking_config(max_safe_block: int) -> BlockingConfig:
     keeps the model valid (the validator bypasses the keys-required check for
     auto_suggest) and matches the established empty-keys pattern used by the
     CLI / preview paths.
+
+    Note: the #417 guard refuses on empty keys only when the committed profile
+    is RED (``_no_blocking_keys AND _profile_red``); a GREEN/YELLOW profile
+    with empty keys would not refuse on that branch (unconditional RED refusal
+    is handled separately by the ``allow_red_config`` work).
     """
     return BlockingConfig(
         keys=[],
@@ -1385,11 +1390,9 @@ def build_blocking(
 
     def _projected_block(fields: list[str]) -> int:
         try:
-            sample_mb = int(
-                df.group_by(fields).len().get_column("len").max() or 0
-            )  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+            sample_mb = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
         except Exception:  # pragma: no cover -- defensive
-            return 0
+            return effective_n_full  # fail-safe: treat unprojectable key as maximally oversized -> dropped
         return project_max_block_size(sample_mb, df.height, effective_n_full)
 
     def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
