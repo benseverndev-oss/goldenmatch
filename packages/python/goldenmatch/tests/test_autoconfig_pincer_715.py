@@ -97,7 +97,10 @@ def test_healthcare_shape_commits_exact_matchkey_and_blocking():
     from goldenmatch.core.autoconfig import auto_configure_df
     from repro_issue_715 import make_healthcare_df
 
-    df = make_healthcare_df(15_000)  # above old Guard 1 (10000), fast
+    # 3K rows: the fix removed the row-count guard, so the pincer behavior is
+    # size-independent. Keep N small so auto_configure_df stays well under the
+    # CI per-test timeout (--timeout=120) under xdist + coverage.
+    df = make_healthcare_df(3_000)
     cfg = auto_configure_df(df, confidence_required=False)
 
     mks = cfg.get_matchkeys()
