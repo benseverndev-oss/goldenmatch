@@ -18,7 +18,6 @@ import subprocess
 import time
 
 import numpy as np
-
 from goldenmatch.embeddings.inhouse.model import GoldenEmbedModel
 
 
