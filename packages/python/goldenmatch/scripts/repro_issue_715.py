@@ -22,7 +22,6 @@ import random
 import sys
 
 import polars as pl
-
 from goldenmatch.core.autoconfig import (
     build_blocking,
     build_matchkeys,
@@ -122,13 +121,13 @@ def main() -> None:
     )
     print("=== build_blocking output ===")
     if blocking is None:
-        print("  (build_blocking not called — no fuzzy/weighted matchkey)")
+        print("  (build_blocking not called - no fuzzy/weighted matchkey)")
     else:
         keys = [k.fields for k in (blocking.keys or [])]
         print(f"  strategy={blocking.strategy} keys={keys}")
     print()
 
-    # ── Verdict ──
+    # -- Verdict --
     exact_mks = [mk for mk in matchkeys if mk.type == "exact"]
     has_blocking = bool(blocking and blocking.keys)
     identifier_cols = [p.name for p in profiles if p.col_type == "identifier"]
