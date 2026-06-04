@@ -27,6 +27,7 @@ struct ModelConfig {
 pub struct GoldenEmbed {
     featurizer: FeaturizerConfig,
     dim: usize,
+    model_id: Option<String>,
     session: Session,
 }
 
@@ -37,18 +38,26 @@ impl GoldenEmbed {
         let cfg_text = std::fs::read_to_string(dir.join("config.json"))
             .with_context(|| format!("reading {}/config.json", dir.display()))?;
         let cfg: ModelConfig = serde_json::from_str(&cfg_text)?;
+        let model_id = crate::model_id::compute_model_id(dir, cfg.dim).ok();
         let session = Session::builder()?
             .commit_from_file(dir.join("model.onnx"))
             .with_context(|| format!("loading {}/model.onnx", dir.display()))?;
         Ok(Self {
             featurizer: cfg.featurizer,
             dim: cfg.dim,
+            model_id,
             session,
         })
     }
 
     pub fn dim(&self) -> usize {
         self.dim
+    }
+
+    /// The Python-parity cache namespace, or `None` when `weights.npz` is absent
+    /// (ONNX-only deployment).
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
     }
 
     /// Embed `texts` into `texts.len()` row vectors of length `dim`.

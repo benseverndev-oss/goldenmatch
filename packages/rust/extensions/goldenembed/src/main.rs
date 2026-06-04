@@ -31,7 +31,11 @@ fn main() -> Result<()> {
 
     let Some(path) = input else {
         // No input file: report the model dimension (smoke check).
-        println!("model loaded: dim={}", model.dim());
+        println!(
+            "model loaded: dim={} model_id={}",
+            model.dim(),
+            model.model_id().unwrap_or("<onnx-only>")
+        );
         return Ok(());
     };
 
