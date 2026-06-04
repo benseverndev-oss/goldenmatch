@@ -133,16 +133,20 @@ _LABEL_PROP_PAIR_THRESHOLD = 50_000_000
 
 
 def _wcc_algorithm() -> str:
-    """Read GOLDENMATCH_DISTRIBUTED_WCC env var.
+    """Read GOLDENMATCH_DISTRIBUTED_WCC env var (default 'two_phase').
 
-    Default 'pointer_jump' -- the fully-distributed Shiloach-Vishkin WCC
-    (``distributed_wcc``) with no driver-side collect. 'two_phase' (the prior
-    default) and 'label_propagation' are kept for comparison/fallback but both
-    collect to the driver (two_phase's Phase A/B; label_prop's per-iteration
-    convergence take_all) and wedge the head at scale.
+    NOTE: the at-scale pipeline (``GOLDENMATCH_DISTRIBUTED_PIPELINE=2``) does NOT
+    route through this function -- it uses ``local_cc_assignments`` directly,
+    which has no driver collect and is what scales to 100M. This selector only
+    governs ``build_clusters_distributed``'s own callers, where 'two_phase'
+    stays the default (Sem Sinchenko recommendation; partition-sensitive but
+    correct). 'pointer_jump' (``distributed_wcc``) is OPT-IN only -- its
+    iterative ``Dataset.join`` loop can deadlock Ray's streaming executor at
+    scale, and it's unnecessary because scoring is per-partition (no
+    cross-partition components to merge). 'label_propagation' is also available.
     """
     import os
-    return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "pointer_jump").lower()
+    return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
 
 
 def _label_prop_threshold() -> int:
