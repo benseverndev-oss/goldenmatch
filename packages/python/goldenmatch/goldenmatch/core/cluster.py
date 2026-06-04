@@ -575,8 +575,8 @@ def build_cluster_frames(
     The BULK path (non-oversized clusters) is the shared pre-split Union-Find
     (via ``_columnar_presplit``) + vectorized weak/quality + emit. Oversized
     clusters are auto-split frames-natively (the dict is materialized ONLY for
-    that rare minority), reusing ``split_oversized_cluster`` and mirroring
-    ``_finalize_clusters``.
+    that rare minority), reusing ``split_oversized_cluster_to_size`` (one batch
+    split per top-level oversized cluster) and mirroring ``_finalize_clusters``.
 
     ``cluster_frames_to_dict(build_cluster_frames(...))`` round-trips to
     ``build_clusters(...)`` gate-ON (the score-free dict): members-as-set,
