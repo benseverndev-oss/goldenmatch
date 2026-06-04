@@ -68,3 +68,20 @@ def test_boundary_card_0_5_admitted():
     ]
     mks = build_matchkeys(profiles, df=_df_with(["npi"]))
     assert "npi" in _exact_fields(mks)
+
+
+def test_aggregate_warning_counts_identifier(caplog):
+    """When every exact-eligible column (incl. identifier) is excluded, the
+    aggregate warning must count identifier columns too."""
+    import logging
+    profiles = [
+        # low-card identifier -> excluded by the >=0.5 gate
+        ColumnProfile("npi", "Utf8", "identifier", 0.9,
+                      null_rate=0.0, cardinality_ratio=0.2),
+        ColumnProfile("name", "Utf8", "name", 0.9,
+                      null_rate=0.0, cardinality_ratio=0.5),
+    ]
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.core.autoconfig"):
+        build_matchkeys(profiles, df=_df_with(["npi", "name"]))
+    msgs = " ".join(r.message for r in caplog.records)
+    assert "exact-eligible" in msgs and "npi" in msgs
