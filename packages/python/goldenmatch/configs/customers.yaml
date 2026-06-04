@@ -1,0 +1,76 @@
+# =============================================================================
+# GoldenMatch config: customer / contact deduplication (single node)
+# =============================================================================
+# A robust, production-shaped starting point. Copy it, point it at your columns,
+# and run:
+#
+#     goldenmatch dedupe customers.csv --config configs/customers.yaml
+#
+# You usually do NOT need a config at all -- `goldenmatch dedupe customers.csv`
+# auto-tunes everything. Write a config when you want to PIN the behavior
+# (reproducible runs), override one decision the auto-tuner got wrong, or
+# document the matching policy for review. Every section below is optional;
+# delete what you don't need.
+# -----------------------------------------------------------------------------
+
+# --- Matchkeys: the rules that declare two records "the same" -----------------
+# Records match if ANY matchkey fires. List the cheapest, highest-precision
+# rule first (exact email), then fuzzier ones.
+matchkeys:
+  # 1) Exact match on normalized email. High precision, near-zero false merges.
+  - name: email_exact
+    type: exact
+    fields:
+      - column: email
+        transforms: [lowercase, strip]      # normalize before comparing
+
+  # 2) Fuzzy match on name. `weighted` needs a `threshold`, and every field
+  #    needs a `scorer` + `weight`. jaro_winkler is the workhorse for names;
+  #    it rewards shared prefixes and tolerates typos/transpositions.
+  - name: name_fuzzy
+    type: weighted
+    threshold: 0.88                          # 0.85-0.92 is the usual band for names
+    fields:
+      - column: first_name
+        scorer: jaro_winkler
+        weight: 1.0
+      - column: last_name
+        scorer: jaro_winkler
+        weight: 1.5                          # surname agreement matters more
+
+# --- Blocking: who gets compared to whom (the scale knob) ---------------------
+# Without blocking, matching is O(n^2). A blocking key buckets records so only
+# records sharing a key are scored. Pick a key that co-locates true duplicates
+# but is selective enough to keep buckets small.
+blocking:
+  max_block_size: 5000                       # guardrail: skip pathologically huge buckets
+  skip_oversized: true
+  keys:
+    # Block on the first 3 letters of the (normalized) last name. Tune the
+    # substring length: shorter = bigger buckets/higher recall, longer = faster.
+    - fields: [last_name]
+      transforms: [lowercase, "substring:0:3"]
+
+# --- Standardization: clean fields before matching ----------------------------
+# Applied once up front. Cuts false negatives from formatting noise.
+standardization:
+  email: [email]                             # lowercase + trim + canonicalize
+  phone: [phone]                             # strip to digits / E.164-ish
+  first_name: [strip, name_proper]
+  last_name: [strip, name_proper]
+  zip: [zip5]                                # keep first 5 digits
+
+# --- Validation: cheap autofix pass (typos, casing, stray whitespace) ---------
+validation:
+  auto_fix: true
+
+# --- Golden record: how to collapse a cluster into one canonical row ----------
+# most_complete = field-by-field, keep the most-populated/cleanest value.
+golden_rules:
+  default_strategy: most_complete
+
+# --- Output --------------------------------------------------------------------
+output:
+  format: csv                                # csv | parquet
+  directory: ./goldenmatch_out
+  run_name: customers
