@@ -223,6 +223,89 @@ def split_oversized_cluster(
     return result
 
 
+def split_oversized_cluster_to_size(
+    members: list[int],
+    pair_scores: dict[tuple[int, int], float],
+    max_size: int,
+) -> list[dict]:
+    """Split a cluster down to ``max_size`` from a SINGLE MST build (#661).
+
+    Repeatedly cuts the weakest tree edge of any component still larger than
+    ``max_size``. A sub-tree of a maximum spanning tree IS the maximum spanning
+    tree of its induced sub-graph (cycle property), so cutting original tree
+    edges reproduces the old per-component re-MST cut decisions (same membership
+    partition, same first-minimum tie-break). Returns final sub-clusters in a
+    DETERMINISTIC order (sort-by-min-member at each cut, oversized components
+    re-enqueued LIFO).
+
+    Components that cannot be cut further (no remaining cuttable tree edge) are
+    returned still oversized (``oversized=True``)."""
+    if len(members) <= max_size or len(members) <= 1 or not pair_scores:
+        size = len(members)
+        return [{"members": sorted(members), "size": size,
+                 "oversized": size > max_size, "pair_scores": pair_scores,
+                 **_confidence_fields(pair_scores, size)}]
+
+    tree_edges = _build_mst(members, pair_scores)
+    if not tree_edges:
+        size = len(members)
+        return [{"members": sorted(members), "size": size,
+                 "oversized": size > max_size, "pair_scores": pair_scores,
+                 **_confidence_fields(pair_scores, size)}]
+
+    out_order: list[frozenset[int]] = []
+    work: list[tuple[set[int], list]] = [(set(members), list(tree_edges))]
+    while work:
+        node_set, edges = work.pop()
+        if len(node_set) <= max_size or not edges:
+            out_order.append(frozenset(node_set))
+            continue
+        weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
+        remaining = [e for e in edges if e is not weakest]
+        uf = UnionFind()
+        uf.add_many(list(node_set))
+        for a, b, _s in remaining:
+            uf.union(a, b)
+        comps = uf.get_clusters()                   # 2 components
+        node_to_rep = {n: uf.find(n) for n in node_set}
+        rep_to_edges: dict[int, list] = {}
+        for e in remaining:
+            rep_to_edges.setdefault(node_to_rep[e[0]], []).append(e)
+        sub_items = [(c, rep_to_edges.get(uf.find(next(iter(c))), [])) for c in comps]
+        sub_items.sort(key=lambda ci: min(ci[0]))
+        for c, ce in sub_items:
+            if len(c) > max_size:
+                work.append((set(c), ce))
+            else:
+                out_order.append(frozenset(c))
+
+    member_to_idx: dict[int, int] = {}
+    for idx, s in enumerate(out_order):
+        for m in s:
+            member_to_idx[m] = idx
+    sub_pairs: list[dict] = [{} for _ in out_order]
+    for (a, b), sc in pair_scores.items():
+        ia = member_to_idx.get(a)
+        if ia is not None and ia == member_to_idx.get(b):
+            sub_pairs[ia][(a, b)] = sc
+
+    result = []
+    for idx, s in enumerate(out_order):
+        sc_list = sorted(s)
+        size = len(sc_list)
+        result.append({
+            "members": sc_list, "size": size, "oversized": size > max_size,
+            "pair_scores": sub_pairs[idx],
+            **_confidence_fields(sub_pairs[idx], size),
+        })
+    return result
+
+
+def _confidence_fields(pair_scores: dict, size: int) -> dict:
+    conf = compute_cluster_confidence(pair_scores, size)
+    return {"confidence": conf["confidence"], "bottleneck_pair": conf["bottleneck_pair"]}
+
+
 # Bridge detection is O(E*(V+E)) per cluster; only run on clusters at or below
 # this size so the sample path stays cheap (clusters there are small).
 _BRIDGE_MAX_CLUSTER_SIZE = 100
