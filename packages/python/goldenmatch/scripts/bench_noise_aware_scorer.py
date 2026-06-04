@@ -32,10 +32,14 @@ NCVR_SAMPLE = (
 
 
 def set_scorer(name: str) -> dict[str, str]:
-    """Env dict for a scorer setting. ``token_sort`` is the baseline (no env);
-    anything else flips the noise-aware flag and targets that scorer."""
+    """Env dict for a scorer setting. ``token_sort`` is the baseline -- it must
+    use the KILL-SWITCH (``GOLDENMATCH_NOISE_AWARE_SCORERS=0``), NOT an empty
+    env: since #662 flipped the noise-aware swap default-ON, an empty env now
+    yields jaro_winkler, so an empty baseline would silently equal the swap and
+    the sweep would measure nothing. Anything else flips the flag on + targets
+    that scorer."""
     if name == "token_sort":
-        return {}
+        return {"GOLDENMATCH_NOISE_AWARE_SCORERS": "0"}  # genuine legacy baseline
     return {
         "GOLDENMATCH_NOISE_AWARE_SCORERS": "1",
         "GOLDENMATCH_NOISE_AWARE_TARGET": name,

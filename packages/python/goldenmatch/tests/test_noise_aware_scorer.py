@@ -133,7 +133,7 @@ def test_bench_script_importable_and_pure_helpers():
     spec = importlib.util.spec_from_file_location("bench_noise_aware_scorer", p)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.set_scorer("token_sort") == {}
+    assert mod.set_scorer("token_sort") == {"GOLDENMATCH_NOISE_AWARE_SCORERS": "0"}
     assert mod.set_scorer("ensemble") == {
         "GOLDENMATCH_NOISE_AWARE_SCORERS": "1",
         "GOLDENMATCH_NOISE_AWARE_TARGET": "ensemble",
