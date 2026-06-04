@@ -563,8 +563,12 @@ def build_matchkeys(
     skipped_exact: list[tuple[str, str]] = []  # (column, reason)
 
     for p in profiles:
-        if p.col_type in ("numeric", "date", "identifier", "year"):
-            continue  # skip non-matchable columns (year is blocking-only)
+        # identifier columns ARE matchable: a real shared identifier
+        # (NPI/SSN/MRN) backs an exact matchkey, gated below by the
+        # cardinality band. Per-record surrogate keys (card==1.0) are
+        # excluded by the upper bound. See #715.
+        if p.col_type in ("numeric", "date", "year"):
+            continue  # year is blocking-only
 
         if p.col_type == "description":
             fuzzy_fields.append(MatchkeyField(
@@ -631,7 +635,7 @@ def build_matchkeys(
         if scorer == "exact" and p.cardinality_ratio > 0 and p.cardinality_ratio < 0.5:
             reason = (
                 f"cardinality_ratio={p.cardinality_ratio:.4f} < 0.5 "
-                f"— lacks identifier-level uniqueness"
+                f"-- lacks identifier-level uniqueness"
             )
             logger.warning(
                 "Skipping exact matchkey for '%s' (%s). "
@@ -641,15 +645,26 @@ def build_matchkeys(
             skipped_exact.append((p.name, reason))
             continue
 
-        # Skip exact matchkeys for large datasets — exact matchkeys do a full
-        # self-join which is O(N^2) without blocking. For auto-configure, use
-        # exact columns only in blocking (handled by build_blocking).
-        if scorer == "exact" and df is not None and df.height > 10000:
-            reason = f"dataset has {df.height} rows; exact self-join is O(N^2)"
-            logger.warning(
-                "Skipping exact matchkey for '%s' (%s). "
-                "Use blocking instead.",
-                p.name, reason,
+        # Exact matchkeys are a Polars hash self-join (find_exact_matches),
+        # not a nested loop, and do not pass through fuzzy blocking. Their
+        # cost is the number of emitted equal-pairs, bounded by cardinality:
+        # a high-cardinality column emits few pairs and is both cheap and
+        # mega-cluster-safe. So there is NO row-count guard here (the old
+        # df.height > 10000 guard mismodeled the cost and orphaned real
+        # identifiers -- see #715). The mega-cluster risk is the OPPOSITE
+        # shape (low cardinality), already caught by the >= 0.5 gate above.
+        #
+        # Upper bound: a perfectly-unique column (card == 1.0) is a
+        # per-record surrogate key (e.g. a row PK). It is never shared, so an
+        # exact match emits zero pairs and asserts no real identity. Exclude
+        # it for config hygiene.
+        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+            reason = (
+                f"cardinality_ratio={p.cardinality_ratio:.4f} >= 1.0 "
+                f"-- perfectly-unique surrogate key, no shared identity to match"
+            )
+            logger.info(
+                "Skipping exact matchkey for '%s' (%s).", p.name, reason,
             )
             skipped_exact.append((p.name, reason))
             continue
@@ -671,7 +686,7 @@ def build_matchkeys(
     # a notebook user their auto-config silently degraded to fuzzy-only.
     _exact_eligible = [
         p for p in profiles
-        if p.col_type not in ("numeric", "date", "identifier", "description")
+        if p.col_type not in ("numeric", "date", "description")
         and _SCORER_MAP.get(p.col_type, (None,))[0] == "exact"
     ]
     if _exact_eligible and not exact_fields:
@@ -2396,6 +2411,10 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     """
     fields = []
     for p in profiles:
+        # NOTE (#715): build_matchkeys now admits high-cardinality identifier
+        # columns to exact matchkeys via a cardinality band. The probabilistic
+        # path intentionally still skips identifier here — admitting it needs a
+        # separate Fellegi-Sunter m/u-aware decision. Tracked as a #715 follow-up.
         if p.col_type in ("numeric", "date", "identifier", "description"):
             continue
 
