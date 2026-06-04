@@ -1402,6 +1402,43 @@ def build_blocking(
     effective_n_full = n_rows_full if n_rows_full is not None else df.height
     sample_n = max(df.height, 1)
 
+    # #491: auto-select ANN blocking when embeddings are present AND the
+    # dataset is at scale. STRICT conjunctive gate — ANN is emitted ONLY when
+    # an embedding-bearing column exists (ANNBlocker needs a vector column;
+    # blocker.py raises ValueError if ``ann_column`` is unset). The embedding
+    # signal is a profile with ``col_type == "description"`` — those columns
+    # become ``record_embedding`` scorers in build_matchkeys (line ~852) and
+    # carry the vectors ANN embeds. No embedding column => fall through to the
+    # existing exact/name/compound logic (never ann).
+    #
+    # ANN_MIN_ROWS default 100_000; env-overridable via
+    # GOLDENMATCH_ANN_MIN_ROWS (mirrors the env-threshold pattern used by
+    # GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD below).
+    _ANN_MIN_ROWS_DEFAULT = 100_000
+    _ann_raw = os.environ.get("GOLDENMATCH_ANN_MIN_ROWS")
+    if _ann_raw is not None:
+        try:
+            ann_min_rows = int(_ann_raw)
+        except ValueError:
+            logger.warning(
+                "GOLDENMATCH_ANN_MIN_ROWS=%r is not an int; ignoring and "
+                "using default %d.", _ann_raw, _ANN_MIN_ROWS_DEFAULT,
+            )
+            ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+    else:
+        ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+
+    _embedding_cols = [p for p in profiles if p.col_type == "description"]
+    _ann_rows = effective_n_full
+    if _embedding_cols and _ann_rows >= ann_min_rows:
+        ann_col = _embedding_cols[0].name
+        logger.info(
+            "Auto-selecting ANN blocking: embedding column %r present and "
+            "n_rows=%d >= ANN_MIN_ROWS=%d. See #491.",
+            ann_col, _ann_rows, ann_min_rows,
+        )
+        return BlockingConfig(strategy="ann", ann_column=ann_col)
+
     def _projected_ratio(p: ColumnProfile) -> float:
         """Sample-corrected cardinality_ratio for the gate."""
         if effective_n_full <= sample_n:

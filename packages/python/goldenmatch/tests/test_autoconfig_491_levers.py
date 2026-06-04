@@ -249,3 +249,85 @@ def test_rule_skips_small_or_healthy():
     target_cfg = _491_cfg(exact_anchor=False, n_fuzzy_fields=3)
     healthy = _491_profile(recall_limited=False)
     assert rule_select_probabilistic_matchkey(healthy, target_cfg, RunHistory()) is None
+
+
+# ── Task 5: ANN blocking auto-selected with embeddings at scale (#491) ────────
+
+
+def _profiles_with_embeddings():
+    """Profiles that carry an embedding signal: a ``description`` column
+    (becomes a ``record_embedding`` scorer / ANN-eligible vector column),
+    plus an ordinary name column."""
+    from goldenmatch.core.autoconfig import ColumnProfile
+
+    return [
+        ColumnProfile(
+            "bio", "Utf8", "description", 0.9,
+            sample_values=[
+                "senior cardiologist at mercy hospital",
+                "pediatric nurse practitioner downtown clinic",
+                "radiology technician regional medical center",
+            ],
+            null_rate=0.0, cardinality_ratio=0.95, avg_len=42.0,
+        ),
+        ColumnProfile(
+            "last_name", "Utf8", "name", 0.9,
+            sample_values=["smith", "jones", "garcia"],
+            null_rate=0.0, cardinality_ratio=0.3, avg_len=5.0,
+        ),
+    ]
+
+
+def _profiles_no_embeddings():
+    """Profiles with NO embedding-bearing column — must never yield ANN."""
+    from goldenmatch.core.autoconfig import ColumnProfile
+
+    return [
+        ColumnProfile(
+            "last_name", "Utf8", "name", 0.9,
+            sample_values=["smith", "jones", "garcia"],
+            null_rate=0.0, cardinality_ratio=0.3, avg_len=5.0,
+        ),
+        ColumnProfile(
+            "city", "Utf8", "geo", 0.9,
+            sample_values=["austin", "dallas", "houston"],
+            null_rate=0.0, cardinality_ratio=0.2, avg_len=6.0,
+        ),
+    ]
+
+
+def _ann_df(cols: list[str]):
+    import polars as pl
+
+    return pl.DataFrame({c: ["a", "b", "c", "d"] for c in cols})
+
+
+def test_ann_blocking_when_embeddings_and_scale():
+    from goldenmatch.core.autoconfig import build_blocking
+
+    profiles = _profiles_with_embeddings()
+    df = _ann_df(["bio", "last_name"])
+    blk = build_blocking(profiles, df, n_rows_full=200_000)
+    assert blk.strategy == "ann"
+    assert blk.ann_column  # set to the embedding column name
+    assert blk.ann_column == "bio"
+
+
+def test_no_ann_without_embeddings():
+    # Safety invariant: no embedding column -> must NOT be ann (ANNBlocker
+    # would raise ValueError without an ann_column / vectors).
+    from goldenmatch.core.autoconfig import build_blocking
+
+    profiles = _profiles_no_embeddings()
+    df = _ann_df(["last_name", "city"])
+    blk = build_blocking(profiles, df, n_rows_full=200_000)
+    assert blk.strategy != "ann"
+
+
+def test_no_ann_below_scale():
+    from goldenmatch.core.autoconfig import build_blocking
+
+    profiles = _profiles_with_embeddings()
+    df = _ann_df(["bio", "last_name"])
+    blk = build_blocking(profiles, df, n_rows_full=1_000)
+    assert blk.strategy != "ann"
