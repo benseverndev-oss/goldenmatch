@@ -888,20 +888,20 @@ class AutoConfigController:
         # warn-and-run on NON-RED degenerate blocking.
         _committed_red = best_entry.profile.health() == HealthVerdict.RED
         if _committed_red and n_rows >= REFUSE_AT_N and not allow_red_config:
-            # Pick the most-specific failing sub-profile. When the committed
-            # config has no blocking keys, the downstream sync degenerates to
-            # a single mega-block -- surface that as the blocking-degenerate
-            # stop_reason (#417). Otherwise fall back to the generic
-            # priority-ordered failing sub-profile.
+            # Report the ACTUAL failing sub-profile (priority-ordered). Only
+            # when blocking is genuinely the failing cause AND the committed
+            # config has no blocking keys does the downstream sync degenerate
+            # to a single mega-block -- surface THAT as the blocking-degenerate
+            # stop_reason (#417). A data-RED config with empty default keys is
+            # a data failure, not a blocking one.
+            failing = _identify_failing_subprofile(best_entry.profile)
             _blocking = best_entry.config.blocking
             _no_blocking_keys = (
                 _blocking is None or not getattr(_blocking, "keys", None)
             )
-            if _no_blocking_keys:
-                failing = "blocking"
+            if failing == "blocking" and _no_blocking_keys:
                 _stop_reason = StopReason.BLOCKING_DEGENERATE.name
             else:
-                failing = _identify_failing_subprofile(best_entry.profile)
                 _stop_reason = (
                     history.stop_reason.name if history.stop_reason else "unset"
                 )
