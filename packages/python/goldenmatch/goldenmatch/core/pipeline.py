@@ -1738,9 +1738,25 @@ def _run_dedupe_pipeline(
                     golden_records = []
                 else:
                     with stage("golden_build_records_batch_slow"):
+                        # #678: thread per-cluster pair_scores so the
+                        # confidence_majority strategy actually weights by
+                        # edge confidence instead of silently degrading to
+                        # count-majority. The legacy `clusters` dict (this
+                        # non-frames, non-columnar default path) carries real
+                        # per-cluster pair_scores keyed by __row_id__; the
+                        # builder remaps those to positional member indices.
+                        # The frames-out / columnar paths carry pair_scores={}
+                        # by design, so this lookup yields empty dicts there
+                        # (documented limitation; confidence_majority on those
+                        # paths still falls back to count-majority).
+                        cluster_pair_scores = {
+                            cid: info.get("pair_scores", {})
+                            for cid, info in clusters.items()
+                        }
                         golden_records = build_golden_records_batch(
                             multi_df, golden_rules,
                             provenance=_provenance_on,
+                            cluster_pair_scores=cluster_pair_scores,
                         )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
