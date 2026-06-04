@@ -6,10 +6,11 @@ programmed via **Spark Connect / PySpark**) to run across nodes, computes connec
 components distributed (removing the one-box UF island), and ultimately retires the
 existing Ray distributed stack.
 
-**Status:** S1+S2+S3(golden) SHIPPED 2026-06-03 (PRs #709, #712, #714);
-identity stage + S4 next. The make-or-break WCC-on-Sail risk is CLOSED.
-**Spec:** `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. **Plans:**
-`docs/superpowers/plans/2026-06-03-sail-tier-stage-{s1,s2,s3}.md`.
+**Status:** the BUILDABLE Sail tier is COMPLETE — S1+S2+S3(golden)+S4-harness
+SHIPPED (PRs #709, #712, #714, #717). Only the real 100M cluster run + Ray
+retirement remain (need a BYO Sail cluster). **Spec:**
+`docs/superpowers/specs/2026-06-03-sail-tier-design.md`. **Plans:**
+`docs/superpowers/plans/2026-06-03-sail-tier-stage-{s1,s2,s3,s4-harness}.md`.
 **Why it matters:** Stage E showed one-box spill-survival is non-binding
 ([../decisions/0003-stage-e-spill-honest-null.md](../decisions/0003-stage-e-spill-honest-null.md))
 — the distributed path is where the value is.
@@ -54,8 +55,16 @@ algorithm** in a new `goldenmatch.sail` package, with native scorers rebound as 
   construction). Content-parity-green per multi-member cluster. SCOPE: golden only; **identity
   SPLIT to its own next stage** (stateful entity store, not a relational op). Uniform most_complete;
   order-dependent/custom/oversized/provenance deferred (in-memory fallback, like Ray).
-- **Identity-on-Sail — NEXT** (split from S3).  **S4:** 100M+ multi-node bench (REAL BYO cluster) +
-  large-star/small-star WCC swap + Ray retire.
+- **S4 harness — SHIPPED (PR #717).** (a) `clustering.connected_components_scale` = chain-robust
+  O(log n) WCC via min-label propagation + POINTER-JUMPING (the literal Kiveris large-star/small-star
+  was attempted first and was WRONG — caught by plan-review hand-trace; pointer-jumping is the
+  correct, hand-verified equivalent). Parity-green incl. a 30-node chain. (b) `pipeline.run_sail_pipeline`
+  end-to-end. (c) `bench-sail-100m.yml` scaffold (workflow_dispatch, SAIL_REMOTE secret, fail-fast).
+  The `sail` lane now has 6 green gates. Ray NOT retired.
+- **Remaining (needs a BYO cluster, not autonomously buildable):** the actual 100M multi-node run
+  (`SAIL_REMOTE` secret + 100M parquet) → the binding verdict + Ray retirement. Dispatch via
+  `gh workflow run bench-sail-100m.yml -f input=<parquet>` once `SAIL_REMOTE` is set.
+- **Split off / not done:** identity-on-Sail (its own stateful stage).
 
 ## Verification
 - CI smoke: a local Sail Spark Connect server (`pysail.spark.SparkConnectServer`) runs the same

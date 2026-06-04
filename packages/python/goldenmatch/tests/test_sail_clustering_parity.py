@@ -95,3 +95,51 @@ def test_sail_wcc_junction_multimerge(spark):
 
     out = connected_components(pairs_df, ids_df, id_col="__row_id__")
     assert _sail_partition(out) == _reference_partition(ids, edges)
+
+
+def test_sail_wcc_scale_two_node(spark):
+    """Minimal case: edges=[(0,1)] -> one component {0,1}. The fastest-failing
+    case for a wrong WCC (it returned two singletons in the blind attempt)."""
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = [0, 1]
+    edges = [(0, 1)]
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame(edges, ["a", "b"])
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    assert _sail_partition(out) == {frozenset({0, 1})}
+
+
+def test_sail_wcc_scale_partition_parity(spark):
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = list(range(7))
+    edges = [(0, 1), (1, 2), (3, 4)]
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame(edges, ["a", "b"])
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    assert _sail_partition(out) == _reference_partition(ids, edges)
+
+
+def test_sail_wcc_scale_long_chain(spark):
+    """A 30-node chain: pointer-jumping converges in O(log 30) rounds where
+    label-prop would need ~30. Must collapse to ONE component."""
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = list(range(30))
+    edges = [(i, i + 1) for i in range(29)]
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame(edges, ["a", "b"])
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    assert _sail_partition(out) == {frozenset(range(30))}
+
+
+def test_sail_wcc_scale_junction(spark):
+    from goldenmatch.sail.clustering import connected_components_scale
+
+    ids = list(range(7))
+    edges = [(0, 3), (1, 3), (2, 3), (4, 5)]  # singleton 6
+    ids_df = spark.createDataFrame([(i,) for i in ids], ["__row_id__"])
+    pairs_df = spark.createDataFrame(edges, ["a", "b"])
+    out = connected_components_scale(pairs_df, ids_df, id_col="__row_id__")
+    assert _sail_partition(out) == _reference_partition(ids, edges)
