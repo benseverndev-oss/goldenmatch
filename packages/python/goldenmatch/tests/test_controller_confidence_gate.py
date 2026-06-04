@@ -193,10 +193,20 @@ def test_gate_does_not_fire_on_yellow_or_green(monkeypatch):
     assert result is not None
 
 
-def test_gate_short_circuits_with_confidence_required_false(monkeypatch):
-    """Spec §Backward compatibility: kwarg opt-out preserves today's
-    warn-and-run behavior. Un-skipped in Phase 4."""
+def test_confidence_required_false_no_longer_bypasses_red_refuse(monkeypatch):
+    """#715 reopened: confidence_required=False NO LONGER bypasses the
+    RED-refuse (that was the reporter's bug). A committed-RED entry at
+    >= REFUSE_AT_N raises regardless of confidence_required."""
     _force_red_history_entry(monkeypatch, n_rows_in_df=SMALL_N)
     df = _df(SMALL_N)
-    result = gm.dedupe_df(df, confidence_required=False)
+    with pytest.raises(ControllerNotConfidentError):
+        gm.dedupe_df(df, confidence_required=False)
+
+
+def test_allow_red_config_is_the_red_refuse_escape_hatch(monkeypatch):
+    """#715 reopened: allow_red_config=True is now the SINGLE escape hatch
+    that restores warn-and-run on a committed-RED entry at >= REFUSE_AT_N."""
+    _force_red_history_entry(monkeypatch, n_rows_in_df=SMALL_N)
+    df = _df(SMALL_N)
+    result = gm.dedupe_df(df, allow_red_config=True)
     assert result is not None
