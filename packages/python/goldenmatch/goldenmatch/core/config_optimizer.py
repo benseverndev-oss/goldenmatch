@@ -331,7 +331,8 @@ class CoordinateDescentProposer:
             # the data-dependent string-similarity choice. (dice/jaccard are
             # bloom-filter/PPRL scorers — they expect hex CLKs, not plain text —
             # so they are NOT in the general candidate set.)
-            "token_sort", "ensemble", "levenshtein", "soundex_match",
+            # #491 Task 2: qgram (char-n-gram Jaccard) added for short-code columns.
+            "token_sort", "ensemble", "levenshtein", "soundex_match", "qgram",
         ),
         weight_deltas: tuple[float, ...] = (-0.5, 0.5),
         blocking_strategies: tuple[str, ...] = ("multi_pass",),

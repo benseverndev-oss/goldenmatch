@@ -67,3 +67,12 @@ def test_short_code_column_gets_qgram():
     scorers = {f.field: f.scorer for mk in mks for f in mk.fields}
     assert scorers.get("sku") == "qgram"
     assert scorers.get("first_name") != "qgram"
+
+
+# ── Task 2: optimizer scorer-family includes qgram ───────────────────────────
+
+
+def test_optimizer_scorer_family_includes_qgram():
+    from goldenmatch.core.config_optimizer import CoordinateDescentProposer
+
+    assert "qgram" in CoordinateDescentProposer()._scorers
