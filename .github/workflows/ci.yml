@@ -943,6 +943,11 @@ jobs:
       - name: Sail golden parity gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_golden_parity.py -v --timeout=300
+      # GATE (blocking): the full Sail pipeline (load->...->golden) runs
+      # end-to-end on Sail (S4).
+      - name: Sail end-to-end pipeline gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
 
   action:
     needs: changes
