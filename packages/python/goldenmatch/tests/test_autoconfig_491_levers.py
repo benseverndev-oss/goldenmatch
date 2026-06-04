@@ -76,3 +76,45 @@ def test_optimizer_scorer_family_includes_qgram():
     from goldenmatch.core.config_optimizer import CoordinateDescentProposer
 
     assert "qgram" in CoordinateDescentProposer()._scorers
+
+
+# ── Task 3: optimizer proposes weighted->probabilistic matchkey-type swaps ────
+
+
+def test_optimizer_proposes_probabilistic_candidate():
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    from goldenmatch.core.config_optimizer import (
+        CoordinateDescentProposer,
+        SearchState,
+    )
+
+    config = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="mk", type="weighted", threshold=0.8, rerank=False,
+            fields=[MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0, transforms=[])],
+        )],
+        blocking=BlockingConfig(
+            strategy="static", keys=[BlockingKeyConfig(fields=["last_name"], transforms=[])],
+        ),
+    )
+    state = SearchState(base_config=config, objective="confidence")
+
+    proposer = CoordinateDescentProposer()
+    types: set[str] = set()
+    # Drain every family (propose returns one family per call).
+    while True:
+        cands = proposer.propose(state)
+        if not cands:
+            break
+        for _label, cfg in cands:
+            for mk in cfg.get_matchkeys():
+                if mk.type is not None:
+                    types.add(mk.type)
+
+    assert "probabilistic" in types

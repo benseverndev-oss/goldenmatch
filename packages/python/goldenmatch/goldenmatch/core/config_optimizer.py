@@ -39,6 +39,7 @@ from goldenmatch.core.config_edits import (
     BlockingKeyEdit,
     BlockingStrategyEdit,
     ConfigEdit,
+    MatchkeyTypeSwap,
     ScorerSwap,
     ThresholdShift,
     WeightShift,
@@ -319,7 +320,7 @@ class CoordinateDescentProposer:
     """
 
     single_round = False
-    _FAMILIES = ("threshold", "scorer", "weight", "blocking", "blocking_key")
+    _FAMILIES = ("threshold", "scorer", "weight", "mktype", "blocking", "blocking_key")
 
     def __init__(
         self,
@@ -368,6 +369,17 @@ class CoordinateDescentProposer:
                     for d in self._weight_deltas:
                         weight_edits.append(WeightShift(mk.name, f.field, d))
             return weight_edits
+        if family == "mktype":
+            # #491: weighted -> probabilistic was unreachable from the
+            # deterministic search. Offer a type swap for each weighted matchkey
+            # so the optimizer can pick probabilistic empirically.
+            mktype_edits: list[ConfigEdit] = []
+            for mk in base.get_matchkeys():
+                if getattr(mk, "type", None) == "weighted":
+                    mktype_edits.append(
+                        MatchkeyTypeSwap(matchkey=mk.name, target_type="probabilistic")
+                    )
+            return mktype_edits
         if family == "blocking":
             return [BlockingStrategyEdit(s) for s in self._blocking_strategies]
         if family == "blocking_key":
