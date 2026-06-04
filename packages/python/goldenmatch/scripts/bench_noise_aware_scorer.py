@@ -18,12 +18,10 @@ import random
 import sys
 from pathlib import Path
 
-
 # Module-level imports must be safe WITHOUT recordlinkage. polars + goldenmatch
 # are always available in this venv; recordlinkage is lazy-imported in
 # run_febrl3 only.
 import polars as pl
-
 
 NCVR_SAMPLE = (
     Path(__file__).parent.parent
@@ -173,7 +171,6 @@ def run_ncvr_high(scorer_env: dict, seed: int = 42) -> dict:
 def run_febrl3(scorer_env: dict) -> dict:
     """Febrl3 (recordlinkage). LAZY import so the module loads without it."""
     try:
-        import recordlinkage
         from recordlinkage.datasets import load_febrl3
     except ImportError:
         return {"skipped": "recordlinkage not installed"}

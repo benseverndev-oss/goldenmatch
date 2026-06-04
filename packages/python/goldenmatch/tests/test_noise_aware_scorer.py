@@ -11,8 +11,8 @@ import pytest
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
     _noise_aware_scorer,
-    _noise_aware_target_scorer,
     _noise_aware_scorers_enabled,
+    _noise_aware_target_scorer,
     build_matchkeys,
 )
 
@@ -128,7 +128,8 @@ def test_short_code_keeps_qgram_even_with_flag(monkeypatch):
 def test_bench_script_importable_and_pure_helpers():
     """The benchmark script imports (recordlinkage is lazy) and its scorer-env
     helper is correct without needing datasets."""
-    import importlib.util, pathlib
+    import importlib.util
+    import pathlib
     p = pathlib.Path(__file__).parent.parent / "scripts" / "bench_noise_aware_scorer.py"
     spec = importlib.util.spec_from_file_location("bench_noise_aware_scorer", p)
     mod = importlib.util.module_from_spec(spec)
@@ -141,7 +142,8 @@ def test_bench_script_importable_and_pure_helpers():
 
 
 def _load_bench():
-    import importlib.util, pathlib
+    import importlib.util
+    import pathlib
     p = pathlib.Path(__file__).parent.parent / "scripts" / "bench_noise_aware_scorer.py"
     spec = importlib.util.spec_from_file_location("bench_noise_aware_scorer", p)
     mod = importlib.util.module_from_spec(spec)
@@ -150,6 +152,7 @@ def _load_bench():
 
 
 import pathlib as _pl
+
 _NCVR = _pl.Path(__file__).parent / "benchmarks" / "datasets" / "NCVR" / "ncvoter_sample_10k.txt"
 
 
