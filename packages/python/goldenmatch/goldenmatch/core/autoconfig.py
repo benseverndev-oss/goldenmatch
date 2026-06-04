@@ -537,8 +537,10 @@ _DOMAIN_SCORER_MAP = {
 # jaro_winkler recovered 0.981. See #662.
 _NOISE_PRONE_FUZZY_TYPES = frozenset({"address", "string"})
 
-# Provisional upgrade target. Component 3 (#662) sets the benchmark-chosen winner
-# (jaro_winkler vs ensemble). jaro_winkler is the NCVR-validated lever.
+# Benchmark-confirmed upgrade target (#662). The sweep tied jaro_winkler with
+# ensemble on NCVR-high F1; jaro_winkler is chosen as the cheaper of the tie
+# (single-pass char similarity vs the multi-scorer ensemble) and is the
+# NCVR-validated lever.
 _NOISE_AWARE_TARGET_SCORER = "jaro_winkler"
 
 
@@ -550,12 +552,13 @@ def _noise_aware_target_scorer() -> str:
 
 
 def _noise_aware_scorers_enabled() -> bool:
-    """Whether to upgrade noise-fragile token_sort assignments. Opt-in via
-    GOLDENMATCH_NOISE_AWARE_SCORERS=1 (or "true"/"enabled", case-insensitive --
-    matches the GOLDENMATCH_AUTOCONFIG_LLM gate convention). Lands default OFF
-    (#662 Component 1); Component 3 flips this after benchmark validation."""
-    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "0").lower() in (
-        "1", "true", "enabled",
+    """Whether to upgrade noise-fragile token_sort assignments on free-text
+    col_types. Default ON (#662: jaro_winkler gave +0.48pp NCVR-high F1,
+    precision-driven, no Febrl3 regression; #528 CI gate guards clean precision).
+    Kill-switch: GOLDENMATCH_NOISE_AWARE_SCORERS=0 (or "false"/"disabled",
+    case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "1").lower() not in (
+        "0", "false", "disabled",
     )
 
 

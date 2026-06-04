@@ -25,7 +25,7 @@ def test_helper_upgrades_token_sort_when_enabled(monkeypatch, col_type):
 
 @pytest.mark.parametrize("col_type", ["address", "string"])
 def test_helper_noop_when_disabled(monkeypatch, col_type):
-    monkeypatch.delenv("GOLDENMATCH_NOISE_AWARE_SCORERS", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", "0")  # kill-switch
     assert _noise_aware_scorer(col_type, "token_sort") == "token_sort"
 
 
@@ -47,10 +47,11 @@ def test_target_scorer_env_override(monkeypatch):
     assert _noise_aware_scorer("address", "token_sort") == "ensemble"
 
 
-def test_default_is_off(monkeypatch):
-    """Lands default-OFF (Component 3 flips it). Pins the committed default."""
+def test_default_is_on(monkeypatch):
+    """#662 Component 3: default flipped ON after benchmark. Pins the committed
+    default so it can't silently drift back."""
     monkeypatch.delenv("GOLDENMATCH_NOISE_AWARE_SCORERS", raising=False)
-    assert _noise_aware_scorers_enabled() is False
+    assert _noise_aware_scorers_enabled() is True
 
 
 @pytest.mark.parametrize("val", ["1", "true", "TRUE", "enabled"])
@@ -61,10 +62,16 @@ def test_enabled_accepts_house_truthy_values(monkeypatch, val):
     assert _noise_aware_scorers_enabled() is True
 
 
-@pytest.mark.parametrize("val", ["0", "false", "disabled", ""])
+@pytest.mark.parametrize("val", ["0", "false", "disabled", "DISABLED"])
 def test_enabled_rejects_falsy_values(monkeypatch, val):
     monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", val)
     assert _noise_aware_scorers_enabled() is False
+
+
+@pytest.mark.parametrize("val", ["", "1", "true", "enabled", "anything"])
+def test_enabled_on_unless_explicit_killswitch(monkeypatch, val):
+    monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", val)
+    assert _noise_aware_scorers_enabled() is True
 
 
 def _address_profile() -> ColumnProfile:
@@ -82,8 +89,16 @@ def _scorer_for(matchkeys, field_name: str):
     return None
 
 
-def test_build_matchkeys_default_keeps_token_sort(monkeypatch):
+def test_build_matchkeys_default_now_upgrades(monkeypatch):
+    """Default-ON: address gets jaro_winkler with no env set."""
     monkeypatch.delenv("GOLDENMATCH_NOISE_AWARE_SCORERS", raising=False)
+    mks = build_matchkeys([_address_profile()])
+    assert _scorer_for(mks, "res_street_address") == "jaro_winkler"
+
+
+def test_build_matchkeys_killswitch_keeps_token_sort(monkeypatch):
+    """Kill-switch restores the legacy token_sort."""
+    monkeypatch.setenv("GOLDENMATCH_NOISE_AWARE_SCORERS", "0")
     mks = build_matchkeys([_address_profile()])
     assert _scorer_for(mks, "res_street_address") == "token_sort"
 
@@ -123,3 +138,27 @@ def test_bench_script_importable_and_pure_helpers():
         "GOLDENMATCH_NOISE_AWARE_SCORERS": "1",
         "GOLDENMATCH_NOISE_AWARE_TARGET": "ensemble",
     }
+
+
+def _load_bench():
+    import importlib.util, pathlib
+    p = pathlib.Path(__file__).parent.parent / "scripts" / "bench_noise_aware_scorer.py"
+    spec = importlib.util.spec_from_file_location("bench_noise_aware_scorer", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+import pathlib as _pl
+_NCVR = _pl.Path(__file__).parent / "benchmarks" / "datasets" / "NCVR" / "ncvoter_sample_10k.txt"
+
+
+@pytest.mark.skipif(not _NCVR.exists(), reason="NCVR sample dataset missing")
+def test_ncvr_high_jaro_winkler_meets_target(monkeypatch):
+    """Pin the jaro_winkler NCVR-high F1 the default-on flip was based on
+    (measured 0.9833; target 0.975 leaves headroom). Disable controller memory
+    so the config is rebuilt under the scorer env."""
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    bench = _load_bench()
+    res = bench.run_ncvr_high(bench.set_scorer("jaro_winkler"))
+    assert res.get("f1", 0.0) >= 0.975, res
