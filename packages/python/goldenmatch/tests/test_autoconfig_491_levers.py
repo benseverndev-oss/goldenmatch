@@ -118,3 +118,134 @@ def test_optimizer_proposes_probabilistic_candidate():
                     types.add(mk.type)
 
     assert "probabilistic" in types
+
+
+# ── Task 4: conservative controller refit rule -> probabilistic matchkey ──────
+
+
+def _491_cfg(*, exact_anchor: bool, n_fuzzy_fields: int):
+    """Build a config with one weighted matchkey of ``n_fuzzy_fields`` graded
+    fuzzy fields (plus optionally a separate exact matchkey)."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    fuzzy_scorers = ["jaro_winkler", "levenshtein", "token_sort", "qgram"]
+    fuzzy_fields = [
+        MatchkeyField(
+            field=f"f{i}", scorer=fuzzy_scorers[i % len(fuzzy_scorers)],
+            weight=1.0, transforms=["lowercase"],
+        )
+        for i in range(n_fuzzy_fields)
+    ]
+    matchkeys = [
+        MatchkeyConfig(
+            name="weighted_mk", type="weighted", threshold=0.8,
+            fields=fuzzy_fields,
+        )
+    ]
+    if exact_anchor:
+        matchkeys.append(
+            MatchkeyConfig(
+                name="exact_mk", type="exact",
+                fields=[MatchkeyField(field="email", transforms=["lowercase"])],
+            )
+        )
+    return GoldenMatchConfig(
+        matchkeys=matchkeys,
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["last_name"], transforms=["lowercase"])],
+        ),
+    )
+
+
+def _491_profile(*, recall_limited: bool):
+    """ComplexityProfile whose scoring is recall-limited (low mass above
+    threshold + poor separation) or healthy."""
+    from goldenmatch.core.complexity_profile import (
+        BlockingProfile,
+        ClusterProfile,
+        ComplexityProfile,
+        DataProfile,
+        FieldStats,
+        MatchkeyProfile,
+        ScoringProfile,
+    )
+
+    if recall_limited:
+        scoring = ScoringProfile(
+            n_pairs_scored=800, candidates_compared=900,
+            mass_above_threshold=0.04,   # very few pairs reach threshold
+            mass_in_borderline=0.05,
+            dip_statistic=0.008,         # poor separation (near-unimodal)
+        )
+    else:
+        scoring = ScoringProfile(
+            n_pairs_scored=800, candidates_compared=900,
+            mass_above_threshold=0.6,    # healthy: clear above-threshold mass
+            mass_in_borderline=0.05,
+            dip_statistic=0.08,          # clear bimodal separation
+        )
+    return ComplexityProfile(
+        data=DataProfile(
+            n_rows=2000, n_cols=5,
+            column_types={"f0": "name", "f1": "text", "f2": "geo",
+                          "f3": "text", "email": "id-like"},
+        ),
+        blocking=BlockingProfile(
+            keys_used=[["last_name"]], n_blocks=400, total_comparisons=900,
+            reduction_ratio=0.9, block_sizes_p99=10,
+        ),
+        scoring=scoring,
+        cluster=ClusterProfile(transitivity_rate=0.9),
+        matchkey=MatchkeyProfile(per_field={"f0": FieldStats(0.5, 0.0, 8)}),
+    )
+
+
+def test_rule_selects_probabilistic_on_target_shape():
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.autoconfig_rules import (
+        rule_select_probabilistic_matchkey,
+    )
+
+    cfg = _491_cfg(exact_anchor=False, n_fuzzy_fields=3)
+    profile = _491_profile(recall_limited=True)
+    out = rule_select_probabilistic_matchkey(profile, cfg, RunHistory())
+    assert out is not None
+    new_cfg, decision = out
+    swapped = next(mk for mk in new_cfg.get_matchkeys() if mk.name == "weighted_mk")
+    assert swapped.type == "probabilistic"
+    assert decision.rule_name == "select_probabilistic_matchkey"
+
+
+def test_rule_skips_when_exact_anchor_present():
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.autoconfig_rules import (
+        rule_select_probabilistic_matchkey,
+    )
+
+    cfg = _491_cfg(exact_anchor=True, n_fuzzy_fields=3)
+    profile = _491_profile(recall_limited=True)
+    assert rule_select_probabilistic_matchkey(profile, cfg, RunHistory()) is None
+
+
+def test_rule_skips_small_or_healthy():
+    from goldenmatch.core.autoconfig_history import RunHistory
+    from goldenmatch.core.autoconfig_rules import (
+        rule_select_probabilistic_matchkey,
+    )
+
+    # Too few graded fuzzy fields (2 < 3) — should not fire even when recall-limited.
+    small_cfg = _491_cfg(exact_anchor=False, n_fuzzy_fields=2)
+    recall_limited = _491_profile(recall_limited=True)
+    assert rule_select_probabilistic_matchkey(recall_limited, small_cfg, RunHistory()) is None
+
+    # Target field count but healthy scoring — should not fire.
+    target_cfg = _491_cfg(exact_anchor=False, n_fuzzy_fields=3)
+    healthy = _491_profile(recall_limited=False)
+    assert rule_select_probabilistic_matchkey(healthy, target_cfg, RunHistory()) is None

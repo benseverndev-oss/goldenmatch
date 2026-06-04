@@ -653,6 +653,94 @@ def rule_blocking_field_null_heavy(
     return new_cfg, decision
 
 
+_FUZZY_GRADED_SCORERS = frozenset({
+    "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
+    "embedding", "record_embedding", "ensemble", "dice", "jaccard", "qgram",
+})
+
+
+def rule_select_probabilistic_matchkey(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """#491: let the iterative controller select a *probabilistic* matchkey on
+    the data shape where it actually helps — a wide fuzzy-only weighted matchkey
+    whose linear weighting can't separate matches from non-matches.
+
+    CONSERVATIVE trigger. Over-firing regresses NCVR / Febrl3 / DQbench, so all
+    of the following must hold:
+
+    (a) ``current`` has a ``weighted`` matchkey with >= 3 fields whose scorers
+        are graded/fuzzy (anything in VALID_SCORERS except ``exact``). A small
+        (1-2 field) matchkey doesn't have enough evidence channels for the EM
+        weighting to beat a hand-tuned weighted sum.
+    (b) Scoring is recall-limited: very little mass reaches the threshold AND
+        the score distribution is near-unimodal (poor match/non-match
+        separation). This reuses the same ``mass_above_threshold`` /
+        ``dip_statistic`` signals ``rule_unimodal_scoring`` and
+        ``rule_recall_gap_suspected`` read — a low dip is the "scores don't
+        separate" signal; low above-threshold mass is the "recall is being
+        left on the table" signal.
+    (c) ``current`` has NO ``exact`` matchkey. An exact anchor already provides
+        a high-precision recall path; flipping the fuzzy key to probabilistic
+        on top of it is the over-firing case the benchmark gate guards against.
+
+    Action: swap that weighted matchkey to ``probabilistic`` via
+    ``MatchkeyTypeSwap`` (EM-weighted log-likelihood comparison) so the field
+    agreement weights are learned rather than fixed.
+    """
+    from goldenmatch.core.config_edits import MatchkeyTypeSwap
+
+    # (c) No exact matchkey anywhere.
+    if any(mk.type == "exact" for mk in (current.matchkeys or [])):
+        return None
+
+    # (a) A weighted matchkey with >= 3 graded fuzzy (non-exact) fields.
+    target_mk = None
+    for mk in (current.matchkeys or []):
+        if mk.type != "weighted":
+            continue
+        fuzzy_fields = [
+            f for f in (mk.fields or [])
+            if f.scorer is not None and f.scorer in _FUZZY_GRADED_SCORERS
+        ]
+        if len(fuzzy_fields) >= 3:
+            target_mk = mk
+            break
+    if target_mk is None:
+        return None
+
+    # (b) Recall-limited scoring: poor separation (low dip) AND little mass above
+    # threshold, with pairs actually scored (so the signal is real).
+    sp = profile.scoring
+    recall_limited = (
+        sp.n_pairs_scored > 0
+        and sp.dip_statistic < 0.02
+        and sp.mass_above_threshold < 0.15
+    )
+    if not recall_limited:
+        return None
+
+    new_cfg = MatchkeyTypeSwap(
+        matchkey=target_mk.name, target_type="probabilistic"
+    ).apply(current)
+    if new_cfg is None:
+        return None
+
+    decision = PolicyDecision(
+        rule_name="select_probabilistic_matchkey",
+        rationale=(
+            f"weighted matchkey {target_mk.name!r} has "
+            f"{len([f for f in (target_mk.fields or []) if f.scorer in _FUZZY_GRADED_SCORERS])} "
+            f"graded fuzzy fields, no exact anchor, and scoring is recall-limited "
+            f"(dip_statistic={sp.dip_statistic:.4f} < 0.02, "
+            f"mass_above_threshold={sp.mass_above_threshold:.3f} < 0.15); "
+            f"swapping to probabilistic (EM-learned field weights)"
+        ),
+        config_diff={f"matchkeys[{target_mk.name}].type": "probabilistic"},
+    )
+    return new_cfg, decision
+
+
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1097,6 +1185,7 @@ DEFAULT_RULES = [
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
+    rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
     rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
     rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
