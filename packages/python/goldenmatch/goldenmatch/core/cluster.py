@@ -34,15 +34,25 @@ _clog = logging.getLogger("goldenmatch.cluster")
 _DEFAULT_SPLIT_EDGE_WORK_BUDGET = 5_000_000
 
 
-def _split_edge_work_budget() -> int:
-    """Cumulative-edge-work cap for the auto-split loop (env-overridable)."""
+_SPLIT_EDGE_BUDGET_PER_ROW = 5  # C: linear edge-work allowance per input row
+
+
+def _split_edge_work_budget(n_rows: int, override: int | None = None) -> int:
+    """Cumulative-edge-work cap for the auto-split loop.
+
+    Precedence: explicit ``override`` (GoldenRulesConfig.split_edge_budget) >
+    GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET env > max(5M, n_rows * C). With the
+    single-MST batch split (#661) exhaustion is rare; this makes the rare case
+    scale-appropriate and tunable."""
+    if override is not None:
+        return max(1, int(override))
     raw = os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET")
-    if raw is None:
-        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(_DEFAULT_SPLIT_EDGE_WORK_BUDGET, int(n_rows) * _SPLIT_EDGE_BUDGET_PER_ROW)
 
 
 def _record_unmerge_corrections(
@@ -447,6 +457,7 @@ def build_clusters(
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Build clusters from scored pairs using Union-Find.
 
@@ -509,10 +520,12 @@ def build_clusters(
     if _columnar_cluster_build_enabled():
         return _build_clusters_via_frames(
             pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+            split_edge_budget,
         )
 
     return _build_clusters_dict_path(
         pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+        split_edge_budget=split_edge_budget,
     )
 
 
@@ -550,6 +563,7 @@ def build_cluster_frames(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> ClusterFrames:
     """SP-A frames-out entry point (gated ``GOLDENMATCH_CLUSTER_FRAMES_OUT``).
 
@@ -679,7 +693,7 @@ def build_cluster_frames(
             live_cids = set(range(1, metadata.height + 1))
             split_result: dict[int, dict] = {}
             drop_cids = set()                      # ORIGINAL cids that split
-            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(), False
+            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(len(all_ids), split_edge_budget), False
             for cid in oversized:
                 members = members_by_cid[int(cid)]
                 ms = set(members)
@@ -822,6 +836,7 @@ def _build_clusters_dict_path(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Legacy list/dict Union-Find cluster build. Verbatim extraction of the
     original ``build_clusters`` body (UF stage -> emit); behavior is unchanged.
@@ -893,6 +908,7 @@ def _build_clusters_dict_path(
 
     return _finalize_clusters(
         result, max_cluster_size, weak_cluster_threshold, auto_split,
+        n_rows=len(all_ids), split_edge_budget=split_edge_budget,
     )
 
 
@@ -904,6 +920,8 @@ def _finalize_clusters(
     *,
     raw_pairs: list[tuple[int, int, float]] | None = None,
     weak_stats: dict[int, tuple[float, float]] | None = None,
+    n_rows: int = 0,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Shared cluster-build tail: auto-split oversized clusters, assign
     ``cluster_quality`` (+ weak confidence downgrade), then emit the profile.
@@ -935,7 +953,7 @@ def _finalize_clusters(
     # is legitimately one quarantined cluster, not N arbitrary cuts.
     oversized_cids = sorted(cid for cid, c in result.items() if c["oversized"]) if auto_split else []
     edge_work = 0
-    edge_budget = _split_edge_work_budget()
+    edge_budget = _split_edge_work_budget(n_rows, split_edge_budget)
     budget_tripped = False
     for cid in oversized_cids:
         cinfo = result[cid]
@@ -1021,6 +1039,7 @@ def _build_clusters_via_frames(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Columnar cluster-build core. Returns the dict path's shape EXCEPT
     ``pair_scores`` is ``{}`` on every cluster (SP4: the eager per-cluster dict --
@@ -1095,6 +1114,7 @@ def _build_clusters_via_frames(
     return _finalize_clusters(
         result, max_cluster_size, weak_cluster_threshold, auto_split,
         raw_pairs=pairs_list, weak_stats=weak_stats,
+        n_rows=len(all_ids), split_edge_budget=split_edge_budget,
     )
 
 
@@ -1622,6 +1642,7 @@ def build_clusters_columnar(
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Columnar wrapper around :func:`build_clusters`.
 
@@ -1671,6 +1692,7 @@ def build_clusters_columnar(
         max_cluster_size=max_cluster_size,
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
+        split_edge_budget=split_edge_budget,
     )
 
 

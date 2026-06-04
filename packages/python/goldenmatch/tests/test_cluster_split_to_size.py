@@ -90,3 +90,34 @@ def test_caller_invokes_batch_once_per_top_level_cluster(monkeypatch):
     pairs = [(a, b, 0.99) for i, a in enumerate(members) for b in members[i + 1:]]
     cl.build_clusters(pairs, all_ids=members, max_cluster_size=5)
     assert calls["n"] == 1
+
+
+def test_budget_autoscales_with_n_rows():
+    from goldenmatch.core.cluster import _split_edge_work_budget
+    assert _split_edge_work_budget(1000) == 5_000_000           # floor
+    assert _split_edge_work_budget(2_000_000) == 10_000_000     # n_rows * 5
+
+
+def test_budget_env_overrides_autoscale(monkeypatch):
+    from goldenmatch.core.cluster import _split_edge_work_budget
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "777")
+    assert _split_edge_work_budget(2_000_000) == 777
+
+
+def test_budget_config_override_beats_env(monkeypatch):
+    from goldenmatch.core.cluster import _split_edge_work_budget
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "777")
+    assert _split_edge_work_budget(2_000_000, override=12345) == 12345
+
+
+def test_golden_rules_config_has_split_edge_budget():
+    # GoldenRulesConfig has a model-validator requiring default_strategy; pass a
+    # valid one so we can exercise the new split_edge_budget field (the field is
+    # the unit under test, not the validator).
+    from goldenmatch.config.schemas import GoldenRulesConfig
+    assert GoldenRulesConfig(default_strategy="most_recent").split_edge_budget is None
+    assert (
+        GoldenRulesConfig(default_strategy="most_recent", split_edge_budget=999)
+        .split_edge_budget
+        == 999
+    )
