@@ -844,12 +844,13 @@ class AutoConfigController:
             # the all-iterations-errored path is the same user-facing
             # pathology as a RED committed entry -- caller would run the
             # full pipeline on the _RED_PROFILE sentinel and produce
-            # degenerate output. Refuse loudly.
+            # degenerate output. Refuse loudly at scale.
             #
             # #715 reopened: the _RED_PROFILE sentinel is a genuine give-up,
-            # so refuse by DEFAULT (independent of confidence_required AND
-            # REFUSE_AT_N) unless allow_red_config=True restores warn-and-run.
-            if not allow_red_config:
+            # so refuse unless allow_red_config=True restores warn-and-run.
+            # The refuse keeps the REFUSE_AT_N threshold -- below it, small-N
+            # runs are cheap and stay warn-and-run (the deliberate design).
+            if n_rows >= REFUSE_AT_N and not allow_red_config:
                 raise ControllerNotConfidentError(
                     n_rows=n_rows,
                     failing_sub_profile="data",  # n_errored=all means data path itself failed
@@ -863,29 +864,30 @@ class AutoConfigController:
         # + #417 degenerate-blocking guard into a SINGLE raise site).
         #
         # Invariant: a committed RED config raises ControllerNotConfidentError
-        # unless allow_red_config=True. A non-RED config never raises here.
+        # when ``n_rows >= REFUSE_AT_N and not allow_red_config``. A non-RED
+        # config never raises here. Below REFUSE_AT_N a committed RED entry
+        # warn-and-runs (cheap; the existing deliberate design).
         #
-        # #715 reopened: the RED-refuse fires by DEFAULT -- independent of
-        # confidence_required AND REFUSE_AT_N (so a small-N RED also raises).
-        # The legacy ``confidence_required and n_rows >= REFUSE_AT_N`` gate is
-        # a strict SUBSET of ``not allow_red_config``-default-True, so its
-        # callers keep raising. allow_red_config=True restores warn-and-run.
+        # #715 reopened: the RED-refuse keeps the REFUSE_AT_N threshold but
+        # drops confidence_required from the gate. confidence_required=False
+        # NO LONGER bypasses the RED-refuse (that was the reporter's bug);
+        # allow_red_config=True is now the SINGLE escape hatch that restores
+        # warn-and-run at scale. The legacy
+        # ``confidence_required and n_rows >= REFUSE_AT_N`` gate is replaced
+        # by ``n_rows >= REFUSE_AT_N and not allow_red_config``.
         #
         # This site supersedes the old Phase-3 RED-health raise here AND the
         # RED-keyed branches of the #417 guard below: it runs FIRST, so any
-        # committed-RED entry is refused here with the most-specific
+        # committed-RED entry at scale is refused here with the most-specific
         # failing_sub_profile. The #417 guard below stays for its NON-RED
         # blocking-degenerate estimator role (gated, as before, on
         # confidence_required + REFUSE_AT_N).
         #
-        # The gate is simply ``_committed_red and not allow_red_config``:
-        # allow_red_config=True is the SINGLE escape hatch (restores
-        # warn-and-run). confidence_required no longer gates the RED-refuse
-        # (the spec makes the refuse independent of it) -- a caller that
-        # previously used confidence_required=False to keep warn-and-run on a
-        # RED commit must now pass allow_red_config=True instead.
+        # confidence_required still gates the #417 NON-RED degenerate-blocking
+        # guard below -- a caller passes confidence_required=False to keep
+        # warn-and-run on NON-RED degenerate blocking.
         _committed_red = best_entry.profile.health() == HealthVerdict.RED
-        if _committed_red and not allow_red_config:
+        if _committed_red and n_rows >= REFUSE_AT_N and not allow_red_config:
             # Pick the most-specific failing sub-profile. When the committed
             # config has no blocking keys, the downstream sync degenerates to
             # a single mega-block -- surface that as the blocking-degenerate
