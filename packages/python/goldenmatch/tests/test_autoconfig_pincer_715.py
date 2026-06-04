@@ -57,3 +57,14 @@ def test_low_card_still_excluded_megacluster_guard_intact():
     ]
     mks = build_matchkeys(profiles, df=_df_with(["status"]))
     assert "status" not in _exact_fields(mks)
+
+
+def test_boundary_card_0_5_admitted():
+    """card == 0.5 is the lower bound of the admission band (strict < 0.5
+    is excluded). Confirm 0.5 itself is admitted."""
+    profiles = [
+        ColumnProfile("npi", "Utf8", "identifier", 0.9,
+                      null_rate=0.0, cardinality_ratio=0.5),
+    ]
+    mks = build_matchkeys(profiles, df=_df_with(["npi"]))
+    assert "npi" in _exact_fields(mks)

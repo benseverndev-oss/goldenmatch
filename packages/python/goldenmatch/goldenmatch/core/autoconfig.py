@@ -563,12 +563,12 @@ def build_matchkeys(
     skipped_exact: list[tuple[str, str]] = []  # (column, reason)
 
     for p in profiles:
+        # identifier columns ARE matchable: a real shared identifier
+        # (NPI/SSN/MRN) backs an exact matchkey, gated below by the
+        # cardinality band. Per-record surrogate keys (card==1.0) are
+        # excluded by the upper bound. See #715.
         if p.col_type in ("numeric", "date", "year"):
-            continue  # skip non-matchable columns (year is blocking-only).
-            # identifier columns ARE matchable: a real shared identifier
-            # (NPI/SSN/MRN) backs an exact matchkey, gated below by the
-            # cardinality band. Per-record surrogate keys (card==1.0) are
-            # excluded by the upper bound. See #715.
+            continue  # year is blocking-only
 
         if p.col_type == "description":
             fuzzy_fields.append(MatchkeyField(
@@ -635,7 +635,7 @@ def build_matchkeys(
         if scorer == "exact" and p.cardinality_ratio > 0 and p.cardinality_ratio < 0.5:
             reason = (
                 f"cardinality_ratio={p.cardinality_ratio:.4f} < 0.5 "
-                f"— lacks identifier-level uniqueness"
+                f"-- lacks identifier-level uniqueness"
             )
             logger.warning(
                 "Skipping exact matchkey for '%s' (%s). "
@@ -2411,6 +2411,10 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     """
     fields = []
     for p in profiles:
+        # NOTE (#715): build_matchkeys now admits high-cardinality identifier
+        # columns to exact matchkeys via a cardinality band. The probabilistic
+        # path intentionally still skips identifier here — admitting it needs a
+        # separate Fellegi-Sunter m/u-aware decision. Tracked as a #715 follow-up.
         if p.col_type in ("numeric", "date", "identifier", "description"):
             continue
 
