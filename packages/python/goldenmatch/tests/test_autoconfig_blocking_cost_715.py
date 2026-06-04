@@ -85,3 +85,12 @@ def test_sparse_zip_gets_bounded_compound_not_degenerate():
     for p in (blk.passes or []):
         all_fields.update(p.fields)
     assert "zip5" in all_fields, f"expected zip5 to bound the compound, got {all_fields}"
+
+
+def test_max_iterations_scales_with_dataset_size():
+    from goldenmatch.core.autoconfig_controller import ControllerBudget
+    small = ControllerBudget.for_dataset(10_000).max_iterations
+    large = ControllerBudget.for_dataset(2_000_000).max_iterations
+    assert large > small, f"expected more iterations at scale, got small={small} large={large}"
+    # base/default unchanged for small data
+    assert ControllerBudget.for_dataset(10_000).max_iterations == 3

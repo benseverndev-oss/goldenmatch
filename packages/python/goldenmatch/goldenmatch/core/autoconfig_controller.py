@@ -424,11 +424,11 @@ class ControllerBudget:
         order of magnitude as N grows from 100K -> 1M. Cap at 20K so
         sample-iteration cost stays bounded above 1M.
 
-        Tiers (n_rows -> max_seconds, sample_size_default):
-          - <5K        -> 15s, 2K (sample_skip_below bypasses sampling)
-          - 5K-100K    -> 30s, 2K (historical defaults; preserves 100K bench)
-          - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K
-          - >=1M       -> 120s, 20K (capped)
+        Tiers (n_rows -> max_seconds, sample_size_default, max_iterations):
+          - <5K        -> 15s, 2K, 3  (sample_skip_below bypasses sampling)
+          - 5K-100K    -> 30s, 2K, 3  (historical defaults; preserves 100K bench)
+          - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K, 4
+          - >=1M       -> 120s, 20K, 5
         """
         if n_rows < 5_000:
             return cls(max_seconds=15.0)
@@ -436,8 +436,11 @@ class ControllerBudget:
             return cls()  # historical defaults
         if n_rows < 1_000_000:
             sample = min(int((n_rows**0.5) * 20), 20_000)
-            return cls(sample_size_default=sample, max_seconds=60.0)
-        return cls(sample_size_default=20_000, max_seconds=120.0)
+            # max_iterations=4: non-load-bearing for #715 (iteration sample masks
+            # the at-scale blocking blow-up) but a correct-direction budget scale.
+            return cls(sample_size_default=sample, max_seconds=60.0, max_iterations=4)
+        # max_iterations=5: same rationale as 100K-1M tier above.
+        return cls(sample_size_default=20_000, max_seconds=120.0, max_iterations=5)
 
 
 def _zero_label_commit_enabled() -> bool:
