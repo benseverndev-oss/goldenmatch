@@ -664,10 +664,12 @@ def build_cluster_frames(
     if auto_split:
         # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
         # confined to the rare oversized MINORITY. Mirrors _finalize_clusters's
-        # split loop EXACTLY (next_cid from max-existing +1 before use, edge-work
-        # budget + no-progress guards, deterministic sub.sort, re-enqueue still-
-        # oversized). split rows carry quality="split" so the Step-3 vectorized
-        # weak/quality block's when(quality=="split") short-circuit preserves them.
+        # split loop EXACTLY: iterate sorted(oversized), call
+        # split_oversized_cluster_to_size ONCE per top-level cluster (the batch fn
+        # owns the full recursive split + sub ordering -- no re-enqueue here), and
+        # label subs contiguously from max(live_cids)+1. split rows carry
+        # quality="split" so the Step-3 vectorized weak/quality block's
+        # when(quality=="split") short-circuit preserves them.
         oversized = sorted(metadata.filter(_pl.col("oversized"))["cluster_id"].to_list())
         if oversized:
             members_by_cid = {
