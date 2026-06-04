@@ -531,6 +531,46 @@ _DOMAIN_SCORER_MAP = {
 }
 
 
+# Free-text col_types where data-entry corruption is common and `token_sort`
+# (word-order-robust but character-noise-fragile) underperforms. Surfaced by the
+# NCVR regression: res_street_address scored with token_sort gave F1 0.871;
+# jaro_winkler recovered 0.981. See #662.
+_NOISE_PRONE_FUZZY_TYPES = frozenset({"address", "string"})
+
+# Provisional upgrade target. Component 3 (#662) sets the benchmark-chosen winner
+# (jaro_winkler vs ensemble). jaro_winkler is the NCVR-validated lever.
+_NOISE_AWARE_TARGET_SCORER = "jaro_winkler"
+
+
+def _noise_aware_target_scorer() -> str:
+    """The scorer token_sort upgrades to on noise-prone col_types. Benchmark-only
+    env override (GOLDENMATCH_NOISE_AWARE_TARGET) lets the harness sweep
+    jaro_winkler/ensemble without code edits; unset -> the committed constant."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_TARGET") or _NOISE_AWARE_TARGET_SCORER
+
+
+def _noise_aware_scorers_enabled() -> bool:
+    """Whether to upgrade noise-fragile token_sort assignments. Opt-in via
+    GOLDENMATCH_NOISE_AWARE_SCORERS=1. Lands default OFF (#662 Component 1);
+    Component 3 flips this after benchmark validation."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "") == "1"
+
+
+def _noise_aware_scorer(col_type: str, scorer: str) -> str:
+    """Upgrade a noise-fragile token_sort to the noise-aware target scorer for
+    free-text col_types prone to character-level corruption. No-op unless the gate
+    is on AND the assignment is exactly token_sort on a noise-prone col_type — so
+    a non-default scorer chosen upstream (refdata/embedding/ensemble/qgram) is
+    never overridden."""
+    if (
+        _noise_aware_scorers_enabled()
+        and col_type in _NOISE_PRONE_FUZZY_TYPES
+        and scorer == "token_sort"
+    ):
+        return _noise_aware_target_scorer()
+    return scorer
+
+
 def _is_short_code(p: ColumnProfile) -> bool:
     """#491: detect short alphanumeric *code* columns (SKU, part-no, plan-code).
 
@@ -652,6 +692,13 @@ def build_matchkeys(
         # names/words/identifiers keep their tuned scorers untouched.
         if scorer in ("token_sort", "ensemble") and _is_short_code(p):
             scorer = "qgram"
+
+        # #662: noise-aware refinement (opt-in, default OFF). Upgrade token_sort
+        # -> jaro_winkler/ensemble on corruption-prone free-text col_types. Runs
+        # AFTER the qgram short-code guard so a code-like string keeps qgram (the
+        # guard already rewrote it; this no-ops on non-token_sort). See
+        # _noise_aware_scorer.
+        scorer = _noise_aware_scorer(p.col_type, scorer)
 
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
