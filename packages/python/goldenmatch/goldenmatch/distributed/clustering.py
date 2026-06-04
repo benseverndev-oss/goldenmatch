@@ -662,8 +662,8 @@ def local_cc_assignments(
     """
     from collections import defaultdict
 
-    import pyarrow as pa
     import polars as pl
+    import pyarrow as pa
 
     from goldenmatch.core.cluster import UnionFind
 
