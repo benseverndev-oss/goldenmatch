@@ -5,8 +5,9 @@
 //! and their `_str` siblings) call the pyo3-free `goldenmatch-graph-core` crate
 //! **native-direct** — no embedded CPython, same shape as `goldenmatch_record_fingerprint`
 //! over `goldenmatch-fingerprint-core`. They take id/score arrays (not JSON) and
-//! return relational `TableIterator` rows. `goldenmatch_embed_local` still routes
-//! through the bridge until the goldenembed-direct rewrite lands.
+//! return relational `TableIterator` rows. `goldenmatch_embed_local` likewise
+//! calls `goldenembed-rs` native-direct (pure Rust, no CPython) and returns the
+//! embedding vector as `float8[]`.
 //!
 //! ```sql
 //! SELECT * FROM goldenmatch.goldenmatch_pair_dedup(ARRAY[2,1], ARRAY[1,2], ARRAY[0.5,0.9]);
@@ -123,13 +124,24 @@ pub fn goldenmatch_connected_components_str(
     TableIterator::new(rows)
 }
 
-/// Embed one text with the local in-house embedder. `model_path` is a saved
-/// `GoldenEmbedModel` directory. Returns a JSON float array.
+/// Embed one text with a local in-house model via goldenembed-rs (pure Rust,
+/// NO embedded CPython). `model_path` is a saved GoldenEmbedModel dir. Returns
+/// the embedding vector as float8[].
 #[pg_extern]
-pub fn goldenmatch_embed_local(text: String, model_path: String) -> String {
-    match goldenmatch_bridge::api::embed_local(&text, &model_path) {
-        Ok(json) => json,
-        Err(e) => pgrx::error!("goldenmatch_embed_local: {}", e),
+pub fn goldenmatch_embed_local(text: String, model_path: String) -> Vec<f64> {
+    let mut model = match goldenembed::GoldenEmbed::load(&model_path) {
+        Ok(m) => m,
+        Err(e) => pgrx::error!("goldenmatch_embed_local load: {}", e),
+    };
+    match model.embed(&[text.as_str()]) {
+        Ok(rows) => rows
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|x| x as f64)
+            .collect(),
+        Err(e) => pgrx::error!("goldenmatch_embed_local embed: {}", e),
     }
 }
 

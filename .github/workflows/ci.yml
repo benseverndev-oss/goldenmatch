@@ -32,6 +32,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
+      embed: ${{ steps.filter.outputs.embed }}
       distributed: ${{ steps.filter.outputs.distributed }}
       sail: ${{ steps.filter.outputs.sail }}
       readme_callouts: ${{ steps.filter.outputs.readme_callouts }}
@@ -152,6 +153,14 @@ jobs:
               # Standalone Rust embedding runtime (char n-gram featurize + ONNX
               # inference via ort). Own workspace, not in the `rust` job's
               # `cargo test --workspace`, so it needs its own lane.
+              - 'packages/rust/extensions/goldenembed/**'
+            embed:
+              # goldenmatch-embed: the maturin/pyo3 wheel that exposes the
+              # goldenembed runtime to Python (GoldenEmbed.load(...).embed(...)).
+              # Own workspace; not in the `rust` job's `cargo test --workspace`,
+              # so it needs its own build+smoke lane. The wheel depends on the
+              # goldenembed crate, so a goldenembed-only change must re-trigger.
+              - 'packages/rust/extensions/embed-py/**'
               - 'packages/rust/extensions/goldenembed/**'
             distributed:
               # Ray-backed distributed paths. The main `python` job installs
@@ -843,6 +852,56 @@ jobs:
         working-directory: packages/rust/extensions/goldenembed
         run: cargo test --release
 
+  # goldenmatch-embed wheel smoke: build the SEPARATE maturin/pyo3 wheel
+  # (packages/rust/extensions/embed-py/) that exposes the goldenembed runtime
+  # to Python and prove it loads + embeds a saved fixture model. Distinct from
+  # `goldenembed`, which only clippy/tests the underlying Rust crate. maturin
+  # normalizes the dist name `goldenmatch-embed` -> `goldenmatch_embed`.
+  embed_wheel:
+    needs: changes
+    if: needs.changes.outputs.embed == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/embed-py
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build the goldenmatch-embed wheel (maturin, pyo3)
+        run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/embed-py/Cargo.toml --out dist
+      - name: Install the wheel + smoke-test load/embed
+        run: |
+          uv pip install dist/goldenmatch_embed-*.whl
+          uv run python - <<'PY'
+          from goldenmatch_embed import GoldenEmbed
+          import math, pathlib
+          model_dir = "packages/rust/extensions/goldenembed/tests/fixtures/tiny_model"
+          m = GoldenEmbed.load(model_dir)
+          vecs = m.embed(["John Smith", "Jon Smyth"])
+          assert len(vecs) == 2, vecs
+          assert m.dim == len(vecs[0]) > 0, (m.dim, len(vecs[0]))
+          assert all(math.isfinite(x) for x in vecs[0]), "non-finite embedding value"
+          # Best-effort parity vs the Python in-house path (acceptance: within tolerance).
+          # Skip if the in-house embedder can't load this fixture in CI (don't fail the lane on that).
+          try:
+              from goldenmatch.embeddings import embed_records
+              ref = embed_records(["John Smith"], provider="inhouse", model=model_dir)[0]
+              a = vecs[0]
+              dot = sum(x*y for x, y in zip(a, ref)); na = math.sqrt(sum(x*x for x in a)); nb = math.sqrt(sum(y*y for y in ref))
+              cos = dot/(na*nb) if na and nb else 0.0
+              assert cos >= 0.999, f"wheel vs in-house cosine {cos} < 0.999"
+              print(f"OK: goldenmatch-embed wheel loads + embeds; in-house parity cosine={cos:.6f}")
+          except ImportError as e:
+              print(f"OK: goldenmatch-embed wheel loads + embeds (dim={m.dim}); in-house parity skipped ({e})")
+          PY
+
   # Ray-backed distributed lane. The full goldenmatch `python` job runs
   # `uv sync --all-packages` WITHOUT the optional `ray` extra, so every
   # tests/test_distributed_*.py SKIPS there via `pytest.importorskip("ray")`.
@@ -1196,6 +1255,7 @@ jobs:
       - native
       - native_wheel
       - goldenembed
+      - embed_wheel
       - distributed
       - sail
       - pyright

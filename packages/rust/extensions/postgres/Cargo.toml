@@ -27,6 +27,9 @@ goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
 # Pure-Rust connected-components + pair-dedup graph kernels (no pyo3) — the graph
 # UDFs call these native-direct, NOT through the embedded-CPython bridge.
 goldenmatch-graph-core = { path = "../graph-core" }
+# Pure-Rust in-house embedder (goldenembed-rs, no pyo3) — goldenmatch_embed_local
+# calls this native-direct, NOT through the embedded-CPython bridge.
+goldenembed = { path = "../goldenembed" }
 serde_json = "1"
 
 [[bin]]
