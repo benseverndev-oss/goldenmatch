@@ -17,6 +17,9 @@ on:
         description: "Repetitions per measurement (median)"
         default: "3"
 
+permissions:
+  contents: read
+
 jobs:
   bench:
     runs-on: large-new-64GB

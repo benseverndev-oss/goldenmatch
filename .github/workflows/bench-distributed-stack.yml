@@ -39,6 +39,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   bench:
     name: "bench distributed stack (chunked vs Component 1+2+3)"

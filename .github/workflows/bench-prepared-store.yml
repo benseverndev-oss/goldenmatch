@@ -16,6 +16,9 @@ on:
         description: "Branch / tag / SHA to bench (default: workflow ref)"
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   bench:
     name: "bench prepared-record-store"
