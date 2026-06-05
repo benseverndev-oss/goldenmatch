@@ -198,7 +198,7 @@ print(result.memory_stats)
 
 ## MCP
 
-Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code. Total tool count is now 35.
+Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code. Total tool count is now 54.
 
 | Tool | Behavior |
 |---|---|

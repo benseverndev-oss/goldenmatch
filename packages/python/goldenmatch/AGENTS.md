@@ -53,7 +53,7 @@
 - `goldenmatch/core/review_queue.py` -- ReviewQueue (memory/SQLite/Postgres backends), ReviewItem, gate_pairs(). Confidence gating: >0.95 auto-merge, 0.75-0.95 review, <0.75 reject
 - `goldenmatch/core/memory/` -- Learning Memory: persistent corrections + rule learning. `store.py` (MemoryStore, SQLite/Postgres CRUD, trust-based upsert), `corrections.py` (apply_corrections with dual-hash staleness detection), `learner.py` (MemoryLearner, threshold tuning from 10+ corrections). Config: `MemoryConfig` in schemas.py, optional `memory:` YAML section
 - `goldenmatch/a2a/` -- A2A protocol server (aiohttp). Agent card at `/.well-known/agent.json`, 10 skills, task lifecycle, SSE streaming. CLI: `goldenmatch agent-serve --port 8200`
-- `goldenmatch/mcp/agent_tools.py` -- 13 agent-level MCP tools (additive to existing). Each creates own AgentSession (no shared global state)
+- `goldenmatch/mcp/agent_tools.py` -- 16 agent-level MCP tools (additive to existing). Each creates own AgentSession (no shared global state)
 - `_api.py` has DataFrame entry points: `dedupe_df()`, `match_df()`, `score_strings()`, `score_pair_df()`, `explain_pair_df()` -- used by SQL extensions
 - `pipeline.py` refactored: `_run_dedupe_pipeline()` and `_run_match_pipeline()` extracted as shared internal functions, called by both file-based and DataFrame-based entry points
 - `goldenmatch/core/` — pipeline modules (no Textual dependency)
@@ -167,7 +167,7 @@
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenmatch-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenmatch`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenmatch`
 - **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

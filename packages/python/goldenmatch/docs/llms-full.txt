@@ -415,8 +415,8 @@ goldenmatch memory import  --config config.yaml --input  corrections.jsonl
 
 ## Interfaces
 
-- **MCP Server**: `goldenmatch mcp-serve` — 35 tools (13 agent + 17 data + 5 memory) for Claude Desktop integration
-- **Remote MCP**: https://goldenmatch-mcp-production.up.railway.app/mcp/ (35 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenmatch)
+- **MCP Server**: `goldenmatch mcp-serve` — 54 tools (16 agent + 24 data + 7 memory + 7 identity) for Claude Desktop integration
+- **Remote MCP**: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - **A2A Server**: `goldenmatch agent-serve --port 8200` — 10 skills via Agent-to-Agent protocol
 - **REST API**: `goldenmatch serve` on port 8000 — match, clusters, explain, reviews endpoints
 - **CLI**: 20+ Typer commands

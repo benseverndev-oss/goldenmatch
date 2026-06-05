@@ -4,7 +4,7 @@
 Find duplicate records in 30 seconds. Zero-config entity resolution, 97.2% F1 out of the box.
 
 ## Description
-GoldenMatch finds duplicate records with zero configuration. No rules to write, no models to train — point it at a CSV and get deduplicated results in 30 seconds. Achieves 97.2% F1 on DBLP-ACM out of the box. Supports single-source deduplication, cross-source matching, golden record creation, and privacy-preserving record linkage (PPRL) with bloom filters. 30 MCP tools give AI assistants full control over the entity resolution workflow — from analysis and configuration through matching, review, and export. DQBench ER score: 95.30.
+GoldenMatch finds duplicate records with zero configuration. No rules to write, no models to train — point it at a CSV and get deduplicated results in 30 seconds. Achieves 97.2% F1 on DBLP-ACM out of the box. Supports single-source deduplication, cross-source matching, golden record creation, and privacy-preserving record linkage (PPRL) with bloom filters. 54 MCP tools give AI assistants full control over the entity resolution workflow — from analysis and configuration through matching, review, and export. DQBench ER score: 95.30.
 
 ## Setup Requirements
 No environment variables required. Works out of the box with local CSV files.
@@ -27,7 +27,7 @@ Record deduplication, Entity resolution, Customer matching, Data merging, Golden
 - Domain-specific matching rules (people, companies, products)
 - Cluster management — inspect, shatter, unmerge, suggest config improvements
 - Real-time single-record matching against loaded datasets
-- 30 MCP tools covering the full ER workflow
+- 54 MCP tools covering the full ER workflow
 - 4 MCP Resources: dataset stats, cluster summary, current config, dataset schema
 - 5 MCP Prompts: deduplicate-walkthrough, investigate-cluster, compare-records, data-quality-audit, pprl-setup
 - Integrates with GoldenCheck (scan quality) and GoldenFlow (transform)

@@ -740,7 +740,7 @@ Full-featured terminal UI built with Textual. Browse profiles, apply transforms,
 
 ## Remote MCP Server
 
-GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenflow) — connect from any MCP client without installing anything.
+GoldenFlow is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenflow) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
