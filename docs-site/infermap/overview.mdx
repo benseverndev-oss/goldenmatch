@@ -1,0 +1,126 @@
+---
+title: "InferMap overview"
+description: "An inference-driven schema mapping engine that aligns messy source columns to a target schema with confidence scores and reasoning."
+keywords: ["infermap", "schema mapping", "column matching", "confidence", "hungarian algorithm"]
+---
+
+InferMap maps messy source columns to a known target schema, with a confidence score and a human-readable reason for each mapping. It runs in Python and TypeScript, and the two implementations are verified bit-for-bit against a shared golden-test suite.
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install infermap
+```
+
+```bash npm
+npm install infermap
+```
+
+</CodeGroup>
+
+Python database extras: `infermap[postgres]`, `infermap[mysql]`, `infermap[duckdb]`, `infermap[all]`. The TypeScript package requires Node 20+ and is edge-runtime compatible.
+
+## Quickstart
+
+```python
+import infermap
+
+result = infermap.map("crm_export.csv", "canonical_customers.csv")
+for m in result.mappings:
+    print(f"{m.source} -> {m.target}  ({m.confidence:.0%})")
+
+# Apply the mapping to a DataFrame
+import polars as pl
+df = pl.read_csv("crm_export.csv")
+renamed = result.apply(df)
+
+# Save and reload
+result.to_config("my_mapping.yaml")
+saved = infermap.from_config("my_mapping.yaml")
+```
+
+In TypeScript:
+
+```typescript
+import { map } from "infermap";
+
+const result = map(
+  { records: [{ fname: "John", lname: "Doe", email_addr: "j@d.co" }] },
+  { records: [{ first_name: "", last_name: "", email: "" }] },
+);
+
+for (const m of result.mappings) {
+  console.log(`${m.source} → ${m.target}  (${m.confidence.toFixed(2)})`);
+}
+```
+
+## Key features
+
+- **7 built-in scorers**: exact, alias, initialism, pattern-type, profile, fuzzy-name, and LLM (pluggable).
+- **Optimal 1:1 assignment** via the Hungarian algorithm.
+- **Common-prefix canonicalization** that strips schema-wide prefixes (for example `prospect_City` versus `City`).
+- **Confidence calibration** (identity, isotonic, or Platt) into probabilities.
+- **Domain dictionaries** for healthcare, finance, and ecommerce.
+- **Custom scorers** via the `@infermap.scorer` decorator (Python) or `defineScorer()` (TypeScript).
+- **Many input formats**: CSV, JSON, in-memory records, database tables, and schema definition files.
+- **Edge-runtime compatible** and zero-dependency in the TypeScript core.
+- Accuracy benchmark: 162 test cases, F1 0.84 (Python); TypeScript parity within 0.0005.
+
+## CLI
+
+| Command | Purpose |
+|---------|---------|
+| `infermap map <source> <target>` | Map two files or schemas and print a report. |
+| `infermap apply <source> --config <mapping> --output <file>` | Apply a saved mapping to rename columns. |
+| `infermap inspect <source>` | Extract and display a schema from a file or DB table. |
+| `infermap validate <source> --config <mapping> --required <fields> --strict` | Validate a saved config against a source. |
+
+```bash
+infermap map crm_export.csv canonical_customers.csv -o mapping.json
+infermap apply crm_export.csv --config mapping.json --output renamed.csv
+infermap inspect "sqlite:///mydb.db" --table customers
+```
+
+## Custom scorer
+
+```python
+import infermap
+from infermap.types import FieldInfo, ScorerResult
+
+@infermap.scorer("prefix_scorer", weight=0.8)
+def prefix_scorer(source: FieldInfo, target: FieldInfo) -> ScorerResult | None:
+    if source.name[:3].lower() != target.name[:3].lower():
+        return None
+    return ScorerResult(score=0.85, reasoning=f"Shared prefix '{source.name[:3]}'")
+```
+
+## Default scorer weights
+
+| Scorer | Weight |
+|--------|--------|
+| ExactScorer | 1.0 |
+| AliasScorer | 0.95 |
+| LLMScorer | 0.8 (pluggable, stubbed by default) |
+| InitialismScorer | 0.75 |
+| PatternTypeScorer | 0.7 |
+| ProfileScorer | 0.5 |
+| FuzzyNameScorer | 0.4 |
+
+## Config
+
+```yaml
+domains:
+  - healthcare
+  - finance
+scorers:
+  LLMScorer:
+    enabled: false
+  FuzzyNameScorer:
+    weight: 0.3
+aliases:
+  order_id:
+    - order_num
+    - ord_no
+```
