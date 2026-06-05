@@ -1,14 +1,10 @@
 ---
-layout: default
-title: LLM Integration
-nav_order: 13
+title: "LLM Integration"
+description: "Use GPT-4o-mini or Claude to score borderline pairs that fuzzy matching alone cannot resolve, with budget caps, model tiering, and iterative calibration."
+keywords: ["llm", "gpt-4o-mini", "claude", "borderline scoring", "budget", "calibration", "cluster mode"]
 ---
-
-# LLM Integration
 
 GoldenMatch uses LLMs (GPT-4o-mini, Claude) to score borderline pairs that fuzzy matching alone cannot resolve. Two modes: pairwise scoring and in-context block clustering.
-
----
 
 ## Quick start
 
@@ -25,8 +21,6 @@ goldenmatch dedupe products.csv --config config.yaml --llm-scorer
 ```
 
 Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variable.
-
----
 
 ## Pairwise scoring
 
@@ -58,8 +52,6 @@ import goldenmatch as gm
 scored = gm.llm_score_pairs(borderline_pairs, df, llm_config)
 ```
 
----
-
 ## Iterative calibration
 
 *New in v1.2.6.* When the candidate set is large (>100 pairs), GoldenMatch uses iterative calibration instead of scoring every pair:
@@ -80,9 +72,7 @@ llm_scorer:
   calibration_convergence_delta: 0.01  # stop when threshold shift < this
 ```
 
-Calibration activates automatically when candidates exceed `calibration_sample_size`. For small candidate sets (<=100 pairs), all pairs are scored directly.
-
----
+Calibration activates automatically when candidates exceed `calibration_sample_size`. For small candidate sets (&le;100 pairs), all pairs are scored directly.
 
 ## Cluster mode
 
@@ -109,8 +99,6 @@ scored = gm.llm_cluster_pairs(borderline_pairs, df, llm_config)
 ```
 
 Graceful degradation: cluster mode falls back to pairwise if a block is too small, then stops if the budget is exhausted.
-
----
 
 ## Budget tracking
 
@@ -142,8 +130,6 @@ The `BudgetTracker` class tracks token usage, cost, and enforces limits. When th
 
 Budget summary is available in `EngineStats.llm_cost` after a pipeline run.
 
----
-
 ## Model tiering
 
 Automatic escalation sends harder pairs to a better (more expensive) model:
@@ -152,8 +138,6 @@ Automatic escalation sends harder pairs to a better (more expensive) model:
 2. **Tier 2**: GPT-4o for pairs in the escalation band (0.80--0.90)
 
 The escalation budget percentage (default 20%) reserves a portion of the total budget for tier-2 calls.
-
----
 
 ## LLM boost
 
@@ -172,8 +156,6 @@ Active sampling selects the most informative pairs for labeling, reducing cost b
 
 LLM boost is most valuable for product matching with local models (MiniLM). For structured data, fuzzy matching alone achieves 97%+ F1.
 
----
-
 ## LLM feature extraction
 
 Extract structured fields from unstructured text using the LLM. O(N) preprocessing, not O(N^2) pair scoring.
@@ -183,8 +165,6 @@ import goldenmatch as gm
 
 enhanced_df = gm.llm_extract_features(df, column="description", budget=tracker)
 ```
-
----
 
 ## Provider configuration
 
@@ -197,8 +177,6 @@ GoldenMatch auto-detects the provider from environment variables:
 
 Both providers return `(text, input_tokens, output_tokens)` tuples for budget tracking.
 
----
-
 ## Cost benchmarks
 
 | Dataset | Strategy | LLM Cost | F1 |
@@ -210,8 +188,6 @@ Both providers return `(text, input_tokens, output_tokens)` tuples for budget tr
 | Typical 5K dataset | LLM scorer (borderline only) | ~$0.05 | varies |
 
 With iterative calibration (v1.2.6+), the LLM scores only ~200 pairs to learn the optimal threshold, then applies it to all candidates. This reduced the Bulldozer benchmark from ~$0.50 (37,500 pairs) to ~$0.01 (200 pairs).
-
----
 
 ## Python API summary
 

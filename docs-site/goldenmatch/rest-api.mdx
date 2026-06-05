@@ -1,14 +1,10 @@
 ---
-layout: default
-title: REST API
-nav_order: 17
+title: "REST API"
+description: "Local HTTP server for real-time matching, cluster browsing, and data steward review."
+keywords: ["rest api", "http server", "matching", "clusters", "review queue"]
 ---
-
-# REST API
 
 GoldenMatch includes a local HTTP server for real-time matching, cluster browsing, and data steward review.
-
----
 
 ## Start the server
 
@@ -17,8 +13,6 @@ goldenmatch serve --file customers.csv --config config.yaml --port 8080
 ```
 
 The server loads data, runs initial matching, and exposes endpoints on the specified port.
-
----
 
 ## Endpoints
 
@@ -37,8 +31,6 @@ The server loads data, runs initial matching, and exposes endpoints on the speci
 | `POST` | `/autoconfig` | Run AutoConfigController; return committed config + telemetry |
 | `GET` | `/controller/telemetry` | Last autoconfig's telemetry (stop_reason, health, decisions, NE fields) |
 
----
-
 ## Health check
 
 ```bash
@@ -48,8 +40,6 @@ curl http://localhost:8080/health
 ```json
 {"status": "ok"}
 ```
-
----
 
 ## Stats
 
@@ -67,8 +57,6 @@ curl http://localhost:8080/stats
     "max_cluster_size": 8
 }
 ```
-
----
 
 ## Match a record
 
@@ -98,8 +86,6 @@ curl -X POST http://localhost:8080/match/batch \
     ]'
 ```
 
----
-
 ## Explain a match
 
 ```bash
@@ -118,8 +104,6 @@ curl -X POST http://localhost:8080/explain \
     ]
 }
 ```
-
----
 
 ## Clusters
 
@@ -163,8 +147,6 @@ curl http://localhost:8080/clusters/1
 }
 ```
 
----
-
 ## Review queue
 
 The review queue surfaces borderline pairs for data steward approval or rejection.
@@ -206,8 +188,6 @@ Decision values: `"approve"` or `"reject"`.
 curl http://localhost:8080/reviews/decisions
 ```
 
----
-
 ## Python client
 
 GoldenMatch includes a REST client that uses only stdlib `urllib` (no extra dependencies):
@@ -229,8 +209,6 @@ explanation = client.explain(42, 108)
 # Get review queue
 reviews = client.reviews()
 ```
-
----
 
 ## AutoConfigController telemetry (v1.7-v1.12)
 
@@ -277,8 +255,6 @@ Returns the cached telemetry from the most recent `POST /autoconfig` call withou
 ```json
 {"available": false, "source": null}
 ```
-
----
 
 ## Docker deployment
 

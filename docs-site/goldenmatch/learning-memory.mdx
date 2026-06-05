@@ -1,18 +1,16 @@
 ---
-layout: default
-title: Learning Memory
-nav_order: 19
+title: "Learning Memory"
+description: "Persist steward corrections, unmerge decisions, and LLM votes across runs so the same false positive never comes back."
+keywords: ["learning memory", "corrections", "threshold learning", "steward", "feedback loop"]
 ---
-
-# Learning Memory
 
 GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After enough corrections accumulate, the learner adjusts matchkey thresholds so the system stops needing the same correction twice.
 
 This is the third layer that sits beside zero-config and explicit YAML: a feedback loop that survives input refresh and re-orders, with no rules to write and no models to train.
 
-> **Status.** Shipped in v1.6.0. Off by default -- the zero-config posture is preserved. Enable via `config.memory.enabled = True` or a `memory:` block in YAML.
-
----
+<Note>
+  Shipped in v1.6.0. Off by default -- the zero-config posture is preserved. Enable via `config.memory.enabled = True` or a `memory:` block in YAML.
+</Note>
 
 ## What it does
 
@@ -23,8 +21,6 @@ Learning Memory is a persistent store of `(id_a, id_b, decision)` corrections pl
 - **Seven collection points.** Every place a steward, an LLM, or an agent makes a decision writes a correction: review queue, boost tab, `unmerge_record` / `unmerge_cluster`, LLM scorer, MCP `agent_approve_reject`, REST `POST /reviews/decide`, Python `add_correction()`.
 - **Threshold learning.** Once a matchkey accumulates `threshold_min_corrections` (default 10) corrections, the learner runs a trust-weighted grid search and stores per-matchkey threshold deltas. The pipeline overlays them on the next run.
 - **Postflight reports impact.** Every run with memory active emits `Memory: N applied, M stale, K stale-ambiguous, J unanchorable`.
-
----
 
 ## Quick walkthrough
 
@@ -84,8 +80,6 @@ goldenmatch dedupe customers.csv --config goldenmatch.yml
 
 After 10+ corrections accumulate against a matchkey, `goldenmatch memory learn` (or the auto-learn pass on the next pipeline call) tunes that matchkey's threshold so future runs need fewer corrections.
 
----
-
 ## Configuration
 
 `MemoryConfig` lives at `config.memory`. Top-level YAML:
@@ -122,8 +116,6 @@ memory:
   dataset: customers_prod
 ```
 
----
-
 ## CLI
 
 The `goldenmatch memory` subgroup exposes the store directly.
@@ -148,8 +140,6 @@ goldenmatch memory import --config goldenmatch.yml --input corrections.jsonl
 | `memory learn` | Force a learning pass; otherwise auto-runs at next pipeline call. |
 | `memory export` | JSONL dump of all corrections (one record per line). |
 | `memory import` | Bulk-load corrections from JSONL. Trust-based upsert (higher trust wins). |
-
----
 
 ## Python API
 
@@ -194,11 +184,9 @@ print(result.memory_stats)
 # {'applied': 12, 'stale': 0, 'stale_ambiguous': 0, 'unanchorable': 0}
 ```
 
----
-
 ## MCP
 
-Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code. Total tool count is now 54.
+Six MCP tools bring Learning Memory into Claude Desktop / Code. Total tool count is now 54.
 
 | Tool | Behavior |
 |---|---|
@@ -207,6 +195,7 @@ Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code
 | `learn_thresholds` | Runs `MemoryLearner.learn()`; returns the adjustment dict. |
 | `memory_stats` | Counts and last-learned timestamps. |
 | `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
+| `memory_import` | Upserts corrections from a list of dicts (the shape `memory_export` returns); higher trust wins. |
 
 A natural-language workflow against an MCP-connected goldenmatch run:
 
@@ -214,11 +203,9 @@ A natural-language workflow against an MCP-connected goldenmatch run:
 
 The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
----
-
 ## How it works
 
-```
+```text
             scored_pairs                          stored corrections
                 |                                          |
                 v                                          v
@@ -243,8 +230,6 @@ The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
 The full design lives in `docs/superpowers/specs/2026-05-04-learning-memory-completion.md` for readers who want algorithm-level detail.
 
----
-
 ## When to enable
 
 - **Always**, if you have stewards reviewing borderline pairs. Their decisions otherwise evaporate.
@@ -252,14 +237,12 @@ The full design lives in `docs/superpowers/specs/2026-05-04-learning-memory-comp
 - **Probably not**, for one-shot dedupes on data you'll never see again.
 - **Probably not**, if you need byte-for-byte reproducible output (e.g. DQBench parity runs). Use `auto_configure_df(df, strict=True)` and leave memory off.
 
----
-
 ## See also
 
 | Topic | Link |
 |---|---|
-| YAML reference | [Configuration](configuration) |
-| `goldenmatch memory ...` | [CLI Reference](cli) |
-| `goldenmatch.add_correction` etc. | [Python API](python-api) |
-| MCP `list_corrections` etc. | [MCP Server](mcp) |
-| Review queue (the steward UI) | [REST API](rest-api) |
+| YAML reference | [Configuration](/goldenmatch/configuration) |
+| `goldenmatch memory ...` | [CLI Reference](/goldenmatch/cli) |
+| `goldenmatch.add_correction` etc. | [Python API](/goldenmatch/python-api) |
+| MCP `list_corrections` etc. | [MCP Server](/goldenmatch/mcp) |
+| Review queue (the steward UI) | [REST API](/goldenmatch/rest-api) |

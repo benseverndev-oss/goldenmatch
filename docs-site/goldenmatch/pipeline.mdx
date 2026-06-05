@@ -1,19 +1,15 @@
 ---
-layout: default
-title: Pipeline
-nav_order: 8
+title: "Pipeline"
+description: "GoldenMatch's 10-step pipeline from raw files to golden records, with per-step API references."
+keywords: ["pipeline", "ingest", "blocking", "scoring", "clustering", "golden records", "matchkeys"]
 ---
-
-# Pipeline
 
 GoldenMatch runs a 10-step pipeline from raw files to golden records. Each step is a separate module in `goldenmatch/core/`.
 
-```
+```text
 Files/DB -> Ingest -> Column Map -> Auto Fix -> Validate -> Standardize
          -> Matchkeys -> Block -> Score -> Cluster -> Golden -> Output
 ```
-
----
 
 ## Pipeline steps
 
@@ -53,7 +49,7 @@ df, fixes = gm.auto_fix_dataframe(df)
 # fixes: [{"column": "phone", "fix": "stripped non-digits", "rows": 142}]
 ```
 
-Fixes include: encoding normalization, whitespace cleanup, type coercion (Polars infers zip/phone as Int64 -- auto-fix converts to string).
+Fixes include: encoding normalization, whitespace cleanup, type coercion (Polars infers zip/phone as Int64 — auto-fix converts to string).
 
 ### 4. Validate
 
@@ -106,7 +102,7 @@ blocks = gm.build_blocks(df, blocking_config)
 # Returns list of DataFrames, one per block
 ```
 
-Blocking key choice dominates fuzzy performance -- coarse keys create huge blocks. Use `auto_select: true` to let GoldenMatch pick the best key by histogram analysis.
+Blocking key choice dominates fuzzy performance — coarse keys create huge blocks. Use `auto_select: true` to let GoldenMatch pick the best key by histogram analysis.
 
 Dynamic block splitting automatically handles oversized blocks by splitting on the highest-cardinality column.
 
@@ -173,8 +169,6 @@ Outputs: golden records, duplicates, unique records, lineage JSON, HTML report, 
 
 Lineage is auto-generated when the pipeline writes output. Each merge decision is saved with per-field score breakdown.
 
----
-
 ## Pipeline entry points
 
 | Entry Point | Description |
@@ -187,8 +181,6 @@ Lineage is auto-generated when the pipeline writes output. Each merge decision i
 | `run_match(target_spec, ref_specs, config)` | Low-level pipeline |
 
 The `_run_dedupe_pipeline()` and `_run_match_pipeline()` internal functions are shared by both file-based and DataFrame-based entry points.
-
----
 
 ## Domain extraction (optional step)
 
