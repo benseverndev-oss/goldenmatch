@@ -74,11 +74,22 @@ def test_registry_covers_phases_1_through_6():
     assert set(PHASE_CRITERIA) == {"phase1", "phase2", "phase3", "phase4", "phase5", "phase6"}
 
 
-def test_phase1_criteria_match_spec():
+def test_phase1_criteria_match_reframed_gate():
+    # Reframed Phase 1 gate: feasibility (columnar completes 5M) + parity,
+    # both bool_true binding criteria. Wall/RSS are no longer gating
+    # (un-measurable at 5M where legacy OOMs).
     names = {c.name: c for c in PHASE_CRITERIA["phase1"]}
-    assert names["wall"].kind == "ratio_le" and names["wall"].target == 0.50
-    assert names["rss"].kind == "ratio_le" and names["rss"].target == 0.25
+    assert names["columnar_completes_5m"].kind == "bool_true"
+    assert names["columnar_completes_5m"].target is True
     assert names["parity"].kind == "bool_true"
+    assert names["parity"].target is True
+    # No ratio_le wall/rss gating criterion remains.
+    assert all(c.kind != "ratio_le" for c in PHASE_CRITERIA["phase1"])
+    assert "wall" not in names and "rss" not in names
+
+
+def test_phase1_bench_scale_is_1m():
+    assert afl.PHASE_BENCH_SCALE["phase1"] == 1_000_000
 
 
 def test_phase3_has_three_speedup_gates():
