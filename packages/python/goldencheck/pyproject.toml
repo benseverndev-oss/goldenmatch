@@ -63,7 +63,7 @@ mcp = [
     "mcp>=1.0",
 ]
 agent = [
-    "aiohttp>=3.9",
+    "aiohttp>=3.14.0",
 ]
 baseline = [
     "scipy>=1.11",

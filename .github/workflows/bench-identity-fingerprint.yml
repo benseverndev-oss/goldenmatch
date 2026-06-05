@@ -14,6 +14,9 @@ on:
         description: "Repetitions per measurement (median reported)"
         default: "3"
 
+permissions:
+  contents: read
+
 jobs:
   bench:
     # Beefy box so the profile is not starved (matches the suite bench default).
@@ -41,7 +44,7 @@ jobs:
             --runs "${{ inputs.runs }}" \
             --output bench_identity_fingerprint.json
       - name: Upload JSON artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: bench-identity-fingerprint-results
           path: bench_identity_fingerprint.json
