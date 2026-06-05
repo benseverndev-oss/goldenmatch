@@ -3,7 +3,7 @@
 # Modeled on Dockerfile.embprov (the #506 pattern): install goldenmatch from
 # PyPI, copy scripts/, run the entry. Build context is scoped to scripts/ by
 # the repo-root .dockerignore (the monorepo is 40+ GB).
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 ENV PYTHONUNBUFFERED=1 \
     GOLDENMATCH_AUTOCONFIG_MEMORY=0
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # stalls the container. Will revert to "goldenmatch==1.23.1" once the patch
 # lands in a release.
 RUN pip install --no-cache-dir \
-    "goldenmatch @ git+https://github.com/benseverndev-oss/goldenmatch.git@feat/510-quality-invariant-scale#subdirectory=packages/python/goldenmatch"
+    "goldenmatch @ git+https://github.com/benseverndev-oss/goldenmatch.git@707b123f70f07920c62c71265052f84d9cbc411e#subdirectory=packages/python/goldenmatch"
 
 COPY scripts ./scripts
 
