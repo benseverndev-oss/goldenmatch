@@ -100,5 +100,10 @@
     "socials": {
       "github": "https://github.com/benseverndev-oss/goldenmatch"
     }
+  },
+  "seo": {
+    "metatags": {
+      "canonical": "https://docs.bensevern.dev"
+    }
   }
 }
