@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent, Tool
 
+from goldenmatch.core._logging import sanitize_for_log
+
 from goldenmatch._exclusions_schema import (
     EXCLUDE_COLUMNS_SCHEMA as _EXCLUDE_COLUMNS_SCHEMA,
 )
@@ -622,7 +624,7 @@ def _dispatch(
         except Exception as exc:
             return {"error": f"Could not read CSV '{file_path}': {exc}"}
 
-        logger.info("scan_quality: scanning %s (%d records)", file_path, df.height)
+        logger.info("scan_quality: scanning %s (%d records)", sanitize_for_log(file_path), df.height)
         qc = QualityConfig(mode="silent", fix_mode="none", domain=args.get("domain"))
         _, issues = run_quality_check(df, qc)
         logger.info("scan_quality: found %d issues", len(issues))
@@ -658,7 +660,7 @@ def _dispatch(
 
         fix_mode = args.get("fix_mode", "safe")
         domain = args.get("domain")
-        logger.info("fix_quality: fixing %s (mode=%s)", file_path, fix_mode)
+        logger.info("fix_quality: fixing %s (mode=%s)", sanitize_for_log(file_path), sanitize_for_log(fix_mode))
         qc = QualityConfig(mode="silent", fix_mode=fix_mode, domain=domain)
         fixed_df, fixes = run_quality_check(df, qc)
         logger.info("fix_quality: %d fixes applied", len(fixes))
@@ -706,7 +708,7 @@ def _dispatch(
         except Exception as exc:
             return {"error": f"Could not read CSV '{file_path}': {exc}"}
 
-        logger.info("run_transforms: transforming %s (%d records)", file_path, df.height)
+        logger.info("run_transforms: transforming %s (%d records)", sanitize_for_log(file_path), df.height)
         tc = TransformConfig(mode="silent")
         transformed_df, fixes = run_transform(df, tc, strict=True)
         logger.info("run_transforms: %d transforms applied", len(fixes))

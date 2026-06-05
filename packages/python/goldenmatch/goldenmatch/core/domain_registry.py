@@ -34,6 +34,8 @@ from pathlib import Path
 
 import yaml
 
+from goldenmatch.core._logging import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 # Default search paths for domain YAML files
@@ -179,7 +181,7 @@ def save_rulebook(rulebook: DomainRulebook, path: str | Path) -> Path:
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
-    logger.info("Saved domain rulebook '%s' to %s", rulebook.name, path)
+    logger.info("Saved domain rulebook '%s' to %s", sanitize_for_log(rulebook.name), sanitize_for_log(path))
     return path
 
 

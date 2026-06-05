@@ -17,6 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from goldenmatch.config.schemas import MatchkeyConfig
+from goldenmatch.core._logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def save_lineage(
     if golden_provenance:
         data["golden_records"] = _serialize_provenance(golden_provenance)
     path.write_text(json.dumps(data, default=str, indent=2), encoding="utf-8")
-    logger.info("Saved lineage for %d pairs to %s", len(lineage), path)
+    logger.info("Saved lineage for %d pairs to %s", len(lineage), sanitize_for_log(path))
     return path
 
 

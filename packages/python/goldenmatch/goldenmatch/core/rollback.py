@@ -11,6 +11,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from goldenmatch.core._logging import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 RUN_LOG_FILE = ".goldenmatch_runs.json"
@@ -103,7 +105,7 @@ def rollback_run(
     target["rolled_back_at"] = datetime.now().isoformat()
     log_path.write_text(json.dumps(runs, indent=2, default=str), encoding="utf-8")
 
-    logger.info("Rolled back run %s: deleted %d files", run_id, len(deleted))
+    logger.info("Rolled back run %s: deleted %d files", sanitize_for_log(run_id), len(deleted))
 
     return {
         "run_id": run_id,
