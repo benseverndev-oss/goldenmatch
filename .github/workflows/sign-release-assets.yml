@@ -1,0 +1,59 @@
+name: sign-release-assets
+
+# Retro-signs the assets of an EXISTING GitHub release with cosign keyless
+# (sigstore bundle per asset, uploaded next to it). Used to backfill
+# signatures on releases published before publish-goldenmatch-pg.yml signed
+# at build time (Scorecard Signed-Releases).
+#
+# Deliberately signature-only: no build-provenance attestation here, because
+# provenance asserts "this artifact was built by this workflow" -- which is
+# false for a retro-signed artifact. Signing asserts only "the repo owner
+# vouches for this asset as published", which is true.
+#
+# Verify with:
+#   cosign verify-blob --bundle <asset>.sigstore <asset> \
+#     --certificate-identity-regexp 'github.com/benseverndev-oss/goldenmatch' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose assets to sign (e.g. goldenmatch-pg-v0.7.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # upload .sigstore bundles to the release
+      id-token: write  # cosign keyless OIDC
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Download, sign, and upload bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir assets && cd assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY"
+          signed=0
+          for f in *; do
+            case "$f" in
+              *.sigstore|*.intoto.jsonl|*.sig|*.asc) echo "skip existing signature artifact: $f"; continue ;;
+            esac
+            cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
+            signed=$((signed + 1))
+          done
+          if [ "$signed" -eq 0 ]; then
+            echo "::error::no signable assets found on release $TAG"
+            exit 1
+          fi
+          gh release upload "$TAG" ./*.sigstore --repo "$GITHUB_REPOSITORY" --clobber
+          echo "signed and uploaded $signed bundle(s) to $TAG"
