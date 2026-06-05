@@ -23,11 +23,13 @@ on:
         default: "bench-dataset-v1"
 
 permissions:
-  contents: write  # required to create / update releases
+  contents: read
 
 jobs:
   generate:
     name: "generate bench dataset"
+    permissions:
+      contents: write  # required to create / update releases
     runs-on: large-new-64GB
     timeout-minutes: 60
 
