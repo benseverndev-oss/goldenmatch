@@ -51,9 +51,16 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: "2_28"
-          # vendored OpenSSL (Linux-only, see embed-py/Cargo.toml) compiles from
-          # source and needs perl in the manylinux container.
-          before-script-linux: "command -v perl >/dev/null || dnf install -y perl-core || yum install -y perl-core"
+          # ort-sys's build script downloads ONNX Runtime via a TLS client that
+          # needs system OpenSSL (a host/build-dep). The x86_64 leg uses the
+          # AlmaLinux manylinux image (dnf/yum -> openssl-devel); the aarch64 leg
+          # uses the Debian-based rust-cross image (apt -> libssl-dev). Try each
+          # package manager so both containers are covered.
+          before-script-linux: |
+            if command -v dnf >/dev/null 2>&1; then dnf install -y openssl-devel pkgconfig
+            elif command -v yum >/dev/null 2>&1; then yum install -y openssl-devel pkgconfig
+            elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y libssl-dev pkg-config
+            fi
           args: --release --out dist -m ${{ env.MANIFEST }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
