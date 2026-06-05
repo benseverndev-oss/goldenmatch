@@ -531,6 +531,89 @@ _DOMAIN_SCORER_MAP = {
 }
 
 
+# Free-text col_types where data-entry corruption is common and `token_sort`
+# (word-order-robust but character-noise-fragile) underperforms. Surfaced by the
+# NCVR regression: res_street_address scored with token_sort gave F1 0.871;
+# jaro_winkler recovered 0.981. See #662.
+_NOISE_PRONE_FUZZY_TYPES = frozenset({"address", "string"})
+
+# Benchmark-confirmed upgrade target (#662). The sweep tied jaro_winkler with
+# ensemble on NCVR-high F1; jaro_winkler is chosen as the cheaper of the tie
+# (single-pass char similarity vs the multi-scorer ensemble) and is the
+# NCVR-validated lever.
+_NOISE_AWARE_TARGET_SCORER = "jaro_winkler"
+
+
+def _noise_aware_target_scorer() -> str:
+    """The scorer token_sort upgrades to on noise-prone col_types. Benchmark-only
+    env override (GOLDENMATCH_NOISE_AWARE_TARGET) lets the harness sweep
+    jaro_winkler/ensemble without code edits; unset -> the committed constant."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_TARGET") or _NOISE_AWARE_TARGET_SCORER
+
+
+def _noise_aware_scorers_enabled() -> bool:
+    """Whether to upgrade noise-fragile token_sort assignments on free-text
+    col_types. Default ON (#662: jaro_winkler gave +0.48pp NCVR-high F1,
+    precision-driven, no Febrl3 regression; #528 CI gate guards clean precision).
+    Kill-switch: GOLDENMATCH_NOISE_AWARE_SCORERS=0 (or "false"/"disabled",
+    case-insensitive)."""
+    return os.environ.get("GOLDENMATCH_NOISE_AWARE_SCORERS", "1").lower() not in (
+        "0", "false", "disabled",
+    )
+
+
+def _noise_aware_scorer(col_type: str, scorer: str) -> str:
+    """Upgrade a noise-fragile token_sort to the noise-aware target scorer for
+    free-text col_types prone to character-level corruption. No-op unless the gate
+    is on AND the assignment is exactly token_sort on a noise-prone col_type — so
+    a non-default scorer chosen upstream (refdata/embedding/ensemble/qgram) is
+    never overridden."""
+    if (
+        _noise_aware_scorers_enabled()
+        and col_type in _NOISE_PRONE_FUZZY_TYPES
+        and scorer == "token_sort"
+    ):
+        return _noise_aware_target_scorer()
+    return scorer
+
+
+def _is_short_code(p: ColumnProfile) -> bool:
+    """#491: detect short alphanumeric *code* columns (SKU, part-no, plan-code).
+
+    These collapse under the generic string scorers (``token_sort`` token-bag
+    similarity is meaningless on a 6-char opaque code), so they get routed to
+    the char-n-gram ``qgram`` scorer instead. Deliberately conservative — a
+    real name/word column must NOT match, or we'd silently swap proven name
+    scoring for qgram. The letter+digit-mix requirement is the main guard:
+    English names/words are letters-only, so they fail it.
+    """
+    if not (3 <= p.avg_len <= 12):
+        return False
+    if p.cardinality_ratio < 0.3:
+        return False
+    # Only generic string-ish columns are candidates; named identity types
+    # (name/email/phone/zip/geo/date/numeric) keep their tuned scorers.
+    if p.col_type not in ("string", "identifier"):
+        return False
+
+    samples = [s for s in (p.sample_values or []) if s]
+    if not samples:
+        return False
+
+    # Code-like signal: the value carries BOTH a letter and a digit
+    # (e.g. ``A1B2C3``, ``SKU-9921``). This is the discriminating test that
+    # excludes pure-alpha names/words and pure-numeric IDs (already handled
+    # as identifiers/numeric upstream). Require a clear majority to look
+    # code-like before overriding.
+    def _is_code_like(s: str) -> bool:
+        has_alpha = any(c.isalpha() for c in s)
+        has_digit = any(c.isdigit() for c in s)
+        return has_alpha and has_digit
+
+    code_like = sum(1 for s in samples if _is_code_like(s))
+    return code_like >= max(1, (len(samples) + 1) // 2)
+
+
 def _adaptive_threshold(fields: list[MatchkeyField]) -> float:
     """Compute threshold based on field types in the matchkey."""
     exact_scorers = {"exact"}
@@ -563,8 +646,12 @@ def build_matchkeys(
     skipped_exact: list[tuple[str, str]] = []  # (column, reason)
 
     for p in profiles:
-        if p.col_type in ("numeric", "date", "identifier", "year"):
-            continue  # skip non-matchable columns (year is blocking-only)
+        # identifier columns ARE matchable: a real shared identifier
+        # (NPI/SSN/MRN) backs an exact matchkey, gated below by the
+        # cardinality band. Per-record surrogate keys (card==1.0) are
+        # excluded by the upper bound. See #715.
+        if p.col_type in ("numeric", "date", "year"):
+            continue  # year is blocking-only
 
         if p.col_type == "description":
             fuzzy_fields.append(MatchkeyField(
@@ -604,6 +691,21 @@ def build_matchkeys(
             p.name, scorer, transforms, p.col_type,
         )
 
+        # #491: short opaque codes (SKU, part-no) score badly under the
+        # generic string scorers — token_sort/ensemble assume word-ish text.
+        # Route them to the char-n-gram qgram scorer instead. Gated on
+        # _is_short_code (letter+digit mix, short, high-cardinality) so real
+        # names/words/identifiers keep their tuned scorers untouched.
+        if scorer in ("token_sort", "ensemble") and _is_short_code(p):
+            scorer = "qgram"
+
+        # #662: noise-aware refinement (opt-in, default OFF). Upgrade token_sort
+        # -> jaro_winkler/ensemble on corruption-prone free-text col_types. Runs
+        # AFTER the qgram short-code guard so a code-like string keeps qgram (the
+        # guard already rewrote it; this no-ops on non-token_sort). See
+        # _noise_aware_scorer.
+        scorer = _noise_aware_scorer(p.col_type, scorer)
+
         # Geo and zip are blocking signals, NOT identity claims. An exact
         # matchkey on a city column asserts "two records sharing a city are
         # the same entity", which collapses every record per city into one
@@ -631,7 +733,7 @@ def build_matchkeys(
         if scorer == "exact" and p.cardinality_ratio > 0 and p.cardinality_ratio < 0.5:
             reason = (
                 f"cardinality_ratio={p.cardinality_ratio:.4f} < 0.5 "
-                f"— lacks identifier-level uniqueness"
+                f"-- lacks identifier-level uniqueness"
             )
             logger.warning(
                 "Skipping exact matchkey for '%s' (%s). "
@@ -641,15 +743,26 @@ def build_matchkeys(
             skipped_exact.append((p.name, reason))
             continue
 
-        # Skip exact matchkeys for large datasets — exact matchkeys do a full
-        # self-join which is O(N^2) without blocking. For auto-configure, use
-        # exact columns only in blocking (handled by build_blocking).
-        if scorer == "exact" and df is not None and df.height > 10000:
-            reason = f"dataset has {df.height} rows; exact self-join is O(N^2)"
-            logger.warning(
-                "Skipping exact matchkey for '%s' (%s). "
-                "Use blocking instead.",
-                p.name, reason,
+        # Exact matchkeys are a Polars hash self-join (find_exact_matches),
+        # not a nested loop, and do not pass through fuzzy blocking. Their
+        # cost is the number of emitted equal-pairs, bounded by cardinality:
+        # a high-cardinality column emits few pairs and is both cheap and
+        # mega-cluster-safe. So there is NO row-count guard here (the old
+        # df.height > 10000 guard mismodeled the cost and orphaned real
+        # identifiers -- see #715). The mega-cluster risk is the OPPOSITE
+        # shape (low cardinality), already caught by the >= 0.5 gate above.
+        #
+        # Upper bound: a perfectly-unique column (card == 1.0) is a
+        # per-record surrogate key (e.g. a row PK). It is never shared, so an
+        # exact match emits zero pairs and asserts no real identity. Exclude
+        # it for config hygiene.
+        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+            reason = (
+                f"cardinality_ratio={p.cardinality_ratio:.4f} >= 1.0 "
+                f"-- perfectly-unique surrogate key, no shared identity to match"
+            )
+            logger.info(
+                "Skipping exact matchkey for '%s' (%s).", p.name, reason,
             )
             skipped_exact.append((p.name, reason))
             continue
@@ -671,7 +784,7 @@ def build_matchkeys(
     # a notebook user their auto-config silently degraded to fuzzy-only.
     _exact_eligible = [
         p for p in profiles
-        if p.col_type not in ("numeric", "date", "identifier", "description")
+        if p.col_type not in ("numeric", "date", "description")
         and _SCORER_MAP.get(p.col_type, (None,))[0] == "exact"
     ]
     if _exact_eligible and not exact_fields:
@@ -886,13 +999,66 @@ def _build_compound_blocking(
     def _null_rate(col_name: str) -> float:
         return df[col_name].null_count() / df.height if df.height > 0 else 0.0
 
-    # Build unified candidate pool (excludes numeric, date, identifier)
-    candidates = [
-        p for p in profiles
-        if p.col_type not in ("numeric", "date", "identifier")
-        and _null_rate(p.name) <= max_null_rate
-        and _check_source_overlap(df, p.name) > 0.0
-    ]
+    def _max_block_size(col_name: str) -> int:
+        """Largest group size when blocking on this column."""
+        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
+
+    def _nonnull_ratio(col_name: str) -> float:
+        """Distinct/non-null ratio -- the TRUE per-record uniqueness, not the
+        null-deflated ColumnProfile.cardinality_ratio. A near-1.0 value means a
+        surrogate-key-like column (npi/phone/email) whose only big "block" is
+        its null bucket -- useless as a blocking component."""
+        nn = df[col_name].drop_nulls()
+        n = nn.len()
+        return (nn.n_unique() / n) if n > 0 else 1.0
+
+    # #715: judge compound COMPONENTS by whether they BOUND block size (i.e.
+    # actually group records) and aren't surrogate keys -- NOT by col_type.
+    # A sparse zip5 reclassifies `numeric -> identifier` and (at ~50% null)
+    # exceeds the single-key null ceiling, so the old col_type/null filters
+    # doubly excluded it, leaving only oversized name columns. As a compound
+    # COMPONENT, a high-null column is fine: the multi_pass config's other
+    # passes cover the null rows. So:
+    #   - keep `numeric`/`date` excluded;
+    #   - admit `identifier` (and the high-cardinality `email`/`phone` types)
+    #     ONLY when the column genuinely GROUPS records: non-singleton blocks
+    #     (`_max_block_size > 1`), `cardinality_ratio < 1.0`, and a non-null
+    #     distinct ratio below the blocking gate (rejects surrogate keys like
+    #     npi/phone/email whose non-null values are ~unique per record and
+    #     whose only large block is the null bucket);
+    #   - relax the single-key null ceiling to 0.6 for the component role so a
+    #     ~50%-null zip5 qualifies.
+    # NOTE: `_nonnull_ratio` / `_max_block_size` are computed on `df` directly.
+    # On the v0 non-distributed path `df` IS the full dataset (controller passes
+    # the full frame to `_initial_config`), so these are exact. If a SAMPLED df
+    # is ever fed here (distributed path), the unprojected non-null ratio is
+    # sample-inflated and would wrongly reject a mid-cardinality column -- such a
+    # caller must Chao1-project the ratio (see scale_cardinality_ratio_to_full_population).
+    # Tracked as a distributed-path follow-up; out of scope for #715 (single-node).
+    from goldenmatch.core.blocking_candidates import _blocking_max_ratio
+    _grouping_ratio_max = _blocking_max_ratio()
+    _component_null_ceiling = max(max_null_rate, 0.6)
+    _high_card_types = ("identifier", "email", "phone")
+
+    def _is_admissible(p: ColumnProfile) -> bool:
+        if p.col_type in ("numeric", "date"):
+            return False
+        if _check_source_overlap(df, p.name) <= 0.0:
+            return False
+        if p.col_type in _high_card_types:
+            # Surrogate-key / near-unique guard: must actually group records.
+            if not (
+                _max_block_size(p.name) > 1
+                and p.cardinality_ratio < 1.0
+                and _nonnull_ratio(p.name) < _grouping_ratio_max
+            ):
+                return False
+            # High-null is OK for a compound component (other passes cover nulls).
+            return _null_rate(p.name) <= _component_null_ceiling
+        # Low-cardinality types (name/string/geo/...): keep the stricter ceiling.
+        return _null_rate(p.name) <= max_null_rate
+
+    candidates = [p for p in profiles if _is_admissible(p)]
     if len(candidates) < 2:
         return None
 
@@ -1214,6 +1380,30 @@ def _pick_date_blocking_col(
     return None
 
 
+def _degenerate_blocking_config(max_safe_block: int) -> BlockingConfig:
+    """Empty-keys blocking config: the #715 degenerate signal.
+
+    Emitted when every candidate blocking key/pass projects oversized at
+    full N. Empty ``keys`` is exactly what the controller's #417 degenerate
+    guard inspects (``not blocking.keys`` at ``>= REFUSE_AT_N``), so it
+    refuses loudly rather than shipping a candidate-pair bomb. ``auto_suggest``
+    keeps the model valid (the validator bypasses the keys-required check for
+    auto_suggest) and matches the established empty-keys pattern used by the
+    CLI / preview paths.
+
+    Note: the #417 guard refuses on empty keys only when the committed profile
+    is RED (``_no_blocking_keys AND _profile_red``); a GREEN/YELLOW profile
+    with empty keys would not refuse on that branch (unconditional RED refusal
+    is handled separately by the ``allow_red_config`` work).
+    """
+    return BlockingConfig(
+        keys=[],
+        auto_suggest=True,
+        max_block_size=max_safe_block,
+        skip_oversized=True,
+    )
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -1264,6 +1454,40 @@ def build_blocking(
     # uses the sample's distinct count + sample_n vs full_n to project.
     effective_n_full = n_rows_full if n_rows_full is not None else df.height
     sample_n = max(df.height, 1)
+
+    # #491: ANN blocking is a FALLBACK, not a preempt. ANN is emitted ONLY
+    # when an embedding-bearing column exists, the dataset is at scale, AND no
+    # bounded exact blocking key is available. A strong exact identifier still
+    # wins over ANN when present — we evaluate the exact/safe-exact path first
+    # (below) and only fall through to ANN when that path produced no usable
+    # key, before the name/compound fallback.
+    #
+    # STRICT invariant preserved: ANN is never emitted without an embedding-
+    # bearing column. ANNBlocker needs a vector column (blocker.py raises
+    # ValueError if ``ann_column`` is unset). The embedding signal is a profile
+    # with ``col_type == "description"`` — those columns become
+    # ``record_embedding`` scorers in build_matchkeys (line ~852) and carry the
+    # vectors ANN embeds. No embedding column => never ann.
+    #
+    # ANN_MIN_ROWS default 100_000; env-overridable via
+    # GOLDENMATCH_ANN_MIN_ROWS (mirrors the env-threshold pattern used by
+    # GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD below).
+    _ANN_MIN_ROWS_DEFAULT = 100_000
+    _ann_raw = os.environ.get("GOLDENMATCH_ANN_MIN_ROWS")
+    if _ann_raw is not None:
+        try:
+            ann_min_rows = int(_ann_raw)
+        except ValueError:
+            logger.warning(
+                "GOLDENMATCH_ANN_MIN_ROWS=%r is not an int; ignoring and "
+                "using default %d.", _ann_raw, _ANN_MIN_ROWS_DEFAULT,
+            )
+            ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+    else:
+        ann_min_rows = _ANN_MIN_ROWS_DEFAULT
+
+    _embedding_cols = [p for p in profiles if p.col_type == "description"]
+    _ann_eligible = bool(_embedding_cols) and effective_n_full >= ann_min_rows
 
     def _projected_ratio(p: ColumnProfile) -> float:
         """Sample-corrected cardinality_ratio for the gate."""
@@ -1339,6 +1563,64 @@ def build_blocking(
     # practical OOM ceiling on a 16 GB runner.
     max_safe_block = max(1000, min(10_000, int(df.height) // 200))
 
+    # #715: gate every emitted blocking key/pass by its PROJECTED full-N max
+    # block size. build_blocking runs on a sample (or, in the v0 path, the
+    # full df) and the emitted single-column soundex(name) passes had no
+    # block-size guard. On a sparse-zip5 healthcare shape, zip5 reclassifies
+    # to `identifier` and drops out of the compound, leaving single-name
+    # passes whose max block projects to ~50K rows at 1M -> ~39.6M candidate
+    # pairs -> an 18-min run. project_max_block_size with full_n == df.height
+    # is the identity (v0 path uses exact block sizes -> correct).
+    from goldenmatch.core.blocking_candidates import project_max_block_size
+
+    def _projected_block(fields: list[str]) -> int:
+        try:
+            sample_mb = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+        except Exception:  # pragma: no cover -- defensive
+            return effective_n_full  # fail-safe: treat unprojectable key as maximally oversized -> dropped
+        return project_max_block_size(sample_mb, df.height, effective_n_full)
+
+    def _pass_is_bounded(key: BlockingKeyConfig) -> bool:
+        return _projected_block(key.fields) <= max_safe_block
+
+    def _gate_passes(
+        primary: BlockingKeyConfig,
+        passes: list[BlockingKeyConfig],
+    ) -> tuple[BlockingKeyConfig | None, list[BlockingKeyConfig]]:
+        """Drop oversized passes; pick a bounded primary key (#715).
+
+        Returns ``(primary_or_None, surviving_passes)``. The chosen primary is
+        the original primary if it is bounded, else the first bounded pass.
+        When NOTHING is bounded, the primary is ``None`` (caller emits an
+        empty/degenerate config so the controller refuses rather than
+        shipping a candidate-pair bomb).
+        """
+        bounded = [p for p in passes if _pass_is_bounded(p)]
+        dropped = [p for p in passes if not _pass_is_bounded(p)]
+        if dropped:
+            logger.info(
+                "Dropping %d oversized blocking pass(es) by projected full-N "
+                "block size (> %d, full_n=%d): %s. See #715.",
+                len(dropped), max_safe_block, effective_n_full,
+                [(p.fields, p.transforms) for p in dropped],
+            )
+        if _pass_is_bounded(primary):
+            return primary, bounded
+        if bounded:
+            logger.info(
+                "Primary blocking key %s projects oversized (> %d); promoting "
+                "first bounded pass %s to primary. See #715.",
+                primary.fields, max_safe_block, bounded[0].fields,
+            )
+            return bounded[0], bounded
+        logger.warning(
+            "All name-fallback blocking keys/passes project oversized at "
+            "full_n=%d (> %d max_safe_block); emitting empty (degenerate) "
+            "blocking config so the controller refuses. See #715.",
+            effective_n_full, max_safe_block,
+        )
+        return None, []
+
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
@@ -1359,15 +1641,43 @@ def build_blocking(
             max_safe_block,
         )
 
+    # #491: ANN fallback. We only reach here when no bounded exact blocking
+    # key was found (the exact path above returns whenever it had a usable
+    # safe_exact key). If embeddings are present at scale, prefer ANN over the
+    # name/compound fallback below.
+    if _ann_eligible:
+        ann_col = _embedding_cols[0].name
+        logger.info(
+            "Auto-selecting ANN blocking (fallback): no bounded exact "
+            "blocking key available, embedding column %r present and "
+            "n_rows=%d >= ANN_MIN_ROWS=%d. See #491.",
+            ann_col, effective_n_full, ann_min_rows,
+        )
+        return BlockingConfig(strategy="ann", ann_column=ann_col)
+
     # ── Check if name-based fallback would also be oversized ──
+    # #715: the name path picks ONE primary name column (pattern_names[0], else
+    # name_cols[0]) and blocks on it. If THAT primary is oversized, single-name
+    # blocking is degraded (it gets demoted to soundex/secondary or dropped) --
+    # so we should try a bounded compound first, even if some OTHER name column
+    # happens to be bounded on its own. Gating on "is the name path's primary
+    # oversized" (by the projected full-N size, consistent with _gate_passes)
+    # rather than "is EVERY name col oversized" lets the sparse-zip shape reach
+    # zip5+last_name instead of degrading to a bare last_name block.
+    def _name_path_primary() -> str | None:
+        if not name_cols:
+            return None
+        pattern_names = [p for p in name_cols if _classify_by_name(p.name) == "name"]
+        return (pattern_names[0] if pattern_names else name_cols[0]).name
+
+    _primary_name = _name_path_primary()
     _all_single_oversized = True
-    for p in name_cols:
+    if _primary_name is not None:
         try:
-            if _max_block_size(p.name) <= max_safe_block:
+            if _projected_block([_primary_name]) <= max_safe_block:
                 _all_single_oversized = False
-                break
         except Exception:
-            continue
+            pass
 
     if _all_single_oversized and (name_cols or text_cols):
         # All single columns produce oversized blocks — try compound blocking
@@ -1380,9 +1690,32 @@ def build_blocking(
 
         compound_config = _build_compound_blocking(profiles, df, max_safe_block, max_null_rate)
         if compound_config is not None:
-            return compound_config
-
-        logger.info("Compound blocking failed — falling through to single-column fallbacks")
+            # #715: project the compound's keys/passes to full N before emitting.
+            # _build_compound_blocking selects on SAMPLE block size, but a
+            # high-null component (e.g. a ~50%-null zip5) hides a large null
+            # bucket that scales linearly: zip5+last_name is ~323/block on a
+            # 30K sample but projects to ~10K at 1M. Gate it through the same
+            # projected guard as the name path; if nothing survives, fall
+            # through to single-column fallbacks rather than ship a bomb.
+            c_primary = (compound_config.keys or [None])[0]
+            c_passes = compound_config.passes or list(compound_config.keys or [])
+            if c_primary is not None:
+                gated_primary, gated_passes = _gate_passes(c_primary, c_passes)
+                if gated_primary is not None:
+                    return BlockingConfig(
+                        keys=[gated_primary],
+                        strategy="multi_pass",
+                        passes=gated_passes,
+                        max_block_size=max_safe_block,
+                        skip_oversized=True,
+                    )
+            logger.info(
+                "Compound blocking config projects oversized at full_n=%d -- "
+                "falling through to single-column fallbacks. See #715.",
+                effective_n_full,
+            )
+        else:
+            logger.info("Compound blocking failed — falling through to single-column fallbacks")
 
     # Name columns: use multi-pass with soundex + substring
     # Prefer columns matched by name pattern (person names) over data-profiled names
@@ -1461,15 +1794,22 @@ def build_blocking(
                     fields=[date_block_col],
                     transforms=["lowercase", "strip"],
                 ))
+            geo_primary = BlockingKeyConfig(
+                fields=[best_geo, best_name], transforms=["lowercase", "strip"]
+            )
+            geo_passes = [
+                BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"]),
+                BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "substring:0:5"]),
+                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
+                *extra_passes,
+            ]
+            primary, gated_passes = _gate_passes(geo_primary, geo_passes)
+            if primary is None:
+                return _degenerate_blocking_config(max_safe_block)
             return BlockingConfig(
-                keys=[BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"])],
+                keys=[primary],
                 strategy="multi_pass",
-                passes=[
-                    BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "strip"]),
-                    BlockingKeyConfig(fields=[best_geo, best_name], transforms=["lowercase", "substring:0:5"]),
-                    BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
-                    *extra_passes,
-                ],
+                passes=gated_passes,
                 max_block_size=max_safe_block,
                 skip_oversized=True,
             )
@@ -1489,15 +1829,22 @@ def build_blocking(
                 fields=[date_block_col],
                 transforms=["lowercase", "strip"],
             ))
+        name_primary = BlockingKeyConfig(
+            fields=[best_name], transforms=["lowercase", "soundex"]
+        )
+        name_passes = [
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "substring:0:5"]),
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
+            BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
+            *extra_passes,
+        ]
+        primary, gated_passes = _gate_passes(name_primary, name_passes)
+        if primary is None:
+            return _degenerate_blocking_config(max_safe_block)
         return BlockingConfig(
-            keys=[BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"])],
+            keys=[primary],
             strategy="multi_pass",
-            passes=[
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "substring:0:5"]),
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "soundex"]),
-                BlockingKeyConfig(fields=[best_name], transforms=["lowercase", "token_sort", "substring:0:8"]),
-                *extra_passes,
-            ],
+            passes=gated_passes,
             max_block_size=max_safe_block,
             skip_oversized=True,
         )
@@ -1813,6 +2160,7 @@ def auto_configure_df(
     reference: pl.DataFrame | pl.LazyFrame | None = None,
     _skip_finalize: bool = False,
     confidence_required: bool = True,
+    allow_red_config: bool = False,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -1948,6 +2296,7 @@ def auto_configure_df(
         v0_kwargs=v0_kw,
         skip_finalize=_skip_finalize,
         confidence_required=confidence_required,
+        allow_red_config=allow_red_config,
     )
 
     # Backend selection is now driven by the controller v3 planner inside
@@ -2396,6 +2745,10 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     """
     fields = []
     for p in profiles:
+        # NOTE (#715): build_matchkeys now admits high-cardinality identifier
+        # columns to exact matchkeys via a cardinality band. The probabilistic
+        # path intentionally still skips identifier here — admitting it needs a
+        # separate Fellegi-Sunter m/u-aware decision. Tracked as a #715 follow-up.
         if p.col_type in ("numeric", "date", "identifier", "description"):
             continue
 

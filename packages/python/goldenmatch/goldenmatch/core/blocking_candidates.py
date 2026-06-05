@@ -120,6 +120,34 @@ def scale_cardinality_ratio_to_full_population(
     return min(scaled_distinct / full_n_rows, 1.0)
 
 
+def project_max_block_size(
+    sample_max_block: int,
+    sample_n: int,
+    full_n: int,
+) -> int:
+    """Project a sample's max block size to the full population.
+
+    Block size for a fixed-cardinality blocking key scales ~LINEARLY with N:
+    a key's largest block holds a roughly fixed FRACTION of all rows, so at
+    full scale the block grows by full_n / sample_n. (Contrast
+    ``scale_cardinality_ratio_to_full_population``, which uses sqrt because
+    DISTINCT-count growth is sublinear; block size is the opposite.)
+
+    Returns ``sample_max_block`` when the sample IS the full data
+    (``full_n <= sample_n``) or on degenerate inputs. Clamped to
+    ``full_n``.
+
+    Used by ``build_blocking`` to reject blocking keys/passes whose projected
+    full-N max block size would exceed ``max_safe_block`` (#715).
+    """
+    if sample_n <= 0 or sample_max_block <= 0:
+        return max(0, sample_max_block)
+    if full_n <= sample_n:
+        return sample_max_block
+    projected = int(round(sample_max_block * (full_n / sample_n)))
+    return min(projected, full_n)
+
+
 @dataclass(frozen=True)
 class ColumnRole:
     """Per-column role classification.

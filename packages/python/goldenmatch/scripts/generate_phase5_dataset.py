@@ -64,6 +64,19 @@ def _generate_chunk(
         np.arange(cluster_start, cluster_end, dtype=np.int64),
         ROWS_PER_CLUSTER,
     )
+    # GLOBAL row id: chunks are contiguous cluster ranges, so a row's global
+    # index is deterministic from its cluster offset regardless of worker
+    # count. Carrying __row_id__ in the data is load-bearing for the
+    # distributed pipeline: without a global id, each Ray partition synthesizes
+    # 0..partition_height-1 LOCALLY, those ids collide across partitions, and
+    # WCC merges unrelated clusters (one block-position fused across all N
+    # partitions). See _score_partition_with_config's `if "__row_id__" not in
+    # df.columns` guard -- a present column is respected, synthesis skipped.
+    row_id = np.arange(
+        cluster_start * ROWS_PER_CLUSTER,
+        cluster_end * ROWS_PER_CLUSTER,
+        dtype=np.int64,
+    )
     typo_mask = rng.random(n_rows) < TYPO_RATE
 
     # Build everything as vectorized Polars expressions over native
@@ -73,6 +86,7 @@ def _generate_chunk(
     # requires matching lengths).
     return pl.DataFrame(
         {
+            "__row_id__": row_id,
             "__cid__": cluster_ids_repeated,
             "__typo__": typo_mask,
         }
@@ -102,7 +116,7 @@ def _generate_chunk(
         # zip: cluster_id % 100000 zero-padded to 5 digits.
         zip=(pl.col("__cid__") % 100000).cast(pl.Utf8).str.zfill(5),
     ).select(
-        "first_name", "last_name", "email", "zip",
+        "__row_id__", "first_name", "last_name", "email", "zip",
     )
 
 

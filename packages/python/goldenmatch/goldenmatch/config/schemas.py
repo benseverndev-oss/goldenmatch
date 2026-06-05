@@ -21,7 +21,7 @@ VALID_SIMPLE_TRANSFORMS = frozenset({
 VALID_SCORERS = frozenset({
     "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
     "embedding", "record_embedding", "ensemble",
-    "dice", "jaccard",
+    "dice", "jaccard", "qgram",
 })
 
 VALID_STRATEGIES = frozenset({
@@ -444,6 +444,12 @@ class GoldenRulesConfig(BaseModel):
     auto_split: bool = True
     quality_weighting: bool = True
     weak_cluster_threshold: float = 0.3
+    # #726: cap on cumulative auto-split edge-work. None => auto-scaled
+    # max(5_000_000, n_rows * 5). Raise this (or env
+    # GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET) if a loud "clusters left oversized"
+    # warning fires on a legitimately dense dataset. Precedence: this field >
+    # env > auto-scaled.
+    split_edge_budget: int | None = None
     # v1.18: post-cluster golden-rules refinement. When True, after
     # clustering the pipeline runs `refine_golden_rules` against the
     # cluster output + column profiles to pick per-field strategies

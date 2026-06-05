@@ -15,6 +15,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - Polars `scan_csv` uses `encoding="utf8"` not `"utf-8"`
 - Polars `read_excel` needs explicit `engine="openpyxl"`
 - **Release tags:** Python = `v1.x.y` (triggers `publish-goldenmatch.yml` → PyPI). TypeScript = `goldenmatch-js-v0.x.y` (triggers `publish-goldenmatch-js.yml` → npm). Never push an unprefixed version tag for TS.
+- **Noise-aware scorer (#662, default ON):** zero-config auto-config upgrades `token_sort` → `jaro_winkler` on `address`/`string` col_types (corruption-prone free text; `token_sort` is word-order-robust but character-noise-fragile). Runs AFTER the qgram short-code guard in `build_matchkeys`, so code-like strings keep `qgram`. Benchmark (`scripts/bench_noise_aware_scorer.py`, NOT a CI gate): +0.48pp F1 on high-corruption NCVR, precision-driven, no Febrl3 regression; `jaro_winkler` == `ensemble` on the sweep (`jaro_winkler` chosen as the cheaper tie). Kill-switch: `GOLDENMATCH_NOISE_AWARE_SCORERS=0` (or `false`/`disabled`) restores legacy `token_sort`; `GOLDENMATCH_NOISE_AWARE_TARGET=ensemble` overrides the target. The clean-precision guard is the in-CI #528 `synthetic_benchmarks` gate. Does NOT reach the negative-evidence `_pick_scorer_for_column` path (separate penalty signal, still `token_sort`).
 
 ## Testing
 - `CliRunner(mix_stderr=False)` errors on click ≥8.3 (currently installed) with `TypeError: unexpected keyword argument 'mix_stderr'`. Drop the kwarg — default already routes stderr separately; `result.stderr` is still accessible.

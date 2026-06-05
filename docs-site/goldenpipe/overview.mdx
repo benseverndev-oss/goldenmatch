@@ -1,0 +1,91 @@
+---
+title: "GoldenPipe overview"
+description: "The orchestrator that chains data-quality checking, transformation, and deduplication into a single adaptive pipeline."
+keywords: ["goldenpipe", "orchestration", "pipeline", "check", "flow", "match"]
+---
+
+GoldenPipe chains GoldenCheck, GoldenFlow, and GoldenMatch into one pipeline. It profiles your data, conditionally routes it through transformation, deduplicates it (or routes sensitive fields to privacy-preserving matching), and emits golden records. Its logic is adaptive: it skips transformation when no issues are found, and it explains the reasoning behind every decision.
+
+## Install
+
+```bash
+pip install goldenpipe
+pip install goldenpipe[mcp]   # MCP server mode
+```
+
+## Quickstart
+
+```python
+import goldenpipe as gp
+
+result = gp.run("customers.csv")
+
+print(result.status)     # "success"
+print(result.check)      # quality findings
+print(result.transform)  # what was fixed
+print(result.match)      # deduplicated clusters
+print(result.reasoning)  # why each decision was made
+```
+
+On the CLI:
+
+```bash
+goldenpipe run customers.csv                 # full pipeline
+goldenpipe run customers.csv --verbose       # show reasoning
+goldenpipe run customers.csv --skip-flow     # check + match only
+goldenpipe run customers.csv --strategy pprl # force privacy mode
+goldenpipe run customers.csv -o golden.csv   # save golden records
+```
+
+## Key features
+
+- **Orchestrates the full pipeline** (Check → Flow → Match) in one call.
+- **Adaptive logic** that skips transformation when there are no quality issues.
+- **Privacy-preserving routing** that detects sensitive fields and routes to PPRL.
+- **Reasoning transparency** that reports why each stage ran or was skipped.
+- **Column-context enrichment** that builds targeted dedupe config from GoldenCheck profiles and column-name heuristics.
+- **Remote and local MCP server** (`goldenpipe mcp-serve`).
+
+GoldenPipe scores 88.07 on the DQBench Pipeline category.
+
+## Selective stages
+
+Run only part of the pipeline by specifying stages:
+
+```python
+from goldenpipe import Pipeline, PipelineConfig, StageSpec
+
+config = PipelineConfig(
+    pipeline="check-and-flow-only",
+    stages=[
+        StageSpec(use="goldencheck.scan"),
+        StageSpec(use="goldenflow.transform"),
+        # omit goldenmatch.dedupe to skip dedup
+    ],
+)
+result = Pipeline(config=config).run(source="data.csv")
+```
+
+## The PipeResult
+
+`Pipeline.run()` returns a `PipeResult`, not the output DataFrame:
+
+```python
+result.status      # PipeStatus enum: SUCCESS, PARTIAL, FAILED
+result.input_rows  # int
+result.stages      # dict[str, StageResult]
+result.artifacts   # dict[str, Any], e.g. {"manifest": Manifest}
+result.errors      # list[str]
+result.reasoning   # dict[str, str], why each stage ran or was skipped
+result.timing      # dict[str, float]
+result.skipped     # list[str]
+```
+
+<Warning>
+  A few sharp edges from the package docs: `PipeResult` does not expose the output DataFrame directly. Use `gp.run(path)` (file-based) rather than `gp.run_df(df)`, since GoldenCheck needs a file extension. And cast mixed-type columns (for example a `birth_year` that is sometimes an int and sometimes a string) to a single type before dedup, or GoldenMatch will raise.
+</Warning>
+
+## MCP endpoints
+
+- Remote: `https://goldenpipe-mcp-production.up.railway.app/mcp/`
+- Local: `goldenpipe mcp-serve --transport http --port 8250`

@@ -10,6 +10,7 @@ distributed clustering, planner integration) ship as their own sub-projects.
 from goldenmatch.distributed._utils import is_ray_dataset
 from goldenmatch.distributed.clustering import (
     build_clusters_distributed,
+    local_cc_assignments,
     materialize_cluster_dict,
     pairs_list_to_dataset,
     two_phase_wcc,
@@ -42,6 +43,7 @@ __all__ = [
     "build_golden_records_smart",
     "dedup_pairs_distributed",
     "is_ray_dataset",
+    "local_cc_assignments",
     "materialize_cluster_dict",
     "materialize_golden_dataframe",
     "materialize_identity_assignments",

@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-06-04
+
+<!-- README-callout
+**100M records, distributed, on a 4-worker Ray cluster — verified.** The distributed Phase-5 pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) now runs a full 100,000,000-row dedupe end to end in ~213 s with the driver process peaking at 0.30 GB RSS. The unlock was removing every driver-side collect from the pipeline (scoring -> per-partition local connected-components -> distributed join -> distributed golden build + write), so nothing funnels back to a single node.
+-->
+
+This release makes the **distributed (Ray) pipeline actually scale to 100M+** by eliminating
+the driver-side materialization points that wedged the head node, and by fixing a latent
+clustering-correctness bug in the distributed path. Verified on a real 4-worker GCP cluster:
+100M rows -> 20M golden records in 213 s, driver peak 0.30 GB.
+
+### Added
+
+- **`local_cc_assignments`** (`goldenmatch.distributed`): connected components via a single
+  per-partition local Union-Find `map_batches`. Distributed scoring is per-partition, so a
+  component's edges are always co-located in one block — a local Union-Find yields the global
+  components with no cross-node merge, no driver collect, and no iterative graph algorithm.
+  Returns `{member_id, cluster_id, cluster_size, oversized}` with globally-unique cluster ids.
+- **End-to-end driver-collect-free distributed pipeline.** `GOLDENMATCH_DISTRIBUTED_PIPELINE=2`
+  now runs `score -> local-CC -> join -> golden -> write` with every stage distributed: rows are
+  annotated with `__cluster_id__` via a distributed `Dataset.join` (not a broadcast dict), and
+  golden records are built **and written** distributed (`build_golden_records_distributed(...)
+  .write_parquet`), never materialized on the driver.
+
+### Fixed
+
+- **Cross-partition cluster-id collision in the distributed path.** The pipeline synthesized
+  `__row_id__` per-partition, so ids collided across partitions and connected-components silently
+  merged unrelated clusters (a 50M run reported ~156K clusters instead of the true ~10M). The
+  synthetic generator now carries a **global** `__row_id__`, and the pipeline respects a
+  pre-existing id.
+
+### Changed
+
+- The distributed golden tail no longer calls `materialize_golden_dataframe(...).to_dicts()` (which
+  collected all golden records to the driver and OOM'd the head at 100M); golden is written from the
+  Ray Dataset directly.
+
+### Ops
+
+- 100M verification recipe: 1 head (`ray start --num-cpus=0`, pure driver) + 4 `e2-standard-16`
+  workers, all with `cloud-platform` scope (workers write parquet to object storage). See
+  `scripts/bench_phase5_explicit.py`.
+
 ## [1.25.0] - 2026-06-01
 
 <!-- README-callout

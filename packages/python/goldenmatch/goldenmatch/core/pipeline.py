@@ -1452,6 +1452,7 @@ def _run_dedupe_pipeline(
     max_cluster_size = 100
     weak_threshold = 0.3
     auto_split = True
+    split_edge_budget = None
     if config.golden_rules:
         if hasattr(config.golden_rules, "max_cluster_size"):
             max_cluster_size = config.golden_rules.max_cluster_size
@@ -1459,6 +1460,7 @@ def _run_dedupe_pipeline(
             weak_threshold = config.golden_rules.weak_cluster_threshold
         if hasattr(config.golden_rules, "auto_split"):
             auto_split = config.golden_rules.auto_split
+        split_edge_budget = getattr(config.golden_rules, "split_edge_budget", None)
 
     record_metric(
         "scored_pair_count",
@@ -1499,6 +1501,7 @@ def _run_dedupe_pipeline(
                 max_cluster_size=max_cluster_size,
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
+                split_edge_budget=split_edge_budget,
             )
         elif _cluster_frames_out_enabled():
             cluster_frames = build_cluster_frames(
@@ -1506,6 +1509,7 @@ def _run_dedupe_pipeline(
                 max_cluster_size=max_cluster_size,
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
+                split_edge_budget=split_edge_budget,
             )
             # SP-B: do NOT rebuild the dict eagerly. stats + dupes (always-run
             # hot path) are computed directly from the frame aggregates below;
@@ -1521,6 +1525,7 @@ def _run_dedupe_pipeline(
                 max_cluster_size=max_cluster_size,
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
+                split_edge_budget=split_edge_budget,
             )
     # SP-B lazy dict rebuild. On the frames-out branch `clusters` is unbound;
     # the remaining dict consumers (adaptive refiner, lineage, identity,
@@ -1738,9 +1743,25 @@ def _run_dedupe_pipeline(
                     golden_records = []
                 else:
                     with stage("golden_build_records_batch_slow"):
+                        # #678: thread per-cluster pair_scores so the
+                        # confidence_majority strategy actually weights by
+                        # edge confidence instead of silently degrading to
+                        # count-majority. The legacy `clusters` dict (this
+                        # non-frames, non-columnar default path) carries real
+                        # per-cluster pair_scores keyed by __row_id__; the
+                        # builder remaps those to positional member indices.
+                        # The frames-out / columnar paths carry pair_scores={}
+                        # by design, so this lookup yields empty dicts there
+                        # (documented limitation; confidence_majority on those
+                        # paths still falls back to count-majority).
+                        cluster_pair_scores = {
+                            cid: info.get("pair_scores", {})
+                            for cid, info in clusters.items()
+                        }
                         golden_records = build_golden_records_batch(
                             multi_df, golden_rules,
                             provenance=_provenance_on,
+                            cluster_pair_scores=cluster_pair_scores,
                         )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by

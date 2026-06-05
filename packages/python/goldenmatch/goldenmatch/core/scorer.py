@@ -90,6 +90,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _dice_score_single(val_a, val_b)
     elif scorer == "jaccard":
         return _jaccard_score_single(val_a, val_b)
+    elif scorer == "qgram":
+        return _qgram_score_single(val_a, val_b)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
@@ -420,6 +422,8 @@ def _fuzzy_score_matrix(
         return _dice_score_matrix(values)
     elif scorer_name == "jaccard":
         return _jaccard_score_matrix(values)
+    elif scorer_name == "qgram":
+        return _qgram_score_matrix(values)
     else:
         # Plugin scorer fallback. Two contracts:
         # 1. Plugin exposes ``score_matrix(values) -> np.ndarray`` — vectorized
@@ -607,6 +611,68 @@ def _jaccard_score_matrix(values: list) -> np.ndarray:
         jaccard = np.where(union > 0, intersection / union, 0.0)
 
     return jaccard.astype(np.float64)
+
+
+def _qgram_set(s: str, n: int = 3) -> set[str]:
+    """Padded character-n-gram set of a raw string.
+
+    Lowercases and pads with ``n-1`` ``#`` sentinels on each side (so a
+    3-gram view of ``"abc"`` is ``{"##a", "#ab", "abc", "bc#", "c##"}``)
+    then returns the FULL set of length-``n`` substrings -- no truncation
+    (unlike the lossy ``qgram:N`` *transform*, which keeps only ``[:5]``).
+    """
+    s = s.lower()
+    pad = "#" * (n - 1)
+    padded = pad + s + pad
+    return {padded[i : i + n] for i in range(len(padded) - n + 1)}
+
+
+def _qgram_score_single(val_a: str, val_b: str, n: int = 3) -> float:
+    """Character-n-gram Jaccard similarity on two raw strings.
+
+    Returns 1.0 when the strings are identical (incl. both empty), 0.0 when
+    the q-gram union is empty (one side empty, the other not), else the
+    Jaccard ratio ``|A & B| / |A | B|`` over their padded q-gram sets.
+    """
+    if val_a == val_b:
+        return 1.0
+    set_a = _qgram_set(val_a, n)
+    set_b = _qgram_set(val_b, n)
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / len(union)
+
+
+def _qgram_score_matrix(values: list, n: int = 3) -> np.ndarray:
+    """NxN character-n-gram Jaccard matrix on raw strings.
+
+    Clear O(N^2) loop -- qgram is a short-code scorer, blocks are small and
+    it stays on the Python path (no native dispatch). None values score 0.0
+    against everything (including the diagonal), mirroring how the bloom
+    matrices treat missing values.
+    """
+    size = len(values)
+    out = np.zeros((size, size), dtype=np.float64)
+    grams: list[set[str] | None] = [
+        _qgram_set(v, n) if v is not None else None for v in values
+    ]
+    for i in range(size):
+        gi = grams[i]
+        if gi is None:
+            continue
+        out[i, i] = 1.0
+        for j in range(i + 1, size):
+            gj = grams[j]
+            if gj is None:
+                continue
+            if values[i] == values[j]:
+                s = 1.0
+            else:
+                union = gi | gj
+                s = len(gi & gj) / len(union) if union else 0.0
+            out[i, j] = out[j, i] = s
+    return out
 
 
 def _build_null_mask(values: list) -> np.ndarray:

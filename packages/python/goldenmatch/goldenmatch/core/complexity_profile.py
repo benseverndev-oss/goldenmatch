@@ -68,23 +68,6 @@ class SparsityVerdict:
 
 
 @dataclass(frozen=True)
-class CollisionSignal:
-    """v1.11: result of identity-column collision detection.
-
-    rate: fraction of multi-record groups (size >= 2) where the witness
-    columns disagree by max divergence > 0.5. High rate (>0.2) indicates
-    the identity column is collision-prone — same value used for distinct
-    entities (T3's adversarial pattern).
-
-    witness_used: name of the witness column that drove the highest
-    divergences (used by the demote rule's logging). Empty string when
-    no signal could be computed (budget timeout, no witnesses).
-    """
-    rate: float
-    witness_used: str
-
-
-@dataclass(frozen=True)
 class IndicatorsProfile:
     """v1.10: dynamic measurements computed lazily by indicators.
 

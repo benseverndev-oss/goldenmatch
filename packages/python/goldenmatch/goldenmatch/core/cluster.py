@@ -34,15 +34,25 @@ _clog = logging.getLogger("goldenmatch.cluster")
 _DEFAULT_SPLIT_EDGE_WORK_BUDGET = 5_000_000
 
 
-def _split_edge_work_budget() -> int:
-    """Cumulative-edge-work cap for the auto-split loop (env-overridable)."""
+_SPLIT_EDGE_BUDGET_PER_ROW = 5  # C: linear edge-work allowance per input row
+
+
+def _split_edge_work_budget(n_rows: int, override: int | None = None) -> int:
+    """Cumulative-edge-work cap for the auto-split loop.
+
+    Precedence: explicit ``override`` (GoldenRulesConfig.split_edge_budget) >
+    GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET env > max(5M, n_rows * C). With the
+    single-MST batch split (#661) exhaustion is rare; this makes the rare case
+    scale-appropriate and tunable."""
+    if override is not None:
+        return max(1, int(override))
     raw = os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET")
-    if raw is None:
-        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return _DEFAULT_SPLIT_EDGE_WORK_BUDGET
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(_DEFAULT_SPLIT_EDGE_WORK_BUDGET, int(n_rows) * _SPLIT_EDGE_BUDGET_PER_ROW)
 
 
 def _record_unmerge_corrections(
@@ -223,6 +233,89 @@ def split_oversized_cluster(
     return result
 
 
+def split_oversized_cluster_to_size(
+    members: list[int],
+    pair_scores: dict[tuple[int, int], float],
+    max_size: int,
+) -> list[dict]:
+    """Split a cluster down to ``max_size`` from a SINGLE MST build (#661).
+
+    Repeatedly cuts the weakest tree edge of any component still larger than
+    ``max_size``. A sub-tree of a maximum spanning tree IS the maximum spanning
+    tree of its induced sub-graph (cycle property), so cutting original tree
+    edges reproduces the old per-component re-MST cut decisions (same membership
+    partition, same first-minimum tie-break). Returns final sub-clusters in a
+    DETERMINISTIC order (sort-by-min-member at each cut, oversized components
+    re-enqueued LIFO).
+
+    Components that cannot be cut further (no remaining cuttable tree edge) are
+    returned still oversized (``oversized=True``)."""
+    if len(members) <= max_size or len(members) <= 1 or not pair_scores:
+        size = len(members)
+        return [{"members": sorted(members), "size": size,
+                 "oversized": size > max_size, "pair_scores": pair_scores,
+                 **_confidence_fields(pair_scores, size)}]
+
+    tree_edges = _build_mst(members, pair_scores)
+    if not tree_edges:
+        size = len(members)
+        return [{"members": sorted(members), "size": size,
+                 "oversized": size > max_size, "pair_scores": pair_scores,
+                 **_confidence_fields(pair_scores, size)}]
+
+    out_order: list[frozenset[int]] = []
+    work: list[tuple[set[int], list]] = [(set(members), list(tree_edges))]
+    while work:
+        node_set, edges = work.pop()
+        if len(node_set) <= max_size or not edges:
+            out_order.append(frozenset(node_set))
+            continue
+        weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
+        remaining = [e for e in edges if e is not weakest]
+        uf = UnionFind()
+        uf.add_many(list(node_set))
+        for a, b, _s in remaining:
+            uf.union(a, b)
+        comps = uf.get_clusters()                   # 2 components
+        node_to_rep = {n: uf.find(n) for n in node_set}
+        rep_to_edges: dict[int, list] = {}
+        for e in remaining:
+            rep_to_edges.setdefault(node_to_rep[e[0]], []).append(e)
+        sub_items = [(c, rep_to_edges.get(uf.find(next(iter(c))), [])) for c in comps]
+        sub_items.sort(key=lambda ci: min(ci[0]))
+        for c, ce in sub_items:
+            if len(c) > max_size:
+                work.append((set(c), ce))
+            else:
+                out_order.append(frozenset(c))
+
+    member_to_idx: dict[int, int] = {}
+    for idx, s in enumerate(out_order):
+        for m in s:
+            member_to_idx[m] = idx
+    sub_pairs: list[dict] = [{} for _ in out_order]
+    for (a, b), sc in pair_scores.items():
+        ia = member_to_idx.get(a)
+        if ia is not None and ia == member_to_idx.get(b):
+            sub_pairs[ia][(a, b)] = sc
+
+    result = []
+    for idx, s in enumerate(out_order):
+        sc_list = sorted(s)
+        size = len(sc_list)
+        result.append({
+            "members": sc_list, "size": size, "oversized": size > max_size,
+            "pair_scores": sub_pairs[idx],
+            **_confidence_fields(sub_pairs[idx], size),
+        })
+    return result
+
+
+def _confidence_fields(pair_scores: dict, size: int) -> dict:
+    conf = compute_cluster_confidence(pair_scores, size)
+    return {"confidence": conf["confidence"], "bottleneck_pair": conf["bottleneck_pair"]}
+
+
 # Bridge detection is O(E*(V+E)) per cluster; only run on clusters at or below
 # this size so the sample path stays cheap (clusters there are small).
 _BRIDGE_MAX_CLUSTER_SIZE = 100
@@ -364,6 +457,7 @@ def build_clusters(
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Build clusters from scored pairs using Union-Find.
 
@@ -426,10 +520,12 @@ def build_clusters(
     if _columnar_cluster_build_enabled():
         return _build_clusters_via_frames(
             pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+            split_edge_budget,
         )
 
     return _build_clusters_dict_path(
         pairs, all_ids, max_cluster_size, weak_cluster_threshold, auto_split,
+        split_edge_budget=split_edge_budget,
     )
 
 
@@ -467,6 +563,7 @@ def build_cluster_frames(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> ClusterFrames:
     """SP-A frames-out entry point (gated ``GOLDENMATCH_CLUSTER_FRAMES_OUT``).
 
@@ -478,8 +575,8 @@ def build_cluster_frames(
     The BULK path (non-oversized clusters) is the shared pre-split Union-Find
     (via ``_columnar_presplit``) + vectorized weak/quality + emit. Oversized
     clusters are auto-split frames-natively (the dict is materialized ONLY for
-    that rare minority), reusing ``split_oversized_cluster`` and mirroring
-    ``_finalize_clusters``.
+    that rare minority), reusing ``split_oversized_cluster_to_size`` (one batch
+    split per top-level oversized cluster) and mirroring ``_finalize_clusters``.
 
     ``cluster_frames_to_dict(build_cluster_frames(...))`` round-trips to
     ``build_clusters(...)`` gate-ON (the score-free dict): members-as-set,
@@ -581,63 +678,50 @@ def build_cluster_frames(
     if auto_split:
         # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
         # confined to the rare oversized MINORITY. Mirrors _finalize_clusters's
-        # split loop EXACTLY (next_cid from max-existing +1 before use, edge-work
-        # budget + no-progress guards, deterministic sub.sort, re-enqueue still-
-        # oversized). split rows carry quality="split" so the Step-3 vectorized
-        # weak/quality block's when(quality=="split") short-circuit preserves them.
-        oversized = metadata.filter(_pl.col("oversized"))["cluster_id"].to_list()
+        # split loop EXACTLY: iterate sorted(oversized), call
+        # split_oversized_cluster_to_size ONCE per top-level cluster (the batch fn
+        # owns the full recursive split + sub ordering -- no re-enqueue here), and
+        # label subs contiguously from max(live_cids)+1. split rows carry
+        # quality="split" so the Step-3 vectorized weak/quality block's
+        # when(quality=="split") short-circuit preserves them.
+        oversized = sorted(metadata.filter(_pl.col("oversized"))["cluster_id"].to_list())
         if oversized:
             members_by_cid = {
                 int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
                 for cid in oversized
             }
-            # Mirror _finalize_clusters's SINGLE `result` dict for split clusters.
-            # split_result holds sub-clusters by cid; an intermediate sub that
-            # re-splits is POPPED (del split_result[cid]) so it can't be emitted
-            # twice. Rows are materialized ONLY at the end, from the FINAL entries.
-            # (Eagerly appending rows + relying on drop_cids -- which only filters
-            # the ORIGINAL bulk frame -- duplicated re-split intermediates: an
-            # invalid overlapping partition.)
-            # live_cids mirrors result.keys() (cids 1..n pre-split + split cids);
-            # next_cid = max(live)+1 AFTER discarding the split cid REUSES a freed
-            # max slot, exactly as _finalize's `result.pop(cid); max(result.keys())+1`.
             live_cids = set(range(1, metadata.height + 1))
             split_result: dict[int, dict] = {}
             drop_cids = set()                      # ORIGINAL cids that split
-            to_split = list(oversized)
-            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(), False
-            while to_split:
-                cid = to_split.pop()
-                members = members_by_cid.pop(cid)
+            edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(len(all_ids), split_edge_budget), False
+            for cid in oversized:
+                members = members_by_cid[int(cid)]
                 ms = set(members)
                 ps = {(a, b): s for a, b, s in pairs_list if a in ms and b in ms}
                 edge_work += len(ps)
                 if edge_work > edge_budget:
                     budget_tripped = True
-                    break  # leave cid (+ queued) oversized: don't drop / don't pop
-                subs = split_oversized_cluster(members, ps)
+                    break  # leave cid (+ remaining) oversized: original rows stay
+                subs = split_oversized_cluster_to_size(members, ps, max_cluster_size)
                 if len(subs) <= 1:
-                    continue  # unsplittable: original row / split_result entry stays
-                subs.sort(key=lambda sc: min(sc["members"]))
-                # Remove the cid being split (post-pop, like _finalize's result.pop):
-                # an intermediate split sub leaves split_result; an original cid is
-                # filtered from the bulk frame via drop_cids.
-                if cid in split_result:
-                    del split_result[cid]
-                else:
-                    drop_cids.add(cid)
-                live_cids.discard(cid)
-                next_cid = max(live_cids, default=0) + 1   # mirror _finalize (post-pop)
+                    continue  # unsplittable: original row stays
+                drop_cids.add(int(cid))
+                live_cids.discard(int(cid))
+                next_cid = max(live_cids, default=0) + 1
                 for sc in subs:
                     split_result[next_cid] = sc
                     live_cids.add(next_cid)
-                    if sc["size"] > max_cluster_size:
-                        members_by_cid[next_cid] = sc["members"]
-                        to_split.append(next_cid)
                     next_cid += 1
             if budget_tripped:
-                _clog.warning("build_cluster_frames: auto-split edge-work budget (%d) "
-                              "exhausted; clusters left oversized.", edge_budget)
+                n_oversized = sum(1 for c in oversized if int(c) not in drop_cids)
+                _clog.warning(
+                    "build_cluster_frames: auto-split edge-work budget (%d) "
+                    "exhausted; %d cluster(s) left OVERSIZED and flagged (kept in "
+                    "output, excluded from golden downstream). Raise "
+                    "GoldenRulesConfig.split_edge_budget or env "
+                    "GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET to split them.",
+                    edge_budget, n_oversized,
+                )
             # Materialize the FINAL split sub-clusters into frame rows. split rows
             # carry quality="split" so the Step-3 when(quality=="split") short-circuit
             # preserves them. min/avg are schema-fill (unused: split skips the weak test).
@@ -759,6 +843,7 @@ def _build_clusters_dict_path(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Legacy list/dict Union-Find cluster build. Verbatim extraction of the
     original ``build_clusters`` body (UF stage -> emit); behavior is unchanged.
@@ -830,6 +915,7 @@ def _build_clusters_dict_path(
 
     return _finalize_clusters(
         result, max_cluster_size, weak_cluster_threshold, auto_split,
+        n_rows=len(all_ids), split_edge_budget=split_edge_budget,
     )
 
 
@@ -841,6 +927,8 @@ def _finalize_clusters(
     *,
     raw_pairs: list[tuple[int, int, float]] | None = None,
     weak_stats: dict[int, tuple[float, float]] | None = None,
+    n_rows: int = 0,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Shared cluster-build tail: auto-split oversized clusters, assign
     ``cluster_quality`` (+ weak confidence downgrade), then emit the profile.
@@ -870,16 +958,14 @@ def _finalize_clusters(
     # Oversized clusters left un-split are excluded from golden downstream, the
     # same as auto_split=False -- a giant cohesive blob of near-identical records
     # is legitimately one quarantined cluster, not N arbitrary cuts.
-    to_split = [cid for cid, c in result.items() if c["oversized"]] if auto_split else []
+    oversized_cids = sorted(cid for cid, c in result.items() if c["oversized"]) if auto_split else []
     edge_work = 0
-    edge_budget = _split_edge_work_budget()
+    edge_budget = _split_edge_work_budget(n_rows, split_edge_budget)
     budget_tripped = False
-    while to_split:
-        cid = to_split.pop()
-        cinfo = result.pop(cid)
+    for cid in oversized_cids:
+        cinfo = result[cid]
         # Columnar path: materialize this oversized cluster's pair_scores on demand
-        # from the raw input pairs (input order, last-wins == the dict path's fill)
-        # so the MST split + edge-budget meter behave identically. Rare (oversized).
+        # from the raw input pairs (input order, last-wins == the dict path's fill).
         if raw_pairs is not None and not cinfo["pair_scores"]:
             _ms = set(cinfo["members"])
             cinfo["pair_scores"] = {
@@ -888,37 +974,28 @@ def _finalize_clusters(
         edge_work += len(cinfo["pair_scores"])
         if edge_work > edge_budget:
             cinfo["oversized"] = True
-            result[cid] = cinfo  # leave oversized; queued cids stay in result too
             budget_tripped = True
-            break
-        sub_clusters = split_oversized_cluster(cinfo["members"], cinfo["pair_scores"])
-        if len(sub_clusters) <= 1:
-            # Couldn't split (no edges / no MST): leave it as-is, don't re-enqueue.
+            break  # leave this + remaining oversized cids in result, flagged
+        subs = split_oversized_cluster_to_size(
+            cinfo["members"], cinfo["pair_scores"], max_cluster_size
+        )
+        if len(subs) <= 1:
+            # Unsplittable (no edges / single blob): leave as-is, flagged by size.
             cinfo["oversized"] = cinfo["size"] > max_cluster_size
-            result[cid] = cinfo
             continue
-        # Deterministic cluster-id assignment. The native mst_split_components
-        # kernel returns sub-clusters in Rust HashMap iteration order
-        # (nondeterministic per call), which made split-cluster ids vary
-        # run-to-run -- and diverge between the dict and columnar build paths,
-        # which call this independently. Sort by min member so next_cid below is
-        # assigned stably. The partition content is already deterministic; this
-        # only pins the labels, the durability invariant identity ids depend on.
-        sub_clusters.sort(key=lambda sc: min(sc["members"]))
+        del result[cid]
         next_cid = max(result.keys(), default=0) + 1
-        for sc in sub_clusters:
-            sc["oversized"] = sc["size"] > max_cluster_size
-            sc["_was_split"] = True
+        for sc in subs:
+            sc["_was_split"] = True            # batch fn already set sc["oversized"]
             result[next_cid] = sc
-            if sc["oversized"]:
-                to_split.append(next_cid)
             next_cid += 1
     if budget_tripped:
         n_oversized = sum(1 for c in result.values() if c.get("oversized"))
         _clog.warning(
             "build_clusters: auto-split edge-work budget (%d) exhausted; %d "
-            "cluster(s) left oversized (dense, no clean weak-bridge split). "
-            "Oversized clusters are excluded from golden downstream.",
+            "cluster(s) left OVERSIZED and flagged (kept in output, excluded "
+            "from golden downstream). Raise GoldenRulesConfig.split_edge_budget "
+            "or env GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET to split them.",
             edge_budget, n_oversized,
         )
 
@@ -970,6 +1047,7 @@ def _build_clusters_via_frames(
     max_cluster_size: int,
     weak_cluster_threshold: float,
     auto_split: bool,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Columnar cluster-build core. Returns the dict path's shape EXCEPT
     ``pair_scores`` is ``{}`` on every cluster (SP4: the eager per-cluster dict --
@@ -1044,6 +1122,7 @@ def _build_clusters_via_frames(
     return _finalize_clusters(
         result, max_cluster_size, weak_cluster_threshold, auto_split,
         raw_pairs=pairs_list, weak_stats=weak_stats,
+        n_rows=len(all_ids), split_edge_budget=split_edge_budget,
     )
 
 
@@ -1571,6 +1650,7 @@ def build_clusters_columnar(
     max_cluster_size: int = 100,
     weak_cluster_threshold: float = 0.3,
     auto_split: bool = True,
+    split_edge_budget: int | None = None,
 ) -> dict[int, dict]:
     """Columnar wrapper around :func:`build_clusters`.
 
@@ -1620,6 +1700,7 @@ def build_clusters_columnar(
         max_cluster_size=max_cluster_size,
         weak_cluster_threshold=weak_cluster_threshold,
         auto_split=auto_split,
+        split_edge_budget=split_edge_budget,
     )
 
 

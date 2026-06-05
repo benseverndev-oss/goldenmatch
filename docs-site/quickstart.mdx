@@ -1,0 +1,103 @@
+---
+title: "Quickstart"
+description: "Deduplicate a CSV in 30 seconds, then run the full pipeline."
+keywords: ["quickstart", "install", "dedupe", "getting started"]
+---
+
+This page gets you from install to a deduplicated file in a couple of minutes. For a deeper tour of the headline package, see the [GoldenMatch quickstart](/goldenmatch/quickstart).
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install goldenmatch
+```
+
+```bash npm
+npm install goldenmatch
+```
+
+</CodeGroup>
+
+## Deduplicate a file
+
+The fastest path is zero-config. GoldenMatch detects column types, assigns scorers, picks a blocking strategy, and writes golden records.
+
+```bash CLI
+goldenmatch dedupe customers.csv
+```
+
+The same in Python:
+
+```python
+import goldenmatch as gm
+
+result = gm.dedupe("customers.csv")
+print(result)  # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
+result.golden.write_csv("deduped.csv")
+```
+
+And in TypeScript:
+
+```typescript
+import { dedupe } from "goldenmatch";
+
+const rows = [
+  { id: 1, name: "John Smith", email: "john@example.com", zip: "12345" },
+  { id: 2, name: "Jon Smith",  email: "john@example.com", zip: "12345" },
+  { id: 3, name: "Jane Doe",   email: "jane@example.com", zip: "54321" },
+];
+
+const result = dedupe(rows, { fuzzy: { name: 0.85 }, blocking: ["zip"], threshold: 0.85 });
+console.log(result.stats);
+```
+
+## Run the whole pipeline
+
+To profile, standardize, and deduplicate in one call, use GoldenPipe. It runs GoldenCheck, conditionally routes through GoldenFlow, then deduplicates with GoldenMatch.
+
+```bash
+pip install goldenpipe
+```
+
+```python
+import goldenpipe as gp
+
+result = gp.run("customers.csv")
+print(result.status)     # "success"
+print(result.reasoning)  # why each stage ran or was skipped
+```
+
+## Optional extras
+
+GoldenMatch ships a single core install plus opt-in extras:
+
+```bash
+pip install goldenmatch[llm]          # Claude / OpenAI borderline scoring
+pip install goldenmatch[duckdb]       # out-of-core backend
+pip install goldenmatch[ray]          # distributed backend (50M+ rows)
+pip install goldenmatch[web]          # localhost browser workbench
+pip install goldenmatch[mcp]          # MCP server for Claude Desktop
+```
+
+Run the interactive setup wizard to configure GPU, API keys, and database connections:
+
+```bash
+goldenmatch setup
+```
+
+<Tip>
+  Try it on bundled sample data first with `goldenmatch demo`.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Auto-config" icon="robot" href="/goldenmatch/auto-config">
+    How zero-config converges on a defensible config.
+  </Card>
+  <Card title="Backends and scale" icon="gauge-high" href="/goldenmatch/backends-and-scale">
+    Polars, DuckDB, chunked, and Ray.
+  </Card>
+</CardGroup>
