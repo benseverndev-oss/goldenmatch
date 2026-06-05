@@ -6,6 +6,8 @@ from pathlib import Path
 
 import polars as pl
 
+from goldenmatch.core._paths import safe_path
+
 # Text-file extensions that should route through smart_load
 _TEXT_SUFFIXES = {".csv", ".txt", ".tsv", ".dat", ".tab", ".psv", ".log", ".asc"}
 
@@ -44,7 +46,7 @@ def load_file(
         FileNotFoundError: If the file does not exist.
         ValueError: If the file format is not supported.
     """
-    path = Path(path)
+    path = safe_path(path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
 

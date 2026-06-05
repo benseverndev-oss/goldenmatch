@@ -28,7 +28,9 @@ def test_agent_card_has_required_fields():
     assert card["version"]
     assert card["provider"]["organization"] == "GoldenMatch"
     assert card["provider"]["url"] == "https://github.com/benseverndev-oss/goldenmatch"
-    assert card["capabilities"]["streaming"] is True
+    # streaming is advertised as False until _handle_send_task actually streams
+    # (Wave 1.4); advertising True while synchronous makes clients hang.
+    assert card["capabilities"]["streaming"] is False
     assert card["capabilities"]["pushNotifications"] is False
     assert card["authentication"]["schemes"] == ["bearer"]
 

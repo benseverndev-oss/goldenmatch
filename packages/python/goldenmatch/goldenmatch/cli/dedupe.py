@@ -90,7 +90,7 @@ def dedupe_cmd(
     chunk_size: int = typer.Option(100000, "--chunk-size", help="Records per chunk in chunked mode"),
     diff: bool = typer.Option(False, "--diff", help="Generate before/after CSV diff"),
     diff_html: bool = typer.Option(False, "--diff-html", help="Generate before/after HTML diff with highlighting"),
-    merge_preview: bool = typer.Option(False, "--preview", help="Show merge preview (what will change) without writing"),
+    merge_preview: bool = typer.Option(False, "--merge-preview", help="Show merge preview (what will change) without writing"),
     anomalies: bool = typer.Option(False, "--anomalies", help="Detect suspicious/fake records"),
     anomaly_sensitivity: str = typer.Option("medium", "--anomaly-sensitivity", help="low, medium, or high"),
     llm_boost: bool = typer.Option(False, "--llm-boost", help="Boost accuracy with LLM-labeled training data"),

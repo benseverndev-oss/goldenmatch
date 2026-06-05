@@ -266,7 +266,10 @@ def build_agent_card(base_url: str) -> dict:
             "url": "https://github.com/benseverndev-oss/goldenmatch",
         },
         "capabilities": {
-            "streaming": True,
+            # Honest capability: _handle_send_task is synchronous (no SSE /
+            # chunked streaming). Real streaming is a Wave-1.4 follow-up; until
+            # then the card must not advertise it or clients hang waiting.
+            "streaming": False,
             "pushNotifications": False,
         },
         "skills": _SKILLS,
@@ -410,10 +413,24 @@ async def _handle_cancel_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "Task not found"}, status=404)
 
 
+async def _handle_health(request: web.Request) -> web.Response:
+    """Liveness probe. Public (no token) so deployment healthchecks pass."""
+    registry: TaskRegistry = request.app["registry"]
+    return web.json_response({
+        "status": "ok",
+        "service": "goldenmatch-a2a",
+        "tasks": len(getattr(registry, "_tasks", {}) or {}),
+    })
+
+
+# Endpoints reachable without a bearer token (liveness + discovery).
+_PUBLIC_PATHS = frozenset({"/health", "/.well-known/agent.json"})
+
+
 @web.middleware
 async def _auth_middleware(request: web.Request, handler):
     token = os.environ.get("GOLDENMATCH_AGENT_TOKEN")
-    if token:
+    if token and request.path not in _PUBLIC_PATHS:
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer ") or auth_header[7:] != token:
             return web.json_response({"error": "Unauthorized"}, status=401)
@@ -421,12 +438,27 @@ async def _auth_middleware(request: web.Request, handler):
 
 
 def create_app(host: str = "0.0.0.0", port: int = 8080) -> web.Application:
-    """Build and return the A2A aiohttp application."""
+    """Build and return the A2A aiohttp application.
+
+    Auth posture matches the MCP HTTP server: ``GOLDENMATCH_AGENT_TOKEN``
+    enables bearer enforcement, and binding to a non-loopback host without a
+    token is refused at startup (fail closed) so an exposed agent server is
+    never unauthenticated by accident.
+    """
+    token = os.environ.get("GOLDENMATCH_AGENT_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not token and not is_loopback:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated A2A server on host {host!r}. "
+            "Set GOLDENMATCH_AGENT_TOKEN, or bind to 127.0.0.1 for local use."
+        )
+
     app = web.Application(middlewares=[_auth_middleware])
     app["registry"] = TaskRegistry()
     app["host"] = host
     app["port"] = port
 
+    app.router.add_get("/health", _handle_health)
     app.router.add_get("/.well-known/agent.json", _handle_agent_card)
     app.router.add_post("/tasks/send", _handle_send_task)
     app.router.add_get("/tasks/{task_id}", _handle_get_task)

@@ -31,6 +31,7 @@ from mcp.types import (
     Tool,
 )
 
+from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
 from goldenmatch.mcp.identity_tools import (
     IDENTITY_TOOL_NAMES,
@@ -1202,9 +1203,18 @@ def _tool_profile_data() -> dict:
     return {"columns": cols, "total_records": _engine.row_count}
 
 
-def _tool_export_results(output_path: str, fmt: str) -> dict:
+def _safe_path_or_error(value: str) -> Path | dict:
+    """Validate *value* via safe_path; return the resolved Path or an error dict."""
+    try:
+        return safe_path(value)
+    except (ValueError, PathOutsideAllowedRootError) as exc:
+        return {"error": str(exc)}
 
-    path = Path(output_path)
+
+def _tool_export_results(output_path: str, fmt: str) -> dict:
+    path = _safe_path_or_error(output_path)
+    if isinstance(path, dict):
+        return path
     if fmt == "json":
         if _result.golden is not None:
             golden_dicts = _result.golden.to_dicts()
@@ -1349,14 +1359,16 @@ def _tool_pprl_auto_config(security_level: str = "high", use_llm: bool = False) 
 
 def _tool_pprl_link(args: dict) -> dict:
     """Run PPRL linkage between two files."""
-    from pathlib import Path
-
     import polars as pl
 
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
-    file_a = Path(args["file_a"])
-    file_b = Path(args["file_b"])
+    file_a = _safe_path_or_error(args["file_a"])
+    if isinstance(file_a, dict):
+        return file_a
+    file_b = _safe_path_or_error(args["file_b"])
+    if isinstance(file_b, dict):
+        return file_b
     if not file_a.exists():
         return {"error": f"File not found: {file_a}"}
     if not file_b.exists():
@@ -1425,7 +1437,10 @@ def _tool_evaluate(ground_truth_path: str, col_a: str = "id_a", col_b: str = "id
     from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
     if _result is None:
         return {"error": "No dataset loaded"}
-    gt = load_ground_truth_csv(ground_truth_path, col_a, col_b)
+    validated = _safe_path_or_error(ground_truth_path)
+    if isinstance(validated, dict):
+        return validated
+    gt = load_ground_truth_csv(str(validated), col_a, col_b)
     return evaluate_clusters(_result.clusters, gt).summary()
 
 
@@ -1449,16 +1464,28 @@ def _tool_analyze_blocking(
 
 def _tool_compare_clusters(clusters_a_path: str, clusters_b_path: str) -> dict:
     from goldenmatch.core.compare_clusters import compare_clusters
-    a = _load_clusters_json(clusters_a_path)
-    b = _load_clusters_json(clusters_b_path)
+    va = _safe_path_or_error(clusters_a_path)
+    if isinstance(va, dict):
+        return va
+    vb = _safe_path_or_error(clusters_b_path)
+    if isinstance(vb, dict):
+        return vb
+    a = _load_clusters_json(str(va))
+    b = _load_clusters_json(str(vb))
     return compare_clusters(a, b).summary()
 
 
 def _tool_schema_match(file_a: str, file_b: str, min_score: float = 0.5) -> dict:
     from goldenmatch.core.ingest import load_file
     from goldenmatch.core.schema_match import auto_map_columns
-    df_a = load_file(file_a).collect()
-    df_b = load_file(file_b).collect()
+    va = _safe_path_or_error(file_a)
+    if isinstance(va, dict):
+        return va
+    vb = _safe_path_or_error(file_b)
+    if isinstance(vb, dict):
+        return vb
+    df_a = load_file(str(va)).collect()
+    df_b = load_file(str(vb)).collect()
     return {"mappings": auto_map_columns(df_a, df_b, min_score=min_score)}
 
 
@@ -1468,6 +1495,11 @@ def _tool_lineage(
     from goldenmatch.core.lineage import build_lineage, save_lineage
     if _result is None or _engine is None or _config is None:
         return {"error": "No dataset loaded"}
+    if output_dir is not None:
+        vdir = _safe_path_or_error(output_dir)
+        if isinstance(vdir, dict):
+            return vdir
+        output_dir = str(vdir)
     lineage = build_lineage(
         _result.scored_pairs,
         _engine.data,
@@ -1484,12 +1516,38 @@ def _tool_lineage(
 
 def _tool_list_runs(output_dir: str = ".") -> dict:
     from goldenmatch.core.rollback import list_runs
-    return {"runs": list_runs(output_dir)}
+    vdir = _safe_path_or_error(output_dir)
+    if isinstance(vdir, dict):
+        return vdir
+    return {"runs": list_runs(str(vdir))}
 
 
 def _tool_rollback(run_id: str, output_dir: str = ".") -> dict:
     from goldenmatch.core.rollback import rollback_run
-    return rollback_run(run_id, output_dir)
+    vdir = _safe_path_or_error(output_dir)
+    if isinstance(vdir, dict):
+        return vdir
+    return rollback_run(run_id, str(vdir))
+
+
+def resolve_http_auth_token(host: str) -> str | None:
+    """Return the MCP HTTP bearer token, enforcing the fail-closed bind rule.
+
+    Raises ``RuntimeError`` when binding to a non-loopback host without
+    ``GOLDENMATCH_MCP_TOKEN`` set, so an exposed server is never started
+    unauthenticated by accident. Returns the token (or ``None`` for an
+    intentionally-open loopback bind).
+    """
+    import os
+
+    token = os.environ.get("GOLDENMATCH_MCP_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not token and not is_loopback:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated MCP HTTP server on host {host!r}. "
+            "Set GOLDENMATCH_MCP_TOKEN, or bind to 127.0.0.1 for local use."
+        )
+    return token
 
 
 async def run_server_http(
@@ -1498,15 +1556,36 @@ async def run_server_http(
     file_paths: list[str] | None = None,
     config_path: str | None = None,
 ) -> None:
-    """Run the MCP server over Streamable HTTP (for hosted deployments)."""
+    """Run the MCP server over Streamable HTTP (for hosted deployments).
+
+    Auth: when ``GOLDENMATCH_MCP_TOKEN`` is set, every ``/mcp`` request must
+    carry ``Authorization: Bearer <token>``. To prevent shipping an open public
+    server, binding to a non-loopback host WITHOUT a token is refused at
+    startup (fail closed). The ``/.well-known/`` server card stays public for
+    healthchecks.
+    """
     import contextlib
     from collections.abc import AsyncIterator
 
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
+
+    token = resolve_http_auth_token(host)
+
+    class _BearerAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if request.url.path.startswith("/.well-known/"):
+                return await call_next(request)
+            if token:
+                header = request.headers.get("Authorization", "")
+                if not header.startswith("Bearer ") or header[7:] != token:
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return await call_next(request)
 
     server = create_server(file_paths or [], config_path)
     session_manager = StreamableHTTPSessionManager(
@@ -1533,6 +1612,7 @@ async def run_server_http(
             Mount("/mcp", app=session_manager.handle_request),
         ],
         lifespan=lifespan,
+        middleware=[Middleware(_BearerAuthMiddleware)],
     )
 
     config = uvicorn.Config(app, host=host, port=port)
