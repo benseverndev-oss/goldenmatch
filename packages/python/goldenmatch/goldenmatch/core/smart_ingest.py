@@ -12,6 +12,8 @@ from pathlib import Path
 
 import polars as pl
 
+from goldenmatch.core._paths import safe_path
+
 # ---------------------------------------------------------------------------
 # Encoding Detection
 # ---------------------------------------------------------------------------
@@ -516,7 +518,7 @@ def smart_load(
 
     Returns (dataframe, metadata_dict).
     """
-    path = Path(path)
+    path = safe_path(path)
     log: list[str] = []
 
     # 1. Encoding
