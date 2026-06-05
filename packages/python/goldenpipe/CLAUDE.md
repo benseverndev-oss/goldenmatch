@@ -10,6 +10,7 @@ Sibling packages live in this monorepo at `packages/python/{goldencheck,goldenfl
 - `goldenpipe/pipeline.py` -- Pipeline class, run() function. ONLY file that imports from tools.
 - `goldenpipe/decisions.py` -- Adaptive logic (decide_flow, decide_match). NO tool imports. Testable independently.
 - `goldenpipe/cli/main.py` -- Typer CLI
+- `goldenpipe/tui/app.py` -- Textual TUI (`[tui]` extra). **Wave 2.2 (2026-06-05): wired from stub to real.** 4 tabs (Pipeline/Config/Results/Log) populate from a `PipeResult`: `r` runs `goldenpipe.run(source)` in a worker thread, then `_render_result` fills the Pipeline tab (stage status + per-stage timing), Config (realized stage chain), Results (artifacts browser via `_summarize`), and Log (reasoning + errors + total time). `goldenpipe interactive [SOURCE] [-c CONFIG]` now takes an optional data file (was no-arg). Test seam: call `_render_result(result)` directly with a real `PipeResult`; for the full path `app.action_run()` then `await app.workers.wait_for_complete()`.
 - Tools imported with try/except ImportError guards (HAS_CHECK, HAS_FLOW, HAS_MATCH)
 - Data flows as Polars DataFrames in memory between stages
 

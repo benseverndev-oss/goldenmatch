@@ -12,14 +12,17 @@ from rich.table import Table
 
 from goldenmatch import __version__
 from goldenmatch.cli.agent_serve import agent_serve_cmd
+from goldenmatch.cli.anomalies import anomalies_cmd
 from goldenmatch.cli.autoconfig import autoconfig_cmd
 from goldenmatch.cli.compare import compare_clusters_cmd
 from goldenmatch.cli.dedupe import dedupe_cmd
 from goldenmatch.cli.demo import demo_cmd
 from goldenmatch.cli.evaluate import evaluate_cmd
+from goldenmatch.cli.explain import explain_cmd
 from goldenmatch.cli.identity import identity_app
 from goldenmatch.cli.incremental import incremental_cmd
 from goldenmatch.cli.label import label_cmd
+from goldenmatch.cli.lineage import lineage_cmd
 from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
 from goldenmatch.cli.memory import memory_app
@@ -116,6 +119,9 @@ app.add_typer(memory_app, name="memory")
 app.add_typer(identity_app, name="identity")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
 app.command("review", help="Review borderline pairs interactively; decisions feed Learning Memory.")(review_cmd)
+app.command("explain", help="Explain why a pair matched or summarize a cluster (plain language).")(explain_cmd)
+app.command("lineage", help="Build + persist the per-pair match lineage for a run.")(lineage_cmd)
+app.command("anomalies", help="Detect suspicious/fake records (standalone).")(anomalies_cmd)
 app.command("agent-serve", help="Start the A2A agent server for AI-to-AI discovery.")(agent_serve_cmd)
 app.command("incremental", help="Match new records against an existing base dataset.")(incremental_cmd)
 app.command("compare-clusters", help="Compare two ER clustering outcomes (CCMS).")(compare_clusters_cmd)
