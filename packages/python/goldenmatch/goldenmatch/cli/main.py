@@ -24,6 +24,7 @@ from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
 from goldenmatch.cli.memory import memory_app
 from goldenmatch.cli.pprl import pprl_app
+from goldenmatch.cli.review import review_cmd
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
 from goldenmatch.cli.schedule import schedule_cmd
 from goldenmatch.cli.sensitivity import sensitivity_cmd
@@ -114,6 +115,7 @@ app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
 app.add_typer(identity_app, name="identity")
 app.command("label", help="Build ground truth by labeling record pairs interactively.")(label_cmd)
+app.command("review", help="Review borderline pairs interactively; decisions feed Learning Memory.")(review_cmd)
 app.command("agent-serve", help="Start the A2A agent server for AI-to-AI discovery.")(agent_serve_cmd)
 app.command("incremental", help="Match new records against an existing base dataset.")(incremental_cmd)
 app.command("compare-clusters", help="Compare two ER clustering outcomes (CCMS).")(compare_clusters_cmd)
