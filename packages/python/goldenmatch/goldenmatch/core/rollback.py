@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from goldenmatch.core._logging import sanitize_for_log
+from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ def rollback_run(
     Returns:
         Summary of what was rolled back.
     """
-    output_dir = Path(output_dir)
+    output_dir = safe_path(output_dir)
     log_path = output_dir / RUN_LOG_FILE
     runs = _load_run_log(log_path)
 
@@ -94,6 +95,12 @@ def rollback_run(
         p = Path(filepath)
         if not p.is_absolute():
             p = output_dir / p
+        try:
+            p = safe_path(p)
+        except PathOutsideAllowedRootError:
+            logger.warning("Skipping rollback of path outside allowed root: %s", sanitize_for_log(str(p)))
+            not_found.append(str(p))
+            continue
         if p.exists():
             p.unlink()
             deleted.append(str(p))

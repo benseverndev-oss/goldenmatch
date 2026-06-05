@@ -1,0 +1,38 @@
+"""Path validation (CodeQL py/path-injection mitigation).
+
+GoldenMatch is local-first: reading the user's own files by path is the
+product, so containment is OPT-IN. Setting GOLDENMATCH_ALLOWED_ROOT (or
+passing base_dir) jails all user-supplied paths under that root --
+deploy-time hardening for network-exposed surfaces (the Railway MCP
+server sets it to the /data volume).
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+_ENV_ROOT = "GOLDENMATCH_ALLOWED_ROOT"
+
+
+class PathOutsideAllowedRootError(ValueError):
+    """Raised when a user-supplied path escapes the configured root."""
+
+
+def safe_path(value: str | os.PathLike, *, base_dir: str | os.PathLike | None = None) -> Path:
+    """Normalize *value* and (when a root is configured) enforce containment.
+
+    Raises ValueError on NUL bytes, PathOutsideAllowedRootError on escape.
+    """
+    raw = os.fspath(value)
+    if "\x00" in raw:
+        raise ValueError("path contains NUL byte")
+    resolved = Path(raw).resolve()
+    root = base_dir if base_dir is not None else os.environ.get(_ENV_ROOT)
+    if root:
+        root_resolved = Path(root).resolve()
+        if not resolved.is_relative_to(root_resolved):
+            raise PathOutsideAllowedRootError(
+                f"path {str(resolved)!r} is outside allowed root {str(root_resolved)!r}"
+            )
+    return resolved

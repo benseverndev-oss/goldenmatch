@@ -18,6 +18,7 @@ import polars as pl
 
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core._logging import sanitize_for_log
+from goldenmatch.core._paths import safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,9 @@ def save_lineage(
     Returns:
         Path to the saved lineage file.
     """
-    output_dir = Path(output_dir)
+    output_dir = safe_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    run_name = Path(run_name).name  # strip any directory components
 
     path = output_dir / f"{run_name}_lineage.json"
     data = {

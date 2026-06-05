@@ -31,6 +31,7 @@ from mcp.types import (
     Tool,
 )
 
+from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
 from goldenmatch.mcp.identity_tools import (
     IDENTITY_TOOL_NAMES,
@@ -1203,8 +1204,10 @@ def _tool_profile_data() -> dict:
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
-
-    path = Path(output_path)
+    try:
+        path = safe_path(output_path)
+    except (ValueError, PathOutsideAllowedRootError) as exc:
+        return {"error": str(exc)}
     if fmt == "json":
         if _result.golden is not None:
             golden_dicts = _result.golden.to_dicts()
@@ -1349,14 +1352,15 @@ def _tool_pprl_auto_config(security_level: str = "high", use_llm: bool = False) 
 
 def _tool_pprl_link(args: dict) -> dict:
     """Run PPRL linkage between two files."""
-    from pathlib import Path
-
     import polars as pl
 
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
-    file_a = Path(args["file_a"])
-    file_b = Path(args["file_b"])
+    try:
+        file_a = safe_path(args["file_a"])
+        file_b = safe_path(args["file_b"])
+    except (ValueError, PathOutsideAllowedRootError) as exc:
+        return {"error": str(exc)}
     if not file_a.exists():
         return {"error": f"File not found: {file_a}"}
     if not file_b.exists():

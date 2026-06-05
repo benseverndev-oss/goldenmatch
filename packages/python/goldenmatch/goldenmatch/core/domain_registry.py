@@ -35,6 +35,7 @@ from pathlib import Path
 import yaml
 
 from goldenmatch.core._logging import sanitize_for_log
+from goldenmatch.core._paths import safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ def load_rulebook(path: str | Path) -> DomainRulebook:
 
 def save_rulebook(rulebook: DomainRulebook, path: str | Path) -> Path:
     """Save a domain rulebook to a YAML file."""
-    path = Path(path)
+    path = safe_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
