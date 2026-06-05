@@ -164,6 +164,93 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    # MCP tool-coverage parity pass: high-level capabilities that had no A2A
+    # skill. Most delegate to the matching MCP dispatch (same JSON contract,
+    # mirroring how the identity_* skills already reuse MCP).
+    {
+        "id": "evaluate",
+        "name": "Evaluate",
+        "description": "Score matching accuracy (precision/recall/F1) against a ground-truth pair CSV. Auto-configures if no config is supplied.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "analyze_blocking",
+        "name": "Analyze Blocking",
+        "description": "Rank blocking-key candidates for a file: block counts, max block size, candidate-pair totals, estimated recall.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "compare_clusters",
+        "name": "Compare Clusters",
+        "description": "Compare two ER clustering outcomes (CCMS): unchanged/merged/partitioned/overlapping + Talburt-Wang Index. Inputs are two cluster JSON files.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "schema_match",
+        "name": "Schema Match",
+        "description": "Auto-map columns between two files with different schemas (synonym + name similarity), with confidence scores.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "sensitivity",
+        "name": "Sensitivity",
+        "description": "Sweep config parameters across a range and report clustering stability (CCMS unchanged %) at each value.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "incremental",
+        "name": "Incremental Match",
+        "description": "Match a batch of new records against an existing base dataset; returns matched (new, base) pairs plus counts.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_show",
+        "name": "Identity Show",
+        "description": "Fetch the full detail of one identity by entity_id (records, evidence edges, recent events).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "list_runs",
+        "name": "List Runs",
+        "description": "List previous dedupe/match runs from the run log (for rollback).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "rollback",
+        "name": "Rollback",
+        "description": "Undo a previous run by deleting its output files (looked up by run_id). Destructive.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "list_corrections",
+        "name": "List Corrections",
+        "description": "Page through stored Learning Memory corrections, optionally filtered by dataset.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "learn_thresholds",
+        "name": "Learn Thresholds",
+        "description": "Run the MemoryLearner over stored corrections and return the per-matchkey threshold adjustments.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "memory_stats",
+        "name": "Memory Stats",
+        "description": "Correction counts, last-learned timestamps, and current learned adjustments from the Learning Memory store.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 
