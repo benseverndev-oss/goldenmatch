@@ -26,23 +26,19 @@ class PathOutsideAllowedRootError(ValueError):
 
 
 def safe_path(value: str | os.PathLike, *, base_dir: str | os.PathLike | None = None) -> Path:
-    """Normalize *value* and enforce containment within a configured root.
+    """Normalize *value* and (when a root is configured) enforce containment.
 
-    Raises ValueError on NUL bytes, PathOutsideAllowedRootError on missing root
-    configuration or containment escape.
+    Raises ValueError on NUL bytes, PathOutsideAllowedRootError on escape.
     """
     raw = os.fspath(value)
     if "\x00" in raw:
         raise ValueError("path contains NUL byte")
     resolved = Path(raw).resolve()
     root = base_dir if base_dir is not None else os.environ.get(_ENV_ROOT)
-    if not root:
-        raise PathOutsideAllowedRootError(
-            f"allowed root is not configured; set {_ENV_ROOT} or pass base_dir"
-        )
-    root_resolved = Path(root).resolve()
-    if not resolved.is_relative_to(root_resolved):
-        raise PathOutsideAllowedRootError(
-            f"path {str(resolved)!r} is outside allowed root {str(root_resolved)!r}"
-        )
+    if root:
+        root_resolved = Path(root).resolve()
+        if not resolved.is_relative_to(root_resolved):
+            raise PathOutsideAllowedRootError(
+                f"path {str(resolved)!r} is outside allowed root {str(root_resolved)!r}"
+            )
     return resolved
