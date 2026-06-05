@@ -41,7 +41,8 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `pipeline.rs` -- 5 job management functions: gm_configure, gm_run, gm_jobs, gm_golden, gm_drop
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
 - `correction.rs` -- Learning Memory CRUD + tuning: `correction_add`, `correction_list`, plus `memory_learn` (force a MemoryLearner pass) and `memory_stats` (counts + learned adjustments). All wrap the bridge `goldenmatch_bridge::api::*`. `memory_learn` is REVOKEd from PUBLIC like `correction_add`; `memory_stats` is read-only status, left for PUBLIC.
-- SQL file at `sql/goldenmatch_pg--0.5.0.sql` -- handwritten (pgrx doesn't auto-generate)
+- SQL file at `sql/goldenmatch_pg--0.6.0.sql` -- handwritten (pgrx doesn't auto-generate); `sql/goldenmatch_pg--0.5.0--0.6.0.sql` is the upgrade script
+- `kernels.rs` -- native-direct graph + fingerprint functions (#509). `goldenmatch_pair_dedup`/`_str` + `goldenmatch_connected_components`/`_str` call the pyo3-free `goldenmatch-graph-core` crate in PURE RUST (no embedded CPython); `goldenmatch_record_fingerprint` uses `fingerprint-core`. `goldenmatch_embed_local` still uses the CPython bridge (goldenembed-rs cutover is the #509 embed follow-up)
 - .control file: `schema = goldenmatch` -- all functions in goldenmatch schema
 
 ### duckdb/ (goldenmatch-duckdb)
@@ -127,7 +128,7 @@ lockstep (bridge fn + pgrx wrapper + handwritten SQL on the Postgres side;
 `functions.py` UDF on the DuckDB side) so the two stay interchangeable.
 
 ## Gotchas
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.5.0.sql` manually
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.6.0.sql` manually (+ the `--0.5.0--0.6.0.sql` upgrade script). Bumping the PG version means renaming the SQL file AND updating the hardcoded `cp sql/goldenmatch_pg--X.Y.Z.sql` lines in root `.github/workflows/ci.yml` + `publish-goldenmatch-pg.yml` (the orphaned `packages/.../.github` copies are ignored)
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts
 - `cargo` defaults CARGO_HOME to drive root on Windows when CWD is D: -- always set explicitly
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads
