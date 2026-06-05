@@ -23,6 +23,8 @@
 
 import { createRequire } from "node:module";
 import type { Row, GoldenMatchConfig, DedupeResult } from "../../core/types.js";
+import { addCorrection } from "../memory/index.js";
+import { writeCsv, writeJson } from "../connectors/file.js";
 import { loadAddons, type LoadedAddons } from "./widgets.js";
 
 const require = createRequire(import.meta.url);
@@ -60,6 +62,33 @@ function loadReact(): any {
 export interface TuiOptions {
   readonly files?: readonly string[];
   readonly config?: GoldenMatchConfig;
+  /** Learning Memory SQLite path for Boost-tab labels (default: package default). */
+  readonly memoryPath?: string;
+  /** Directory the Export tab writes golden/dupes/unique into (default: cwd). */
+  readonly outputDir?: string;
+}
+
+/**
+ * Write a dedupe result's golden / dupes / unique populations to `dir` in the
+ * given format. Returns the paths written. Backs the Export tab (extracted so
+ * it's unit-testable without an ink renderer).
+ */
+export function writeExports(
+  result: DedupeResult,
+  format: "csv" | "json",
+  dir: string,
+): string[] {
+  const written: string[] = [];
+  const write = (name: string, rows: readonly Row[]): void => {
+    const path = `${dir}/${name}.${format}`;
+    if (format === "json") writeJson(path, rows);
+    else writeCsv(path, rows);
+    written.push(path);
+  };
+  write("golden", result.goldenRecords);
+  write("dupes", result.dupes);
+  write("unique", result.unique);
+  return written;
 }
 
 /**
@@ -500,6 +529,19 @@ export async function startTui(options: TuiOptions = {}): Promise<void> {
           ],
           onSelect: (item: { value: string }) => {
             setLabels({ ...labels, [idx]: item.value });
+            // Persist the decision to Learning Memory (y=approve, n=reject;
+            // skip writes nothing). Fire-and-forget — labeling stays snappy.
+            if (item.value === "y" || item.value === "n") {
+              void addCorrection({
+                idA: pair.idA,
+                idB: pair.idB,
+                decision: item.value === "y" ? "approve" : "reject",
+                source: "steward",
+                ...(options.memoryPath !== undefined
+                  ? { path: options.memoryPath }
+                  : {}),
+              }).catch(() => {});
+            }
             setIdx((prev) => prev + 1);
           },
         }),
@@ -546,12 +588,17 @@ export async function startTui(options: TuiOptions = {}): Promise<void> {
       setExporting(true);
       setDone(null);
       setStatus(`Exporting as ${format}...`);
-      // Simulate async write. Real impl would dispatch to a writer.
-      setTimeout(() => {
+      // Real write: golden / dupes / unique to the output dir.
+      try {
+        const dir = options.outputDir ?? ".";
+        writeExports(result, format === "json" ? "json" : "csv", dir);
         setExporting(false);
         setDone(format);
-        setStatus(`Export complete (${format})`);
-      }, 400);
+        setStatus(`Export complete (${format}) -> ${dir}`);
+      } catch (e) {
+        setExporting(false);
+        setStatus(`Export failed: ${String(e)}`);
+      }
     };
 
     if (exporting) {
