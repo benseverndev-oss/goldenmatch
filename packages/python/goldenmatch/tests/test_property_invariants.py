@@ -193,26 +193,21 @@ def test_jaccard_bounds(pair: tuple) -> None:
     assert 0.0 <= result <= 1.0, f"jaccard a={a!r} b={b!r} -> {result}"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="known bug: _dice_score_single/_jaccard_score_single numpy "
+    "broadcast crash on different-length bloom hex inputs (matrix "
+    "variants pad to max_len and are unaffected); XPASS here means "
+    "the bug was fixed -- delete this marker and keep the assertions",
+)
 def test_dice_jaccard_mismatched_length_bug() -> None:
-    """KNOWN BUG: dice/jaccard crash on mismatched-length bloom filter inputs.
-
-    Hypothesis shrunk counterexample: a='0000' (2 bytes), b='000000' (3 bytes).
-    The single-pair functions (_dice_score_single, _jaccard_score_single) call
-    np.bitwise_and on arrays of different shapes without padding, raising
-    ValueError. The matrix variants pad to max_len and are unaffected.
-
-    This test is marked xfail(strict=False) so it:
-      - XFAIL (expected failure) as long as the bug is present
-      - becomes an XPASS (unexpected pass) when the bug is fixed, alerting the
-        maintainer to remove or flip this test
-    """
+    """Different-length hex inputs should score, not crash (found by hypothesis)."""
     from goldenmatch.core.scorer import score_field
 
-    with pytest.raises(ValueError):
-        score_field("0000", "000000", "dice")
-
-    with pytest.raises(ValueError):
-        score_field("0000", "000000", "jaccard")
+    for scorer in ("dice", "jaccard"):
+        result = score_field("0000", "000000", scorer)
+        assert result is not None and 0.0 <= result <= 1.0
 
 
 # ---------------------------------------------------------------------------
