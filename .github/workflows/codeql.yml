@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v3
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
           languages: ${{ matrix.language }}
           # Use the security-extended query suite — the default is too
@@ -50,9 +50,9 @@ jobs:
         # Python + JS are interpreted; autobuild is a no-op but the action
         # still expects the step in the pipeline. Keeping it explicit so
         # the same workflow scales if we add a compiled language later.
-        uses: github/codeql-action/autobuild@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v3
+        uses: github/codeql-action/autobuild@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v3
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
           category: "/language:${{ matrix.language }}"
