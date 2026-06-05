@@ -1028,7 +1028,8 @@ jobs:
           # handwritten one into PG's extension dir so `CREATE EXTENSION`
           # finds it. The schema file is the canonical declaration of
           # public function signatures.
-          cp sql/goldenmatch_pg--0.5.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.6.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.5.0--0.6.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
 
       - name: Expose goldenmatch to Postgres' Python interpreter
         # Postgres runs as user `postgres` under a different Python than the
