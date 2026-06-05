@@ -14,6 +14,8 @@ Endpoints:
     GET  /reviews             Review queue (borderline pairs for steward review)
     GET  /reviews/decisions   List completed review decisions
     POST /reviews/decide      Approve or reject a pair (steward action)
+    POST /shatter             Break a cluster into singletons
+    POST /unmerge             Pull a record out of its cluster
 """
 
 from __future__ import annotations
@@ -239,6 +241,39 @@ class MatchServer:
                 return {"status": "recorded", "pair_id": pair_id, "decision": decision}
 
         return {"error": f"Pair {pair_id} not found in review queue"}
+
+    def shatter_cluster(self, cluster_id: int) -> dict:
+        """Break a cluster into singletons (mirrors the MCP shatter_cluster tool)."""
+        if not self.result:
+            return {"error": "Server not initialized"}
+        info = self.result.clusters.get(cluster_id)
+        if info is None:
+            return {"error": f"Cluster {cluster_id} not found"}
+        member_count = info["size"]
+        updated = self.engine.unmerge_cluster(cluster_id)
+        if updated is None:
+            return {"error": "No matching results. Run matching first."}
+        self.result = updated
+        return {
+            "status": "shattered",
+            "cluster_id": cluster_id,
+            "records_freed": member_count,
+            "total_clusters": self.result.stats.total_clusters,
+        }
+
+    def unmerge_record_op(self, record_id: int, threshold: float = 0.0) -> dict:
+        """Pull a record out of its cluster into a singleton (re-clusters the rest)."""
+        if not self.result:
+            return {"error": "Server not initialized"}
+        updated = self.engine.unmerge_record(record_id, threshold)
+        if updated is None:
+            return {"error": "No matching results. Run matching first."}
+        self.result = updated
+        return {
+            "status": "unmerged",
+            "record_id": record_id,
+            "total_clusters": self.result.stats.total_clusters,
+        }
 
     def _record_memory_correction(self, item: dict, decision: str) -> None:
         """Persist a Correction with source='steward', trust=1.0, empty hashes."""
@@ -489,6 +524,21 @@ class APIHandler(BaseHTTPRequestHandler):
             else:
                 result = _server_instance.review_decision(pair_id, decision, reviewer)
                 self._json_response(result)
+        elif path == "/shatter":
+            cluster_id = data.get("cluster_id")
+            if not isinstance(cluster_id, int):
+                self._json_response({"error": "cluster_id (int) is required"}, 400)
+            else:
+                result = _server_instance.shatter_cluster(cluster_id)
+                self._json_response(result, 404 if "error" in result else 200)
+        elif path == "/unmerge":
+            record_id = data.get("record_id")
+            if not isinstance(record_id, int):
+                self._json_response({"error": "record_id (int) is required"}, 400)
+            else:
+                threshold = float(data.get("threshold", 0.0))
+                result = _server_instance.unmerge_record_op(record_id, threshold)
+                self._json_response(result, 404 if "error" in result else 200)
         else:
             self._json_response({"error": "Not found"}, 404)
 
