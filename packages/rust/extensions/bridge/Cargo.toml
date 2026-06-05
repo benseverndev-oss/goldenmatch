@@ -7,9 +7,8 @@ authors.workspace = true
 description = "Python bridge for GoldenMatch SQL extensions"
 
 [dependencies]
-# Pinned to >=0.23.3 to exclude the vulnerable range
-# (GHSA: >= 0.23.0, < 0.23.3). Bumping to 0.24+ is a separate task — pyo3
-# 0.24 has API breaks that need migration; tracked in the Rust extensions
-# workstream.
-pyo3 = { version = ">=0.23.3, <0.24", features = ["auto-initialize"] }
+# Pinned to >=0.24.1 for the GHSA buffer-overflow fix in PyString::from_object
+# (affected range: >=0.23.0, <0.24.1). Upper bound <0.25 keeps us on the same
+# API line as the native crate.
+pyo3 = { version = ">=0.24.1, <0.25", features = ["auto-initialize"] }
 thiserror = "2"
