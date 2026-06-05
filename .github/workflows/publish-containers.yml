@@ -30,11 +30,13 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # pushes images to ghcr.io
     strategy:
       fail-fast: false
       matrix:
