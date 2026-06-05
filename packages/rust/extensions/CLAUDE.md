@@ -42,7 +42,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - `spi.rs` -- reads PG tables via `row_to_json()` SPI queries
 - `correction.rs` -- Learning Memory CRUD + tuning: `correction_add`, `correction_list`, plus `memory_learn` (force a MemoryLearner pass) and `memory_stats` (counts + learned adjustments). All wrap the bridge `goldenmatch_bridge::api::*`. `memory_learn` is REVOKEd from PUBLIC like `correction_add`; `memory_stats` is read-only status, left for PUBLIC.
 - SQL file at `sql/goldenmatch_pg--0.6.0.sql` -- handwritten (pgrx doesn't auto-generate); `sql/goldenmatch_pg--0.5.0--0.6.0.sql` is the upgrade script
-- `kernels.rs` -- native-direct graph + fingerprint functions (#509). `goldenmatch_pair_dedup`/`_str` + `goldenmatch_connected_components`/`_str` call the pyo3-free `goldenmatch-graph-core` crate in PURE RUST (no embedded CPython); `goldenmatch_record_fingerprint` uses `fingerprint-core`. `goldenmatch_embed_local` still uses the CPython bridge (goldenembed-rs cutover is the #509 embed follow-up)
+- `kernels.rs` -- native-direct graph + fingerprint functions (#509). `goldenmatch_pair_dedup`/`_str` + `goldenmatch_connected_components`/`_str` call the pyo3-free `goldenmatch-graph-core` crate in PURE RUST (no embedded CPython); `goldenmatch_record_fingerprint` uses `fingerprint-core`. `goldenmatch_embed_local(text, model_path)` and `gm_embed(text)` (#737; dir from `GOLDENEMBED_MODEL_DIR`, `float4[]` for DataFusion parity, NULL->"") call `goldenembed-rs` native-direct (no CPython); the model is loaded once per backend process and cached by dir (`embed_one` + an `OnceLock<Mutex<HashMap>>`)
 - .control file: `schema = goldenmatch` -- all functions in goldenmatch schema
 
 ### duckdb/ (goldenmatch-duckdb)
@@ -70,6 +70,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - Postgres CI: tests PG 15/16/17 in parallel (fail-fast: false). Uses PostgreSQL apt repo for PG 15/17 availability
 - Multi-PG: must `pg_createcluster` explicitly + use `pg_lsclusters` to find correct port per version
 - System Python for Postgres: `sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py` then `sudo pip install --break-system-packages goldenmatch`
+- **Embed smoke (#737):** the `rust_pgrx` lane proves `ort`/onnxruntime loads inside the Postgres BACKEND process (distinct from the proven DataFusion cdylib case) by calling `goldenmatch_embed_local`/`gm_embed` against the goldenembed `tests/fixtures/tiny_model`. `gm_embed` reads `GOLDENEMBED_MODEL_DIR` from the backend env, and the postmaster does NOT inherit env passed to `pg_ctlcluster` (it re-execs) — write the var to the per-cluster `/etc/postgresql/<ver>/main/environment` file (the documented Debian mechanism PostgreSQL reads at startup) then `pg_ctlcluster ... restart`. `gm_embed` is NOT `STRICT` (NULL -> "" parity with DataFusion), so the smoke also asserts `gm_embed(NULL)` still returns a vector. The lane triggers on `goldenembed/**` too (path dep of the postgres crate).
 - Release workflow: builds .tar.gz + .deb + .rpm for PG 15/16/17, pushes Docker to ghcr.io + Docker Hub
 
 ## Identity Graph (v2.0, 2026-05-13)

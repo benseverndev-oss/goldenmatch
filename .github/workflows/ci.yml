@@ -119,6 +119,10 @@ jobs:
               # configuration.
               - 'packages/rust/extensions/postgres/**'
               - 'packages/rust/extensions/bridge/**'
+              # goldenembed is a path dep of the postgres crate (gm_embed /
+              # goldenmatch_embed_local) and supplies the embed-smoke fixture,
+              # so a goldenembed change must rebuild + re-smoke this lane.
+              - 'packages/rust/extensions/goldenembed/**'
               - 'packages/rust/extensions/Cargo.toml'
             duckdb_extensions:
               # The DuckDB UDF package is pure Python but lives under
@@ -1157,6 +1161,42 @@ jobs:
               ELSE
                 RAISE NOTICE 'v1.7-v1.12 autoconfig surface not yet on main (waiting on PR #159)';
               END IF;
+            END$$;
+          EOSQL
+          # In-house embed (#737): proves `ort`/onnxruntime loads inside the
+          # Postgres backend process (the new surface vs the proven DataFusion
+          # cdylib case). goldenmatch_embed_local takes an explicit model dir;
+          # gm_embed reads GOLDENEMBED_MODEL_DIR from the backend env. The
+          # postmaster does NOT inherit env passed to `pg_ctlcluster` (it re-execs);
+          # the documented Debian mechanism is the per-cluster `environment` file,
+          # which PostgreSQL reads at startup. Write it, then restart.
+          # Uses the goldenembed tiny_model fixture.
+          MODEL_DIR=/tmp/gm_tiny_model
+          sudo mkdir -p "${MODEL_DIR}"
+          sudo cp "${GITHUB_WORKSPACE}/packages/rust/extensions/goldenembed/tests/fixtures/tiny_model/"* "${MODEL_DIR}/"
+          sudo chmod -R a+rX "${MODEL_DIR}"
+          echo "GOLDENEMBED_MODEL_DIR = '${MODEL_DIR}'" | sudo tee -a "/etc/postgresql/${PG_VERSION}/main/environment"
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main restart
+          sleep 2
+          # Explicit-path variant (shell-interpolated dir at the top level, where
+          # psql doesn't help): proves ort loads in-backend + returns a real vector.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 \
+            -c "SELECT CASE WHEN array_length(goldenmatch.goldenmatch_embed_local('acme corp', '${MODEL_DIR}'), 1) > 0 THEN 'embed_local ok' ELSE NULL END;"
+          # gm_embed reads GOLDENEMBED_MODEL_DIR from the (restarted) backend env;
+          # also asserts the NULL -> "" convention (function is NOT STRICT).
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE v_gm real[]; v_nul real[];
+            BEGIN
+              v_gm := goldenmatch.gm_embed('acme corp');
+              IF v_gm IS NULL OR array_length(v_gm, 1) IS NULL THEN
+                RAISE EXCEPTION 'gm_embed returned no embedding';
+              END IF;
+              v_nul := goldenmatch.gm_embed(NULL);  -- NULL -> "" (not STRICT)
+              IF v_nul IS NULL OR array_length(v_nul, 1) IS NULL THEN
+                RAISE EXCEPTION 'gm_embed(NULL) should embed "" (NULL -> ""), got no array';
+              END IF;
+              RAISE NOTICE 'gm_embed smoke passed: dim=%', array_length(v_gm, 1);
             END$$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="
