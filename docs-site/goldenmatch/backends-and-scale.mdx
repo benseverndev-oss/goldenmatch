@@ -1,0 +1,69 @@
+---
+title: "Backends and scale"
+description: "The Polars, chunked, DuckDB, and Ray backends, and the measured scale numbers for each."
+keywords: ["backend", "polars", "duckdb", "chunked", "ray", "scale", "performance"]
+---
+
+GoldenMatch runs the same pipeline across four backends. The default is in-memory Polars; the others trade per-record speed for the ability to handle larger datasets without running out of memory.
+
+## Backends
+
+| Backend | Range | How it works |
+|---------|-------|--------------|
+| `polars` (default) | < 500K rows | In-memory Polars DataFrames. Fastest per record. |
+| `chunked` | 5M+ rows, single machine | Streaming CSV reader plus a vectorized Polars cross-chunk join plus a block-keyed bucketed index. |
+| `duckdb` | 500K – 50M rows | Out-of-core pair store via DuckDB. Spills to disk, so RAM is not the ceiling. |
+| `ray` | ≥ 50M rows, distributed | Per-block remote tasks; matchkey config and exclude-pairs set shared zero-copy via the Ray object store. |
+
+## Measured scale
+
+Quoted from the repository. Re-measure for your own hardware.
+
+| Records | Backend | Wall | Peak RSS | Clusters |
+|---------|---------|------|----------|----------|
+| 1,000 | polars | 0.2s | 101 MB | 210 multi-member |
+| 10,000 | polars | 1.4s | 123 MB | 7,000 multi-member |
+| 100,000 | polars | 12s | 544 MB | ~8,200 rec/s |
+| 1M (exact) | polars | ~7.8s | — | — |
+| 1M (fuzzy) | polars | ~43 min | ~10 GB | 836K |
+| 5M | chunked | ~50 min | 11.9 GB | 618,817 multi-member, no OOM |
+
+## Selecting a backend
+
+You can force a backend in config or on the CLI:
+
+```python
+config = gm.GoldenMatchConfig(backend="duckdb")
+```
+
+```bash
+goldenmatch dedupe big.csv --backend ray
+goldenmatch dedupe big.csv --chunked
+```
+
+Or let auto-config pick. By default it chooses `duckdb` at 1M+ rows and `chunked` for 5M+. Tune the cutoff with `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD`.
+
+## DuckDB spill path
+
+The DuckDB backend stores candidate pairs in an on-disk store. Point it somewhere with room:
+
+```bash
+export GOLDENMATCH_DUCKDB_SCORE_DB=/scratch/goldenmatch_pairs.duckdb
+```
+
+## Ray distributed
+
+```bash
+pip install goldenmatch[ray]
+goldenmatch dedupe big.csv --backend ray
+```
+
+The Ray path short-circuits back to local parallel scoring below four large blocks, since the distribution overhead does not pay off for small workloads.
+
+<Note>
+  Debug the prep-versus-kernel split for the bucket backend with `GOLDENMATCH_BUCKET_DEBUG=1`. It prints a per-bucket prep / kernel / post-filter timing breakdown. It is off by default, costs nothing, and does not change output.
+</Note>
+
+<Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
+  The block-size failure modes that matter more than the backend choice.
+</Card>

@@ -1,0 +1,74 @@
+---
+title: "GoldenFlow CLI"
+description: "Commands, flags, and the goldenflow.yaml config format."
+keywords: ["goldenflow", "cli", "commands", "config", "transforms"]
+---
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `goldenflow transform <file>` | Zero-config auto-detect and fix. |
+| `goldenflow <file>` | Shorthand that routes to `transform`. |
+| `goldenflow -` | Read from stdin, write to stdout. |
+| `goldenflow map --source a.csv --target b.csv` | Auto-map schemas between files. |
+| `goldenflow profile <file>` | Show column profiles. |
+| `goldenflow learn <file> -o config.yaml` | Generate a config from data patterns. |
+| `goldenflow validate <file>` | Dry-run: show what would change. |
+| `goldenflow diff before.csv after.csv` | Compare pre/post transform. |
+| `goldenflow watch ./data/` | Auto-transform new or changed files. |
+| `goldenflow schedule <file> --every 1h` | Run on a schedule (`5m`, `1h`, `30s`...). |
+| `goldenflow stream large_file.csv --chunk-size 50000` | Stream-process in batches. |
+| `goldenflow init <file>` | Interactive setup wizard. |
+| `goldenflow demo` | Generate sample data to try. |
+| `goldenflow history [-n 50]` | Show recent transform runs. |
+| `goldenflow interactive <file>` | Launch the TUI. |
+| `goldenflow serve` | REST API for real-time transforms. |
+| `goldenflow mcp-serve` | MCP server for Claude Desktop. |
+
+## Key flags
+
+| Flag | Effect |
+|------|--------|
+| `--domain healthcare\|people_hr\|finance\|ecommerce\|real_estate` | Apply a domain pack. |
+| `--strict` | Fail on the first transform error (exit 1). |
+| `--llm` | Enable LLM-enhanced corrections. |
+| `-c <config.yaml>` | Load an explicit config. |
+| `-o <output_path>` | Output directory or file. |
+| `--every <interval>` | Scheduling interval. |
+| `--chunk-size <N>` | Streaming batch size. |
+
+## Config
+
+```yaml
+source: customers.csv
+output: customers_clean.csv
+
+transforms:
+  - column: name
+    ops: [strip, title_case]
+  - column: email
+    ops: [lowercase, strip]
+  - column: phone
+    ops: [phone_e164]
+
+renames:
+  email_address: email
+  phone_number: phone
+
+drop: [internal_id, temp_notes]
+
+dedup:
+  columns: [email]
+  keep: first
+```
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `OPENAI_API_KEY` | LLM-enhanced categorical corrections (with `--llm`). |
+| `ANTHROPIC_API_KEY` | Alternative LLM provider. |
+| `GOLDENFLOW_LLM=1` | Enable LLM mode programmatically. |
+
+Transform runs are saved to `~/.goldenflow/history/` as JSON.

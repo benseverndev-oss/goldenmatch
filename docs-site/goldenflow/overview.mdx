@@ -1,0 +1,111 @@
+---
+title: "GoldenFlow overview"
+description: "Standardize, reshape, and normalize messy data with 76 built-in transforms across 11 categories."
+keywords: ["goldenflow", "transforms", "standardization", "normalization", "data cleaning"]
+---
+
+GoldenFlow standardizes, reshapes, and normalizes messy data before it enters a pipeline. In zero-config mode it auto-detects quality issues and applies safe transforms. It ships 76 built-in transforms across 11 categories (text, phone, name, address, date, categorical, numeric, email, identifiers, and URLs), plus domain packs for healthcare, finance, ecommerce, people/HR, and real estate. It scores 100/100 on the DQBench transform benchmarks.
+
+<Card title="CLI reference" icon="terminal" href="/goldenflow/cli">
+  Commands, flags, and the config format.
+</Card>
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install goldenflow
+```
+
+```bash npm
+npm install goldenflow
+```
+
+</CodeGroup>
+
+Extras: `goldenflow[check]` adds GoldenCheck integration, `goldenflow[mcp]` adds the MCP server, and `goldenflow[all]` brings everything.
+
+## Quickstart
+
+Zero-config auto-detect:
+
+```bash
+goldenflow transform messy_data.csv
+goldenflow demo
+```
+
+In Python:
+
+```python
+import goldenflow
+
+result = goldenflow.transform_file("messy_data.csv")
+print(result.df)        # clean Polars DataFrame
+print(result.manifest)  # audit trail
+```
+
+In TypeScript:
+
+```typescript
+import { TransformEngine } from "goldenflow";
+
+const result = new TransformEngine().transformDf([
+  { name: "  JOHN  ", phone: "(555) 123-4567", email: "John@Example.COM" },
+]);
+console.log(result.rows[0]);
+// { name: "JOHN", phone: "+15551234567", email: "john@example.com" }
+```
+
+## Key features
+
+- **Zero-config mode**: auto-detects column types and applies safe transforms.
+- **76 transforms** across 11 categories.
+- **5 domain packs**: healthcare, finance, ecommerce, people/HR, real estate.
+- **Audit trail**: a JSON manifest of every transform, which rows changed, and before/after samples.
+- **Schema mapping**: auto-map columns between systems by name similarity and data profiling.
+- **Streaming**: process large files in chunks via `StreamProcessor`.
+- **Cloud connectors**: transparent `s3://` and `gs://` paths.
+- **Watch and schedule**: auto-transform new files, or run on an interval.
+- **LLM-enhanced mode**: optional categorical corrections via `--llm`.
+- **Polars-native**, with Jupyter-friendly rich rendering.
+
+## Configured transforms
+
+```python
+import goldenflow
+from goldenflow import GoldenFlowConfig, TransformSpec
+
+config = GoldenFlowConfig(transforms=[
+    TransformSpec(column="first_name", ops=["strip", "title_case"]),
+    TransformSpec(column="last_name", ops=["strip", "title_case"]),
+    TransformSpec(column="email", ops=["strip", "lowercase"]),
+    TransformSpec(column="phone", ops=["strip", "phone_national"]),
+])
+result = goldenflow.transform_df(df, config=config)
+```
+
+## Schema mapping
+
+```python
+from goldenflow import SchemaMapper
+import polars as pl
+
+source = pl.DataFrame({"fname": ["John"], "lname": ["Smith"]})
+target = pl.DataFrame({"first_name": [""], "last_name": [""]})
+
+mapper = SchemaMapper()
+for m in mapper.map(source, target):
+    print(f"{m.source} → {m.target} ({m.confidence:.0%})")
+```
+
+## Streaming
+
+```python
+from goldenflow.streaming import StreamProcessor
+
+processor = StreamProcessor(config=config)
+for result in processor.stream_file("large_data.csv", chunk_size=10_000):
+    write_to_output(result.df)
+print(f"Processed {processor.batches_processed} batches")
+```

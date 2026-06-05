@@ -1,0 +1,104 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Golden Suite",
+  "description": "A polyglot data-quality and entity-resolution toolkit. Zero-config, AI-native, MIT-licensed.",
+  "colors": {
+    "primary": "#d4a017",
+    "light": "#e8b923",
+    "dark": "#b8860b"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "index",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/entity-resolution",
+              "concepts/scale-envelope"
+            ]
+          },
+          {
+            "group": "GoldenMatch",
+            "pages": [
+              "goldenmatch/overview",
+              "goldenmatch/quickstart",
+              "goldenmatch/auto-config",
+              "goldenmatch/backends-and-scale",
+              "goldenmatch/pprl",
+              "goldenmatch/cli"
+            ]
+          },
+          {
+            "group": "GoldenCheck",
+            "pages": [
+              "goldencheck/overview",
+              "goldencheck/cli",
+              "goldencheck/integrations"
+            ]
+          },
+          {
+            "group": "GoldenFlow",
+            "pages": [
+              "goldenflow/overview",
+              "goldenflow/cli"
+            ]
+          },
+          {
+            "group": "GoldenPipe",
+            "pages": [
+              "goldenpipe/overview"
+            ]
+          },
+          {
+            "group": "InferMap",
+            "pages": [
+              "infermap/overview"
+            ]
+          },
+          {
+            "group": "SQL extensions",
+            "pages": [
+              "extensions/sql"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/vendor-comparison"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/benseverndev-oss/goldenmatch"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "PyPI",
+      "href": "https://pypi.org/project/goldenmatch/"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/benseverndev-oss/goldenmatch"
+    }
+  }
+}

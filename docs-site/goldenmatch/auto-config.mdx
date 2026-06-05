@@ -1,0 +1,66 @@
+---
+title: "Auto-config"
+description: "How the introspective AutoConfig controller detects column types, picks scorers and blocking, and iterates until it converges."
+keywords: ["auto-config", "controller", "zero-config", "complexity profile", "convergence"]
+---
+
+The introspective AutoConfig controller is what lets GoldenMatch beat hand-tuned baselines with no input. It detects column types, selects scorers, picks a blocking strategy, then iterates on signals the pipeline emits until it converges on a defensible config.
+
+## What it does
+
+Given a file, the controller:
+
+1. Detects column types (name, email, phone, zip, address, description).
+2. Selects appropriate scorers per column.
+3. Picks a blocking strategy.
+4. Runs the pipeline and reads back complexity signals.
+5. Applies refinement rules and repeats until health stops improving.
+
+## Signals it watches
+
+The controller iterates on a `ComplexityProfile`:
+
+- Block-size distribution (p50 / p95 / p99).
+- Score histogram (bimodality detection).
+- Transitivity rate.
+- Borderline mass (pairs near the threshold).
+- Negative-evidence collision rate (v1.11+).
+
+## Refinement rules
+
+The `HeuristicRefitPolicy` applies rules such as:
+
+| Rule | Effect |
+|------|--------|
+| `rule_no_matches` | Raises the threshold if no pairs are found. |
+| `rule_blocking_key_swap` | Switches to an orthogonal blocking key on low recall. |
+| `rule_corruption_normalize` | Adds normalization for corrupted identity columns. |
+| `rule_sparse_match_expand` | Lowers the threshold and adds side-channel blocking for sparse matches. |
+| `rule_demote_clustered_identity` | Demotes exact matchkeys with a collision rate above 0.75 (v1.11). |
+| `promote_negative_evidence` | Adds negative-evidence penalties for identity-discriminating columns (v1.11). |
+| `rule_negative_evidence_exact_filter` | Applies negative-evidence penalties to exact matchkeys via a post-filter (Path Y, v1.12). |
+
+Configs are ranked by a health metric: GREEN > YELLOW > RED, with the initial config as a virtual fallback.
+
+<Warning>
+  At 100,000+ rows, auto-config raises `ControllerNotConfidentError` rather than silently committing a low-confidence (RED) config. Handle this explicitly instead of adding a silent fallback path.
+</Warning>
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `GOLDENMATCH_AUTOCONFIG_MEMORY=0` | Disable cross-run memory (default on; stored at `~/.goldenmatch/autoconfig_memory.db`). |
+| `GOLDENMATCH_AUTOCONFIG_MEMORY_PATH=<path>` | Custom path for the cross-run memory store. |
+| `GOLDENMATCH_AUTOCONFIG_LLM=1` | Enable the LLM fallback policy (requires `OPENAI_API_KEY`). |
+| `GOLDENMATCH_AUTOCONFIG_BACKEND=duckdb\|ray\|0` | Force a backend, or `0` to auto-select. |
+| `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=<int>` | Row-count cutoff for DuckDB auto-selection (default 1,000,000). |
+| `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast\|full` | Run the cheap or the full indicator set (default `fast`). |
+
+## Cross-run memory
+
+By default the controller remembers what worked on prior runs and seeds future runs from it. Disable it with `GOLDENMATCH_AUTOCONFIG_MEMORY=0`, or point it elsewhere with `GOLDENMATCH_AUTOCONFIG_MEMORY_PATH`.
+
+<Card title="Scale envelope" icon="gauge-high" href="/concepts/scale-envelope">
+  The block-size guards the controller respects, and how it picks a backend.
+</Card>
