@@ -438,7 +438,21 @@ async def _auth_middleware(request: web.Request, handler):
 
 
 def create_app(host: str = "0.0.0.0", port: int = 8080) -> web.Application:
-    """Build and return the A2A aiohttp application."""
+    """Build and return the A2A aiohttp application.
+
+    Auth posture matches the MCP HTTP server: ``GOLDENMATCH_AGENT_TOKEN``
+    enables bearer enforcement, and binding to a non-loopback host without a
+    token is refused at startup (fail closed) so an exposed agent server is
+    never unauthenticated by accident.
+    """
+    token = os.environ.get("GOLDENMATCH_AGENT_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not token and not is_loopback:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated A2A server on host {host!r}. "
+            "Set GOLDENMATCH_AGENT_TOKEN, or bind to 127.0.0.1 for local use."
+        )
+
     app = web.Application(middlewares=[_auth_middleware])
     app["registry"] = TaskRegistry()
     app["host"] = host
