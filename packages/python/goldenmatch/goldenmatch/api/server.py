@@ -492,6 +492,21 @@ class APIHandler(BaseHTTPRequestHandler):
         else:
             self._json_response({"error": "Not found"}, 404)
 
+    def _safe_cors_origin(self, origin: str, allowed: set[str]) -> str:
+        """Return a safe origin for header reflection, or empty string if invalid."""
+        if not origin:
+            return ""
+        # Prevent HTTP response splitting via CR/LF injection.
+        if "\r" in origin or "\n" in origin:
+            return ""
+        sanitized = origin.strip()
+        # Reject values that change after stripping to avoid ambiguous whitespace.
+        if sanitized != origin:
+            return ""
+        if sanitized not in allowed:
+            return ""
+        return sanitized
+
     def _json_response(self, data: Any, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -503,8 +518,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if o.strip()
         }
         origin = self.headers.get("Origin", "")
-        if origin and origin in allowed:
-            self.send_header("Access-Control-Allow-Origin", origin)
+        safe_origin = self._safe_cors_origin(origin, allowed)
+        if safe_origin:
+            self.send_header("Access-Control-Allow-Origin", safe_origin)
             self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode())
