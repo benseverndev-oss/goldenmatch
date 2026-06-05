@@ -93,6 +93,7 @@ Registered UDFs:
 | `goldenmatch_connected_components(...)` | Group a candidate-pair graph into entities. |
 | `goldenmatch_pair_dedup(...)` | Keep the best score per canonical pair. |
 | `goldenmatch_embed_local(text, model_path)` | Embed text with a local in-house model. |
+| `gm_embed(text)` (PostgreSQL) | Embed text with the in-house model, dir from `GOLDENEMBED_MODEL_DIR`. |
 
 ## Graph and embedding kernels
 
@@ -155,6 +156,13 @@ SELECT goldenmatch.goldenmatch_embed_local('John Smith', '/path/to/model');  -- 
 ```
 
 </CodeGroup>
+
+On PostgreSQL, `gm_embed(text)` is a one-argument convenience that reads the model directory from the `GOLDENEMBED_MODEL_DIR` environment variable instead of taking it per call, and returns `real[]` (float4) to match the DataFusion `goldenmatch_embed` UDF. The model loads once per backend process and is cached. A `NULL` input embeds the empty string rather than returning `NULL`.
+
+```sql PostgreSQL
+-- Set GOLDENEMBED_MODEL_DIR in the server environment first.
+SELECT goldenmatch.gm_embed('John Smith');  -- real[]
+```
 
 <Note>
   The DuckDB embedding UDF needs the optional embed runtime: `pip install goldenmatch-duckdb[embed]`.
