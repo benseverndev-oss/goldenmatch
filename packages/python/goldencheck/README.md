@@ -559,7 +559,7 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 
 ## Remote MCP Server
 
-GoldenCheck is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldencheck) — connect from any MCP client without installing anything.
+GoldenCheck is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldencheck) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
