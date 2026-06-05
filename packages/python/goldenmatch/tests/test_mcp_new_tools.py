@@ -59,13 +59,32 @@ def demo_file(tmp_path):
     return str(f)
 
 
+@pytest.fixture
+def simple_config(tmp_path):
+    """Explicit exact-email config so create_server skips auto-config.
+
+    Auto-config on a 3-field shape can enable rerank (cross-encoder download),
+    which fails in offline CI. An explicit config keeps these tests hermetic.
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "matchkeys:\n"
+        "  - name: exact_email\n"
+        "    type: exact\n"
+        "    fields:\n"
+        "      - field: email\n"
+        "        transforms: [lowercase, strip]\n"
+    )
+    return str(cfg)
+
+
 # ── Base tools on a loaded dataset ────────────────────────────────────────────
 
 
-def test_evaluate(demo_file, tmp_path):
+def test_evaluate(demo_file, simple_config, tmp_path):
     from goldenmatch.mcp.server import _handle_tool, create_server
 
-    create_server([demo_file])
+    create_server([demo_file], simple_config)
     gt = tmp_path / "gt.csv"
     with open(gt, "w", newline="") as fp:
         w = csv.writer(fp)
@@ -75,29 +94,29 @@ def test_evaluate(demo_file, tmp_path):
     assert "f1" in result and "precision" in result and "recall" in result
 
 
-def test_analyze_blocking(demo_file):
+def test_analyze_blocking(demo_file, simple_config):
     from goldenmatch.mcp.server import _handle_tool, create_server
 
-    create_server([demo_file])
+    create_server([demo_file], simple_config)
     result = _handle_tool("analyze_blocking", {"limit": 5})
     assert "suggestions" in result
     assert isinstance(result["suggestions"], list)
     assert "matchkey_columns" in result
 
 
-def test_lineage(demo_file):
+def test_lineage(demo_file, simple_config):
     from goldenmatch.mcp.server import _handle_tool, create_server
 
-    create_server([demo_file])
+    create_server([demo_file], simple_config)
     result = _handle_tool("lineage", {"max_pairs": 10})
     assert "count" in result
     assert "lineage" in result
 
 
-def test_lineage_to_dir(demo_file, tmp_path):
+def test_lineage_to_dir(demo_file, simple_config, tmp_path):
     from goldenmatch.mcp.server import _handle_tool, create_server
 
-    create_server([demo_file])
+    create_server([demo_file], simple_config)
     out = tmp_path / "lineage_out"
     out.mkdir()
     result = _handle_tool("lineage", {"max_pairs": 10, "output_dir": str(out)})
