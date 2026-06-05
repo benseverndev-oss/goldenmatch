@@ -6,10 +6,7 @@
 //! is bit-exact with its Python reference (integer arithmetic + a strict-`>`
 //! max reduction — no float tolerance), so the `pairs` component is gated on by
 //! default once the parity test passes.
-use std::collections::BTreeMap;
-
-use arrow::array::{Array, ArrayData, Float64Array, Int64Array};
-use arrow::datatypes::DataType;
+use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -30,17 +27,7 @@ pub fn canonicalize_pairs(pairs: Vec<(i64, i64, f64)>) -> Vec<(i64, i64, f64)> {
 /// occurrence wins on ties — identical to the Python `if s > best[key]` guard.
 #[pyfunction]
 pub fn dedup_pairs_max_score(pairs: Vec<(i64, i64, f64)>) -> Vec<(i64, i64, f64)> {
-    let mut best: BTreeMap<(i64, i64), f64> = BTreeMap::new();
-    for (a, b, s) in pairs {
-        let key = if a <= b { (a, b) } else { (b, a) };
-        match best.get(&key) {
-            Some(&cur) if s <= cur => {}
-            _ => {
-                best.insert(key, s);
-            }
-        }
-    }
-    best.into_iter().map(|((a, b), s)| (a, b, s)).collect()
+    goldenmatch_graph_core::dedup_pairs_max_score(&pairs)
 }
 
 /// Total candidate comparisons across blocks: `sum(n*(n-1)/2)`. Accumulates in
@@ -82,82 +69,9 @@ pub fn dedup_pairs_arrow(
     id_b: PyArrowType<ArrayData>,
     score: PyArrowType<ArrayData>,
 ) -> PyResult<(PyArrowType<ArrayData>, PyArrowType<ArrayData>, PyArrowType<ArrayData>)> {
-    let id_a_data = id_a.0;
-    let id_b_data = id_b.0;
-    let score_data = score.0;
-
-    if id_a_data.data_type() != &DataType::Int64 {
-        return Err(PyValueError::new_err(format!(
-            "dedup_pairs_arrow: id_a must be int64, got {:?}",
-            id_a_data.data_type()
-        )));
-    }
-    if id_b_data.data_type() != &DataType::Int64 {
-        return Err(PyValueError::new_err(format!(
-            "dedup_pairs_arrow: id_b must be int64, got {:?}",
-            id_b_data.data_type()
-        )));
-    }
-    if score_data.data_type() != &DataType::Float64 {
-        return Err(PyValueError::new_err(format!(
-            "dedup_pairs_arrow: score must be float64, got {:?}",
-            score_data.data_type()
-        )));
-    }
-
-    let id_a = Int64Array::from(id_a_data);
-    let id_b = Int64Array::from(id_b_data);
-    let score = Float64Array::from(score_data);
-
-    let n = id_a.len();
-    if id_b.len() != n || score.len() != n {
-        return Err(PyValueError::new_err(format!(
-            "dedup_pairs_arrow: array lengths differ -- id_a={}, id_b={}, score={}",
-            n, id_b.len(), score.len(),
-        )));
-    }
-
-    // Reduce: same algorithm as dedup_pairs_max_score. Strict `>`
-    // first-occurrence-wins on ties keeps it bit-identical with the
-    // dict-shaped kernel at the output value layer.
-    let mut best: BTreeMap<(i64, i64), f64> = BTreeMap::new();
-    for i in 0..n {
-        if id_a.is_null(i) || id_b.is_null(i) || score.is_null(i) {
-            continue;
-        }
-        let a = id_a.value(i);
-        let b = id_b.value(i);
-        let s = score.value(i);
-        let key = if a <= b { (a, b) } else { (b, a) };
-        match best.get(&key) {
-            Some(&cur) if s <= cur => {}
-            _ => {
-                best.insert(key, s);
-            }
-        }
-    }
-
-    // Emit sorted output as three Arrow arrays. BTreeMap iter yields
-    // ascending key order, so the result is already sorted by (a, b).
-    let n_out = best.len();
-    let mut out_a: Vec<i64> = Vec::with_capacity(n_out);
-    let mut out_b: Vec<i64> = Vec::with_capacity(n_out);
-    let mut out_s: Vec<f64> = Vec::with_capacity(n_out);
-    for ((a, b), s) in best {
-        out_a.push(a);
-        out_b.push(b);
-        out_s.push(s);
-    }
-
-    let a_array = Int64Array::from(out_a);
-    let b_array = Int64Array::from(out_b);
-    let s_array = Float64Array::from(out_s);
-
-    Ok((
-        PyArrowType(a_array.to_data()),
-        PyArrowType(b_array.to_data()),
-        PyArrowType(s_array.to_data()),
-    ))
+    let (a, b, s) = goldenmatch_graph_core::dedup_pairs_arrow_data(id_a.0, id_b.0, score.0)
+        .map_err(PyValueError::new_err)?;
+    Ok((PyArrowType(a), PyArrowType(b), PyArrowType(s)))
 }
 
 /// `(count, total_records, max, p50, p95, p99)` over the block-size

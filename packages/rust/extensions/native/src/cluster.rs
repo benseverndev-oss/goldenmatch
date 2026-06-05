@@ -44,28 +44,7 @@ pub fn connected_components(
     edges: Vec<(i64, i64, f64)>,
     all_ids: Vec<i64>,
 ) -> Vec<Vec<i64>> {
-    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(all_ids.len());
-    for id in all_ids {
-        parent.entry(id).or_insert(id);
-    }
-    for (a, b, _s) in &edges {
-        parent.entry(*a).or_insert(*a);
-        parent.entry(*b).or_insert(*b);
-    }
-    for (a, b, _s) in &edges {
-        let ra = find(&mut parent, *a);
-        let rb = find(&mut parent, *b);
-        if ra != rb {
-            parent.insert(ra, rb);
-        }
-    }
-    let keys: Vec<i64> = parent.keys().copied().collect();
-    let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
-    for k in keys {
-        let r = find(&mut parent, k);
-        groups.entry(r).or_default().push(k);
-    }
-    groups.into_values().collect()
+    goldenmatch_graph_core::connected_components(&edges, &all_ids)
 }
 
 /// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
@@ -574,4 +553,22 @@ pub fn build_clusters_arrow(
         PyArrowType(metadata_min.to_data()),
         PyArrowType(metadata_avg.to_data()),
     ))
+}
+
+/// Arrow columnar connected components. Edge columns int64/int64/float64 + an
+/// int64 `all_ids` universe column. Returns one Arrow `List<Int64>` array (one
+/// list per component, members sorted ascending). Delegates to the pyo3-free
+/// `graph-core` kernel so DuckDB (via this shim) and DataFusion share one path.
+#[pyfunction]
+pub fn connected_components_arrow(
+    id_a: PyArrowType<ArrayData>,
+    id_b: PyArrowType<ArrayData>,
+    score: PyArrowType<ArrayData>,
+    all_ids: PyArrowType<ArrayData>,
+) -> PyResult<PyArrowType<ArrayData>> {
+    let out = goldenmatch_graph_core::connected_components_arrow_data(
+        id_a.0, id_b.0, score.0, all_ids.0,
+    )
+    .map_err(PyValueError::new_err)?;
+    Ok(PyArrowType(out))
 }
