@@ -122,8 +122,11 @@ Same per-engine encoding as above.
 
 - **int64 columns/arrays** → straight into the kernel (zero mapping).
 - **Utf8/dictionary (DuckDB/DataFusion) or `text[]` (Postgres)** → wrapper builds
-  a deterministic str↔i64 dictionary, runs the i64 kernel, maps results back to
-  the original string ids. Dictionary build is parity-tested.
+  a deterministic str↔i64 dictionary (**first-seen insertion order**: scan
+  `id_a` then `id_b`, assign the next i64 to each unseen string), runs the i64
+  kernel, maps results back to the original string ids. Build order is identical
+  across all three wrappers so grouping + round-trip agree. Dictionary build is
+  parity-tested.
 
 ### `goldenmatch_embed_local(text, model_path)`
 
@@ -133,9 +136,20 @@ Same per-engine encoding as above.
 |---|---|
 | DuckDB | new `goldenmatch-embed` wheel (goldenembed-rs ONNX) |
 | Postgres | `goldenembed` crate **directly** (pure Rust, no CPython bridge) |
-| DataFusion | existing `goldenmatch_embed` UDF (`embed_udf.rs`) already does this |
+| DataFusion | extend existing `embed_udf.rs` — **see divergence note** |
 
 Returns the embedding vector (float array / `FixedSizeList<Float32>` on Arrow).
+
+**DataFusion divergence (must resolve in the plan):** the existing UDF is named
+`goldenmatch_embed` (not `goldenmatch_embed_local`), takes a **single** `text`
+arg, and reads the model dir from the `GOLDENEMBED_MODEL_DIR` env var at
+construction — it has **no per-call `model_path`**. So the DataFusion surface is
+**not** a no-op. The plan must choose one:
+- **(a)** add a 2-arg `goldenmatch_embed_local(text, model_path)` alongside the
+  existing env-var `goldenmatch_embed` (lockstep name parity, keeps back-compat), or
+- **(b)** rename/repoint to the 2-arg form and document the env-var contract drop.
+Recommended: **(a)** — adds the lockstep name without breaking the existing
+env-var UDF.
 
 ## Data flow (graph UDF, DuckDB, string ids)
 
@@ -183,7 +197,8 @@ DuckDB + `graph-core`.
 - `goldenmatch-duckdb`: `0.5.0 → 0.6.0` (Arrow graph UDFs, embed via wheel).
 - `goldenmatch_pg`: `0.5.0 → 0.6.0` — new handwritten `sql/goldenmatch_pg--0.6.0.sql`
   + `--0.5.0--0.6.0.sql` upgrade script (drops old JSON signatures, creates new).
-- `datafusion-udf`: graph UDFs added (version bump per its own scheme).
+- `datafusion-udf`: graph UDFs + 2-arg `goldenmatch_embed_local` added; bump its
+  crate version one minor (pin the exact target during planning).
 
 ## Build sequence (graph-first)
 
