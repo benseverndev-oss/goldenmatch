@@ -1,6 +1,9 @@
 //! Pyo3-free graph kernels. Behavior-exact extraction of the loops that lived in
 //! `native/src/{cluster,pairs}.rs`; the `native` crate keeps thin `#[pyfunction]`
 //! shims delegating here (one source of truth, like `score-core`).
+mod dict;
+pub use dict::*;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
