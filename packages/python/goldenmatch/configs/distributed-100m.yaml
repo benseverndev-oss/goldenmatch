@@ -1,0 +1,73 @@
+# =============================================================================
+# GoldenMatch config: distributed dedupe at 100M+ rows (Ray cluster)
+# =============================================================================
+# The *matching policy* below is an ordinary config -- identical in shape to
+# customers.yaml. What makes a run "distributed" is HOW you invoke it (env vars
+# + a Ray cluster), not the config file. This file documents both.
+#
+# Verified shape: a full 100,000,000-row dedupe ran in ~213 s on a 4-worker
+# `e2-standard-16` cluster (64 worker CPU), 20,000,000 golden records, with the
+# driver process peaking at 0.30 GB RSS. The pipeline is driver-collect-free:
+#   score -> per-partition local connected-components -> distributed join
+#   -> distributed golden build -> distributed write.
+#
+# --- How to run (the part that makes it distributed) --------------------------
+# 1. Stand up a Ray cluster. Run the HEAD as a pure driver so shuffle data
+#    never lands on it:
+#       ray start --head --num-cpus=0 --object-store-memory=20000000000
+#    Workers join and supply ALL the compute:
+#       ray start --address=<head-ip>:6379 --num-cpus=16 --object-store-memory=20000000000
+#    On cloud, give workers WRITE access to object storage (the distributed
+#    parquet write runs ON the workers), e.g. GCP `--scopes=cloud-platform`.
+#
+# 2. Your input must carry a GLOBAL row id column named `__row_id__`
+#    (0..N-1, unique across the whole dataset). This is load-bearing: without
+#    it, each partition mints local ids that collide across partitions and
+#    connected-components merges unrelated clusters. The bench generator
+#    (`scripts/generate_phase5_dataset.py`) writes it; for your own data add a
+#    monotonic id column before partitioning.
+#
+# 3. Drive it through the fully-distributed pipeline:
+#       export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+#       export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
+#       export RAY_ADDRESS=auto
+#    Then read the input partitioned and run it. See
+#    `scripts/bench_phase5_explicit.py` for the exact 100M assembly, and
+#    `examples/distributed_pipeline.py` for a runnable Ray-local-mode demo.
+# -----------------------------------------------------------------------------
+
+# --- Matchkeys ----------------------------------------------------------------
+# Keep matchkeys cheap at scale: prefer exact/blocked-fuzzy over many fuzzy
+# fields. Each fuzzy field is scored per candidate pair on every worker.
+matchkeys:
+  - name: name_fuzzy
+    type: weighted
+    threshold: 0.85
+    fields:
+      - column: first_name
+        scorer: jaro_winkler
+        weight: 1.0
+
+# --- Blocking (THE scale lever) ------------------------------------------------
+# At 100M, blocking selectivity decides whether you finish in minutes or never.
+# Block on a high-cardinality key so buckets stay small (here: a unique-ish
+# last_name). Each scoring partition only compares within its own rows, so a
+# selective key keeps per-partition pair counts bounded.
+blocking:
+  strategy: static
+  max_block_size: 5000
+  skip_oversized: true
+  keys:
+    - fields: [last_name]
+
+# --- Golden record ------------------------------------------------------------
+golden_rules:
+  default_strategy: most_complete
+
+# --- Output -------------------------------------------------------------------
+# At scale the pipeline writes a DIRECTORY of parquet part files (one per
+# partition), straight from the workers -- never materialized on the driver.
+output:
+  format: parquet
+  directory: ./goldenmatch_out_100m
+  run_name: distributed_100m

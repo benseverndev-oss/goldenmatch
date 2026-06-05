@@ -65,8 +65,22 @@ def _adversarial_pairs():
         (32, 34, 0.99), (32, 35, 0.99), (32, 36, 0.99), (33, 34, 0.99),
         (33, 35, 0.99), (33, 36, 0.99), (34, 35, 0.99), (34, 36, 0.99),
         (35, 36, 0.99),
+        # Group A (40-48): three triangles + two weak bridges -> splits into 3
+        # components at max_cluster_size=5 (exercises the batch fn's repeated cuts
+        # on the hand-written frames-out split loop).
+        (40, 41, 0.99), (40, 42, 0.99), (41, 42, 0.99),
+        (43, 44, 0.99), (43, 45, 0.99), (44, 45, 0.99),
+        (46, 47, 0.99), (46, 48, 0.99), (47, 48, 0.99),
+        (42, 43, 0.30), (45, 46, 0.25),
+        # Group B (50-57): two 4-cliques + one weak bridge -> a SECOND splittable
+        # oversized top-level cluster (exercises multi-cluster labeling order).
+        (50, 51, 0.99), (50, 52, 0.99), (50, 53, 0.99),
+        (51, 52, 0.99), (51, 53, 0.99), (52, 53, 0.99),
+        (54, 55, 0.99), (54, 56, 0.99), (54, 57, 0.99),
+        (55, 56, 0.99), (55, 57, 0.99), (56, 57, 0.99),
+        (53, 54, 0.28),
     ]
-    all_ids = list(range(0, 23)) + list(range(30, 37))
+    all_ids = list(range(0, 23)) + list(range(30, 37)) + list(range(40, 49)) + list(range(50, 58))
     return pairs, all_ids
 
 
@@ -109,6 +123,29 @@ def test_frames_out_roundtrips_to_dict_full(monkeypatch, native):
     assert got.keys() == ref.keys()
     for cid in ref:
         assert _norm(got[cid]) == _norm(ref[cid]), f"cid {cid}: {got[cid]} vs {ref[cid]}"
+
+
+def test_budget_break_frames_out_matches_dict(monkeypatch):
+    """#726: under budget exhaustion, the frames-out split loop and the dict path
+    leave the SAME clusters oversized + conserve total membership. Locks the two
+    `break` paths (the hand-written frames loop vs `_finalize_clusters`) against
+    each other -- the cross-path parity the per-task review flagged as untested."""
+    pairs, all_ids = _adversarial_pairs()
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET", "1")  # exhaust immediately
+    kw = dict(all_ids=all_ids, max_cluster_size=5,
+              weak_cluster_threshold=0.3, auto_split=True)
+    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_CLUSTER_BUILD", "1")
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", raising=False)
+    ref = build_clusters(pairs, **kw)
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
+    got = cluster_frames_to_dict(build_cluster_frames(pairs, **kw))
+    assert got.keys() == ref.keys()
+    for cid in ref:
+        assert _norm(got[cid]) == _norm(ref[cid]), f"cid {cid}: {got[cid]} vs {ref[cid]}"
+    # Membership conserved + something left oversized (budget=1 trips immediately).
+    assert sum(c["size"] for c in got.values()) == len(all_ids)
+    assert any(c["oversized"] for c in got.values())
 
 
 def test_step3_quality_matches_dict_loop(monkeypatch):

@@ -1,0 +1,67 @@
+---
+title: "Scale envelope"
+description: "Pick the right backend for your row count, and avoid the block-size failure modes that dominate ER performance."
+keywords: ["scale", "backend", "polars", "duckdb", "ray", "blocking", "performance"]
+---
+
+The right backend depends mostly on your row count. The single biggest performance lever, though, is the blocking key, not the backend.
+
+## Backend by row count
+
+| Rows | Backend | Notes |
+|------|---------|-------|
+| < 500K | `polars` (default) | In-memory. Fastest per record. OOM ceiling near 500K on fuzzy runs. |
+| 500K – 50M | `duckdb` | Out-of-core, single machine. Spills to disk, so RAM stops being the ceiling. |
+| ≥ 50M, or many large blocks | `ray` | Distributed block scoring. Needs ≥ 4 large blocks to pay back overhead. |
+
+<Note>
+  GoldenMatch also has a `chunked` backend used for very large single-machine dedupe (streaming CSV reader plus a Polars cross-chunk join plus a block-keyed index). See [backends and scale](/goldenmatch/backends-and-scale).
+</Note>
+
+## Measured numbers
+
+These are quoted from the repository and were measured on the versions noted. Re-measure for your own hardware.
+
+| Records | Backend | Wall | Peak RSS | Notes |
+|---------|---------|------|----------|-------|
+| 1M exact dedupe | polars | ~7.8s | — | In-memory self-join |
+| 100K fuzzy (name + zip) | polars | ~12.8s | 544 MB | Full pipeline, ~8,200 rec/s |
+| 1M fuzzy | polars | — | — | OOMs in-memory |
+| 5M | chunked | ~50 min | 11.9 GB | 4c/16GB runner, 618,817 multi-member clusters, no OOM |
+
+## Block-size failure modes
+
+Most ER blow-ups come from a blocking key that produces a few huge blocks. GoldenMatch enforces guard rails:
+
+- `max_block_size: 5000` in hand-written `BlockingConfig`.
+- `max_safe_block = 1000` in auto-config (blocks over 1000 can OOM ensemble scorers).
+- `skip_oversized: false` by default. When true, oversized blocks are ANN-sub-blocked or skipped.
+
+### Cardinality guards (v1.2.7)
+
+| Guard | Threshold | Prevents |
+|-------|-----------|----------|
+| Blocking exclusion | `cardinality_ratio >= 0.95` | Near-unique columns producing single-record blocks. |
+| Matchkey exclusion | `cardinality_ratio < 0.01` | Too few distinct values to be useful. |
+| Null-rate exclusion | `null_rate > 0.2` | Sparse columns creating huge null-block sinks. |
+
+### The common-email trap
+
+Using `exact=["email"]` as the only matchkey creates oversized clusters around shared values like `info@`, `noreply@`, or null. Symptoms: one giant cluster, stalled scoring, memory pressure. Fix it by standardizing or stripping common patterns, or by adding a second blocking pass.
+
+## Checklist before scaling
+
+<Steps>
+  <Step title="Profile your blocking key">
+    Check its `cardinality_ratio`. Auto-config prints this in its postflight health report.
+  </Step>
+  <Step title="Respect the block-size cap">
+    Stay under `max_block_size=1000` for auto-config, or `5000` for hand-written configs.
+  </Step>
+  <Step title="Pick the backend from row count">
+    < 500K → Polars; 500K – 50M → DuckDB; ≥ 50M or many large blocks → Ray.
+  </Step>
+  <Step title="Re-measure if exact numbers matter">
+    The published figures are baselines on specific versions and hardware.
+  </Step>
+</Steps>

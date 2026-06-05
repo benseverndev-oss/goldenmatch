@@ -10,7 +10,6 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
@@ -19,7 +18,6 @@ from goldenmatch.config.schemas import (
     BlockingKeyConfig,
     GoldenMatchConfig,
     MatchkeyConfig,
-    MatchkeyField,
 )
 from goldenmatch.core.autoconfig_history import PolicyDecision, RunHistory
 from goldenmatch.core.complexity_profile import ComplexityProfile
@@ -132,90 +130,6 @@ def _orthogonal_key(cfg: GoldenMatchConfig, df_columns: list[str]) -> BlockingKe
     if not candidates:
         return None
     return BlockingKeyConfig(fields=[candidates[0]], transforms=["lowercase"])
-
-
-def _demote_exact_to_weighted_fuzzy(
-    cfg: GoldenMatchConfig, identity_col: str, witness_col: str,
-) -> tuple[GoldenMatchConfig, str]:
-    """Demote an exact matchkey on identity_col to a fuzzy participant
-    in the existing weighted matchkey. Add identity_col to blocking.
-
-    Returns (new_config, rationale). Returns (cfg, "") if no weighted
-    matchkey exists to add to (defensive — we can't demote without
-    a target).
-    """
-    matchkeys = cfg.matchkeys or []
-    weighted_indices = [
-        i for i, mk in enumerate(matchkeys) if mk.type == "weighted"
-    ]
-    if not weighted_indices:
-        return cfg, ""
-
-    exact_indices = [
-        i for i, mk in enumerate(matchkeys)
-        if mk.type == "exact" and any(f.field == identity_col for f in mk.fields)
-    ]
-    if not exact_indices:
-        return cfg, ""    # nothing to demote
-
-    target_idx = weighted_indices[0]
-    target_mk = matchkeys[target_idx]
-
-    # Add identity_col as a fuzzy field with low weight (0.3)
-    new_field = MatchkeyField(
-        field=identity_col,
-        transforms=["lowercase", "strip"],
-        scorer="token_sort",
-        weight=0.3,
-    )
-    if any(f.field == identity_col for f in target_mk.fields):
-        new_target_mk = target_mk    # already participating; just remove exact
-    else:
-        new_target_fields = list(target_mk.fields) + [new_field]
-        new_target_mk = target_mk.model_copy(update={"fields": new_target_fields})
-
-    # Build new matchkeys list: drop the exact matchkey(s); replace target
-    new_matchkeys: list[MatchkeyConfig] = []
-    for i, mk in enumerate(matchkeys):
-        if i in exact_indices:
-            continue
-        if i == target_idx:
-            new_matchkeys.append(new_target_mk)
-        else:
-            new_matchkeys.append(mk)
-
-    # Add to blocking if not present
-    blocking = cfg.blocking
-    assert blocking is not None, "callers gate on cfg.blocking before invoking"
-    blocking_cols: set[str] = set()
-    for k in blocking.keys:
-        blocking_cols.update(k.fields)
-    if identity_col not in blocking_cols:
-        new_block_key = BlockingKeyConfig(
-            fields=[identity_col], transforms=["lowercase", "strip"],
-        )
-        new_keys = list(blocking.keys) + [new_block_key]
-        # passes: existing passes (or existing keys if no passes) + only the NEW key
-        existing_passes = list(blocking.passes) if blocking.passes else list(blocking.keys)
-        new_passes = existing_passes + [new_block_key]
-        new_blocking = blocking.model_copy(update={
-            "strategy": "multi_pass" if len(new_keys) > 1 else blocking.strategy,
-            "keys": new_keys,
-            "passes": new_passes if len(new_keys) > 1 else None,
-        })
-    else:
-        new_blocking = blocking
-
-    new_cfg = cfg.model_copy(update={
-        "matchkeys": new_matchkeys,
-        "blocking": new_blocking,
-    })
-
-    rationale = (
-        f"demoted exact_{identity_col} to fuzzy participant "
-        f"(witness_used={witness_col}); added {identity_col} to blocking"
-    )
-    return new_cfg, rationale
 
 
 def rule_blocking_singleton_trap(
@@ -739,6 +653,94 @@ def rule_blocking_field_null_heavy(
     return new_cfg, decision
 
 
+_FUZZY_GRADED_SCORERS = frozenset({
+    "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
+    "embedding", "record_embedding", "ensemble", "dice", "jaccard", "qgram",
+})
+
+
+def rule_select_probabilistic_matchkey(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """#491: let the iterative controller select a *probabilistic* matchkey on
+    the data shape where it actually helps — a wide fuzzy-only weighted matchkey
+    whose linear weighting can't separate matches from non-matches.
+
+    CONSERVATIVE trigger. Over-firing regresses NCVR / Febrl3 / DQbench, so all
+    of the following must hold:
+
+    (a) ``current`` has a ``weighted`` matchkey with >= 3 fields whose scorers
+        are graded/fuzzy (anything in VALID_SCORERS except ``exact``). A small
+        (1-2 field) matchkey doesn't have enough evidence channels for the EM
+        weighting to beat a hand-tuned weighted sum.
+    (b) Scoring is recall-limited: very little mass reaches the threshold AND
+        the score distribution is near-unimodal (poor match/non-match
+        separation). This reuses the same ``mass_above_threshold`` /
+        ``dip_statistic`` signals ``rule_unimodal_scoring`` and
+        ``rule_recall_gap_suspected`` read — a low dip is the "scores don't
+        separate" signal; low above-threshold mass is the "recall is being
+        left on the table" signal.
+    (c) ``current`` has NO ``exact`` matchkey. An exact anchor already provides
+        a high-precision recall path; flipping the fuzzy key to probabilistic
+        on top of it is the over-firing case the benchmark gate guards against.
+
+    Action: swap that weighted matchkey to ``probabilistic`` via
+    ``MatchkeyTypeSwap`` (EM-weighted log-likelihood comparison) so the field
+    agreement weights are learned rather than fixed.
+    """
+    from goldenmatch.core.config_edits import MatchkeyTypeSwap
+
+    # (c) No exact matchkey anywhere.
+    if any(mk.type == "exact" for mk in (current.matchkeys or [])):
+        return None
+
+    # (a) A weighted matchkey with >= 3 graded fuzzy (non-exact) fields.
+    target_mk = None
+    for mk in (current.matchkeys or []):
+        if mk.type != "weighted":
+            continue
+        fuzzy_fields = [
+            f for f in (mk.fields or [])
+            if f.scorer is not None and f.scorer in _FUZZY_GRADED_SCORERS
+        ]
+        if len(fuzzy_fields) >= 3:
+            target_mk = mk
+            break
+    if target_mk is None:
+        return None
+
+    # (b) Recall-limited scoring: poor separation (low dip) AND little mass above
+    # threshold, with pairs actually scored (so the signal is real).
+    sp = profile.scoring
+    recall_limited = (
+        sp.n_pairs_scored > 0
+        and sp.dip_statistic < 0.02
+        and sp.mass_above_threshold < 0.15
+    )
+    if not recall_limited:
+        return None
+
+    new_cfg = MatchkeyTypeSwap(
+        matchkey=target_mk.name, target_type="probabilistic"
+    ).apply(current)
+    if new_cfg is None:
+        return None
+
+    decision = PolicyDecision(
+        rule_name="select_probabilistic_matchkey",
+        rationale=(
+            f"weighted matchkey {target_mk.name!r} has "
+            f"{len([f for f in (target_mk.fields or []) if f.scorer in _FUZZY_GRADED_SCORERS])} "
+            f"graded fuzzy fields, no exact anchor, and scoring is recall-limited "
+            f"(dip_statistic={sp.dip_statistic:.4f} < 0.02, "
+            f"mass_above_threshold={sp.mass_above_threshold:.3f} < 0.15); "
+            f"swapping to probabilistic (EM-learned field weights)"
+        ),
+        config_diff={f"matchkeys[{target_mk.name}].type": "probabilistic"},
+    )
+    return new_cfg, decision
+
+
 def rule_recall_gap_suspected(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1028,98 +1030,6 @@ def rule_sparse_match_expand(
     return new_cfg, decision
 
 
-def rule_demote_clustered_identity(
-    profile: ComplexityProfile,
-    current: GoldenMatchConfig,
-    history: RunHistory,
-    ctx: IndicatorContext | None = None,
-) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
-    """v1.11: when an exact matchkey's identity column is collision-prone,
-    demote it to a fuzzy participant + add to blocking.
-
-    Fires when:
-        ctx is not None
-        AND some col has cardinality_ratio in [0.5, 0.95]
-                  AND column_priors[col].identity_score >= 0.85
-                  AND col is the field of an exact matchkey in current
-                  AND collision_signal(col, [other identity priors]).rate > 0.75
-
-    The threshold of 0.75 prevents false positives on legitimate fuzzy ER
-    datasets where random email collisions produce collision rates of 0.5-0.65
-    (ER T2/T3 fuzzy shapes). Adversarial reuse (hospital/fraud-style: same
-    email shared across hundreds of unrelated entities) produces rates near
-    1.0 and clears this bar easily. Raised from 0.5 (Phase 6) after Phase 7
-    benchmark showed ER T2 false-fire at 0.62 causing 186 FNs.
-
-    Spec: docs/superpowers/plans/2026-05-08-autoconfig-negative-evidence-and-clustered-identity.md
-          §Components rule firing conditions.
-    """
-    if ctx is None:
-        return None
-    df = ctx._df
-    if df is None or df.is_empty():
-        return None
-
-    # Find candidate columns: exact matchkey + identity-shaped + clustered cardinality
-    candidates = []
-    for mk in (current.matchkeys or []):
-        if mk.type != "exact":
-            continue
-        for f in mk.fields:
-            col = f.field
-            if col not in df.columns:
-                continue
-            cp = ctx.column_priors.get(col)
-            if cp is None or cp.identity_score < 0.85:
-                continue
-            try:
-                cardinality_ratio = df[col].n_unique() / max(1, df.height)
-            except Exception:
-                continue
-            if not (0.5 <= cardinality_ratio <= 0.95):
-                continue
-            candidates.append(col)
-    if not candidates:
-        return None
-
-    for identity_col in candidates:
-        # Witness cols: other identity-prior columns with identity_score >= 0.7
-        witness_cols = [
-            c for c, p in ctx.column_priors.items()
-            if c != identity_col
-            and p.identity_score >= 0.7
-            and c in df.columns
-        ]
-        if not witness_cols:
-            continue
-        signal = ctx.identity_collision_signal(identity_col, witness_cols)
-        if signal.rate > 0.75:
-            new_cfg, rationale = _demote_exact_to_weighted_fuzzy(
-                current, identity_col, signal.witness_used,
-            )
-            if new_cfg != current:
-                # #124: telemetry observation window. Env-gated INFO log
-                # so we can observe whether this rule actually fires in
-                # production -- v1.12 Path Y addressed T3 directly, so
-                # this rule is suspected dead. Users opt into the
-                # telemetry by setting GOLDENMATCH_TELEMETRY_DEMOTE_RULE=1;
-                # we collect firing counts via grep. After 1-2 weeks of
-                # zero firings, the rule + its 5-file collateral chain
-                # gets deleted in Wave C.
-                if os.environ.get("GOLDENMATCH_TELEMETRY_DEMOTE_RULE", "") == "1":
-                    logger.info(
-                        "TELEMETRY rule_demote_clustered_identity FIRED "
-                        "(column=%r, collision_rate=%.3f, witness=%r). See #124.",
-                        identity_col, signal.rate, signal.witness_used,
-                    )
-                return new_cfg, PolicyDecision(
-                    rule_name="demote_clustered_identity",
-                    rationale=f"collision_rate={signal.rate:.2f}; {rationale}",
-                    config_diff={},
-                )
-    return None
-
-
 _DEMOTE_CARD_THRESHOLD = 0.99
 _DEMOTE_MIN_REMAINING_FIELDS = 2
 
@@ -1269,20 +1179,13 @@ DEFAULT_RULES = [
     rule_blocking_too_coarse,              # 5  structural: p99 outlier (skewed distribution)
     rule_uniform_heavy_blocking,           # 6  structural: uniform-large blocks
     rule_corruption_normalize,             # 7  NEW v1.10: normalize on high-corruption blocking col
-    # v1.20.x #124: rule_demote_clustered_identity removed from rotation.
-    # v1.11 Phase 7 diagnostic showed it never reaches position 8 in
-    # iteration -- rule_blocking_too_coarse exhausts the budget first --
-    # AND v1.12 Path Y (NE on exact matchkeys) addressed T3 directly,
-    # making the rule's mechanism redundant. The function + helper +
-    # indicator are kept as dead code for now so direct-invocation tests
-    # still pass; full surface removal is a follow-up once
-    # telemetry confirms zero invocations from external callers.
     rule_unimodal_scoring,                 # 9  tuning: dip statistic low
     rule_low_reduction_ratio,              # 10 structural: too-tight blocking
     rule_cross_blocking_disagreement,      # 11 NEW v1.10: multi-pass on low cross-blocking overlap
     rule_low_transitivity,                 # 12 tuning: transitivity low
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
+    rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
     rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
     rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.

@@ -1,0 +1,80 @@
+---
+title: "GoldenCheck integrations"
+description: "Run GoldenCheck as dbt tests and as a GitHub Action that gates pull requests on data-quality regressions."
+keywords: ["dbt", "github actions", "ci", "data quality", "integration"]
+---
+
+GoldenCheck plugs into the two places data-quality regressions usually slip through: warehouse models and pull requests.
+
+## dbt
+
+Add the package to `packages.yml`:
+
+```yaml
+packages:
+  - git: "https://github.com/benseverndev-oss/goldenmatch.git"
+    subdirectory: "packages/dbt/goldencheck"
+    revision: main
+```
+
+Then run `dbt deps`. The package offers a SQL-native test macro and a Python runner.
+
+Use the test macro in a schema file:
+
+```yaml
+models:
+  - name: orders
+    tests:
+      - goldencheck_not_empty
+```
+
+Run a full scan against a model's output:
+
+```bash
+python scripts/run_goldencheck.py orders --fail-on error
+python scripts/run_goldencheck.py patients --fail-on warning --domain healthcare
+```
+
+The runner connects through `profiles.yml`, queries the model via `dbt show`, writes a temp CSV, runs the full profiler, and exits non-zero on findings at or above `--fail-on`.
+
+<Note>
+  Requires dbt-core 1.7+, goldencheck 0.5.0+, and Python 3.11+.
+</Note>
+
+## GitHub Actions
+
+Scan CSV files in CI and post a findings summary on the pull request:
+
+```yaml
+- uses: benseverndev-oss/goldencheck-action@v1
+  with:
+    files: "data/*.csv"
+    fail-on: error
+    config: goldencheck.yml
+    llm-boost: true
+    llm-provider: openai
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+### Inputs
+
+| Input | Required | Default | Values |
+|-------|----------|---------|--------|
+| `files` | Yes | — | Glob pattern (for example `data/*.csv`). |
+| `fail-on` | No | `error` | `error`, `warning`. |
+| `config` | No | — | Path to `goldencheck.yml`. |
+| `llm-boost` | No | `false` | `true`, `false`. |
+| `llm-provider` | No | `anthropic` | `anthropic`, `openai`. |
+| `python-version` | No | `3.12` | Python version string. |
+| `version` | No | `latest` | GoldenCheck version. |
+
+### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `errors` | number | Total error count. |
+| `warnings` | number | Total warning count. |
+| `health-grade` | string | Worst health grade (A–F). |
+
+The action posts a summary table on the pull request and sets a pass/fail status check from the exit code.

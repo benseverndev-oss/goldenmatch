@@ -1,0 +1,143 @@
+# Issue #715 repro -- workflow_dispatch only.
+#
+# Runs scripts/repro_issue_715.py on a clean Linux runner to confirm the
+# "pincer": high-cardinality identifier columns (npi/email/phone) on
+# healthcare-provider-shape data are excluded from BOTH the exact-matchkey
+# path (Guard 1: df.height > 10000) AND the blocking path (#408 cardinality
+# gate), leaving a fuzzy-only, no-blocking config.
+#
+# Synthetic data only (no real records). Pure-Python path -- no native build.
+#
+# Dispatch:
+#   gh workflow run repro-issue-715.yml --ref <branch>
+#   gh workflow run repro-issue-715.yml --ref <branch> -f rows=50000
+name: repro-issue-715
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Row count for the synthetic healthcare-shape repro"
+        required: false
+        default: "20000"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "ubuntu-latest"
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Run #715 repro
+        working-directory: packages/python/goldenmatch
+        run: |
+          ROWS="${{ inputs.rows }}"
+          uv run python scripts/repro_issue_715.py "$ROWS" | tee repro715.log
+          {
+            echo "## issue #715 repro (rows=\`$ROWS\`, runner=\`${{ inputs.runner }}\`)"
+            echo ""
+            echo '```'
+            cat repro715.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert pincer resolved
+        working-directory: packages/python/goldenmatch
+        run: |
+          if grep -q "PINCER PRESENT" repro715.log; then
+            echo "::error::#715 pincer still present -- identifier columns produced no exact matchkeys"
+            exit 1
+          fi
+          if grep -q "PINCER RESOLVED" repro715.log; then
+            echo "pincer resolved"
+          else
+            echo "::warning::inconclusive verdict"
+          fi
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: issue-715-repro-log
+          path: packages/python/goldenmatch/repro715.log
+          retention-days: 30
+
+  # #715 REOPENED guard: assert the FIXED build_blocking yields a BOUNDED
+  # blocking config on the sparse-zip + realistic-surname healthcare shape at
+  # scale (>=500K). A sample-sized unit test cannot catch the at-scale blocking
+  # blow-up -- the gap that let #715 reopen. Runs build_blocking on the FULL df
+  # (the v0 committed-config path) so we reproduce the committed blocking choice
+  # WITHOUT the full controller (avoids a rerank/torch segfault risk in CI).
+  blocking-scale:
+    runs-on: large-new-64GB
+    timeout-minutes: 30
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Run #715 blocking-scale assertion
+        working-directory: packages/python/goldenmatch
+        run: |
+          uv run python scripts/repro_issue_715.py --mode blocking-scale --rows 500000 \
+            | tee repro715-blocking-scale.log
+          {
+            echo "## issue #715 blocking-scale (rows=\`500000\`, runner=\`large-new-64GB\`)"
+            echo ""
+            echo '```'
+            cat repro715-blocking-scale.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert blocking bounded
+        working-directory: packages/python/goldenmatch
+        run: |
+          if grep -q "BLOCKING UNBOUNDED" repro715-blocking-scale.log; then
+            echo "::error::#715 blocking UNBOUNDED at scale -- build_blocking emitted an oversized key/pass"
+            exit 1
+          fi
+          if grep -qE "BLOCKING BOUNDED|BLOCKING REFUSED \(degenerate\)" repro715-blocking-scale.log; then
+            echo "blocking bounded (or degenerate-refused) at scale"
+          else
+            echo "::error::no blocking-scale verdict found in log"
+            exit 1
+          fi
+
+      - name: Upload blocking-scale log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: issue-715-blocking-scale-log
+          path: packages/python/goldenmatch/repro715-blocking-scale.log
+          retention-days: 30

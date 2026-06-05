@@ -22,7 +22,6 @@ from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage
 from goldenmatch.core.complexity_profile import (
-    CollisionSignal,
     ColumnPrior,
     ComplexityProfile,
     DataProfile,
@@ -115,20 +114,6 @@ class IndicatorContext:
         key = ("cross_blocking_overlap", a, b)
         if key not in self._memo:
             self._memo[key] = compute_cross_blocking_overlap(self._df, a, b)
-        return self._memo[key]
-
-    def identity_collision_signal(
-        self, identity_col: str, witness_cols: list[str],
-    ) -> CollisionSignal:
-        if self._is_fast_mode():
-            return CollisionSignal(rate=0.0, witness_used="")
-        from goldenmatch.core.indicators import compute_identity_collision_signal
-        canonical_witnesses = tuple(sorted(witness_cols))
-        key = ("identity_collision_signal", identity_col, canonical_witnesses)
-        if key not in self._memo:
-            self._memo[key] = compute_identity_collision_signal(
-                self._df, identity_col, list(canonical_witnesses),
-            )
         return self._memo[key]
 
     def has_fired(self, rule_name: str) -> bool:
@@ -288,7 +273,8 @@ class ControllerNotConfidentError(Exception):
             f"stop_reason: {stop_reason}). Running this config would produce "
             f"degenerate dedupe; passing it back instead of running. "
             f"Options: pass an explicit GoldenMatchConfig, lower the matchkey "
-            f"threshold, or re-call with confidence_required=False. See "
+            f"threshold, or re-call with allow_red_config=True (runs the "
+            f"degenerate config anyway) / confidence_required=False. See "
             f"{self.DOCS_URL}."
         )
 
@@ -424,11 +410,11 @@ class ControllerBudget:
         order of magnitude as N grows from 100K -> 1M. Cap at 20K so
         sample-iteration cost stays bounded above 1M.
 
-        Tiers (n_rows -> max_seconds, sample_size_default):
-          - <5K        -> 15s, 2K (sample_skip_below bypasses sampling)
-          - 5K-100K    -> 30s, 2K (historical defaults; preserves 100K bench)
-          - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K
-          - >=1M       -> 120s, 20K (capped)
+        Tiers (n_rows -> max_seconds, sample_size_default, max_iterations):
+          - <5K        -> 15s, 2K, 3  (sample_skip_below bypasses sampling)
+          - 5K-100K    -> 30s, 2K, 3  (historical defaults; preserves 100K bench)
+          - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K, 4
+          - >=1M       -> 120s, 20K, 5
         """
         if n_rows < 5_000:
             return cls(max_seconds=15.0)
@@ -436,8 +422,11 @@ class ControllerBudget:
             return cls()  # historical defaults
         if n_rows < 1_000_000:
             sample = min(int((n_rows**0.5) * 20), 20_000)
-            return cls(sample_size_default=sample, max_seconds=60.0)
-        return cls(sample_size_default=20_000, max_seconds=120.0)
+            # max_iterations=4: non-load-bearing for #715 (iteration sample masks
+            # the at-scale blocking blow-up) but a correct-direction budget scale.
+            return cls(sample_size_default=sample, max_seconds=60.0, max_iterations=4)
+        # max_iterations=5: same rationale as 100K-1M tier above.
+        return cls(sample_size_default=20_000, max_seconds=120.0, max_iterations=5)
 
 
 def _zero_label_commit_enabled() -> bool:
@@ -475,6 +464,7 @@ class AutoConfigController:
         v0_kwargs: dict | None = None,
         skip_finalize: bool = False,
         confidence_required: bool = True,
+        allow_red_config: bool = False,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -840,7 +830,12 @@ class AutoConfigController:
             # pathology as a RED committed entry -- caller would run the
             # full pipeline on the _RED_PROFILE sentinel and produce
             # degenerate output. Refuse loudly at scale.
-            if confidence_required and n_rows >= REFUSE_AT_N:
+            #
+            # #715 reopened: the _RED_PROFILE sentinel is a genuine give-up,
+            # so refuse unless allow_red_config=True restores warn-and-run.
+            # The refuse keeps the REFUSE_AT_N threshold -- below it, small-N
+            # runs are cheap and stay warn-and-run (the deliberate design).
+            if n_rows >= REFUSE_AT_N and not allow_red_config:
                 raise ControllerNotConfidentError(
                     n_rows=n_rows,
                     failing_sub_profile="data",  # n_errored=all means data path itself failed
@@ -850,16 +845,51 @@ class AutoConfigController:
                 )
             return config_v0, _RED_PROFILE, history
 
-        # Confidence gate (Phase 3 of controller-budget pathology spec).
-        # When the controller committed a RED entry on a large input,
-        # running the full pipeline would produce ~26-min degenerate
-        # dedupe. Refuse loudly instead. Spec §Design / Confidence gate.
-        if (
-            confidence_required
-            and n_rows >= REFUSE_AT_N
-            and best_entry.profile.health() == HealthVerdict.RED
-        ):
+        # RED-refuse gate (reconciled #715-reopened + Phase 3 confidence gate
+        # + #417 degenerate-blocking guard into a SINGLE raise site).
+        #
+        # Invariant: a committed RED config raises ControllerNotConfidentError
+        # when ``n_rows >= REFUSE_AT_N and not allow_red_config``. A non-RED
+        # config never raises here. Below REFUSE_AT_N a committed RED entry
+        # warn-and-runs (cheap; the existing deliberate design).
+        #
+        # #715 reopened: the RED-refuse keeps the REFUSE_AT_N threshold but
+        # drops confidence_required from the gate. confidence_required=False
+        # NO LONGER bypasses the RED-refuse (that was the reporter's bug);
+        # allow_red_config=True is now the SINGLE escape hatch that restores
+        # warn-and-run at scale. The legacy
+        # ``confidence_required and n_rows >= REFUSE_AT_N`` gate is replaced
+        # by ``n_rows >= REFUSE_AT_N and not allow_red_config``.
+        #
+        # This site supersedes the old Phase-3 RED-health raise here AND the
+        # RED-keyed branches of the #417 guard below: it runs FIRST, so any
+        # committed-RED entry at scale is refused here with the most-specific
+        # failing_sub_profile. The #417 guard below stays for its NON-RED
+        # blocking-degenerate estimator role (gated, as before, on
+        # confidence_required + REFUSE_AT_N).
+        #
+        # confidence_required still gates the #417 NON-RED degenerate-blocking
+        # guard below -- a caller passes confidence_required=False to keep
+        # warn-and-run on NON-RED degenerate blocking.
+        _committed_red = best_entry.profile.health() == HealthVerdict.RED
+        if _committed_red and n_rows >= REFUSE_AT_N and not allow_red_config:
+            # Report the ACTUAL failing sub-profile (priority-ordered). Only
+            # when blocking is genuinely the failing cause AND the committed
+            # config has no blocking keys does the downstream sync degenerate
+            # to a single mega-block -- surface THAT as the blocking-degenerate
+            # stop_reason (#417). A data-RED config with empty default keys is
+            # a data failure, not a blocking one.
             failing = _identify_failing_subprofile(best_entry.profile)
+            _blocking = best_entry.config.blocking
+            _no_blocking_keys = (
+                _blocking is None or not getattr(_blocking, "keys", None)
+            )
+            if failing == "blocking" and _no_blocking_keys:
+                _stop_reason = StopReason.BLOCKING_DEGENERATE.name
+            else:
+                _stop_reason = (
+                    history.stop_reason.name if history.stop_reason else "unset"
+                )
             # ``_LAST_CONTROLLER_RUN`` here is the CONTROLLER-LOCAL ContextVar
             # defined at the top of this file (line ~45), NOT the
             # ``(profile, history)`` tuple ContextVar in ``autoconfig.py``.
@@ -869,11 +899,7 @@ class AutoConfigController:
             raise ControllerNotConfidentError(
                 n_rows=n_rows,
                 failing_sub_profile=failing,
-                stop_reason=(
-                    history.stop_reason.name
-                    if history.stop_reason
-                    else "unset"
-                ),
+                stop_reason=_stop_reason,
             )
 
         # #408: blocking-degenerate gate. Independent of the RED-health
@@ -894,7 +920,16 @@ class AutoConfigController:
         # Trigger only when confidence_required (default True) -- caller
         # opts out via confidence_required=False to keep today's
         # "warn-and-run" behavior on degenerate blocking.
-        if confidence_required and n_rows >= REFUSE_AT_N:
+        #
+        # #715 reopened: this guard now handles ONLY the NON-RED
+        # degenerate-blocking case. Every committed-RED entry (including
+        # RED + no-blocking-keys) is already decided by the reconciled
+        # RED-refuse gate ABOVE -- which either raised (default) or, when
+        # allow_red_config=True, deliberately let the RED config through to
+        # warn-and-run. Re-raising here on a RED entry would (a) double-gate
+        # and (b) ignore allow_red_config. So skip this block entirely when
+        # the committed profile is RED.
+        if confidence_required and n_rows >= REFUSE_AT_N and not _committed_red:
             from goldenmatch.core.blocking_candidates import (
                 degenerate_guard_max_avg_block_size,
                 degenerate_guard_threshold,

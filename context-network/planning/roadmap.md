@@ -22,8 +22,21 @@ island), and ultimately REPLACES the Ray distributed stack. See
 [../architecture/sail-tier.md](../architecture/sail-tier.md) +
 [../decisions/0004-sail-tier-scope.md](../decisions/0004-sail-tier-scope.md).
 Spec: `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. Staged, each a gate:
-- **S1** — Sail harness + scorer Arrow UDF + score/dedup (parity vs one-box spine).
-- **S2** — **WCC on Sail** (port two-phase WCC to Spark Connect) — THE GATE.
+- **S1 — SHIPPED (PR #709, 2026-06-03)** — Sail harness + scorer pandas UDF + score/dedup,
+  connectivity + pair-set parity gates green on the new `sail` CI lane.
+- **S2 — SHIPPED (PR #712, 2026-06-03)** — **WCC on Sail** via min-label propagation; partition-
+  parity green (chain + junction + singleton). The make-or-break gate; existential risk CLOSED.
+  (Led with label-prop; large-star/small-star is an S4 prerequisite.)
+- **S3 (golden) — SHIPPED (PR #714, 2026-06-03)** — distributed survivorship via
+  `collect_list` + a scalar pandas UDF calling the one-box `merge_field`; content-parity green.
+  Scoped to golden; identity split to its own stage.
+- **S4 harness — SHIPPED (PR #717, 2026-06-04)** — chain-robust O(log n) WCC (pointer-jumping;
+  the blind large-star attempt was wrong, caught by plan-review hand-trace), `run_sail_pipeline`
+  end-to-end, and the 100M bench scaffold. The `sail` lane has 6 green gates. The BUILDABLE Sail
+  tier is COMPLETE.
+- **Remaining (needs a BYO cluster):** the real 100M multi-node run (`SAIL_REMOTE` secret) → the
+  binding verdict + Ray retirement. The only thing left, and it needs real infrastructure.
+- **Identity on Sail** — split off; its own stateful stage, not yet done.
 - **S3** — golden (incl. custom rules) + identity on Sail.
 - **S4** — binding 100M+ multi-node bench + Ray retirement. Kill criterion: completes
   where one-box can't, per-node RSS bounded, wall scales with nodes.

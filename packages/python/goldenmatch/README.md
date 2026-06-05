@@ -7,6 +7,8 @@
 
 *Zero-config entity resolution for Python & TypeScript — with a self-verifying auto-config that tells you when it's unsure.*
 
+**⚡ Scales from a CSV on your laptop to 100M+ rows on a Ray cluster — verified: 100,000,000 records deduped in 213 s with a 0.30 GB driver footprint.** ([how →](#scaling-to-100m))
+
 <br>
 
 <!-- Packages -->
@@ -48,11 +50,11 @@ npm install goldenmatch
 ```
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **🆕 v1.25.0 — Arrow-native groundwork + leaner large-N runs** — columnar pair-stream / two-frame-cluster entry points and optional Rust/Arrow-C kernels (`build_clusters`, `dedup_pairs`, `record_fingerprints`, MST oversized-split) land behind the `goldenmatch._native` extension, purely additive with the pure-Python + Polars pipeline unchanged as the default and byte-for-byte reference. Plus single-node memory wins (golden -2.6 GB, bucket -3.8 GB peak at 10M; standardize ~25-30s off the prep wall) and fixes for a silently-dropped GoldenCheck quality scan and a prep-cache `id()`-recycle flake. PRs #588-#650.
+> **🆕 v1.26.0** — **100M records, distributed, on a 4-worker Ray cluster — verified.** The distributed Phase-5 pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) now runs a full 100,000,000-row dedupe end to end in ~213 s with the driver process peaking at 0.30 GB RSS. The unlock was removing every driver-side collect from the pipeline (scoring -> per-partition local connected-components -> distributed join -> distributed golden build + write), so nothing funnels back to a single node.
+>
+> **v1.25.0 — Arrow-native groundwork + leaner large-N runs** — columnar pair-stream / two-frame-cluster entry points and optional Rust/Arrow-C kernels (`build_clusters`, `dedup_pairs`, `record_fingerprints`, MST oversized-split) land behind the `goldenmatch._native` extension, purely additive with the pure-Python + Polars pipeline unchanged as the default and byte-for-byte reference. Plus single-node memory wins (golden -2.6 GB, bucket -3.8 GB peak at 10M; standardize ~25-30s off the prep wall) and fixes for a silently-dropped GoldenCheck quality scan and a prep-cache `id()`-recycle flake. PRs #588-#650.
 >
 > **v1.16.0 — 5M records in 9.94 min, 6.4 GB peak RSS, on one 16-core node** — the new `backend="bucket"` path is now the recommended 5M-on-one-node config. 5x wall reduction and 2x peak RSS reduction vs the v1.15 chunked baseline (~50 min, 11.9 GB), with rock-solid reliability on Linux runners where the chunked path was hanging at 63 GB plateau on the same fixture. PRs #310-#326.
->
-> **v1.15.0 — 5M records in ~50 min on commodity hardware** — Chunked mode now actually delivers on its "1M to 100M+" promise. The streaming `scan_csv().slice()` reader + Polars-native cross-chunk join (B) + block-keyed bucketed index (C) + DuckDB pair-store backend (D) replace a broken eager-read + Python-double-loop path that OOM-killed at 3h+ on the pre-fix 5M dispatch. **Measured: 5M records, 50 min wall, 11.9 GB peak RSS, 618,817 multi-member clusters, no OOM** on a 4c/16GB GitHub runner. Pass `backend="chunked"` with an explicit blocking config. PRs #233/#234/#235.
 <!-- README-callouts:end -->
 
 ---
@@ -719,6 +721,10 @@ Files/DB → Ingest → Standardize → Block → Score → Cluster → Golden R
 
 ## Config Reference
 
+> 📁 **Copy-paste-ready configs live in [`configs/`](configs/)** — a robust
+> [`customers.yaml`](configs/customers.yaml), a [`distributed-100m.yaml`](configs/distributed-100m.yaml),
+> and a [walkthrough README](configs/README.md) explaining every knob.
+
 ```yaml
 matchkeys:
   - name: exact_email
@@ -1030,7 +1036,48 @@ goldenmatch watch --table customers --connection-string "$DATABASE_URL" --interv
 - Progressive embedding: computes 100K embeddings per run, ANN improves over time
 - Persistent clusters with golden record versioning
 
-**Scale:** Tested to 10M+ records in Postgres. For 100M+, use larger chunk sizes and dedicated Postgres infrastructure.
+**Scale:** Tested to 10M+ records in Postgres. For 100M+ on a cluster, use distributed mode below.
+
+## Scaling to 100M
+
+GoldenMatch runs the same matching policy from a CSV on your laptop up to 100M+
+rows on a [Ray](https://www.ray.io/) cluster. **Verified:** a full
+**100,000,000-row** dedupe in **213 s** on a 4-worker `e2-standard-16` cluster
+(64 worker CPU) producing **20,000,000 golden records**, with the driver process
+peaking at **0.30 GB RSS**.
+
+The distributed pipeline is **driver-collect-free** — every stage runs on the
+workers and nothing funnels back to a single node, which is what makes it scale:
+
+```
+score  ->  per-partition local connected-components  ->  distributed join
+       ->  distributed golden build  ->  distributed write
+```
+
+**Run it:**
+
+1. Stand up a Ray cluster. Run the **head as a pure driver** so shuffle data
+   never lands on it; the workers supply all the compute:
+   ```bash
+   # head node
+   ray start --head --num-cpus=0 --object-store-memory=20000000000
+   # each worker
+   ray start --address=<head-ip>:6379 --num-cpus=16 --object-store-memory=20000000000
+   ```
+2. Make sure your input carries a **global `__row_id__`** column (0..N-1, unique
+   across the whole dataset). Without it, partition-local ids collide and
+   unrelated clusters get merged.
+3. Drive it through the fully-distributed pipeline:
+   ```bash
+   export GOLDENMATCH_DISTRIBUTED_PIPELINE=2
+   export GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1
+   export RAY_ADDRESS=auto
+   ```
+
+- **Config:** [`configs/distributed-100m.yaml`](configs/distributed-100m.yaml) (matching policy + the full recipe).
+- **Runnable demo** (Ray local mode, no cluster): [`examples/distributed_pipeline.py`](examples/distributed_pipeline.py).
+- **The exact 100M assembly:** [`scripts/bench_phase5_explicit.py`](scripts/bench_phase5_explicit.py).
+- **Background:** [`docs/scale-100m-ray-vs-spark.md`](docs/scale-100m-ray-vs-spark.md).
 
 ## Interactive TUI
 

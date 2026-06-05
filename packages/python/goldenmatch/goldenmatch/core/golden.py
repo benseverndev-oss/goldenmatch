@@ -664,6 +664,7 @@ def build_golden_records_batch(
     rules: GoldenRulesConfig,
     quality_scores: dict[tuple[int, str], float] | None = None,
     provenance: bool = False,
+    cluster_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None,
 ) -> list[dict]:
     """Vectorized batch builder for many golden records sharing a parent df.
 
@@ -691,6 +692,17 @@ def build_golden_records_batch(
             May also be a ray.data.Dataset (Phase 4 distributed path).
         rules: golden rules configuration.
         quality_scores: optional per-(row_id, col) quality weights.
+        cluster_pair_scores: optional ``{cluster_id: {(row_id_a, row_id_b):
+            score}}`` -- the per-cluster scored edges, keyed by the SAME
+            ``__row_id__`` values that appear in ``multi_df``. Required for
+            the ``confidence_majority`` strategy to actually weight by edge
+            confidence; ``None`` (the default) preserves today's behavior
+            where ``confidence_majority`` silently falls back to
+            count-majority (#678). Only consumed on the slow per-cluster
+            path; the polars-native fast path never uses confidence_majority.
+            The edge keys (row ids) are remapped per cluster to the positional
+            member indices that ``merge_field`` / ``_confidence_majority``
+            expect.
         provenance: when True, each field dict additionally carries
             ``source_row_id`` -- the ``__row_id__`` of the record whose value
             won survivorship for that field (``None`` when the field is
@@ -783,6 +795,25 @@ def build_golden_records_batch(
         per_cluster = (
             cluster_overrides.get(int(cid)) if cluster_overrides else None
         )
+        # #678: remap this cluster's pair_scores from row-id keys to the
+        # positional member indices merge_field/_confidence_majority use.
+        # The cluster dict keys edges by __row_id__ (e.g. (10, 11)); the
+        # merge functions key non_null by slice position (0..size-1). Build
+        # a row_id -> position map from this cluster's row-id slice and
+        # rewrite the edge keys. None (default) leaves pair_scores unset,
+        # preserving the count-majority fallback.
+        positional_pair_scores: dict[tuple[int, int], float] | None = None
+        if cluster_pair_scores is not None and row_id_array is not None:
+            cluster_scores = cluster_pair_scores.get(int(cid))
+            if cluster_scores:
+                row_slice = row_id_array[offset:offset + size]
+                rid_to_pos = {rid: pos for pos, rid in enumerate(row_slice)}
+                positional_pair_scores = {}
+                for (rid_a, rid_b), score in cluster_scores.items():
+                    pa = rid_to_pos.get(rid_a)
+                    pb = rid_to_pos.get(rid_b)
+                    if pa is not None and pb is not None:
+                        positional_pair_scores[(pa, pb)] = score
         for col in user_cols:
             values = col_arrays[col][offset:offset + size]
             if per_cluster and col in per_cluster:
@@ -809,6 +840,7 @@ def build_golden_records_batch(
 
             val, conf, idx = merge_field(
                 values, field_rule, sources=sources, dates=dates, quality_weights=weights,
+                pair_scores=positional_pair_scores,
             )
             field: dict = {"value": val, "confidence": conf}
             if provenance:

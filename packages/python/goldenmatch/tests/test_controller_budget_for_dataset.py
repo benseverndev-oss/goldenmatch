@@ -65,11 +65,12 @@ def test_for_dataset_returns_new_instance_each_call():
 
 
 def test_for_dataset_preserves_other_budget_fields():
-    """Only sample_size_default and max_seconds vary by tier; the rest
-    (max_iterations, sample_skip_below, converge_epsilon, drift_threshold)
-    keep their defaults so the iteration loop's other tuning stays stable."""
+    """sample_size_default, max_seconds, AND max_iterations vary by tier
+    (#715: max_iterations now scales 3 -> 4 -> 5 across tiers). The rest
+    (sample_skip_below, converge_epsilon, drift_threshold) keep their
+    defaults so the iteration loop's other tuning stays stable."""
     b = ControllerBudget.for_dataset(500_000)
-    assert b.max_iterations == 3
+    assert b.max_iterations == 4  # 100K-1M tier scales to 4 (#715)
     assert b.sample_skip_below == 5000
     assert b.converge_epsilon == 0.05
     assert b.drift_threshold == 0.30

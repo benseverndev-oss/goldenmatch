@@ -8,8 +8,10 @@
 
 use pyo3::prelude::*;
 
+use crate::embed_udf::EmbedUDF;
 use crate::scalar_udf::{JaroWinklerUDF, LevenshteinUDF, TokenSortUDF};
 
+pub(crate) mod embed_udf;
 pub(crate) mod scalar_udf;
 
 #[pymodule]
@@ -17,5 +19,6 @@ fn goldenmatch_datafusion_udf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<JaroWinklerUDF>()?;
     m.add_class::<TokenSortUDF>()?;
     m.add_class::<LevenshteinUDF>()?;
+    m.add_class::<EmbedUDF>()?;
     Ok(())
 }

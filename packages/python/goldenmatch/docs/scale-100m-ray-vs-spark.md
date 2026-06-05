@@ -1,5 +1,26 @@
 # Scaling GoldenMatch to 100M+ Records: Ray vs Spark
 
+> **✅ VERIFIED 2026-06-04 — 100M completes on Ray, distributed, driver 0.30 GB peak.**
+> The distributed Phase-5 pipeline (`GOLDENMATCH_DISTRIBUTED_PIPELINE=2`) ran a full
+> **100,000,000-row** dedupe on a 4-worker Ray cluster (`e2-standard-16`, 64 worker CPU)
+> in **213 s wall**, producing **20,000,000 golden records** (exact, clean clustering),
+> with the driver/client process peaking at **0.30 GB RSS** and the head node flat at ~5 GB
+> the entire run. Output (2.4 GiB) was written distributed straight to object storage.
+>
+> The decision below ("ship Ray") held. The thing that actually unlocked 100M was **not**
+> distributing more compute — it was removing every **driver-side `collect`/`take_all`** from
+> the pipeline so nothing funnels back to a single node. The winning shape is
+> `score → local-CC → join → golden → write`, every stage distributed, **zero driver collect**:
+> per-partition scoring; connected components via a single per-partition local Union-Find
+> (`local_cc_assignments` — components never span partitions, so no cross-node merge is needed);
+> the row→cluster annotation as a distributed `Dataset.join`; golden built and **written**
+> distributed (`build_golden_records_distributed(...).write_parquet`), never materialized on the
+> driver. Run the head as a pure driver (`ray start --num-cpus=0`) so shuffle data never lands on it.
+> See `scripts/bench_phase5_explicit.py` for the exact assembly and `goldenmatch/distributed/` for
+> the implementation. Everything below is the original 2026-05-15 design evaluation, preserved.
+
+---
+
 Evaluation prepared 2026-05-15 against `main` post-PRs #233/#234/#235 (the 5M scale audit).
 
 ## TL;DR
@@ -22,8 +43,8 @@ Concrete numbers, working from the 5M data point:
 | ------ | ------- | --------- | ---------------------- | -------- | -------------------------------------- |
 | t-1M   | 1M      | yes       | ~43 min, polars-direct | ~10 GB   | 4c/16GB CI runner                      |
 | t-5M   | 5M      | yes       | ~50 min, chunked       | ~12 GB   | 4c/16GB CI runner                      |
-| t-50M  | 50M     | no        | est. ~7 h, chunked     | ?        | Single 16GB box; pair store off-heap   |
-| t-100M | 100M    | no        | est. >14 h             | OOM-risk | Single box infeasible; needs >1 worker |
+| t-50M  | 50M     | yes       | 295 s, distributed Ray | 2.8 GB driver | 4-worker e2-standard-16 cluster   |
+| t-100M | 100M    | **yes**   | **213 s, distributed Ray** | **0.30 GB driver** | 4-worker e2-standard-16; 20M golden records |
 | t-1B   | 1B      | no        | n/a                    | n/a      | Splink/Spark territory                 |
 
 The 5M run is the load-bearing number. Linear extrapolation says 100M is 20× — but the chunked path's cross-chunk matching is O(chunks × index_size) on the slim index, so the realistic shape is super-linear. The `_index_df` grows monotonically; by the time chunk 1000 lands, every chunk re-concatenates with a 100M-row slim index. That's the failure mode to design against, not block-scoring throughput.

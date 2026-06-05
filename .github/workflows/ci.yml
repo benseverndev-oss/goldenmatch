@@ -941,6 +941,21 @@ jobs:
       - name: Sail score/dedup parity gate (blocking)
         run: |
           .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_score_parity.py -v --timeout=300
+      # GATE (blocking): connected-components partition parity -- the make-or-
+      # break S2 gate (the Union-Find holdout, computed distributed on Sail).
+      - name: Sail WCC parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_clustering_parity.py -v --timeout=300
+      # GATE (blocking): golden survivorship content parity per multi-member
+      # cluster vs the one-box merge_field primitive (S3).
+      - name: Sail golden parity gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_golden_parity.py -v --timeout=300
+      # GATE (blocking): the full Sail pipeline (load->...->golden) runs
+      # end-to-end on Sail (S4).
+      - name: Sail end-to-end pipeline gate (blocking)
+        run: |
+          .venv/bin/python -m pytest packages/python/goldenmatch/tests/test_sail_pipeline.py -v --timeout=300
 
   action:
     needs: changes

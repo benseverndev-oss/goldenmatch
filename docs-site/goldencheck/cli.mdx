@@ -1,0 +1,87 @@
+---
+title: "GoldenCheck CLI"
+description: "Commands, key flags, domain packs, and the goldencheck.yml config format."
+keywords: ["goldencheck", "cli", "commands", "domains", "config"]
+---
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `goldencheck <file>` | Scan and launch the interactive TUI. |
+| `goldencheck scan <file>` | Explicit scan (`--smart`, `--guided`). |
+| `goldencheck validate <file>` | Validate against `goldencheck.yml` rules. |
+| `goldencheck review <file>` | Scan plus validate, then launch the TUI. |
+| `goldencheck init <file>` | Interactive setup wizard (scan → config → CI). |
+| `goldencheck diff <file> [file2]` | Compare two files, or against git HEAD (`--ref main`). |
+| `goldencheck watch <dir>` | Poll a directory and re-scan on change (`--interval 30`). |
+| `goldencheck fix <file>` | Auto-fix issues (`--mode safe\|moderate\|aggressive`, `--dry-run`). |
+| `goldencheck baseline <file>` | Deep-profile and save a statistical baseline to YAML. |
+| `goldencheck learn <file>` | Generate LLM validation rules. |
+| `goldencheck history` | Show scan history and trends. |
+| `goldencheck serve` | Start the REST API server (`--port 8000`). |
+| `goldencheck scan-db <conn>` | Scan a database table directly. |
+| `goldencheck schedule <files>` | Run scans on a cron schedule (`--interval`, `--webhook`). |
+| `goldencheck mcp-serve` | Start the MCP server (19 tools). |
+
+The TypeScript CLI mirrors the core commands under `goldencheck-js` (`scan`, `validate`, `profile`, `health-score`, `baseline`, `fix`, `diff`, `demo`).
+
+## Key flags
+
+| Flag | Values | Effect |
+|------|--------|--------|
+| `--no-tui` | — | Print results to the console. |
+| `--json` | — | JSON output. |
+| `--fail-on` | `error`, `warning` | Exit non-zero at this severity. |
+| `--domain` | `healthcare`, `finance`, `ecommerce`, `real_estate`, `people_hr` | Apply a domain pack. |
+| `--llm-boost` | — | Enable LLM enhancement. |
+| `--llm-provider` | `anthropic` (default), `openai` | Choose the LLM provider. |
+| `--mode` | `safe`, `moderate`, `aggressive` | Fix mode (for `fix`). |
+| `--smart` | — | Auto-triage: pin high-confidence, dismiss low. |
+| `--webhook` | URL | POST findings to Slack, PagerDuty, or a custom endpoint. |
+| `--baseline` | path | Baseline YAML for drift detection. |
+
+## Config
+
+A `goldencheck.yml` pins explicit rules for CI:
+
+```yaml
+version: 1
+
+settings:
+  sample_size: 100000
+  fail_on: error
+
+columns:
+  email:
+    type: string
+    required: true
+    format: email
+    unique: true
+  age:
+    type: integer
+    range: [0, 120]
+  status:
+    type: string
+    enum: [active, inactive, pending, closed]
+
+relations:
+  - type: temporal_order
+    columns: [start_date, end_date]
+
+ignore:
+  - column: notes
+    check: nullability
+```
+
+Relation types: `temporal_order`, `null_correlation`, `numeric_cross_column`, and `age_vs_dob`.
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `ANTHROPIC_API_KEY` | LLM boost (default provider). |
+| `OPENAI_API_KEY` | LLM boost (alternative provider). |
+| `GOLDENCHECK_LLM_BUDGET` | Max spend per scan, in USD. |
+| `GOLDENCHECK_SAMPLE_SIZE` | Override the default sample size (100K rows). |
+| `GOLDENCHECK_DOMAIN` | Default domain pack. |

@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -106,6 +107,33 @@ def _auth(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
     if authorization.removeprefix("Bearer ").strip() != expected:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+
+
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _safe_child(base: Path, name: str) -> Path:
+    """Resolve ``name`` strictly inside ``base`` and return the resolved path.
+
+    Caller-supplied filenames (``?file=``, ``?job_id=``, ``output=``) must not
+    escape ``DATA_DIR``. Two layers:
+
+    1. An allowlist regexp barrier: ``name`` must be a single segment of safe
+       characters with no parent ref. This rejects separators (``/`` and the
+       Windows ``\\``), leading dots, and ``..`` before the value is ever used
+       to build a path.
+    2. A realpath containment check: ``os.path.realpath`` collapses any symlink,
+       so a symlinked entry inside ``base`` that points elsewhere is caught.
+
+    Raises ``HTTPException(400)`` on any traversal attempt.
+    """
+    if not _SAFE_NAME_RE.fullmatch(name) or ".." in name:
+        raise HTTPException(400, "name must be a simple filename (no path)")
+    base_real = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(base_real, name))
+    if candidate != base_real and not candidate.startswith(base_real + os.sep):
+        raise HTTPException(400, "resolved path escapes the data directory")
+    return Path(candidate)
 
 
 def _run_subprocess(job_id: str, cmd: list[str]) -> None:
@@ -191,10 +219,8 @@ def trigger_generate(
         raise HTTPException(400, "workers must be positive")
 
     out_name = output or f"bench_{rows}.parquet"
-    if "/" in out_name or out_name.startswith("."):
-        raise HTTPException(400, "output filename must be a simple name (no path)")
-    out_path = DATA_DIR / out_name
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _safe_child(DATA_DIR, out_name)
 
     job_id = f"{job}-{rows}-{int(time.time())}"
     cmd = [
@@ -215,18 +241,24 @@ def trigger_generate(
 
 @app.get("/download", dependencies=[Depends(_auth)])
 def download(file: str) -> FileResponse:
-    """Stream a file from ``DATA_DIR``. Path is a simple filename
-    (no `/`, no `..`) so the operator can only pull files we wrote."""
-    if "/" in file or file.startswith("."):
+    """Stream a file from ``DATA_DIR`` by exact name.
+
+    The path handed to ``FileResponse`` comes from a directory listing, never
+    from the request value: we validate ``file`` is a simple name, then look
+    for a real entry whose ``.name`` matches. A traversal string therefore
+    can't reach the filesystem sink (the served path is `entry`, not a path
+    built from user input)."""
+    if not _SAFE_NAME_RE.fullmatch(file) or ".." in file:
         raise HTTPException(400, "file must be a simple name (no path)")
-    p = DATA_DIR / file
-    if not p.is_file():
-        raise HTTPException(404, f"{file} not found")
-    return FileResponse(
-        str(p),
-        media_type="application/octet-stream",
-        filename=file,
-    )
+    listing = DATA_DIR.iterdir() if DATA_DIR.exists() else []
+    for entry in listing:
+        if entry.is_file() and entry.name == file:
+            return FileResponse(
+                str(entry),
+                media_type="application/octet-stream",
+                filename=entry.name,
+            )
+    raise HTTPException(404, f"{file} not found")
 
 
 @app.get("/list", dependencies=[Depends(_auth)])
@@ -249,10 +281,13 @@ def list_files() -> JSONResponse:
 
 @app.get("/logs", dependencies=[Depends(_auth)])
 def get_log(job_id: str) -> FileResponse:
-    """Stream a job's log file."""
-    if "/" in job_id or job_id.startswith("."):
+    """Stream a job's log file by exact name from a directory listing
+    (same no-user-derived-path-at-the-sink pattern as ``/download``)."""
+    if not _SAFE_NAME_RE.fullmatch(job_id) or ".." in job_id:
         raise HTTPException(400, "job_id must be a simple identifier")
-    p = LOGS_DIR / f"{job_id}.log"
-    if not p.is_file():
-        raise HTTPException(404, f"log for {job_id} not found")
-    return FileResponse(str(p), media_type="text/plain", filename=p.name)
+    target = f"{job_id}.log"
+    listing = LOGS_DIR.iterdir() if LOGS_DIR.exists() else []
+    for entry in listing:
+        if entry.is_file() and entry.name == target:
+            return FileResponse(str(entry), media_type="text/plain", filename=entry.name)
+    raise HTTPException(404, f"log for {job_id} not found")

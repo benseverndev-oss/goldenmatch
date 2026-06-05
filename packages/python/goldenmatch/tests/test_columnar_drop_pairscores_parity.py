@@ -21,6 +21,10 @@ def _adversarial_pairs():
     # oversized that splits (10..16 minus 13), score-tied (20,21,22), dup pair,
     # dense clique that can't cleanly split (30..36). PLUS a different-score
     # duplicate canonical pair (3,4) to exercise the kernel last-wins dedup.
+    # Group A (40..48): three triangles + two weak bridges -> splits into 3
+    # components (exercises a cluster that cuts into >=3 pieces). Group B (50..57):
+    # two 4-cliques + one weak bridge -> a SECOND splittable oversized top-level
+    # cluster (exercises top-level iteration/labeling order across multiple splits).
     pairs = [
         (1, 2, 0.95),
         (3, 4, 0.9), (4, 5, 0.92), (3, 5, 0.88),
@@ -37,8 +41,21 @@ def _adversarial_pairs():
         (32, 34, 0.99), (32, 35, 0.99), (32, 36, 0.99), (33, 34, 0.99),
         (33, 35, 0.99), (33, 36, 0.99), (34, 35, 0.99), (34, 36, 0.99),
         (35, 36, 0.99),
+        # Group A (40-48): three triangles joined by two weak bridges -> splits
+        # into 3 components at max_cluster_size=5 (exercises repeated cuts).
+        (40, 41, 0.99), (40, 42, 0.99), (41, 42, 0.99),
+        (43, 44, 0.99), (43, 45, 0.99), (44, 45, 0.99),
+        (46, 47, 0.99), (46, 48, 0.99), (47, 48, 0.99),
+        (42, 43, 0.30), (45, 46, 0.25),
+        # Group B (50-57): two 4-cliques joined by one weak bridge -> a SECOND
+        # splittable oversized top-level cluster (splits into 2).
+        (50, 51, 0.99), (50, 52, 0.99), (50, 53, 0.99),
+        (51, 52, 0.99), (51, 53, 0.99), (52, 53, 0.99),
+        (54, 55, 0.99), (54, 56, 0.99), (54, 57, 0.99),
+        (55, 56, 0.99), (55, 57, 0.99), (56, 57, 0.99),
+        (53, 54, 0.28),
     ]
-    all_ids = list(range(0, 23)) + list(range(30, 37))
+    all_ids = list(range(0, 23)) + list(range(30, 37)) + list(range(40, 49)) + list(range(50, 58))
     return pairs, all_ids
 
 

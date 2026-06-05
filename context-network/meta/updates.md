@@ -2,6 +2,33 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-04 — Sail tier S4 harness shipped (buildable tier COMPLETE)
+- S4 harness merged (PR #717): chain-robust O(log n) WCC via pointer-jumping (the blind
+  large-star/small-star attempt was wrong, caught by plan-review hand-trace + replaced),
+  `run_sail_pipeline` end-to-end, and the 100M bench scaffold. The `sail` lane has 6 green gates.
+  The BUILDABLE Sail tier is COMPLETE; only the real 100M cluster run + Ray retirement remain
+  (need a BYO Sail cluster). Updated [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md).
+
+## 2026-06-03 — Sail tier Stage S3 (golden) shipped
+- S3 golden merged (PR #714): distributed survivorship on Sail (collect_list + merge_field UDF),
+  content-parity green. SCOPE DECISION: S3 scoped to golden only; identity split to its own next
+  stage (stateful graph subsystem, not a relational op). Updated
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). Identity-on-Sail is next, then S4 (real cluster).
+
+## 2026-06-03 — Sail tier Stage S2 shipped (make-or-break gate)
+- S2 merged (PR #712): WCC on Sail via min-label propagation, partition-parity green. The
+  existential "WCC-on-Sail at all" risk is CLOSED. Marked S2 done in
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). S3 (golden + identity on Sail) is next.
+
+## 2026-06-03 — Sail tier Stage S1 shipped
+- S1 merged (PR #709): the `goldenmatch.sail` harness + scorer pandas UDF + score/dedup,
+  parity-green on a new `sail` CI lane. Marked S1 done in
+  [../architecture/sail-tier.md](../architecture/sail-tier.md) +
+  [../planning/roadmap.md](../planning/roadmap.md). S2 (WCC on Sail) is the next gate.
+
 ## 2026-06-03 — Sail tier specced + roadmapped
 - Added the Sail-tier design (`docs/superpowers/specs/2026-06-03-sail-tier-design.md`,
   spec-reviewer approved) — the distributed Sail-native pipeline that replaces Ray.

@@ -1,0 +1,40 @@
+name: bench-goldenembed
+# Throughput bench for the standalone goldenembed crate. workflow_dispatch only
+# (not part of the default CI gate) — runs the `goldenembed bench` verb and
+# publishes the rows/sec table to the job summary. Defaults to large-new-64GB
+# per the repo bench-runner convention.
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "rows to embed"
+        default: "200000"
+      runner:
+        description: "runner label"
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ github.event.inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build goldenembed (release)
+        working-directory: packages/rust/extensions/goldenembed
+        run: cargo build --release
+      - name: Bench
+        working-directory: packages/rust/extensions/goldenembed
+        run: |
+          ./target/release/goldenembed bench \
+            --model tests/fixtures/tiny_model \
+            --rows ${{ github.event.inputs.rows }} \
+            --batch 64,256,1024,4096 | tee bench.txt
+      - name: Summary
+        working-directory: packages/rust/extensions/goldenembed
+        run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat bench.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

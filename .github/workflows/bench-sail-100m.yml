@@ -1,0 +1,38 @@
+# Sail tier S4 binding bench (workflow_dispatch only). Runs the full Sail
+# pipeline over a parquet on a REAL BYO Sail cluster (SAIL_REMOTE secret), the
+# binding "beats one-box / scales out" proof. SCAFFOLD: without SAIL_REMOTE the
+# driver exits 2 (fail-fast). Mirrors the Ray phase5 BYO-cluster posture (docs
+# not bootstrap). Ray is NOT retired until this binds.
+# Spec: docs/superpowers/specs/2026-06-03-sail-tier-design.md (S4).
+name: bench-sail-100m
+on:
+  workflow_dispatch:
+    inputs:
+      input:
+        description: "parquet path/URI reachable from the Sail cluster"
+        required: true
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+      - run: uv sync --all-packages
+      - name: Install sail extra
+        run: uv pip install -e 'packages/python/goldenmatch[sail]'
+      - name: Run Sail bench (real cluster via SAIL_REMOTE)
+        env:
+          SAIL_REMOTE: ${{ secrets.SAIL_REMOTE }}
+        run: |
+          .venv/bin/python packages/python/goldenmatch/scripts/bench_sail_100m.py \
+            --input "${{ inputs.input }}" --out .profile_tmp/sail_100m.json
+          { echo '## bench-sail-100m'; echo '```'; cat .profile_tmp/sail_100m.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: sail-100m-bench
+          path: .profile_tmp/sail_100m.json
+          if-no-files-found: warn
