@@ -1,5 +1,8 @@
 name: bench-df-cluster-edges
 
+permissions:
+  contents: read
+
 # 3-way cluster-edge view bench (workflow_dispatch only): legacy dict
 # (ClusterPairScores) vs embedded DataFusion cid-sorted edge stream vs Polars
 # lazy, on a HEAVY-TAILED cluster partition (most clusters 2-5, long tail, a few
