@@ -76,6 +76,8 @@ def _run_phase5_pipeline(
     *,
     output_path: str | None = None,
     confidence_required: bool = True,
+    config: Any | None = None,
+    allow_red_config: bool = False,
     **kwargs: Any,
 ):
     """Phase 5 streaming: score -> cluster -> golden -> write, no driver take-alls.
@@ -100,8 +102,20 @@ def _run_phase5_pipeline(
     from goldenmatch.distributed.golden import build_golden_records_distributed
     from goldenmatch.distributed.scoring import score_blocks_distributed
 
-    # 1. Auto-configure via Phase 2 controller (handles sample collect from Dataset).
-    cfg = auto_configure_df(ds, confidence_required=confidence_required, _skip_finalize=True)
+    # 1. Honor an explicit caller config (#739); otherwise auto-configure via the
+    #    Phase 2 controller (handles sample collect from Dataset). ``allow_red_config``
+    #    is the documented escape hatch (post-#715, NOT ``confidence_required``), so it
+    #    must reach ``auto_configure_df`` -- dropping it silently re-raised
+    #    ``ControllerNotConfidentError`` at scale even when the caller opted in.
+    if config is None:
+        cfg = auto_configure_df(
+            ds,
+            confidence_required=confidence_required,
+            allow_red_config=allow_red_config,
+            _skip_finalize=True,
+        )
+    else:
+        cfg = config
 
     # 2. Distributed scoring -> Ray Dataset of pairs (RAW: per-partition, so each
     #    component's edges are co-located in one block -- required by local_cc).
