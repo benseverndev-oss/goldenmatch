@@ -9,6 +9,7 @@ from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
 from goldenmatch.tui.engine import EngineResult
+from goldenmatch.tui.widgets.threshold_slider import ThresholdSlider
 
 
 class MatchesTab(Static):
@@ -51,10 +52,17 @@ class MatchesTab(Static):
                 id="no-results-msg",
                 classes="no-results",
             )
+            # Live re-cluster preview: arrow keys adjust the threshold and the
+            # app recomputes the cluster count off cached scored pairs (no
+            # re-scoring). Hidden until the first result lands.
+            yield ThresholdSlider(id="threshold-slider")
             yield DataTable(id="cluster-table")
             yield DataTable(id="detail-table")
 
     def on_mount(self) -> None:
+        slider = self.query_one("#threshold-slider", ThresholdSlider)
+        slider.display = False
+
         cluster_table = self.query_one("#cluster-table", DataTable)
         cluster_table.add_columns("Cluster ID", "Size", "Top Score", "Confidence")
         cluster_table.display = False
@@ -72,6 +80,12 @@ class MatchesTab(Static):
         # Hide placeholder
         no_msg = self.query_one("#no-results-msg", Static)
         no_msg.display = False
+
+        # Reveal the threshold slider and seed its preview with the current
+        # multi-member cluster count.
+        slider = self.query_one("#threshold-slider", ThresholdSlider)
+        slider.display = True
+        slider.set_preview(sum(1 for c in result.clusters.values() if c["size"] > 1))
 
         # Build cluster list
         cluster_table = self.query_one("#cluster-table", DataTable)
