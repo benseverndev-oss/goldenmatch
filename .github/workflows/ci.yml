@@ -1166,14 +1166,17 @@ jobs:
           # In-house embed (#737): proves `ort`/onnxruntime loads inside the
           # Postgres backend process (the new surface vs the proven DataFusion
           # cdylib case). goldenmatch_embed_local takes an explicit model dir;
-          # gm_embed reads GOLDENEMBED_MODEL_DIR from the backend env, so restart
-          # the cluster with it set. Uses the goldenembed tiny_model fixture.
+          # gm_embed reads GOLDENEMBED_MODEL_DIR from the backend env. The
+          # postmaster does NOT inherit env passed to `pg_ctlcluster` (it re-execs);
+          # the documented Debian mechanism is the per-cluster `environment` file,
+          # which PostgreSQL reads at startup. Write it, then restart.
+          # Uses the goldenembed tiny_model fixture.
           MODEL_DIR=/tmp/gm_tiny_model
           sudo mkdir -p "${MODEL_DIR}"
           sudo cp "${GITHUB_WORKSPACE}/packages/rust/extensions/goldenembed/tests/fixtures/tiny_model/"* "${MODEL_DIR}/"
           sudo chmod -R a+rX "${MODEL_DIR}"
-          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main stop 2>/dev/null || true
-          sudo -u postgres env GOLDENEMBED_MODEL_DIR="${MODEL_DIR}" pg_ctlcluster "${PG_VERSION}" main start
+          echo "GOLDENEMBED_MODEL_DIR = '${MODEL_DIR}'" | sudo tee -a "/etc/postgresql/${PG_VERSION}/main/environment"
+          sudo -u postgres pg_ctlcluster "${PG_VERSION}" main restart
           sleep 2
           # Explicit-path variant (shell-interpolated dir at the top level, where
           # psql doesn't help): proves ort loads in-backend + returns a real vector.
