@@ -57,7 +57,8 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - `pipeline.py` refactored: `_run_dedupe_pipeline()` and `_run_match_pipeline()` extracted as shared internal functions, called by both file-based and DataFrame-based entry points
 - `goldenmatch/core/` — pipeline modules (no Textual dependency)
 - `goldenmatch/tui/` — Textual TUI + MatchEngine (engine.py has no Textual dependency)
-- `goldenmatch/cli/` — Typer CLI commands (23 commands, including `unmerge`, `evaluate`, `incremental`, `pprl`, `label`, `compare-clusters`, `sensitivity`)
+- `goldenmatch/cli/` — Typer CLI commands (including `unmerge`, `evaluate`, `incremental`, `pprl`, `label`, `compare-clusters`, `sensitivity`, `review`)
+- **Wave 3.1 (2026-06-05) surfaced 3 library features as CLI front doors** (each ran via the pipeline before, but had no standalone command): `goldenmatch explain` (NL pair/cluster explanation via `core/explain.py`; `--pair a,b` or `--cluster id`), `goldenmatch lineage` (per-pair audit trail via `core/lineage.py`; was MCP-tool-only), `goldenmatch anomalies` (standalone `core/anomaly.py` detection; was `dedupe --anomalies` only). `explain`/`lineage` run the pipeline through `tui/engine.py::MatchEngine` (clean `EngineResult.scored_pairs`/`.clusters` + `engine.data`) — NOT `run_dedupe`, whose result dict does NOT reliably carry `_df`/`scored_pairs` (label.py reconstructs the df when `_df` is None). Reuse MatchEngine for any new command that needs scored pairs + the row-id'd frame.
 - `goldenmatch/db/` — Postgres integration (connector, sync, reconcile, clusters, ANN index)
 - `goldenmatch/api/` — REST API server (`goldenmatch serve`)
 - `goldenmatch/mcp/` — MCP server for Claude Desktop (`goldenmatch mcp-serve`)
