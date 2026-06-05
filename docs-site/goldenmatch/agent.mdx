@@ -262,8 +262,10 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
 
 ```json
 {
-  "name": "goldenmatch-agent",
-  "description": "Autonomous entity resolution agent.",
+  "name": "GoldenMatch ER Agent",
+  "description": "Autonomous entity resolution agent for deduplication, matching, and data quality.",
+  "url": "http://localhost:8200",
+  "version": "1.26.0",
   "provider": {
     "organization": "GoldenMatch",
     "url": "https://github.com/benseverndev-oss/goldenmatch"
@@ -272,7 +274,18 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
     "streaming": true,
     "pushNotifications": false
   },
-  "skills": ["..."]
+  "skills": [
+    {
+      "id": "deduplicate",
+      "name": "Deduplicate",
+      "description": "Run deduplication pipeline on a single file.",
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
 }
 ```
 
