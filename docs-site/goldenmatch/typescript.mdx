@@ -1,18 +1,14 @@
 ---
-layout: default
-title: TypeScript API
-nav_order: 4.5
+title: "TypeScript API"
+description: "GoldenMatch as an npm package with full feature parity with the Python toolkit: edge-safe core, Node-only additions, and all scoring, blocking, and golden-record strategies."
+keywords: ["typescript", "javascript", "node", "npm", "goldenmatch-js", "edge", "api"]
 ---
-
-# TypeScript / Node.js
 
 GoldenMatch is also published as an npm package with full feature parity with the Python toolkit.
 
 ```bash
 npm install goldenmatch
 ```
-
----
 
 ## Quick Start
 
@@ -34,8 +30,6 @@ const result = dedupe(rows, {
 console.log(result.stats);
 ```
 
----
-
 ## Two Entrypoints
 
 The package ships with two separate entry points so the core stays edge-safe and dependency-free:
@@ -50,8 +44,6 @@ import { dedupe, match, scoreStrings, applyTransforms } from "goldenmatch";
 // Node-only additions
 import { readFile, writeCsv, dedupeFile, startApiServer } from "goldenmatch/node";
 ```
-
----
 
 ## Core API
 
@@ -107,8 +99,6 @@ applyTransforms("  John Q. Smith  ", ["strip", "lowercase", "alpha_only"]);
 // "johnqsmith"
 ```
 
----
-
 ## Scorers
 
 All scorers implement the same interface as Python `goldenmatch.core.scorer`:
@@ -124,8 +114,6 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 | **embedding** | Cosine similarity of embeddings |
 | **record_embedding** | Cosine similarity across whole records |
 
----
-
 ## Blocking Strategies
 
 - `static` — single blocking key with transforms
@@ -136,8 +124,6 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 - `canopy` — TF-IDF canopy clustering
 - `learned` — data-driven predicate selection
 
----
-
 ## Golden Record Strategies
 
 - `most_complete` — pick longest string
@@ -146,8 +132,6 @@ All scorers implement the same interface as Python `goldenmatch.core.scorer`:
 - `most_recent` — pick value with most recent date
 - `first_non_null` — pick first non-null
 
----
-
 ## Transforms
 
 Applied at matchkey time. Same names as the Python toolkit:
@@ -155,8 +139,6 @@ Applied at matchkey time. Same names as the Python toolkit:
 `lowercase`, `uppercase`, `strip`, `strip_all`, `soundex`, `metaphone`,
 `digits_only`, `alpha_only`, `normalize_whitespace`, `token_sort`,
 `first_token`, `last_token`, `substring:start:end`, `qgram:n`.
-
----
 
 ## CLI
 
@@ -179,8 +161,6 @@ npx goldenmatch-js profile data.csv
 # Launch interactive TUI (requires ink peer deps)
 npx goldenmatch-js tui data.csv
 ```
-
----
 
 ## Servers
 
@@ -216,8 +196,6 @@ npx goldenmatch-js tui
 
 Requires the Ink peer deps (see below).
 
----
-
 ## Optional Peer Dependencies
 
 All peer deps are optional. Install only what you need:
@@ -235,8 +213,6 @@ All peer deps are optional. Install only what you need:
 | `@google-cloud/bigquery` | BigQuery connector |
 | `@databricks/sql` | Databricks connector |
 
----
-
 ## Advanced Features
 
 - **Probabilistic matching** — Fellegi-Sunter with Splink-style EM
@@ -247,20 +223,14 @@ All peer deps are optional. Install only what you need:
 - **Sensitivity analysis** — Parameter sweep with CCMS / TWI cluster comparison
 - **Lineage tracking** — Full provenance per field per golden record
 
----
-
 ## Examples
 
 See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js/examples) for 11 full end-to-end TypeScript examples covering dedupe, match, PPRL, streaming, graph ER, Fellegi-Sunter, and more.
-
----
 
 ## Source
 
 - **npm**: [https://www.npmjs.com/package/goldenmatch](https://www.npmjs.com/package/goldenmatch)
 - **GitHub**: [https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/goldenmatch-js)
-
----
 
 ## Comparison With Python
 

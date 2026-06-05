@@ -1,14 +1,10 @@
 ---
-layout: default
-title: Scoring
-nav_order: 10
+title: "Scoring"
+description: "All GoldenMatch scoring methods: exact, fuzzy, probabilistic, LLM, embedding, and parallel scoring."
+keywords: ["scoring", "fuzzy matching", "jaro-winkler", "levenshtein", "probabilistic", "fellegi-sunter", "embedding", "llm scorer"]
 ---
-
-# Scoring
 
 GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring runs after blocking and produces `(row_id_a, row_id_b, score)` tuples.
-
----
 
 ## Scorer reference
 
@@ -27,9 +23,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `name_freq_weighted_jw` | Jaro-Winkler modulated by US Census surname IDF | 0.0--1.0 | `last_name` / `surname` |
 | `given_name_aliased_jw` | Jaro-Winkler with alias-aware exact bonus | 0.0--1.0 | `first_name` / `given_name` |
 
-The last two ship as part of the bundled reference-data packs and are picked automatically by auto-config when a column matches the relevant name pattern AND its profiled `col_type` agrees. See [Reference Data](reference-data) for the full pack overview, refinement rules, and the col_type gate.
-
----
+The last two ship as part of the bundled reference-data packs and are picked automatically by auto-config when a column matches the relevant name pattern AND its profiled `col_type` agrees. See [Reference Data](/goldenmatch/reference-data) for the full pack overview, refinement rules, and the col_type gate.
 
 ## Fuzzy scoring
 
@@ -68,8 +62,6 @@ matchkeys:
 
 Pairs with `overall_score >= threshold` are matched.
 
----
-
 ## Exact scoring
 
 Exact matching uses Polars self-join for high performance. No threshold needed.
@@ -86,8 +78,6 @@ matchkeys:
 ```python
 pairs = gm.find_exact_matches(df, fields)
 ```
-
----
 
 ## Probabilistic scoring (Fellegi-Sunter)
 
@@ -124,8 +114,6 @@ Key details:
 - Comparison vectors apply field transforms before scoring
 - Achieves 98.8% precision, 57.6% recall on DBLP-ACM
 
----
-
 ## LLM scoring
 
 Send borderline pairs to GPT-4o-mini or Claude for scoring. Two modes:
@@ -156,9 +144,7 @@ llm_scorer:
   cluster_min_size: 5        # below this, fall back to pairwise
 ```
 
-See [LLM Integration](llm) for full details.
-
----
+See [LLM Integration](/goldenmatch/llm) for full details.
 
 ## Cross-encoder reranking
 
@@ -180,13 +166,11 @@ Pairs within `threshold +/- rerank_band` get reranked. Requires `pip install gol
 reranked = gm.rerank_top_pairs(pairs, df, matchkey)
 ```
 
----
-
 ## Parallel scoring
 
 Fuzzy blocks are scored concurrently via `ThreadPoolExecutor`. RapidFuzz's `cdist` releases the GIL, so threads provide real parallelism.
 
-```
+```text
 Block 1 ──> Thread 1 ──> pairs
 Block 2 ──> Thread 2 ──> pairs    (concurrent)
 Block 3 ──> Thread 3 ──> pairs
@@ -201,8 +185,6 @@ Implementation details:
 ### Intra-field early termination
 
 After scoring each expensive field, the scorer checks if the remaining fields can push any pair above the threshold. If not, it breaks early. This reduces 100K fuzzy matching from ~100s to ~39s (2.5x speedup).
-
----
 
 ## Embedding scoring
 
@@ -238,8 +220,6 @@ Use Google Cloud's managed embedding API (no GPU needed):
 # Set GOOGLE_APPLICATION_CREDENTIALS, then use embedding scorer
 # Vertex AI text-embedding-004 supports inference only (no fine-tuning)
 ```
-
----
 
 ## Scoring a single pair
 

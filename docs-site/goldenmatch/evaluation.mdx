@@ -1,14 +1,10 @@
 ---
-layout: default
-title: Evaluation
-nav_order: 19
+title: "Evaluation"
+description: "Measure matching accuracy against ground truth and enforce quality gates in CI/CD pipelines."
+keywords: ["evaluation", "ground truth", "f1", "precision", "recall", "ci/cd", "quality gate"]
 ---
-
-# Evaluation
 
 Measure matching accuracy against ground truth and enforce quality gates in CI/CD pipelines.
-
----
 
 ## Quick start
 
@@ -22,8 +18,6 @@ print(f"F1: {metrics['f1']:.1%}, Precision: {metrics['precision']:.1%}, Recall: 
 ```bash
 goldenmatch evaluate data.csv --config config.yaml --gt ground_truth.csv
 ```
-
----
 
 ## Ground truth format
 
@@ -46,8 +40,6 @@ IDs correspond to GoldenMatch's `__row_id__` (int64). Ground truth CSVs may have
 gt_pairs = gm.load_ground_truth_csv("gt.csv", col_a="id_a", col_b="id_b")
 # Returns set of (int, int) tuples
 ```
-
----
 
 ## CI/CD quality gates
 
@@ -79,8 +71,6 @@ jobs:
             --min-f1 0.90 --min-precision 0.80
 ```
 
----
-
 ## EvalResult
 
 ```python
@@ -96,8 +86,6 @@ class EvalResult:
     def summary(self) -> dict
 ```
 
----
-
 ## Evaluate pairs directly
 
 ```python
@@ -112,8 +100,6 @@ print(f"Recall: {result.recall:.1%}")        # 3/4 = 75%
 print(f"F1: {result.f1:.1%}")                # 75%
 ```
 
----
-
 ## Evaluate clusters
 
 Evaluate a cluster dict (as returned by `build_clusters`). Expands cluster members into pairs for comparison.
@@ -126,8 +112,6 @@ print(result.f1)
 ```
 
 Note: `run_dedupe()` does not return `scored_pairs` -- use the `clusters` dict instead.
-
----
 
 ## Build ground truth with label command
 
@@ -147,8 +131,6 @@ The label command shows pairs and prompts for your judgment:
 
 Pairs are selected from actual pipeline output, focusing on borderline cases near the threshold.
 
----
-
 ## Evaluation workflow
 
 1. **Build ground truth**: Use `goldenmatch label` or create a CSV manually
@@ -156,13 +138,11 @@ Pairs are selected from actual pipeline output, focusing on borderline cases nea
 3. **Iterate**: Adjust config (thresholds, scorers, blocking) and re-evaluate
 4. **Gate CI**: Add `--min-f1` threshold to your CI pipeline
 
-```
+```text
 label pairs --> ground_truth.csv --> evaluate --> adjust config --> repeat
                                          |
                                     CI/CD gate (--min-f1 0.90)
 ```
-
----
 
 ## Metrics explained
 
@@ -176,8 +156,6 @@ For entity resolution:
 - **High precision** means few false merges (records incorrectly combined)
 - **High recall** means few missed duplicates
 - Most production systems prioritize precision (false merges are harder to fix than missed dupes)
-
----
 
 ## Cluster comparison (CCMS)
 
@@ -206,8 +184,6 @@ The **TWI (Talburt-Wang Index)** measures overall clustering similarity, normali
 goldenmatch compare-clusters run_a.json run_b.json --details --case-type merged
 ```
 
----
-
 ## Parameter sensitivity analysis
 
 Sweep a parameter across a range and compare each run against a baseline:
@@ -230,8 +206,6 @@ goldenmatch sensitivity data.csv -c config.yaml --sweep threshold:0.70:0.95:0.05
 ```
 
 Supported sweep fields: `threshold`, `matchkey.<name>.threshold`, `blocking.max_block_size`.
-
----
 
 ## Benchmark evaluation tips
 

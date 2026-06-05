@@ -1,16 +1,14 @@
 ---
-layout: default
-title: Identity Graph
-nav_order: 20
+title: "Identity Graph"
+description: "Durable, queryable identity graph with stable entity IDs, evidence edges, and a consistent JSON view across Python, SQL, REST, MCP, A2A, and the web UI."
+keywords: ["identity graph", "entity resolution", "stable ids", "entity_id", "deduplication", "provenance"]
 ---
-
-# Identity Graph
 
 GoldenMatch v1.15 turns the run-local cluster output of `dedupe_df()` into a **durable, queryable identity graph**. Stable `entity_id`s survive re-runs, every match has provenance, and the same answer comes back from Python, SQL, REST, MCP, A2A, and the web UI.
 
-> **Status.** Shipped in v1.15.0 (2026-05-12). Off by default -- the zero-config posture is preserved. Enable via `config.identity.enabled = True` or an `identity:` block in YAML.
-
----
+<Note>
+  Shipped in v1.15.0 (2026-05-12). Off by default — the zero-config posture is preserved. Enable via `config.identity.enabled = True` or an `identity:` block in YAML.
+</Note>
 
 ## What problem this solves
 
@@ -22,8 +20,6 @@ A plain `run_dedupe()` returns clusters whose IDs are meaningful only inside *th
 - The web/SQL/agent surfaces all reason from scratch each time.
 
 The Identity Graph layer turns the cluster output into **first-class entities** that persist across runs, retain the evidence that linked them, and expose the same JSON view from every surface.
-
----
 
 ## Quickstart
 
@@ -68,8 +64,6 @@ with gm.IdentityStore(path=".goldenmatch/identity.db") as store:
     print([(e.kind, e.run_name) for e in view.events])
 ```
 
----
-
 ## Storage model
 
 Five tables. SQLite default at `.goldenmatch/identity.db`; Postgres optional.
@@ -77,14 +71,12 @@ Five tables. SQLite default at `.goldenmatch/identity.db`; Postgres optional.
 | Table | What it stores |
 |---|---|
 | `identity_nodes` | One row per identity: `entity_id` (UUIDv7), status, rolled-up golden record, confidence, dataset. |
-| `source_records` | One row per `{source}:{source_pk}` -- the raw observation, current owning identity, payload, first/last seen. |
+| `source_records` | One row per `{source}:{source_pk}` — the raw observation, current owning identity, payload, first/last seen. |
 | `evidence_edges` | One row per scored pair that supports an identity. Score, matchkey, per-field breakdown, NE penalties, controller telemetry, run name. |
 | `identity_events` | Append-only log: `created` / `absorbed_record` / `merged_with` / `split_from` / `retired` / `manual_*`. |
 | `identity_aliases` | Optional cross-source convenience lookups (e.g. `salesforce:003abc` -> entity). |
 
 Postgres ships three analytical views: `v_identities`, `v_identity_pairs`, `v_identity_timeline`. Apply via `packages/python/goldenmatch/goldenmatch/db/migrations/identity_v1.sql` or let `IdentityStore(backend="postgres", connection=...)` create them on first connect.
-
----
 
 ## How resolution works
 
@@ -92,19 +84,17 @@ After clustering, the pipeline takes each cluster and:
 
 1. **Look up existing identities** that already own any record in the cluster.
 2. **Decide what happened:**
-   - No overlap -> mint a new identity (UUIDv7), emit `created`.
-   - One existing identity covers all overlapping records -> absorb the new records, emit `absorbed_record` per addition.
-   - Multiple existing identities overlap -> merge them. Winner = most members (tie-break: oldest `created_at`). Emit `merged_with` on winner, retire losers with `status='merged_into', merged_into=<winner>`.
+   - No overlap — mint a new identity (UUIDv7), emit `created`.
+   - One existing identity covers all overlapping records — absorb the new records, emit `absorbed_record` per addition.
+   - Multiple existing identities overlap — merge them. Winner = most members (tie-break: oldest `created_at`). Emit `merged_with` on winner, retire losers with `status='merged_into', merged_into=<winner>`.
 3. **Upsert** every cluster record under the chosen identity.
-4. **Record evidence** -- one row in `evidence_edges` for every scored within-cluster pair, including matchkey name, per-field scores, negative-evidence penalties, and a controller-telemetry snapshot.
+4. **Record evidence** — one row in `evidence_edges` for every scored within-cluster pair, including matchkey name, per-field scores, negative-evidence penalties, and a controller-telemetry snapshot.
 
-The result: `entity_id` is **stable across runs**. The same Alice Smith on a Tuesday run and a Wednesday run with one extra record both resolve to the same UUID -- evidence in `evidence_edges` shows which run added which edge.
+The result: `entity_id` is **stable across runs**. The same Alice Smith on a Tuesday run and a Wednesday run with one extra record both resolve to the same UUID — evidence in `evidence_edges` shows which run added which edge.
 
 Resolution is **idempotent**: replaying the same `run_name` is a no-op. Edges deduplicate on `(entity_id, record_a_id, record_b_id, run_name)`. Events deduplicate on `(run_name, kind, entity_id)`.
 
----
-
-## Surfaces -- one shape, many faces
+## Surfaces — one shape, many faces
 
 Every surface returns the same JSON (the `IdentityView.to_dict()` shape). The cross-surface contract test at `tests/identity/test_cross_surface_contract.py` enforces this byte-for-byte across all six.
 
@@ -133,7 +123,7 @@ goldenmatch identity split <entity_id> crm:42 crm:43 --reason "wrong merge"
 
 ### REST
 
-```
+```text
 GET    /api/v1/identities                            # list (paginated)
 GET    /api/v1/identities/stats                      # totals
 GET    /api/v1/identities/{entity_id}                # full view
@@ -151,18 +141,18 @@ The "Identities" tab in `goldenmatch serve-ui` lists identities with dataset/sta
 
 ### MCP
 
-Six tools on the standard MCP server (`goldenmatch mcp-serve`):
+Seven tools on the standard MCP server (`goldenmatch mcp-serve`):
 
-- `identity_resolve` -- look up by `record_id`
-- `identity_list` -- list with filters
-- `identity_view` -- full payload by `entity_id`
-- `identity_history` -- event log
-- `identity_conflicts` -- list `conflicts_with` edges
-- `identity_merge` / `identity_split` -- steward operations
+- `identity_resolve` — look up by `record_id`
+- `identity_show` — full payload by `entity_id`
+- `identity_list` — list with filters
+- `identity_history` — event log
+- `identity_conflicts` — list `conflicts_with` edges
+- `identity_merge` / `identity_split` — steward operations
 
 ### A2A
 
-Same six skills on the A2A agent server (`goldenmatch agent-serve`). Agent card declares 18 total skills (the 12 pre-v1.15 surface plus the six identity skills).
+Same seven skills on the A2A agent server (`goldenmatch agent-serve`). The agent card declares 31 total skills.
 
 ### SQL (Postgres + DuckDB)
 
@@ -176,11 +166,9 @@ SELECT goldenmatch_identity_conflicts('customers', '/path/to/identity.db');
 SELECT goldenmatch_identity_list('customers', 'active', '/path/to/identity.db');
 ```
 
-All five return JSON in the same shape the Python `IdentityView.to_dict()` returns. SQL is read-only -- writes go through the Python CLI, REST endpoints, or MCP tools.
+All five return JSON in the same shape the Python `IdentityView.to_dict()` returns. SQL is read-only — writes go through the Python CLI, REST endpoints, or MCP tools.
 
----
-
-## "Why did these link?" -- reading the evidence
+## "Why did these link?" — reading the evidence
 
 Every link decision is auditable. Pull an entity's edges:
 
@@ -202,8 +190,6 @@ for edge in view.edges:
 
 The same shape comes back from `GET /api/v1/identities/{eid}/evidence`, `identity_history` over MCP/A2A, and the DuckDB / Postgres `_view` functions.
 
----
-
 ## Configuration reference
 
 ```yaml
@@ -221,8 +207,6 @@ identity:
 
 When `source_pk_column` is unset and you have near-duplicate raw rows from the same source, two physically-different observations may collide on the same `record_id`. The recommended pattern is to always pass an explicit PK column when you can.
 
----
-
 ## Postgres setup
 
 Apply the schema directly (skip if you only use SQLite):
@@ -237,34 +221,26 @@ Or let the Python store create it on first connect:
 gm.IdentityStore(backend="postgres", connection="postgres://user:pass@host/db")
 ```
 
-Both paths produce identical schemas. The migration script also creates three analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`) that the bare `IdentityStore` does not -- prefer the migration file for shared/team setups.
-
----
+Both paths produce identical schemas. The migration script also creates three analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`) that the bare `IdentityStore` does not — prefer the migration file for shared/team setups.
 
 ## Performance notes
 
 - Resolve runs after clustering, before output. On a 100k-row dedupe the resolve step is dominated by SQLite write throughput (~5-15s). Postgres scales further but adds network latency.
-- Resolution is **gated and additive** -- if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
+- Resolution is **gated and additive** — if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
 - For multi-process writers, the SQLite store uses WAL + a 5s `busy_timeout`. Postgres relies on row-level locks. Single-tenant web UI / CLI invocations are the assumed model; for high-write multi-tenant graphs use Postgres.
-
----
 
 ## When NOT to use it
 
 - Single-shot ad-hoc dedupe where you only want golden records out and don't care about the next run.
-- Pipelines whose source has no stable PK and whose rows are duplicated character-for-character -- the hash fallback will fold them together.
-
----
+- Pipelines whose source has no stable PK and whose rows are duplicated character-for-character — the hash fallback will fold them together.
 
 ## Migration / backfill
 
 Existing projects without an identity graph don't get retroactive `entity_id` stability. New runs will assign fresh UUIDs from the moment you enable identity. A best-effort backfill command that walks lineage JSONL + cluster snapshots is on the v2.1 roadmap.
 
----
-
 ## See also
 
-- `examples/python/08_identity_graph.py` -- end-to-end demo (two-run stability + absorb + merge + split + conflict)
-- [Pipeline architecture](architecture.md) -- where identity sits in the dedupe flow
-- [Learning Memory](learning-memory.md) -- the other persistent-state layer; complementary, not competing
-- [Configuration](configuration.md) -- full schema reference
+- `examples/python/08_identity_graph.py` — end-to-end demo (two-run stability + absorb + merge + split + conflict)
+- [Pipeline architecture](/concepts/architecture) — where identity sits in the dedupe flow
+- [Learning Memory](/goldenmatch/learning-memory) — the other persistent-state layer; complementary, not competing
+- [Configuration](/goldenmatch/configuration) — full schema reference

@@ -1,27 +1,23 @@
 ---
-layout: default
-title: MCP Server
-nav_order: 18
+title: "MCP Server"
+description: "Connect GoldenMatch to Claude Desktop, Claude Code, and other MCP clients — 54 tools for autonomous entity resolution, data inspection, Learning Memory, and Identity Graph."
+keywords: ["mcp", "claude desktop", "model context protocol", "entity resolution", "learning memory"]
 ---
-
-# MCP Server
 
 GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 54 tools total: 16 agent-level tools for autonomous ER, 24 data tools for inspection and management, 7 Learning Memory tools (v1.6.0) for persisting steward decisions, and 7 Identity Graph tools.
 
-> **Looking for AI-to-AI autonomy?** See the [ER Agent (A2A)](agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
-
----
+<Tip>
+  Looking for AI-to-AI autonomy? See the [ER Agent (A2A)](/goldenmatch/agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
+</Tip>
 
 ## Remote vs. Local
 
 | | Remote (Smithery) | Local |
 |---|---|---|
 | Install | None | `pip install goldenmatch[mcp]` |
-| Latency | ~200ms (network) | <10ms |
+| Latency | ~200ms (network) | &lt;10ms |
 | Data | Upload to server | Stays on your machine |
 | Best for | Quick exploration | Production, private data |
-
----
 
 ## Remote Server (no install required)
 
@@ -40,8 +36,6 @@ Add to your `claude_desktop_config.json`:
 ```
 
 Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldenmatch](https://smithery.ai/servers/benzsevern/goldenmatch)
-
----
 
 ## Local Server
 
@@ -80,8 +74,6 @@ With a config file:
 }
 ```
 
----
-
 ## Tools
 
 The MCP server exposes the following tools to Claude Desktop:
@@ -90,7 +82,7 @@ The MCP server exposes the following tools to Claude Desktop:
 
 Get dataset statistics: record count, cluster count, match rate, cluster sizes.
 
-```
+```text
 "How many duplicates did you find?"
 ```
 
@@ -98,7 +90,7 @@ Get dataset statistics: record count, cluster count, match rate, cluster sizes.
 
 Search for duplicate records matching a query.
 
-```
+```text
 "Find duplicates of John Smith"
 ```
 
@@ -106,7 +98,7 @@ Search for duplicate records matching a query.
 
 Get details of a specific cluster including all member records and pair scores.
 
-```
+```text
 "Show me cluster 42"
 ```
 
@@ -114,7 +106,7 @@ Get details of a specific cluster including all member records and pair scores.
 
 Match a new record against the loaded dataset.
 
-```
+```text
 "Does this record match anything: name=Jane Doe, email=jane@example.com?"
 ```
 
@@ -122,7 +114,7 @@ Match a new record against the loaded dataset.
 
 Explain why two specific records were matched or not matched.
 
-```
+```text
 "Why were records 42 and 108 matched?"
 ```
 
@@ -130,7 +122,7 @@ Explain why two specific records were matched or not matched.
 
 Remove a record from its cluster. Re-clusters the remaining members.
 
-```
+```text
 "Remove record 215 from its cluster, it was a false match"
 ```
 
@@ -138,7 +130,7 @@ Remove a record from its cluster. Re-clusters the remaining members.
 
 Analyze bad merges, identify which fields caused false matches, and suggest threshold/weight changes.
 
-```
+```text
 "Cluster 5 has a bad merge. What should I change?"
 ```
 
@@ -146,7 +138,7 @@ Analyze bad merges, identify which fields caused false matches, and suggest thre
 
 List all available domain packs (built-in and custom).
 
-```
+```text
 "What domain packs are available?"
 ```
 
@@ -154,7 +146,7 @@ List all available domain packs (built-in and custom).
 
 Create a new custom domain pack.
 
-```
+```text
 "Create a domain pack for automotive parts with fields: part_number, manufacturer, fitment"
 ```
 
@@ -162,7 +154,7 @@ Create a new custom domain pack.
 
 Test a domain pack against sample data to verify extraction quality.
 
-```
+```text
 "Test the electronics domain pack on my data"
 ```
 
@@ -170,7 +162,7 @@ Test a domain pack against sample data to verify extraction quality.
 
 Analyze data and recommend optimal PPRL parameters.
 
-```
+```text
 "What PPRL settings should I use for this dataset?"
 ```
 
@@ -178,7 +170,7 @@ Analyze data and recommend optimal PPRL parameters.
 
 Run privacy-preserving record linkage.
 
-```
+```text
 "Link hospital_a.csv and hospital_b.csv using PPRL"
 ```
 
@@ -186,7 +178,7 @@ Run privacy-preserving record linkage.
 
 Scan data for quality issues (encoding errors, Unicode problems, format violations) without applying fixes. Requires `pip install goldenmatch[quality]`.
 
-```
+```text
 "Scan my data for quality issues before matching"
 ```
 
@@ -194,7 +186,7 @@ Scan data for quality issues (encoding errors, Unicode problems, format violatio
 
 Scan and apply data quality fixes (safe or moderate mode). Optionally saves the fixed CSV.
 
-```
+```text
 "Fix encoding issues in customers.csv using moderate mode"
 ```
 
@@ -202,11 +194,67 @@ Scan and apply data quality fixes (safe or moderate mode). Optionally saves the 
 
 Normalize phone numbers (E.164), dates (ISO), categorical spelling, and Unicode. Requires `pip install goldenmatch[transform]`.
 
-```
+```text
 "Normalize the phone and date formats in my data"
 ```
 
-In addition, 16 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental). See [ER Agent](agent) for details.
+### evaluate
+
+Score the loaded run against ground-truth pairs: precision, recall, and F1.
+
+```text
+"How accurate is this matching against my labeled pairs in gt.csv?"
+```
+
+### analyze_blocking
+
+Diagnose blocking on the loaded dataset: ranked key candidates with block counts, max block size, candidate-pair totals, and estimated recall.
+
+```text
+"Why is matching producing so many candidate pairs?"
+```
+
+### compare_clusters
+
+Compare two ER clustering outcomes without ground truth (CCMS): unchanged / merged / partitioned / overlapping, plus the Talburt-Wang Index. Takes two cluster JSON files.
+
+```text
+"How did clustering change between the old run and the new one?"
+```
+
+### schema_match
+
+Auto-map columns between two files with different schemas (synonym + name similarity), with a confidence score per mapping.
+
+```text
+"Map the columns between crm.csv and billing.csv before I match them"
+```
+
+### lineage
+
+Field-level provenance for the loaded run: the per-field score breakdown behind each scored pair, plus cluster id.
+
+```text
+"Show me the lineage for the pairs in cluster 14"
+```
+
+### list_runs
+
+List previous dedupe/match runs from the run log (for rollback).
+
+```text
+"What runs can I roll back?"
+```
+
+### rollback
+
+Undo a previous run by deleting its output files (looked up by run_id). Destructive.
+
+```text
+"Roll back run 2026-06-05-abc123"
+```
+
+In addition, 16 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental). See [ER Agent](/goldenmatch/agent) for details.
 
 ### AutoConfigController telemetry (v1.7-v1.12)
 
@@ -219,10 +267,10 @@ In addition, 16 **agent-level tools** are available for autonomous operation (an
     "available": true,
     "stop_reason": "green",
     "health": "green",
-    "decisions": [...],
-    "column_priors": [...],
-    "committed_matchkeys": [...],
-    "negative_evidence": [...]
+    "decisions": [],
+    "column_priors": [],
+    "committed_matchkeys": [],
+    "negative_evidence": []
   }
 }
 ```
@@ -233,7 +281,7 @@ The standalone `controller_telemetry` tool surfaces a per-session limitation not
 
 ### Learning Memory tools (v1.6.0)
 
-Five tools surface the persistent corrections store. See [Learning Memory]({% link learning-memory.md %}) for the full feature.
+Six tools surface the persistent corrections store. See [Learning Memory](/goldenmatch/learning-memory) for the full feature.
 
 | Tool | Behavior |
 |---|---|
@@ -242,14 +290,29 @@ Five tools surface the persistent corrections store. See [Learning Memory]({% li
 | `learn_thresholds` | Runs `MemoryLearner.learn()`; returns the adjustment dict per matchkey. |
 | `memory_stats` | Counts plus last-learned timestamps. |
 | `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
+| `memory_import` | Upserts corrections from a list of dicts (the shape `memory_export` returns); higher trust wins. |
 
 Natural-language workflow:
 
-> "Show me uncertain pairs from the last goldenmatch run on customers.csv, then mark rows 17 and 23 as not-a-match because they have different EINs."
+<Note>
+  "Show me uncertain pairs from the last goldenmatch run on customers.csv, then mark rows 17 and 23 as not-a-match because they have different EINs."
+</Note>
 
 The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
 
----
+### Identity Graph tools (v2.0)
+
+Seven tools expose the durable identity layer above run-local clusters. See [Identity Graph](/goldenmatch/identity-graph) for the full feature.
+
+| Tool | Behavior |
+|---|---|
+| `identity_resolve` | Resolve a record_id to its durable identity (members, edges, recent events). |
+| `identity_show` | Full detail of one identity by entity_id. |
+| `identity_list` | List identities, optionally filtered by dataset/status. |
+| `identity_history` | Temporal event log for an identity (merges, splits, absorbs). |
+| `identity_conflicts` | Evidence edges marked `conflicts_with` for steward review. |
+| `identity_merge` | Manually merge two identities. |
+| `identity_split` | Split records off an identity into a new identity. |
 
 ## How it works
 
@@ -262,8 +325,6 @@ When the MCP server starts, it:
 5. Exposes tools via the MCP protocol over stdio
 
 The server uses the `MatchEngine` from `goldenmatch.tui.engine` (which has no Textual dependency) for matching operations.
-
----
 
 ## Example conversation
 
@@ -285,8 +346,6 @@ With Claude Desktop connected to the GoldenMatch MCP server:
 
 **Claude:** Uses `suggest_config` tool. "The jaro_winkler threshold for first_name is 0.80, which is catching partial matches like 'John' and 'Jonathan'. I suggest raising it to 0.88 and adding a last_name exact match as a secondary check."
 
----
-
 ## Auto-config mode
 
 If no config file is specified, the MCP server auto-configures matching rules:
@@ -297,13 +356,11 @@ goldenmatch mcp-serve --file customers.csv
 
 Auto-config detects column types, assigns appropriate scorers, and picks a blocking strategy. The `suggest_config` tool can then help refine the auto-generated config based on observed results.
 
----
-
 ## See also
 
 | Topic | Link |
 |-------|------|
-| AI-to-AI agent protocol (A2A) | [ER Agent](agent) |
-| REST API for HTTP integration | [Python API](python-api) |
-| Quick start with Python/CLI | [Quick Start](quick-start) |
-| Full configuration reference | [Configuration](configuration) |
+| AI-to-AI agent protocol (A2A) | [ER Agent](/goldenmatch/agent) |
+| REST API for HTTP integration | [Python API](/goldenmatch/python-api) |
+| Quick start with Python/CLI | [Quick Start](/goldenmatch/quickstart) |
+| Full configuration reference | [Configuration](/goldenmatch/configuration) |

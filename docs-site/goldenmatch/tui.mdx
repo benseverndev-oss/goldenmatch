@@ -1,10 +1,8 @@
 ---
-layout: default
-title: Interactive TUI
-nav_order: 6
+title: "Interactive TUI"
+description: "Gold-themed terminal UI for GoldenMatch: 7 tabs for data profiling, configuration, match review, golden records, active learning, export, and AutoConfigController telemetry."
+keywords: ["tui", "terminal", "interactive", "textual", "goldenmatch interactive"]
 ---
-
-# Interactive TUI
 
 GoldenMatch includes a gold-themed terminal UI built with Textual. Launch it with `goldenmatch interactive` or `goldenmatch dedupe` (zero-config mode opens the TUI automatically).
 
@@ -12,8 +10,6 @@ GoldenMatch includes a gold-themed terminal UI built with Textual. Launch it wit
 goldenmatch interactive customers.csv
 goldenmatch interactive customers.csv --config config.yaml
 ```
-
----
 
 ## 7 Tabs
 
@@ -80,8 +76,6 @@ AutoConfigController telemetry from the most recent `Ctrl+A` invocation:
 
 Same JSON shape as the web `/api/v1/controller/telemetry` endpoint and the CLI `goldenmatch autoconfig` output.
 
----
-
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -97,8 +91,6 @@ Same JSON shape as the web `/api/v1/controller/telemetry` endpoint and the CLI `
 | `s` | Skip pair (Boost tab) |
 | `q` | Quit |
 
----
-
 ## Pipeline progress
 
 On first run, the TUI shows a full-screen progress view:
@@ -108,8 +100,6 @@ On first run, the TUI shows a full-screen progress view:
 
 On re-runs (e.g., after threshold adjustment), progress appears in the footer bar.
 
----
-
 ## Auto-config summary
 
 When launched without a config file, the first screen shows:
@@ -118,8 +108,6 @@ When launched without a config file, the first screen shows:
 - Proposed blocking strategy
 - Three options: **Run** (accept and run), **Edit** (modify config), **Save** (write YAML)
 
----
-
 ## TUI with config file
 
 ```bash
@@ -127,8 +115,6 @@ goldenmatch interactive customers.csv --config config.yaml
 ```
 
 When a config file is provided, the TUI skips auto-detection and uses the specified matchkeys, blocking, and golden rules.
-
----
 
 ## Screenshots
 

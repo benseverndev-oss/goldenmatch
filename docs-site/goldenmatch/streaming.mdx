@@ -1,14 +1,10 @@
 ---
-layout: default
-title: Streaming & Incremental
-nav_order: 14
+title: "Streaming & Incremental"
+description: "Single-record matching, micro-batch streaming, and CLI-based incremental matching against existing data in real time."
+keywords: ["streaming", "incremental", "match_one", "StreamProcessor", "watch", "sync", "database"]
 ---
-
-# Streaming & Incremental
 
 Match new records against existing data in real time. GoldenMatch supports single-record matching, micro-batch streaming, and CLI-based incremental matching.
-
----
 
 ## match_one
 
@@ -26,8 +22,6 @@ matches = gm.match_one(
 ```
 
 `match_one` works with fuzzy (weighted) matchkeys. For exact matchkeys (threshold=None), use `find_exact_matches` with a Polars join instead.
-
----
 
 ## StreamProcessor
 
@@ -70,8 +64,6 @@ for record in batch:
 batch_results = processor.flush()
 ```
 
----
-
 ## Incremental cluster updates
 
 When a new record matches existing records, update the cluster structure:
@@ -94,8 +86,6 @@ gm.unmerge_cluster(cluster_id, clusters)
 2. New record matches records in multiple clusters -- merges those clusters
 3. New record has no matches -- creates a singleton cluster
 
----
-
 ## Incremental CLI
 
 Match new CSV records against an existing base dataset:
@@ -107,8 +97,6 @@ goldenmatch incremental base.csv --new new_records.csv --config config.yaml
 The incremental CLI handles exact and fuzzy matchkeys separately:
 - **Exact matchkeys**: Polars join between new and base records (fast)
 - **Fuzzy matchkeys**: `match_one` brute-force against the base (thorough)
-
----
 
 ## ANN incremental operations
 
@@ -123,8 +111,6 @@ neighbors = blocker.query_one(embedding)  # Find nearest neighbors
 ```
 
 The ANN index is persistent when using database sync mode. Embeddings are computed progressively across runs (100K per run).
-
----
 
 ## Database watch mode
 
@@ -147,8 +133,6 @@ Daemon mode adds:
 - PID file for process management
 - SIGTERM handling for graceful shutdown
 
----
-
 ## Database sync
 
 Full incremental matching against a live Postgres database:
@@ -167,8 +151,6 @@ Features:
 - **Persistent ANN index** -- disk cache + DB source of truth
 - **Golden record versioning** -- append-only with `is_current` flag
 
----
-
 ## run_stream
 
 Run a streaming pipeline programmatically:
@@ -179,11 +161,9 @@ import goldenmatch as gm
 result = gm.run_stream(existing_df, config, new_records)
 ```
 
----
-
 ## Architecture
 
-```
+```text
 New Record
     |
     v
@@ -198,7 +178,7 @@ build_golden_record() --> updated canonical record
 
 For database mode:
 
-```
+```text
 Postgres table (new rows)
     |
     v

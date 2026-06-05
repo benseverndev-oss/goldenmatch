@@ -1,13 +1,7 @@
 ---
-layout: default
-title: Installation
-nav_order: 2
----
-
-# Installation
-
-Install GoldenMatch from PyPI with pip. Optional extras add embeddings, LLM scoring, database sync, and more.
-
+title: "Installation"
+description: "Install GoldenMatch from PyPI, Docker, or as a PostgreSQL/DuckDB extension. Optional extras add embeddings, LLM scoring, database sync, and more."
+keywords: ["installation", "pip", "docker", "postgresql", "duckdb", "dbt", "extras"]
 ---
 
 ## pip (recommended)
@@ -52,8 +46,6 @@ Install multiple extras at once:
 pip install goldenmatch[embeddings,llm,postgres]
 ```
 
----
-
 ## Docker
 
 ```bash
@@ -67,8 +59,6 @@ docker run --rm -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
 docker run --rm -p 8080:8080 -v $(pwd):/data ghcr.io/benseverndev-oss/goldenmatch:latest \
     serve --file /data/customers.csv --port 8080
 ```
-
----
 
 ## PostgreSQL Extension
 
@@ -86,8 +76,6 @@ sudo systemctl restart postgresql
 
 Download `.deb` and `.rpm` from the [goldenmatch-extensions releases](https://github.com/benseverndev-oss/goldenmatch-extensions/releases) page.
 
----
-
 ## DuckDB UDFs
 
 ```bash
@@ -102,8 +90,6 @@ goldenmatch_duckdb.register(con)
 con.sql("SELECT goldenmatch_score('John', 'Jon', 'jaro_winkler')")
 ```
 
----
-
 ## dbt Integration
 
 ```bash
@@ -111,8 +97,6 @@ pip install dbt-goldensuite
 ```
 
 The `dbt-goldensuite` package provides macros for running entity resolution inside dbt pipelines using DuckDB.
-
----
 
 ## Verify installation
 
@@ -129,8 +113,6 @@ import goldenmatch as gm
 print(gm.__version__)   # "1.1.1"
 ```
 
----
-
 ## Environment variables
 
 | Variable | Purpose |
@@ -139,8 +121,6 @@ print(gm.__version__)   # "1.1.1"
 | `ANTHROPIC_API_KEY` | LLM scorer (Claude) |
 | `DATABASE_URL` | PostgreSQL connection string for `sync` / `watch` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Vertex AI embeddings (GCP service account) |
-
----
 
 ## Setup wizard
 

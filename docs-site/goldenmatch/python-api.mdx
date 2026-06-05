@@ -1,18 +1,14 @@
 ---
-layout: default
-title: Python API
-nav_order: 4
+title: "Python API"
+description: "Complete reference for all 106 symbols exported by GoldenMatch from a single import."
+keywords: ["python api", "goldenmatch", "dedupe", "match", "scoring", "pprl", "auto-config", "configuration", "result classes"]
 ---
-
-# Python API
 
 GoldenMatch exports 106 symbols from a single import. Every feature is accessible via `import goldenmatch as gm`.
 
 ```python
 import goldenmatch as gm
 ```
-
----
 
 ## High-level convenience functions
 
@@ -112,8 +108,6 @@ Match DataFrames directly without file I/O.
 result = gm.match_df(target_df, reference_df, fuzzy={"name": 0.85})
 ```
 
----
-
 ## Scoring functions
 
 ### score_strings
@@ -172,8 +166,6 @@ explanation = gm.explain_pair_df(
 )
 print(explanation)
 ```
-
----
 
 ## PPRL (Privacy-Preserving Record Linkage)
 
@@ -243,8 +235,6 @@ gm.PPRLConfig(
 | `LinkageResult` | Dataclass with clusters, match_count, total_comparisons |
 | `profile_for_pprl` | Profile data for PPRL field selection |
 | `auto_configure_pprl_llm` | LLM-assisted PPRL configuration |
-
----
 
 ## Evaluation
 
@@ -370,8 +360,6 @@ gm.SweepParam(field: str, start: float, stop: float, step: float)
 
 Fields: `"threshold"`, `"matchkey.<name>.threshold"`, `"blocking.max_block_size"`.
 
----
-
 ## Configuration
 
 ### load_config
@@ -446,8 +434,6 @@ gm.MatchkeyField(
 | `ValidationConfig` | Data validation rules |
 | `OutputConfig` | Output path, format, directory |
 
----
-
 ## Result classes
 
 ### DedupeResult
@@ -485,8 +471,6 @@ class MatchResult:
     def to_csv(path)
 ```
 
----
-
 ## Streaming and incremental
 
 ### match_one
@@ -501,7 +485,9 @@ Match a single record against an existing DataFrame. Returns list of `(row_id, s
 matches = gm.match_one({"name": "John Smith", "zip": "10001"}, existing_df, matchkey)
 ```
 
-Note: returns empty list for exact matchkeys (threshold=None). Use `find_exact_matches` for exact matching.
+<Note>
+Returns empty list for exact matchkeys (threshold=None). Use `find_exact_matches` for exact matching.
+</Note>
 
 ### StreamProcessor
 
@@ -521,8 +507,6 @@ matches = processor.process_record(new_record)
 ```python
 gm.run_stream(df, config, records) -> dict
 ```
-
----
 
 ## Pipeline functions
 
@@ -566,8 +550,6 @@ Low-level pipeline entry points. File specs are `(path, source_name)` tuples.
 | `apply_standardization(df, config)` | Apply column standardization |
 | `compute_matchkeys(df, matchkeys)` | Compute matchkey columns |
 
----
-
 ## LLM scoring
 
 ### llm_score_pairs
@@ -601,8 +583,6 @@ Tracks token usage, cost, and enforces limits. Degrades gracefully: cluster mode
 | `llm_label_pairs` | LLM-labeled training pairs |
 | `llm_extract_features` | LLM-based feature extraction for low-confidence records |
 
----
-
 ## Probabilistic matching (Fellegi-Sunter)
 
 ### train_em
@@ -621,8 +601,6 @@ gm.score_probabilistic(block_df, matchkey, em_result) -> list[tuple]
 
 Score pairs using trained Fellegi-Sunter weights.
 
----
-
 ## Learned blocking
 
 ```python
@@ -632,8 +610,6 @@ gm.apply_learned_blocks(df, rules) -> list[pl.DataFrame]
 
 Data-driven predicate selection. Achieves 96.9% F1 matching hand-tuned blocking.
 
----
-
 ## Explainability
 
 ```python
@@ -642,8 +618,6 @@ gm.explain_cluster(cluster, df) -> str
 ```
 
 Template-based natural-language explanations at zero LLM cost. `explain_pair` is an alias for `explain_pair_nl`.
-
----
 
 ## Domain extraction
 
@@ -655,8 +629,6 @@ gm.match_domain(df, column) -> str | None
 gm.extract_with_rulebook(df, column, rulebook) -> tuple[pl.DataFrame, pl.DataFrame]
 ```
 
----
-
 ## Data quality
 
 ```python
@@ -666,8 +638,6 @@ gm.detect_anomalies(df) -> list[dict]
 gm.auto_map_columns(df_a, df_b) -> dict[str, str]  # Schema matching
 ```
 
----
-
 ## Lineage and profiling
 
 ```python
@@ -675,8 +645,6 @@ gm.build_lineage(clusters, df, matchkeys) -> dict
 gm.save_lineage(lineage, path)
 gm.profile_dataframe(df) -> dict
 ```
-
----
 
 ## Auto-configuration
 
@@ -747,8 +715,6 @@ result = session.autoconfigure("customers.csv")
 session.deduplicate("customers.csv")
 print(session.last_telemetry)  # same shape as result["telemetry"]
 ```
-
----
 
 ## Verification (v1.5.0)
 
@@ -872,8 +838,6 @@ class PostflightSignals(TypedDict):
 - `DedupeResult.postflight_report: PostflightReport | None` — set by the pipeline after scoring.
 - `MatchResult.postflight_report: PostflightReport | None` — same for match flows.
 
----
-
 ## Active learning
 
 ```python
@@ -882,16 +846,12 @@ gm.boost_accuracy(pairs, df, config) -> dict
 
 Label borderline pairs, train LogisticRegression, reclassify.
 
----
-
 ## Diff and rollback
 
 ```python
 gm.generate_diff(before, after) -> dict
 gm.rollback_run(run_id) -> dict
 ```
-
----
 
 ## Graph ER
 
@@ -901,16 +861,12 @@ gm.run_graph_er(entities, relationships) -> dict
 
 Multi-table entity resolution with cross-relationship evidence propagation.
 
----
-
 ## Output
 
 ```python
 gm.write_output(result, config) -> dict
 gm.generate_dedupe_report(result) -> str  # HTML report
 ```
-
----
 
 ## Learning Memory (v1.6.0)
 
@@ -937,7 +893,7 @@ for c in store.get_corrections(dataset="customers"):
 ```
 
 | Function | Returns |
-|---|---|
+|----------|---------|
 | `goldenmatch.get_memory()` | The active `MemoryStore` (constructed from `config.memory`). |
 | `goldenmatch.add_correction(id_a, id_b, decision, ...)` | Upserts a correction, trust-weighted. Higher trust wins on conflict. |
 | `goldenmatch.learn()` | Runs `MemoryLearner`, returns the dict of threshold adjustments. |
@@ -951,9 +907,7 @@ print(result.memory_stats)
 # {'applied': 12, 'stale': 0, 'stale_ambiguous': 0, 'unanchorable': 0}
 ```
 
-Full guide: [Learning Memory]({% link learning-memory.md %}).
-
----
+Full guide: [Learning Memory](/goldenmatch/learning-memory).
 
 ## REST API client
 

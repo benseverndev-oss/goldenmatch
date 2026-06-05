@@ -1,18 +1,16 @@
 ---
-layout: default
-title: ER Agent
-nav_order: 22
+title: "ER Agent"
+description: "GoldenMatch as an autonomous entity resolution agent: A2A protocol, 31 skills, confidence-gated review queue, and Python API."
+keywords: ["agent", "A2A", "entity resolution", "autonomous", "review queue", "MCP"]
 ---
-
-# ER Agent
 
 GoldenMatch exposes itself as an autonomous entity resolution agent that other AI systems can discover and invoke.
 
 An agent says "deduplicate this data" and GoldenMatch handles strategy selection, config generation, pipeline execution, and result explanation -- all without human configuration.
 
-> **Just want to use from Claude Desktop?** See the [MCP Server](mcp) page instead -- it's simpler for human-in-the-loop workflows.
-
----
+<Tip>
+  Just want to use from Claude Desktop? See the [MCP Server](/goldenmatch/mcp) page instead -- it's simpler for human-in-the-loop workflows.
+</Tip>
 
 ## What is A2A?
 
@@ -24,16 +22,12 @@ An agent says "deduplicate this data" and GoldenMatch handles strategy selection
 
 A2A is supported by LangChain, CrewAI, AutoGen, and other agent frameworks. Use A2A when you're building **agent-to-agent workflows** where no human is in the loop.
 
----
-
 ## Two Protocols
 
 | Protocol | Port | Best For | When to Use |
 |----------|------|----------|-------------|
 | **A2A** (Agent-to-Agent) | 8200 | AI agent frameworks (LangChain, CrewAI, AutoGen) | Agent-to-agent automation, no human in the loop |
 | **MCP** (Model Context Protocol) | stdio | Claude Desktop, Cursor, Windsurf | Human-in-the-loop, interactive AI assistants |
-
----
 
 ## Quick Start
 
@@ -45,7 +39,8 @@ goldenmatch agent-serve --port 8200
 ```
 
 Other agents discover GoldenMatch at:
-```
+
+```text
 GET http://localhost:8200/.well-known/agent.json
 ```
 
@@ -64,9 +59,9 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
----
+## Agent Capabilities (31 Skills)
 
-## Agent Capabilities (12 Skills)
+### Core & pipeline
 
 | Skill | What It Does |
 |-------|-------------|
@@ -83,7 +78,39 @@ Add to `claude_desktop_config.json`:
 | `quality` | Scan and fix data quality issues (encoding, Unicode, format violations) using GoldenCheck |
 | `transform` | Normalize data formats (phone E.164, dates ISO, categorical spelling) using GoldenFlow |
 
----
+### Analysis & operations
+
+| Skill | What It Does |
+|-------|-------------|
+| `evaluate` | Score accuracy (precision/recall/F1) against a ground-truth pair CSV |
+| `analyze_blocking` | Rank blocking-key candidates: block counts, max block size, candidate-pair totals, estimated recall |
+| `compare_clusters` | Compare two ER outcomes (CCMS / Talburt-Wang Index) |
+| `schema_match` | Auto-map columns between two files with different schemas |
+| `sensitivity` | Sweep config parameters and report clustering stability at each value |
+| `incremental` | Match a batch of new records against an existing base dataset |
+| `list_runs` | List previous runs from the run log (for rollback) |
+| `rollback` | Undo a previous run by deleting its outputs (destructive) |
+
+### Identity Graph (v2.0)
+
+| Skill | What It Does |
+|-------|-------------|
+| `identity_resolve` | Resolve a record_id to its durable identity |
+| `identity_show` | Full detail of one identity by entity_id |
+| `identity_list` | List identities, optionally filtered by dataset/status |
+| `identity_history` | Temporal event log for an identity |
+| `identity_conflicts` | Evidence edges marked `conflicts_with` |
+| `identity_merge` | Manually merge two identities |
+| `identity_split` | Split records off an identity into a new one |
+
+### Learning Memory
+
+| Skill | What It Does |
+|-------|-------------|
+| `add_correction` | File a pair- or field-level correction (source=`agent`, trust 0.5) |
+| `list_corrections` | Page through stored corrections, filtered by dataset |
+| `learn_thresholds` | Run the MemoryLearner; return per-matchkey threshold adjustments |
+| `memory_stats` | Correction counts, last-learned timestamps, current adjustments |
 
 ## How It Works
 
@@ -128,8 +155,6 @@ Every response includes the agent's reasoning:
 }
 ```
 
----
-
 ## Confidence-Gated Review Queue
 
 Not all matches are equal. The agent splits results by confidence:
@@ -173,8 +198,6 @@ print(session.review_queue.stats("customers"))
 # {"pending": 2, "approved": 1, "rejected": 1}
 ```
 
----
-
 ## Python API
 
 ```python
@@ -212,14 +235,13 @@ session.deduplicate("customers.csv")
 print(session.last_telemetry)                    # same shape as autoconfigure's telemetry
 ```
 
----
-
-## MCP Tools (14 Agent-Level)
+## MCP Tools (16 Agent-Level)
 
 | Tool | Description |
 |------|-------------|
 | `analyze_data` | Profile data, detect domain, recommend strategy |
 | `auto_configure` | Generate optimal config |
+| `controller_telemetry` | Surface AutoConfigController telemetry (per-session note under stateless dispatch) |
 | `agent_deduplicate` | Full pipeline with reasoning |
 | `agent_match_sources` | Cross-source matching |
 | `agent_explain_pair` | Explain a pair match |
@@ -231,17 +253,19 @@ print(session.last_telemetry)                    # same shape as autoconfigure's
 | `scan_quality` | Run GoldenCheck data quality scan, return issues without fixing |
 | `fix_quality` | Run GoldenCheck scan and apply fixes (safe or moderate mode) |
 | `run_transforms` | Run GoldenFlow transforms (phone E.164, dates ISO, Unicode) |
+| `sensitivity` | Parameter-sweep stability analysis |
+| `incremental` | Match new records against an existing base dataset |
 
-These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.) continue to work.
-
----
+These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.) continue to work. The full MCP surface is **54 tools** (16 agent-level + 24 data + 7 Learning Memory + 7 Identity Graph) -- see [MCP Server](/goldenmatch/mcp).
 
 ## A2A Agent Card
 
 ```json
 {
-  "name": "goldenmatch-agent",
-  "description": "Autonomous entity resolution agent.",
+  "name": "GoldenMatch ER Agent",
+  "description": "Autonomous entity resolution agent for deduplication, matching, and data quality.",
+  "url": "http://localhost:8200",
+  "version": "1.26.0",
   "provider": {
     "organization": "GoldenMatch",
     "url": "https://github.com/benseverndev-oss/goldenmatch"
@@ -250,25 +274,32 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
     "streaming": true,
     "pushNotifications": false
   },
-  "skills": [...]
+  "skills": [
+    {
+      "id": "deduplicate",
+      "name": "Deduplicate",
+      "description": "Run deduplication pipeline on a single file.",
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
 }
 ```
 
 Full card at: `http://localhost:8200/.well-known/agent.json`
 
----
-
 ## Authentication
 
 Set `GOLDENMATCH_AGENT_TOKEN` env var for bearer token auth. If not set, no auth required (suitable for local use).
-
----
 
 ## See also
 
 | Topic | Link |
 |-------|------|
-| MCP Server (Claude Desktop) | [MCP Server](mcp) |
-| Quick start with Python/CLI | [Quick Start](quick-start) |
-| Full Python API (101 exports) | [Python API](python-api) |
-| Configuration reference | [Configuration](configuration) |
+| MCP Server (Claude Desktop) | [MCP Server](/goldenmatch/mcp) |
+| Quick start with Python/CLI | [Quick Start](/goldenmatch/quickstart) |
+| Full Python API (101 exports) | [Python API](/goldenmatch/python-api) |
+| Configuration reference | [Configuration](/goldenmatch/configuration) |

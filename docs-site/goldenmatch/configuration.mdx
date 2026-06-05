@@ -1,14 +1,10 @@
 ---
-layout: default
-title: Configuration
-nav_order: 7
+title: "Configuration"
+description: "Full YAML reference for GoldenMatch: matchkeys, blocking, golden rules, standardization, validation, LLM scorer, Learning Memory, output, and backends."
+keywords: ["configuration", "yaml", "matchkeys", "blocking", "golden rules", "standardization", "validation", "llm scorer", "learning memory", "backend"]
 ---
 
-# Configuration
-
-GoldenMatch uses YAML config files with Pydantic validation. Every section is optional -- GoldenMatch auto-configures what you leave out.
-
----
+GoldenMatch uses YAML config files with Pydantic validation. Every section is optional — GoldenMatch auto-configures what you leave out.
 
 ## Full YAML reference
 
@@ -177,8 +173,6 @@ output:
 backend: null              # null (Polars), "ray", or "duckdb"
 ```
 
----
-
 ## Matchkeys
 
 Three matchkey types:
@@ -214,7 +208,7 @@ Applied to field values before scoring.
 | `address_normalize` | USPS Pub. 28 street-suffix + unit-abbrev canonicalization (Avenue→AVE, Apartment→APT) — bundled refdata |
 | `naics_normalize` | NAICS 2022 industry-code canonicalization (code-or-title input → canonical code) — bundled refdata |
 
-Refdata transforms are auto-prepended by the controller when a column name matches the relevant pattern AND its profiled `col_type` agrees. See [Reference Data](reference-data).
+Refdata transforms are auto-prepended by the controller when a column name matches the relevant pattern AND its profiled `col_type` agrees. See [Reference Data](/goldenmatch/reference-data).
 
 ### Scorers
 
@@ -247,8 +241,6 @@ matchkeys:
     rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
 
----
-
 ## Blocking
 
 | Strategy | Description |
@@ -263,8 +255,6 @@ matchkeys:
 | `learned` | Data-driven predicate selection |
 
 Set `auto_select: true` to auto-pick the best blocking key by histogram analysis. Set `auto_suggest: true` to get blocking suggestions when no keys are specified.
-
----
 
 ## Golden rules
 
@@ -287,8 +277,6 @@ golden_rules:
     email: { strategy: majority_vote }
     name: { strategy: source_priority, source_priority: [crm, erp] }
 ```
-
----
 
 ## Standardization
 
@@ -318,8 +306,6 @@ standardization:
 | `strip` | Remove leading/trailing whitespace |
 | `trim_whitespace` | Collapse multiple spaces |
 
----
-
 ## Validation
 
 ```yaml
@@ -342,16 +328,12 @@ validation:
 Rule types: `regex`, `min_length`, `max_length`, `not_null`, `in_set`, `format`.
 Actions: `flag` (mark but keep), `null` (set to null), `quarantine` (remove from matching).
 
----
-
 ## Settings persistence
 
-- **Global**: `~/.goldenmatch/settings.yaml` -- output mode, default model, API keys
-- **Project**: `.goldenmatch.yaml` -- column mappings, thresholds, blocking config
+- **Global**: `~/.goldenmatch/settings.yaml` — output mode, default model, API keys
+- **Project**: `.goldenmatch.yaml` — column mappings, thresholds, blocking config
 
 Settings tuned in the TUI can be saved to the project file. Next run picks them up automatically.
-
----
 
 ## Programmatic config
 
@@ -382,8 +364,6 @@ Or auto-generate from data:
 config = gm.auto_configure([("data.csv", "source")])
 ```
 
----
-
 ## Verification (v1.5.0)
 
 `auto_configure_df` runs **preflight** at the end of config generation — 6 checks that auto-repair missing domain-extracted columns, drop useless-cardinality exact matchkeys, flag oversized blocks, demote remote-asset scorers, and cap low-confidence weights. Unrepairable issues raise `ConfigValidationError`; the full report is attached to the exception as `err.report`.
@@ -413,9 +393,7 @@ for finding in cfg._preflight_report.findings:
     print(f"[{finding.severity}] {finding.check}: {finding.message}")
 ```
 
-See the [Verification section in the Python API docs](python-api.html#verification-v150) for the full `preflight` / `postflight` signatures and the `PostflightSignals` schema.
-
----
+See the [Verification section in the Python API docs](/goldenmatch/python-api#verification-v150) for the full `preflight` / `postflight` signatures and the `PostflightSignals` schema.
 
 ## Learning Memory (v1.6.0)
 
@@ -431,4 +409,4 @@ The optional `memory:` section enables persistent corrections. Once a steward, a
 | `learning.threshold_min_corrections` | `10` | Trust-weighted grid search runs once a matchkey crosses this floor. |
 | `learning.weights_min_corrections` | `50` | Field-weight learning is stubbed in v1.6.0 and returns `null`. |
 
-Full guide: [Learning Memory]({% link learning-memory.md %}).
+Full guide: [Learning Memory](/goldenmatch/learning-memory).
