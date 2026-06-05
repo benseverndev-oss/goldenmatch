@@ -35,6 +35,10 @@ arrow-schema = "58"
 # UDFs score byte-identically to the per-pair native scorers (parity by
 # construction — one source of truth).
 goldenmatch-score-core = { path = "../score-core" }
+# Standalone local embedding runtime (featurize + ONNX). Lets goldenmatch_embed
+# run the in-house embed path with zero CPython inside the SQL engine. Pulls
+# `ort` (onnxruntime) into this cdylib — heavier build; validated in CI.
+goldenembed = { path = "../goldenembed" }
 # extension-module: don't link libpython (this .so is imported BY CPython).
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13 (matches the
 # sibling `native` crate; the example uses abi3-py310 but we floor at 3.11).
