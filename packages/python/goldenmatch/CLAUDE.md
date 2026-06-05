@@ -152,6 +152,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - `unmerge_cluster(cluster_id, clusters)` shatters a cluster into singletons
 - TUI has 6 tabs: Data, Config, Matches, Golden, Boost, Export (key 1-6)
 - Boost tab: active learning with y/n/s keyboard labeling, trains LogisticRegression on labeled pairs
+- **Wave 2.1 (2026-06-05): the three previously-orphaned TUI components are now wired in `tui/app.py`.** (1) `ProgressOverlay` mounts during sample/full runs via `_start_progress`/`_stop_progress` (time-driven busy indicator — the pipeline is one worker call with no per-stage callback, so it shows elapsed + a creeping bar, not real per-stage %); (2) `ThresholdSlider` lives in the Matches tab (`#threshold-slider`, hidden until results), and `on_threshold_slider_threshold_changed` drives a live re-cluster preview via `engine.recluster_at_threshold` (preview-only, no mutation; `can_focus=True` so arrow keys fire); (3) `AutoConfigScreen` is pushed after Ctrl+A (`_show_autoconfig_screen`) with a config summary, routing Run/Edit/Save on dismiss. Wave 2 follow-ups still open: goldenpipe TUI stub→real (2.2), TS-TUI boost write-back + real export (2.3), in-TUI review-queue triage loop (2.4).
 - `match_one(record, df, mk)` in `core/match_one.py` — single-record matching primitive for streaming
 - `add_to_cluster(record_id, matches, clusters)` — incremental cluster update (join or merge)
 - `ANNBlocker.add_to_index(embedding)` / `ANNBlocker.query_one(embedding)` — incremental FAISS ops

@@ -9,6 +9,10 @@ from textual.widgets import Static
 class ThresholdSlider(Static):
     """Inline threshold control with arrow key adjustment."""
 
+    # Static isn't focusable by default; the key_left/key_right handlers only
+    # fire when the widget can hold focus.
+    can_focus = True
+
     class ThresholdChanged(Message):
         def __init__(self, value: float):
             super().__init__()

@@ -8,6 +8,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
+from goldenmatch.tui.screens.autoconfig_screen import AutoConfigScreen
 from goldenmatch.tui.sidebar import Sidebar
 from goldenmatch.tui.tabs.boost_tab import BoostTab
 from goldenmatch.tui.tabs.config_tab import ConfigTab
@@ -17,6 +18,8 @@ from goldenmatch.tui.tabs.data_tab import DataTab
 from goldenmatch.tui.tabs.export_tab import ExportTab
 from goldenmatch.tui.tabs.golden_tab import GoldenTab
 from goldenmatch.tui.tabs.matches_tab import MatchesTab
+from goldenmatch.tui.widgets.progress_overlay import ProgressOverlay
+from goldenmatch.tui.widgets.threshold_slider import ThresholdSlider
 
 
 class GoldenMatchApp(App):
@@ -260,6 +263,9 @@ class GoldenMatchApp(App):
         # Corrections tab + Golden / Matches modals. Set by callers
         # (e.g. CLI launcher) when memory is enabled in config.
         self.memory_db_path: str | None = None
+        # Progress-overlay state (mounted while a sample/full run is in flight).
+        self._progress_timer = None
+        self._progress_elapsed = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -320,7 +326,45 @@ class GoldenMatchApp(App):
         export_tab.set_config(event.config)
         # Run sample if engine is loaded
         if self.engine is not None:
+            self._start_progress()
             self.run_matching(event.config)
+
+    # ── Progress overlay ──────────────────────────────────────────
+
+    def _start_progress(self) -> None:
+        """Mount the full-screen progress overlay and tick elapsed time.
+
+        The pipeline runs in a single worker call with no per-stage callback,
+        so the overlay is a time-driven busy indicator (elapsed seconds + a
+        bar that creeps toward 95% until completion), not a claim of real
+        per-stage completion. It replaces the prior bare toast.
+        """
+        if self.query("#progress-overlay"):
+            return
+        self._progress_elapsed = 0.0
+        self.mount(ProgressOverlay(id="progress-overlay"))
+        self._progress_timer = self.set_interval(0.1, self._tick_progress)
+
+    def _tick_progress(self) -> None:
+        self._progress_elapsed += 0.1
+        overlay = self.query("#progress-overlay")
+        if not overlay:
+            return
+        # Creep toward 95% asymptotically; set_complete jumps to 100.
+        pct = min(95.0, self._progress_elapsed * 12.0)
+        overlay.first().update_progress(
+            stage=0, percent=pct, elapsed=self._progress_elapsed
+        )
+
+    def _stop_progress(self) -> None:
+        if self._progress_timer is not None:
+            self._progress_timer.stop()
+            self._progress_timer = None
+        overlay = self.query("#progress-overlay")
+        if overlay:
+            node = overlay.first()
+            node.set_complete()
+            node.remove()
 
     @work(thread=True)
     def run_matching(self, config) -> None:
@@ -331,12 +375,14 @@ class GoldenMatchApp(App):
             result = self.engine.run_sample(config, sample_size=1000)
             self.call_from_thread(self._on_matching_complete, result)
         except Exception as e:
+            self.call_from_thread(self._stop_progress)
             self.call_from_thread(
                 self.notify, f"Matching error: {e}", severity="error"
             )
 
     def _on_matching_complete(self, result) -> None:
         """Called on the main thread when matching finishes."""
+        self._stop_progress()
         self.last_result = result
         # Update sidebar stats
         sidebar = self.query_one(Sidebar)
@@ -424,6 +470,7 @@ class GoldenMatchApp(App):
             self.notify("No config set. Build a config in the Config tab first.", severity="warning")
             return
         self.notify("Running sample match...", severity="information")
+        self._start_progress()
         self.run_matching(self.current_config)
 
     def action_rerun(self) -> None:
@@ -449,6 +496,23 @@ class GoldenMatchApp(App):
             self.call_from_thread(self._on_full_job_complete, result, output_options)
         except Exception as e:
             self.call_from_thread(self._on_full_job_error, str(e))
+
+    def on_threshold_slider_threshold_changed(
+        self, event: ThresholdSlider.ThresholdChanged
+    ) -> None:
+        """Live re-cluster preview: recompute the cluster count at the new
+        threshold off cached scored pairs (no re-scoring) and update the slider."""
+        if self.engine is None or self.last_result is None:
+            return
+        try:
+            stats = self.engine.recluster_at_threshold(event.value)
+        except RuntimeError:
+            return
+        try:
+            slider = self.query_one("#threshold-slider", ThresholdSlider)
+            slider.set_preview(stats.total_clusters)
+        except Exception:
+            pass
 
     def _on_full_job_complete(self, result, output_options: dict) -> None:
         """Handle completion of a full job run."""
@@ -569,6 +633,55 @@ class GoldenMatchApp(App):
             f"{'s' if n_decisions != 1 else ''}{suffix}.",
             severity="information",
         )
+        # Surface the detected config in a review screen (Run / Edit / Save).
+        self._show_autoconfig_screen(config)
+
+    def _autoconfig_column_profiles(self, config) -> list[dict]:
+        """Flatten the committed config's matchkey fields into the row shape
+        AutoConfigScreen renders (name / type / scorer / weight)."""
+        rows: list[dict] = []
+        for mk in config.get_matchkeys():
+            for f in getattr(mk, "fields", None) or []:
+                name = getattr(f, "field", None) or getattr(f, "resolved_field", None)
+                if not name:
+                    continue
+                rows.append({
+                    "name": name,
+                    "type": getattr(mk, "type", "string"),
+                    "scorer": getattr(f, "scorer", None) or "—",
+                    "weight": getattr(f, "weight", None) or "—",
+                })
+        return rows
+
+    def _show_autoconfig_screen(self, config) -> None:
+        """Push the auto-config review screen; route its Run/Edit/Save result."""
+        if self.engine is None:
+            return
+        mks = config.get_matchkeys()
+        threshold = next(
+            (mk.threshold for mk in mks if getattr(mk, "threshold", None) is not None),
+            0.80,
+        )
+        blocking_info = "auto" if getattr(config, "blocking", None) else "none"
+        screen = AutoConfigScreen(
+            file_name=", ".join(p for p in self.file_paths) or "loaded data",
+            row_count=self.engine.row_count,
+            col_count=len(self.engine.columns),
+            column_profiles=self._autoconfig_column_profiles(config),
+            blocking_info=blocking_info,
+            threshold=threshold,
+            model_info="auto",
+        )
+
+        def _on_dismiss(result: str | None) -> None:
+            if result == "run":
+                self.action_run_sample()
+            elif result == "edit":
+                self._goto_tab("tab-config")
+            elif result == "save":
+                self.action_save_config()
+
+        self.push_screen(screen, _on_dismiss)
 
     # ── Quick export ──────────────────────────────────────────────
 
