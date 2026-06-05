@@ -48,8 +48,6 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      # Allows the job to comment on the workflow summary + upload artifacts.
-      actions: write
     env:
       DATASETS: ${{ inputs.datasets || 'all' }}
       WITH_LLM: ${{ inputs.with_llm || false }}
