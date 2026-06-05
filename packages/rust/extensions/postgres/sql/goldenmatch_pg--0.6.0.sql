@@ -672,6 +672,15 @@ STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_embed_local_wrapper';
 
+-- Embed one text with the in-house model, model dir from GOLDENEMBED_MODEL_DIR
+-- (loaded once per backend process). Returns real[] (float4) -- parity with the
+-- DataFusion goldenmatch_embed UDF, including NULL -> "" (so NOT STRICT). #737.
+CREATE FUNCTION "gm_embed"(
+    "text" TEXT  /* nullable: NULL -> "" */
+) RETURNS real[]
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'gm_embed_wrapper';
+
 -- Canonical record fingerprint (64 hex) of a JSON record object. The
 -- cross-surface stable record-id hash; matches the DuckDB
 -- goldenmatch_record_fingerprint UDF + the Python identity path.
