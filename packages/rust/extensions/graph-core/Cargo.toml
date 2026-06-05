@@ -1,0 +1,21 @@
+# Standalone workspace so this pyo3-free graph core can be a path dependency of
+# the `native` (extension-module), `postgres` (pgrx), and `datafusion-udf` (FFI)
+# crates without any of their workspaces claiming it. Same isolation rationale as
+# the sibling `score-core` / `fingerprint-core` crates.
+[workspace]
+
+[package]
+name = "goldenmatch-graph-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Connected-components + pair-dedup graph kernels (no pyo3) shared across the native ext, the pgrx Postgres ext, and the DataFusion FFI UDFs"
+
+[lib]
+name = "goldenmatch_graph_core"
+
+[dependencies]
+# Arrow columnar helpers for the DuckDB/DataFusion zero-copy path. No pyarrow/pyo3
+# here — callers pass `arrow::array::ArrayData`; the pyo3 bridge lives in `native`.
+arrow = { version = "55", default-features = false }
