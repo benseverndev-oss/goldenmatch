@@ -20,11 +20,16 @@ runner = CliRunner()
 class TestPreviewFlagCollision:
     """0.2 -- the two flags must be distinct, not both claim --preview."""
 
-    def test_both_preview_flags_in_help(self):
-        result = runner.invoke(app, ["dedupe", "--help"])
-        assert result.exit_code == 0
-        assert "--preview" in result.stdout
-        assert "--merge-preview" in result.stdout
+    def test_both_preview_flags_registered_distinctly(self):
+        # Introspect the registered click params rather than scraping Rich's
+        # rendered --help (which wraps tokens at CI's narrow terminal width and
+        # made the substring check flaky -- passed locally, failed in CI).
+        from typer.main import get_command
+
+        dedupe = get_command(app).commands["dedupe"]
+        opts = {o for p in dedupe.params for o in p.opts}
+        assert "--preview" in opts
+        assert "--merge-preview" in opts
 
 
 class TestReviewCommandRegistered:
