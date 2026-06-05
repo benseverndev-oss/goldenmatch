@@ -141,18 +141,18 @@ The "Identities" tab in `goldenmatch serve-ui` lists identities with dataset/sta
 
 ### MCP
 
-Six tools on the standard MCP server (`goldenmatch mcp-serve`):
+Seven tools on the standard MCP server (`goldenmatch mcp-serve`):
 
 - `identity_resolve` — look up by `record_id`
+- `identity_show` — full payload by `entity_id`
 - `identity_list` — list with filters
-- `identity_view` — full payload by `entity_id`
 - `identity_history` — event log
 - `identity_conflicts` — list `conflicts_with` edges
 - `identity_merge` / `identity_split` — steward operations
 
 ### A2A
 
-Same six skills on the A2A agent server (`goldenmatch agent-serve`). Agent card declares 18 total skills (the 12 pre-v1.15 surface plus the six identity skills).
+Same seven skills on the A2A agent server (`goldenmatch agent-serve`). The agent card declares 31 total skills.
 
 ### SQL (Postgres + DuckDB)
 

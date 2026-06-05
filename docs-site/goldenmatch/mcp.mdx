@@ -198,6 +198,62 @@ Normalize phone numbers (E.164), dates (ISO), categorical spelling, and Unicode.
 "Normalize the phone and date formats in my data"
 ```
 
+### evaluate
+
+Score the loaded run against ground-truth pairs: precision, recall, and F1.
+
+```text
+"How accurate is this matching against my labeled pairs in gt.csv?"
+```
+
+### analyze_blocking
+
+Diagnose blocking on the loaded dataset: ranked key candidates with block counts, max block size, candidate-pair totals, and estimated recall.
+
+```text
+"Why is matching producing so many candidate pairs?"
+```
+
+### compare_clusters
+
+Compare two ER clustering outcomes without ground truth (CCMS): unchanged / merged / partitioned / overlapping, plus the Talburt-Wang Index. Takes two cluster JSON files.
+
+```text
+"How did clustering change between the old run and the new one?"
+```
+
+### schema_match
+
+Auto-map columns between two files with different schemas (synonym + name similarity), with a confidence score per mapping.
+
+```text
+"Map the columns between crm.csv and billing.csv before I match them"
+```
+
+### lineage
+
+Field-level provenance for the loaded run: the per-field score breakdown behind each scored pair, plus cluster id.
+
+```text
+"Show me the lineage for the pairs in cluster 14"
+```
+
+### list_runs
+
+List previous dedupe/match runs from the run log (for rollback).
+
+```text
+"What runs can I roll back?"
+```
+
+### rollback
+
+Undo a previous run by deleting its output files (looked up by run_id). Destructive.
+
+```text
+"Roll back run 2026-06-05-abc123"
+```
+
 In addition, 16 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental). See [ER Agent](/goldenmatch/agent) for details.
 
 ### AutoConfigController telemetry (v1.7-v1.12)
@@ -225,7 +281,7 @@ The standalone `controller_telemetry` tool surfaces a per-session limitation not
 
 ### Learning Memory tools (v1.6.0)
 
-Five tools surface the persistent corrections store. See [Learning Memory](/goldenmatch/learning-memory) for the full feature.
+Six tools surface the persistent corrections store. See [Learning Memory](/goldenmatch/learning-memory) for the full feature.
 
 | Tool | Behavior |
 |---|---|
@@ -234,6 +290,7 @@ Five tools surface the persistent corrections store. See [Learning Memory](/gold
 | `learn_thresholds` | Runs `MemoryLearner.learn()`; returns the adjustment dict per matchkey. |
 | `memory_stats` | Counts plus last-learned timestamps. |
 | `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
+| `memory_import` | Upserts corrections from a list of dicts (the shape `memory_export` returns); higher trust wins. |
 
 Natural-language workflow:
 
@@ -242,6 +299,20 @@ Natural-language workflow:
 </Note>
 
 The host LLM calls `list_corrections` -> `add_correction` -> `learn_thresholds`.
+
+### Identity Graph tools (v2.0)
+
+Seven tools expose the durable identity layer above run-local clusters. See [Identity Graph](/goldenmatch/identity-graph) for the full feature.
+
+| Tool | Behavior |
+|---|---|
+| `identity_resolve` | Resolve a record_id to its durable identity (members, edges, recent events). |
+| `identity_show` | Full detail of one identity by entity_id. |
+| `identity_list` | List identities, optionally filtered by dataset/status. |
+| `identity_history` | Temporal event log for an identity (merges, splits, absorbs). |
+| `identity_conflicts` | Evidence edges marked `conflicts_with` for steward review. |
+| `identity_merge` | Manually merge two identities. |
+| `identity_split` | Split records off an identity into a new identity. |
 
 ## How it works
 

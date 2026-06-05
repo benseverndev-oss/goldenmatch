@@ -186,7 +186,7 @@ print(result.memory_stats)
 
 ## MCP
 
-Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code. Total tool count is now 54.
+Six MCP tools bring Learning Memory into Claude Desktop / Code. Total tool count is now 54.
 
 | Tool | Behavior |
 |---|---|
@@ -195,6 +195,7 @@ Five new MCP tools (`memory_*`) bring Learning Memory into Claude Desktop / Code
 | `learn_thresholds` | Runs `MemoryLearner.learn()`; returns the adjustment dict. |
 | `memory_stats` | Counts and last-learned timestamps. |
 | `memory_export` | Returns all corrections as a JSON array (use server-side for review portability). |
+| `memory_import` | Upserts corrections from a list of dicts (the shape `memory_export` returns); higher trust wins. |
 
 A natural-language workflow against an MCP-connected goldenmatch run:
 

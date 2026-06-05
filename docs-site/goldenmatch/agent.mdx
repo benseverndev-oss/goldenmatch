@@ -1,6 +1,6 @@
 ---
 title: "ER Agent"
-description: "GoldenMatch as an autonomous entity resolution agent: A2A protocol, 12 skills, confidence-gated review queue, and Python API."
+description: "GoldenMatch as an autonomous entity resolution agent: A2A protocol, 31 skills, confidence-gated review queue, and Python API."
 keywords: ["agent", "A2A", "entity resolution", "autonomous", "review queue", "MCP"]
 ---
 
@@ -59,7 +59,9 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-## Agent Capabilities (12 Skills)
+## Agent Capabilities (31 Skills)
+
+### Core & pipeline
 
 | Skill | What It Does |
 |-------|-------------|
@@ -75,6 +77,40 @@ Add to `claude_desktop_config.json`:
 | `pprl` | Privacy-preserving mode for sensitive data |
 | `quality` | Scan and fix data quality issues (encoding, Unicode, format violations) using GoldenCheck |
 | `transform` | Normalize data formats (phone E.164, dates ISO, categorical spelling) using GoldenFlow |
+
+### Analysis & operations
+
+| Skill | What It Does |
+|-------|-------------|
+| `evaluate` | Score accuracy (precision/recall/F1) against a ground-truth pair CSV |
+| `analyze_blocking` | Rank blocking-key candidates: block counts, max block size, candidate-pair totals, estimated recall |
+| `compare_clusters` | Compare two ER outcomes (CCMS / Talburt-Wang Index) |
+| `schema_match` | Auto-map columns between two files with different schemas |
+| `sensitivity` | Sweep config parameters and report clustering stability at each value |
+| `incremental` | Match a batch of new records against an existing base dataset |
+| `list_runs` | List previous runs from the run log (for rollback) |
+| `rollback` | Undo a previous run by deleting its outputs (destructive) |
+
+### Identity Graph (v2.0)
+
+| Skill | What It Does |
+|-------|-------------|
+| `identity_resolve` | Resolve a record_id to its durable identity |
+| `identity_show` | Full detail of one identity by entity_id |
+| `identity_list` | List identities, optionally filtered by dataset/status |
+| `identity_history` | Temporal event log for an identity |
+| `identity_conflicts` | Evidence edges marked `conflicts_with` |
+| `identity_merge` | Manually merge two identities |
+| `identity_split` | Split records off an identity into a new one |
+
+### Learning Memory
+
+| Skill | What It Does |
+|-------|-------------|
+| `add_correction` | File a pair- or field-level correction (source=`agent`, trust 0.5) |
+| `list_corrections` | Page through stored corrections, filtered by dataset |
+| `learn_thresholds` | Run the MemoryLearner; return per-matchkey threshold adjustments |
+| `memory_stats` | Correction counts, last-learned timestamps, current adjustments |
 
 ## How It Works
 
@@ -199,12 +235,13 @@ session.deduplicate("customers.csv")
 print(session.last_telemetry)                    # same shape as autoconfigure's telemetry
 ```
 
-## MCP Tools (14 Agent-Level)
+## MCP Tools (16 Agent-Level)
 
 | Tool | Description |
 |------|-------------|
 | `analyze_data` | Profile data, detect domain, recommend strategy |
 | `auto_configure` | Generate optimal config |
+| `controller_telemetry` | Surface AutoConfigController telemetry (per-session note under stateless dispatch) |
 | `agent_deduplicate` | Full pipeline with reasoning |
 | `agent_match_sources` | Cross-source matching |
 | `agent_explain_pair` | Explain a pair match |
@@ -216,8 +253,10 @@ print(session.last_telemetry)                    # same shape as autoconfigure's
 | `scan_quality` | Run GoldenCheck data quality scan, return issues without fixing |
 | `fix_quality` | Run GoldenCheck scan and apply fixes (safe or moderate mode) |
 | `run_transforms` | Run GoldenFlow transforms (phone E.164, dates ISO, Unicode) |
+| `sensitivity` | Parameter-sweep stability analysis |
+| `incremental` | Match new records against an existing base dataset |
 
-These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.) continue to work.
+These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.) continue to work. The full MCP surface is **54 tools** (16 agent-level + 24 data + 7 Learning Memory + 7 Identity Graph) -- see [MCP Server](/goldenmatch/mcp).
 
 ## A2A Agent Card
 
