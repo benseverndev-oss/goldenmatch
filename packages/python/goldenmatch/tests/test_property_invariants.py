@@ -21,12 +21,14 @@ Exclusions (documented empirically):
           Falsifying example: a='0000', b='000000'
           ValueError: operands could not be broadcast together with shapes (2,) (3,)
       The bounds/symmetry tests use a same-length strategy to verify the invariant
-      on well-formed inputs. test_dice_jaccard_mismatched_length_bug asserts the
-      bug is present and acts as a regression detector for when it is fixed.
+      on well-formed inputs. test_dice_mismatched_length_bug and
+      test_jaccard_mismatched_length_bug each assert the bug is present and act as
+      regression detectors for when it is fixed.
     - soundex_match is excluded from bounds-with-arbitrary-text because
       jellyfish.soundex is undefined for some surrogate-pair / very unusual
       codepoint sequences in older builds; we use a restricted printable-ASCII
-      strategy for it.
+      strategy for it. The rapidfuzz-backed scorers (exact, jaro_winkler,
+      levenshtein, token_sort, qgram) accept full printable-unicode text.
     - std_address and std_name_proper are INCLUDED in idempotence -- empirical
       check confirms both are idempotent over their defined output space.
     - NaN floats are excluded from fingerprint dict values because
@@ -104,11 +106,15 @@ _nonempty_ascii = st.text(
 
 # Dict strategy for fingerprint tests: str keys (no __ prefix, nonempty),
 # values from the supported primitive types (no NaN floats -- by spec they raise).
+# The alphabet is restricted to Lu/Ll/Nd (letters + digits), which excludes the
+# Pc (connector punctuation) category that contains underscore -- so no generated
+# key can start with "__". The .filter() is belt-and-braces in case the category
+# exclusion ever changes.
 _fp_key = st.text(
     alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd")),
     min_size=1,
     max_size=16,
-).filter(lambda k: not k.startswith("__"))
+).filter(lambda k: not k.startswith("__"))  # belt-and-braces: alphabet excludes Pc (underscore)
 
 _fp_value = st.one_of(
     st.none(),
@@ -121,12 +127,40 @@ _fp_value = st.one_of(
 _fp_dict = st.dictionaries(_fp_key, _fp_value, min_size=0, max_size=8)
 
 # ---------------------------------------------------------------------------
-# Scorer: imports are deferred inside tests to avoid heavy module load at
-# collection time for envs without hypothesis.
+# Scorer: imports are deferred inside tests for two reasons:
+#   1. xdist worker isolation -- each worker process must import independently
+#      (global-state side effects like register_transform in process A are
+#      invisible to process B).
+#   2. Optional transitive deps (e.g. jellyfish for soundex_match) may not be
+#      installed; deferring keeps collection clean and lets importorskip handle
+#      missing deps at test time rather than at module load.
 # ---------------------------------------------------------------------------
 
-_SYMMETRIC_SCORERS = ["exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match", "qgram"]
-_ALL_SCORERS_BOUNDS = ["exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match", "qgram"]
+# soundex_match requires ASCII (jellyfish.soundex is undefined for some surrogate-
+# pair / unusual codepoint sequences in older builds). The rapidfuzz-backed scorers
+# accept full printable unicode -- use _printable_text for them.
+_SOUNDEX_SCORERS = ["soundex_match"]
+_RAPIDFUZZ_SCORERS = ["exact", "jaro_winkler", "levenshtein", "token_sort", "qgram"]
+_SYMMETRIC_SCORERS = _RAPIDFUZZ_SCORERS + _SOUNDEX_SCORERS
+_ALL_SCORERS_BOUNDS = _RAPIDFUZZ_SCORERS + _SOUNDEX_SCORERS
+
+# Per-scorer text strategy: rapidfuzz handles full unicode; soundex needs ASCII.
+_SCORER_TEXT_STRATEGY: dict = {
+    "exact": _printable_text,
+    "jaro_winkler": _printable_text,
+    "levenshtein": _printable_text,
+    "token_sort": _printable_text,
+    "qgram": _printable_text,
+    "soundex_match": _ascii_text,
+}
+_SCORER_NONEMPTY_STRATEGY: dict = {
+    "exact": _nonempty_text,
+    "jaro_winkler": _nonempty_text,
+    "levenshtein": _nonempty_text,
+    "token_sort": _nonempty_text,
+    "qgram": _nonempty_text,
+    "soundex_match": _nonempty_ascii,
+}
 
 # Standardizers that are idempotent by design (empirically verified above)
 _IDEMPOTENT_STDS = [
@@ -150,13 +184,19 @@ _IDEMPOTENT_STDS = [
 @settings(**_SETTINGS)
 @given(
     scorer=st.sampled_from(_ALL_SCORERS_BOUNDS),
-    a=_ascii_text,
-    b=_ascii_text,
+    ab=st.data(),
 )
-def test_scorer_bounds(scorer: str, a: str, b: str) -> None:
-    """score_field(a, b, scorer) is in [0.0, 1.0] for any non-None inputs."""
+def test_scorer_bounds(scorer: str, ab: st.DataObject) -> None:
+    """score_field(a, b, scorer) is in [0.0, 1.0] for any non-None inputs.
+
+    rapidfuzz-backed scorers use full printable-unicode text; soundex_match
+    is restricted to ASCII (jellyfish.soundex limitation on unusual codepoints).
+    """
     from goldenmatch.core.scorer import score_field
 
+    text_strat = _SCORER_TEXT_STRATEGY[scorer]
+    a = ab.draw(text_strat)
+    b = ab.draw(text_strat)
     result = score_field(a, b, scorer)
     assert result is not None
     assert isinstance(result, float)
@@ -196,18 +236,31 @@ def test_jaccard_bounds(pair: tuple) -> None:
 @pytest.mark.xfail(
     strict=True,
     raises=ValueError,
-    reason="known bug: _dice_score_single/_jaccard_score_single numpy "
-    "broadcast crash on different-length bloom hex inputs (matrix "
-    "variants pad to max_len and are unaffected); XPASS here means "
-    "the bug was fixed -- delete this marker and keep the assertions",
+    reason="known bug: _dice_score_single numpy broadcast crash on "
+    "different-length bloom hex inputs (matrix variant pads to max_len "
+    "and is unaffected); XPASS means the bug was fixed -- remove marker",
 )
-def test_dice_jaccard_mismatched_length_bug() -> None:
+def test_dice_mismatched_length_bug() -> None:
     """Different-length hex inputs should score, not crash (found by hypothesis)."""
     from goldenmatch.core.scorer import score_field
 
-    for scorer in ("dice", "jaccard"):
-        result = score_field("0000", "000000", scorer)
-        assert result is not None and 0.0 <= result <= 1.0
+    result = score_field("0000", "000000", "dice")
+    assert result is not None and 0.0 <= result <= 1.0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="known bug: _jaccard_score_single numpy broadcast crash on "
+    "different-length bloom hex inputs (matrix variant pads to max_len "
+    "and is unaffected); XPASS means the bug was fixed -- remove marker",
+)
+def test_jaccard_mismatched_length_bug() -> None:
+    """Different-length hex inputs should score, not crash (found by hypothesis)."""
+    from goldenmatch.core.scorer import score_field
+
+    result = score_field("0000", "000000", "jaccard")
+    assert result is not None and 0.0 <= result <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -217,13 +270,19 @@ def test_dice_jaccard_mismatched_length_bug() -> None:
 @settings(**_SETTINGS)
 @given(
     scorer=st.sampled_from(_SYMMETRIC_SCORERS),
-    a=_ascii_text,
-    b=_ascii_text,
+    ab=st.data(),
 )
-def test_scorer_symmetry(scorer: str, a: str, b: str) -> None:
-    """score_field(a, b, s) == score_field(b, a, s) for all symmetric scorers."""
+def test_scorer_symmetry(scorer: str, ab: st.DataObject) -> None:
+    """score_field(a, b, s) == score_field(b, a, s) for all symmetric scorers.
+
+    rapidfuzz-backed scorers use full printable-unicode text; soundex_match
+    is restricted to ASCII (jellyfish.soundex limitation on unusual codepoints).
+    """
     from goldenmatch.core.scorer import score_field
 
+    text_strat = _SCORER_TEXT_STRATEGY[scorer]
+    a = ab.draw(text_strat)
+    b = ab.draw(text_strat)
     fwd = score_field(a, b, scorer)
     rev = score_field(b, a, scorer)
     assert fwd == pytest.approx(rev, abs=1e-9), (
@@ -261,13 +320,19 @@ def test_jaccard_symmetry(pair: tuple) -> None:
 
 @settings(**_SETTINGS)
 @given(
-    scorer=st.sampled_from(["exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match", "qgram"]),
-    a=_nonempty_ascii,
+    scorer=st.sampled_from(_RAPIDFUZZ_SCORERS + _SOUNDEX_SCORERS),
+    ab=st.data(),
 )
-def test_scorer_identity(scorer: str, a: str) -> None:
-    """score_field(a, a, s) == 1.0 for non-empty a across string scorers."""
+def test_scorer_identity(scorer: str, ab: st.DataObject) -> None:
+    """score_field(a, a, s) == 1.0 for non-empty a across string scorers.
+
+    rapidfuzz-backed scorers use full printable-unicode text; soundex_match
+    is restricted to ASCII (jellyfish.soundex limitation on unusual codepoints).
+    """
     from goldenmatch.core.scorer import score_field
 
+    nonempty_strat = _SCORER_NONEMPTY_STRATEGY[scorer]
+    a = ab.draw(nonempty_strat)
     result = score_field(a, a, scorer)
     assert result is not None
     assert result == pytest.approx(1.0, abs=1e-9), (
@@ -304,24 +369,26 @@ def test_dice_identity(a: str) -> None:
 @settings(**_SETTINGS)
 @given(
     scorer=st.sampled_from(_ALL_SCORERS_BOUNDS),
-    x=_ascii_text,
+    xd=st.data(),
 )
-def test_scorer_none_propagation_left(scorer: str, x: str) -> None:
+def test_scorer_none_propagation_left(scorer: str, xd: st.DataObject) -> None:
     """score_field(None, x, s) is None."""
     from goldenmatch.core.scorer import score_field
 
+    x = xd.draw(_SCORER_TEXT_STRATEGY[scorer])
     assert score_field(None, x, scorer) is None
 
 
 @settings(**_SETTINGS)
 @given(
     scorer=st.sampled_from(_ALL_SCORERS_BOUNDS),
-    x=_ascii_text,
+    xd=st.data(),
 )
-def test_scorer_none_propagation_right(scorer: str, x: str) -> None:
+def test_scorer_none_propagation_right(scorer: str, xd: st.DataObject) -> None:
     """score_field(x, None, s) is None."""
     from goldenmatch.core.scorer import score_field
 
+    x = xd.draw(_SCORER_TEXT_STRATEGY[scorer])
     assert score_field(x, None, scorer) is None
 
 
