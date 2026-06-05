@@ -225,6 +225,7 @@ Hosted on Railway, registered on Smithery:
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
 - **Railway project:** `golden-suite-mcp` (service: `goldenmatch-mcp`, port 8200)
 - **Local HTTP:** `goldenmatch mcp-serve --transport http --port 8200`
+- **AUTH (Wave 0, 2026-06-05): the HTTP server is fail-closed.** `run_server_http` refuses to start on a non-loopback host (default bind is `0.0.0.0`) unless `GOLDENMATCH_MCP_TOKEN` is set; when set, every `/mcp` request needs `Authorization: Bearer <token>` (the `/.well-known/` card stays public). **The Railway service MUST have `GOLDENMATCH_MCP_TOKEN` set or the deploy crash-loops** (`startCommand` has no `--host`, so it binds `0.0.0.0`). Set it on the service: `railway variables --set GOLDENMATCH_MCP_TOKEN=<token>` (or via the dashboard). Local loopback (`--host 127.0.0.1`) still runs token-free. Same posture on the A2A server via `GOLDENMATCH_AGENT_TOKEN` (`a2a/server.py::create_app`).
 
 ## Auto-Config
 - `dedupe_df()` supports zero-config: calls `auto_configure_df(df)` when no exact/fuzzy kwargs

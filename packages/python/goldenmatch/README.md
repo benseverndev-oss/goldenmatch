@@ -445,7 +445,7 @@ memory:
 goldenmatch dedupe customers.csv --config goldenmatch.yml
 
 # 2. Steward decides borderline pairs (writes to .goldenmatch/memory.db)
-goldenmatch review --config goldenmatch.yml      # interactive TUI
+goldenmatch review --config goldenmatch.yml      # interactive review loop
 
 # 3. Re-run -- corrections apply automatically; postflight reports impact
 goldenmatch dedupe customers.csv --config goldenmatch.yml

@@ -1530,21 +1530,62 @@ def _tool_rollback(run_id: str, output_dir: str = ".") -> dict:
     return rollback_run(run_id, str(vdir))
 
 
+def resolve_http_auth_token(host: str) -> str | None:
+    """Return the MCP HTTP bearer token, enforcing the fail-closed bind rule.
+
+    Raises ``RuntimeError`` when binding to a non-loopback host without
+    ``GOLDENMATCH_MCP_TOKEN`` set, so an exposed server is never started
+    unauthenticated by accident. Returns the token (or ``None`` for an
+    intentionally-open loopback bind).
+    """
+    import os
+
+    token = os.environ.get("GOLDENMATCH_MCP_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not token and not is_loopback:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated MCP HTTP server on host {host!r}. "
+            "Set GOLDENMATCH_MCP_TOKEN, or bind to 127.0.0.1 for local use."
+        )
+    return token
+
+
 async def run_server_http(
     host: str = "0.0.0.0",
     port: int = 8200,
     file_paths: list[str] | None = None,
     config_path: str | None = None,
 ) -> None:
-    """Run the MCP server over Streamable HTTP (for hosted deployments)."""
+    """Run the MCP server over Streamable HTTP (for hosted deployments).
+
+    Auth: when ``GOLDENMATCH_MCP_TOKEN`` is set, every ``/mcp`` request must
+    carry ``Authorization: Bearer <token>``. To prevent shipping an open public
+    server, binding to a non-loopback host WITHOUT a token is refused at
+    startup (fail closed). The ``/.well-known/`` server card stays public for
+    healthchecks.
+    """
     import contextlib
     from collections.abc import AsyncIterator
 
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
+
+    token = resolve_http_auth_token(host)
+
+    class _BearerAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if request.url.path.startswith("/.well-known/"):
+                return await call_next(request)
+            if token:
+                header = request.headers.get("Authorization", "")
+                if not header.startswith("Bearer ") or header[7:] != token:
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return await call_next(request)
 
     server = create_server(file_paths or [], config_path)
     session_manager = StreamableHTTPSessionManager(
@@ -1571,6 +1612,7 @@ async def run_server_http(
             Mount("/mcp", app=session_manager.handle_request),
         ],
         lifespan=lifespan,
+        middleware=[Middleware(_BearerAuthMiddleware)],
     )
 
     config = uvicorn.Config(app, host=host, port=port)
