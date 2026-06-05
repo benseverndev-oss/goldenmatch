@@ -19,7 +19,13 @@ const EMAIL_PLUS_RE = /^([^+@]+)\+[^@]*(@.+)$/;
 // Mirrors Python's `_NON_DIGIT_RE`. The `g` flag matches re.sub semantics.
 const NON_DIGIT_RE = /\D+/g;
 // Mirrors Python's `_URL_RE` (scheme://host[rest]).
-const URL_RE = /^(?<scheme>[a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?<host>[^/?#]+)(?<rest>.*)$/;
+// `rest` must START with a path/query/fragment delimiter (or be absent) so it
+// can't overlap with `host`'s character class. The earlier `(?<host>[^/?#]+)`
+// + `(?<rest>.*)` pair had two adjacent quantifiers matching the same chars,
+// which CodeQL flags as polynomial-ReDoS (js/polynomial-redos #303). This form
+// is unambiguous (linear) and matches the exact same set of strings.
+const URL_RE =
+  /^(?<scheme>[a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?<host>[^/?#]+)(?<rest>[/?#].*)?$/;
 const WHITESPACE_RE = /\s+/g;
 const BOOL_TRUTHY = new Set(["true", "t", "yes", "y", "1", "on"]);
 const BOOL_FALSY = new Set(["false", "f", "no", "n", "0", "off"]);
@@ -178,7 +184,8 @@ function canonicalizeUrl(value: string): string {
   let scheme = (match.groups!["scheme"] as string).toLowerCase();
   if (scheme === "http://") scheme = "https://";
   const host = (match.groups!["host"] as string).toLowerCase();
-  let rest = match.groups!["rest"] as string;
+  // `rest` is an optional group now (absent on bare `scheme://host`).
+  let rest = (match.groups!["rest"] as string | undefined) ?? "";
   if (rest === "/") {
     rest = "";
   } else if (
