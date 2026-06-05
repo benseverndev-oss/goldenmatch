@@ -26,12 +26,14 @@ EXPECTED_NAMES = {
     "memory_export",
     # v1.18.3 (#predefined-merge-plugins): plugin discovery via MCP.
     "list_plugins",
+    # MCP tool-coverage pass: round-trips memory_export.
+    "memory_import",
 }
 
 
 def test_memory_tools_registered():
-    """MEMORY_TOOLS exposes the six tool definitions; names match frozenset."""
-    assert len(MEMORY_TOOLS) == 6
+    """MEMORY_TOOLS exposes the seven tool definitions; names match frozenset."""
+    assert len(MEMORY_TOOLS) == 7
     names = {t.name for t in MEMORY_TOOLS}
     assert names == EXPECTED_NAMES
     assert _MEMORY_TOOL_NAMES == frozenset(EXPECTED_NAMES)
@@ -162,4 +164,4 @@ def test_server_card_description_count():
     text = server_path.read_text(encoding="utf-8")
     match = re.search(r"(\d+) MCP tools", text)
     assert match is not None
-    assert int(match.group(1)) == 35
+    assert int(match.group(1)) == 54

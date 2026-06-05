@@ -312,6 +312,54 @@ AGENT_TOOLS = [
             "required": ["file_path"],
         },
     ),
+    Tool(
+        name="sensitivity",
+        description=(
+            "Parameter-sensitivity analysis: sweep one or more config "
+            "parameters across a range and report how stable the clustering "
+            "is at each value (CCMS unchanged %). Use it to find robust "
+            "thresholds. Auto-configures the file if no config is given."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "CSV/Parquet to analyze"},
+                "sweep": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Sweep specs as 'field:start:stop:step', e.g. "
+                        "'threshold:0.70:0.95:0.05'. One or more."
+                    ),
+                },
+                "config": {"type": "string", "description": "Optional config YAML path"},
+                "sample_size": {
+                    "type": "integer",
+                    "description": "Optional: randomly sample N records before sweeping",
+                },
+            },
+            "required": ["file_path", "sweep"],
+        },
+    ),
+    Tool(
+        name="incremental",
+        description=(
+            "Match a batch of new records against an existing base dataset "
+            "(without re-running the whole base). Returns matched "
+            "(new_row_id, base_row_id, score) pairs plus counts. "
+            "Auto-configures from the base file if no config is given."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "base_file": {"type": "string", "description": "Existing base dataset path"},
+                "new_records": {"type": "string", "description": "New records file to match in"},
+                "config": {"type": "string", "description": "Optional config YAML path"},
+                "threshold": {"type": "number", "description": "Optional threshold override"},
+            },
+            "required": ["base_file", "new_records"],
+        },
+    ),
 ]
 
 _AGENT_TOOL_NAMES = frozenset(t.name for t in AGENT_TOOLS)
@@ -682,5 +730,58 @@ def _dispatch(
         if write_error:
             result["write_error"] = write_error
         return result
+
+    if name == "sensitivity":
+        from pathlib import Path as _Path
+
+        from goldenmatch.core.sensitivity import SweepParam, run_sensitivity
+
+        file_path = args["file_path"]
+        specs = [(file_path, _Path(file_path).stem)]
+        cfg_path = args.get("config")
+        if cfg_path:
+            from goldenmatch.config.loader import load_config
+            cfg = load_config(cfg_path)
+        else:
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure(specs)
+
+        sweeps = []
+        for spec in args.get("sweep", []):
+            parts = str(spec).split(":")
+            if len(parts) != 4:
+                return {"error": f"Bad sweep spec '{spec}'; expected 'field:start:stop:step'"}
+            sweeps.append(SweepParam(
+                field=parts[0],
+                start=float(parts[1]),
+                stop=float(parts[2]),
+                step=float(parts[3]),
+            ))
+        if not sweeps:
+            return {"error": "Provide at least one sweep spec, e.g. 'threshold:0.70:0.95:0.05'"}
+
+        results = run_sensitivity(specs, cfg, sweeps, sample_size=args.get("sample_size"))
+        return {"results": [r.stability_report() for r in results]}
+
+    if name == "incremental":
+        from pathlib import Path as _Path
+
+        from goldenmatch.core.incremental import run_incremental
+
+        base_file = args["base_file"]
+        cfg_path = args.get("config")
+        if cfg_path:
+            from goldenmatch.config.loader import load_config
+            cfg = load_config(cfg_path)
+        else:
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure([(base_file, _Path(base_file).stem)])
+
+        return run_incremental(
+            base_file,
+            args["new_records"],
+            cfg,
+            threshold=args.get("threshold"),
+        )
 
     return {"error": f"Unknown agent tool: {name}"}

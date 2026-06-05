@@ -248,6 +248,7 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
     if skill_id in {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
+        "identity_show",
     }:
         from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
         # Reuse MCP dispatch since the contract is identical (JSON in/out).
@@ -349,6 +350,69 @@ def dispatch_skill(skill_id: str, params: dict) -> dict:
             result["id_a"] = correction.id_a
             result["id_b"] = correction.id_b
         return result
+
+    # ── MCP tool-coverage parity ──────────────────────────────────────────────
+    # Reuse the MCP dispatch where the JSON contract is identical (same pattern
+    # as the identity_* skills above). File-based analysis skills that depend on
+    # MCP's loaded-dataset state are implemented directly instead.
+    if skill_id in {"compare_clusters", "schema_match", "list_runs", "rollback"}:
+        from goldenmatch.mcp.server import _handle_tool
+        return _handle_tool(skill_id, params)
+
+    if skill_id in {"sensitivity", "incremental"}:
+        from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
+        return _agent_dispatch(skill_id, params, AgentSession)
+
+    if skill_id in {"list_corrections", "learn_thresholds", "memory_stats"}:
+        from goldenmatch.mcp.memory_tools import _dispatch as _memory_dispatch
+        return _memory_dispatch(skill_id, params)
+
+    if skill_id == "evaluate":
+        from goldenmatch._api import evaluate as _evaluate
+
+        fp = params["file_path"]
+        cfg = params.get("config")
+        if not cfg:
+            from pathlib import Path as _Path
+
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure([(fp, _Path(fp).stem)])
+        return _evaluate(
+            fp,
+            config=cfg,
+            ground_truth=params["ground_truth"],
+            col_a=params.get("col_a", "id_a"),
+            col_b=params.get("col_b", "id_b"),
+        )
+
+    if skill_id == "analyze_blocking":
+        from dataclasses import asdict
+        from pathlib import Path as _Path
+
+        import polars as pl
+
+        from goldenmatch.core.block_analyzer import analyze_blocking
+
+        fp = params["file_path"]
+        cfg = params.get("config")
+        if cfg:
+            from goldenmatch.config.loader import load_config
+            cfg = load_config(cfg) if isinstance(cfg, str) else cfg
+        else:
+            from goldenmatch.core.autoconfig import auto_configure
+            cfg = auto_configure([(fp, _Path(fp).stem)])
+        df = pl.read_csv(fp, encoding="utf8-lossy", ignore_errors=True)
+        cols = sorted({f.field for mk in cfg.get_matchkeys() for f in mk.fields if f.field})
+        suggestions = analyze_blocking(
+            df, cols,
+            sample_size=int(params.get("sample_size", 1000)),
+            target_block_size=int(params.get("target_block_size", 5000)),
+        )
+        limit = int(params.get("limit", 10))
+        return {
+            "matchkey_columns": cols,
+            "suggestions": [asdict(s) for s in suggestions[:limit]],
+        }
 
     raise ValueError(f"Unknown skill: {skill_id}")
 
