@@ -70,6 +70,7 @@ Native SQL extensions for [GoldenMatch](https://github.com/benseverndev-oss/gold
 - Postgres CI: tests PG 15/16/17 in parallel (fail-fast: false). Uses PostgreSQL apt repo for PG 15/17 availability
 - Multi-PG: must `pg_createcluster` explicitly + use `pg_lsclusters` to find correct port per version
 - System Python for Postgres: `sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py` then `sudo pip install --break-system-packages goldenmatch`
+- **Embed smoke (#737):** the `rust_pgrx` lane proves `ort`/onnxruntime loads inside the Postgres BACKEND process (distinct from the proven DataFusion cdylib case) by calling `goldenmatch_embed_local`/`gm_embed` against the goldenembed `tests/fixtures/tiny_model`. `gm_embed` reads `GOLDENEMBED_MODEL_DIR` from the backend env, so the smoke STOPS the cluster and restarts it with `sudo -u postgres env GOLDENEMBED_MODEL_DIR=<dir> pg_ctlcluster ... start` (sudo strips env otherwise). `gm_embed` is NOT `STRICT` (NULL -> "" parity with DataFusion), so the smoke also asserts `gm_embed(NULL)` still returns a vector. The lane triggers on `goldenembed/**` too (path dep of the postgres crate).
 - Release workflow: builds .tar.gz + .deb + .rpm for PG 15/16/17, pushes Docker to ghcr.io + Docker Hub
 
 ## Identity Graph (v2.0, 2026-05-13)
