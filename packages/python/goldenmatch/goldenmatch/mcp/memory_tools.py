@@ -171,6 +171,29 @@ MEMORY_TOOLS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="memory_import",
+        description=(
+            "Import corrections from a list of dicts (the exact shape "
+            "memory_export returns). Upserts into the store: higher trust "
+            "wins, same trust = latest wins. Returns the count imported."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "corrections": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Correction dicts, as returned by memory_export.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "SQLite memory DB path. Default: .goldenmatch/memory.db",
+                },
+            },
+            "required": ["corrections"],
+        },
+    ),
 ]
 
 
@@ -408,5 +431,31 @@ def _dispatch(name: str, args: dict) -> dict:
             "count": len(corrections),
             "corrections": [_correction_to_dict(c) for c in corrections],
         }
+
+    if name == "memory_import":
+        from goldenmatch.core.memory.store import Correction
+
+        rows = args.get("corrections") or []
+        imported = 0
+        with MemoryStore(backend="sqlite", path=path) as store:
+            for r in rows:
+                created = r.get("created_at")
+                store.add_correction(Correction(
+                    id=r.get("id") or str(uuid.uuid4()),
+                    id_a=int(r.get("id_a", 0)),
+                    id_b=int(r.get("id_b", 0)),
+                    decision=r["decision"],
+                    source=r.get("source", "api"),
+                    trust=float(r.get("trust", 0.5)),
+                    field_hash=r.get("field_hash", ""),
+                    record_hash=r.get("record_hash", ""),
+                    original_score=float(r.get("original_score", 0.0)),
+                    matchkey_name=r.get("matchkey_name"),
+                    reason=r.get("reason"),
+                    dataset=r.get("dataset"),
+                    created_at=datetime.fromisoformat(created) if created else datetime.now(),
+                ))
+                imported += 1
+        return {"imported": imported}
 
     return {"error": f"Unknown memory tool: {name}"}
