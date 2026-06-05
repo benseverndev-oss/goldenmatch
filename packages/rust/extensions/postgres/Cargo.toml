@@ -24,6 +24,9 @@ goldenmatch-bridge = { path = "../bridge" }
 # Pure-Rust canonical fingerprint — computed in-process, NOT through the
 # embedded-CPython bridge (the decoupling lever; see kernels.rs).
 goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
+# Pure-Rust connected-components + pair-dedup graph kernels (no pyo3) — the graph
+# UDFs call these native-direct, NOT through the embedded-CPython bridge.
+goldenmatch-graph-core = { path = "../graph-core" }
 serde_json = "1"
 
 [[bin]]
