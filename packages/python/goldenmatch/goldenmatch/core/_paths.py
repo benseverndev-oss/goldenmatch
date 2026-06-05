@@ -5,6 +5,12 @@ product, so containment is OPT-IN. Setting GOLDENMATCH_ALLOWED_ROOT (or
 passing base_dir) jails all user-supplied paths under that root --
 deploy-time hardening for network-exposed surfaces (the Railway MCP
 server sets it to the /data volume).
+
+An empty string for base_dir or GOLDENMATCH_ALLOWED_ROOT is treated as
+unset, meaning containment checking is disabled. Symlink TOCTOU
+(resolve-then-open race) is an accepted non-goal: the threat model is
+attacker-supplied path STRINGS, not attacker control of the server's
+filesystem state.
 """
 
 from __future__ import annotations

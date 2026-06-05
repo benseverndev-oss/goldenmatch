@@ -1212,10 +1212,9 @@ def _safe_path_or_error(value: str) -> Path | dict:
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
-    try:
-        path = safe_path(output_path)
-    except (ValueError, PathOutsideAllowedRootError) as exc:
-        return {"error": str(exc)}
+    path = _safe_path_or_error(output_path)
+    if isinstance(path, dict):
+        return path
     if fmt == "json":
         if _result.golden is not None:
             golden_dicts = _result.golden.to_dicts()
@@ -1364,11 +1363,12 @@ def _tool_pprl_link(args: dict) -> dict:
 
     from goldenmatch.pprl.protocol import PPRLConfig, run_pprl
 
-    try:
-        file_a = safe_path(args["file_a"])
-        file_b = safe_path(args["file_b"])
-    except (ValueError, PathOutsideAllowedRootError) as exc:
-        return {"error": str(exc)}
+    file_a = _safe_path_or_error(args["file_a"])
+    if isinstance(file_a, dict):
+        return file_a
+    file_b = _safe_path_or_error(args["file_b"])
+    if isinstance(file_b, dict):
+        return file_b
     if not file_a.exists():
         return {"error": f"File not found: {file_a}"}
     if not file_b.exists():
