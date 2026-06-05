@@ -47,10 +47,18 @@ Spec: `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. Staged, each a ga
 - **Fix the pre-existing empty/all-singleton `run_spine` SchemaError** (frames-out tail,
   null vs i64 join key) — flagged during Stage D, out of scope there.
 
+## Adjacent — SQL-native extensions surface (SHIPPED 2026-06-05)
+Not part of the scale arc, but the same Arrow-native theme: the graph + embedding
+UDFs went **native-direct** (no CPython bridge) across DuckDB, Postgres, and DataFusion
+via a shared pyo3-free `graph-core` kernel + a `goldenmatch-embed` wheel over
+`goldenembed-rs` (#509; PRs #740/#743/#745). See
+[../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md) +
+[../decisions/0005-sql-native-direct-udfs.md](../decisions/0005-sql-native-direct-udfs.md).
+
 ## Related larger arcs (in `packages/python/goldenmatch/CLAUDE.md`)
 - The Splink-Spark parity roadmap (Ray Phases 1-6) — distributed loader → controller →
   clustering → golden → multi-node → identity. Mostly plumbing-complete, gated behind
   `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`.
 
 ---
-**Classification:** planning/active • **Last updated:** 2026-06-03
+**Classification:** planning/active • **Last updated:** 2026-06-05
