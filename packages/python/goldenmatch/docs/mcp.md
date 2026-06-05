@@ -39,7 +39,7 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-Or browse on Smithery: [https://smithery.ai/servers/benseverndev-oss/goldenmatch](https://smithery.ai/servers/benseverndev-oss/goldenmatch)
+Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldenmatch](https://smithery.ai/servers/benzsevern/goldenmatch)
 
 ---
 

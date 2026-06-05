@@ -167,7 +167,7 @@
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenmatch-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenmatch`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenmatch`
 - **Server card:** `https://goldenmatch-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

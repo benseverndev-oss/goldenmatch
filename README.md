@@ -34,7 +34,7 @@
 [![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/)
 [![Wiki](https://img.shields.io/badge/wiki-github-d4a017)](https://github.com/benseverndev-oss/goldenmatch/wiki)
 [![Web UI](https://img.shields.io/badge/web%20ui-FastAPI%20%2B%20React-d4a017?logo=react&logoColor=white)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
-[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benseverndev-oss/goldenmatch)
+[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 
 <!-- Activity -->
 [![Last commit](https://img.shields.io/github/last-commit/benseverndev-oss/goldenmatch?color=d4a017&label=last%20commit)](https://github.com/benseverndev-oss/goldenmatch/commits/main)
@@ -251,7 +251,7 @@ Sister packages compose: `pip install goldenpipe[full]` brings in Check + Flow +
 
 ## Remote MCP Server
 
-GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch) — connect from any MCP client without installing anything.
+GoldenMatch is hosted as an MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch) — connect from any MCP client without installing anything.
 
 ```json
 {
