@@ -12,6 +12,10 @@ on:
       runner:
         description: "runner label"
         default: "large-new-64GB"
+
+permissions:
+  contents: read
+
 jobs:
   bench:
     runs-on: ${{ github.event.inputs.runner }}
