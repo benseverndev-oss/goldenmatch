@@ -83,6 +83,10 @@ npx vitest run tests/parity/        # parity-only suite
 - **MCP bin (v0.12.0):** `src/node/mcp/server.ts` is exposed as the `goldenmatch-mcp` bin (tsup entry `node/mcp/server`); it already had the JSON-RPC stdio loop (`startMcpServer`) — v0.12.0 added the shebang + `require.main` guard + bin wiring so it's directly runnable.
 - **Identity MCP tools (v0.13.0):** `src/node/mcp/identity-tools.ts` exposes the 6 identity tools (`identity_resolve`/`identity_list`/`identity_history`/`identity_conflicts`/`identity_merge`/`identity_split`) at parity with `goldenmatch/mcp/identity_tools.py`, composed into `TOOLS` and routed via `IDENTITY_TOOL_NAMES` in the server. snake_case wire format; backed by `SqliteIdentityStore` (test seam `__setIdentityStoreFactoryForTests` injects `InMemoryIdentityStore` so tests skip the better-sqlite3 peer dep).
 
+## CLI parity (Wave 4, 2026-06-05)
+- Added the `evaluate` command (`src/cli.ts`): `goldenmatch-js evaluate <files...> --ground-truth gt.csv [--col-a id_a --col-b id_b --min-f1 X]` — runs `dedupe`, loads GT via `loadGroundTruthPairs`, scores with `evaluateClusters(result.clusters, gt, allIds)`, prints P/R/F1 + TP/FP/FN, exits non-zero below `--min-f1` (CI gate, parity with Python `goldenmatch evaluate`). `evaluateClusters` takes a 3rd `allIds` arg (pass `rows.map((_, i) => i)`).
+- Fixed the hardcoded `0.1.0` version in two spots (`.version()` + the `info` command) — now `import pkg from "../package.json" with { type: "json" }` (resolveJsonModule + Bundler resolution; tsup inlines it). The built bin reports the real package version. `compare-clusters`/`sensitivity` CLI deferred (need a cluster-file loader / sweep plumbing).
+
 ## Build outputs
 - tsup with 5 entry points: `index`, `core/index`, `node/index`, `cli`, `node/backends/score-worker` (piscina worker).
 - Build artifacts to `dist/` (gitignored).
