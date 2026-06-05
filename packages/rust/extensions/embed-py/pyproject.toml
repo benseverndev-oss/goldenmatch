@@ -1,0 +1,37 @@
+# goldenmatch-embed — local ONNX embedder for SQL UDFs, shipped as a SEPARATE
+# maturin/abi3 wheel. Thin pyo3 wrapper over the pyo3-free `goldenembed` crate
+# so the DuckDB embed UDF runs the same kernel as the pgrx/DataFusion surfaces.
+# All of `ort` (onnxruntime) is confined to this wheel. Build is maturin (this
+# crate IS the package — same layout as the sibling `goldenmatch-native` wheel).
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenmatch-embed"
+version = "0.1.0"
+description = "Local ONNX embedder (goldenembed-rs) for goldenmatch SQL UDFs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/goldenmatch_embed/;
+# the compiled abi3 ext lands at goldenmatch_embed/_embed (pymodule `_embed`,
+# so the last path component matches and no Rust rename is needed).
+python-source = "python"
+module-name = "goldenmatch_embed._embed"
+# One abi3 wheel per platform spans CPython 3.11-3.13 (pyo3 abi3-py311 in
+# Cargo.toml). extension-module (no libpython link) is already a default pyo3
+# feature on the crate, so maturin inherits it.

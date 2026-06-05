@@ -31,8 +31,8 @@
 [![GitHub stars](https://img.shields.io/github/stars/benseverndev-oss/goldenmatch?style=flat&color=d4a017&logo=github)](https://github.com/benseverndev-oss/goldenmatch/stargazers)
 
 <!-- Ecosystem -->
-[![Docs](https://img.shields.io/badge/docs-github.io-d4a017)](https://benseverndev-oss.github.io/goldenmatch/)
-[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benseverndev-oss/goldenmatch)
+[![Docs](https://img.shields.io/badge/docs-docs.bensevern.dev-d4a017)](https://docs.bensevern.dev/)
+[![Smithery MCP](https://img.shields.io/badge/MCP-smithery-6e40c9)](https://smithery.ai/servers/benzsevern/goldenmatch)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.benzsevern%2Fgoldenmatch-0ea5e9)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.benseverndev-oss/goldenmatch)
 
 </div>
@@ -65,7 +65,7 @@ npm install goldenmatch
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 62.87 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **35 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch))
+- **54 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### What's new in v1.17
@@ -112,14 +112,14 @@ npm install goldenmatch
 
 | I want to... | Go here |
 |--------------|---------|
-| Deduplicate a CSV right now | [Quick Start](https://benseverndev-oss.github.io/goldenmatch/quick-start) |
-| Use from Claude Desktop / AI assistant | [MCP Server](https://benseverndev-oss.github.io/goldenmatch/mcp) |
-| Build AI agents that deduplicate | [ER Agent (A2A)](https://benseverndev-oss.github.io/goldenmatch/agent) |
-| Write Python code | [Python API](https://benseverndev-oss.github.io/goldenmatch/python-api) |
-| Write TypeScript / Node.js | [TypeScript API](https://benseverndev-oss.github.io/goldenmatch/typescript) |
-| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://benseverndev-oss.github.io/goldenmatch/typescript) |
-| Use the interactive TUI | [TUI Guide](https://benseverndev-oss.github.io/goldenmatch/tui) |
-| Train the system on my corrections | [Learning Memory](https://benseverndev-oss.github.io/goldenmatch/learning-memory) |
+| Deduplicate a CSV right now | [Quick Start](https://docs.bensevern.dev/goldenmatch/quickstart) |
+| Use from Claude Desktop / AI assistant | [MCP Server](https://docs.bensevern.dev/goldenmatch/mcp) |
+| Build AI agents that deduplicate | [ER Agent (A2A)](https://docs.bensevern.dev/goldenmatch/agent) |
+| Write Python code | [Python API](https://docs.bensevern.dev/goldenmatch/python-api) |
+| Write TypeScript / Node.js | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
+| Deploy to Vercel Edge / Cloudflare Workers | [TypeScript API](https://docs.bensevern.dev/goldenmatch/typescript) |
+| Use the interactive TUI | [TUI Guide](https://docs.bensevern.dev/goldenmatch/tui) |
+| Train the system on my corrections | [Learning Memory](https://docs.bensevern.dev/goldenmatch/learning-memory) |
 
 ---
 
@@ -129,7 +129,7 @@ npm install goldenmatch
 ### Matching
 - **12+ scoring methods** — exact, Jaro-Winkler, Levenshtein, token sort, soundex, ensemble, embedding, record embedding, dice, jaccard, **`name_freq_weighted_jw`** (surname IDF-weighted), **`given_name_aliased_jw`** (alias-aware) + plugin extensible
 - **8+ blocking strategies** — static, adaptive, sorted neighborhood, multi-pass, ANN, ann_pairs, canopy, **learned** (data-driven predicate selection)
-- **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://benseverndev-oss.github.io/goldenmatch/reference-data).
+- **Bundled OSS reference data** — five packs ship with the wheel: US Census 2010 surnames, given-name aliases, business legal forms, USPS Pub. 28 addresses, NAICS 2022 industries. Auto-config swaps in the matching scorer / transform when a column name AND its profiled data shape agree. See [Reference Data](https://docs.bensevern.dev/goldenmatch/reference-data).
 - **Fellegi-Sunter probabilistic matching** — EM-trained m/u probabilities, automatic threshold estimation
 - **LLM scorer with budget controls** — GPT-4o-mini scores borderline pairs for just $0.04. Budget caps, model tiering, graceful degradation
 - **Cross-encoder reranking** — re-score borderline pairs with a pre-trained cross-encoder for higher precision
@@ -219,7 +219,7 @@ console.log(result.stats);  // { totalRecords: 3, totalClusters: 2, ... }
 - **478 tests, strict TypeScript** (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
 - **Zero-dep install** works — optional peer deps unlock native paths (hnswlib-node, @huggingface/transformers for ONNX cross-encoder, piscina for worker threads, pg/duckdb/snowflake for data connectors)
 
-Full docs: [benseverndev-oss.github.io/goldenmatch/typescript](https://benseverndev-oss.github.io/goldenmatch/typescript)
+Full docs: [docs.bensevern.dev/goldenmatch/typescript](https://docs.bensevern.dev/goldenmatch/typescript)
 See [packages/goldenmatch-js/examples/](packages/goldenmatch-js/examples/) for 10+ usage examples.
 
 ## Web UI
@@ -403,7 +403,7 @@ result = gm.dedupe("huge.parquet", exact=["email"], backend="ray")
 
 ### Learning Memory (v1.6.0)
 
-GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://benseverndev-oss.github.io/goldenmatch/learning-memory).
+GoldenMatch can remember past steward decisions and apply them automatically on every subsequent run. Reject a pair once -- it stays rejected. Approve a borderline pair once -- it stays approved. After 10+ corrections accumulate against a matchkey, the learner adjusts its threshold so the system stops needing the same correction twice. Off by default; enable via `config.memory.enabled = True` or a `memory:` block in YAML. Full guide: [Learning Memory docs](https://docs.bensevern.dev/goldenmatch/learning-memory).
 
 **`goldenmatch.yml`:**
 
@@ -660,7 +660,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (35 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (54 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -1152,7 +1152,7 @@ Settings tuned in the TUI can be saved to the project file. Next run picks them 
 
 ## Remote MCP Server
 
-GoldenMatch is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenmatch) — connect from any MCP client without installing anything.
+GoldenMatch is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenmatch) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json
@@ -1171,7 +1171,7 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-35 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+54 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ## Architecture
 

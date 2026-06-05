@@ -417,6 +417,124 @@ _BASE_TOOLS = [
             "required": ["file_a", "file_b", "fields"],
         },
     ),
+    Tool(
+        name="evaluate",
+        description=(
+            "Score the loaded run against ground-truth pairs. Loads a "
+            "ground-truth CSV (id_a,id_b columns) and returns precision, "
+            "recall, and F1 for the current clustering."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "ground_truth_path": {
+                    "type": "string",
+                    "description": "CSV of true match pairs (columns id_a,id_b or idA,idB).",
+                },
+                "col_a": {"type": "string", "default": "id_a"},
+                "col_b": {"type": "string", "default": "id_b"},
+            },
+            "required": ["ground_truth_path"],
+        },
+    ),
+    Tool(
+        name="analyze_blocking",
+        description=(
+            "Diagnose blocking on the loaded dataset: returns ranked blocking "
+            "key candidates with block counts, max block size, total candidate "
+            "comparisons, and estimated recall. Use it to explain why matching "
+            "is slow or produces too many candidate pairs."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "sample_size": {"type": "integer", "default": 1000},
+                "target_block_size": {"type": "integer", "default": 5000},
+                "limit": {"type": "integer", "default": 10, "description": "Top N suggestions"},
+            },
+        },
+    ),
+    Tool(
+        name="compare_clusters",
+        description=(
+            "Compare two ER clustering outcomes on the same dataset without "
+            "ground truth (CCMS): classifies each cluster as unchanged / "
+            "merged / partitioned / overlapping and returns the Talburt-Wang "
+            "Index. Both inputs are JSON cluster files (as written by "
+            "export-style output)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "clusters_a_path": {"type": "string", "description": "Baseline clusters JSON"},
+                "clusters_b_path": {"type": "string", "description": "Comparison clusters JSON"},
+            },
+            "required": ["clusters_a_path", "clusters_b_path"],
+        },
+    ),
+    Tool(
+        name="schema_match",
+        description=(
+            "Auto-map columns between two files with different schemas. "
+            "Returns proposed (col_a, col_b) mappings with a confidence score "
+            "and method (synonym / name_sim / composite). Useful before "
+            "matching two sources."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_a": {"type": "string"},
+                "file_b": {"type": "string"},
+                "min_score": {"type": "number", "default": 0.5},
+            },
+            "required": ["file_a", "file_b"],
+        },
+    ),
+    Tool(
+        name="lineage",
+        description=(
+            "Field-level provenance for the loaded run: for each scored pair, "
+            "the per-field scores that produced the match, plus cluster id. "
+            "Optionally write a lineage JSON to a directory."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "max_pairs": {"type": "integer", "default": 100},
+                "natural_language": {"type": "boolean", "default": False},
+                "output_dir": {
+                    "type": "string",
+                    "description": "If set, write lineage JSON here and return the path instead of inline records.",
+                },
+            },
+        },
+    ),
+    Tool(
+        name="list_runs",
+        description="List previous dedupe/match runs (for rollback) from the run log.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "output_dir": {"type": "string", "default": "."},
+            },
+        },
+    ),
+    Tool(
+        name="rollback",
+        description=(
+            "Undo a previous run by DELETING its output files (looked up by "
+            "run_id in the run log). Destructive: removes the files that run "
+            "wrote. Use list_runs first to find the run_id."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "output_dir": {"type": "string", "default": "."},
+            },
+            "required": ["run_id"],
+        },
+    ),
 ]
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
@@ -748,6 +866,32 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_pprl_auto_config(args.get("security_level", "high"), args.get("use_llm", False))
     elif name == "pprl_link":
         return _tool_pprl_link(args)
+    elif name == "evaluate":
+        return _tool_evaluate(
+            args["ground_truth_path"],
+            args.get("col_a", "id_a"),
+            args.get("col_b", "id_b"),
+        )
+    elif name == "analyze_blocking":
+        return _tool_analyze_blocking(
+            args.get("sample_size", 1000),
+            args.get("target_block_size", 5000),
+            args.get("limit", 10),
+        )
+    elif name == "compare_clusters":
+        return _tool_compare_clusters(args["clusters_a_path"], args["clusters_b_path"])
+    elif name == "schema_match":
+        return _tool_schema_match(args["file_a"], args["file_b"], args.get("min_score", 0.5))
+    elif name == "lineage":
+        return _tool_lineage(
+            args.get("max_pairs", 100),
+            args.get("natural_language", False),
+            args.get("output_dir"),
+        )
+    elif name == "list_runs":
+        return _tool_list_runs(args.get("output_dir", "."))
+    elif name == "rollback":
+        return _tool_rollback(args["run_id"], args.get("output_dir", "."))
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -1261,6 +1405,93 @@ async def run_server(file_paths: list[str], config_path: str | None = None) -> N
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def _load_clusters_json(path: str) -> dict[int, dict]:
+    """Load a clusters JSON file into the {cluster_id: {"members": [...]}} shape.
+
+    Accepts either a bare cluster mapping or a {"clusters": {...}} wrapper, and
+    cluster values that are either a dict with a "members" list or a bare list.
+    """
+    with open(path, encoding="utf-8") as fp:
+        data = json.load(fp)
+    raw = data.get("clusters", data) if isinstance(data, dict) else data
+    out: dict[int, dict] = {}
+    for k, v in raw.items():
+        members = v.get("members") if isinstance(v, dict) else v
+        out[int(k)] = {"members": [int(m) for m in members]}
+    return out
+
+
+def _tool_evaluate(ground_truth_path: str, col_a: str = "id_a", col_b: str = "id_b") -> dict:
+    from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
+    if _result is None:
+        return {"error": "No dataset loaded"}
+    gt = load_ground_truth_csv(ground_truth_path, col_a, col_b)
+    return evaluate_clusters(_result.clusters, gt).summary()
+
+
+def _tool_analyze_blocking(
+    sample_size: int = 1000, target_block_size: int = 5000, limit: int = 10
+) -> dict:
+    from dataclasses import asdict
+
+    from goldenmatch.core.block_analyzer import analyze_blocking
+    if _engine is None or _config is None:
+        return {"error": "No dataset loaded"}
+    cols = sorted({f.field for mk in _config.get_matchkeys() for f in mk.fields})
+    suggestions = analyze_blocking(
+        _engine.data, cols, sample_size=sample_size, target_block_size=target_block_size
+    )
+    return {
+        "matchkey_columns": cols,
+        "suggestions": [asdict(s) for s in suggestions[:limit]],
+    }
+
+
+def _tool_compare_clusters(clusters_a_path: str, clusters_b_path: str) -> dict:
+    from goldenmatch.core.compare_clusters import compare_clusters
+    a = _load_clusters_json(clusters_a_path)
+    b = _load_clusters_json(clusters_b_path)
+    return compare_clusters(a, b).summary()
+
+
+def _tool_schema_match(file_a: str, file_b: str, min_score: float = 0.5) -> dict:
+    from goldenmatch.core.ingest import load_file
+    from goldenmatch.core.schema_match import auto_map_columns
+    df_a = load_file(file_a).collect()
+    df_b = load_file(file_b).collect()
+    return {"mappings": auto_map_columns(df_a, df_b, min_score=min_score)}
+
+
+def _tool_lineage(
+    max_pairs: int = 100, natural_language: bool = False, output_dir: str | None = None
+) -> dict:
+    from goldenmatch.core.lineage import build_lineage, save_lineage
+    if _result is None or _engine is None or _config is None:
+        return {"error": "No dataset loaded"}
+    lineage = build_lineage(
+        _result.scored_pairs,
+        _engine.data,
+        _config.get_matchkeys(),
+        _result.clusters,
+        max_pairs=max_pairs,
+        natural_language=natural_language,
+    )
+    if output_dir:
+        path = save_lineage(lineage, output_dir, run_name="mcp")
+        return {"saved_to": str(path), "count": len(lineage)}
+    return {"count": len(lineage), "lineage": lineage}
+
+
+def _tool_list_runs(output_dir: str = ".") -> dict:
+    from goldenmatch.core.rollback import list_runs
+    return {"runs": list_runs(output_dir)}
+
+
+def _tool_rollback(run_id: str, output_dir: str = ".") -> dict:
+    from goldenmatch.core.rollback import rollback_run
+    return rollback_run(run_id, output_dir)
+
+
 async def run_server_http(
     host: str = "0.0.0.0",
     port: int = 8200,
@@ -1291,7 +1522,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 35 MCP tools for matching, explaining, reviewing, data quality, transforms, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 54 MCP tools for matching, explaining, reviewing, evaluating, blocking analysis, lineage, data quality, transforms, identity graph, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

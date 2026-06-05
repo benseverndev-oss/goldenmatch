@@ -134,3 +134,10 @@ lockstep (bridge fn + pgrx wrapper + handwritten SQL on the Postgres side;
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads
 - `cargo fmt` must run separately for bridge (workspace) and postgres (standalone)
 - PyPI publishing uses credentials from `D:\show_case\goldenmatch\.testing\.env`
+
+## maturin wheels over `ort` (onnxruntime) -- cross-platform PUBLISH gotchas (`goldenmatch-embed`, learned 2026-06-05, took 3 build-fix rounds)
+`ort` builds fine in the plain `embed_wheel`/`goldenembed` CI lanes (ubuntu-latest has system OpenSSL), but the maturin **publish** workflow uses minimal manylinux/cross containers that bite:
+- **`ort-sys` pulls `openssl-sys` as a BUILD-dependency** (its build script downloads ONNX Runtime via a TLS client). Cargo resolver v2 does NOT propagate a normal-dep `openssl/vendored` feature into build-deps, so vendoring from the crate is a NO-OP. Fix = install SYSTEM OpenSSL into the build container via maturin-action `before-script-linux`.
+- **The two Linux legs use DIFFERENT base images.** x86_64 = AlmaLinux manylinux (`dnf`/`yum` -> `openssl-devel`); aarch64 = the Debian-based `rust-cross/manylinux_2_28-cross:aarch64` (`apt-get` -> `libssl-dev`). A `dnf`-only before-script exits **127** on aarch64. Use a portable `if dnf; elif yum; elif apt-get` script (see `publish-goldenmatch-embed.yml`).
+- **No `ort` prebuilt for `x86_64-apple-darwin`** (Intel Macs) -> that maturin leg can't link without compiling ONNX from source. Drop it; macOS = `aarch64` only (Intel users fall back to the Python in-house embedder). Windows + macOS-arm + both Linux legs build fine once OpenSSL is present.
+- **Re-run a failed publish** with `gh workflow run publish-goldenmatch-embed.yml --ref main` (workflow_dispatch builds main HEAD + publishes the pyproject version) instead of re-tagging. The `publish` job is `release: published`-gated per package, so every release event fires ALL per-package publish workflows; each self-skips unless the tag matches its prefix (a "skipped" run for the wrong tag is correct, not a failure).

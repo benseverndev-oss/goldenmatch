@@ -62,7 +62,7 @@ goldenpipe run customers.csv -o golden.csv  # Save golden records
 
 ## Remote MCP Server
 
-GoldenPipe is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benseverndev-oss/goldenpipe) — connect from any MCP client without installing anything.
+GoldenPipe is available as a hosted MCP server on [Smithery](https://smithery.ai/servers/benzsevern/goldenpipe) — connect from any MCP client without installing anything.
 
 **Claude Desktop / Claude Code:**
 ```json

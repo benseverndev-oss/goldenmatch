@@ -285,7 +285,7 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 
 Hosted on Railway, registered on Smithery:
 - **Endpoint:** `https://goldenflow-mcp-production.up.railway.app/mcp/`
-- **Smithery:** `https://smithery.ai/servers/benseverndev-oss/goldenflow`
+- **Smithery:** `https://smithery.ai/servers/benzsevern/goldenflow`
 - **Server card:** `https://goldenflow-mcp-production.up.railway.app/.well-known/mcp/server-card.json`
 - **Transport:** Streamable HTTP (via `StreamableHTTPSessionManager`)
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)

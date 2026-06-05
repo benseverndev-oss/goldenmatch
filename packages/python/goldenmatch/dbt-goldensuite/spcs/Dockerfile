@@ -12,7 +12,7 @@
 # account in this PR -- see docs/snowflake-spcs.md for the deploy
 # walkthrough.
 
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0
 
 # Build-time hardening for native wheel installs.
 RUN apt-get update \

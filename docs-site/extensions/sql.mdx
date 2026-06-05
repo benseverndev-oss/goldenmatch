@@ -6,6 +6,11 @@ keywords: ["postgres", "duckdb", "sql", "extension", "pgrx", "udf"]
 
 The `goldenmatch-extensions` package runs GoldenMatch directly from SQL, without leaving the database. It ships a pgrx-based PostgreSQL extension and a DuckDB UDF package.
 
+[![goldenmatch-duckdb on PyPI](https://img.shields.io/pypi/v/goldenmatch-duckdb?label=pypi%3A%20goldenmatch-duckdb&color=d4a017&logo=pypi&logoColor=white)](https://pypi.org/project/goldenmatch-duckdb/)
+[![goldenmatch-duckdb downloads](https://img.shields.io/pypi/dm/goldenmatch-duckdb?label=downloads/mo&color=2ea44f)](https://pypi.org/project/goldenmatch-duckdb/)
+[![goldenmatch-embed on PyPI](https://img.shields.io/pypi/v/goldenmatch-embed?label=pypi%3A%20goldenmatch-embed&color=d4a017&logo=pypi&logoColor=white)](https://pypi.org/project/goldenmatch-embed/)
+[![goldenmatch_pg release](https://img.shields.io/github/v/release/benseverndev-oss/goldenmatch?filter=goldenmatch-pg-v*&label=release%3A%20goldenmatch_pg&color=336791&logo=postgresql&logoColor=white)](https://github.com/benseverndev-oss/goldenmatch/releases?q=goldenmatch-pg)
+
 ## PostgreSQL
 
 ### Install
@@ -85,6 +90,75 @@ Registered UDFs:
 | `goldenmatch_match_tables(target, ref, config)` | Match two tables. |
 | `goldenmatch_dedupe(json, config)` | Deduplicate JSON records directly. |
 | `goldenmatch_match(target_json, ref_json, config)` | Match two JSON record sets. |
+| `goldenmatch_connected_components(...)` | Group a candidate-pair graph into entities. |
+| `goldenmatch_pair_dedup(...)` | Keep the best score per canonical pair. |
+| `goldenmatch_embed_local(text, model_path)` | Embed text with a local in-house model. |
+
+## Graph and embedding kernels
+
+These run native-direct in pure Rust, with no CPython round-trip. They expose GoldenMatch's clustering primitives and the local embedder directly in SQL, on both backends (and as DataFusion FFI UDFs). One shared kernel backs all surfaces, so results are identical across them.
+
+### Connected components and pair dedupe
+
+`goldenmatch_connected_components` groups a candidate-pair graph into entities, one component per entity, with singletons included. `goldenmatch_pair_dedup` canonicalizes a candidate-pair set and keeps the best score per pair. Both take the edge columns as lists. Pass integer record ids to the bare name, or string ids to the `_str` sibling.
+
+<CodeGroup>
+
+```sql DuckDB
+-- Components over an edge set plus the id universe
+SELECT goldenmatch_connected_components(
+  (SELECT list(id_a) FROM edges),
+  (SELECT list(id_b) FROM edges),
+  (SELECT list(score) FROM edges),
+  (SELECT list(id) FROM records)
+);  -- [[id, ...], ...]
+
+-- Canonical max-score pairs
+SELECT goldenmatch_pair_dedup(
+  (SELECT list(id_a) FROM pairs),
+  (SELECT list(id_b) FROM pairs),
+  (SELECT list(score) FROM pairs)
+);  -- [{a, b, s}, ...]
+
+-- String record ids use the _str variants
+SELECT goldenmatch_connected_components_str(
+  ['a', 'b'], ['b', 'c'], [0.9, 0.8], ['a', 'b', 'c', 'd']
+);
+```
+
+```sql PostgreSQL
+-- Components: returns (component, member) rows
+SELECT * FROM goldenmatch.goldenmatch_connected_components(
+  ARRAY[1, 2], ARRAY[2, 3], ARRAY[0.9, 0.8], ARRAY[1, 2, 3, 4]
+);
+
+-- Canonical max-score pairs: returns (a, b, s) rows
+SELECT * FROM goldenmatch.goldenmatch_pair_dedup(
+  ARRAY[2, 1], ARRAY[1, 2], ARRAY[0.5, 0.9]
+);
+```
+
+</CodeGroup>
+
+### Local embedding
+
+`goldenmatch_embed_local` embeds text with a saved in-house model through the `goldenembed` ONNX runtime. No network and no API key. `model_path` is a directory holding `config.json` and `model.onnx`.
+
+<CodeGroup>
+
+```sql DuckDB
+SELECT goldenmatch_embed_local('John Smith', '/path/to/model');  -- JSON float array
+```
+
+```sql PostgreSQL
+SELECT goldenmatch.goldenmatch_embed_local('John Smith', '/path/to/model');  -- double precision[]
+```
+
+</CodeGroup>
+
+<Note>
+  The DuckDB embedding UDF needs the optional embed runtime: `pip install goldenmatch-duckdb[embed]`.
+</Note>
 
 ## Requirements
 
@@ -94,5 +168,5 @@ Registered UDFs:
 - PostgreSQL 15, 16, or 17 (Postgres extension)
 
 <Note>
-  The extension embeds CPython through pyo3 and calls the GoldenMatch Python API, so the matching the extension performs is identical to the Python package.
+  The scoring and table operations embed CPython through pyo3 and call the GoldenMatch Python API, so they match the Python package exactly. The graph and embedding kernels run native-direct in pure Rust with no CPython, sharing one kernel across DuckDB, PostgreSQL, and DataFusion.
 </Note>

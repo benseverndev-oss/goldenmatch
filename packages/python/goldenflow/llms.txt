@@ -4,7 +4,7 @@
 
 ## Interfaces
 - MCP Server: `goldenflow mcp-serve` (10 tools: transform, map, profile, learn, diff, validate, stream, history, domain, demo)
-- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benseverndev-oss/goldenflow)
+- Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
 - A2A Server: `goldenflow agent-serve --port 8150` (6 skills)
 - CLI: `goldenflow transform`, `goldenflow map`, + 12 more commands
 - Python API: `from goldenflow import transform_file, transform_df`

@@ -22,7 +22,7 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-Or browse on Smithery: [https://smithery.ai/servers/benseverndev-oss/goldencheck](https://smithery.ai/servers/benseverndev-oss/goldencheck)
+Or browse on Smithery: [https://smithery.ai/servers/benzsevern/goldencheck](https://smithery.ai/servers/benzsevern/goldencheck)
 
 ## Local Install
 

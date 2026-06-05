@@ -33,14 +33,14 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_19_skills():
+def test_agent_card_has_31_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
-    (18->19)."""
+    (18->19); the MCP tool-coverage parity pass added 12 (19->31)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 19
+    assert len(card["skills"]) == 31
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "controller_telemetry" in ids
@@ -48,6 +48,12 @@ def test_agent_card_has_19_skills():
     assert {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
+    } <= ids
+    # MCP tool-coverage parity pass.
+    assert {
+        "evaluate", "analyze_blocking", "compare_clusters", "schema_match",
+        "sensitivity", "incremental", "identity_show", "list_runs", "rollback",
+        "list_corrections", "learn_thresholds", "memory_stats",
     } <= ids
 
 
@@ -152,6 +158,142 @@ def test_dispatch_unknown_skill():
 
     with pytest.raises(ValueError, match="Unknown skill"):
         dispatch_skill("nonexistent_skill", {})
+
+
+# ── MCP tool-coverage parity skills ───────────────────────────────────────────
+
+
+def _exact_email_cfg(tmp_path) -> str:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "matchkeys:\n"
+        "  - name: exact_email\n"
+        "    type: exact\n"
+        "    fields:\n"
+        "      - field: email\n"
+        "        transforms: [lowercase, strip]\n"
+    )
+    return str(cfg)
+
+
+def test_dispatch_compare_clusters(tmp_path):
+    import json
+
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    a.write_text(json.dumps({"0": {"members": [0, 1, 2]}}))
+    b.write_text(json.dumps({"0": {"members": [0, 1]}, "1": {"members": [2]}}))
+    result = dispatch_skill("compare_clusters", {
+        "clusters_a_path": str(a), "clusters_b_path": str(b),
+    })
+    assert "twi" in result
+    assert result["cc1"] == 1 and result["cc2"] == 2
+
+
+def test_dispatch_schema_match(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    fa = tmp_path / "a.csv"
+    fb = tmp_path / "b.csv"
+    fa.write_text("full_name,email\nJohn,j@x.com\n")
+    fb.write_text("contact_name,email_address\nJohn,j@x.com\n")
+    result = dispatch_skill("schema_match", {"file_a": str(fa), "file_b": str(fb)})
+    assert isinstance(result["mappings"], list)
+    assert len(result["mappings"]) >= 1
+
+
+def test_dispatch_list_runs_and_rollback(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    assert dispatch_skill("list_runs", {"output_dir": str(tmp_path)})["runs"] == []
+    assert "error" in dispatch_skill("rollback", {"run_id": "nope", "output_dir": str(tmp_path)})
+
+
+def test_dispatch_evaluate(tmp_path):
+    import csv
+
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    data = tmp_path / "data.csv"
+    with open(data, "w", newline="") as fp:
+        w = csv.writer(fp)
+        w.writerow(["name", "email"])
+        w.writerow(["John Smith", "john@x.com"])
+        w.writerow(["Jon Smith", "john@x.com"])
+    gt = tmp_path / "gt.csv"
+    with open(gt, "w", newline="") as fp:
+        w = csv.writer(fp)
+        w.writerow(["id_a", "id_b"])
+        w.writerow([0, 1])
+    result = dispatch_skill("evaluate", {
+        "file_path": str(data), "config": _exact_email_cfg(tmp_path), "ground_truth": str(gt),
+    })
+    assert "f1" in result and "precision" in result
+
+
+def test_dispatch_incremental(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    base = tmp_path / "base.csv"
+    new = tmp_path / "new.csv"
+    base.write_text("name,email\nJohn Smith,john@x.com\nJane Doe,jane@x.com\n")
+    new.write_text("name,email\nJohnny Smith,john@x.com\nBob New,bob@x.com\n")
+    result = dispatch_skill("incremental", {
+        "base_file": str(base), "new_records": str(new), "config": _exact_email_cfg(tmp_path),
+    })
+    assert result["matched_to_base"] == 1
+    assert result["new_entities"] == 1
+
+
+def test_dispatch_analyze_blocking(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    data = tmp_path / "data.csv"
+    data.write_text("name,email\nA,a@x.com\nB,b@x.com\n")
+    result = dispatch_skill("analyze_blocking", {
+        "file_path": str(data), "config": _exact_email_cfg(tmp_path),
+    })
+    assert "suggestions" in result
+    assert isinstance(result["suggestions"], list)
+
+
+def test_dispatch_sensitivity_requires_sweep(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    data = tmp_path / "data.csv"
+    data.write_text("name,email\nA,a@x.com\n")
+    result = dispatch_skill("sensitivity", {
+        "file_path": str(data), "sweep": [], "config": _exact_email_cfg(tmp_path),
+    })
+    assert "error" in result
+
+
+def test_dispatch_identity_show(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+    from goldenmatch.identity import IdentityNode, IdentityStore, SourceRecord, new_entity_id
+
+    path = str(tmp_path / "identity.db")
+    eid = new_entity_id()
+    with IdentityStore(path=path) as s:
+        s.upsert_identity(IdentityNode(entity_id=eid, dataset="d", confidence=0.9))
+        s.upsert_record(SourceRecord("src:1", "src", "1", "h1", entity_id=eid, dataset="d"))
+    result = dispatch_skill("identity_show", {"entity_id": eid, "path": path})
+    assert result.get("entity_id") == eid
+
+
+def test_dispatch_memory_loop(tmp_path):
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    path = str(tmp_path / "memory.db")
+    dispatch_skill("add_correction", {
+        "decision": "reject", "id_a": 1, "id_b": 2, "dataset": "ds1", "path": path,
+    })
+    listed = dispatch_skill("list_corrections", {"path": path, "dataset": "ds1"})
+    assert listed["count"] == 1
+    stats = dispatch_skill("memory_stats", {"path": path})
+    assert stats["total_corrections"] == 1
 
 
 def test_agent_card_has_quality_and_transform_skills():

@@ -20,6 +20,7 @@ from goldenmatch.identity import (
     IdentityStore,
     find_by_record,
     find_conflicts,
+    get_entity,
     history,
     list_entities,
     manual_merge,
@@ -123,6 +124,23 @@ IDENTITY_TOOLS: list[Tool] = [
             "required": ["entity_id", "record_ids"],
         },
     ),
+    Tool(
+        name="identity_show",
+        description=(
+            "Fetch the full detail of one identity by entity_id: its member "
+            "records, evidence edges, and recent event log. Returns "
+            "{found: false} when no such entity exists."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "event_limit": {"type": "integer", "default": 100},
+                "path": {"type": "string", "description": "Identity DB path"},
+            },
+            "required": ["entity_id"],
+        },
+    ),
 ]
 
 
@@ -179,6 +197,11 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
                 reason=args.get("reason"),
                 run_name="mcp",
             )
+
+    if name == "identity_show":
+        with _open(args) as s:
+            view = get_entity(s, args["entity_id"], event_limit=int(args.get("event_limit", 100)))
+        return view.to_dict() if view else {"found": False}
 
     raise ValueError(f"unknown identity tool: {name}")
 

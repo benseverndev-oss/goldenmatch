@@ -26,6 +26,16 @@ def _scalar(con, sql: str) -> str:
 
 class TestEmbedLocal:
     def test_embeds_with_saved_model(self, con, tmp_path):
+        # goldenmatch_embed_local now runs the goldenembed-rs ONNX kernel via the
+        # optional `goldenmatch-embed` wheel (an extra), which loads `model.onnx`.
+        # That export is only written by `model.save` when `onnx` is installed.
+        # So this happy-path needs BOTH; skip where either is absent (e.g. the
+        # duckdb_extensions lane, which doesn't install the wheel). The wheel's
+        # embed correctness is covered directly in the `embed_wheel` CI lane.
+        import pytest
+
+        pytest.importorskip("goldenmatch_embed")
+        pytest.importorskip("onnx")
         from goldenmatch.embeddings.inhouse import (
             FeaturizerConfig,
             TrainConfig,

@@ -1,0 +1,154 @@
+name: Publish goldenmatch-embed to PyPI
+
+# Builds the SEPARATE compiled embed wheel (maturin/abi3, ort/ONNX runtime
+# bundled) across platforms and publishes to PyPI. The pure-Python `goldenmatch`
+# frontend is published by publish-goldenmatch.yml; this is the goldenembed-rs
+# ONNX embedding counterpart.
+#
+# Fires on a release tagged `goldenmatch-embed-v*` (kept distinct from the
+# Python `v*`, TS `goldenmatch-js-v*`, and native `goldenmatch-native-v*` tags
+# so the publish workflows never cross-trigger). workflow_dispatch with a `ref`
+# allows a manual/retro build.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: HEAD of main)"
+        required: false
+        default: ""
+      publish:
+        description: "Upload to PyPI (uncheck for a build-matrix dry run)"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  # One manifest drives every job; abi3 means one wheel per platform (3.11+).
+  MANIFEST: packages/rust/extensions/embed-py/Cargo.toml
+
+jobs:
+  linux:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-embed-v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels (maturin, abi3, manylinux)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          # ort-sys's build script downloads ONNX Runtime via a TLS client that
+          # needs system OpenSSL (a host/build-dep). The x86_64 leg uses the
+          # AlmaLinux manylinux image (dnf/yum -> openssl-devel); the aarch64 leg
+          # uses the Debian-based rust-cross image (apt -> libssl-dev). Try each
+          # package manager so both containers are covered.
+          before-script-linux: |
+            if command -v dnf >/dev/null 2>&1; then dnf install -y openssl-devel pkgconfig
+            elif command -v yum >/dev/null 2>&1; then yum install -y openssl-devel pkgconfig
+            elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y libssl-dev pkg-config
+            fi
+          args: --release --out dist -m ${{ env.MANIFEST }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  windows:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-embed-v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel (maturin, abi3)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
+        with:
+          target: x64
+          args: --release --out dist -m ${{ env.MANIFEST }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: wheels-windows-x64
+          path: dist
+
+  macos:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-embed-v')
+    # Apple Silicon only. `ort` ships NO prebuilt ONNX Runtime for
+    # x86_64-apple-darwin (Intel Macs), so that cross-compile cannot link
+    # without building ONNX from source -- not worth it for an EOL arch; those
+    # users fall back to the pure-Python in-house embedder. macos-13 (Intel)
+    # runners also queue indefinitely in this org.
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel (maturin, abi3)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist -m ${{ env.MANIFEST }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  sdist:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-embed-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1.51.0
+        with:
+          command: sdist
+          args: --out dist -m ${{ env.MANIFEST }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  publish:
+    needs: [linux, windows, macos, sdist]
+    # Release events always publish; a workflow_dispatch publishes only when the
+    # `publish` box is checked (unchecked = build-matrix dry run, no upload).
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          # Merge every wheels-* artifact into a single dist/ for upload.
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        with:
+          packages-dir: dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

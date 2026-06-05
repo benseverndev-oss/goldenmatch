@@ -33,11 +33,50 @@
             "group": "GoldenMatch",
             "pages": [
               "goldenmatch/overview",
-              "goldenmatch/quickstart",
-              "goldenmatch/auto-config",
-              "goldenmatch/backends-and-scale",
-              "goldenmatch/pprl",
-              "goldenmatch/cli"
+              {
+                "group": "Guides",
+                "pages": [
+                  "goldenmatch/quickstart",
+                  "goldenmatch/installation",
+                  "goldenmatch/cli",
+                  "goldenmatch/tui"
+                ]
+              },
+              {
+                "group": "Features",
+                "pages": [
+                  "goldenmatch/auto-config",
+                  "goldenmatch/scoring",
+                  "goldenmatch/blocking",
+                  "goldenmatch/pipeline",
+                  "goldenmatch/backends-and-scale",
+                  "goldenmatch/pprl",
+                  "goldenmatch/llm",
+                  "goldenmatch/learning-memory",
+                  "goldenmatch/identity-graph",
+                  "goldenmatch/domain-packs",
+                  "goldenmatch/reference-data",
+                  "goldenmatch/streaming",
+                  "goldenmatch/evaluation"
+                ]
+              },
+              {
+                "group": "APIs & integrations",
+                "pages": [
+                  "goldenmatch/python-api",
+                  "goldenmatch/typescript",
+                  "goldenmatch/rest-api",
+                  "goldenmatch/mcp",
+                  "goldenmatch/agent"
+                ]
+              },
+              {
+                "group": "API reference",
+                "pages": [
+                  "goldenmatch/configuration",
+                  "goldenmatch/api-quick-reference"
+                ]
+              }
             ]
           },
           {

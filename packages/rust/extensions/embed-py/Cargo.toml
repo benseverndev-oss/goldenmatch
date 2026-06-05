@@ -1,0 +1,44 @@
+# goldenmatch-embed — the thin pyo3/maturin WRAPPER over the pyo3-free
+# `goldenembed` crate. Keeping the wrapper separate is deliberate: `goldenembed`
+# stays pyo3-free (so the pgrx `postgres` crate and the DataFusion FFI surface
+# can link it without embedding CPython), and ALL of the `ort` (onnxruntime)
+# dependency is confined to THIS wheel. `pip install goldenmatch-embed` is what
+# the DuckDB embed UDF imports to run the same ONNX kernel as the other surfaces.
+#
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# here is NOT unified with the `bridge` crate's `auto-initialize` feature — the
+# two are mutually incompatible (ext-module must NOT link libpython; embedding
+# must). Same reasoning as the sibling `native` wheel.
+[workspace]
+
+[package]
+name = "goldenmatch-embed-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Local ONNX embedder for GoldenMatch (PyO3 extension module over goldenembed-rs)"
+
+[lib]
+# Produces lib_embed.so; renamed to goldenmatch_embed/_embed.abi3.so at install.
+# The #[pymodule] is `_embed`, so the init symbol is PyInit__embed.
+name = "_embed"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# The pyo3-free kernel this wheel wraps. Pulls `ort` (onnxruntime) transitively;
+# that dependency is confined to this wheel by construction.
+goldenembed = { path = "../goldenembed" }
+
+# NOTE: `ort-sys`'s build script downloads the ONNX Runtime via a TLS client
+# that pulls `openssl-sys` as a BUILD-dependency. Resolver v2 does NOT propagate
+# a normal-dependency `openssl/vendored` feature into build-deps, so vendoring
+# from here does nothing -- the fix lives in the publish workflow, which installs
+# system `openssl-devel` into the manylinux build container.
+
+[profile.release]
+opt-level = 3
+lto = "thin"
