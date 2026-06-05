@@ -12,7 +12,7 @@ on:
       - ".github/workflows/update-download-badges.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: update-download-badges
@@ -21,6 +21,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # pushes refreshed badge JSON to the `badges` branch
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
