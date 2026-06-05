@@ -197,8 +197,12 @@ def _default_llm_caller(prompt: str) -> str | None:
                 model="claude-haiku-4-5-20251001",
             )
         return text
-    except Exception as exc:
-        logger.warning("LLM strategy pick failed (%s): %s", provider, exc)
+    except Exception:
+        # Log a constant only. Both `exc` (provider clients echo the api key
+        # into error text) and `provider` (element 0 of `_detect_provider`'s
+        # (label, key) tuple, which CodeQL taints from the OPENAI_API_KEY
+        # source) carry credential taint to this sink (CodeQL #302).
+        logger.warning("LLM strategy pick failed")
         return None
 
 

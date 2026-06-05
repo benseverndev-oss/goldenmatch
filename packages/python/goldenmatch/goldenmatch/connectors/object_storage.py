@@ -76,6 +76,26 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_FORMATS = ("parquet", "csv", "json", "ndjson")
 
+_AZURE_BLOB_HOST_SUFFIX = ".blob.core.windows.net"
+
+
+def _is_azure_blob_https(path: str) -> bool:
+    """True when ``path`` is an http(s) URL whose host is an Azure Blob endpoint.
+
+    Checks the parsed hostname suffix rather than a substring match. A bare
+    ``".blob.core.windows.net" in path`` is fooled by a URL that only embeds
+    that text in its path/query (``https://evil.com/.blob.core.windows.net``)
+    or a suffix-confusion host (``blob.core.windows.net.evil.com``) — see
+    CodeQL #323.
+    """
+    parsed = urlparse(path)
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    return host == _AZURE_BLOB_HOST_SUFFIX.lstrip(".") or host.endswith(
+        _AZURE_BLOB_HOST_SUFFIX
+    )
+
 
 class ObjectStorageConnector(BaseConnector):
     """Read/write tabular data from S3, GCS, or Azure Blob Storage."""
@@ -246,13 +266,7 @@ class ObjectStorageConnector(BaseConnector):
                 import boto3  # type: ignore[import-not-found]  # noqa: F401
             elif scheme in ("gs", "gcs"):
                 import google.cloud.storage  # type: ignore[import-not-found]  # noqa: F401
-            elif (
-                scheme in ("abfs", "abfss", "az")
-                or (
-                    scheme in ("http", "https")
-                    and ".blob.core.windows.net" in path.lower()
-                )
-            ):
+            elif scheme in ("abfs", "abfss", "az") or _is_azure_blob_https(path):
                 import azure.storage.blob  # type: ignore[import-not-found]  # noqa: F401
         except ImportError as exc:
             extra = {

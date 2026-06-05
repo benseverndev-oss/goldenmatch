@@ -16,6 +16,9 @@ on:
         description: "Comma-separated row counts"
         default: "1000000,5000000"
 
+permissions:
+  contents: read
+
 jobs:
   count:
     runs-on: large-new-64GB

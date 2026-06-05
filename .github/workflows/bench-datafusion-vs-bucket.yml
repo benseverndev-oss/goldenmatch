@@ -52,7 +52,7 @@ jobs:
         run: uv pip install -e "packages/python/goldenmatch[datafusion]"
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
 
       - name: Build native module
         # bucket and datafusion backends both REQUIRE the native
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload bench artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: datafusion-vs-bucket-day3
           path: .profile_tmp/datafusion-bench/
