@@ -2745,11 +2745,14 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     """
     fields = []
     for p in profiles:
-        # NOTE (#715): build_matchkeys now admits high-cardinality identifier
-        # columns to exact matchkeys via a cardinality band. The probabilistic
-        # path intentionally still skips identifier here — admitting it needs a
-        # separate Fellegi-Sunter m/u-aware decision. Tracked as a #715 follow-up.
-        if p.col_type in ("numeric", "date", "identifier", "description"):
+        # #721: identifiers ARE admitted to the probabilistic (Fellegi-Sunter)
+        # path. Unlike the exact path's cardinality BAND (#715), F-S needs no
+        # lower floor: a weak (low-cardinality) identifier self-regulates because
+        # its higher u (agreement among non-matches) yields a smaller EM weight,
+        # so EM down-weights it rather than mega-clustering. m/u estimation and
+        # blocking-field exclusion are EM's job at train time (train_em
+        # blocking_fields=...), not this builder's.
+        if p.col_type in ("numeric", "date", "description"):
             continue
 
         scorer_info = _SCORER_MAP.get(p.col_type)
@@ -2757,6 +2760,14 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
             continue
 
         scorer, _weight, transforms = scorer_info
+
+        # The one hard gate, applied uniformly to every exact-scorer field
+        # (identifier/email/phone): a perfectly-unique column (card == 1.0) is a
+        # per-record surrogate key -- it is never shared, so an agreement carries
+        # zero shared-identity signal. Exclude it for config hygiene. (Mirrors the
+        # exact path's >= 1.0 upper bound; previously the prob path gated none.)
+        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+            continue
 
         # Refdata hook (mirrors build_matchkeys); see module-top fallback
         # for the unavailable-refdata case.
@@ -2819,8 +2830,9 @@ def auto_configure_probabilistic_df(
     if not matchkeys:
         raise ValueError(
             "No probabilistic matchkeys could be built: no matchable columns "
-            "found (probabilistic skips numeric/date/identifier/description "
-            "columns; provide name/address/email/phone-like fields)."
+            "found (probabilistic skips numeric/date/description columns and "
+            "perfectly-unique surrogate keys; provide name/address/email/phone/"
+            "identifier-like fields)."
         )
     blocking = build_blocking(profiles, df, llm_provider=llm_provider)
     return GoldenMatchConfig(
