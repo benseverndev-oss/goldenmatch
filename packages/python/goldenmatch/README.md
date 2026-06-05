@@ -1101,6 +1101,22 @@ GoldenMatch includes a gold-themed interactive terminal UI:
 
 ![Golden Tab](docs/screenshots/tui-golden.svg)
 
+## Environment Variables
+
+Key environment variables for tuning and hardening GoldenMatch:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOLDENMATCH_ALLOWED_ROOT` | *(unset)* | Opt-in path sandbox. When set, every user-supplied file path (MCP tools, ingest, rollback, lineage, domain registry) must resolve under this directory. Raises `PathOutsideAllowedRootError` on escape. Recommended for network-exposed deployments (e.g. the Railway MCP server sets it to the `/data` volume). |
+| `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | Set to `0` to disable cross-run auto-config memory (`~/.goldenmatch/autoconfig_memory.db`). Useful in CI. |
+| `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | Set to `1` to enable LLM policy fallback when heuristic auto-config rules are exhausted. Requires `OPENAI_API_KEY`. |
+| `GOLDENMATCH_NOISE_AWARE_SCORERS` | `1` | Set to `0` to disable noise-aware scorer upgrades (`token_sort` -> `jaro_winkler` on address/string columns). |
+| `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` | `0` | Set to `1` to let the v3 planner auto-pick Ray at 50M+ rows. |
+| `GOLDENMATCH_DISTRIBUTED_PIPELINE` | `0` | Set to `2` to activate the full Phase-5 distributed pipeline (no driver-side materialization). |
+| `GOLDENMATCH_BUCKET_DEBUG` | `0` | Set to `1` to print per-bucket prep/kernel/post-filter timing for `backend=bucket`. Zero production overhead. |
+| `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | Minimum candidate-pair count per call before the native kernel fans out to rayon threads. |
+| `POLARS_SKIP_CPU_CHECK` | `0` | Set to `1` on Windows to skip the polars CPU-check WMI query (avoids startup hang). |
+
 ## Settings Persistence
 
 GoldenMatch saves preferences across sessions:
