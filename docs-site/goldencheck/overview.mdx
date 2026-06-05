@@ -1,0 +1,109 @@
+---
+title: "GoldenCheck overview"
+description: "Zero-config data-quality scanning that discovers rules from your data instead of making you write them."
+keywords: ["goldencheck", "data quality", "validation", "profiling", "drift detection"]
+---
+
+GoldenCheck is a zero-config data-validation platform that discovers quality rules automatically from your data. It combines fast statistical profilers with optional LLM enhancement to catch type mismatches, missing values, format violations, outliers, and cross-column constraints. It runs as a CLI, a Python and TypeScript library, a dbt package, and a GitHub Action.
+
+<CardGroup cols={2}>
+  <Card title="CLI reference" icon="terminal" href="/goldencheck/cli">
+    Commands, flags, and domain packs.
+  </Card>
+  <Card title="Integrations" icon="plug" href="/goldencheck/integrations">
+    dbt tests and the GitHub Action.
+  </Card>
+</CardGroup>
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install goldencheck
+```
+
+```bash npm
+npm install goldencheck
+```
+
+</CodeGroup>
+
+Extras:
+
+```bash
+pip install goldencheck[llm]                # LLM boost (Anthropic / OpenAI)
+pip install goldencheck[baseline]           # deep profiling and drift detection
+pip install goldencheck[baseline,semantic]  # + semantic type inference
+pip install goldencheck[db]                  # database scanning
+pip install goldencheck[mcp]                 # MCP server
+```
+
+## Quickstart
+
+```bash
+# Scan a file: discover issues and launch the TUI
+goldencheck data.csv
+
+# CI-friendly: no TUI, JSON output, fail on errors
+goldencheck data.csv --no-tui --json
+goldencheck validate data.csv
+```
+
+In Python:
+
+```python
+import goldencheck
+
+findings = goldencheck.scan_file("data.csv")
+for f in findings:
+    print(f"[{f.severity}] {f.column}: {f.check} — {f.message}")
+
+score = goldencheck.health_score("data.csv")
+print(score)  # e.g. "B (78/100)"
+```
+
+The edge-safe TypeScript core:
+
+```typescript
+import { scanData, TabularData, Severity } from "goldencheck";
+
+const data = new TabularData([
+  { id: 1, email: "alice@example.com", age: 30, status: "active" },
+  { id: 2, email: "bob@test.com", age: -5, status: "inactive" },
+  { id: 3, email: "not-an-email", age: 25, status: "active" },
+]);
+
+const { findings, profile } = scanData(data);
+for (const f of findings) {
+  console.log(`[${f.severity === Severity.ERROR ? "ERROR" : "WARNING"}] ${f.column}: ${f.message}`);
+}
+```
+
+## Key features
+
+- **Profiling**: type inference, nullability, uniqueness, format detection, range and distribution, cardinality, and pattern consistency.
+- **Cross-column checks**: temporal ordering, null correlation, numeric constraints, and age-versus-DOB.
+- **Baseline and drift detection**: 13 check types including distribution drift, entropy drift, Benford drift, functional-dependency violation, and type drift.
+- **Domain packs**: healthcare, finance, ecommerce, real estate, and people/HR.
+- **Auto-fix**: safe repairs such as trim, normalize case, fix encoding, and coerce types.
+- **LLM boost**: optional semantic understanding at roughly $0.01 per scan.
+- **Confidence scoring**: every finding carries a 0.0–1.0 confidence.
+
+## Baseline and drift
+
+Create a statistical baseline once, then check new data against it cheaply:
+
+```python
+import goldencheck
+
+baseline = goldencheck.create_baseline("reference.csv")
+baseline.save("goldencheck_baseline.yaml")
+
+findings, profile = goldencheck.scan_file("production.csv", baseline="goldencheck_baseline.yaml")
+drift = [f for f in findings if f.source == "baseline_drift"]
+```
+
+## Benchmark
+
+GoldenCheck scores 88.40 on DQBench (versus Pandera 32.51, Great Expectations 21.68, Soda 22.36), at roughly 482K rows/sec.

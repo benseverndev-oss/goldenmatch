@@ -1,0 +1,39 @@
+---
+title: "Privacy-preserving linkage"
+description: "Match records across organizations without sharing raw data, using Bloom-filter PPRL."
+keywords: ["pprl", "privacy", "record linkage", "bloom filter", "federated"]
+---
+
+Privacy-preserving record linkage (PPRL) lets two parties find shared entities without exchanging plaintext identifiers. GoldenMatch encodes fields into Bloom filters and matches on those, reaching F1 0.924 on the FEBRL4 benchmark.
+
+## Auto-configured
+
+```python
+import goldenmatch as gm
+
+result = gm.pprl_link("hospital_a.csv", "hospital_b.csv")
+print(f"Found {result['match_count']} matches")
+```
+
+## Manual config
+
+```python
+import goldenmatch as gm
+
+result = gm.pprl_link(
+    "party_a.csv", "party_b.csv",
+    fields=["first_name", "last_name", "dob", "zip"],
+    threshold=0.85,
+    security_level="high",
+)
+```
+
+## CLI
+
+```bash
+goldenmatch pprl link file_a.csv file_b.csv
+```
+
+<Warning>
+  PPRL reduces but does not eliminate disclosure risk. Choose `security_level` and field sets with your privacy and compliance requirements in mind.
+</Warning>

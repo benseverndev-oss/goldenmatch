@@ -1,0 +1,58 @@
+---
+title: "GoldenMatch CLI"
+description: "Every GoldenMatch command and the key flags for the dedupe pipeline."
+keywords: ["cli", "commands", "dedupe", "flags"]
+---
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `goldenmatch dedupe FILE [...]` | Deduplicate one or more CSV / Parquet / Excel files. |
+| `goldenmatch match TARGET --against REF` | Match a target against a reference file. |
+| `goldenmatch sync --table TABLE --connection-string "$DB"` | Incremental Postgres database sync. |
+| `goldenmatch watch --table TABLE` | Live stream mode (`--daemon` for service mode). |
+| `goldenmatch serve FILE [...]` | Start the REST API server (default `localhost:8000`). |
+| `goldenmatch mcp-serve FILE [...]` | Start the MCP server (stdio or HTTP transport). |
+| `goldenmatch interactive FILE [...]` | Launch the interactive TUI. |
+| `goldenmatch serve-ui [--project DIR]` | Start the web UI workbench. |
+| `goldenmatch setup` | Interactive setup wizard (GPU, API keys, database). |
+| `goldenmatch demo` | Run the built-in demo with sample data. |
+| `goldenmatch init` | Interactive config wizard. |
+| `goldenmatch profile FILE` | Profile data quality. |
+| `goldenmatch evaluate FILE --gt GT.csv` | Evaluate matching accuracy against ground truth. |
+| `goldenmatch incremental BASE --new NEW` | Match new records against an existing base. |
+| `goldenmatch analyze-blocking FILE` | Analyze data and suggest blocking strategies. |
+| `goldenmatch label FILE --config --gt` | Interactively label pairs to build ground truth. |
+| `goldenmatch rollback RUN_ID` | Undo a previous merge run. |
+| `goldenmatch unmerge RECORD_ID` | Remove a record from its cluster. |
+| `goldenmatch runs` | List previous runs for rollback. |
+| `goldenmatch memory stats\|learn\|export\|import\|show` | Manage the Learning Memory store. |
+| `goldenmatch config save\|load\|list\|show` | Manage config presets. |
+| `goldenmatch compare-clusters A B` | Cluster comparison (unchanged / merged / partitioned / overlapping). |
+| `goldenmatch sensitivity FILE` | Parameter sweep over threshold, blocking, and matchkey. |
+| `goldenmatch pprl link FILE_A FILE_B` | Privacy-preserving record linkage. |
+
+## Key dedupe flags
+
+| Flag | Effect |
+|------|--------|
+| `--anomalies` | Detect fake emails, placeholder data, and suspicious records. |
+| `--preview` | Show what will change before writing. |
+| `--diff` / `--diff-html` | Generate a before/after change report. |
+| `--dashboard` | Before/after data-quality dashboard (HTML). |
+| `--html-report` | Detailed match report with charts. |
+| `--chunked` | Large-dataset mode (process in chunks). |
+| `--backend ray` | Force a backend. |
+| `--llm-boost` | Improve accuracy with LLM-labeled training. |
+| `--daemon` | Run watch mode as a background service with a health endpoint. |
+
+## Cloud storage
+
+Read directly from cloud storage by passing a URI:
+
+```bash
+goldenmatch dedupe s3://bucket/customers.csv
+goldenmatch dedupe gs://bucket/customers.csv
+goldenmatch dedupe az://container/customers.csv
+```

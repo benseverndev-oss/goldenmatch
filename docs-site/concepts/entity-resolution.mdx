@@ -1,0 +1,57 @@
+---
+title: "Entity resolution"
+description: "The core concepts behind deduplication and record linkage: blocking, scoring, clustering, and survivorship."
+keywords: ["entity resolution", "blocking", "scoring", "clustering", "survivorship", "matchkey"]
+---
+
+Entity resolution (ER) is the process of finding records that refer to the same real-world entity, whether within one dataset (deduplication) or across two (record linkage). GoldenMatch breaks this into four stages.
+
+## Blocking
+
+Comparing every pair of records is quadratic and infeasible at scale. Blocking reduces candidate pairs by grouping records that share a key (for example, the same ZIP or the same soundex of a surname) and only comparing within blocks.
+
+The blocking key is the single biggest performance lever. For `N` rows split into blocks of sizes `n1, n2, ...`:
+
+```text
+candidate_pairs = sum_i (ni choose 2)
+```
+
+A good key produces many small blocks. A poor key (for example, blocking on a low-cardinality city field) produces a few huge blocks and an explosion of pairs. See [scale envelope](/concepts/scale-envelope) for the guard rails.
+
+GoldenMatch ships 8+ blocking strategies: `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `ann_pairs`, `canopy`, and `learned` (data-driven predicate selection).
+
+## Scoring
+
+Within each block, candidate pairs are scored. A **matchkey** is a named rule that combines one or more fields, each with a scorer and a weight, and a threshold above which a pair is a match.
+
+GoldenMatch provides 12+ scoring methods, including:
+
+- **String similarity**: `exact`, `jaro_winkler`, `levenshtein`, `token_sort`, `soundex_match`, `dice`, `jaccard`.
+- **Name-aware**: `name_freq_weighted_jw` (surname IDF-weighted), `given_name_aliased_jw` (alias-aware).
+- **Embedding**: `embedding`, `record_embedding`.
+- **Probabilistic**: Fellegi-Sunter EM-trained m/u probabilities with automatic threshold estimation.
+- **LLM**: GPT-4o-mini or Claude scores borderline pairs, with budget caps and graceful degradation.
+
+## Clustering
+
+Pairwise matches are transitively closed into clusters: if A matches B and B matches C, then A, B, and C form one cluster. Clusters are labeled `strong`, `weak`, or `split`. Oversized clusters are automatically split on their weakest edge using a minimum spanning tree, which prevents a single shared value (a common `info@` email, say) from collapsing unrelated records into one giant cluster.
+
+## Survivorship
+
+A **golden record** is the canonical record synthesized from a cluster. GoldenMatch offers five merge strategies:
+
+- `most_complete`
+- `majority_vote`
+- `source_priority`
+- `most_recent`
+- `first_non_null`
+
+Fields can be weighted by source quality (from GoldenCheck), and field-level provenance tracks which source row contributed each value.
+
+## Privacy-preserving linkage
+
+When you cannot share raw data across organizations, [PPRL](/goldenmatch/pprl) matches records using Bloom-filter encodings instead of plaintext, reaching F1 0.924 on the FEBRL4 benchmark.
+
+<Card title="Auto-config" icon="robot" href="/goldenmatch/auto-config">
+  GoldenMatch can choose all of the above for you and iterate until it converges.
+</Card>

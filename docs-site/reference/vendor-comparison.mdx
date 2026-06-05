@@ -1,0 +1,58 @@
+---
+title: "ER vendor comparison"
+description: "How GoldenMatch compares to other entity-resolution engines across OSS, identity-graph, cloud-managed, and enterprise MDM tiers."
+keywords: ["comparison", "splink", "dedupe", "senzing", "zingg", "entity resolution vendors"]
+---
+
+This page summarizes the entity-resolution landscape as recorded in the repository's vendor comparison. The intent is honest positioning: where GoldenMatch leads, and where other engines lead.
+
+<Note>
+  Pricing is indicative, vendor surfaces change quickly, and academic F1 numbers are not enterprise outcomes on your real data. GoldenMatch numbers are reproducible from `docs/reproducing-benchmarks.md` in the repository.
+</Note>
+
+## GoldenMatch baseline
+
+| Axis | GoldenMatch |
+|------|-------------|
+| License | MIT (every package). |
+| Languages | Python (headline) + TypeScript (parity) + Rust (Postgres/DuckDB). |
+| Runtimes | Polars (≤500K), DuckDB (500K–50M), Ray (≥50M); Postgres via pgrx; DuckDB UDFs; edge JS. |
+| Throughput | 1M dedupe in ~12.3 min on 4-core / 16 GB; 100K fuzzy ~39s. |
+| Accuracy (DBLP-ACM) | F1 0.964 zero-config (hand-tuned ceiling 0.918). |
+| Accuracy (NCVR) | F1 0.972 zero-config. |
+| Zero-config | Introspective auto-config controller with cross-run memory and LLM fallback. |
+| PPRL | Bloom-filter PPRL, F1 0.924 on FEBRL4. |
+| AI-native surface | 35+ MCP tools, agent skills, REST API. |
+
+## OSS engines
+
+| Engine | License | Where it beats GoldenMatch | Where GoldenMatch beats it |
+|--------|---------|----------------------------|----------------------------|
+| Splink (UK MoJ) | MIT | Throughput (1B+ rows); PII F1 on Febrl (0.998). | Non-PII accuracy (DBLP-ACM 0.964 vs 0.728); zero-config; polyglot; AI-native; PPRL. |
+| dedupe.io | BSD | Cleanest active-learning UX in OSS. | Accuracy without labels; throughput at scale; polyglot; AI-native; PPRL. |
+| RecordLinkage Toolkit | BSD | DBLP-ACM F1 0.923 (narrowly). | Throughput, scale, PPRL, AI-native, zero-config, polyglot. |
+| Zingg | AGPL + commercial | Native Spark scale. | MIT license; polyglot; AI-native; zero-config; PPRL. |
+| Senzing G2 CE | Apache wrapper + closed core | Native identity graph; bundled reference data; real-time latency. | OSS license; zero-config; AI-native; bibliographic/product matching; PPRL. |
+
+## Identity-graph and cloud-managed
+
+| Engine | Where it beats GoldenMatch | Where GoldenMatch beats it |
+|--------|----------------------------|----------------------------|
+| Quantexa | Graph-native output; decisioning layer; enterprise governance. | OSS and composable; time-to-value; AI-native; cost. |
+| Tilores | Identity-graph engine; GraphQL API; hosted by default. | OSS; edge runtimes; zero-config; AI-native; PPRL. |
+| AWS Entity Resolution | Scale is AWS's problem; Glue/Lake Formation integration. | Portability (laptop, Postgres, edge worker); zero-config; AI-native; multi-cloud. |
+| Snowflake Cortex Match | Runs in-warehouse, no data movement. | Full engine (blocking, clustering, golden records); portable; published F1. |
+
+## Research SOTA
+
+| Engine | Where it beats GoldenMatch | Where GoldenMatch beats it |
+|--------|----------------------------|----------------------------|
+| Ditto (Megagon) | Abt-Buy F1 0.893 (product-matching SOTA) vs GoldenMatch 0.722 (+LLM) / 0.817 (+Vertex). | No training labels; non-product domains; throughput; AI-native; cheaper than fine-tuning. |
+
+## Cross-cutting observations
+
+- **Zero-config is uncontested.** No other vendor publishes zero-config benchmark numbers.
+- **Identity graph is the next frontier.** Mainstream OSS engines emit clusters; Senzing, Quantexa, and Tilores emit a graph.
+- **AI-native is uncontested but unproven.** Nobody else ships MCP, agent skills, or LLM-budget-controlled borderline scoring.
+- **License matters.** MIT and BSD engines have outgrown AGPL and closed-core peers partly on embedding permissions.
+- **Portability is the wedge** against warehouse-native managed services: the same engine runs in app code, an edge worker, or a Postgres trigger.

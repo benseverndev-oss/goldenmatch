@@ -1,0 +1,86 @@
+---
+title: "GoldenMatch overview"
+description: "Zero-config entity resolution for Python and TypeScript: fuzzy, exact, probabilistic, and LLM scoring with golden-record synthesis."
+keywords: ["goldenmatch", "entity resolution", "deduplication", "record linkage", "fuzzy matching"]
+---
+
+GoldenMatch is the headline package of the Golden Suite. It finds duplicate records in seconds with no rules to write and no model to train. It combines fuzzy matching, probabilistic Fellegi-Sunter EM, LLM scoring, privacy-preserving record linkage, golden-record synthesis, and an introspective auto-configuration controller that beats hand-tuned baselines on standard benchmarks.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/goldenmatch/quickstart">
+    Dedupe, match, and write golden records.
+  </Card>
+  <Card title="Auto-config" icon="robot" href="/goldenmatch/auto-config">
+    How zero-config converges on a defensible config.
+  </Card>
+  <Card title="Backends and scale" icon="gauge-high" href="/goldenmatch/backends-and-scale">
+    Polars, DuckDB, chunked, and Ray.
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/goldenmatch/cli">
+    Every command and the key flags.
+  </Card>
+</CardGroup>
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install goldenmatch
+```
+
+```bash npm
+npm install goldenmatch
+```
+
+</CodeGroup>
+
+Common extras:
+
+```bash
+pip install goldenmatch[embeddings]   # sentence-transformers, FAISS
+pip install goldenmatch[llm]          # Claude / OpenAI borderline scoring
+pip install goldenmatch[duckdb]       # out-of-core backend
+pip install goldenmatch[ray]          # distributed backend (50M+ rows)
+pip install goldenmatch[postgres]     # Postgres sync
+pip install goldenmatch[quality]      # GoldenCheck integration
+pip install goldenmatch[transform]    # GoldenFlow integration
+pip install goldenmatch[web]          # localhost browser workbench
+pip install goldenmatch[mcp]          # MCP server for Claude Desktop
+```
+
+## Key features
+
+- **12+ scoring methods**: exact, Jaro-Winkler, Levenshtein, token-sort, soundex, ensemble, embedding, record-embedding, dice, jaccard, surname IDF-weighted, and alias-aware.
+- **Probabilistic matching**: Fellegi-Sunter EM-trained m/u probabilities with automatic threshold estimation.
+- **LLM scorer**: scores borderline pairs with budget caps and graceful degradation.
+- **8+ blocking strategies**: static, adaptive, sorted-neighborhood, multi-pass, ANN, canopy, and learned.
+- **Golden records**: five merge strategies with field-level provenance and quality-weighted survivorship.
+- **PPRL**: privacy-preserving record linkage across organizations (F1 0.924 on FEBRL4).
+- **Learning Memory**: persists steward corrections, unmerges, and LLM votes across runs.
+- **Interactive TUI**, REST API, MCP server (35 tools), A2A agent, and a localhost web workbench.
+
+## Benchmarks
+
+Zero-config accuracy, quoted from the package README:
+
+| Dataset | F1 | Note |
+|---------|----|----|
+| DBLP-ACM (bibliographic) | 0.964 | Hand-tuned ceiling 0.918 |
+| Febrl3 (PII) | 0.944 | Zero-config |
+| NCVR (voter records) | 0.972 | Zero-config |
+| Febrl4 (PII, PPRL) | 0.924 | Bloom-filter PPRL |
+| DQBench ER composite | 91.04 | No LLM (v1.12.0) |
+
+## A minimal example
+
+```python
+import goldenmatch as gm
+
+result = gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85, "zip": 0.95})
+result.golden.write_csv("deduped.csv")
+```
+
+<Tip>
+  Leave out `exact` and `fuzzy` entirely to let [auto-config](/goldenmatch/auto-config) choose them.
+</Tip>

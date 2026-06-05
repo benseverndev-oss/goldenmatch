@@ -1,0 +1,145 @@
+---
+title: "GoldenMatch quickstart"
+description: "Dedupe a file, match two files, write golden records, and configure matchkeys in Python and TypeScript."
+keywords: ["goldenmatch", "quickstart", "dedupe", "match", "config", "matchkey"]
+---
+
+## Zero-config dedupe
+
+```bash
+goldenmatch dedupe customers.csv
+```
+
+This auto-detects column types, assigns scorers, picks a blocking strategy, and launches a review TUI. The same in Python:
+
+```python
+import goldenmatch as gm
+
+result = gm.dedupe("customers.csv")
+print(result)  # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
+result.golden.write_csv("deduped.csv")
+```
+
+## Match two files
+
+Match a target file against a reference file:
+
+```bash
+goldenmatch match prospects.csv --against customers.csv
+```
+
+## TypeScript
+
+The TypeScript core is edge-safe and zero-dependency:
+
+```typescript
+import { dedupe } from "goldenmatch";
+
+const rows = [
+  { id: 1, name: "John Smith", email: "john@example.com", zip: "12345" },
+  { id: 2, name: "Jon Smith",  email: "john@example.com", zip: "12345" },
+  { id: 3, name: "Jane Doe",   email: "jane@example.com", zip: "54321" },
+];
+
+const result = dedupe(rows, {
+  fuzzy: { name: 0.85 },
+  blocking: ["zip"],
+  threshold: 0.85,
+});
+
+console.log(result.stats);
+for (const record of result.goldenRecords) {
+  console.log(record);
+}
+```
+
+## Explicit configuration
+
+For full control, build a `GoldenMatchConfig` with named matchkeys:
+
+```python
+import goldenmatch as gm
+
+config = gm.GoldenMatchConfig(
+    matchkeys=[
+        gm.MatchkeyConfig(
+            name="exact_email",
+            type="exact",
+            fields=[gm.MatchkeyField(field="email", transforms=["lowercase"])],
+        ),
+        gm.MatchkeyConfig(
+            name="fuzzy_name",
+            type="weighted",
+            threshold=0.85,
+            fields=[
+                gm.MatchkeyField(field="name", scorer="jaro_winkler", weight=0.7),
+                gm.MatchkeyField(field="zip", scorer="exact", weight=0.3),
+            ],
+        ),
+    ],
+    blocking=gm.BlockingConfig(strategy="learned"),
+    llm_scorer=gm.LLMScorerConfig(enabled=True, mode="cluster"),
+    backend="ray",
+)
+
+result = gm.dedupe_df(df, config=config)
+```
+
+## YAML config
+
+The same config in `goldenmatch.yml`:
+
+```yaml
+matchkeys:
+  - name: exact_email
+    type: exact
+    fields:
+      - field: email
+        transforms: [lowercase]
+  - name: fuzzy_name
+    type: weighted
+    threshold: 0.85
+    fields:
+      - field: name
+        scorer: jaro_winkler
+        weight: 0.7
+      - field: zip
+        scorer: exact
+        weight: 0.3
+
+blocking:
+  strategy: learned
+
+golden_rules:
+  default_strategy: most_complete
+  auto_split: true
+```
+
+## Learning Memory
+
+Record steward corrections so future runs improve:
+
+```python
+import goldenmatch
+
+goldenmatch.add_correction(
+    id_a=42, id_b=87,
+    decision="reject",
+    source="steward",
+    reason="Different EIN despite name match",
+    dataset="customers",
+)
+
+adjustments = goldenmatch.learn()
+print(f"Adjusted {len(adjustments)} matchkey thresholds")
+print(goldenmatch.memory_stats())
+```
+
+## Evaluate against ground truth
+
+```python
+import goldenmatch as gm
+
+metrics = gm.evaluate("data.csv", config="config.yaml", ground_truth="gt.csv")
+print(f"F1: {metrics['f1']:.1%}, Precision: {metrics['precision']:.1%}")
+```
