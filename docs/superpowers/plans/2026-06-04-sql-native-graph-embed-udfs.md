@@ -271,7 +271,9 @@ These take `arrow::array::ArrayData` (NOT `PyArrowType` — that stays in `nativ
 goldenmatch-graph-core = { path = "../graph-core" }
 ```
 
-- [ ] **Step 2:** In `pairs.rs`, replace the body of `dedup_pairs_max_score` with a delegation: keep the `#[pyfunction]` signature, call `goldenmatch_graph_core::dedup_pairs_max_score(&pairs)`. Same for `cluster.rs::connected_components`. For the `*_arrow` pyfunctions, unwrap `PyArrowType` to `ArrayData`, call the `graph-core` `*_arrow_data` fn, rewrap. Leave `build_clusters_arrow`/`build_clusters_native` as-is (out of #509 scope) unless they call the moved helpers — if so, point them at `graph-core`.
+- [ ] **Step 2:** In `pairs.rs`, replace the body of `dedup_pairs_max_score` with a delegation: keep the `#[pyfunction]` signature, call `goldenmatch_graph_core::dedup_pairs_max_score(&pairs)`. Same for `cluster.rs::connected_components`. For the existing `dedup_pairs_arrow` pyfunction (`pairs.rs:80`), unwrap `PyArrowType` to `ArrayData`, call `graph_core::dedup_pairs_arrow_data`, rewrap as `PyArrowType`.
+
+- [ ] **Step 2b: Add the missing `connected_components_arrow` pyfunction.** There is currently NO `connected_components_arrow` in `native` (only `dedup_pairs_arrow` is registered at `lib.rs:27`; `build_clusters_arrow` exists but has a different, cluster-building contract). Task 6's DuckDB "delegate to `goldenmatch.native.connected_components_arrow` when available" path requires it. Add a new `#[pyfunction] connected_components_arrow(id_a, id_b, score, all_ids: PyArrowType<ArrayData>) -> PyResult<PyArrowType<ArrayData>>` in `cluster.rs` (returns the components as an Arrow `List<Int64>`), delegating to `graph_core::connected_components_arrow_data`. **Register it in `lib.rs`** by adding `m.add_function(wrap_pyfunction!(cluster::connected_components_arrow, m)?)?;` to the `#[pymodule]` block (alongside the existing `connected_components` / `dedup_pairs_arrow` registrations at `lib.rs:19,27`). Leave `build_clusters_arrow`/`build_clusters_native` as-is (out of #509 scope) unless they call the moved helpers — if so, point them at `graph-core`.
 
 - [ ] **Step 3: Verify behavior-exact** — Run `cargo check -p goldenmatch-native` locally (preamble). Full `cargo test -p goldenmatch-native` is CI (needs goldenmatch Python). Expected local: compiles clean.
 
@@ -290,13 +292,13 @@ DuckDB Python UDFs registered with `type='arrow'` receive pyarrow arrays. The ke
 ```python
 import duckdb
 import pytest
-from goldenmatch_duckdb.functions import register_functions
+from goldenmatch_duckdb.functions import register  # public entrypoint (see functions.py:19; __init__.py calls register())
 
 
 @pytest.fixture
 def con():
     c = duckdb.connect()
-    register_functions(c)
+    register(c)
     return c
 
 
@@ -320,7 +322,9 @@ def test_connected_components_string_ids(con):
     assert sorted(comps) == [["w"], ["x", "y", "z"]]
 ```
 
-- [ ] **Step 2: Run, verify FAIL** — `cd packages/rust/extensions/duckdb && python -m pytest tests/test_graph_arrow.py -v` (set `POLARS_SKIP_CPU_CHECK=1`). Expected: fails (signatures are still JSON `VARCHAR`).
+- [ ] **Step 2: Run, verify FAIL** — `cd packages/rust/extensions/duckdb && python -m pytest tests/test_graph_arrow.py -v` (set `POLARS_SKIP_CPU_CHECK=1`). Expected: fails (signatures are still JSON `VARCHAR`). **Validate the new registration shape here:** no existing UDF in this codebase uses `con.create_function` with native `LIST`/list-of-list args or returns — confirm DuckDB accepts the list arg/return types in this FAIL run (a registration-time `TypeError` means the shape needs adjusting, e.g. fall back to a table-returning UDF) before writing Step 3.
+
+- [ ] **Step 2b: Update the pre-existing `test_core_kernels.py` for the clean break.** `duckdb/tests/test_core_kernels.py` tests the OLD JSON signatures (`goldenmatch_connected_components('[[1,2,0.9]]')`, `goldenmatch_pair_dedup('[[...]]')`) and the fail-soft `{"error": ...}` convention — all of which the clean break removes. Rewrite the graph-UDF cases in this file to the new Arrow/list signatures (the embed case is handled in Task 12), or move them into `test_graph_arrow.py` and delete the dead graph cases. Run `python -m pytest tests/test_core_kernels.py -v` and confirm no stale JSON-signature assertions remain. This file must not be left red.
 
 - [ ] **Step 3: Rewrite `core_kernels.py` graph UDFs.** Replace `_connected_components(pairs_json)` / `_pair_dedup(pairs_json)` and their `con.create_function` registrations. Register the new signatures with list/arrow types; accept int64 lists (fast path) and Utf8 lists (build a Python dict, call kernel, map back). Decide the exact final SQL shape (table-returning vs list-return) to match the test above; keep `connected_components` returning `list<list<id>>` and `pair_dedup` table-returning `(a,b,s)`. Delegate to `goldenmatch.native.*_arrow` when available, else the pure-Python `connected_components`/`dedup_pairs_max_score`.
 
