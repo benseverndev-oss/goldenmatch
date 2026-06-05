@@ -24,6 +24,10 @@ dependencies = [
     "pyarrow>=14.0",
 ]
 
+[project.optional-dependencies]
+# goldenmatch_embed_local UDF runs the goldenembed-rs kernel via this wheel.
+embed = ["goldenmatch-embed"]
+
 [project.urls]
 Homepage = "https://github.com/benseverndev-oss/goldenmatch"
 Repository = "https://github.com/benseverndev-oss/goldenmatch"

@@ -164,6 +164,39 @@ SELECT * FROM goldenmatch_get_pairs('job_id');
 SELECT goldenmatch_job_status('job_id');
 ```
 
+### Native graph kernels + local embedding (v0.6.0)
+
+Native-direct UDFs over the Rust kernels — no Python round-trip. The graph UDFs take the
+candidate-pair / edge columns as lists (aggregate with `list(...)`) and accept either
+integer record ids (the bare name) or string ids (the `_str` sibling).
+
+```sql
+-- Canonical max-score pairs (dedupe a candidate-pair set, keep the best score per pair)
+SELECT goldenmatch_pair_dedup(
+  (SELECT list(id_a) FROM pairs),
+  (SELECT list(id_b) FROM pairs),
+  (SELECT list(score) FROM pairs)
+);  -- -> [{a, b, s}, ...]
+
+-- Connected components over an edge set + the id universe (singletons included)
+SELECT goldenmatch_connected_components(
+  (SELECT list(id_a) FROM edges),
+  (SELECT list(id_b) FROM edges),
+  (SELECT list(score) FROM edges),
+  (SELECT list(id) FROM records)
+);  -- -> [[id, ...], ...]   (one list per entity)
+
+-- String record ids: use the _str variants
+SELECT goldenmatch_connected_components_str([ 'a','b' ], [ 'b','c' ], [0.9, 0.8], [ 'a','b','c','d' ]);
+
+-- Local embedding via goldenembed-rs (no network). model_path is a saved in-house
+-- model dir (config.json + model.onnx). Requires `pip install goldenmatch-duckdb[embed]`.
+SELECT goldenmatch_embed_local('John Smith', '/path/to/model');  -- -> JSON float array
+```
+
+The same functions are available on Postgres (`goldenmatch.goldenmatch_*`, table-returning;
+embed returns `double precision[]`) and as DataFusion FFI UDFs — same kernels, identical values.
+
 ### Utility functions
 
 ```sql

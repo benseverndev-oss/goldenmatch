@@ -4,7 +4,7 @@
 # SA key from env, fetches DBLP-ACM, and runs the 3-way comparison to stdout
 # (the Railway deploy logs). Build context is scoped to scripts/ via the
 # repo-root .dockerignore so `railway up` doesn't upload the 40GB monorepo.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 ENV PYTHONUNBUFFERED=1 \
     GOLDENMATCH_AUTOCONFIG_MEMORY=0 \
@@ -15,7 +15,7 @@ WORKDIR /app
 # cryptography is required by VertexEmbedder._get_sa_token to RS256-sign the
 # service-account JWT (on Railway there's no local ADC, so the SA-key path is
 # used). Without it the vertex arm silently falls back to token_sort.
-RUN pip install --no-cache-dir "goldenmatch==1.23.0" recordlinkage cryptography
+RUN pip install --no-cache-dir "goldenmatch==1.23.0" "recordlinkage==0.16" "cryptography==48.0.0"
 
 COPY scripts ./scripts
 RUN mkdir -p /data

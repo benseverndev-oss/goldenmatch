@@ -21,8 +21,9 @@ Exposed in SQL:
   component; the universe (``all_ids``) makes singletons appear.
 - ``goldenmatch_connected_components_str(...VARCHAR variants...)``
   -> ``VARCHAR[][]``.
-- ``goldenmatch_embed_local(text, model_path)`` -> JSON float array (unchanged;
-  owned by the embed task).
+- ``goldenmatch_embed_local(text, model_path)`` -> JSON float array, computed by
+  the ``goldenembed-rs`` kernel via the ``goldenmatch-embed`` wheel (no Python
+  in-house embedder).
 
 The string variants build a first-seen ``str -> int`` dict, run the int kernel,
 then map results back to the original string ids. Bad input fails the query
@@ -138,9 +139,9 @@ def _connected_components_str(
 
 def _embed_local(text: str, model_path: str) -> str:
     try:
-        from goldenmatch.embeddings import embed_records
+        from goldenmatch_embed import GoldenEmbed
 
-        vecs = embed_records([text], provider="inhouse", model=model_path)
-        return json.dumps([round(float(x), 6) for x in vecs[0]])
+        vec = GoldenEmbed.load(model_path).embed([text])[0]
+        return json.dumps([round(float(x), 6) for x in vec])
     except Exception as e:  # noqa: BLE001 - fail-soft per module contract
         return json.dumps({"error": str(e)})

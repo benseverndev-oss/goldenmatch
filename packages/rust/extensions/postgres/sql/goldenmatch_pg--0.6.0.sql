@@ -661,11 +661,13 @@ STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_connected_components_str_wrapper';
 
--- Embed one text with a local in-house model (a saved GoldenEmbedModel dir).
+-- Embed one text with a local in-house model (a saved GoldenEmbedModel dir)
+-- via goldenembed-rs (pure Rust, no embedded CPython). Returns the vector as
+-- float8[].
 CREATE FUNCTION "goldenmatch_embed_local"(
     "text" TEXT,
     "model_path" TEXT
-) RETURNS TEXT
+) RETURNS double precision[]
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_embed_local_wrapper';
