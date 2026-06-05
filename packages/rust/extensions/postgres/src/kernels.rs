@@ -5,15 +5,17 @@
 //! and their `_str` siblings) call the pyo3-free `goldenmatch-graph-core` crate
 //! **native-direct** — no embedded CPython, same shape as `goldenmatch_record_fingerprint`
 //! over `goldenmatch-fingerprint-core`. They take id/score arrays (not JSON) and
-//! return relational `TableIterator` rows. `goldenmatch_embed_local` likewise
-//! calls `goldenembed-rs` native-direct (pure Rust, no CPython) and returns the
-//! embedding vector as `float8[]`.
+//! return relational `TableIterator` rows. `goldenmatch_embed_local` / `gm_embed`
+//! likewise call `goldenembed-rs` native-direct (pure Rust, no CPython) and return
+//! the embedding vector (`float8[]` / `float4[]` respectively).
 //!
 //! ```sql
 //! SELECT * FROM goldenmatch.goldenmatch_pair_dedup(ARRAY[2,1], ARRAY[1,2], ARRAY[0.5,0.9]);
 //! SELECT * FROM goldenmatch.goldenmatch_connected_components(
 //!     ARRAY[1,2], ARRAY[2,3], ARRAY[0.9,0.8], ARRAY[1,2,3,4]);
 //! SELECT goldenmatch.goldenmatch_embed_local('John Smith', '/path/to/model');
+//! -- gm_embed reads GOLDENEMBED_MODEL_DIR from the backend env (float4[]):
+//! SELECT goldenmatch.gm_embed('John Smith');
 //! ```
 use goldenmatch_graph_core as gc;
 use pgrx::prelude::*;
@@ -124,25 +126,64 @@ pub fn goldenmatch_connected_components_str(
     TableIterator::new(rows)
 }
 
+/// Process-lifetime cache of loaded in-house models, keyed by model dir.
+///
+/// `GoldenEmbed::load` reads an ONNX model from disk -- doing it per call (the
+/// pre-#737 behavior) reloaded the model on every row. Each Postgres backend
+/// process gets its own `OnceLock` (forked after postmaster start), so the model
+/// loads once per backend on first use, mirroring the DataFusion UDF's
+/// `Arc<Mutex<GoldenEmbed>>` posture (`embed_udf.rs`). `ort`'s `Session::run` is
+/// `&mut`, so the same single-`Mutex` serialization applies.
+fn embed_models(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, goldenembed::GoldenEmbed>> {
+    static MODELS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, goldenembed::GoldenEmbed>>,
+    > = std::sync::OnceLock::new();
+    MODELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Embed one text against the cached model at `model_dir`. Loads + caches on
+/// first use per backend process. Returns the raw `f32` components.
+fn embed_one(model_dir: &str, text: &str) -> Vec<f32> {
+    let mut models = embed_models()
+        .lock()
+        .unwrap_or_else(|_| pgrx::error!("gm_embed: model cache lock poisoned"));
+    let model = models.entry(model_dir.to_string()).or_insert_with(|| {
+        goldenembed::GoldenEmbed::load(model_dir)
+            .unwrap_or_else(|e| pgrx::error!("gm_embed load '{}': {}", model_dir, e))
+    });
+    match model.embed(&[text]) {
+        Ok(rows) => rows.into_iter().next().unwrap_or_default(),
+        Err(e) => pgrx::error!("gm_embed embed: {}", e),
+    }
+}
+
 /// Embed one text with a local in-house model via goldenembed-rs (pure Rust,
 /// NO embedded CPython). `model_path` is a saved GoldenEmbedModel dir. Returns
-/// the embedding vector as float8[].
+/// the embedding vector as float8[]. The model is loaded once per backend
+/// process and cached by path (#737).
 #[pg_extern]
 pub fn goldenmatch_embed_local(text: String, model_path: String) -> Vec<f64> {
-    let mut model = match goldenembed::GoldenEmbed::load(&model_path) {
-        Ok(m) => m,
-        Err(e) => pgrx::error!("goldenmatch_embed_local load: {}", e),
-    };
-    match model.embed(&[text.as_str()]) {
-        Ok(rows) => rows
-            .into_iter()
-            .next()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|x| x as f64)
-            .collect(),
-        Err(e) => pgrx::error!("goldenmatch_embed_local embed: {}", e),
-    }
+    embed_one(&model_path, &text)
+        .into_iter()
+        .map(|x| x as f64)
+        .collect()
+}
+
+/// Embed one text with the in-house model, model dir resolved from the
+/// `GOLDENEMBED_MODEL_DIR` env var (loaded once per backend process). Returns
+/// `float4[]` -- parity with the DataFusion `goldenmatch_embed` UDF, including
+/// the NULL -> "" convention (so the arg is nullable, NOT `STRICT`). #737.
+#[pg_extern]
+pub fn gm_embed(text: Option<&str>) -> Vec<f32> {
+    let dir = std::env::var("GOLDENEMBED_MODEL_DIR").unwrap_or_else(|_| {
+        pgrx::error!(
+            "gm_embed: GOLDENEMBED_MODEL_DIR not set (a saved GoldenEmbedModel \
+             directory). Use goldenmatch_embed_local(text, model_path) to pass \
+             the dir explicitly."
+        )
+    });
+    embed_one(&dir, text.unwrap_or(""))
 }
 
 /// Canonical record fingerprint (64 lowercase hex) of a JSON record object.
