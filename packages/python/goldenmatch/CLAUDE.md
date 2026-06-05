@@ -327,13 +327,12 @@ Hosted on Railway, registered on Smithery:
 - goldenmatch-extensions uses `benzsevern` GitHub account (same auth switch requirement as main repo)
 - Trunk (pgt.dev) shut down July 2025 -- do not reference it for Postgres extension distribution
 - dbdev (database.dev) only supports SQL/PL/pgSQL extensions (TLE) -- compiled C extensions not eligible
-- Jekyll docs: `{{` in code blocks triggers Liquid template errors -- wrap with `{% raw %}` / `{% endraw %}`
 - `typing_extensions` on Ubuntu CI: system package at `/usr/lib/python3/dist-packages/` overrides pip install -- must `sudo rm -f` the system file first
 - pyo3 embeds Python linked at compile time -- CI must install goldenmatch into the same Python that Postgres uses
 - DuckDB UDF `con.sql()` without `.fetchone()` may not execute the UDF -- always fetch results
 - `json.dumps(clusters)` fails when cluster dict has tuple keys (pair_scores) -- use str() fallback
 - Coverage config in pyproject.toml: omit db/*, mcp/*, vertex_embedder, connectors/* (require external services)
-- GitHub Pages: docs workflow uses `actions/jekyll-build-pages` with source `./docs`, Just the Docs theme
+- Docs site is **Mintlify** at `docs-site/` (custom domain `docs.bensevern.dev`); the legacy Jekyll site under `packages/python/goldenmatch/docs/` was torn down (only `images/`/`screenshots/`/`design/`/`superpowers/`/`wiki/`/`llms*.txt` remain there as assets/engineering docs). Edit docs via the Mintlify MDX under `docs-site/`; run `mint validate` + `mint broken-links` from `docs-site/`.
 - GitHub Release triggers publish.yml workflow which auto-publishes to PyPI via trusted publishing
 - Scored pairs are canonicalized as `(min(id_a, id_b), max(id_a, id_b))` throughout cluster.py, graph.py, chunked.py, ann_blocker.py -- any new code storing/looking up pairs must canonicalize too
 - v1.6.0 Learning Memory: end-to-end loop wired. Pipeline applies corrections + learned thresholds; 7 collection points (ReviewQueue, BoostTab, unmerge_record/cluster, LLM scorer, agent_approve_reject, REST `/reviews/decide`, Python API); 5 MCP tools (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`); CLI subgroup `goldenmatch memory ...`. Spec: `docs/superpowers/specs/2026-05-04-learning-memory-completion.md` (foundation: pre-fold 2026-03-26 spec).
@@ -345,7 +344,7 @@ Hosted on Railway, registered on Smithery:
 
 ## API + Common Mistakes
 
-Moved to `packages/python/goldenmatch/docs/api-quick-reference.md` (reference content, not session context). DQBench ER scores live in the package README + CHANGELOG.
+Lives in the Mintlify docs at `docs-site/goldenmatch/api-quick-reference.mdx` (published at `docs.bensevern.dev/goldenmatch/api-quick-reference`) -- reference content, not session context. DQBench ER scores live in the package README + CHANGELOG.
 
 ## Web UI (`goldenmatch[web]`)
 
