@@ -25,3 +25,7 @@ def test_non_string_values_coerced():
 
 def test_plain_string_unchanged():
     assert sanitize_for_log("normal_file.csv") == "normal_file.csv"
+
+
+def test_strips_osc_sequences():
+    assert sanitize_for_log("\x1b]0;evil\x07x") == "]0;evilx"

@@ -13,11 +13,10 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.types import TextContent, Tool
 
-from goldenmatch.core._logging import sanitize_for_log
-
 from goldenmatch._exclusions_schema import (
     EXCLUDE_COLUMNS_SCHEMA as _EXCLUDE_COLUMNS_SCHEMA,
 )
+from goldenmatch.core._logging import sanitize_for_log
 
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore

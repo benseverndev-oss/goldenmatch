@@ -20,5 +20,5 @@ def sanitize_for_log(value: object, max_length: int = _MAX_LEN) -> str:
     s = s.replace("\r", " ").replace("\n", " ")
     s = _CONTROL_CHARS.sub("", s)
     if len(s) > max_length:
-        s = s[: max_length - 3] + "..."
+        s = s[: max(0, max_length - 3)] + "..."
     return s
