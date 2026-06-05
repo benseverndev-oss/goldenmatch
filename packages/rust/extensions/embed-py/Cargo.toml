@@ -33,15 +33,11 @@ pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py31
 # that dependency is confined to this wheel by construction.
 goldenembed = { path = "../goldenembed" }
 
-# `ort`'s binary downloader pulls `openssl-sys` on Linux, but the minimal
-# manylinux build container has no system OpenSSL (and the aarch64 leg has no
-# target OpenSSL). Vendoring OpenSSL from source -- Linux ONLY -- fixes both
-# Linux wheels without disturbing the Windows / macOS-arm builds, which don't
-# hit this path. Cargo feature unification makes every transitive `openssl-sys`
-# in the tree build vendored. (Needs `perl` in the build env; the publish
-# workflow installs perl-core in the manylinux container.)
-[target.'cfg(target_os = "linux")'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
+# NOTE: `ort-sys`'s build script downloads the ONNX Runtime via a TLS client
+# that pulls `openssl-sys` as a BUILD-dependency. Resolver v2 does NOT propagate
+# a normal-dependency `openssl/vendored` feature into build-deps, so vendoring
+# from here does nothing -- the fix lives in the publish workflow, which installs
+# system `openssl-devel` into the manylinux build container.
 
 [profile.release]
 opt-level = 3
