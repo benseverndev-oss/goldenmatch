@@ -244,6 +244,14 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
+      # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
+      # optional `datafusion` extra, which `uv sync --all-packages` does NOT
+      # install. Install it explicitly for the goldenmatch lane so its parity
+      # tests actually RUN — they `pytest.importorskip("datafusion")` and would
+      # SILENTLY SKIP (a false green) otherwise. test_cluster_edges_df.py also
+      # carries a loud no-importorskip guard that fails if this install is missing.
+      - if: matrix.pkg == 'goldenmatch'
+        run: uv pip install 'datafusion>=53,<54'
       # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
       # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
       - run: uv run ruff check packages/python/${{ matrix.pkg }}
