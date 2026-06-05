@@ -235,6 +235,7 @@ Hosted on Railway, registered on Smithery:
   - Blocking: skips columns with cardinality_ratio >= 0.95 (near-unique, produces single-record blocks)
   - Matchkeys: skips exact matchkeys for columns with cardinality_ratio < 0.01 (too few distinct values)
   - Description columns: routes long text to fuzzy matching (token_sort) alongside embedding scorer
+- **Probabilistic matchkeys admit identifiers (#721, 2026-06-05):** `build_probabilistic_matchkeys` no longer blanket-skips `col_type="identifier"` (it diverged from the exact path's #715 admission). Identifiers become exact-scorer comparison fields with **no lower cardinality floor** — unlike the exact path, Fellegi-Sunter self-regulates a weak identifier (higher `u` → smaller EM weight) instead of mega-clustering. The ONE hard gate is `cardinality_ratio >= 1.0` (perfect surrogate key, zero shared-identity signal), now applied **uniformly to every exact-scorer field** (identifier/email/phone). m/u estimation + blocking-field exclusion stay EM's job at train time (`train_em(blocking_fields=...)`), NOT the builder's. Spec: `docs/superpowers/specs/2026-06-05-721-probabilistic-identifier-admission-design.md`.
 - `_DATE_PATTERNS` in autoconfig.py — checked before phone/name to prevent shadowing
 - `_GEO_PATTERNS` expanded: matches city_desc, state_cd, county (not just ^city$)
 - `utf8-lossy` encoding on all CSV read paths (ingest.py, agent.py, chunked.py, smart_ingest.py, skills.py)
