@@ -43,7 +43,8 @@ def test_accepts_lazyframe():
 
 
 def test_raises_when_no_matchable_columns():
-    # All numeric/identifier -> probabilistic skips them -> no matchkey.
+    # All numeric / perfectly-unique columns -> probabilistic skips numeric and
+    # excludes card==1.0 surrogate keys (#721) -> no matchkey.
     df = pl.DataFrame({"row_id": [1, 2, 3], "count": [10, 20, 30]})
     with pytest.raises(ValueError, match="probabilistic"):
         auto_configure_probabilistic_df(df)
