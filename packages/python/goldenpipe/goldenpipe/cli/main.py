@@ -210,11 +210,14 @@ def agent_serve(
 
 
 @app.command()
-def interactive() -> None:
+def interactive(
+    source: str = typer.Argument(None, help="Optional data file to load (press 'r' to run)."),
+    config: str = typer.Option(None, "--config", "-c", help="Optional pipeline YAML config."),
+) -> None:
     """Launch the TUI."""
     try:
         from goldenpipe.tui.app import GoldenPipeApp
-        GoldenPipeApp().run()
+        GoldenPipeApp(source=source, config_path=config).run()
     except ImportError:
         console.print("[red]Textual not installed. Run: pip install goldenpipe[tui][/red]")
         raise typer.Exit(code=1)
