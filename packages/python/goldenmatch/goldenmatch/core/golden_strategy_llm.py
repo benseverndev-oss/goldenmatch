@@ -198,7 +198,12 @@ def _default_llm_caller(prompt: str) -> str | None:
             )
         return text
     except Exception as exc:
-        logger.warning("LLM strategy pick failed (%s): %s", provider, exc)
+        # Log only the exception type, never str(exc): provider clients
+        # routinely echo the auth header / api key into their error text,
+        # and this warning would otherwise leak the credential (CodeQL #302).
+        logger.warning(
+            "LLM strategy pick failed (%s): %s", provider, type(exc).__name__
+        )
         return None
 
 

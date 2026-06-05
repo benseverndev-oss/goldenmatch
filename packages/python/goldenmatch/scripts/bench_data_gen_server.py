@@ -108,6 +108,25 @@ def _auth(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
 
 
+def _safe_child(base: Path, name: str) -> Path:
+    """Resolve ``name`` strictly inside ``base`` and return the resolved path.
+
+    Caller-supplied filenames (``?file=``, ``?job_id=``, ``output=``) must not
+    escape ``DATA_DIR``. A bare ``"/" in name`` check is not enough: it misses
+    the Windows ``\\`` separator and symlinks inside ``base`` that point out.
+    We reject any path separator / parent ref up front, then ``resolve()`` and
+    confirm containment so a symlink can't smuggle us out. Raises
+    ``HTTPException(400)`` on any traversal attempt.
+    """
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "name must be a simple filename (no path)")
+    base_resolved = base.resolve()
+    candidate = (base_resolved / name).resolve()
+    if not candidate.is_relative_to(base_resolved):
+        raise HTTPException(400, "resolved path escapes the data directory")
+    return candidate
+
+
 def _run_subprocess(job_id: str, cmd: list[str]) -> None:
     """Run ``cmd`` synchronously inside a background task; mark state."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -191,10 +210,8 @@ def trigger_generate(
         raise HTTPException(400, "workers must be positive")
 
     out_name = output or f"bench_{rows}.parquet"
-    if "/" in out_name or out_name.startswith("."):
-        raise HTTPException(400, "output filename must be a simple name (no path)")
-    out_path = DATA_DIR / out_name
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _safe_child(DATA_DIR, out_name)
 
     job_id = f"{job}-{rows}-{int(time.time())}"
     cmd = [
@@ -217,9 +234,7 @@ def trigger_generate(
 def download(file: str) -> FileResponse:
     """Stream a file from ``DATA_DIR``. Path is a simple filename
     (no `/`, no `..`) so the operator can only pull files we wrote."""
-    if "/" in file or file.startswith("."):
-        raise HTTPException(400, "file must be a simple name (no path)")
-    p = DATA_DIR / file
+    p = _safe_child(DATA_DIR, file)
     if not p.is_file():
         raise HTTPException(404, f"{file} not found")
     return FileResponse(
@@ -250,9 +265,7 @@ def list_files() -> JSONResponse:
 @app.get("/logs", dependencies=[Depends(_auth)])
 def get_log(job_id: str) -> FileResponse:
     """Stream a job's log file."""
-    if "/" in job_id or job_id.startswith("."):
-        raise HTTPException(400, "job_id must be a simple identifier")
-    p = LOGS_DIR / f"{job_id}.log"
+    p = _safe_child(LOGS_DIR, f"{job_id}.log")
     if not p.is_file():
         raise HTTPException(404, f"log for {job_id} not found")
     return FileResponse(str(p), media_type="text/plain", filename=p.name)
