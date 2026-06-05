@@ -101,8 +101,13 @@ impl ScalarUDFImpl for EmbedUDF {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
+        // Nullable item field to match what `FixedSizeListBuilder` produces in
+        // `invoke_with_args` (its inner field defaults to nullable). DataFusion
+        // validates the returned array's type against this exactly; a non-null
+        // declaration here mismatches the nullable builder output. The values
+        // are never actually null (we append a full row each time).
         Ok(DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("item", DataType::Float32, true)),
             self.dim,
         ))
     }
