@@ -98,7 +98,7 @@ def _match_one_ann(
 
     logger.info(
         "match_one: %d ANN candidates, %d above threshold %.2f",
-        len(candidates), len(results), mk.threshold,
+        len(candidates), len(results), float(mk.threshold),
     )
     return results
 
@@ -128,6 +128,6 @@ def _match_one_brute(
 
     logger.info(
         "match_one (brute): %d records scanned, %d above threshold %.2f",
-        df.height, len(results), mk.threshold,
+        df.height, len(results), float(mk.threshold),
     )
     return results
