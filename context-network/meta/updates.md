@@ -2,6 +2,21 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-05 — SQL-native graph + embedding UDFs shipped (#509, all 3 PRs)
+- #509 fully delivered across PRs #740 (graph half — DuckDB + Postgres), #743 (embed
+  half — `goldenmatch-embed` wheel + repoint + bridge cleanup), #745 (DataFusion FFI
+  graph UDFs). The graph + embed SQL surface is now **native-direct** (pure-Rust
+  `graph-core` + `goldenembed-rs`, no embedded-CPython JSON bridge) across all three
+  backends; the #503 bridge placeholder + its dead `bridge::api` fns are gone.
+- New nodes: [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md),
+  [../decisions/0005-sql-native-direct-udfs.md](../decisions/0005-sql-native-direct-udfs.md).
+  Noted the adjacent SQL surface in [../planning/roadmap.md](../planning/roadmap.md).
+- New crates/packages: `graph-core` (pyo3-free shared kernel), `goldenmatch-embed`
+  (maturin wheel over goldenembed-rs). `goldenmatch_pg` + `goldenmatch-duckdb` bumped
+  0.5.0→0.6.0 (new handwritten SQL surface + upgrade script). Spec/plan:
+  `docs/superpowers/specs/2026-06-04-sql-native-graph-embed-udfs-design.md`,
+  `docs/superpowers/plans/2026-06-04-sql-native-graph-embed-udfs.md`.
+
 ## 2026-06-04 — Sail tier S4 harness shipped (buildable tier COMPLETE)
 - S4 harness merged (PR #717): chain-robust O(log n) WCC via pointer-jumping (the blind
   large-star/small-star attempt was wrong, caught by plan-review hand-trace + replaced),
@@ -50,4 +65,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-03
+**Classification:** meta/log • **Last updated:** 2026-06-05
