@@ -241,16 +241,24 @@ def trigger_generate(
 
 @app.get("/download", dependencies=[Depends(_auth)])
 def download(file: str) -> FileResponse:
-    """Stream a file from ``DATA_DIR``. Path is a simple filename
-    (no `/`, no `..`) so the operator can only pull files we wrote."""
-    p = _safe_child(DATA_DIR, file)
-    if not p.is_file():
-        raise HTTPException(404, f"{file} not found")
-    return FileResponse(
-        str(p),
-        media_type="application/octet-stream",
-        filename=file,
-    )
+    """Stream a file from ``DATA_DIR`` by exact name.
+
+    The path handed to ``FileResponse`` comes from a directory listing, never
+    from the request value: we validate ``file`` is a simple name, then look
+    for a real entry whose ``.name`` matches. A traversal string therefore
+    can't reach the filesystem sink (the served path is `entry`, not a path
+    built from user input)."""
+    if not _SAFE_NAME_RE.fullmatch(file) or ".." in file:
+        raise HTTPException(400, "file must be a simple name (no path)")
+    listing = DATA_DIR.iterdir() if DATA_DIR.exists() else []
+    for entry in listing:
+        if entry.is_file() and entry.name == file:
+            return FileResponse(
+                str(entry),
+                media_type="application/octet-stream",
+                filename=entry.name,
+            )
+    raise HTTPException(404, f"{file} not found")
 
 
 @app.get("/list", dependencies=[Depends(_auth)])
@@ -273,8 +281,13 @@ def list_files() -> JSONResponse:
 
 @app.get("/logs", dependencies=[Depends(_auth)])
 def get_log(job_id: str) -> FileResponse:
-    """Stream a job's log file."""
-    p = _safe_child(LOGS_DIR, f"{job_id}.log")
-    if not p.is_file():
-        raise HTTPException(404, f"log for {job_id} not found")
-    return FileResponse(str(p), media_type="text/plain", filename=p.name)
+    """Stream a job's log file by exact name from a directory listing
+    (same no-user-derived-path-at-the-sink pattern as ``/download``)."""
+    if not _SAFE_NAME_RE.fullmatch(job_id) or ".." in job_id:
+        raise HTTPException(400, "job_id must be a simple identifier")
+    target = f"{job_id}.log"
+    listing = LOGS_DIR.iterdir() if LOGS_DIR.exists() else []
+    for entry in listing:
+        if entry.is_file() and entry.name == target:
+            return FileResponse(str(entry), media_type="text/plain", filename=entry.name)
+    raise HTTPException(404, f"log for {job_id} not found")

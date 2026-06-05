@@ -40,6 +40,8 @@ permissions:
 
 jobs:
   benchmarks:
+    permissions:
+      contents: read
     # Datasets are gated behind repo VARS so a fork without dataset access
     # doesn't try to run and fail. Set vars.RUN_BENCHMARKS=true and provide
     # the dataset secrets/vars to enable; otherwise the workflow exits 0
