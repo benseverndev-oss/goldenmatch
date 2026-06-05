@@ -23,12 +23,18 @@ def serve_ui_cmd(
     try:
         import uvicorn
 
-        from goldenmatch.web.app import create_app
+        from goldenmatch.web.app import create_app, resolve_web_auth_token
         from goldenmatch.web.state import AppState
     except ImportError as exc:
         raise typer.BadParameter(
             "goldenmatch[web] extra not installed. Run: pip install 'goldenmatch[web]'"
         ) from exc
+
+    # Fail closed: a non-loopback bind without a token is refused.
+    try:
+        resolve_web_auth_token(host)
+    except RuntimeError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     project_dir = (path or Path.cwd()).resolve()
     if not project_dir.is_dir():
