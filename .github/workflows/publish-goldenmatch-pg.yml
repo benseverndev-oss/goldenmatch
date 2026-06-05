@@ -24,13 +24,17 @@ on:
         default: ""
 
 permissions:
-  contents: write  # needed to upload release assets
+  contents: read
 
 jobs:
   build:
     # Only fire for goldenmatch-pg release tags.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-pg-v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # upload release assets
+      id-token: write      # cosign keyless OIDC signing
+      attestations: write  # GitHub build-provenance attestation
     strategy:
       fail-fast: false
       matrix:
@@ -122,11 +126,41 @@ jobs:
           echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
           ls -la "${ASSET}"
 
+      # --- Signing + provenance (Scorecard Signed-Releases) ---------------
+      # cosign keyless: OIDC identity = this workflow on this ref; verifiers
+      # run `cosign verify-blob --bundle <asset>.sigstore <asset>` with
+      # --certificate-identity-regexp pinned to this repo's workflow path.
+      - name: Install cosign
+        if: github.event_name == 'release'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Sign artifact (cosign keyless)
+        if: github.event_name == 'release'
+        working-directory: packages/rust/extensions/postgres
+        run: cosign sign-blob --yes --bundle "${ASSET}.sigstore" "${ASSET}"
+
+      - name: Attest build provenance
+        if: github.event_name == 'release'
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-path: packages/rust/extensions/postgres/${{ env.ASSET }}
+
+      - name: Stage provenance bundle as a release asset
+        if: github.event_name == 'release'
+        # The attestation lives in GitHub's attestation store; also attach it
+        # to the release so consumers (and Scorecard) see it next to the
+        # artifact.
+        run: cp "${{ steps.attest.outputs.bundle-path }}" "packages/rust/extensions/postgres/${ASSET}.intoto.jsonl"
+
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8  # v2
         with:
-          files: packages/rust/extensions/postgres/${{ env.ASSET }}
+          files: |
+            packages/rust/extensions/postgres/${{ env.ASSET }}
+            packages/rust/extensions/postgres/${{ env.ASSET }}.sigstore
+            packages/rust/extensions/postgres/${{ env.ASSET }}.intoto.jsonl
           tag_name: ${{ github.event.release.tag_name }}
 
       - name: Upload artifact (workflow_dispatch only)
