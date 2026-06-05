@@ -129,7 +129,7 @@ lockstep (bridge fn + pgrx wrapper + handwritten SQL on the Postgres side;
 `functions.py` UDF on the DuckDB side) so the two stay interchangeable.
 
 ## Gotchas
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.6.0.sql` manually (+ the `--0.5.0--0.6.0.sql` upgrade script). Bumping the PG version means renaming the SQL file AND updating the hardcoded `cp sql/goldenmatch_pg--X.Y.Z.sql` lines in root `.github/workflows/ci.yml` + `publish-goldenmatch-pg.yml` (the orphaned `packages/.../.github` copies are ignored)
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.7.0.sql` (the current `default_version` base) manually, plus the chained upgrade scripts (`--0.5.0--0.6.0.sql`, `--0.6.0--0.7.0.sql`). Bumping the extension version means adding a new `--X.Y.Z.sql` base + `--<prev>--X.Y.Z.sql` migration, bumping `default_version` in `goldenmatch_pg.control` AND `version` in `Cargo.toml`, and adding the hardcoded `cp sql/goldenmatch_pg--*.sql` lines in root `.github/workflows/ci.yml` + `publish-goldenmatch-pg.yml` (the orphaned `packages/.../.github` copies are ignored). A new function in an ALREADY-PUBLISHED version is wrong: published versions are immutable, so the function goes in the NEXT version's base + migration, NOT retro-added to the released base (bit gm_embed/#737 -- it shipped into 0.6.0 which was already released, fixed by moving it to 0.7.0).
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts
 - `cargo` defaults CARGO_HOME to drive root on Windows when CWD is D: -- always set explicitly
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads

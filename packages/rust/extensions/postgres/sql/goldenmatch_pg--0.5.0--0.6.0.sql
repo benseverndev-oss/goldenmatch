@@ -63,12 +63,3 @@ CREATE FUNCTION "goldenmatch_embed_local"(
 STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'goldenmatch_embed_local_wrapper';
-
--- gm_embed: 1-arg convenience over the in-house model, dir from
--- GOLDENEMBED_MODEL_DIR, real[] (float4) for DataFusion parity. NULL -> ""
--- (NOT STRICT). #737.
-CREATE FUNCTION "gm_embed"(
-    "text" TEXT  /* nullable: NULL -> "" */
-) RETURNS real[]
-LANGUAGE c
-AS 'MODULE_PATHNAME', 'gm_embed_wrapper';

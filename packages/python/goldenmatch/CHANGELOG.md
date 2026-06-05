@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-06-05
+
+### Fixed
+- **Distributed Phase-5 pipeline now honors an explicit config (#739).** `run_dedupe_pipeline_distributed(..., config=my_config)` previously dropped the `config` kwarg and forced `auto_configure_df`, so a hand-built config was ignored and a RED auto-config commit could crash the run. `allow_red_config` was likewise dropped. Both are now respected (`allow_red_config=True` is the documented escape hatch at scale, per the post-#715 contract).
+
+### Changed
+- **Auto-config admits high-cardinality identifiers to probabilistic matchkeys (#721).** `build_probabilistic_matchkeys` no longer skips `col_type="identifier"`, matching the exact path (#715). Identifiers become Fellegi-Sunter comparison fields with no lower cardinality floor (F-S self-regulates a weak identifier via its u/EM weight); only perfectly-unique surrogate keys (`cardinality_ratio >= 1.0`) are excluded, now uniformly across all exact-scorer fields.
+
+### Notes
+- The Postgres extension gains `gm_embed(text) -> real[]` (#737), released separately as `goldenmatch-pg` 0.7.0 (a cached, `GOLDENEMBED_MODEL_DIR`-based convenience over the in-house embedder, mirroring the DataFusion `goldenmatch_embed` UDF). No change to the Python package surface.
+
 ## [1.26.0] - 2026-06-04
 
 <!-- README-callout

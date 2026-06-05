@@ -1,5 +1,5 @@
 comment = 'Entity resolution toolkit -- deduplicate, match, and maintain golden records'
-default_version = '0.6.0'
+default_version = '0.7.0'
 module_pathname = '$libdir/goldenmatch_pg'
 relocatable = false
 schema = goldenmatch
