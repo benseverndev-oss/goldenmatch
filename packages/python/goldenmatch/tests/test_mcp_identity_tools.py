@@ -19,10 +19,11 @@ from goldenmatch.mcp.identity_tools import (
 
 
 def test_identity_tool_count_and_names():
-    assert len(IDENTITY_TOOLS) == 6
+    assert len(IDENTITY_TOOLS) == 7
     assert IDENTITY_TOOL_NAMES == {
         "identity_resolve", "identity_list", "identity_history",
         "identity_conflicts", "identity_merge", "identity_split",
+        "identity_show",
     }
 
 
