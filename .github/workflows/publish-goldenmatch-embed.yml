@@ -51,6 +51,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: "2_28"
+          # vendored OpenSSL (Linux-only, see embed-py/Cargo.toml) compiles from
+          # source and needs perl in the manylinux container.
+          before-script-linux: "command -v perl >/dev/null || dnf install -y perl-core || yum install -y perl-core"
           args: --release --out dist -m ${{ env.MANIFEST }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
@@ -79,14 +82,16 @@ jobs:
 
   macos:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'goldenmatch-embed-v')
-    # Both arches build on the Apple Silicon runner; x86_64 is a cross-compile
-    # (Apple ships the x86_64 SDK slice). macos-13 (Intel) runners queue
-    # indefinitely in this org, so we don't depend on them.
+    # Apple Silicon only. `ort` ships NO prebuilt ONNX Runtime for
+    # x86_64-apple-darwin (Intel Macs), so that cross-compile cannot link
+    # without building ONNX from source -- not worth it for an EOL arch; those
+    # users fall back to the pure-Python in-house embedder. macos-13 (Intel)
+    # runners also queue indefinitely in this org.
     runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        target: [aarch64]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
