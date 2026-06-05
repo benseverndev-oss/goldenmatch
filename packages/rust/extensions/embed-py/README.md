@@ -1,5 +1,9 @@
 # goldenmatch-embed
 
+[![PyPI](https://img.shields.io/pypi/v/goldenmatch-embed?color=d4a017&logo=pypi&logoColor=white)](https://pypi.org/project/goldenmatch-embed/)
+[![Downloads](https://img.shields.io/pypi/dm/goldenmatch-embed?color=2ea44f)](https://pypi.org/project/goldenmatch-embed/)
+[![Python](https://img.shields.io/pypi/pyversions/goldenmatch-embed?logo=python&logoColor=white)](https://pypi.org/project/goldenmatch-embed/)
+
 Local ONNX embedder for [GoldenMatch](https://github.com/benseverndev-oss/goldenmatch)
 SQL UDFs, shipped as a standalone abi3 wheel.
 

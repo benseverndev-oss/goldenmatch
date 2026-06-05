@@ -1,5 +1,9 @@
 # goldenmatch-duckdb
 
+[![PyPI](https://img.shields.io/pypi/v/goldenmatch-duckdb?color=d4a017&logo=pypi&logoColor=white)](https://pypi.org/project/goldenmatch-duckdb/)
+[![Downloads](https://img.shields.io/pypi/dm/goldenmatch-duckdb?color=2ea44f)](https://pypi.org/project/goldenmatch-duckdb/)
+[![Python](https://img.shields.io/pypi/pyversions/goldenmatch-duckdb?logo=python&logoColor=white)](https://pypi.org/project/goldenmatch-duckdb/)
+
 GoldenMatch entity resolution functions for DuckDB.
 
 ```bash

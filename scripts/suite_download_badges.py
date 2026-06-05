@@ -25,6 +25,14 @@ PYPI_PACKAGES = [
     "goldenflow",
     "infermap",
     "goldencheck-types",
+    "goldensuite-mcp",
+    # SQL extensions + the optional compiled/embed runtimes. `goldenmatch-native`
+    # (goldenmatch[native]) and `goldenmatch-embed` (goldenmatch-duckdb[embed]) are
+    # extras, so their downloads partially overlap their parent packages -- counted
+    # here because they are distinct distributions in the suite, same as the rest.
+    "goldenmatch-duckdb",
+    "goldenmatch-native",
+    "goldenmatch-embed",
 ]
 NPM_PACKAGES = [
     "goldenmatch",
