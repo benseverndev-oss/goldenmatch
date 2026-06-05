@@ -57,3 +57,16 @@ def test_mcp_export_respects_root(tmp_path, monkeypatch):
     from goldenmatch.mcp import server as mcp_server
     result = mcp_server._tool_export_results(str(tmp_path / "escape.json"), "json")
     assert "error" in result
+
+
+def test_mcp_compare_clusters_respects_root(tmp_path, monkeypatch):
+    root = tmp_path / "jail"
+    root.mkdir()
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(root))
+    from goldenmatch.mcp import server as mcp_server
+    # clusters_a_path escapes the jail — must get an error dict, not an open() call
+    result = mcp_server._tool_compare_clusters(
+        str(tmp_path / "escape_a.json"),
+        str(root / "b.json"),
+    )
+    assert "error" in result
