@@ -198,11 +198,11 @@ def _default_llm_caller(prompt: str) -> str | None:
             )
         return text
     except Exception:
-        # Don't bind or log the exception: provider clients routinely echo the
-        # auth header / api key into their error text, and CodeQL taints any
-        # value derived from `exc` (even type(exc).__name__) back to the key
-        # source in llm_scorer. Log only the provider name (CodeQL #302).
-        logger.warning("LLM strategy pick failed for provider %s", provider)
+        # Log a constant only. Both `exc` (provider clients echo the api key
+        # into error text) and `provider` (element 0 of `_detect_provider`'s
+        # (label, key) tuple, which CodeQL taints from the OPENAI_API_KEY
+        # source) carry credential taint to this sink (CodeQL #302).
+        logger.warning("LLM strategy pick failed")
         return None
 
 
