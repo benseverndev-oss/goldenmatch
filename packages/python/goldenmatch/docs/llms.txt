@@ -3,8 +3,8 @@
 > Entity resolution toolkit — deduplicate records and match across datasets using fuzzy, probabilistic, and LLM-powered scoring.
 
 ## Interfaces
-- MCP Server: `goldenmatch mcp-serve` (13 agent tools + 17 data tools + 5 memory tools = 35 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (35 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (12 skills)
 - CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, + more
 - Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports

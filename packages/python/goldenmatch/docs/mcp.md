@@ -6,7 +6,7 @@ nav_order: 18
 
 # MCP Server
 
-GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 35 tools total: 13 agent-level tools for autonomous ER, 17 data tools for inspection and management, and 5 Learning Memory tools (v1.6.0) for persisting steward decisions.
+GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 54 tools total: 16 agent-level tools for autonomous ER, 24 data tools for inspection and management, 7 Learning Memory tools (v1.6.0) for persisting steward decisions, and 7 Identity Graph tools.
 
 > **Looking for AI-to-AI autonomy?** See the [ER Agent (A2A)](agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
 
@@ -206,7 +206,7 @@ Normalize phone numbers (E.164), dates (ISO), categorical spelling, and Unicode.
 "Normalize the phone and date formats in my data"
 ```
 
-In addition, 14 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms). See [ER Agent](agent) for details.
+In addition, 16 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental). See [ER Agent](agent) for details.
 
 ### AutoConfigController telemetry (v1.7-v1.12)
 

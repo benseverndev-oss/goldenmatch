@@ -103,7 +103,7 @@ print(result.memory_stats)
 
 ## MCP
 
-Five new MCP tools (total now 35):
+Five new MCP tools (total now 54):
 
 | Tool | Behavior |
 |---|---|

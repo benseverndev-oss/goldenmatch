@@ -47,7 +47,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - `goldenmatch/core/review_queue.py` -- ReviewQueue (memory/SQLite/Postgres backends), ReviewItem, gate_pairs(). Confidence gating: >0.95 auto-merge, 0.75-0.95 review, <0.75 reject
 - `goldenmatch/core/memory/` -- Learning Memory: persistent corrections + rule learning. `store.py` (MemoryStore, SQLite/Postgres CRUD, trust-based upsert), `corrections.py` (apply_corrections with dual-hash staleness detection), `learner.py` (MemoryLearner, threshold tuning from 10+ corrections). Config: `MemoryConfig` in schemas.py, optional `memory:` YAML section
 - `goldenmatch/a2a/` -- A2A protocol server (aiohttp). Agent card at `/.well-known/agent.json`, 10 skills, task lifecycle, SSE streaming. CLI: `goldenmatch agent-serve --port 8200`
-- `goldenmatch/mcp/agent_tools.py` -- 13 agent-level MCP tools (additive to existing). Each creates own AgentSession (no shared global state)
+- `goldenmatch/mcp/agent_tools.py` -- 16 agent-level MCP tools (additive to existing). Each creates own AgentSession (no shared global state)
 - Adding MCP tools: add Tool to `AGENT_TOOLS` in `mcp/agent_tools.py`, add dispatch handler in `_dispatch()`, update server card tool count in `mcp/server.py` (line ~1002)
 - Adding A2A skills: add entry to `_SKILLS` in `a2a/server.py`, add dispatch handler in `a2a/skills.py`, update `test_agent_card_has_N_skills` assertion in `tests/test_a2a.py`
 - MCP/A2A handlers must validate `file_path` param, catch `FileNotFoundError` on `pl.read_csv`, and wrap `write_csv(output_path)` in try/except to preserve results on write failure
