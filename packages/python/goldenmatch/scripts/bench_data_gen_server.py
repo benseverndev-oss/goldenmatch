@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -108,23 +109,31 @@ def _auth(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
 
 
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 def _safe_child(base: Path, name: str) -> Path:
     """Resolve ``name`` strictly inside ``base`` and return the resolved path.
 
     Caller-supplied filenames (``?file=``, ``?job_id=``, ``output=``) must not
-    escape ``DATA_DIR``. A bare ``"/" in name`` check is not enough: it misses
-    the Windows ``\\`` separator and symlinks inside ``base`` that point out.
-    We reject any path separator / parent ref up front, then ``resolve()`` and
-    confirm containment so a symlink can't smuggle us out. Raises
-    ``HTTPException(400)`` on any traversal attempt.
+    escape ``DATA_DIR``. Two layers:
+
+    1. An allowlist regexp barrier: ``name`` must be a single segment of safe
+       characters with no parent ref. This rejects separators (``/`` and the
+       Windows ``\\``), leading dots, and ``..`` before the value is ever used
+       to build a path.
+    2. A realpath containment check: ``os.path.realpath`` collapses any symlink,
+       so a symlinked entry inside ``base`` that points elsewhere is caught.
+
+    Raises ``HTTPException(400)`` on any traversal attempt.
     """
-    if not name or "/" in name or "\\" in name or name.startswith("."):
+    if not _SAFE_NAME_RE.fullmatch(name) or ".." in name:
         raise HTTPException(400, "name must be a simple filename (no path)")
-    base_resolved = base.resolve()
-    candidate = (base_resolved / name).resolve()
-    if not candidate.is_relative_to(base_resolved):
+    base_real = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(base_real, name))
+    if candidate != base_real and not candidate.startswith(base_real + os.sep):
         raise HTTPException(400, "resolved path escapes the data directory")
-    return candidate
+    return Path(candidate)
 
 
 def _run_subprocess(job_id: str, cmd: list[str]) -> None:

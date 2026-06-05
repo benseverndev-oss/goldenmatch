@@ -197,13 +197,12 @@ def _default_llm_caller(prompt: str) -> str | None:
                 model="claude-haiku-4-5-20251001",
             )
         return text
-    except Exception as exc:
-        # Log only the exception type, never str(exc): provider clients
-        # routinely echo the auth header / api key into their error text,
-        # and this warning would otherwise leak the credential (CodeQL #302).
-        logger.warning(
-            "LLM strategy pick failed (%s): %s", provider, type(exc).__name__
-        )
+    except Exception:
+        # Don't bind or log the exception: provider clients routinely echo the
+        # auth header / api key into their error text, and CodeQL taints any
+        # value derived from `exc` (even type(exc).__name__) back to the key
+        # source in llm_scorer. Log only the provider name (CodeQL #302).
+        logger.warning("LLM strategy pick failed for provider %s", provider)
         return None
 
 

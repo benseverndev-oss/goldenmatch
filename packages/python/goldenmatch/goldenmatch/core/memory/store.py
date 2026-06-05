@@ -185,9 +185,7 @@ class MemoryStore:
             self._conn.executescript(_SCHEMA)
             self._migrate_field_correction_columns()
             self._migrate_cluster_decision_columns()
-            # %r quotes the path so a newline/control char in a caller-supplied
-            # db path can't forge log lines (CodeQL #301 log-injection).
-            log.debug("MemoryStore opened: %r (journal_mode=WAL)", path)
+            log.debug("MemoryStore opened: %s (journal_mode=WAL)", path)
         else:
             raise NotImplementedError(f"Backend '{backend}' not yet implemented")
 
