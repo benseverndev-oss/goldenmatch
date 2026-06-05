@@ -39,7 +39,11 @@ def test_embed_udf_shape_and_parity(monkeypatch):
     assert len(out[0]) == 8  # model dim
     assert out[0] == out[1]  # determinism: identical input -> identical vector
 
-    py = GoldenEmbedModel.load(str(FIXTURE)).embed(["acme corp"], backend="onnx")[0]
+    # Reference via the numpy forward pass (the model's documented source of
+    # truth) -- the CI venv has no `onnxruntime` Python package, and numpy needs
+    # none. This is a genuine cross-impl parity check: the Rust UDF runs ONNX,
+    # the reference runs numpy; they must agree to high precision.
+    py = GoldenEmbedModel.load(str(FIXTURE)).embed(["acme corp"], backend="numpy")[0]
     v = np.asarray(out[0], dtype=np.float32)
     cos = float(np.dot(v, py) / (np.linalg.norm(v) * np.linalg.norm(py) + 1e-9))
     assert cos > 0.999, f"UDF vs python embed cosine {cos}"
