@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -346,18 +347,53 @@ class MatchServer:
 
 # Global server instance
 _server_instance: MatchServer | None = None
+# Bearer token enforced on every endpoint except /health (None = open, loopback only).
+_auth_token: str | None = None
+
+
+def resolve_api_auth_token(host: str) -> str | None:
+    """Return the REST API bearer token, enforcing the fail-closed bind rule.
+
+    Raises ``RuntimeError`` when binding to a non-loopback host without
+    ``GOLDENMATCH_API_TOKEN`` set. Returns the token (or ``None`` for an
+    intentionally-open loopback bind).
+    """
+    token = os.environ.get("GOLDENMATCH_API_TOKEN")
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not token and not is_loopback:
+        raise RuntimeError(
+            f"Refusing to start an unauthenticated REST API on host {host!r}. "
+            "Set GOLDENMATCH_API_TOKEN, or bind to 127.0.0.1 for local use."
+        )
+    return token
 
 
 class APIHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the GoldenMatch API."""
+
+    def _authorized(self) -> bool:
+        """True when no token is configured or the Bearer header matches."""
+        if not _auth_token:
+            return True
+        header = self.headers.get("Authorization", "")
+        return header.startswith("Bearer ") and header[7:] == _auth_token
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
         if path == "/health":
-            self._json_response({"status": "ok", "service": "goldenmatch"})
-        elif path == "/stats":
+            ready = _server_instance is not None and _server_instance.result is not None
+            self._json_response(
+                {"status": "ok" if ready else "initializing", "service": "goldenmatch", "ready": ready},
+                200 if ready else 503,
+            )
+            return
+        if not self._authorized():
+            self._json_response({"error": "Unauthorized"}, 401)
+            return
+
+        if path == "/stats":
             self._json_response(_server_instance.get_stats())
         elif path == "/clusters":
             params = parse_qs(parsed.query)
@@ -393,6 +429,10 @@ class APIHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+
+        if not self._authorized():
+            self._json_response({"error": "Unauthorized"}, 401)
+            return
 
         try:
             content_length = int(self.headers.get("Content-Length", 0))
@@ -455,7 +495,17 @@ class APIHandler(BaseHTTPRequestHandler):
     def _json_response(self, data: Any, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # CORS: only echo an Origin that's on the explicit allowlist
+        # (GOLDENMATCH_API_CORS_ORIGINS, comma-separated). No wildcard.
+        allowed = {
+            o.strip()
+            for o in os.environ.get("GOLDENMATCH_API_CORS_ORIGINS", "").split(",")
+            if o.strip()
+        }
+        origin = self.headers.get("Origin", "")
+        if origin and origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode())
 
@@ -470,7 +520,8 @@ def start_server(
     port: int = 8080,
 ) -> None:
     """Start the GoldenMatch API server."""
-    global _server_instance
+    global _server_instance, _auth_token
+    _auth_token = resolve_api_auth_token(host)
     _server_instance = MatchServer(engine, config)
 
     print("Initializing GoldenMatch API...")
