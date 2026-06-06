@@ -79,15 +79,15 @@ Download `.deb` and `.rpm` from the [goldenmatch releases](https://github.com/be
 ### Verifying release artifacts
 
 Releases since goldenmatch-pg v0.6.0 ship a `.sigstore` bundle alongside
-each tarball. Releases from v0.8.0 onward also ship an `.intoto.jsonl`
-build-provenance attestation.
+each tarball. Releases published after 2026-06-05 also ship an
+`.intoto.jsonl` build-provenance attestation next to each asset.
 
 Verify a tarball with cosign (keyless, GitHub Actions OIDC):
 
 ```bash
 cosign verify-blob \
-  --bundle goldenmatch_pg-0.7.0.tar.gz.sigstore \
-  goldenmatch_pg-0.7.0.tar.gz \
+  --bundle goldenmatch_pg-0.7.0-pg17-linux-x86_64.tar.gz.sigstore \
+  goldenmatch_pg-0.7.0-pg17-linux-x86_64.tar.gz \
   --certificate-identity-regexp 'github.com/benseverndev-oss/goldenmatch' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
