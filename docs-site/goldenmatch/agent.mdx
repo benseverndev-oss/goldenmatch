@@ -271,7 +271,7 @@ These are additive -- existing MCP tools (`suggest_config`, `list_domains`, etc.
     "url": "https://github.com/benseverndev-oss/goldenmatch"
   },
   "capabilities": {
-    "streaming": true,
+    "streaming": false,
     "pushNotifications": false
   },
   "skills": [
@@ -293,7 +293,23 @@ Full card at: `http://localhost:8200/.well-known/agent.json`
 
 ## Authentication
 
-Set `GOLDENMATCH_AGENT_TOKEN` env var for bearer token auth. If not set, no auth required (suitable for local use).
+The server is fail-closed: binding to a non-loopback host (the default is
+`0.0.0.0`) refuses to start unless `GOLDENMATCH_AGENT_TOKEN` is set. When the
+token is set, all task endpoints require it as a bearer token; `GET /health`
+and the agent card at `/.well-known/agent.json` stay public for healthchecks
+and discovery.
+
+```bash
+export GOLDENMATCH_AGENT_TOKEN="your-secret-token"
+goldenmatch agent-serve --port 8200
+```
+
+Binding to `127.0.0.1` runs token-free for local use.
+
+<Note>
+The agent card advertises `"streaming": false` — task dispatch is synchronous.
+Poll `GET /tasks/{task_id}` for long-running skills.
+</Note>
 
 ## See also
 

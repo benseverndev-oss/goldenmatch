@@ -65,7 +65,7 @@ memory:
 goldenmatch dedupe customers.csv --config goldenmatch.yml
 ```
 
-**Run 2 -- the steward decides.** The interactive review TUI writes approve / reject decisions to `.goldenmatch/memory.db` with `source=steward, trust=1.0`.
+**Run 2 -- the steward decides.** The guided review loop walks borderline pairs (plus any stale corrections the pipeline re-enqueued) one at a time -- `y` approve, `n` reject, `s` skip -- and writes decisions to `.goldenmatch/memory.db` with `source=steward, trust=1.0`.
 
 ```bash
 goldenmatch review --config goldenmatch.yml

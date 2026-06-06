@@ -48,6 +48,27 @@ goldenmatch mcp-serve --file customers.csv --config config.yaml
 goldenmatch mcp-serve --file customers.csv --transport http --port 8200
 ```
 
+### Authentication (HTTP transport)
+
+The HTTP server is fail-closed: binding to a non-loopback host (the default is
+`0.0.0.0`) refuses to start unless `GOLDENMATCH_MCP_TOKEN` is set. When the
+token is set, every request to `/mcp` must carry it as a bearer token. The
+`/.well-known/mcp/server-card.json` healthcheck stays public.
+
+```bash
+# Exposed bind: token required, enforced on /mcp
+export GOLDENMATCH_MCP_TOKEN="your-secret-token"
+goldenmatch mcp-serve --transport http --port 8200
+
+curl -H "Authorization: Bearer your-secret-token" http://host:8200/mcp/
+```
+
+<Info>
+Local development on loopback runs token-free:
+`goldenmatch mcp-serve --transport http --host 127.0.0.1`. The stdio transport
+(Claude Desktop) is local-only and never requires a token.
+</Info>
+
 Or add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
 ```json
