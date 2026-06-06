@@ -24,6 +24,8 @@ links rather than reading everything.
 
 ## Planning (where it's going)
 - [planning/roadmap.md](planning/roadmap.md) — the Arrow-native arc and what's next.
+- [planning/surface-hardening.md](planning/surface-hardening.md) — the 2026-06-05 four-surface audit arc: fail-closed HTTP auth, CLI/TUI fixes, Python->TS parity ports (+ the parity-fixture methodology), and the open PR queue.
+- [planning/security-hardening.md](planning/security-hardening.md) — the 2026-06-05 security-hardening arc: 42-alert remediation (Dependabot + code scanning), Scorecard 6.1->7.3 (Token-Permissions/Signed-Releases/Fuzzing), the CodeQL Autofix incident, property-test bug ledger, and open actions.
 
 ## Meta (keeping the network alive)
 - [meta/updates.md](meta/updates.md) — chronological change log for the network.
