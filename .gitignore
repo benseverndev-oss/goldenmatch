@@ -5,6 +5,7 @@ build/
 *.egg-info/
 node_modules/
 __pycache__/
+**/.hypothesis/
 .venv/
 .uv-cache/
 

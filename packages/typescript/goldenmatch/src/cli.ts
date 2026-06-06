@@ -929,12 +929,25 @@ program
   .description("Launch interactive TUI (requires optional peer deps: ink + react)")
   .argument("[files...]", "input files to load on startup")
   .option("-c, --config <path>", "path to YAML config file")
-  .action(async (files: string[], opts: { config?: string }) => {
+  .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
+  .option("-o, --output-dir <dir>", "directory the Export tab writes into")
+  .action(
+    async (
+      files: string[],
+      opts: { config?: string; memoryPath?: string; outputDir?: string },
+    ) => {
     try {
       const { startTui } = await import("./node/tui/app.js");
-      const tuiOpts: { files?: string[]; config?: ReturnType<typeof loadConfigFile> } = {};
+      const tuiOpts: {
+        files?: string[];
+        config?: ReturnType<typeof loadConfigFile>;
+        memoryPath?: string;
+        outputDir?: string;
+      } = {};
       if (files && files.length > 0) tuiOpts.files = files;
       if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
+      if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
+      if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
       await startTui(tuiOpts);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
