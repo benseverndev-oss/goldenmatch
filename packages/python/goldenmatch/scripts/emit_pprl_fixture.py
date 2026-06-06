@@ -21,7 +21,6 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-
 from goldenmatch.core.scorer import _hex_to_bits
 from goldenmatch.pprl.protocol import PPRLConfig, compute_bloom_filters, run_pprl
 from goldenmatch.utils.transforms import apply_transform
