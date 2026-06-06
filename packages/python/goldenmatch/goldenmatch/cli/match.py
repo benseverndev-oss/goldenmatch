@@ -20,8 +20,8 @@ def match_cmd(
     against: list[str] = typer.Option(
         ..., "--against", "-a", help="Reference files as path or path:source_name"
     ),
-    config: str = typer.Option(
-        ..., "--config", "-c", help="Path to YAML config file"
+    config: str | None = typer.Option(
+        None, "--config", "-c", help="Path to YAML config file (optional - auto-detects if omitted)"
     ),
     preview: bool = typer.Option(False, "--preview", help="Preview results without writing files"),
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
@@ -53,13 +53,25 @@ def match_cmd(
     target_parsed = _parse_file_source(target)
     refs_parsed = [_parse_file_source(f) for f in against]
 
-    # Load config
-    try:
-        cfg = load_config(config)
-    except (FileNotFoundError, ValueError) as exc:
+    # Load config - from file, or auto-detect from the target + references
+    # (zero-config, mirroring `dedupe`).
+    if config:
+        try:
+            cfg = load_config(config)
+        except (FileNotFoundError, ValueError) as exc:
+            if not quiet:
+                console.print(f"[red]Config error:[/red] {exc}")
+            raise typer.Exit(code=1)
+    else:
+        from goldenmatch.core.autoconfig import auto_configure
         if not quiet:
-            console.print(f"[red]Config error:[/red] {exc}")
-        raise typer.Exit(code=1)
+            console.print("[yellow]No config file - auto-detecting column types...[/yellow]")
+        try:
+            cfg = auto_configure([target_parsed, *refs_parsed])
+        except Exception as exc:
+            if not quiet:
+                console.print(f"[red]Auto-config failed:[/red] {exc}")
+            raise typer.Exit(code=1)
 
     # Merge --exclude-columns into config (additive with YAML field).
     from goldenmatch._exclusions_schema import merge_exclude_columns_into_config
