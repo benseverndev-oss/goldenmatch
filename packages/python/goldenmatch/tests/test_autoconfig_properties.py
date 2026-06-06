@@ -20,7 +20,7 @@ from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
 from goldenmatch.core.autoconfig_controller import ConfigValidationError
 from goldenmatch.core.complexity_profile import HealthVerdict
-from hypothesis import HealthCheck, given, settings  # noqa: E402
+from hypothesis import HealthCheck, example, given, settings  # noqa: E402
 from hypothesis import strategies as st
 
 # ---- Strategies ---------------------------------------------------------
@@ -56,10 +56,22 @@ def _small_df_strategy() -> st.SearchStrategy[pl.DataFrame]:
     max_examples=20, deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
+@example(df=pl.DataFrame({"col_0": ["null"] * 5, "col_1": ["null"] * 5}))
 @given(df=_small_df_strategy())
 def test_determinism(df: pl.DataFrame):
     """auto_configure_df(df) is deterministic -- same df -> same config."""
-    cfg1 = goldenmatch.auto_configure_df(df)
+    try:
+        cfg1 = goldenmatch.auto_configure_df(df)
+    except ConfigValidationError:
+        # Typed rejection of degenerate input -- determinism also holds:
+        # if the first call rejects, the second must too.
+        try:
+            goldenmatch.auto_configure_df(df)
+        except ConfigValidationError:
+            pass
+        else:
+            raise AssertionError("first call raised ConfigValidationError but second succeeded")
+        return
     cfg2 = goldenmatch.auto_configure_df(df)
     # Pydantic models compare by value
     assert cfg1 == cfg2, "auto_configure_df is not deterministic for the same input"
@@ -69,11 +81,17 @@ def test_determinism(df: pl.DataFrame):
     max_examples=20, deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
+@example(df=pl.DataFrame({"col_0": ["null"] * 5, "col_1": ["null"] * 5}))
 @given(df=_small_df_strategy())
 def test_sample_stability(df: pl.DataFrame):
     """When n_rows < sample_skip_below (5000), controller uses full data --
     no sample is taken, sample_size in meta == n_rows (or 0 for short-circuit)."""
-    goldenmatch.auto_configure_df(df)
+    try:
+        goldenmatch.auto_configure_df(df)
+    except ConfigValidationError:
+        # Typed rejection of degenerate input -- the property under test is about
+        # successful runs.
+        return
     state = _LAST_CONTROLLER_RUN.get()
     if state is None:
         return  # facade returned without running controller (rare)
@@ -94,11 +112,17 @@ def test_sample_stability(df: pl.DataFrame):
     max_examples=20, deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
+@example(df=pl.DataFrame({"col_0": ["null"] * 5, "col_1": ["null"] * 5}))
 @given(df=_small_df_strategy())
 def test_profile_non_collapse(df: pl.DataFrame):
     """_finalize does not produce RED if any history entry was non-RED
     AND drift < DRIFT_THRESHOLD (0.30). Drift-induced YELLOW is allowed."""
-    goldenmatch.auto_configure_df(df)
+    try:
+        goldenmatch.auto_configure_df(df)
+    except ConfigValidationError:
+        # Typed rejection of degenerate input -- the property under test is about
+        # successful runs.
+        return
     state = _LAST_CONTROLLER_RUN.get()
     if state is None:
         return
@@ -146,13 +170,19 @@ def test_no_silent_crashes(df: pl.DataFrame):
     max_examples=20, deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
+@example(df=pl.DataFrame({"col_0": ["null"] * 5, "col_1": ["null"] * 5}))
 @given(df=_small_df_strategy())
 def test_history_audit_invariant(df: pl.DataFrame):
     """Every decision in history.decisions corresponds to a rule in
     HeuristicRefitPolicy's rule table -- no 'phantom' rules."""
     from goldenmatch.core.autoconfig_rules import DEFAULT_RULES
 
-    goldenmatch.auto_configure_df(df)
+    try:
+        goldenmatch.auto_configure_df(df)
+    except ConfigValidationError:
+        # Typed rejection of degenerate input -- the property under test is about
+        # successful runs.
+        return
     state = _LAST_CONTROLLER_RUN.get()
     if state is None or not state[1].decisions:
         return  # no decisions recorded -- trivially satisfies the invariant
