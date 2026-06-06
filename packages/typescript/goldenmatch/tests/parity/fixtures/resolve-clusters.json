@@ -1,0 +1,181 @@
+{
+  "source_pk_col": "pk",
+  "runs": [
+    {
+      "run_name": "r1",
+      "rows": [
+        {
+          "pk": "a1",
+          "name": "Alice"
+        },
+        {
+          "pk": "a2",
+          "name": "Alice A"
+        },
+        {
+          "pk": "b1",
+          "name": "Bob"
+        },
+        {
+          "pk": "c1",
+          "name": "Carol"
+        }
+      ],
+      "clusters": {
+        "0": {
+          "members": [
+            0,
+            1
+          ],
+          "confidence": 0.95,
+          "pair_scores": [
+            [
+              0,
+              1,
+              0.95
+            ]
+          ]
+        },
+        "1": {
+          "members": [
+            2
+          ],
+          "confidence": 1.0,
+          "pair_scores": []
+        },
+        "2": {
+          "members": [
+            3
+          ],
+          "confidence": 1.0,
+          "pair_scores": []
+        }
+      },
+      "scored_pairs": [
+        [
+          0,
+          1,
+          0.95
+        ]
+      ],
+      "expected_summary": {
+        "created": 3,
+        "absorbed_records": 0,
+        "merged": 0,
+        "split": 0,
+        "edges_added": 1,
+        "events_emitted": 3,
+        "records_upserted": 4,
+        "conflicts_flagged": 0
+      }
+    },
+    {
+      "run_name": "r2",
+      "rows": [
+        {
+          "pk": "a1",
+          "name": "Alice"
+        },
+        {
+          "pk": "a3",
+          "name": "Alice Anne"
+        }
+      ],
+      "clusters": {
+        "0": {
+          "members": [
+            0,
+            1
+          ],
+          "confidence": 0.9,
+          "pair_scores": [
+            [
+              0,
+              1,
+              0.9
+            ]
+          ]
+        }
+      },
+      "scored_pairs": [
+        [
+          0,
+          1,
+          0.9
+        ]
+      ],
+      "expected_summary": {
+        "created": 0,
+        "absorbed_records": 1,
+        "merged": 0,
+        "split": 0,
+        "edges_added": 1,
+        "events_emitted": 1,
+        "records_upserted": 2,
+        "conflicts_flagged": 0
+      }
+    },
+    {
+      "run_name": "r3",
+      "rows": [
+        {
+          "pk": "a1",
+          "name": "Alice"
+        },
+        {
+          "pk": "b1",
+          "name": "Bob"
+        }
+      ],
+      "clusters": {
+        "0": {
+          "members": [
+            0,
+            1
+          ],
+          "confidence": 0.9,
+          "pair_scores": [
+            [
+              0,
+              1,
+              0.9
+            ]
+          ]
+        }
+      },
+      "scored_pairs": [
+        [
+          0,
+          1,
+          0.9
+        ]
+      ],
+      "expected_summary": {
+        "created": 0,
+        "absorbed_records": 0,
+        "merged": 1,
+        "split": 0,
+        "edges_added": 1,
+        "events_emitted": 2,
+        "records_upserted": 2,
+        "conflicts_flagged": 0
+      }
+    }
+  ],
+  "expected_final": {
+    "groups": [
+      [
+        "s:a1",
+        "s:a2",
+        "s:a3",
+        "s:b1"
+      ],
+      [
+        "s:c1"
+      ]
+    ],
+    "active_identities": 2,
+    "edges": 3,
+    "events": 4
+  }
+}
