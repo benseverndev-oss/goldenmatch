@@ -475,6 +475,20 @@ export type {
   PostflightReport,
 } from "./autoconfigVerify.js";
 
+// ── Config-edit lever vocabulary (Wave 4 parity: core/config_edits.py) ──────
+export {
+  ThresholdShift,
+  ScorerSwap,
+  BlockingStrategyEdit,
+  WeightShift,
+  MatchkeyTypeSwap,
+  BlockingKeyEdit,
+  editFromSpec,
+  parseLlmEdits,
+  foldEdits,
+  type ConfigEdit,
+} from "./config-edits.js";
+
 
 // v0.11.0 (#208): predefined golden-strategy plugin port.
 export type {
