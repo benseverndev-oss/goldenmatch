@@ -24,16 +24,30 @@ from __future__ import annotations
 
 import argparse
 import functools
+import io
 import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
 # Planning-effort tier applied to every dedupe/match call (spec 2026-06-06).
 # Set from --planning-effort in main(); "normal" reproduces the prior numbers.
 _PLANNING_EFFORT = "normal"
+
+# Dataset sources for --download (auto-pull missing datasets). DBLP-ACM is small
+# + public (Leipzig); the Magellan mirror carries identical CSVs when Leipzig
+# 404s. NCVR's full source is a 4.3 GB NC SBE extract we do NOT mirror — the
+# runner pulls only the small derived 10k sample from a controlled mirror URL
+# (host it once on a release asset and point GOLDENMATCH_NCVR_SAMPLE_URL at it).
+_DBLP_ACM_URL = os.environ.get(
+    "GOLDENMATCH_DBLP_ACM_URL", "https://dbs.uni-leipzig.de/file/DBLP-ACM.zip"
+)
+_NCVR_SAMPLE_URL = os.environ.get("GOLDENMATCH_NCVR_SAMPLE_URL", "")
 
 # Make `dqbench_adapters.*` importable when this file is invoked as
 # `python scripts/run_benchmarks.py` from the repo root. The scripts/
@@ -47,6 +61,86 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 def _info(msg: str) -> None:
     print(f"[run_benchmarks] {msg}", flush=True)
+
+
+def _http_get(url: str, timeout: int = 180) -> bytes:
+    """GET with a few retries + exponential backoff. Raises on final failure."""
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 (trusted bench mirrors)
+                return resp.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            last = exc
+            time.sleep(2 ** attempt)
+    raise RuntimeError(f"download failed after retries: {url} ({last})")
+
+
+def _fetch_dblp_acm(datasets_dir: Path) -> bool:
+    """Auto-pull the Leipzig DBLP-ACM CSVs (idempotent). Returns True if present."""
+    out = datasets_dir / "DBLP-ACM"
+    if (out / "DBLP2.csv").exists():
+        return True
+    out.mkdir(parents=True, exist_ok=True)
+    _info(f"  DBLP-ACM: downloading from {_DBLP_ACM_URL} ...")
+    try:
+        raw = _http_get(_DBLP_ACM_URL)
+        zipfile.ZipFile(io.BytesIO(raw)).extractall(out)
+    except zipfile.BadZipFile:
+        _info("  DBLP-ACM: response was not a zip (dead mirror returning HTML?); "
+              "set GOLDENMATCH_DBLP_ACM_URL to the Magellan mirror. Skipping.")
+        return False
+    except Exception as exc:  # noqa: BLE001 - download is best-effort
+        _info(f"  DBLP-ACM: download failed ({exc}); set GOLDENMATCH_DBLP_ACM_URL "
+              "to a mirror. Skipping.")
+        return False
+    # The zip may nest the CSVs under a folder; flatten so DBLP2.csv sits in out/.
+    if not (out / "DBLP2.csv").exists():
+        for p in out.rglob("DBLP2.csv"):
+            for f in p.parent.iterdir():
+                f.rename(out / f.name)
+            break
+    ok = (out / "DBLP2.csv").exists()
+    _info(f"  DBLP-ACM: {'ready' if ok else 'still missing after extract'}.")
+    return ok
+
+
+def _fetch_ncvr_sample(datasets_dir: Path) -> bool:
+    """Pull the small derived NCVR 10k sample from a controlled mirror URL.
+
+    The full NC SBE extract (4.3 GB) is intentionally NOT auto-pulled. Host the
+    `ncvoter_sample_10k.txt` once (e.g. a release asset) and set
+    GOLDENMATCH_NCVR_SAMPLE_URL.
+    """
+    dest = datasets_dir / "NCVR" / "ncvoter_sample_10k.txt"
+    if dest.exists():
+        return True
+    if not _NCVR_SAMPLE_URL:
+        _info("  NCVR: no local sample and GOLDENMATCH_NCVR_SAMPLE_URL unset — "
+              "skipping (the 4.3 GB NC SBE source isn't mirrored; host the 10k "
+              "sample on a release asset and set the URL).")
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _info(f"  NCVR: downloading 10k sample from {_NCVR_SAMPLE_URL} ...")
+    try:
+        dest.write_bytes(_http_get(_NCVR_SAMPLE_URL))
+    except Exception as exc:  # noqa: BLE001 - download is best-effort
+        _info(f"  NCVR: sample download failed ({exc}). Skipping.")
+        return False
+    return dest.exists()
+
+
+def _ensure_datasets(datasets_dir: Path, selected: set[str]) -> None:
+    """Auto-pull any selected file-backed datasets that aren't already present.
+
+    Febrl3 (recordlinkage) and dqbench (PyPI) are self-contained; only DBLP-ACM
+    and NCVR are file-backed. Best-effort: a failed/skip download just lets the
+    per-dataset runner emit its existing 'missing — skipping' notice.
+    """
+    if "dblp-acm" in selected:
+        _fetch_dblp_acm(datasets_dir)
+    if "ncvr" in selected:
+        _fetch_ncvr_sample(datasets_dir)
 
 
 def _measure_with_polars(
@@ -316,6 +410,10 @@ def main() -> int:
                         help="Auto-config planning-effort tier applied to every "
                              "dedupe/match call (default: normal = prior behavior). "
                              "Use to A/B the tiers head-to-head on a dataset.")
+    parser.add_argument("--download", action=argparse.BooleanOptionalAction, default=True,
+                        help="Auto-pull missing file-backed datasets (DBLP-ACM from "
+                             "Leipzig; NCVR 10k sample from GOLDENMATCH_NCVR_SAMPLE_URL). "
+                             "Default on; --no-download to use only local files.")
     args = parser.parse_args()
 
     global _PLANNING_EFFORT
@@ -323,6 +421,9 @@ def main() -> int:
     _info(f"planning_effort={_PLANNING_EFFORT}")
 
     selected = {args.datasets} if args.datasets != "all" else {"dblp-acm", "febrl3", "ncvr", "dqbench"}
+
+    if args.download:
+        _ensure_datasets(args.datasets_dir, selected)
     results: list[dict[str, Any] | None] = []
 
     if "dblp-acm" in selected:

@@ -80,7 +80,13 @@ The lane's `case` block already checks `OPENAI_API_KEY`. Setting the secret in t
 - `tests/benchmarks/datasets/NCVR/` (488MB voter zip; sample at `ncvoter_sample_10k.txt`)
 - Febrl3 ships with `recordlinkage` PyPI package
 
-To enable: cache the datasets in CI runner storage, or download them in the lane's setup step from a controlled mirror. Out of scope for v1; this lane stays not-configured until the dataset hosting story lands. The synthetic-fixture smoke (`synthetic_benchmarks` job in `ci.yml`) covers regressions against committed synthetic fixtures on every PR.
+To enable: set repo var `RUN_BENCHMARKS=true`. `scripts/run_benchmarks.py` now **auto-pulls** missing file-backed datasets (`--download`, default on):
+- **DBLP-ACM** downloads from Leipzig automatically (override with repo var `DBLP_ACM_URL` → `GOLDENMATCH_DBLP_ACM_URL` if Leipzig 404s; the Magellan mirror carries identical CSVs). Verified end-to-end: fresh pull → F1 0.9641.
+- **Febrl3** is self-contained via `recordlinkage` (installed in the lane).
+- **NCVR**'s source is a 4.3 GB NC SBE extract we do NOT mirror — host the small derived `ncvoter_sample_10k.txt` on a controlled mirror (e.g. a release asset) and set repo var `NCVR_SAMPLE_URL` → `GOLDENMATCH_NCVR_SAMPLE_URL`. Without it, the NCVR lane skips.
+- **DQbench** datasets ship with the `dqbench` PyPI package (installed in the lane).
+
+The synthetic-fixture smoke (`synthetic_benchmarks` job in `ci.yml`) covers regressions against committed synthetic fixtures on every PR.
 
 ## Real-benchmark workflow (`benchmarks.yml`)
 

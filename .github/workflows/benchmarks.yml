@@ -79,7 +79,11 @@ jobs:
 
       - name: Install
         if: steps.prereqs.outputs.configured == 'true'
-        run: uv sync --all-packages
+        run: |
+          uv sync --all-packages
+          # recordlinkage powers Febrl3; dqbench ships the DQbench tier datasets.
+          # Both are bench-only, kept out of the package deps.
+          uv pip install recordlinkage dqbench || true
 
       # Native kernels ship gated OFF by default; build them so a `native=true`
       # dispatch measures DQbench on the native path (the parity + composite
@@ -102,11 +106,15 @@ jobs:
           # Memory disabled so cross-run state doesn't leak between scheduled runs.
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
           GOLDENMATCH_NATIVE: ${{ env.NATIVE }}
+          # DBLP-ACM auto-pulls from Leipzig; override with a mirror if it 404s.
+          # NCVR's 4.3 GB source isn't mirrored — point at a hosted 10k sample.
+          GOLDENMATCH_DBLP_ACM_URL: ${{ vars.DBLP_ACM_URL }}
+          GOLDENMATCH_NCVR_SAMPLE_URL: ${{ vars.NCVR_SAMPLE_URL }}
         run: |
           set -euo pipefail
-          # The runner script (committed in this PR — see scripts/run_benchmarks.py)
-          # measures each requested dataset and writes a JSON artifact + a
-          # markdown summary to $GITHUB_STEP_SUMMARY.
+          # The runner auto-pulls missing file-backed datasets (--download is the
+          # default), then measures each + writes a JSON artifact + a markdown
+          # summary to $GITHUB_STEP_SUMMARY.
           uv run python scripts/run_benchmarks.py \
             --datasets "$DATASETS" \
             --output benchmark_results.json \
