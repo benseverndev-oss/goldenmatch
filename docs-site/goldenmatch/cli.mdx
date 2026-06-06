@@ -24,8 +24,9 @@ keywords: ["cli", "commands", "dedupe", "flags"]
 | `goldenmatch incremental BASE --new NEW` | Match new records against an existing base. |
 | `goldenmatch analyze-blocking FILE` | Analyze data and suggest blocking strategies. |
 | `goldenmatch label FILE --config --gt` | Interactively label pairs to build ground truth. |
+| `goldenmatch review --config CONFIG` | Guided review loop: walk borderline pairs (and the stale-correction queue) one at a time. Decisions feed Learning Memory. |
 | `goldenmatch rollback RUN_ID` | Undo a previous merge run. |
-| `goldenmatch unmerge RECORD_ID` | Remove a record from its cluster. |
+| `goldenmatch unmerge RECORD_ID --clusters FILE` | Remove a record from its cluster and re-cluster the rest; writes the updated clusters CSV. Use `--shatter` to break the whole cluster apart. |
 | `goldenmatch runs` | List previous runs for rollback. |
 | `goldenmatch memory stats\|learn\|export\|import\|show` | Manage the Learning Memory store. |
 | `goldenmatch config save\|load\|list\|show` | Manage config presets. |
@@ -38,7 +39,8 @@ keywords: ["cli", "commands", "dedupe", "flags"]
 | Flag | Effect |
 |------|--------|
 | `--anomalies` | Detect fake emails, placeholder data, and suspicious records. |
-| `--preview` | Show what will change before writing. |
+| `--preview` | Preview results on a sample without writing files. |
+| `--merge-preview` | Show the merge preview (what will change) without writing. |
 | `--diff` / `--diff-html` | Generate a before/after change report. |
 | `--dashboard` | Before/after data-quality dashboard (HTML). |
 | `--html-report` | Detailed match report with charts. |

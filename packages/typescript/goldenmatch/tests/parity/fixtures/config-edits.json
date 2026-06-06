@@ -1,0 +1,498 @@
+{
+  "cases": [
+    {
+      "spec": {
+        "op": "threshold_shift",
+        "delta": 0.05
+      },
+      "label": "threshold+0.05",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.9,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "threshold_shift",
+        "delta": 0.0
+      },
+      "label": "baseline",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "threshold_shift",
+        "delta": 0.5
+      },
+      "label": "threshold+0.50",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 1.0,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "scorer_swap",
+        "matchkey": "identity",
+        "field": "name",
+        "scorer": "token_sort"
+      },
+      "label": "scorer:name=token_sort",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "token_sort",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "scorer_swap",
+        "matchkey": "identity",
+        "field": "name",
+        "scorer": "jaro_winkler"
+      },
+      "label": "scorer:name=jaro_winkler",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "scorer_swap",
+        "matchkey": "identity",
+        "field": "name",
+        "scorer": "bogus_scorer"
+      },
+      "label": "scorer:name=bogus_scorer",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "blocking_strategy",
+        "strategy": "multi_pass"
+      },
+      "label": "blocking:multi_pass",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "multi_pass",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "blocking_strategy",
+        "strategy": "static"
+      },
+      "label": "blocking:static",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "weight_shift",
+        "matchkey": "identity",
+        "field": "email",
+        "delta": 0.2
+      },
+      "label": "weight:email+0.20",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 1.0
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "weight_shift",
+        "matchkey": "identity",
+        "field": "email",
+        "delta": -2.0
+      },
+      "label": "weight:email-2.00",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.0
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "weight_shift",
+        "matchkey": "email_exact",
+        "field": "email",
+        "delta": 0.1
+      },
+      "label": "weight:email+0.10",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "matchkey_type",
+        "matchkey": "identity",
+        "target_type": "probabilistic"
+      },
+      "label": "mktype:identity=probabilistic",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "probabilistic",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "matchkey_type",
+        "matchkey": "identity",
+        "target_type": "weighted"
+      },
+      "label": "mktype:identity=weighted",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "blocking_key",
+        "action": "add",
+        "fields": [
+          "last_name"
+        ],
+        "transforms": [
+          "soundex"
+        ]
+      },
+      "label": "block-add:last_name",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "email|lowercase",
+          "last_name|soundex",
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "blocking_key",
+        "action": "add",
+        "fields": [
+          "email"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      "label": "block-add:email",
+      "applied": false,
+      "projection": null
+    },
+    {
+      "spec": {
+        "op": "blocking_key",
+        "action": "remove",
+        "fields": [
+          "email"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      "label": "block-remove:email",
+      "applied": true,
+      "projection": {
+        "thresholds": {
+          "identity": 0.85,
+          "email_exact": null
+        },
+        "types": {
+          "identity": "weighted",
+          "email_exact": "exact"
+        },
+        "scorers": {
+          "identity.name": "jaro_winkler",
+          "identity.email": "jaro_winkler"
+        },
+        "weights": {
+          "identity.name": 1.0,
+          "identity.email": 0.8
+        },
+        "blocking_strategy": "static",
+        "blocking_keys": [
+          "zip|"
+        ]
+      }
+    },
+    {
+      "spec": {
+        "op": "blocking_key",
+        "action": "remove",
+        "fields": [
+          "city"
+        ]
+      },
+      "label": "block-remove:city",
+      "applied": false,
+      "projection": null
+    }
+  ],
+  "fold_case": {
+    "specs": [
+      {
+        "op": "threshold_shift",
+        "delta": 0.05
+      },
+      {
+        "op": "weight_shift",
+        "matchkey": "identity",
+        "field": "email",
+        "delta": 0.2
+      },
+      {
+        "op": "blocking_strategy",
+        "strategy": "multi_pass"
+      },
+      {
+        "op": "scorer_swap",
+        "matchkey": "identity",
+        "field": "name",
+        "scorer": "bogus_scorer"
+      },
+      {
+        "op": "blocking_key",
+        "action": "remove",
+        "fields": [
+          "email"
+        ],
+        "transforms": [
+          "lowercase"
+        ]
+      },
+      {
+        "op": "blocking_key",
+        "action": "remove",
+        "fields": [
+          "zip"
+        ]
+      }
+    ],
+    "projection": {
+      "thresholds": {
+        "identity": 0.9,
+        "email_exact": null
+      },
+      "types": {
+        "identity": "weighted",
+        "email_exact": "exact"
+      },
+      "scorers": {
+        "identity.name": "jaro_winkler",
+        "identity.email": "jaro_winkler"
+      },
+      "weights": {
+        "identity.name": 1.0,
+        "identity.email": 1.0
+      },
+      "blocking_strategy": "multi_pass",
+      "blocking_keys": [
+        "zip|"
+      ]
+    }
+  },
+  "base_projection": {
+    "thresholds": {
+      "identity": 0.85,
+      "email_exact": null
+    },
+    "types": {
+      "identity": "weighted",
+      "email_exact": "exact"
+    },
+    "scorers": {
+      "identity.name": "jaro_winkler",
+      "identity.email": "jaro_winkler"
+    },
+    "weights": {
+      "identity.name": 1.0,
+      "identity.email": 0.8
+    },
+    "blocking_strategy": "static",
+    "blocking_keys": [
+      "email|lowercase",
+      "zip|"
+    ]
+  }
+}

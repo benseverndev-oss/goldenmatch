@@ -50,6 +50,31 @@ export async function listEntities(
   return store.listIdentities(opts);
 }
 
+/**
+ * Conflicting evidence edges awaiting steward review. Mirrors Python
+ * `goldenmatch.identity.query.find_conflicts` (TS returns the rich
+ * `EvidenceEdge` type; the snake_case dict shape is applied at the MCP/REST
+ * boundary, as in `node/api/server.ts`).
+ */
+export async function findConflicts(
+  store: IdentityStore,
+  dataset?: string,
+): Promise<EvidenceEdge[]> {
+  return store.findConflicts(dataset);
+}
+
+/**
+ * Temporal event log for one identity. Mirrors Python
+ * `goldenmatch.identity.query.history`.
+ */
+export async function history(
+  store: IdentityStore,
+  entityId: string,
+  limit?: number,
+): Promise<IdentityEvent[]> {
+  return store.history(entityId, limit);
+}
+
 export async function manualMerge(
   store: IdentityStore,
   keepEntityId: string,
