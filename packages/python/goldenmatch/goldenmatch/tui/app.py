@@ -242,6 +242,7 @@ class GoldenMatchApp(App):
         Binding("ctrl+r", "rerun", "Re-run"),
         Binding("ctrl+s", "save_preset", "Preset"),
         Binding("ctrl+e", "quick_export", "Export"),
+        Binding("ctrl+t", "triage", "Triage"),
         Binding("question_mark", "show_shortcuts", "Shortcuts"),
         Binding("1", "goto_tab_1", "Data", show=False),
         Binding("2", "goto_tab_2", "Config", show=False),
@@ -693,6 +694,45 @@ class GoldenMatchApp(App):
         self._goto_tab("tab-export")
         self.notify("Switched to Export tab. Configure and save.", severity="information")
 
+    # ── Guided triage ─────────────────────────────────────────────
+
+    def action_triage(self) -> None:
+        """Walk the borderline (review-band) pairs one at a time, recording
+        approve/reject corrections to Learning Memory (Ctrl+T)."""
+        if self.last_result is None or self.engine is None:
+            self.notify("No results to triage. Run matching first.", severity="warning")
+            return
+        from goldenmatch.core.review_queue import gate_pairs
+
+        _, review, _ = gate_pairs(self.last_result.scored_pairs)
+        if not review:
+            self.notify("No borderline pairs to review.", severity="information")
+            return
+        if not self.memory_db_path:
+            self.notify(
+                "Memory store not configured -- decisions won't persist. "
+                "Launch with memory enabled to record corrections.",
+                severity="warning",
+            )
+
+        from goldenmatch.tui.screens.triage_screen import TriageScreen
+
+        dataset = getattr(self, "memory_dataset", None) or "tui"
+
+        def _on_done(summary: dict | None) -> None:
+            if not summary:
+                return
+            self.notify(
+                f"Triage done -- approved {summary['approved']}, "
+                f"rejected {summary['rejected']}, skipped {summary['skipped']}.",
+                severity="information",
+            )
+
+        self.push_screen(
+            TriageScreen(pairs=review, df=self.engine.data, dataset=dataset),
+            _on_done,
+        )
+
     # ── Shortcut overlay ──────────────────────────────────────────
 
     def action_show_shortcuts(self) -> None:
@@ -705,6 +745,7 @@ class GoldenMatchApp(App):
             "[bold #d4a017]Ctrl+R[/]     Re-run matching\n"
             "[bold #d4a017]Ctrl+S[/]     Save preset\n"
             "[bold #d4a017]Ctrl+E[/]     Quick export\n"
+            "[bold #d4a017]Ctrl+T[/]     Triage borderline pairs\n"
             "[bold #d4a017]?[/]          This help\n"
             "[bold #d4a017]Q[/]          Quit\n\n"
             "[bold #8892a0]Matches Tab:[/]\n"
