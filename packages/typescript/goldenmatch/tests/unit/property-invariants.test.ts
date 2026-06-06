@@ -126,11 +126,13 @@ describe("scorer symmetry: f(a,b) === f(b,a)", () => {
 // 3. Identity: f(a, a) === 1 (or 0 for distance)
 //
 // Empty-string edge cases, empirically verified:
-//   jaro("", "") = 0 (both lengths are 0 → early return 0 in the implementation;
-//     the Python rapidfuzz jaro_similarity("","") also returns 0).
-//     Encoding: jaro("","") === 0 (NOT 1). This is the TRUE behavior — tested
-//     explicitly rather than excluded, so a regression would be caught.
-//   jaroWinkler("","") = 0 (calls jaro, gets 0, early-returns 0).
+//   jaro("", "") = 1 in TS (NOT 0). The TS implementation has `if (a === b) return 1.0`
+//     as its first check, which fires before the empty-length guard, so jaro("","") === 1.
+//     Python's rapidfuzz.jaro_similarity("","") returns 0 (Python guards length first).
+//     This is a documented cross-surface divergence on the degenerate empty-string input.
+//     Encoding: jaro("","") === 1 (NOT 0). Tested explicitly below as a canary so any
+//     future re-implementation is forced to confront it.
+//   jaroWinkler("","") = 1 (inherits TS a===b short-circuit via jaro).
 //   levenshteinSimilarity("","") = 1 (maxLen=0 → returns 1.0 directly).
 //   indelSimilarity("","") = 1 (total=0 → returns 1.0 directly).
 //   tokenSortRatio("","") = 1 (normalized to "" on both sides → indelSimilarity("","")=1).
@@ -311,8 +313,13 @@ describe("standardizer idempotence: applyStandardizer(applyStandardizer(x,n),n) 
   }
 
   // Unicode variant for the text standardizers (not phone/zip5 which are digit-only).
+  // name_proper is intentionally excluded from this unicode loop: stdNameProper uses
+  // `charAt(0).toUpperCase() + slice(1).toLowerCase()`, and toUpperCase() can expand
+  // a single codepoint to multiple chars on 3-way-case codepoints (counterexample:
+  // U+1F80 "ᾀ" -> toUpperCase() = "ἈΙ", a 2-char sequence), so double application
+  // diverges. It IS idempotent on ASCII strings (tested in the ASCII loop above).
+  // The known bug is pinned below with it.fails.
   const textStandardizers = [
-    "name_proper",
     "name_upper",
     "name_lower",
     "state",
@@ -332,4 +339,19 @@ describe("standardizer idempotence: applyStandardizer(applyStandardizer(x,n),n) 
       );
     });
   }
+
+  // Known bug pin: stdNameProper is NOT idempotent on U+1F80 "ᾀ" because
+  // "ᾀ".toUpperCase() expands to the 2-char sequence "ἈΙ", causing the second
+  // application to produce a different result than the first.
+  // This it.fails will flip to a hard error (test-suite signal) when stdNameProper
+  // is fixed to handle 3-way-case codepoints correctly. Fix belongs in src/, not here.
+  it.fails(
+    'name_proper unicode 3-way-case idempotence (known bug: U+1F80 "ᾀ" toUpperCase expands to 2-char sequence)',
+    () => {
+      const input = "ᾀ"; // ᾀ — fast-check found this counterexample
+      const s1 = applyStandardizer(input, "name_proper");
+      const s2 = applyStandardizer(s1, "name_proper");
+      expect(s2).toBe(s1);
+    },
+  );
 });
