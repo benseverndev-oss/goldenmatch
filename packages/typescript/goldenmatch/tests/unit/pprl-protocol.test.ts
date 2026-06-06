@@ -247,7 +247,9 @@ describe("runPPRL", () => {
     }
   });
 
-  it("deterministic CLK: running twice on same data gives identical matches", () => {
+  // 30s like its siblings above: shared-runner CI is slow, and the faithful
+  // protocol port computes Python-default 1024-bit/30-hash CLKs (was 512/20).
+  it("deterministic CLK: running twice on same data gives identical matches", { timeout: 30000 }, () => {
     const { a, b } = twoPartiesWithOverlap();
     const config: PPRLConfig = {
       fields: ["first_name", "last_name", "email"],
