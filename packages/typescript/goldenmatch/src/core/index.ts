@@ -447,8 +447,19 @@ export * from "./identity/index.js";
 // PPRL (Privacy-Preserving Record Linkage)
 // ---------------------------------------------------------------------------
 
-export { runPPRL, autoConfigurePPRL } from "./pprl/protocol.js";
-export type { PPRLConfig, PPRLResult } from "./pprl/protocol.js";
+export {
+  runPPRL,
+  autoConfigurePPRL,
+  computeBloomFilters,
+  linkTrustedThirdParty,
+  linkSMC,
+} from "./pprl/protocol.js";
+export type {
+  PPRLConfig,
+  PPRLResult,
+  PPRLMatch,
+  PPRLClusterMember,
+} from "./pprl/protocol.js";
 
 // ---------------------------------------------------------------------------
 // Auto-config verification (preflight + postflight)
