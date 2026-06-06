@@ -1,0 +1,122 @@
+{
+  "proposers": {
+    "pinned_scorers": [
+      "token_sort",
+      "ensemble",
+      "levenshtein",
+      "soundex_match"
+    ],
+    "blocking_key_adds": [
+      [
+        "last_name"
+      ]
+    ],
+    "grid_labels": [
+      "threshold-0.10",
+      "threshold-0.05",
+      "baseline",
+      "threshold+0.05",
+      "threshold+0.10"
+    ],
+    "coordinate_rounds": [
+      [
+        "threshold-0.10",
+        "threshold-0.05",
+        "baseline",
+        "threshold+0.05",
+        "threshold+0.10"
+      ],
+      [
+        "scorer:name=token_sort",
+        "scorer:name=ensemble",
+        "scorer:name=levenshtein",
+        "scorer:name=soundex_match",
+        "scorer:email=token_sort",
+        "scorer:email=ensemble",
+        "scorer:email=levenshtein",
+        "scorer:email=soundex_match"
+      ],
+      [
+        "weight:name-0.50",
+        "weight:name+0.50",
+        "weight:email-0.50",
+        "weight:email+0.50"
+      ],
+      [
+        "mktype:identity=probabilistic"
+      ],
+      [
+        "blocking:multi_pass"
+      ],
+      [
+        "block-add:last_name"
+      ]
+    ]
+  },
+  "loop": {
+    "rows": [
+      {
+        "name": "aaaa bbbb cccc",
+        "city": "x"
+      },
+      {
+        "name": "aaaa bbbb cccc",
+        "city": "x"
+      },
+      {
+        "name": "zzzz yyyy xxxx",
+        "city": "x"
+      },
+      {
+        "name": "zzzz yyyy xxxx",
+        "city": "x"
+      },
+      {
+        "name": "kathryn weaver",
+        "city": "x"
+      },
+      {
+        "name": "kirsten meyer",
+        "city": "x"
+      }
+    ],
+    "base_threshold": 0.85,
+    "offsets": [
+      0.0,
+      0.05,
+      -0.25
+    ],
+    "ground_truth": [
+      [
+        0,
+        1
+      ],
+      [
+        2,
+        3
+      ]
+    ],
+    "expected": {
+      "trials": [
+        {
+          "label": "baseline",
+          "score": 1.0,
+          "error": null
+        },
+        {
+          "label": "threshold+0.05",
+          "score": 1.0,
+          "error": null
+        },
+        {
+          "label": "threshold-0.25",
+          "score": 0.8,
+          "error": null
+        }
+      ],
+      "best_label": "baseline",
+      "rounds": 1,
+      "objective": "f1"
+    }
+  }
+}

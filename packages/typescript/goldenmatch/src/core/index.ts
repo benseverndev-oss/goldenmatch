@@ -489,6 +489,23 @@ export {
   type ConfigEdit,
 } from "./config-edits.js";
 
+// ── Config optimizer (Wave 4 parity: core/config_optimizer.py) ──────────────
+export {
+  optimizeConfig,
+  GridProposer,
+  CoordinateDescentProposer,
+  thresholdVariants,
+  bestValidTrial,
+  formatOptimizeReport,
+  DEFAULT_THRESHOLD_OFFSETS,
+  type OptimizerTrial,
+  type OptimizeResult,
+  type OptimizeOptions,
+  type Proposer,
+  type SearchState,
+  type ScoreFn,
+} from "./config-optimizer.js";
+
 
 // v0.11.0 (#208): predefined golden-strategy plugin port.
 export type {
