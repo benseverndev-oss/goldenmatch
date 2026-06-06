@@ -2,6 +2,15 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-05 — Surface hardening + parity arc (Waves 0-4)
+- New workstream node: [../planning/surface-hardening.md](../planning/surface-hardening.md)
+  — the four-surface audit, the merged auth/bug/TUI waves (#766/#767/#769), the
+  ten-PR open queue (#771-#782), the Railway `GOLDENMATCH_MCP_TOKEN` open action,
+  and the parity-fixture methodology (structure-not-ids; emitter-asserted margins).
+- Promoted in [../planning/roadmap.md](../planning/roadmap.md) as an adjacent arc.
+- Docs-site updated in the same change (MCP/REST/A2A auth, review command, TUI
+  8-tabs + auto-config screen, REST readiness health, A2A streaming:false).
+
 ## 2026-06-05 — SQL-native graph + embedding UDFs shipped (#509, all 3 PRs)
 - #509 fully delivered across PRs #740 (graph half — DuckDB + Postgres), #743 (embed
   half — `goldenmatch-embed` wheel + repoint + bridge cleanup), #745 (DataFusion FFI
