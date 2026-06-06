@@ -1,6 +1,6 @@
 ---
 title: "Interactive TUI"
-description: "Gold-themed terminal UI for GoldenMatch: 7 tabs for data profiling, configuration, match review, golden records, active learning, export, and AutoConfigController telemetry."
+description: "Gold-themed terminal UI for GoldenMatch: 8 tabs for data profiling, configuration, match review, golden records, active learning, export, AutoConfigController telemetry, and Learning Memory corrections."
 keywords: ["tui", "terminal", "interactive", "textual", "goldenmatch interactive"]
 ---
 
@@ -11,9 +11,9 @@ goldenmatch interactive customers.csv
 goldenmatch interactive customers.csv --config config.yaml
 ```
 
-## 7 Tabs
+## 8 Tabs
 
-The TUI has 7 tabs, accessible via keyboard shortcuts `1` through `7`.
+The TUI has 8 tabs. The first 7 are accessible via keyboard shortcuts `1` through `7`; use `Tab` to cycle through all of them, including Corrections.
 
 ### Tab 1: Data
 
@@ -76,6 +76,14 @@ AutoConfigController telemetry from the most recent `Ctrl+A` invocation:
 
 Same JSON shape as the web `/api/v1/controller/telemetry` endpoint and the CLI `goldenmatch autoconfig` output.
 
+### Tab 8: Corrections
+
+Learning Memory corrections browser:
+- Table of stored corrections (pair, decision, source, trust, dataset)
+- Live filter by dataset
+- `r` to refresh, `d` to delete the selected correction
+- Writes happen through the Golden and Matches correction modals
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -102,7 +110,7 @@ On re-runs (e.g., after threshold adjustment), progress appears in the footer ba
 
 ## Auto-config summary
 
-When launched without a config file, the first screen shows:
+After auto-configure runs (`Ctrl+A`), a review screen shows:
 - Detected columns and their inferred types
 - Suggested scorers for each column
 - Proposed blocking strategy

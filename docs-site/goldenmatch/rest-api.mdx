@@ -14,6 +14,30 @@ goldenmatch serve --file customers.csv --config config.yaml --port 8080
 
 The server loads data, runs initial matching, and exposes endpoints on the specified port.
 
+## Authentication and CORS
+
+The server is fail-closed: binding to a non-loopback host refuses to start
+unless `GOLDENMATCH_API_TOKEN` is set. When the token is set, every endpoint
+except `GET /health` requires it as a bearer token.
+
+```bash
+export GOLDENMATCH_API_TOKEN="your-secret-token"
+goldenmatch serve --file customers.csv --host 0.0.0.0 --port 8080
+
+curl -H "Authorization: Bearer your-secret-token" http://host:8080/stats
+```
+
+Cross-origin requests are denied by default (no wildcard). To allow specific
+browser origins, set a comma-separated allowlist:
+
+```bash
+export GOLDENMATCH_API_CORS_ORIGINS="https://app.example.com,https://admin.example.com"
+```
+
+<Info>
+The default bind is `127.0.0.1`, which runs token-free for local use.
+</Info>
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -38,8 +62,11 @@ curl http://localhost:8080/health
 ```
 
 ```json
-{"status": "ok"}
+{"status": "ok", "service": "goldenmatch", "ready": true}
 ```
+
+Returns `503` with `"status": "initializing"` until the initial matching run
+has populated results — readiness, not just liveness.
 
 ## Stats
 
