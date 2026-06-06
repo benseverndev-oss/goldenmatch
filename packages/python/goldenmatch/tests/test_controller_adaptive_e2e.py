@@ -76,9 +76,9 @@ def test_adaptive_budget_picks_correct_tier_at_call_time(monkeypatch):
     real_for_dataset = ctrl_mod.ControllerBudget.for_dataset
 
     @classmethod  # type: ignore[misc]
-    def _capturing(cls, n_rows: int):
+    def _capturing(cls, n_rows: int, effort: str = "normal"):
         captured["n_rows"] = n_rows
-        return real_for_dataset(n_rows)
+        return real_for_dataset(n_rows, effort)
 
     monkeypatch.setattr(ctrl_mod.ControllerBudget, "for_dataset", _capturing)
 

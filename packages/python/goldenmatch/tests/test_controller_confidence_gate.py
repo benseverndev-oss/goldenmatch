@@ -72,7 +72,9 @@ def _lower_refuse_at_n_for_speed(monkeypatch, request):
     # Replace ControllerBudget.for_dataset with a min-iterations stub.
     # `range(max_iterations + 1)` means max_iterations=0 still runs 1
     # iteration -- enough for the mocked pick_committed to commit.
-    def _tight_for_dataset(cls, n_rows: int) -> ctrl_mod.ControllerBudget:
+    def _tight_for_dataset(
+        cls, n_rows: int, effort: str = "normal"
+    ) -> ctrl_mod.ControllerBudget:
         return cls(max_iterations=0, max_seconds=15.0)
 
     monkeypatch.setattr(
