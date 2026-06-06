@@ -21,8 +21,6 @@ from itertools import combinations
 from pathlib import Path
 
 import polars as pl
-from rapidfuzz.distance import JaroWinkler
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
@@ -36,6 +34,7 @@ from goldenmatch.core.config_optimizer import (
     SearchState,
     optimize_config,
 )
+from rapidfuzz.distance import JaroWinkler
 
 PINNED_SCORERS = ("token_sort", "ensemble", "levenshtein", "soundex_match")
 LOOP_OFFSETS = (0.0, 0.05, -0.25)
