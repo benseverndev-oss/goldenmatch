@@ -242,17 +242,24 @@ Febrl3 and NCVR have working GT helpers under `dqbench_adapters/`.
 
 What still requires external work (not bugs, just dataset realities):
 
+0. **Auto-pull (default).** `scripts/run_benchmarks.py --download` (on by
+   default) fetches missing file-backed datasets before measuring: DBLP-ACM from
+   Leipzig (override via `GOLDENMATCH_DBLP_ACM_URL`), and the NCVR 10k sample from
+   `GOLDENMATCH_NCVR_SAMPLE_URL` when set. Febrl3 (`recordlinkage`) and DQbench
+   (`dqbench`) are self-contained. `--no-download` uses only local files.
+   Verified end-to-end: a fresh DBLP-ACM pull reproduces F1 0.9641.
 1. **NCVR dataset is not redistributable from this repo.** It is the
    first 10K rows of `ncvoter_Statewide.zip` from the NC State Board
-   of Elections. Public data but bandwidth-heavy; we don't mirror it.
-   Drop the sample at
+   of Elections. Public data but bandwidth-heavy; we don't mirror the 4.3 GB
+   source. Host the small derived `ncvoter_sample_10k.txt` once (e.g. a release
+   asset) and set `GOLDENMATCH_NCVR_SAMPLE_URL` for auto-pull, or drop it at
    `packages/python/goldenmatch/tests/benchmarks/datasets/NCVR/ncvoter_sample_10k.txt`
    before running `--datasets ncvr`.
 2. **Leipzig DBLP-ACM mirror availability.** The canonical link at
    `dbs.uni-leipzig.de` has been intermittently 404-ing in 2026. If
-   the link is dead, the Magellan benchmark mirror at
-   `sites.google.com/site/anhaidgroup/projects/data` carries identical
-   CSVs.
+   the link is dead, set `GOLDENMATCH_DBLP_ACM_URL` to the Magellan benchmark
+   mirror at `sites.google.com/site/anhaidgroup/projects/data`, which carries
+   identical CSVs.
 3. **DQbench dataset bundling.** The `dqbench` PyPI package ships its
    own tier datasets. Pinning the `dqbench` version (currently any
    2024+ release) is enough; we don't re-publish the tiers.
