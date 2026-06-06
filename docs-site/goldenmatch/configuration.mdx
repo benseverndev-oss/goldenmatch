@@ -328,6 +328,44 @@ validation:
 Rule types: `regex`, `min_length`, `max_length`, `not_null`, `in_set`, `format`.
 Actions: `flag` (mark but keep), `null` (set to null), `quarantine` (remove from matching).
 
+## Environment variables
+
+Key environment variables that affect runtime behaviour:
+
+| Variable | Default | Description |
+|---|---|---|
+| `GOLDENMATCH_ALLOWED_ROOT` | unset | When set, every user-supplied file path (MCP tools, ingest, rollback, lineage, domain registry) must resolve under this root. Paths that escape it return an error instead of executing. Unset = no containment; local-first default. See [Path sandbox](#path-sandbox) below. |
+| `GOLDENMATCH_MCP_TOKEN` | unset | Bearer token for the MCP HTTP server. Required on non-loopback binds (fail-closed). |
+| `GOLDENMATCH_API_TOKEN` | unset | Bearer token for the REST API server. Required on non-loopback binds. |
+| `GOLDENMATCH_AGENT_TOKEN` | unset | Bearer token for the A2A agent server. Required on non-loopback binds. |
+| `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` | `0` | Enable the Ray distributed backend. |
+| `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | Candidate-pair threshold below which the native kernel scores in the calling thread (avoids rayon futex contention on small workloads). |
+| `GOLDENMATCH_BUCKET_DEBUG` | `0` | When `1`, prints per-bucket prep/kernel/post-filter timing for `backend=bucket`. |
+| `POLARS_SKIP_CPU_CHECK` | unset | Set to `1` to skip the Polars WMI CPU check on Windows (avoids startup hang). |
+
+### Path sandbox
+
+`GOLDENMATCH_ALLOWED_ROOT` activates an opt-in path containment layer
+for deployed or shared instances. When set, `safe_path()` resolves every
+incoming file argument with `Path.resolve()`, checks for NUL bytes, and
+then asserts the resolved path falls under the root. Paths that fail
+this check are rejected before any I/O occurs.
+
+```bash
+# Deployed MCP server on Railway: restrict to the /data volume
+export GOLDENMATCH_ALLOWED_ROOT=/data
+goldenmatch mcp-serve --transport http --port 8200
+```
+
+Unset (the default) means no containment check — any accessible path is
+valid. This is the correct default for a local-first desktop tool.
+
+<Info>
+The Railway `goldenmatch-mcp` service should set
+`GOLDENMATCH_ALLOWED_ROOT=/data` to scope the MCP tools to the mounted
+data volume. See [MCP Server](/goldenmatch/mcp#path-sandbox).
+</Info>
+
 ## Settings persistence
 
 - **Global**: `~/.goldenmatch/settings.yaml` — output mode, default model, API keys

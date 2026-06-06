@@ -47,6 +47,16 @@ Spec: `docs/superpowers/specs/2026-06-03-sail-tier-design.md`. Staged, each a ga
 - **Fix the pre-existing empty/all-singleton `run_spine` SchemaError** (frames-out tail,
   null vs i64 join key) — flagged during Stage D, out of scope there.
 
+## Adjacent — security hardening arc (2026-06-05, COMPLETE)
+Cleared 42 open alerts (7 Dependabot + 35 code scanning) and lifted Scorecard
+6.1->7.3: Token-Permissions 0->10 (#760/#772), Signed-Releases 0->8 (#770;
+->10 on next pg release), Fuzzing 0->10 (#778/#783). New hardening helpers:
+`_logging.sanitize_for_log()` (9 sites), `_paths.safe_path()` (all entry
+boundaries + 9 MCP tool handlers; opt-in `GOLDENMATCH_ALLOWED_ROOT` sandbox).
+Property suites found 4 real bugs pre-merge. OPEN ACTIONS: Railway
+`GOLDENMATCH_ALLOWED_ROOT=/data`; issue #784 (dice/jaccard bloom); TS
+`stdNameProper` titlecase. See [security-hardening.md](security-hardening.md).
+
 ## Adjacent — surface hardening + parity arc (2026-06-05, Waves 0-4 executed)
 A risk-first sweep of the four user surfaces (CLI/TUI/web/API) from the same-day
 audit: fail-closed auth on all five HTTP servers, the confirmed CLI bugs, the three
