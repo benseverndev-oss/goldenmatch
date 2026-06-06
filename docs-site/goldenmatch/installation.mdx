@@ -76,6 +76,31 @@ sudo systemctl restart postgresql
 
 Download `.deb` and `.rpm` from the [goldenmatch releases](https://github.com/benseverndev-oss/goldenmatch/releases) page (look for the `goldenmatch-pg-v*` tags).
 
+### Verifying release artifacts
+
+Releases since goldenmatch-pg v0.6.0 ship a `.sigstore` bundle alongside
+each tarball. Releases published after 2026-06-05 also ship an
+`.intoto.jsonl` build-provenance attestation next to each asset.
+
+Verify a tarball with cosign (keyless, GitHub Actions OIDC):
+
+```bash
+cosign verify-blob \
+  --bundle goldenmatch_pg-0.7.0-pg17-linux-x86_64.tar.gz.sigstore \
+  goldenmatch_pg-0.7.0-pg17-linux-x86_64.tar.gz \
+  --certificate-identity-regexp 'github.com/benseverndev-oss/goldenmatch' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+A successful run prints `Verified OK`. The `.sigstore` bundle contains the
+certificate, transparency-log entry, and signature in a single file -- no
+separate key management required.
+
+<Tip>
+Install cosign with `brew install cosign` (macOS) or
+`go install github.com/sigstore/cosign/v2/cmd/cosign@latest` (any platform).
+</Tip>
+
 ## DuckDB UDFs
 
 ```bash

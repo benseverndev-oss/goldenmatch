@@ -2,6 +2,18 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-05 — Security hardening arc (42 alerts cleared, Scorecard 6.1->7.3)
+- New workstream node: [../planning/security-hardening.md](../planning/security-hardening.md)
+  — Dependabot 7/7 (#761/#762), code-scanning 35/35 (log-injection #764,
+  path-injection #768, TokenPermissions #760/#772, dismissals), Scorecard
+  climbs (Token-Permissions->10, Signed-Releases->8, Fuzzing->10 via
+  #770/#778/#783), the CodeQL Autofix incident, the 4-bug property-test
+  ledger, and 3 open actions.
+- Promoted in [../planning/roadmap.md](../planning/roadmap.md) as an adjacent arc.
+- Docs-site updated in the same change: `GOLDENMATCH_ALLOWED_ROOT` in
+  configuration + MCP path-sandbox section; cosign release-verification
+  snippet in installation.
+
 ## 2026-06-05 — Surface hardening + parity arc (Waves 0-4)
 - New workstream node: [../planning/surface-hardening.md](../planning/surface-hardening.md)
   — the four-surface audit, the merged auth/bug/TUI waves (#766/#767/#769), the
