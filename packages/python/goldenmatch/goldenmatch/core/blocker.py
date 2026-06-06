@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import polars as pl
 
@@ -82,6 +83,69 @@ def _emit_blocking_profile(
         oversized_block_count=oversized_block_count,
     )
     current_emitter().set_blocking(profile)
+
+
+def measure_blocking_profile(
+    df: pl.DataFrame | pl.LazyFrame,
+    config: Any,
+) -> BlockingProfile | None:
+    """Measure a ``BlockingProfile`` on the FULL frame (Phase 1: measure, not
+    extrapolate). Spec 2026-06-06 §Phase 1.
+
+    Runs the committed config's blocking over all rows and computes the true
+    pair count + block-size distribution — the cheap op (blocking was never the
+    bottleneck; scoring was, and that is now ~5x faster). Returns ``None`` on
+    ANY failure or when the config has no blocking, so the caller can fall back
+    to linear extrapolation without risk.
+    """
+    try:
+        blocking_cfg = getattr(config, "blocking", None)
+        if blocking_cfg is None:
+            return None
+        lf = df.lazy() if isinstance(df, pl.DataFrame) else df
+        blocks = build_blocks(lf, blocking_cfg)
+        n_rows: int = lf.select(pl.len()).collect().item()
+
+        if blocking_cfg.passes:
+            keys_used = [list(k.fields) for k in blocking_cfg.passes]
+        elif blocking_cfg.keys:
+            keys_used = [list(k.fields) for k in blocking_cfg.keys]
+        else:
+            keys_used = []
+
+        sizes: list[int] = []
+        for b in blocks:
+            try:
+                sizes.append(b.df.select(pl.len()).collect().item())
+            except Exception:
+                sizes.append(0)
+        sizes_sorted = sorted(sizes)
+        n_blocks = len(sizes_sorted)
+        total_comparisons = sum(s * (s - 1) // 2 for s in sizes_sorted)
+        max_pairs = n_rows * (n_rows - 1) // 2
+        reduction_ratio = 1.0 - total_comparisons / max(1, max_pairs)
+        singleton_block_count = sum(1 for s in sizes_sorted if s == 1)
+        oversized_block_count = sum(
+            1 for s in sizes_sorted if s > blocking_cfg.max_block_size
+        )
+        return BlockingProfile(
+            keys_used=keys_used,
+            n_blocks=n_blocks,
+            total_comparisons=total_comparisons,
+            reduction_ratio=reduction_ratio,
+            block_sizes_p50=_percentile(sizes_sorted, 0.50),
+            block_sizes_p95=_percentile(sizes_sorted, 0.95),
+            block_sizes_p99=_percentile(sizes_sorted, 0.99),
+            block_sizes_max=max(sizes_sorted) if sizes_sorted else 0,
+            singleton_block_count=singleton_block_count,
+            oversized_block_count=oversized_block_count,
+        )
+    except Exception:
+        logger.debug(
+            "measure_blocking_profile failed; caller should extrapolate.",
+            exc_info=True,
+        )
+        return None
 
 
 @dataclass

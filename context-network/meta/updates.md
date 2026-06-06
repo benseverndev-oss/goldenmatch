@@ -2,6 +2,21 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-06 — Auto-config search strategy after the engine speedup (v1.28.0)
+- New planning node: [../planning/autoconfig-search-strategy.md](../planning/autoconfig-search-strategy.md)
+  — the thesis (the controller's search strategy was calibrated to a cost model the
+  perf arc falsified), the four-phase arc, and what shipped in 1.28.0 vs. what's staged.
+- Shipped (1.28.0): a **planning-effort tier** (`fast`/`normal`/`thinking`/`einstein`)
+  on `GoldenMatchConfig` + `dedupe_df`/`match_df`/`auto_configure_df` +
+  `GOLDENMATCH_PLANNING_EFFORT`; `ControllerBudget.for_dataset(n_rows, effort)`;
+  **measure-don't-extrapolate** at thinking+ (`blocker.measure_blocking_profile`);
+  **provider-aware in-house embedding** (`_check_remote_assets` no longer demotes the
+  local model). Default `normal` is byte-for-byte unchanged.
+- Staged for a follow-up (behind the thinking/einstein seam): full successive-halving
+  over a candidate grid (Phase 2) and an LLM-judge labeling objective (Phase 4).
+- Spec: `docs/superpowers/specs/2026-06-06-autoconfig-search-strategy-after-engine-speedup-design.md`.
+  Docs-site: `goldenmatch/auto-config.mdx` (Planning effort + in-house embeddings).
+
 ## 2026-06-05 — Security hardening arc (42 alerts cleared, Scorecard 6.1->7.3)
 - New workstream node: [../planning/security-hardening.md](../planning/security-hardening.md)
   — Dependabot 7/7 (#761/#762), code-scanning 35/35 (log-injection #764,

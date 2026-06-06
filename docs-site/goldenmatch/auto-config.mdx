@@ -46,6 +46,32 @@ Configs are ranked by a health metric: GREEN > YELLOW > RED, with the initial co
   At 100,000+ rows, auto-config raises `ControllerNotConfidentError` rather than silently committing a low-confidence (RED) config. Handle this explicitly instead of adding a silent fallback path.
 </Warning>
 
+## Planning effort
+
+The **planning-effort tier** controls how hard the controller searches for a config. Pass it as a `planning_effort=` kwarg to `dedupe_df` / `match_df` / `auto_configure_df`, set it on a `GoldenMatchConfig`, or use the `GOLDENMATCH_PLANNING_EFFORT` env var. The default `normal` is byte-for-byte the prior behavior.
+
+| Tier | What it does |
+|------|--------------|
+| `fast` | A single cheap pass — no refit breadth, tight wall budget. |
+| `normal` *(default)* | Today's interactive budget: sqrt-scaled sample, a few refit iterations, linear pair-count extrapolation. |
+| `thinking` | Larger sample + more iterations + a longer budget, and **measures real blocking on the full frame** to pick the backend instead of extrapolating from the sample. |
+| `einstein` | The widest search — the largest sample, the most iterations, and the longest budget. |
+
+```python
+import goldenmatch as gm
+
+# Spend more search effort on a tricky dataset:
+result = gm.dedupe_df(df, planning_effort="thinking")
+```
+
+<Note>
+  Because block scoring is now ~5x faster (bucket+native), the higher tiers measure the true candidate-pair count on the full data rather than projecting it from a 2K–20K sample — which removes the wrong-backend-on-skewed-data failure. Any measurement failure falls back to extrapolation.
+</Note>
+
+### In-house embeddings
+
+When you point auto-config at the **local in-house embedding model** (a matchkey field with `model="inhouse:/path"`, or `GOLDENMATCH_EMBEDDING_PROVIDER=inhouse` + `GOLDENMATCH_INHOUSE_MODEL`), it is treated as a local, offline-safe scorer and is **not** demoted as a remote-asset drift risk. Cloud embedders (sentence-transformers / Vertex) still require `allow_remote_assets=True`.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -56,6 +82,8 @@ Configs are ranked by a health metric: GREEN > YELLOW > RED, with the initial co
 | `GOLDENMATCH_AUTOCONFIG_BACKEND=duckdb\|ray\|0` | Force a backend, or `0` to auto-select. |
 | `GOLDENMATCH_AUTOCONFIG_BACKEND_THRESHOLD=<int>` | Row-count cutoff for DuckDB auto-selection (default 1,000,000). |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET=fast\|full` | Run the cheap or the full indicator set (default `fast`). |
+| `GOLDENMATCH_PLANNING_EFFORT=fast\|normal\|thinking\|einstein` | Planning-effort tier (default `normal`). Higher tiers search wider and measure full-frame blocking. |
+| `GOLDENMATCH_EMBEDDING_PROVIDER=inhouse` + `GOLDENMATCH_INHOUSE_MODEL=<path>` | Treat the local in-house embedding model as an offline-safe scorer (not demoted as a remote asset). |
 
 ## Cross-run memory
 

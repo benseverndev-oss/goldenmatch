@@ -2161,6 +2161,7 @@ def auto_configure_df(
     _skip_finalize: bool = False,
     confidence_required: bool = True,
     allow_red_config: bool = False,
+    planning_effort: str | None = None,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -2270,8 +2271,15 @@ def auto_configure_df(
     from goldenmatch.core.autoconfig_controller import (
         AutoConfigController,
         ControllerBudget,
+        resolve_planning_effort,
     )
     from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy, LLMRefitPolicy
+
+    # Spec 2026-06-06 §Phase 0: resolve the planning-effort tier (explicit
+    # kwarg → GOLDENMATCH_PLANNING_EFFORT env → "normal"). It scales the
+    # controller budget and (at thinking+) flips the planner to measured
+    # blocking.
+    effort = resolve_planning_effort(planning_effort)
 
     memory = _get_default_memory()
     if _AUTOCONFIG_LLM_ENABLED:
@@ -2280,7 +2288,7 @@ def auto_configure_df(
         policy = HeuristicRefitPolicy()
     controller = AutoConfigController(
         policy=policy,
-        budget=ControllerBudget.for_dataset(_n_rows_for_budget),
+        budget=ControllerBudget.for_dataset(_n_rows_for_budget, effort),
         memory=memory,
     )
     v0_kw = {
@@ -2297,7 +2305,14 @@ def auto_configure_df(
         skip_finalize=_skip_finalize,
         confidence_required=confidence_required,
         allow_red_config=allow_red_config,
+        planning_effort=effort,
     )
+    # Surface the resolved tier on the committed config for observability
+    # (telemetry, YAML round-trip). No-op for the default "normal".
+    try:
+        config.planning_effort = effort  # type: ignore[assignment]
+    except Exception:
+        pass
 
     # Backend selection is now driven by the controller v3 planner inside
     # AutoConfigController.run -- it captures RuntimeProfile, extrapolates
