@@ -14,8 +14,10 @@ import {
   writeJson,
 } from "./node/connectors/file.js";
 import { dedupe, match, scoreStrings } from "./core/api.js";
+import { evaluateClusters, loadGroundTruthPairs } from "./core/index.js";
 import { loadConfigFile } from "./node/config-file.js";
 import type { Row } from "./core/types.js";
+import pkg from "../package.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -116,7 +118,7 @@ const program = new Command();
 program
   .name("goldenmatch-js")
   .description("Entity resolution toolkit -- dedupe, match, build golden records")
-  .version("0.1.0");
+  .version(pkg.version);
 
 // ---------- dedupe ----------
 program
@@ -218,7 +220,7 @@ program
   .command("info")
   .description("Show information about the package")
   .action(() => {
-    process.stdout.write("GoldenMatch JS v0.1.0\n");
+    process.stdout.write(`GoldenMatch JS v${pkg.version}\n`);
     process.stdout.write(
       "Scorers: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble\n",
     );
@@ -231,6 +233,45 @@ program
     process.stdout.write(
       "Transforms: lowercase, uppercase, strip, soundex, metaphone, digits_only, alpha_only, token_sort\n",
     );
+  });
+
+// ---------- evaluate ----------
+interface EvaluateOpts extends SharedMatchOpts {
+  groundTruth: string;
+  colA: string;
+  colB: string;
+  minF1?: number;
+}
+
+program
+  .command("evaluate")
+  .description("Evaluate dedupe quality (precision/recall/F1) vs a ground-truth pairs file")
+  .argument("<files...>", "input file paths")
+  .requiredOption("--ground-truth <path>", "CSV of ground-truth match pairs")
+  .option("-c, --config <path>", "path to YAML config file")
+  .option("-e, --exact <fields>", "comma-separated exact match fields")
+  .option("-f, --fuzzy <fields>", "fuzzy match fields, e.g. 'name:0.85'")
+  .option("-b, --blocking <fields>", "comma-separated blocking keys")
+  .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
+  .option("--col-a <name>", "ground-truth column for id A", "id_a")
+  .option("--col-b <name>", "ground-truth column for id B", "id_b")
+  .option("--min-f1 <value>", "exit non-zero if F1 is below this (CI gate)", parseFloat)
+  .action(async (files: string[], opts: EvaluateOpts) => {
+    const rows = loadFilesWithSource(files);
+    const result = await dedupe(rows, buildOptionsFromFlags(opts));
+    const gt = loadGroundTruthPairs(readFile(opts.groundTruth), opts.colA, opts.colB);
+    const allIds = rows.map((_, i) => i);
+    const ev = evaluateClusters(result.clusters, gt, allIds);
+    process.stdout.write(
+      `Precision: ${ev.precision.toFixed(4)}  Recall: ${ev.recall.toFixed(4)}  F1: ${ev.f1.toFixed(4)}\n` +
+        `TP: ${ev.truePositives}  FP: ${ev.falsePositives}  FN: ${ev.falseNegatives}\n`,
+    );
+    if (opts.minF1 !== undefined && ev.f1 < opts.minF1) {
+      process.stderr.write(
+        `F1 ${ev.f1.toFixed(4)} below --min-f1 ${opts.minF1}\n`,
+      );
+      process.exit(1);
+    }
   });
 
 // ---------- profile ----------
@@ -888,12 +929,25 @@ program
   .description("Launch interactive TUI (requires optional peer deps: ink + react)")
   .argument("[files...]", "input files to load on startup")
   .option("-c, --config <path>", "path to YAML config file")
-  .action(async (files: string[], opts: { config?: string }) => {
+  .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
+  .option("-o, --output-dir <dir>", "directory the Export tab writes into")
+  .action(
+    async (
+      files: string[],
+      opts: { config?: string; memoryPath?: string; outputDir?: string },
+    ) => {
     try {
       const { startTui } = await import("./node/tui/app.js");
-      const tuiOpts: { files?: string[]; config?: ReturnType<typeof loadConfigFile> } = {};
+      const tuiOpts: {
+        files?: string[];
+        config?: ReturnType<typeof loadConfigFile>;
+        memoryPath?: string;
+        outputDir?: string;
+      } = {};
       if (files && files.length > 0) tuiOpts.files = files;
       if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
+      if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
+      if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
       await startTui(tuiOpts);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
