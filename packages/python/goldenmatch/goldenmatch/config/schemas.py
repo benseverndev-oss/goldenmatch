@@ -735,6 +735,19 @@ class GoldenMatchConfig(BaseModel):
     # (backends/datafusion_spine.run_spine) enforces the scale-mode feature
     # gate; this field is the opt-in signal.
     mode: Literal["standard", "scale"] = "standard"
+    planning_effort: Literal["fast", "normal", "thinking", "einstein"] = Field(
+        default="normal",
+        description=(
+            "Auto-config planning-effort tier (spec 2026-06-06 §Phase 0). "
+            "Controls how hard the controller searches: 'fast' = a single "
+            "cheap pass; 'normal' (default) = today's interactive budget; "
+            "'thinking'/'einstein' spend the freed engine cycles on a larger "
+            "sample, more refit iterations, and — at thinking+ — measuring "
+            "real blocking on the full frame instead of extrapolating. "
+            "Overridable via the GOLDENMATCH_PLANNING_EFFORT env var. Default "
+            "'normal' is byte-for-byte the prior behavior."
+        ),
+    )
     memory: MemoryConfig | None = None
     identity: IdentityConfig | None = None
     exclude_columns: list[str] = Field(

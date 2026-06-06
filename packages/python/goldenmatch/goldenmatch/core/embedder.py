@@ -128,6 +128,24 @@ def _make_inhouse_embedder(model_name: str) -> _ProviderEmbedder:
     return _ProviderEmbedder(InHouseProvider(path))
 
 
+def inhouse_embedding_available() -> bool:
+    """Whether the local in-house embedding model is reachable without cloud.
+
+    True when a model path is discoverable via ``GOLDENMATCH_INHOUSE_MODEL`` AND
+    the in-house inference stack is importable. Spec 2026-06-06 §Phase 3
+    (availability probe) — lets the auto-config brain treat embedding/ANN as an
+    eligible local candidate instead of a cloud drift-risk. Cheap + side-effect
+    free; never raises.
+    """
+    if not os.environ.get("GOLDENMATCH_INHOUSE_MODEL"):
+        return False
+    try:
+        from goldenmatch.embeddings.providers import InHouseProvider  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def get_embedder(model_name: str = "all-MiniLM-L6-v2") -> Embedder | _ProviderEmbedder:
     """Return a cached Embedder instance, using GPU routing when available.
 

@@ -74,6 +74,14 @@ via a shared pyo3-free `graph-core` kernel + a `goldenmatch-embed` wheel over
 [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md) +
 [../decisions/0005-sql-native-direct-udfs.md](../decisions/0005-sql-native-direct-udfs.md).
 
+## Adjacent — auto-config search strategy after the engine speedup (v1.28.0, 2026-06-06)
+The mirror image of the scale arc: because execution got ~5x cheaper, the auto-config
+*brain* can now measure instead of extrapolate and use its power tools. v1.28.0 shipped the
+spine — a `fast`/`normal`/`thinking`/`einstein` **planning-effort tier**, measure-don't-
+extrapolate at the higher tiers, and a provider-aware in-house-embedding exemption. Full
+successive-halving + an LLM-judge labeling objective are staged behind the tier seam. See
+[autoconfig-search-strategy.md](autoconfig-search-strategy.md).
+
 ## Related larger arcs (in `packages/python/goldenmatch/CLAUDE.md`)
 - The Splink-Spark parity roadmap (Ray Phases 1-6) — distributed loader → controller →
   clustering → golden → multi-node → identity. Mostly plumbing-complete, gated behind

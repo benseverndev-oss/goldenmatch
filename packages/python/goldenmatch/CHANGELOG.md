@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-06-06
+
+This release re-derives the **auto-config search strategy for the post-speedup cost model**.
+Now that block scoring is ~5x cheaper (bucket+native) and the in-house embedding model is
+local and CPU-only, the controller no longer has to reason from a thin sample + a linear
+projection or refuse its own power tools. Introduces a **planning-effort tier** —
+`fast / normal / thinking / einstein` — that controls how hard the brain searches. Default
+`normal` is byte-for-byte the prior behavior. Spec:
+`docs/superpowers/specs/2026-06-06-autoconfig-search-strategy-after-engine-speedup-design.md`.
+
+### Added
+- **`planning_effort` tier on auto-config (`fast`/`normal`/`thinking`/`einstein`).** New
+  `GoldenMatchConfig.planning_effort` field + `planning_effort=` kwarg on `dedupe_df` /
+  `match_df` / `auto_configure_df`, plus the `GOLDENMATCH_PLANNING_EFFORT` env override.
+  `ControllerBudget.for_dataset(n_rows, effort)` gains the effort dimension: `fast` collapses
+  to a single cheap pass; `thinking`/`einstein` spend the freed engine cycles on a larger
+  sample, more refit iterations, and a longer wall budget (the breadth lever).
+- **`goldenmatch.core.embedder.inhouse_embedding_available()`** — cheap, side-effect-free
+  probe for the local in-house embedding stack.
+
+### Changed
+- **Measure, don't extrapolate (Phase 1).** At `thinking`/`einstein` effort the controller
+  now runs real blocking on the **full frame** (`blocker.measure_blocking_profile`) to pick
+  the execution backend off measured pair counts instead of a linear projection from the
+  sample — killing the wrong-rung-on-skewed-data failure. `normal`/`fast` (and the
+  distributed path) keep extrapolation; any measurement failure falls back to it.
+- **Provider-aware in-house embedding (Phase 3).** Auto-config preflight
+  (`_check_remote_assets`) no longer demotes `embedding`/`record_embedding` scorers backed by
+  the **local in-house model** (`model="inhouse:..."` or `GOLDENMATCH_EMBEDDING_PROVIDER=inhouse`
+  + `GOLDENMATCH_INHOUSE_MODEL`). The drift-risk demotion remains for cloud embedders
+  (sentence-transformers / Vertex), which genuinely need a download or credentials.
+
+### Notes
+- `normal` (the default) is unchanged from 1.27.0 — same sample sizes, iterations, budget,
+  and extrapolation. The new behavior is opt-in via the higher tiers / env var.
+- The broader search redesign (full successive-halving over a candidate grid, and an
+  LLM-judge labeling objective) is staged behind the `thinking`/`einstein` seam for a
+  follow-up; this release ships the load-bearing spine (the tier knob, measurement, and the
+  in-house embedding exemption).
+
 ## [1.27.0] - 2026-06-05
 
 ### Fixed

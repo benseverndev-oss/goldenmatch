@@ -11,7 +11,7 @@ import os
 import time
 import traceback
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -402,31 +402,88 @@ class ControllerBudget:
     drift_threshold: float = 0.30
 
     @classmethod
-    def for_dataset(cls, n_rows: int) -> ControllerBudget:
-        """Calibrate budget + sample size to the input row count.
+    def for_dataset(cls, n_rows: int, effort: str = "normal") -> ControllerBudget:
+        """Calibrate budget + sample size to the input row count AND effort tier.
 
         Spec §Design / ControllerBudget.for_dataset. Sqrt-scaling above
         100K preserves expected dup-pair density in the sample within an
         order of magnitude as N grows from 100K -> 1M. Cap at 20K so
         sample-iteration cost stays bounded above 1M.
 
-        Tiers (n_rows -> max_seconds, sample_size_default, max_iterations):
+        Row-count base (the ``normal`` tier; n_rows -> max_seconds,
+        sample_size_default, max_iterations):
           - <5K        -> 15s, 2K, 3  (sample_skip_below bypasses sampling)
           - 5K-100K    -> 30s, 2K, 3  (historical defaults; preserves 100K bench)
           - 100K-1M    -> 60s, int(sqrt(n) * 20) capped at 20K, 4
           - >=1M       -> 120s, 20K, 5
+
+        ``effort`` is the second dimension (spec 2026-06-06 §Phase 0):
+        ``normal`` is identity (back-compat); ``fast`` collapses to a single
+        pass; ``thinking``/``einstein`` spend the freed engine cycles on a
+        larger sample, more iterations, and a longer wall budget.
         """
         if n_rows < 5_000:
-            return cls(max_seconds=15.0)
-        if n_rows < 100_000:
-            return cls()  # historical defaults
-        if n_rows < 1_000_000:
+            base = cls(max_seconds=15.0)
+        elif n_rows < 100_000:
+            base = cls()  # historical defaults
+        elif n_rows < 1_000_000:
             sample = min(int((n_rows**0.5) * 20), 20_000)
             # max_iterations=4: non-load-bearing for #715 (iteration sample masks
             # the at-scale blocking blow-up) but a correct-direction budget scale.
-            return cls(sample_size_default=sample, max_seconds=60.0, max_iterations=4)
-        # max_iterations=5: same rationale as 100K-1M tier above.
-        return cls(sample_size_default=20_000, max_seconds=120.0, max_iterations=5)
+            base = cls(sample_size_default=sample, max_seconds=60.0, max_iterations=4)
+        else:
+            # max_iterations=5: same rationale as 100K-1M tier above.
+            base = cls(sample_size_default=20_000, max_seconds=120.0, max_iterations=5)
+        return base._scaled_for_effort(effort, n_rows)
+
+    def _scaled_for_effort(self, effort: str, n_rows: int) -> ControllerBudget:
+        """Apply the planning-effort tier on top of the row-count base budget.
+
+        Spec 2026-06-06 §Phase 0. ``normal`` is identity (today's calibration,
+        so default callers are byte-for-byte unchanged); ``fast`` collapses to a
+        single pass with a tight wall; ``thinking``/``einstein`` are the breadth
+        lever — bigger sample, more iterations, longer budget — affordable now
+        that block scoring is ~5x cheaper.
+        """
+        effort = (effort or "normal").strip().lower()
+        if effort == "fast":
+            return replace(
+                self,
+                max_iterations=1,
+                max_seconds=min(self.max_seconds, 15.0),
+            )
+        if effort in ("thinking", "einstein"):
+            mult, extra_iters, secs_mult = (
+                (2, 2, 3.0) if effort == "thinking" else (4, 4, 6.0)
+            )
+            new_sample = min(self.sample_size_default * mult, 100_000)
+            if n_rows > 0:
+                new_sample = min(new_sample, n_rows)
+            return replace(
+                self,
+                sample_size_default=new_sample,
+                max_iterations=self.max_iterations + extra_iters,
+                max_seconds=self.max_seconds * secs_mult,
+            )
+        return self  # normal / unknown → unchanged (back-compat)
+
+
+_PLANNING_EFFORTS: tuple[str, ...] = ("fast", "normal", "thinking", "einstein")
+
+
+def resolve_planning_effort(effort: str | None = None) -> str:
+    """Resolve the planning-effort tier from an explicit value or the env.
+
+    Precedence: explicit ``effort`` arg → ``GOLDENMATCH_PLANNING_EFFORT`` env →
+    ``"normal"``. Unknown values fall back to ``"normal"`` so a typo never
+    silently changes behavior. Spec 2026-06-06 §Phase 0.
+    """
+    if effort is None:
+        effort = os.environ.get("GOLDENMATCH_PLANNING_EFFORT")
+    if not effort:
+        return "normal"
+    effort = effort.strip().lower()
+    return effort if effort in _PLANNING_EFFORTS else "normal"
 
 
 def _zero_label_commit_enabled() -> bool:
@@ -465,6 +522,7 @@ class AutoConfigController:
         skip_finalize: bool = False,
         confidence_required: bool = True,
         allow_red_config: bool = False,
+        planning_effort: str = "normal",
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -1135,10 +1193,42 @@ class AutoConfigController:
         from goldenmatch.core.runtime_profile import capture_runtime_profile
 
         runtime = capture_runtime_profile()
-        # Extrapolate the committed (sample) blocking profile to full-row count
-        # so the planner rules in later phases see signals at full scale.
+        # Pick the blocking signal the planner reasons over. Spec 2026-06-06
+        # §Phase 1 (measure, don't extrapolate): at thinking/einstein effort,
+        # run real blocking on the FULL frame (the cheap op — scoring was the
+        # bottleneck, not blocking) so the rung is chosen off measured pair
+        # counts, killing the wrong-rung-on-skewed-data failure. normal/fast
+        # (and the distributed path, where a full-frame blocking pass would
+        # defeat the no-materialization invariant) keep the linear
+        # extrapolation. Any measurement failure falls back to extrapolation.
         committed_profile = best_entry.profile
-        if committed_profile.meta.is_sample and committed_profile.meta.sample_size > 0:
+        measured_blocking = None
+        if planning_effort in ("thinking", "einstein") and not distributed:
+            try:
+                from goldenmatch.core.blocker import measure_blocking_profile
+                measured_blocking = measure_blocking_profile(df, committed_config)
+            except Exception:
+                logger.debug(
+                    "Phase-1 full-blocking measurement failed; "
+                    "falling back to extrapolation.",
+                    exc_info=True,
+                )
+                measured_blocking = None
+
+        if measured_blocking is not None:
+            profile_for_planner = dataclasses.replace(
+                committed_profile, blocking=measured_blocking
+            )
+            logger.info(
+                "auto-config(planning_effort=%s): measured %d candidate pairs on "
+                "full data (%d rows) for plan selection instead of extrapolating.",
+                planning_effort,
+                measured_blocking.estimated_pair_count,
+                n_rows,
+            )
+        elif committed_profile.meta.is_sample and committed_profile.meta.sample_size > 0:
+            # Extrapolate the committed (sample) blocking profile to full-row
+            # count so the planner rules see signals at full scale.
             blocking_full = committed_profile.blocking.extrapolate_to(
                 n_rows_sample=committed_profile.meta.sample_size,
                 n_rows_full=n_rows,

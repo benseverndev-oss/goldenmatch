@@ -14,6 +14,7 @@ downstream introspection (Postflight, diagnostics, tests).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -667,6 +668,28 @@ def _check_block_sizes(
 _REMOTE_SCORERS = frozenset({"embedding", "record_embedding"})
 
 
+def _is_local_embedding_field(f: Any) -> bool:
+    """Whether an embedding matchkey field resolves to the LOCAL in-house model.
+
+    Spec 2026-06-06 §Phase 3 (provider-aware eligibility). The remote-asset
+    demotion is correct for cloud embedders (sentence-transformers download,
+    Vertex creds) but WRONG for the in-house ``goldenembed-rs`` model, which is
+    local, CPU-only, and ships in the ``goldenmatch-embed`` wheel. A field is
+    local when its ``model`` is an ``inhouse:`` path, or when the global
+    provider override (``GOLDENMATCH_EMBEDDING_PROVIDER=inhouse`` +
+    ``GOLDENMATCH_INHOUSE_MODEL``) is set.
+    """
+    model = getattr(f, "model", None)
+    if isinstance(model, str) and (model == "inhouse" or model.startswith("inhouse:")):
+        return True
+    if (
+        os.environ.get("GOLDENMATCH_EMBEDDING_PROVIDER", "").strip().lower() == "inhouse"
+        and os.environ.get("GOLDENMATCH_INHOUSE_MODEL")
+    ):
+        return True
+    return False
+
+
 def _check_remote_assets(
     config: GoldenMatchConfig,
     report: PreflightReport,
@@ -701,7 +724,12 @@ def _check_remote_assets(
     mks = config.get_matchkeys()
     to_drop: list = []
     for mk in mks:
-        uses_remote = any(f.scorer in _REMOTE_SCORERS for f in mk.fields)
+        # In-house embedding fields are LOCAL — exempt from the remote-asset
+        # demotion (spec 2026-06-06 §Phase 3).
+        uses_remote = any(
+            f.scorer in _REMOTE_SCORERS and not _is_local_embedding_field(f)
+            for f in mk.fields
+        )
         uses_rerank = bool(mk.rerank)
         if not (uses_remote or uses_rerank):
             continue
@@ -713,6 +741,10 @@ def _check_remote_assets(
         # matchkey already cover offline scoring.
         kept_fields = []
         for f in mk.fields:
+            # In-house local embedder: keep verbatim, never demote/drop.
+            if f.scorer in _REMOTE_SCORERS and _is_local_embedding_field(f):
+                kept_fields.append(f)
+                continue
             if f.scorer == "record_embedding":
                 report.findings.append(
                     PreflightFinding(
