@@ -97,7 +97,7 @@ def dedupe_cmd(
     llm_retrain: bool = typer.Option(False, "--llm-retrain", help="Force re-labeling (ignore saved model)"),
     llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider: auto, anthropic, or openai"),
     llm_max_labels: int = typer.Option(500, "--llm-max-labels", help="Max pairs to label with LLM"),
-    backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, ray, duckdb"),
+    backend: str | None = typer.Option(None, "--backend", help="Processing backend: default, bucket, chunked, ray, duckdb"),
     exclude_columns: str | None = typer.Option(
         None, "--exclude-columns",
         help=(
