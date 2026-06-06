@@ -47,6 +47,25 @@ The load-bearing spine:
   own (today the exemption is the bugfix; the higher tiers reserve the seam).
 - **Phase 4** the labeling objective (LLM-judge on borderline pairs).
 
+## Verifying it works (the Phase-1 win is real, not just safe)
+A default-tier benchmark only proves *non-regression* (Febrl3 F1 0.9665 on 1.28.0,
+identical across tiers — correct, since the cheap config is already optimal there).
+The *value* of `thinking`/`einstein` only shows on data where `normal` mis-routes.
+That case is now pinned:
+- **`scripts/bench_planning_effort.py`** — A/B on a skewed fixture (40k rows, 12k
+  dominant block). `normal` extrapolates ~3.5M pairs → routes `bucket` (in-memory,
+  would choke); `thinking` measures the true ~72M → routes `chunked` (RAM-safe).
+  A 20x under-count that flips the backend.
+- **`tests/test_planning_effort_routing.py`** — locks the flip in as a regression
+  (`plan_selected_simple` → `plan_selected_chunked` once measured).
+- **`scripts/run_benchmarks.py --planning-effort {fast,normal,thinking,einstein}`**
+  — A/B the tiers on the canonical sets (records `planning_effort` + `backend`).
+
+Still open (the Phase-2/4 upside): an *F1* win from broader search / labeling is
+unmeasured — backends are output-equivalent on one box, so the Phase-1 win is
+correct routing / scale-safety, not accuracy. An accuracy A/B needs the Phase-2
+search + a labeled hard set.
+
 ## Future direction (out of scope)
 **GoldenAnalyze** — extract auto-config into a standalone package that produces a
 reusable, drop-in `GoldenMatchConfig` from a team's data. The 1.28.0 work keeps

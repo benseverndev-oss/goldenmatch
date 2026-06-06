@@ -23,12 +23,17 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# Planning-effort tier applied to every dedupe/match call (spec 2026-06-06).
+# Set from --planning-effort in main(); "normal" reproduces the prior numbers.
+_PLANNING_EFFORT = "normal"
 
 # Make `dqbench_adapters.*` importable when this file is invoked as
 # `python scripts/run_benchmarks.py` from the repo root. The scripts/
@@ -51,11 +56,10 @@ def _measure_with_polars(
     import polars as pl
     from goldenmatch import dedupe_df
 
-    start = time.time()
     df: pl.DataFrame = df_loader()
     gt_pairs: set[tuple[int, int]] = gt_pairs_loader(df)
     config_start = time.time()
-    result = dedupe_df(df)
+    result = dedupe_df(df, planning_effort=_PLANNING_EFFORT)
     elapsed = time.time() - config_start
 
     # Extract emitted pairs from clusters (canonical form: (min, max))
@@ -87,8 +91,15 @@ def _measure_with_polars(
         if hist is not None and getattr(hist, "stop_reason", None) is not None:
             stop_reason = hist.stop_reason.value
 
+    backend = "unknown"
+    plan = getattr(getattr(result, "postflight_report", None), "controller_history", None)
+    plan = getattr(plan, "execution_plan", None)
+    if plan is not None and getattr(plan, "backend", None):
+        backend = plan.backend
+
     _info(f"  {name}: f1={f1:.4f} precision={precision:.4f} recall={recall:.4f} "
-          f"elapsed={elapsed:.2f}s health={health} stop_reason={stop_reason}")
+          f"elapsed={elapsed:.2f}s health={health} stop_reason={stop_reason} "
+          f"effort={_PLANNING_EFFORT} backend={backend}")
 
     return {
         "name": name, "f1": round(f1, 4),
@@ -96,6 +107,7 @@ def _measure_with_polars(
         "tp": tp, "fp": fp, "fn": fn,
         "elapsed_seconds": round(elapsed, 2),
         "health": health, "stop_reason": stop_reason,
+        "planning_effort": _PLANNING_EFFORT, "backend": backend,
     }
 
 
@@ -110,17 +122,17 @@ def _measure_dblp_acm(
     emitted pairs back to source IDs the same way the package's own
     `tests/benchmarks/run_leipzig.py` harness does.
     """
-    from goldenmatch import match_df
-
     from dqbench_adapters.leipzig_eval import run_dblp_acm_zeroconfig
+    from goldenmatch import match_df
 
     dblp_path = datasets_dir / "DBLP-ACM" / "DBLP2.csv"
     if not dblp_path.exists():
         _info(f"  DBLP-ACM: dataset files missing at {datasets_dir} — skipping")
         return None
 
+    _match = functools.partial(match_df, planning_effort=_PLANNING_EFFORT)
     start = time.time()
-    res = run_dblp_acm_zeroconfig(datasets_dir, match_df)
+    res = run_dblp_acm_zeroconfig(datasets_dir, _match)
     elapsed = time.time() - start
     if res is None:
         _info(f"  DBLP-ACM: dataset files missing at {datasets_dir} — skipping")
@@ -149,12 +161,11 @@ def _measure_febrl3() -> dict[str, Any] | None:
     `.profile_tmp/baseline_febrl3_ncvr.py` did, so F1 matches the v1.8
     CHANGELOG value (0.9443).
     """
-    from goldenmatch import dedupe_df
-
     from dqbench_adapters.febrl3 import (
         evaluate_febrl3,
         load_febrl3_df_and_gt,
     )
+    from goldenmatch import dedupe_df
 
     loaded = load_febrl3_df_and_gt()
     if loaded is None:
@@ -162,8 +173,9 @@ def _measure_febrl3() -> dict[str, Any] | None:
         return None
     df, gt_pairs = loaded
 
+    _dedupe = functools.partial(dedupe_df, planning_effort=_PLANNING_EFFORT)
     start = time.time()
-    res = evaluate_febrl3(df, gt_pairs, dedupe_df)
+    res = evaluate_febrl3(df, gt_pairs, _dedupe)
     elapsed = time.time() - start
     _info(
         f"  Febrl3: f1={res.f1:.4f} precision={res.precision:.4f} "
@@ -188,9 +200,8 @@ def _measure_ncvr(datasets_dir: Path) -> dict[str, Any] | None:
     The 0.9719 F1 in the v1.8 CHANGELOG was measured against this
     construction; the 10K-row source file is gitignored.
     """
-    from goldenmatch import dedupe_df
-
     from dqbench_adapters.ncvr import build_ncvr_df_and_gt, evaluate_ncvr
+    from goldenmatch import dedupe_df
 
     ncvr_path = datasets_dir / "NCVR" / "ncvoter_sample_10k.txt"
     loaded = build_ncvr_df_and_gt(ncvr_path)
@@ -199,8 +210,9 @@ def _measure_ncvr(datasets_dir: Path) -> dict[str, Any] | None:
         return None
     df, gt_pairs = loaded
 
+    _dedupe = functools.partial(dedupe_df, planning_effort=_PLANNING_EFFORT)
     start = time.time()
-    res = evaluate_ncvr(df, gt_pairs, dedupe_df)
+    res = evaluate_ncvr(df, gt_pairs, _dedupe)
     elapsed = time.time() - start
     _info(
         f"  NCVR: f1={res.f1:.4f} precision={res.precision:.4f} "
@@ -299,7 +311,16 @@ def main() -> int:
     parser.add_argument("--datasets-dir", type=Path,
                         default=Path("packages/python/goldenmatch/tests/benchmarks/datasets"),
                         help="Directory containing benchmark datasets")
+    parser.add_argument("--planning-effort", default="normal",
+                        choices=["fast", "normal", "thinking", "einstein"],
+                        help="Auto-config planning-effort tier applied to every "
+                             "dedupe/match call (default: normal = prior behavior). "
+                             "Use to A/B the tiers head-to-head on a dataset.")
     args = parser.parse_args()
+
+    global _PLANNING_EFFORT
+    _PLANNING_EFFORT = args.planning_effort
+    _info(f"planning_effort={_PLANNING_EFFORT}")
 
     selected = {args.datasets} if args.datasets != "all" else {"dblp-acm", "febrl3", "ncvr", "dqbench"}
     results: list[dict[str, Any] | None] = []
@@ -320,6 +341,7 @@ def main() -> int:
             "results": results,
             "metadata": {
                 "with_llm": args.with_llm,
+                "planning_effort": _PLANNING_EFFORT,
                 "datasets_dir": str(args.datasets_dir),
                 "memory_disabled": os.environ.get("GOLDENMATCH_AUTOCONFIG_MEMORY") == "0",
             },
