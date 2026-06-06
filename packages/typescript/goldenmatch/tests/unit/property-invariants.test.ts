@@ -210,6 +210,13 @@ describe("levenshteinDistance identity: d(a,a) === 0", () => {
       { numRuns: 50 },
     );
   });
+
+  it("d(a,a)===0 for unicode strings", { timeout: 15000 }, () => {
+    fc.assert(
+      fc.property(unicode32, (a) => levenshteinDistance(a, a) === 0),
+      { numRuns: 50 },
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -346,7 +353,7 @@ describe("standardizer idempotence: applyStandardizer(applyStandardizer(x,n),n) 
   // This it.fails will flip to a hard error (test-suite signal) when stdNameProper
   // is fixed to handle 3-way-case codepoints correctly. Fix belongs in src/, not here.
   it.fails(
-    'name_proper unicode 3-way-case idempotence (known bug: U+1F80 "ᾀ" toUpperCase expands to 2-char sequence)',
+    'name_proper unicode 3-way-case idempotence -- KNOWN BUG (U+1F80 toUpperCase expands to 2 chars); if this unexpectedly PASSES, stdNameProper was fixed: delete this it.fails and add name_proper to textStandardizers',
     () => {
       const input = "ᾀ"; // ᾀ — fast-check found this counterexample
       const s1 = applyStandardizer(input, "name_proper");
