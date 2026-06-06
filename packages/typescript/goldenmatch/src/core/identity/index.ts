@@ -12,8 +12,15 @@ export * from "./types.js";
 export { newEntityId } from "./new-entity-id.js";
 export { InMemoryIdentityStore } from "./in-memory-store.js";
 export {
+  resolveClusters,
+  type ResolveSummary,
+  type ResolveOptions,
+} from "./resolve.js";
+export {
   findByRecord,
+  findConflicts,
   getEntity,
+  history,
   listEntities,
   manualMerge,
   manualSplit,
