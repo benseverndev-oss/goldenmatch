@@ -16,7 +16,6 @@ import tempfile
 from pathlib import Path
 
 import polars as pl
-
 from goldenmatch.identity.resolve import resolve_clusters
 from goldenmatch.identity.store import IdentityStore
 
