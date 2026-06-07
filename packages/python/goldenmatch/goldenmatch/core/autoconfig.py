@@ -1404,6 +1404,106 @@ def _degenerate_blocking_config(max_safe_block: int) -> BlockingConfig:
     )
 
 
+# --- Quality-aware blocking (GoldenCheck -> GoldenMatch door #1) -------------
+# Spec: docs/design/2026-06-07-quality-aware-blocking-design.md
+#
+# Edit-distance value variants that survive lowercase/strip ("Californa" vs
+# "California") shard true duplicates into different exact blocks -> recall lost
+# before scoring. GoldenCheck's per-column fuzziness (via core.quality.
+# blocking_risk) lets us ADD a fuzzy-tolerant pass for an affected blocking key
+# so the variants co-block. Purely additive (the original key is retained), so
+# recall can only rise; precision is unchanged (scoring still decides matches).
+
+# A column is "fuzzy enough to matter" at >= 2% variant rows.
+_BLOCKING_RISK_NORMALIZE = 0.02
+# Transforms already tolerant of edit-distance variants (don't double up).
+_FUZZY_TOLERANT_TRANSFORMS = ("soundex", "metaphone")
+
+
+def _quality_aware_blocking_enabled() -> bool:
+    """v1 is OFF by default (spec §7) until the Febrl/DBLP-ACM/NCVR sweep proves
+    recall-up / no-precision-regression. Opt in with
+    ``GOLDENMATCH_QUALITY_AWARE_BLOCKING=1`` (the #662 kill-switch pattern)."""
+    val = os.environ.get("GOLDENMATCH_QUALITY_AWARE_BLOCKING")
+    return val is not None and val.lower() in ("1", "true", "yes", "on")
+
+
+def _has_fuzzy_tolerant_transform(transforms: list[str]) -> bool:
+    return any(
+        t in _FUZZY_TOLERANT_TRANSFORMS or t.startswith("substring:") for t in transforms
+    )
+
+
+def _fuzzy_pass_transforms(col_type: str) -> list[str]:
+    # Phonetic for names (catches early-character typos like Jon/John); a prefix
+    # block for everything else (catches typos after a shared prefix and reuses
+    # an existing transform).
+    if col_type == "name":
+        return ["lowercase", "soundex"]
+    return ["lowercase", "strip", "substring:0:6"]
+
+
+def apply_quality_aware_blocking(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame,
+    *,
+    enabled: bool | None = None,
+) -> BlockingConfig | None:
+    """Augment a blocking config with fuzzy-tolerant passes for columns
+    GoldenCheck flags as edit-distance-fuzzy. Fail-open + additive: returns the
+    config unchanged when disabled, goldencheck is absent, the data is clean, or
+    the strategy isn't one we can safely extend (only ``static`` / ``multi_pass``
+    -- the common auto-config outputs)."""
+    if blocking is None:
+        return blocking
+    if enabled is None:
+        enabled = _quality_aware_blocking_enabled()
+    if not enabled or blocking.strategy not in ("static", "multi_pass"):
+        return blocking
+
+    from goldenmatch.core.quality import blocking_risk
+
+    risk = blocking_risk(df)
+    if not risk:
+        return blocking
+
+    col_type = {p.name: p.col_type for p in profiles}
+    existing = list(blocking.passes or []) + list(blocking.keys or [])
+    if not existing:
+        return blocking
+
+    # Fields already covered by a fuzzy-tolerant transform need no extra pass.
+    already_tolerant = {
+        f for kc in existing if _has_fuzzy_tolerant_transform(kc.transforms) for f in kc.fields
+    }
+
+    new_passes: list[BlockingKeyConfig] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for kc in existing:
+        for fld in kc.fields:
+            if fld in already_tolerant or risk.get(fld, 0.0) < _BLOCKING_RISK_NORMALIZE:
+                continue
+            transforms = _fuzzy_pass_transforms(col_type.get(fld, "string"))
+            sig = (fld, tuple(transforms))
+            if sig in seen:
+                continue
+            seen.add(sig)
+            new_passes.append(BlockingKeyConfig(fields=[fld], transforms=transforms))
+
+    if not new_passes:
+        return blocking
+
+    # Convert to an explicit multi_pass union: original keys/passes become passes
+    # (so they survive `auto_select`, which otherwise picks a single key), plus
+    # the fuzzy-tolerant passes. Every other config field is preserved.
+    return blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "passes": existing + new_passes,
+        "keys": [],
+    })
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -2550,6 +2650,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
         llm_provider=llm_provider,
         n_rows_full=total_rows,
     ) if has_fuzzy else None
+    # Quality-aware blocking (door #1): add fuzzy-tolerant passes for columns
+    # GoldenCheck flags as edit-distance-fuzzy. Fail-open + additive; OFF unless
+    # GOLDENMATCH_QUALITY_AWARE_BLOCKING=1. Runs before adaptive promotion.
+    blocking = apply_quality_aware_blocking(blocking, profiles, df)
     # At 1M+ rows, swap static blocking for adaptive so blocker.py's
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
@@ -2899,6 +3003,7 @@ def auto_configure_probabilistic_df(
         )
     blocking = build_blocking(profiles, df, llm_provider=llm_provider)
     blocking = _maybe_prune_blocking_passes(blocking, df)
+    blocking = apply_quality_aware_blocking(blocking, profiles, df)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,

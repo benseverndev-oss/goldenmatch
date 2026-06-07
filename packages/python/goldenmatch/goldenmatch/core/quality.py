@@ -92,6 +92,45 @@ def compute_quality_scores(
     return scores or None
 
 
+def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
+    """Per-column "block-shatter risk" for quality-aware blocking.
+
+    `risk[col]` is the fraction of rows whose value is an edit-distance variant
+    of a more-frequent value in that (string) column -- the records that would
+    shard off their canonical exact block and be lost to recall. Derived
+    fail-open by reusing `goldencheck.cell_quality`: every penalized cell in a
+    string column is such a fuzzy variant (the date/future-dated penalties live
+    on non-string columns and are excluded here).
+
+    Returns ``None`` when goldencheck is absent, too old, or the data is clean --
+    callers treat that as "no risk" and leave blocking unchanged."""
+    if not _goldencheck_available():
+        return None
+    try:
+        from goldencheck import cell_quality
+    except ImportError:
+        return None
+    n = df.height
+    if n == 0:
+        return None
+    try:
+        positional = cell_quality(df)
+    except Exception:  # noqa: BLE001 - never let DQ scoring break auto-config
+        logger.debug("goldencheck.cell_quality failed; skipping blocking risk", exc_info=True)
+        return None
+    if not positional:
+        return None
+
+    string_cols = {c for c, dt in zip(df.columns, df.dtypes) if dt == pl.Utf8}
+    counts: dict[str, int] = {}
+    for (_idx, col), _weight in positional.items():
+        if col in string_cols:
+            counts[col] = counts.get(col, 0) + 1
+    if not counts:
+        return None
+    return {col: cnt / n for col, cnt in counts.items()}
+
+
 def run_quality_check(
     df: pl.DataFrame,
     config=None,
