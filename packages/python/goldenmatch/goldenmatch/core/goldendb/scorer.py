@@ -4,17 +4,23 @@ Conforms to the same contract as :func:`goldenmatch.core.scorer.score_blocks_par
 (``(blocks, mk, matched_pairs, ...) -> list[(row_id_a, row_id_b, score)]``) so it
 drops into the pipeline via ``_get_block_scorer`` when ``config.backend == "gpu"``.
 
-Per block it encodes each matchkey field to a matrix, computes per-field cosine via
-a JAX matmul, and combines them with the GA2M weighted-average (exact attribution,
-monotone). It scores WITHIN the existing blocks -- cross-block ANN recall (Stage A
-in the design doc) is not wired yet, so recall is whatever the blocker produces.
+Two scoring paths per block:
 
-See :mod:`goldenmatch.core.goldendb` for the full work-in-progress caveat list.
+* **dense** (small blocks, ``n <= ANN_THRESHOLD``): build the full per-field ``[N, N]``
+  cosine via a JAX matmul and combine. Simple, exact, quadratic in memory.
+* **recall** (large blocks): Stage A coarse-vector top-k ANN shortlist
+  (:mod:`goldenmatch.core.goldendb.recall`) followed by a vectorised Stage B that
+  scores only the shortlisted candidate pairs -- the spec's "N^2 cost lives only in
+  Stage A" path. With ``k >= n-1`` the recall path is exactly the dense path.
+
+Cross-*block* recall is still future work: this scores within the blocks the
+blocker produced. See :mod:`goldenmatch.core.goldendb` for the full WIP caveats.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import numpy as np
@@ -23,6 +29,7 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.goldendb import WIP_BANNER
 from goldenmatch.core.goldendb._combine import combine_matrices
 from goldenmatch.core.goldendb._encode import char_ngram_hashed, cosine_matrix
+from goldenmatch.core.goldendb.recall import coarse_encode, topk_candidates
 from goldenmatch.core.scorer import (
     _build_null_mask,
     _exact_score_matrix,
@@ -34,6 +41,11 @@ logger = logging.getLogger(__name__)
 _warned = False
 _EXACT_SCORERS = frozenset({"exact"})
 
+# Block size above which Stage A ANN recall replaces the dense NxN path, and the
+# default per-record neighbour count for that recall. Tunable via env.
+ANN_THRESHOLD = int(os.environ.get("GOLDENMATCH_GOLDENDB_ANN_THRESHOLD", "4096"))
+ANN_K = int(os.environ.get("GOLDENMATCH_GOLDENDB_ANN_K", "20"))
+
 
 def _warn_once() -> None:
     global _warned
@@ -42,35 +54,115 @@ def _warn_once() -> None:
         _warned = True
 
 
-def _field_sim_matrix(block_df, field: MatchkeyField) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(sim[N,N], valid[N,N])`` for one matchkey field.
+class _Field:
+    """Prepared per-field data, computed once per block."""
 
-    Exact-scorer fields use the hash-grouped exact matrix; everything else uses
-    char-ngram cosine via the JAX matmul. ``valid`` is 0.0 where either value is
-    null so a field only contributes where both sides have data.
+    __slots__ = ("scorer", "weight", "is_exact", "emb", "values", "null")
+
+    def __init__(self, scorer: str, weight: float, is_exact: bool,
+                 emb: np.ndarray | None, values: list, null: np.ndarray):
+        self.scorer = scorer
+        self.weight = weight
+        self.is_exact = is_exact
+        self.emb = emb            # [N, dim] for fuzzy fields, else None
+        self.values = values      # transformed values list
+        self.null = null          # [N] bool, True where value is null
+
+
+def _prep_fields(block_df, fields: list[MatchkeyField]) -> list[_Field]:
+    prepped: list[_Field] = []
+    for f in fields:
+        values = _get_transformed_values(block_df, f)
+        null = np.array([v is None for v in values])
+        is_exact = f.scorer in _EXACT_SCORERS
+        emb = None if is_exact else char_ngram_hashed(values)
+        prepped.append(
+            _Field(
+                scorer=f.scorer or "",
+                weight=float(f.weight) if f.weight is not None else 0.0,
+                is_exact=is_exact,
+                emb=emb,
+                values=values,
+                null=null,
+            )
+        )
+    return prepped
+
+
+def _dense_pairs(prepped: list[_Field], threshold: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Dense NxN path. Returns (rows_idx, cols_idx, scores) for the upper triangle
+    above threshold (index space, not row-id space)."""
+    sim_list, valid_list = [], []
+    for fld in prepped:
+        if fld.is_exact:
+            sim = _exact_score_matrix(fld.values).astype(np.float32)
+        else:
+            sim = cosine_matrix(fld.emb)
+        valid = (~(fld.null[:, None] | fld.null[None, :])).astype(np.float32)
+        sim_list.append(sim)
+        valid_list.append(valid)
+    weights = np.array([fld.weight for fld in prepped], dtype=np.float64)
+    score, _attr = combine_matrices(np.stack(sim_list), weights, np.stack(valid_list))
+    upper = np.triu(score, k=1)
+    rows_idx, cols_idx = np.where(upper >= threshold)
+    return rows_idx, cols_idx, upper[rows_idx, cols_idx]
+
+
+def _recall_pairs(
+    prepped: list[_Field], threshold: float, k: int, min_sim: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Stage A ANN recall + vectorised Stage B scoring on the shortlist.
+
+    Returns (rows_idx, cols_idx, scores) in index space for candidate pairs whose
+    combined score is >= threshold.
     """
-    values = _get_transformed_values(block_df, field)
-    valid = (~_build_null_mask(values)).astype(np.float32)
-    scorer = field.scorer
-    if scorer in _EXACT_SCORERS:
-        sim = _exact_score_matrix(values).astype(np.float32)
-    else:
-        # char-ngram embed -> cosine (the matmul hot path). Covers
-        # jaro_winkler/levenshtein/token_sort/qgram/dice/jaccard/soundex etc.
-        # in one continuous kernel (NOT byte-identical to those scorers -- this
-        # is the experimental matrix approximation).
-        mat = char_ngram_hashed(values)
-        sim = cosine_matrix(mat)
-    return sim, valid
+    fuzzy = [fld for fld in prepped if not fld.is_exact and fld.emb is not None]
+    if not fuzzy:
+        # No vectors to recall on -- fall back to dense (exact-only blocks).
+        return _dense_pairs(prepped, threshold)
+
+    coarse = coarse_encode([fld.emb for fld in fuzzy],
+                           np.array([fld.weight for fld in fuzzy]))
+    cand = topk_candidates(coarse, k=k, min_sim=min_sim)
+    if not cand:
+        empty = np.array([], dtype=int)
+        return empty, empty, np.array([], dtype=np.float32)
+
+    I = np.array([c[0] for c in cand])
+    J = np.array([c[1] for c in cand])
+    num = np.zeros(len(cand), dtype=np.float64)
+    den = np.zeros(len(cand), dtype=np.float64)
+    for fld in prepped:
+        validk = (~(fld.null[I] | fld.null[J])).astype(np.float64)
+        if fld.is_exact:
+            varr = np.array(fld.values, dtype=object)
+            simk = (varr[I] == varr[J]).astype(np.float64)
+        else:
+            # cosine on the candidate subset = row-wise dot of L2-normalised embeddings
+            simk = np.einsum("pd,pd->p", fld.emb[I], fld.emb[J])
+            simk = np.clip(simk, 0.0, 1.0)
+        num += fld.weight * simk * validk
+        den += fld.weight * validk
+    score = np.where(den > 0.0, num / np.where(den > 0.0, den, 1.0), 0.0)
+    keep = score >= threshold
+    return I[keep], J[keep], score[keep].astype(np.float32)
 
 
 def find_matches_gpu(
     block_df,
     mk: MatchkeyConfig,
     exclude_pairs: set | frozenset | None = None,
+    *,
+    use_recall: bool | None = None,
+    k: int | None = None,
+    min_sim: float = 0.0,
 ) -> list[tuple[int, int, float]]:
     """Score one block via the matrix path. Mirrors
     :func:`goldenmatch.core.scorer.find_fuzzy_matches`' return contract.
+
+    ``use_recall`` forces (True) / disables (False) the Stage A ANN recall path;
+    ``None`` (default) auto-selects by block size (``> ANN_THRESHOLD``). ``k`` is
+    the per-record neighbour count for recall (default :data:`ANN_K`).
     """
     if mk.threshold is None:
         raise ValueError("find_matches_gpu requires mk.threshold")
@@ -94,33 +186,55 @@ def find_matches_gpu(
             "applied by the matrix path; scoring without it."
         )
 
-    sim_list: list[np.ndarray] = []
-    valid_list: list[np.ndarray] = []
-    for f in fields:
-        sim, valid = _field_sim_matrix(block_df, f)
-        sim_list.append(sim)
-        valid_list.append(valid)
+    prepped = _prep_fields(block_df, fields)
 
-    sim_stack = np.stack(sim_list, axis=0)        # [K, N, N]
-    valid_stack = np.stack(valid_list, axis=0)    # [K, N, N]
-    score, _attribution = combine_matrices(sim_stack, weights, valid_stack)
+    if use_recall is None:
+        use_recall = n > ANN_THRESHOLD
+    if k is None:
+        k = ANN_K
 
-    # Upper triangle above threshold.
-    upper = np.triu(score, k=1)
-    rows_idx, cols_idx = np.where(upper >= threshold)
+    if use_recall:
+        rows_idx, cols_idx, scores = _recall_pairs(prepped, threshold, k, min_sim)
+    else:
+        rows_idx, cols_idx, scores = _dense_pairs(prepped, threshold)
+
     if len(rows_idx) == 0:
         return []
 
     row_ids = block_df["__row_id__"].to_list()
     results: list[tuple[int, int, float]] = []
-    for i, j in zip(rows_idx, cols_idx):
+    for i, j, s in zip(rows_idx, cols_idx, scores):
         a = int(row_ids[int(i)])
         b = int(row_ids[int(j)])
         lo, hi = (a, b) if a <= b else (b, a)
         if exclude_pairs and (lo, hi) in exclude_pairs:
             continue
-        results.append((lo, hi, float(upper[i, j])))
+        results.append((lo, hi, float(s)))
     return results
+
+
+def resolve_dataset_gpu(
+    df,
+    mk: MatchkeyConfig,
+    k: int | None = None,
+    min_sim: float = 0.0,
+    exclude_pairs: set | frozenset | None = None,
+) -> list[tuple[int, int, float]]:
+    """Blocker-free matrix-native resolution over an ENTIRE dataset.
+
+    Runs Stage A ANN recall across all records (no blocking key required) and
+    Stage B GA2M scoring on the shortlist -- the spec's "primitive join operator is
+    approximate" path. Because recall is similarity-based rather than key-based, it
+    finds duplicates that a blocking key would separate (e.g. ``Catherine`` vs
+    ``Katherine`` under a first-letter key). ``df`` must carry ``__row_id__``.
+
+    **WORK IN PROGRESS** -- brute-force top-k recall (good to ~1e5-1e6 rows per the
+    design doc); a true GPU-ANN index is the next step for larger datasets.
+    """
+    _warn_once()
+    return find_matches_gpu(
+        df, mk, exclude_pairs=exclude_pairs, use_recall=True, k=k, min_sim=min_sim,
+    )
 
 
 def score_blocks_gpu(
@@ -135,10 +249,9 @@ def score_blocks_gpu(
 ) -> list[tuple[int, int, float]]:
     """Score all blocks via the matrix path. Drop-in for ``score_blocks_parallel``.
 
-    Runs sequentially (the JAX matmul already vectorises the per-block NxN work;
-    threading buys little here and keeps the WIP path simple). Pairs are
-    canonicalised ``(min, max)``, filtered against ``matched_pairs``, and -- in
-    match mode -- restricted to target/reference cross pairs.
+    Runs sequentially (the JAX matmul already vectorises the per-block work).
+    Pairs are canonicalised ``(min, max)``, filtered against ``matched_pairs``,
+    and -- in match mode -- restricted to target/reference cross pairs.
     """
     _warn_once()
     if not blocks:

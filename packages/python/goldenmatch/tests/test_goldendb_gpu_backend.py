@@ -21,11 +21,14 @@ from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.goldendb import (
     GA2MCombiner,
     char_ngram_hashed,
+    coarse_encode,
     combine_matrices,
     cosine_matrix,
     find_matches_gpu,
     jax_available,
+    resolve_dataset_gpu,
     score_blocks_gpu,
+    topk_candidates,
 )
 
 
@@ -186,6 +189,87 @@ def test_get_block_scorer_routes_gpu():
     assert _get_block_scorer(SimpleNamespace(backend="gpu")) is score_blocks_gpu
     default = _get_block_scorer(SimpleNamespace(backend=None))
     assert default.__name__ == "score_blocks_parallel"
+
+
+# ── Stage A: ANN recall ───────────────────────────────────────────────────────
+
+def _varied_block() -> pl.DataFrame:
+    names = [
+        "John Smith", "Jon Smith", "John Smyth",
+        "Mary Jones", "Mary Jonas", "Maria Jones",
+        "Robert Lee", "Bob Lee", "Roberta Lee",
+        "Wei Zhang", "Wei Zang", "Xavier Stone",
+    ]
+    return pl.DataFrame({"__row_id__": list(range(len(names))), "name": names})
+
+
+def test_topk_candidates_finds_nearest():
+    coarse = char_ngram_hashed(["alpha", "alpha", "omega"])
+    pairs = topk_candidates(coarse, k=1)
+    assert (0, 1) in pairs            # the two identical vectors are mutual NN
+
+
+def test_coarse_encode_normalised():
+    emb = char_ngram_hashed(["john smith", "mary jones"])
+    coarse = coarse_encode([emb], np.array([1.0]))
+    norms = np.linalg.norm(coarse, axis=1)
+    np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+
+def test_recall_path_matches_dense_path():
+    """With k >= n-1 the ANN shortlist is every pair, so the recall path must
+    reproduce the dense path exactly (modulo fp tolerance)."""
+    df = _varied_block()
+    mk = _mk(0.5)
+    dense = find_matches_gpu(df, mk, use_recall=False)
+    recall = find_matches_gpu(df, mk, use_recall=True, k=df.height)
+    dense_keys = {(a, b) for a, b, _ in dense}
+    recall_keys = {(a, b) for a, b, _ in recall}
+    assert dense_keys == recall_keys
+    dscore = {(a, b): s for a, b, s in dense}
+    for a, b, s in recall:
+        assert abs(s - dscore[(a, b)]) < 1e-4
+
+
+def test_recall_path_finds_duplicates_with_small_k():
+    df = _varied_block()
+    pairs = find_matches_gpu(df, _mk(0.55), use_recall=True, k=3)
+    keys = {frozenset((a, b)) for a, b, _ in pairs}
+    # char-ngram cosine catches character-similar variants (not nicknames like
+    # Bob/Robert, which share almost no n-grams -- correctly below threshold).
+    assert frozenset((0, 1)) in keys      # John Smith / Jon Smith
+    assert frozenset((9, 10)) in keys     # Wei Zhang / Wei Zang
+
+
+def test_recall_auto_selected_above_threshold(monkeypatch):
+    import goldenmatch.core.goldendb.scorer as gs
+
+    monkeypatch.setattr(gs, "ANN_THRESHOLD", 4)   # force recall on a tiny block
+    df = _varied_block()
+    pairs = gs.find_matches_gpu(df, _mk(0.55))      # use_recall=None -> auto
+    assert any({a, b} == {0, 1} for a, b, _ in pairs)
+
+
+# ── blocker-free dataset resolution (the "approximate primitive join") ────────
+
+def test_resolve_dataset_gpu_finds_cross_block_duplicates():
+    """ANN recall finds duplicates a blocking key would separate -- Catherine vs
+    Katherine (different first letter) and Sophie vs Sofie."""
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 4],
+            "name": [
+                "Catherine Reed", "Katherine Reed",
+                "Sophie Lang", "Sofie Lang",
+                "Totally Different",
+            ],
+        }
+    )
+    pairs = resolve_dataset_gpu(df, _mk(0.5), k=4)
+    keys = {frozenset((a, b)) for a, b, _ in pairs}
+    assert frozenset((0, 1)) in keys      # Catherine / Katherine
+    assert frozenset((2, 3)) in keys      # Sophie / Sofie
+    assert not any(4 in (a, b) for a, b, _ in pairs)
 
 
 # ── the (id, cluster_id) handoff into the existing CPU clustering path ─────────

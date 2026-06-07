@@ -15,8 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `jax.grad` training step for the probabilistic combine. Install with
   `pip install goldenmatch[goldendb]`. **Scores are produced by char-ngram cosine + an
   untrained combine and are NOT calibrated against the production scorers — treat output as
-  experimental.** Not yet wired: cross-block ANN recall, trained shape functions / interaction
-  terms, negative-evidence penalties, and GPU wall-clock validation. Lives in
+  experimental.** Includes a Stage A brute-force top-k ANN recall path
+  (`goldenmatch.core.goldendb.recall`) that auto-engages on large blocks to avoid the dense
+  N² matrix, plus `resolve_dataset_gpu(df, mk)` for **blocker-free** whole-dataset resolution
+  (finds duplicates a blocking key would separate). Not yet wired: a true GPU-ANN index
+  (recall is brute force, good to ~1e5–1e6 rows), trained shape functions / interaction terms,
+  negative-evidence penalties, and GPU wall-clock validation. Lives in
   `goldenmatch/core/goldendb/`. Spec:
   `docs/superpowers/specs/2026-06-07-goldendb-matrix-native-entity-resolution-design.md`.
 

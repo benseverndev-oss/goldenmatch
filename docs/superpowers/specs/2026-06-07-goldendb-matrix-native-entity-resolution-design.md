@@ -301,17 +301,25 @@ installable via `pip install goldenmatch[goldendb]`. It is loudly marked
 work-in-progress (module banner + a one-time runtime warning + CHANGELOG note) and
 is NOT production-validated.
 
-Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`):
+Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
 - char-ngram hashed per-field encoding -> L2-normalised matrices
 - per-field cosine via a JAX `matmul` (the GPU path; runs on CPU here)
 - GA2M weighted-average combine with EXACT additive attribution + monotonicity
 - a differentiable `jax.grad` training step for the probabilistic combine
+- **Stage A recall**: coarse-vector brute-force top-k shortlist
+  (`recall.py`) + a vectorised Stage B that scores only the shortlist. Two entry
+  points: (a) auto-engaged inside large blocks (`n > ANN_THRESHOLD`) so the dense
+  N^2 path is avoided, and (b) `resolve_dataset_gpu(df, mk)` -- **blocker-free**
+  resolution over a whole dataset, finding duplicates a blocking key would separate
+  (Catherine/Katherine). With `k >= n-1` the recall path equals the dense path
+  (parity-tested).
 - block-scorer-contract output `(id_a, id_b, score)` feeding the unchanged
   `core/cluster.py` -> `core/golden.py` path via `__row_id__`
 
 NOT yet wired (future work):
-- cross-block ANN recall (Stage A) -- today it scores within the existing blocks,
-  so recall is whatever the blocker produces
+- a true GPU-ANN index (FAISS / DiskANN) -- recall is brute-force top-k today
+  (good to ~1e5-1e6 vectors per the design doc); larger datasets and streaming
+  inserts need the indexed path
 - trained shape functions / pairwise interaction terms (structure is linear today)
 - negative-evidence penalties (ignored with a warning if configured)
 - GPU wall-clock crossover measurement (the recall@k gate above remains the first

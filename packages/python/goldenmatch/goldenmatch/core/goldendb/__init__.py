@@ -83,8 +83,13 @@ from goldenmatch.core.goldendb._encode import (  # noqa: E402
     char_ngram_hashed,
     cosine_matrix,
 )
+from goldenmatch.core.goldendb.recall import (  # noqa: E402
+    coarse_encode,
+    topk_candidates,
+)
 from goldenmatch.core.goldendb.scorer import (  # noqa: E402
     find_matches_gpu,
+    resolve_dataset_gpu,
     score_blocks_gpu,
 )
 
@@ -98,6 +103,9 @@ __all__ = [
     "cosine_matrix",
     "combine_matrices",
     "GA2MCombiner",
+    "coarse_encode",
+    "topk_candidates",
     "find_matches_gpu",
+    "resolve_dataset_gpu",
     "score_blocks_gpu",
 ]
