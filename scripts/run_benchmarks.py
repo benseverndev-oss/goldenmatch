@@ -294,14 +294,23 @@ def _measure_ncvr(datasets_dir: Path) -> dict[str, Any] | None:
     The 0.9719 F1 in the v1.8 CHANGELOG was measured against this
     construction; the 10K-row source file is gitignored.
     """
-    from dqbench_adapters.ncvr import build_ncvr_df_and_gt, evaluate_ncvr
+    from dqbench_adapters.ncvr import (
+        build_ncvr_df_and_gt,
+        build_ncvr_synthetic_df_and_gt,
+        evaluate_ncvr,
+    )
     from goldenmatch import dedupe_df
 
     ncvr_path = datasets_dir / "NCVR" / "ncvoter_sample_10k.txt"
     loaded = build_ncvr_df_and_gt(ncvr_path)
+    label = "NCVR"
     if loaded is None:
-        _info(f"  NCVR: sample missing at {ncvr_path} — skipping")
-        return None
+        # No real (PII-bearing, gitignored) sample -> fall back to the committed
+        # PII-free synthetic NCVR-shaped fixture so the lane runs anywhere. Its
+        # F1 is its OWN baseline, NOT the real-data 0.9719 -> label it distinctly.
+        _info(f"  NCVR: real sample absent at {ncvr_path} — using synthetic NCVR-shaped fixture.")
+        loaded = build_ncvr_synthetic_df_and_gt()
+        label = "NCVR-synthetic"
     df, gt_pairs = loaded
 
     _dedupe = functools.partial(dedupe_df, planning_effort=_PLANNING_EFFORT)
@@ -309,16 +318,17 @@ def _measure_ncvr(datasets_dir: Path) -> dict[str, Any] | None:
     res = evaluate_ncvr(df, gt_pairs, _dedupe)
     elapsed = time.time() - start
     _info(
-        f"  NCVR: f1={res.f1:.4f} precision={res.precision:.4f} "
-        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s"
+        f"  {label}: f1={res.f1:.4f} precision={res.precision:.4f} "
+        f"recall={res.recall:.4f} elapsed={elapsed:.2f}s effort={_PLANNING_EFFORT}"
     )
     return {
-        "name": "NCVR", "f1": round(res.f1, 4),
+        "name": label, "f1": round(res.f1, 4),
         "precision": round(res.precision, 4), "recall": round(res.recall, 4),
         "tp": res.true_positives, "fp": res.false_positives,
         "fn": res.false_negatives,
         "elapsed_seconds": round(elapsed, 2),
         "health": "n/a", "stop_reason": "n/a",
+        "planning_effort": _PLANNING_EFFORT,
     }
 
 
@@ -339,6 +349,11 @@ def _run_dqbench(with_llm: bool = False) -> dict[str, Any] | None:
         return None
 
     env = os.environ.copy()
+    # The adapter calls dedupe_df, which reads GOLDENMATCH_PLANNING_EFFORT — so
+    # --planning-effort flows into the DQbench subprocess and the tiers can be
+    # A/B'd on the ER composite (thinking lifts T2 by fixing budget-limited RED
+    # commits: 51.56 -> 57.11 measured 2026-06-06).
+    env["GOLDENMATCH_PLANNING_EFFORT"] = _PLANNING_EFFORT
     if not with_llm:
         # Strip API keys so DQbench measures the no-LLM path
         for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
@@ -416,9 +431,14 @@ def main() -> int:
                              "Default on; --no-download to use only local files.")
     args = parser.parse_args()
 
+    # Benchmarks must NOT use the cross-run auto-config cache — a config learned
+    # on a prior run would leak across datasets and make numbers irreproducible.
+    # Force it off unless the caller has deliberately overridden it.
+    os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+
     global _PLANNING_EFFORT
     _PLANNING_EFFORT = args.planning_effort
-    _info(f"planning_effort={_PLANNING_EFFORT}")
+    _info(f"planning_effort={_PLANNING_EFFORT} memory={os.environ.get('GOLDENMATCH_AUTOCONFIG_MEMORY')}")
 
     selected = {args.datasets} if args.datasets != "all" else {"dblp-acm", "febrl3", "ncvr", "dqbench"}
 
