@@ -12,6 +12,8 @@ links rather than reading everything.
 - [architecture/sail-tier.md](architecture/sail-tier.md) — the distributed Sail-native tier (Spark Connect) that replaces Ray; specced, build not started.
 - [architecture/sql-native-extensions.md](architecture/sql-native-extensions.md) — graph + embedding UDFs on DuckDB/Postgres/DataFusion, native-direct (shared `graph-core` + `goldenembed-rs`); SHIPPED (#509).
 - [architecture/goldenflow-native-kernel.md](architecture/goldenflow-native-kernel.md) — GoldenFlow date/phone vectorized fast paths + the optional `goldenflow-native` phone kernel (NANP-only gated); SHIPPED (2026-06-07).
+- [architecture/goldencheck-native-kernel.md](architecture/goldencheck-native-kernel.md) — GoldenCheck's Arrow-native runtime (`goldencheck-native`) + deep-profiling expansion (Benford / composite-key / FD / fuzzy / approx-FD kernels, `--deep`, `refs`, freshness) + the `cell_quality` / `functional_dependencies` bridge APIs; SHIPPED (#793, 2026-06-07).
+- [architecture/goldencheck-goldenmatch-integration.md](architecture/goldencheck-goldenmatch-integration.md) — data quality feeds entity resolution: four fail-open, default-OFF doors (survivorship, blocking, FD negative-evidence, quality-gated review); #794/#795 shipped, #797/#798 open.
 
 ## Decisions (records with no other home)
 - [decisions/0001-gate-reframe-engine-portability.md](decisions/0001-gate-reframe-engine-portability.md) — retire one-box RSS as the gate; engine portability is the destination.
@@ -20,6 +22,7 @@ links rather than reading everything.
 - [decisions/0004-sail-tier-scope.md](decisions/0004-sail-tier-scope.md) — Sail tier: full, buildable, Sail-native, replaces Ray; WCC-on-Sail is the gate.
 - [decisions/0005-sql-native-direct-udfs.md](decisions/0005-sql-native-direct-udfs.md) — SQL graph + embed UDFs go native-direct (drop the CPython bridge); shared `graph-core`, accept-both ids, embed wheel, 3 surfaces.
 - [decisions/0006-goldenflow-native-nanp-gating.md](decisions/0006-goldenflow-native-nanp-gating.md) — GoldenFlow: vectorize in Polars first; gate the native phone kernel to NANP-only (parity-safe by construction).
+- [decisions/0007-goldencheck-goldenmatch-integration.md](decisions/0007-goldencheck-goldenmatch-integration.md) — GoldenCheck→GoldenMatch: fail-open quality bridges, additive, default-OFF + benchmark-gated; hold the DQ↔ER boundary.
 
 ## Processes (how work is done here)
 - [processes/development-workflow.md](processes/development-workflow.md) — spec → plan → execute → review → CI → merge, plus the hard environment constraints.
