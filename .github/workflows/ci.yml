@@ -31,6 +31,7 @@ jobs:
       rust_pgrx: ${{ steps.filter.outputs.rust_pgrx }}
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
+      goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
       distributed: ${{ steps.filter.outputs.distributed }}
@@ -153,6 +154,22 @@ jobs:
               - 'packages/python/goldenmatch/tests/test_embeddings.py'
               - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
               - 'scripts/build_native.py'
+            goldencheck_native:
+              # GoldenCheck's native acceleration ext (PyO3), a standalone
+              # workspace like goldenmatch's `native`. Builds the .so and runs the
+              # Python parity suite (which SKIPS when the ext is absent), so
+              # without this lane the goldencheck kernels are UNTESTED in CI.
+              - 'packages/rust/extensions/goldencheck-native/**'
+              - 'packages/rust/extensions/goldencheck-core/**'
+              - 'packages/python/goldencheck/goldencheck/core/_native_loader.py'
+              - 'packages/python/goldencheck/goldencheck/baseline/statistical.py'
+              - 'packages/python/goldencheck/goldencheck/drift/detector.py'
+              - 'packages/python/goldencheck/goldencheck/relations/composite_key.py'
+              - 'packages/python/goldencheck/goldencheck/relations/functional_dependency.py'
+              - 'packages/python/goldencheck/goldencheck/relations/approx_fd.py'
+              - 'packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py'
+              - 'packages/python/goldencheck/tests/core/test_native_parity.py'
+              - 'scripts/build_goldencheck_native.py'
             goldenembed:
               # Standalone Rust embedding runtime (char n-gram featurize + ONNX
               # inference via ort). Own workspace, not in the `rust` job's
@@ -791,6 +808,62 @@ jobs:
             packages/python/goldenmatch/tests/test_inhouse_embedder.py \
             -v
 
+  # GoldenCheck native parity: the goldencheck-native ext (PyO3, standalone
+  # workspace) isn't built by the `rust` job's `cargo test --workspace`. This
+  # lane clippy's the crates, builds the .so into the goldencheck package, and
+  # runs the parity suite — which `skipif`s when the ext is absent, so without
+  # this lane the goldencheck kernels would be UNTESTED in CI. Parity asserts the
+  # native path matches pure-Python (Benford byte-identical; composite-key/FD
+  # integer-exact), incl. a GOLDENCHECK_NATIVE=1 required-mode run.
+  goldencheck_native:
+    needs: changes
+    if: needs.changes.outputs.goldencheck_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/goldencheck-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + test (goldencheck-core, pyo3-free kernels)
+        working-directory: packages/rust/extensions/goldencheck-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
+      - name: clippy (goldencheck-native ext crate)
+        working-directory: packages/rust/extensions/goldencheck-native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_goldencheck_native.py
+      - name: Install deep-profiling + Arrow deps the parity tests need
+        # baseline (numpy/scipy) for the Benford path; pyarrow is the Arrow C
+        # Data Interface bridge the kernels read through (the [native] extra).
+        run: uv pip install numpy scipy pyarrow
+      - name: Parity suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/goldencheck/tests/core/test_native_parity.py \
+            packages/python/goldencheck/tests/relations/test_composite_key.py \
+            packages/python/goldencheck/tests/relations/test_approx_duplicate.py \
+            packages/python/goldencheck/tests/relations/test_functional_dependency.py \
+            packages/python/goldencheck/tests/relations/test_approx_fd.py \
+            packages/python/goldencheck/tests/profilers/test_fuzzy_values.py \
+            -v
+      - name: Required-native mode (GOLDENCHECK_NATIVE=1 must use the kernel)
+        env:
+          GOLDENCHECK_NATIVE: "1"
+        run: uv run pytest packages/python/goldencheck/tests/core -q
+
   # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
   # wheel (the polars / polars-runtime split) and prove the runtime loads
   # through the wheel path. Distinct from `native`, which builds the in-tree
@@ -1296,6 +1369,7 @@ jobs:
       - rust_pgrx
       - duckdb_extensions
       - native
+      - goldencheck_native
       - native_wheel
       - goldenembed
       - embed_wheel

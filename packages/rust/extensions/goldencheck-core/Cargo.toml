@@ -1,0 +1,25 @@
+# goldencheck-core -- pyo3-free kernel library for GoldenCheck's CPU-bound
+# deep-profiling work. The `score-core` analogue: pure compute over slices, no
+# Python, no Arrow. The pyo3 + Arrow C Data Interface shims live in the sibling
+# `goldencheck-native` crate, which path-depends on this one. Keeping the kernel
+# logic pyo3-free means it can later back a DuckDB/DataFusion SQL surface (as
+# `score-core`/`graph-core` do for goldenmatch) without dragging in CPython.
+[package]
+name = "goldencheck-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <ben@bensevern.dev>"]
+description = "Pyo3-free deep-profiling kernels for GoldenCheck (Benford, composite-key & functional-dependency mining)"
+
+[lib]
+name = "goldencheck_core"
+
+[dependencies]
+# Fast, deterministic hashing for the combinatorial key/FD kernels. rustc-hash
+# is already in the dependency graph (pulled by the goldenmatch native stack),
+# so this adds no new crates.io fetch.
+rustc-hash = "2"
+
+[dev-dependencies]
+# Property/parity checks for the Benford leading-digit extraction.

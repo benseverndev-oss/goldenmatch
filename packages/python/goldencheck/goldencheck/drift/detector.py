@@ -20,6 +20,7 @@ from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.models import BaselineProfile
 from goldencheck.baseline.patterns import _induce_column_grammars
 from goldencheck.baseline.semantic import infer_semantic_types
+from goldencheck.baseline.statistical import _leading_digit_counts
 from goldencheck.models.finding import Finding, Severity
 
 __all__ = ["run_drift_checks"]
@@ -335,19 +336,10 @@ def _check_benford_drift(col: str, series: pl.Series, sp: Any) -> list[Finding]:
 
 def _compute_benford_pvalue(values: np.ndarray) -> float | None:
     """Return chi-squared p-value for Benford conformance of values."""
-    leading_digits: list[int] = []
-    for v in values:
-        if v <= 0 or not math.isfinite(v):
-            continue
-        exp = math.floor(math.log10(v))
-        normalised = v / (10 ** exp)
-        d = int(normalised)
-        if 1 <= d <= 9:
-            leading_digits.append(d)
-    if not leading_digits:
+    # Shared with baseline/statistical.py; uses the native kernel when enabled.
+    counts, total = _leading_digit_counts(values)
+    if total == 0:
         return None
-    total = len(leading_digits)
-    counts = Counter(leading_digits)
     observed = [counts.get(d, 0) for d in range(1, 10)]
     expected = [math.log10(1 + 1 / d) * total for d in range(1, 10)]
     try:

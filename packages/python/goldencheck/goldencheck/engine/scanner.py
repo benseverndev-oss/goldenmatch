@@ -19,6 +19,8 @@ from goldencheck.profilers.cardinality import CardinalityProfiler
 from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
 from goldencheck.profilers.format_detection import FormatDetectionProfiler
+from goldencheck.profilers.freshness import FreshnessProfiler
+from goldencheck.profilers.fuzzy_values import FuzzyValuesProfiler
 from goldencheck.profilers.nullability import NullabilityProfiler
 from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
 from goldencheck.profilers.range_distribution import RangeDistributionProfiler
@@ -26,6 +28,10 @@ from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.profilers.uniqueness import UniquenessProfiler
 from goldencheck.relations.age_validation import AgeValidationProfiler
+from goldencheck.relations.approx_duplicate import ApproxDuplicateProfiler
+from goldencheck.relations.approx_fd import ApproximateFDProfiler
+from goldencheck.relations.composite_key import CompositeKeyProfiler
+from goldencheck.relations.functional_dependency import FunctionalDependencyProfiler
 from goldencheck.relations.identity_safe_pk import IdentitySafePkProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
@@ -46,6 +52,11 @@ COLUMN_PROFILERS = [
     EncodingDetectionProfiler(),
     SequenceDetectionProfiler(),
     DriftDetectionProfiler(),
+    # Fuzzy near-duplicate VALUE detection (inconsistent categorical encodings).
+    # Kernel-backed (trigram+prefix blocking + Levenshtein); Python fallback.
+    FuzzyValuesProfiler(),
+    # Freshness: future-dated values + (name-gated) staleness on date/datetime cols.
+    FreshnessProfiler(),
 ]
 
 RELATION_PROFILERS = [
@@ -57,6 +68,16 @@ RELATION_PROFILERS = [
     # Identity Graph downstreams need source_pk_column to avoid record_id
     # collisions on duplicate raw rows.
     IdentitySafePkProfiler(),
+    # Discover minimal composite keys when no single-column key exists
+    # (kernel-backed via goldencheck[native]; pure-Python fallback otherwise).
+    CompositeKeyProfiler(),
+    # Exact + near-duplicate (normalized) row detection.
+    ApproxDuplicateProfiler(),
+    # Discover strict single-column functional dependencies (redundant columns /
+    # lookup relationships). Kernel-backed; pure-Polars fallback.
+    FunctionalDependencyProfiler(),
+    # Surface rows that BREAK a near-strict FD (likely data-entry errors).
+    ApproximateFDProfiler(),
 ]
 
 def _post_classification_checks(
@@ -229,6 +250,7 @@ def scan_dataframe(
     domain: str | None = None,
     baseline: BaselineProfile | Path | None = None,
     schema: object | None = None,
+    deep: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     """Scan an already-loaded Polars DataFrame.
 
@@ -251,6 +273,7 @@ def scan_dataframe(
         domain=domain,
         baseline=baseline,
         schema=schema,
+        deep=deep,
     )
 
 
@@ -261,6 +284,7 @@ def scan_file(
     domain: str | None = None,
     baseline: BaselineProfile | Path | None = None,
     schema: object | None = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
+    deep: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     df = read_file(path)
     return _scan_dataframe_impl(
@@ -271,6 +295,7 @@ def scan_file(
         domain=domain,
         baseline=baseline,
         schema=schema,
+        deep=deep,
     )
 
 
@@ -283,10 +308,18 @@ def _scan_dataframe_impl(
     domain: str | None,
     baseline: BaselineProfile | Path | None,
     schema: object | None,
+    deep: bool = False,
 ) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
     row_count = len(df)
-    sample = maybe_sample(df, max_rows=sample_size)
-    logger.info("Scanning %d rows, %d columns", row_count, len(df.columns))
+    # Deep mode profiles the FULL population (no 100K sample cap) -- removes
+    # sampling error on cardinality / uniqueness / rare-value / composite-key
+    # checks. Heavier, but the Polars profilers are vectorized and the native
+    # kernels (when goldencheck[native] is installed) carry the CPU-bound work.
+    sample = df if deep else maybe_sample(df, max_rows=sample_size)
+    logger.info(
+        "Scanning %d rows, %d columns%s",
+        row_count, len(df.columns), " (deep: full population)" if deep else "",
+    )
 
     all_findings: list[Finding] = []
     column_profiles: list[ColumnProfile] = []
@@ -453,6 +486,7 @@ def scan_file_with_llm(
     provider: str = "anthropic",
     sample_size: int = 100_000,
     domain: str | None = None,
+    deep: bool = False,
 ) -> tuple[list[Finding], DatasetProfile]:
     """Scan a file with profilers, then enhance with LLM boost."""
     import json
@@ -467,7 +501,9 @@ def scan_file_with_llm(
     check_llm_available(provider)
 
     # Run profilers first — returns findings, profile, AND the sampled df
-    findings, profile, sample = scan_file(path, sample_size=sample_size, return_sample=True, domain=domain)
+    findings, profile, sample = scan_file(
+        path, sample_size=sample_size, return_sample=True, domain=domain, deep=deep
+    )
 
     # Budget check before calling LLM (~2000 input, ~500 output as estimates)
     import os

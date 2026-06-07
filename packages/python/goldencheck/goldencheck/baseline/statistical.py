@@ -18,6 +18,7 @@ except ImportError as _err:  # pragma: no cover
 import polars as pl
 
 from goldencheck.baseline.models import StatProfile
+from goldencheck.core._native_loader import native_enabled, native_module
 
 if TYPE_CHECKING:
     pass
@@ -305,9 +306,7 @@ def _maybe_benford(
 
 def _compute_benford(values: np.ndarray) -> dict[str, float]:
     """Compute observed leading-digit frequencies and chi-squared p-value."""
-    leading_digits = _extract_leading_digits(values)
-    total = len(leading_digits)
-    observed_counts = Counter(leading_digits)
+    observed_counts, total = _leading_digit_counts(values)
 
     # Benford expected proportions for digits 1-9
     expected_props = {d: math.log10(1 + 1 / d) for d in range(1, 10)}
@@ -328,6 +327,27 @@ def _compute_benford(values: np.ndarray) -> dict[str, float]:
     result["chi2_pvalue"] = round(float(pvalue), 6)
 
     return result
+
+
+def _leading_digit_counts(values: np.ndarray) -> tuple[dict[int, int], int]:
+    """Leading-digit (1-9) counts and the total count of qualifying values.
+
+    Uses the native ``benford_leading_digits`` kernel when enabled (it replaces
+    the per-value Python loop below); falls back to the pure-Python path
+    otherwise. Both produce identical counts -- see
+    ``tests/core/test_native_parity.py``."""
+    if native_enabled("benford"):
+        try:
+            import pyarrow as pa
+
+            arr = pa.array(np.asarray(values, dtype=np.float64))
+            hist = native_module().benford_leading_digits(arr)
+            counts = {d: int(hist[d - 1]) for d in range(1, 10)}
+            return counts, sum(counts.values())
+        except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
+            logger.debug("native benford kernel failed; using Python", exc_info=True)
+    digits = _extract_leading_digits(values)
+    return dict(Counter(digits)), len(digits)
 
 
 def _extract_leading_digits(values: np.ndarray) -> list[int]:

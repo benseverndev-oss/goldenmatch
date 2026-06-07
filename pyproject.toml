@@ -22,6 +22,10 @@ goldencheck-types = { workspace = true }
 # published goldenmatch wheel resolves goldenmatch-native from PyPI (uv.sources
 # is workspace-local, stripped from published Requires-Dist).
 goldenmatch-native = { path = "packages/rust/extensions/native" }
+# goldencheck-native is the optional compiled runtime (goldencheck[native]) --
+# same maturin/Rust split as goldenmatch-native above. Point uv at the path for
+# dev/CI resolution; the published goldencheck wheel resolves it from PyPI.
+goldencheck-native = { path = "packages/rust/extensions/goldencheck-native" }
 
 [dependency-groups]
 dev = [

@@ -8,6 +8,10 @@ Cargo.lock
 # Same rationale for goldenembed: the `goldenembed` CI lane builds it (and links
 # onnxruntime via `ort`), so pin the exact resolved deps it was verified against.
 !goldenembed/Cargo.lock
+# Same rationale for goldencheck-native: the publish-goldencheck-native workflow
+# builds it as a verified wheel, so pin the exact resolved deps. (goldencheck-core
+# is a pyo3-free library dep -- its lock stays ignored, like score-core/graph-core.)
+!goldencheck-native/Cargo.lock
 *.so
 *.dylib
 *.dll
