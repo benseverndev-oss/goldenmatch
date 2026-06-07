@@ -5,12 +5,25 @@
 
 One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
 
-## PR 1 — Phase 0: hygiene
-- [ ] Isotonic (PAV) monotonicity pass on `EMResult.match_weights` in `train_em`; warn on adjust.
-- [ ] `scripts/bench_fs_calibration.py`: linear vs posterior × threshold grid (DBLP-ACM + Febrl).
-- [ ] Set `_FS_CALIBRATION_DEFAULT` from the sweep; fix the line-53 comment; set a measured posterior cut if posterior wins.
-- [ ] Delete continuous EM (`train_em_continuous`, `score_probabilistic_continuous`, `ContinuousEMResult`) unless a caller lands; keep `probabilistic_fast.py` (Phase 3 input).
-- [ ] Gate: DBLP-ACM F1 ≥ 0.968; `title` weights monotone.
+## PR 1 — Phase 0: hygiene ✅ (2026-06-07)
+- [x] Isotonic (PAV) monotonicity pass + `enforce_weight_monotonicity` in `train_em`.
+      Three-state `GOLDENMATCH_FS_MONOTONIC` (`warn` default / `enforce` / `off`).
+      **Measured:** `enforce` *regresses* DBLP-ACM F1 0.968 → 0.941 (the inversion
+      is genuine signal there), so default is `warn` (detect + log, no change) —
+      the Splink posture, and value-preserving.
+- [x] `scripts/bench_fs_calibration.py`: linear vs posterior × threshold grid.
+      Febrl not bundled (skipped, not faked); ran on DBLP-ACM.
+- [x] `_FS_CALIBRATION_DEFAULT` stays `linear` (posterior *ties*, doesn't beat;
+      flipping the headline score → probability shifts downstream cluster
+      thresholds → Phase 4). Fixed the stale "flipped to posterior" comment + the
+      bogus 57.6%-recall figure. Fixed the mis-tuned posterior cut 0.50 → 0.99
+      (`compute_thresholds`), so the opt-in posterior path now ties linear (0.968).
+- [x] **Continuous EM kept, NOT deleted** — deeper inspection shows it is a
+      tested public API (`tests/test_probabilistic.py`) with a TS parity port
+      (`typescript/.../core/probabilistic.ts`) + fixtures. "Wired nowhere" was
+      true for the *pipeline*, false for the *library surface*. `probabilistic_fast.py`
+      kept (Phase 3 input).
+- [x] Gate: DBLP-ACM F1 = 0.968 (no regression, default modes); 86 FS tests pass.
 
 ## PR 2 — Phase 1a: model persistence
 - [ ] `EMResult.to_dict/from_dict/save_json/load_json`.

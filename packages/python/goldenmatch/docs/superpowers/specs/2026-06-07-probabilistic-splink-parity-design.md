@@ -42,7 +42,7 @@ An audit of `core/probabilistic.py` (2026-06-07) found the FS *algorithm* is fai
 
 - **Monotonicity guard** in `train_em`: isotonic (PAV) pass over each field's `match_weights` so levels are non-decreasing; `logger.warning` when it adjusts. Gate: DBLP-ACM `title` becomes monotone, F1 ≥ 0.968 (no regression).
 - **Calibration decision**: commit a `scripts/bench_fs_calibration.py` sweep (linear vs posterior × threshold grid on DBLP-ACM + Febrl). Pick the default by max F1; align `_FS_CALIBRATION_DEFAULT` and the line-53 comment. If `posterior`, set a measured default cut (not 0.5).
-- **Dead-code triage**: mark `probabilistic_fast.py` as Phase-3 input (keep), delete continuous EM unless Phase 0 wires a caller.
+- **Dead-code triage**: keep `probabilistic_fast.py` (Phase-3 input). **Resolved: keep continuous EM** — it is a tested public API with a TS parity port, not dead code (the audit's "wired nowhere" held for the pipeline, not the library surface).
 
 ## Phase 1 — Model lifecycle (highest operational leverage)
 

@@ -34,23 +34,30 @@ logger = logging.getLogger(__name__)
 #
 #   "linear"    — (W - W_min) / (W_max - W_min). Monotonic in W but NOT a
 #                 probability: a 0.50 cutoff lands at the midpoint of the
-#                 achievable weight range, which has no probabilistic meaning
-#                 and (on asymmetric-weight data) sits far above the Bayes
-#                 boundary. This is the historical behavior — precision-heavy,
-#                 recall-starved (98.8% / 57.6% on DBLP-ACM).
+#                 achievable weight range, which has no probabilistic meaning.
+#                 This is the default. With full-block scoring it measures
+#                 P=0.978 / R=0.958 / F1=0.968 on DBLP-ACM (the old "57.6%
+#                 recall" was a block-skip artifact, not the calibration).
 #
 #   "posterior" — the true FS match probability:
 #                     logodds = log2(λ/(1-λ)) + W
 #                     p       = 1 / (1 + 2^(-logodds))
 #                 where λ is the EM-estimated within-block match rate
-#                 (em_result.proportion_matched). This restores the prior the
-#                 EM step estimates and then the linear path discards, and the
-#                 score is an actual calibrated probability the user can reason
-#                 about. A 0.50 cutoff means "more likely a match than not".
+#                 (em_result.proportion_matched). The score is an actual
+#                 calibrated probability. Note the 0.50 Bayes cut is too
+#                 permissive in practice: blocking inflates the within-block
+#                 prior λ, so post-block pairs clear 0.50 easily. Measured on
+#                 DBLP-ACM, posterior matches linear's F1 only at a cut >= ~0.9
+#                 (0.50 -> F1 0.936; 0.99 -> F1 0.968, P 0.984). So the
+#                 calibrated default cut is 0.99, not 0.50 (compute_thresholds).
 #
 # Default resolved by `_fs_calibration_mode()`. `GOLDENMATCH_FS_CALIBRATED`
 # overrides: "1"/"posterior" -> posterior, "0"/"linear" -> linear.
-# NOTE: default flipped to "posterior" below once measured on DBLP-ACM/Febrl.
+# Default stays "linear": posterior ties (not beats) linear on F1, and flipping
+# the headline score from a normalized weight to a probability shifts the value
+# distribution the downstream clustering thresholds are tuned against — that
+# belongs in the Phase 4 calibration work, not here. Sweep:
+# scripts/bench_fs_calibration.py.
 _FS_CALIBRATION_DEFAULT = "linear"
 
 
@@ -90,6 +97,88 @@ def posterior_from_weight(total_weight: float, prior_w: float) -> float:
     if logodds < -60.0:
         return 0.0
     return 1.0 / (1.0 + 2.0 ** (-logodds))
+
+
+def _isotonic_nondecreasing(values: list[float]) -> list[float]:
+    """Pool-adjacent-violators isotonic regression (non-decreasing).
+
+    Returns the non-decreasing sequence closest to ``values`` in squared
+    error — the minimal-change monotone projection. Used to enforce that
+    Fellegi-Sunter match weights increase with agreement level.
+    """
+    # Each block: [mean, pooled weight (count), size].
+    blocks: list[list[float]] = []
+    for v in values:
+        blocks.append([float(v), 1.0, 1])
+        while len(blocks) >= 2 and blocks[-2][0] > blocks[-1][0]:
+            v2, w2, s2 = blocks.pop()
+            v1, w1, s1 = blocks.pop()
+            merged = (v1 * w1 + v2 * w2) / (w1 + w2)
+            blocks.append([merged, w1 + w2, int(s1 + s2)])
+    out: list[float] = []
+    for mean, _w, size in blocks:
+        out.extend([mean] * int(size))
+    return out
+
+
+def _fs_monotonic_mode() -> str:
+    """Resolve the FS match-weight monotonicity mode: 'warn' | 'enforce' | 'off'.
+
+    Default is 'warn': detect a non-monotonic weight vector (a rare middle
+    level outweighing exact agreement) and log it, but leave the EM weights
+    untouched. This mirrors Splink, which surfaces non-monotonicity rather
+    than silently mangling it — and on measured data (DBLP-ACM) isotonically
+    pooling the inverted levels *regresses* F1 (0.968 -> 0.941, precision
+    0.978 -> 0.896), because near-exact title agreement is genuinely more
+    discriminative there than perfect agreement.
+
+    ``GOLDENMATCH_FS_MONOTONIC``:
+      - unset / 'warn'                 -> detect + warn, do not modify (default)
+      - 'enforce' / '1' / 'true' / 'on'-> apply isotonic (PAV) repair
+      - '0' / 'off' / 'disabled'       -> no detection, no warning
+    """
+    val = os.environ.get("GOLDENMATCH_FS_MONOTONIC")
+    if val is None:
+        return "warn"
+    v = val.strip().lower()
+    if v in ("0", "false", "no", "off", "disabled"):
+        return "off"
+    if v in ("1", "true", "yes", "on", "enforce"):
+        return "enforce"
+    return "warn"
+
+
+def enforce_weight_monotonicity(
+    match_weights: dict[str, list[float]],
+    skip_fields: list[str] | None = None,
+) -> tuple[dict[str, list[float]], list[str]]:
+    """Make each field's match weights non-decreasing across agreement levels.
+
+    Fellegi-Sunter weights are log2(m/u) per comparison level; with levels
+    ordered disagree -> ... -> exact-agree, a well-specified model has weights
+    that increase with the level. EM estimates m and u per level independently,
+    so a rare-but-discriminative middle level can outweigh exact agreement
+    (observed on DBLP-ACM title: partial 28.6 bits > exact 11.9 bits). That
+    inversion means "partial agreement is stronger evidence than exact
+    agreement", which is almost always a level-discretization artifact.
+
+    Applies pool-adjacent-violators isotonic regression per field. Returns the
+    (possibly adjusted) weights and the list of fields that changed.
+    ``skip_fields`` (e.g. blocking fields, whose weights are fixed and already
+    monotone) are passed through untouched.
+    """
+    skip = set(skip_fields or [])
+    adjusted: list[str] = []
+    out: dict[str, list[float]] = {}
+    for field, weights in match_weights.items():
+        if field in skip or len(weights) < 2:
+            out[field] = list(weights)
+            continue
+        fixed = _isotonic_nondecreasing(weights)
+        if any(abs(a - b) > 1e-9 for a, b in zip(fixed, weights)):
+            adjusted.append(field)
+        out[field] = fixed
+    return out, adjusted
 
 
 @dataclass
@@ -459,6 +548,31 @@ def train_em(
             weights.append(math.log2(m_val / u_val))
         match_weights[f.field] = weights
 
+    # Guard: FS match weights are expected non-decreasing in agreement level.
+    # EM can invert a rare-but-discriminative middle level above exact
+    # agreement. Default 'warn' surfaces it (Splink posture) without changing
+    # the weights; 'enforce' isotonically repairs them (measured to trade F1
+    # on some data — opt in deliberately).
+    _mono_mode = _fs_monotonic_mode()
+    if _mono_mode != "off":
+        repaired, adjusted = enforce_weight_monotonicity(
+            match_weights, skip_fields=blocking_fields,
+        )
+        if adjusted and _mono_mode == "enforce":
+            match_weights = repaired
+            logger.warning(
+                "FS match weights were non-monotonic; isotonically repaired "
+                "field(s): %s (GOLDENMATCH_FS_MONOTONIC=enforce)",
+                ", ".join(adjusted),
+            )
+        elif adjusted:
+            logger.warning(
+                "FS match weights are non-monotonic for field(s): %s — a partial "
+                "agreement level outweighs exact agreement. Left as-is (Splink "
+                "posture); set GOLDENMATCH_FS_MONOTONIC=enforce to isotonically "
+                "repair, or inspect the level thresholds.", ", ".join(adjusted),
+            )
+
     # Term-frequency tables for fields opting into Winkler TF adjustment.
     tf_freqs, tf_collision = _build_tf_tables(df, mk)
 
@@ -772,16 +886,20 @@ def compute_thresholds(
     that works well across datasets.
 
     When ``calibrated`` is True (posterior scoring), the default thresholds
-    are interpreted as probabilities: link at 0.5 ("more likely a match than
-    not", given the within-block prior) and a low review floor. The score is
-    already a probability so no percentile rescaling is applied.
+    are interpreted as probabilities. The link cut is 0.99, NOT the 0.5 Bayes
+    boundary: blocking inflates the within-block prior λ, so post-block pairs
+    clear 0.5 trivially (DBLP-ACM at 0.5 -> F1 0.936 vs 0.968 at 0.99 — see
+    scripts/bench_fs_calibration.py). The score is already a probability so no
+    percentile rescaling is applied.
     """
     if calibrated is None:
         calibrated = _fs_calibration_mode() == "posterior"
     if calibrated:
         # Posterior scores are calibrated probabilities; thresholds are
-        # absolute, not distribution-relative. 0.5 is the Bayes boundary.
-        return 0.50, 0.10
+        # absolute, not distribution-relative. 0.99 is the measured-best link
+        # cut on post-block pairs (the 0.5 Bayes boundary is too permissive
+        # once blocking inflates the prior).
+        return 0.99, 0.50
     if scored_weights and len(scored_weights) > 50:
         # Data-driven: use the distribution of actual pair scores
         sorted_w = sorted(scored_weights)

@@ -702,3 +702,75 @@ class TestEMWithBlockingFields:
         mk = _make_probabilistic_mk()
         result = train_em(df, mk, n_sample_pairs=100, blocking_fields=["zip"])
         assert result.u_probs["zip"] == [0.50, 0.50]
+
+
+# ── Weight monotonicity guard (Phase 0) ────────────────────────────────────
+
+
+class TestWeightMonotonicity:
+    def test_isotonic_already_monotone_unchanged(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        assert _isotonic_nondecreasing([-3.0, 1.0, 5.0]) == [-3.0, 1.0, 5.0]
+
+    def test_isotonic_pools_inversion(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        # partial (28.0) outweighs exact (12.0): pool to their mean.
+        out = _isotonic_nondecreasing([-2.0, 28.0, 12.0])
+        assert out[0] == -2.0
+        assert out[1] == out[2] == pytest.approx(20.0)
+        # result is non-decreasing
+        assert all(out[i] <= out[i + 1] + 1e-9 for i in range(len(out) - 1))
+
+    def test_isotonic_single_and_empty(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        assert _isotonic_nondecreasing([5.0]) == [5.0]
+        assert _isotonic_nondecreasing([]) == []
+
+    def test_enforce_reports_adjusted_and_skips_blocking(self):
+        from goldenmatch.core.probabilistic import enforce_weight_monotonicity
+        weights = {
+            "title": [-2.0, 28.0, 12.0],   # inverted
+            "year": [12.0, -3.0],          # inverted but blocking -> skipped
+            "authors": [-5.0, 3.0, 9.0],   # already monotone
+        }
+        out, adjusted = enforce_weight_monotonicity(weights, skip_fields=["year"])
+        assert adjusted == ["title"]
+        assert out["year"] == [12.0, -3.0]          # untouched
+        assert out["authors"] == [-5.0, 3.0, 9.0]   # untouched
+        assert out["title"][1] == out["title"][2]   # pooled
+
+    def test_mode_env_parsing(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.delenv("GOLDENMATCH_FS_MONOTONIC", raising=False)
+        assert p._fs_monotonic_mode() == "warn"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "enforce")
+        assert p._fs_monotonic_mode() == "enforce"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "0")
+        assert p._fs_monotonic_mode() == "off"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "garbage")
+        assert p._fs_monotonic_mode() == "warn"
+
+    def test_warn_mode_does_not_modify_weights(self, monkeypatch):
+        # Default (warn) leaves EM weights as-is; enforce changes them.
+        from goldenmatch.core.probabilistic import train_em
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "off")
+        raw = train_em(df, mk, n_sample_pairs=200, blocking_fields=["zip"])
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "warn")
+        warned = train_em(df, mk, n_sample_pairs=200, blocking_fields=["zip"])
+        assert warned.match_weights == raw.match_weights
+
+
+class TestPosteriorThresholds:
+    def test_calibrated_link_cut_is_high(self):
+        # Posterior default cut is 0.99, not the 0.5 Bayes boundary.
+        from goldenmatch.core.probabilistic import EMResult, compute_thresholds
+        em = EMResult(
+            m_probs={"name": [0.1, 0.9]}, u_probs={"name": [0.9, 0.1]},
+            match_weights={"name": [-3.0, 3.0]}, converged=True,
+            iterations=5, proportion_matched=0.05,
+        )
+        link, review = compute_thresholds(em, calibrated=True)
+        assert link == 0.99
+        assert review == 0.50

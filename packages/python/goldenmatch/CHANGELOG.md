@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **FS match-weight monotonicity guard (Splink-parity Phase 0).** EM estimates
+  m/u per comparison level independently, so a rare-but-discriminative middle
+  level can outweigh exact agreement (DBLP-ACM `title`: partial 28.6 bits >
+  exact 11.9 bits). `enforce_weight_monotonicity` applies pool-adjacent-violators
+  isotonic regression per field. `GOLDENMATCH_FS_MONOTONIC` modes: `warn`
+  (default — detect + log, do NOT modify, the Splink posture), `enforce`
+  (isotonically repair), `off` (silent). Default `warn` is value-preserving
+  (DBLP-ACM F1 stays 0.968); `enforce` *trades* F1 there (0.968 → 0.941, the
+  inversion is genuine signal, not pure artifact) so it is opt-in. Sweep:
+  `scripts/bench_fs_calibration.py`. Spec/plan:
+  `docs/superpowers/{specs,plans}/2026-06-07-probabilistic-splink-parity*`.
 - **Weak-positive-aware blocking-pass selection (opt-in,
   `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1`).** `core/blocking_pass_selection.py::select_passes`
   prunes multi-pass blocking passes that contribute little, ranking by marginal
@@ -22,6 +33,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   in recall-critical passes; most useful at scale or as an explicit recall/cost knob.
 
 ### Fixed
+- **FS `posterior` calibration default cut corrected 0.50 → 0.99.** The opt-in
+  `GOLDENMATCH_FS_CALIBRATED=posterior` path was mis-tuned: `compute_thresholds`
+  returned the 0.5 Bayes boundary, but blocking inflates the within-block prior
+  so post-block pairs clear 0.5 trivially (DBLP-ACM F1 0.936 at 0.5). At the
+  measured 0.99 cut, posterior ties linear (F1 0.968, P 0.984). Default
+  calibration stays `linear` (flipping the headline score to a probability
+  shifts the distribution downstream clustering thresholds are tuned against —
+  deferred to Phase 4). Also removed the stale "default flipped to posterior
+  once measured" comment that never matched the code, and the bogus "57.6%
+  recall" figure (that was a block-skip artifact, not the linear calibration).
 - **Multi-pass blocking no longer silently drops cross-pass blocks.**
   `_build_multi_pass_blocks` deduplicated blocks by `block_key`, which is the
   concatenated field *values* with no field identity — so a later pass's block
