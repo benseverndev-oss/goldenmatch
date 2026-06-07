@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **Weak-positive-aware blocking-pass selection (opt-in,
+  `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1`).** `core/blocking_pass_selection.py::select_passes`
+  prunes multi-pass blocking passes that contribute little, ranking by marginal
+  yield of *likely matches* (new pairs weighted by an unsupervised weak-positive
+  proxy — agreement on ≥2 discriminative fields) rather than raw new-pair count.
+  This protects sparse-but-precise passes (e.g. exact date-of-birth, which on
+  Febrl4 adds ~1.7K pairs but +8.5pp recall) that a naive new-pair pruner would
+  wrongly delete. Default floor keeps anything contributing ≥1 likely match
+  (drops only fully-redundant/all-noise passes, recall-safe); a `candidate_budget`
+  or higher floor trades recall for fewer candidates. Wired env-gated into
+  auto-config (default OFF). Measured modest on already-good schemes (Febrl4
+  6-pass → 3 = -1.8% candidates, -0.08pp recall ceiling) since cost concentrates
+  in recall-critical passes; most useful at scale or as an explicit recall/cost knob.
+
 ### Fixed
 - **Multi-pass blocking no longer silently drops cross-pass blocks.**
   `_build_multi_pass_blocks` deduplicated blocks by `block_key`, which is the
