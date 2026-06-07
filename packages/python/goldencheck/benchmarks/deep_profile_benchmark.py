@@ -147,6 +147,40 @@ def bench_functional_dependency(rows: int) -> None:
         print("  native kernel        : (not built -- skipping)")
 
 
+def bench_fuzzy_values(n_distinct: int) -> None:
+    from goldencheck.profilers import fuzzy_values as fv
+
+    print(f"\n## Fuzzy value clustering  (distinct values={n_distinct:,})")
+    rng = random.Random(17)
+    # Many distinct values, with typo'd / re-cased variants seeded throughout.
+    bases = [f"category_{i}" for i in range(n_distinct // 3)]
+    values: list[str] = []
+    for b in bases:
+        values.append(b)
+        s = list(b)
+        if len(s) > 4:
+            del s[rng.randrange(len(s))]
+        values.append("".join(s))           # typo variant
+        values.append(b.upper())            # case variant
+    values = list(dict.fromkeys(values))[:n_distinct]
+
+    def py() -> None:
+        fv._python_clusters(values, fv._MIN_SIMILARITY)
+
+    py_wall = _median_wall(py, runs=3)
+    print(f"  pure-Python (Levenshtein) : {py_wall * 1000:9.2f} ms")
+
+    if native_available():
+        def nat() -> None:
+            native_module().near_duplicate_value_clusters(values, fv._MIN_SIMILARITY)
+
+        nat_wall = _median_wall(nat, runs=3)
+        speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")
+        print(f"  native kernel             : {nat_wall * 1000:9.2f} ms   ({speedup:.1f}x faster)")
+    else:
+        print("  native kernel             : (not built -- skipping)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1_000_000, help="row count per kernel")
@@ -157,6 +191,7 @@ def main() -> int:
     bench_benford(args.rows)
     bench_composite_key(min(args.rows, 200_000))  # combinatorial; keep it sane
     bench_functional_dependency(min(args.rows, 200_000))
+    bench_fuzzy_values(2000)  # operates on a column's DISTINCT values
     return 0
 
 

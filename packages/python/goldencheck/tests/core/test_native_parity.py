@@ -185,3 +185,31 @@ def test_discover_fd_parity(seed: int) -> None:
     arrays = [df[c].to_arrow() for c in cols]
     nat = set(native_module().discover_functional_dependencies(arrays))
     assert nat == py
+
+
+from goldencheck.profilers import fuzzy_values as fv  # noqa: E402
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(6))
+def test_fuzzy_value_clusters_parity(seed: int) -> None:
+    """Native fuzzy value clustering matches the pure-Python fallback exactly
+    (same normalization, blocking, Levenshtein metric, and union-find)."""
+    rng = random.Random(seed)
+    bases = ["California", "Texas", "New York", "Florida", "Washington", "Arizona"]
+    values: list[str] = []
+    for b in bases:
+        values.append(b)
+        # add a few typo'd / re-cased variants
+        for _ in range(rng.randint(0, 3)):
+            s = list(b.lower())
+            if len(s) > 3 and rng.random() < 0.7:
+                del s[rng.randrange(len(s))]  # drop a char (typo)
+            values.append("".join(s).upper() if rng.random() < 0.3 else "".join(s))
+    # de-dup to mimic the profiler's distinct-value input
+    values = list(dict.fromkeys(values))
+
+    py = fv._python_clusters(values, fv._MIN_SIMILARITY)
+    nat = native_module().near_duplicate_value_clusters(values, fv._MIN_SIMILARITY)
+    # Compare as sets of frozensets (cluster identity, order-independent).
+    assert {frozenset(c) for c in py} == {frozenset(c) for c in nat}

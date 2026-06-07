@@ -30,7 +30,7 @@ goldencheck scan data.csv --domain healthcare  # Domain-specific types
 goldencheck/
 ├── cli/           # Typer CLI (15 commands incl. baseline, scan, validate, review, diff, watch, fix, learn, mcp-serve)
 ├── engine/        # Scanner, validator, confidence, fixer, differ, watcher
-├── profilers/     # 10 column profilers (BaseProfiler ABC)
+├── profilers/     # column profilers (BaseProfiler ABC; incl. fuzzy-values near-dup)
 ├── baseline/      # Deep profiling: statistical, constraints, semantic, correlation, patterns, priors
 ├── drift/         # Drift detector (13 check types against saved baseline)
 ├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation, composite-key, approx-duplicate, functional-dependency)
@@ -80,6 +80,13 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   one `u128`** → allocation-free `FxHashSet<u128>` → **1.7x faster**. Don't gate a
   kernel on "it's Rust"; gate on the measured wall vs the *Polars* baseline, which is
   already fast.
+- **Fuzzy values** (`profilers/fuzzy_values.py`): per-column near-duplicate VALUE
+  detection (inconsistent categorical encodings: `California`/`Californa`/`CALIFORNIA`,
+  `Jon`/`John`), `fuzzy_duplicate_values` check. Native kernel does trigram+prefix
+  **blocking** + pairwise **Levenshtein** over a column's *distinct* values; the
+  Python fallback uses the identical metric/blocking so clusters match. Whole-ROW
+  fuzzy matching is deliberately NOT here — that's entity resolution (GoldenMatch).
+  Guards: string dtype, ≥50 rows, distinct count in [3, 2000].
 - **Strict FDs** (`relations/functional_dependency.py`): discovers exact
   single-column functional dependencies (`zip -> city`) = redundant/lookup
   columns, INFO, scan-path. The native `discover_functional_dependencies` kernel

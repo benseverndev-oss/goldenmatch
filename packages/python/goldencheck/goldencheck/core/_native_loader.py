@@ -49,8 +49,11 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     asserted in tests/core/test_native_parity.py.
 #   - functional_dependencies: A->B determinism primitive. Integer-exact; parity
 #     asserted in the same test module.
+#   - fuzzy_values: near-duplicate value clustering (trigram+prefix blocking +
+#     Levenshtein-ratio). The pure-Python fallback uses the identical metric +
+#     blocking, so cluster sets match; parity asserted in the same test module.
 _GATED_ON: frozenset[str] = frozenset(
-    {"benford", "composite_keys", "functional_dependencies"}
+    {"benford", "composite_keys", "functional_dependencies", "fuzzy_values"}
 )
 
 
@@ -90,6 +93,7 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "benford": "benford_leading_digits",
     "composite_keys": "composite_key_search",
     "functional_dependencies": "discover_functional_dependencies",
+    "fuzzy_values": "near_duplicate_value_clusters",
 }
 
 

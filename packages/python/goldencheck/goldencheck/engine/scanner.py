@@ -19,6 +19,7 @@ from goldencheck.profilers.cardinality import CardinalityProfiler
 from goldencheck.profilers.drift_detection import DriftDetectionProfiler
 from goldencheck.profilers.encoding_detection import EncodingDetectionProfiler
 from goldencheck.profilers.format_detection import FormatDetectionProfiler
+from goldencheck.profilers.fuzzy_values import FuzzyValuesProfiler
 from goldencheck.profilers.nullability import NullabilityProfiler
 from goldencheck.profilers.pattern_consistency import PatternConsistencyProfiler
 from goldencheck.profilers.range_distribution import RangeDistributionProfiler
@@ -49,6 +50,9 @@ COLUMN_PROFILERS = [
     EncodingDetectionProfiler(),
     SequenceDetectionProfiler(),
     DriftDetectionProfiler(),
+    # Fuzzy near-duplicate VALUE detection (inconsistent categorical encodings).
+    # Kernel-backed (trigram+prefix blocking + Levenshtein); Python fallback.
+    FuzzyValuesProfiler(),
 ]
 
 RELATION_PROFILERS = [
