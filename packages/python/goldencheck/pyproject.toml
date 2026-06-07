@@ -69,6 +69,15 @@ baseline = [
     "scipy>=1.11",
     "numpy>=1.26",
 ]
+native = [
+    # Optional Rust/PyO3 acceleration for the CPU-bound deep-profiling kernels
+    # (Benford, composite-key & functional-dependency mining). goldencheck stays
+    # pure-Python and falls back automatically when this isn't installed; see
+    # goldencheck/core/_native_loader.py. pyarrow is the Arrow C Data Interface
+    # bridge the kernels read through.
+    "goldencheck-native>=0.1.0",
+    "pyarrow>=14",
+]
 semantic = [
     "sentence-transformers>=2.2",
 ]

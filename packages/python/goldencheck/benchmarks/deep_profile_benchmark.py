@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Wall-clock benchmark for GoldenCheck's native deep-profiling kernels.
+
+This is both the gate and the verification for the native path: a kernel only
+earns a place in ``_native_loader._GATED_ON`` once a parity test proves it is
+byte-identical AND this harness shows the wall actually moved on a realistic
+workload (the repo's ``feedback_verify_perf_not_just_ship`` lesson -- don't
+trust "it shipped", measure the wall on the workload of interest).
+
+Run:
+    python benchmarks/deep_profile_benchmark.py
+    python benchmarks/deep_profile_benchmark.py --rows 10000000
+
+Reports the 5-run median wall for the pure-Python path vs the native kernel,
+side by side, for each kernel. Skips native rows cleanly if the extension isn't
+built (``pip install goldencheck[native]`` or
+``python scripts/build_goldencheck_native.py``).
+"""
+from __future__ import annotations
+
+import argparse
+import random
+import statistics
+import time
+from collections import Counter
+
+import numpy as np
+from goldencheck.baseline import statistical as st
+from goldencheck.core._native_loader import native_available, native_module
+
+
+def _median_wall(fn, runs: int = 5) -> float:
+    samples = []
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        fn()
+        samples.append(time.perf_counter() - t0)
+    return statistics.median(samples)
+
+
+def _benford_dataset(rows: int, seed: int = 7) -> np.ndarray:
+    """A Benford-ish positive column spanning several orders of magnitude."""
+    rng = random.Random(seed)
+    return np.array(
+        [rng.choice([1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9]) * 10.0 ** rng.randint(0, 6)
+         + rng.random() for _ in range(rows)],
+        dtype=np.float64,
+    )
+
+
+def bench_benford(rows: int) -> None:
+    print(f"\n## Benford leading-digit histogram  (rows={rows:,})")
+    values = _benford_dataset(rows)
+
+    def py() -> None:
+        digits = st._extract_leading_digits(values)
+        Counter(digits)
+
+    py_wall = _median_wall(py)
+    print(f"  pure-Python loop : {py_wall * 1000:9.2f} ms")
+
+    if native_available():
+        import pyarrow as pa
+
+        arr = pa.array(values)
+
+        def nat() -> None:
+            native_module().benford_leading_digits(arr)
+
+        nat_wall = _median_wall(nat)
+        speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")
+        print(f"  native kernel    : {nat_wall * 1000:9.2f} ms   ({speedup:.1f}x faster)")
+    else:
+        print("  native kernel    : (not built -- skipping)")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--rows", type=int, default=1_000_000, help="row count per kernel")
+    args = ap.parse_args()
+
+    print("GoldenCheck native deep-profiling benchmark")
+    print(f"native extension available: {native_available()}")
+    bench_benford(args.rows)
+    # Future kernels (composite-key discovery, functional-dependency mining)
+    # plug in here as they land.
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

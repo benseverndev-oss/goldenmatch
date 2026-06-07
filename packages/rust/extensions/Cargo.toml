@@ -6,6 +6,11 @@ members = [
 exclude = [
     "postgres",
     "native",
+    # goldencheck-native is a standalone workspace (abi3 ext-module, like
+    # `native`); goldencheck-core is its pyo3-free path dependency. Neither
+    # belongs in the `bridge` workspace.
+    "goldencheck-native",
+    "goldencheck-core",
 ]
 
 [workspace.package]

@@ -37,11 +37,41 @@ goldencheck/
 ├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
 ├── mcp/           # MCP server (count varies; see goldencheck mcp-serve --help for current)
 ├── config/        # Pydantic YAML config (goldencheck.yml)
+├── core/          # native-kernel loader/gate (_native_loader.py)
 ├── models/        # Finding (with metadata dict), Profile dataclasses
 ├── notebook.py    # ScanResult wrapper + HTML renderers for Jupyter/Colab
 ├── reporters/     # Rich, JSON, CI output
 └── tui/           # Textual TUI (4 tabs)
 ```
+
+## goldencheck-native (optional compiled runtime)
+
+Mirrors goldenmatch's native split. `goldencheck` stays pure-Python; `pip install
+goldencheck[native]` pulls a separate maturin/abi3 wheel (`goldencheck-native`)
+that accelerates the CPU-bound **deep-profiling** work (Benford conformance, and
+— landing next — composite-key & functional-dependency mining). The sampled
+scan path is already Polars/Arrow-vectorized and is NOT a native target.
+
+- **Crates:** `packages/rust/extensions/goldencheck-core/` (pyo3-free kernels, the
+  `score-core` analogue) + `goldencheck-native/` (abi3 PyO3 shim, standalone
+  workspace, reads Arrow zero-copy via `PyArrowType<ArrayData>`, pinned `arrow=55`).
+- **Loader:** `goldencheck/core/_native_loader.py` — discover order
+  `goldencheck._native` (in-tree build) → `goldencheck_native._native` (wheel) →
+  pure Python. `GOLDENCHECK_NATIVE=auto|0|1`. A component runs native only if it's
+  in `_GATED_ON` AND its symbol is present (explicit capability probe, not a silent
+  `AttributeError` fallback — the goldenmatch #688 footgun).
+- **In-tree dev build:** `python scripts/build_goldencheck_native.py` (drops
+  `goldencheck/_native.abi3.so`; gitignored). Needs `pyarrow` installed (the Arrow
+  bridge). No maturin needed for in-tree.
+- **Parity is the gate:** a kernel joins `_GATED_ON` only after
+  `tests/core/test_native_parity.py` proves byte-identical output AND
+  `benchmarks/deep_profile_benchmark.py` shows the wall moved. Benford: byte-identical
+  (incl. exact powers-of-ten — the divisor is a correctly-rounded `1e{exp}` table,
+  NOT `powi`, matching Python's bignum `10**exp`), 17.6x faster on 1M rows.
+- **Release:** tag `goldencheck-native-v*` fires `publish-goldencheck-native.yml`
+  (distinct from Python `v*` / TS `goldencheck-js-v*`). Bump BOTH
+  `Cargo.toml` and `pyproject.toml` `[project].version` in lockstep (maturin reads
+  pyproject; `skip-existing: true` silently no-ops a stale version).
 
 ## Pipeline Flow
 
