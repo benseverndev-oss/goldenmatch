@@ -83,8 +83,8 @@ The lane's `case` block already checks `OPENAI_API_KEY`. Setting the secret in t
 To enable: set repo var `RUN_BENCHMARKS=true`. `scripts/run_benchmarks.py` now **auto-pulls** missing file-backed datasets (`--download`, default on):
 - **DBLP-ACM** downloads from Leipzig automatically (override with repo var `DBLP_ACM_URL` → `GOLDENMATCH_DBLP_ACM_URL` if Leipzig 404s; the Magellan mirror carries identical CSVs). Verified end-to-end: fresh pull → F1 0.9641.
 - **Febrl3** is self-contained via `recordlinkage` (installed in the lane).
-- **NCVR**'s source is a 4.3 GB NC SBE extract we do NOT mirror — host the small derived `ncvoter_sample_10k.txt` on a controlled mirror (e.g. a release asset) and set repo var `NCVR_SAMPLE_URL` → `GOLDENMATCH_NCVR_SAMPLE_URL`. Without it, the NCVR lane skips.
-- **DQbench** datasets ship with the `dqbench` PyPI package (installed in the lane).
+- **NCVR**'s real source is a 4.3 GB NC SBE extract carrying real voter PII (names + home addresses), so it's gitignored and NOT mirrored. The lane now **falls back to a committed PII-free synthetic NCVR-shaped fixture** (`dqbench_adapters.ncvr.generate_synthetic_ncvr`) when the real sample is absent — results are labelled **`NCVR-synthetic`** (its own baseline, ~0.98, NOT the real-data 0.9719). To run the real-data number, host `ncvoter_sample_10k.txt` privately and set repo var `NCVR_SAMPLE_URL` → `GOLDENMATCH_NCVR_SAMPLE_URL`.
+- **DQbench** is installed from the **org repo** (`git+https://github.com/benseverndev-oss/dqbench`), NOT PyPI — PyPI `dqbench` 1.0.0 is a stale slice with only the detection API (no `EntityResolutionAdapter`), so the ER lane needs the git version. The ER composite responds to `--planning-effort` (`thinking` lifts it 51.56 → 57.11 by fixing budget-limited RED commits on T2).
 
 The synthetic-fixture smoke (`synthetic_benchmarks` job in `ci.yml`) covers regressions against committed synthetic fixtures on every PR.
 
