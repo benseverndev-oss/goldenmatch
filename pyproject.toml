@@ -26,6 +26,8 @@ goldenmatch-native = { path = "packages/rust/extensions/native" }
 # same maturin/Rust split as goldenmatch-native above. Point uv at the path for
 # dev/CI resolution; the published goldencheck wheel resolves it from PyPI.
 goldencheck-native = { path = "packages/rust/extensions/goldencheck-native" }
+# Same pattern for goldenflow's optional compiled runtime (goldenflow[native]).
+goldenflow-native = { path = "packages/rust/extensions/native-flow" }
 
 [dependency-groups]
 dev = [

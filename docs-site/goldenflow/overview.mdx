@@ -6,9 +6,14 @@ keywords: ["goldenflow", "transforms", "standardization", "normalization", "data
 
 GoldenFlow standardizes, reshapes, and normalizes messy data before it enters a pipeline. In zero-config mode it auto-detects quality issues and applies safe transforms. It ships 76 built-in transforms across 11 categories (text, phone, name, address, date, categorical, numeric, email, identifiers, and URLs), plus domain packs for healthcare, finance, ecommerce, people/HR, and real estate. It scores 100/100 on the DQBench transform benchmarks.
 
-<Card title="CLI reference" icon="terminal" href="/goldenflow/cli">
-  Commands, flags, and the config format.
-</Card>
+<CardGroup cols={2}>
+  <Card title="CLI reference" icon="terminal" href="/goldenflow/cli">
+    Commands, flags, and the config format.
+  </Card>
+  <Card title="Performance" icon="gauge-high" href="/goldenflow/performance">
+    Vectorized fast paths and the optional Arrow-native phone kernel.
+  </Card>
+</CardGroup>
 
 ## Install
 
@@ -68,7 +73,9 @@ console.log(result.rows[0]);
 - **Cloud connectors**: transparent `s3://` and `gs://` paths.
 - **Watch and schedule**: auto-transform new files, or run on an interval.
 - **LLM-enhanced mode**: optional categorical corrections via `--llm`.
-- **Polars-native**, with Jupyter-friendly rich rendering.
+- **Polars-native**, with Jupyter-friendly rich rendering. Date and phone
+  normalization use vectorized fast paths (≈14× faster end-to-end), plus an
+  optional [Arrow-native Rust kernel](/goldenflow/performance) for the phone tail.
 
 ## Configured transforms
 

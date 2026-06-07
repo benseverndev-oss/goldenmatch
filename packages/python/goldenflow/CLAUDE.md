@@ -125,6 +125,73 @@ The `mode` field on `TransformInfo` controls how the engine applies a transform:
 
 The engine in `engine/transformer.py` dispatches based on `TransformInfo.mode` -- do not add mode-specific logic anywhere else.
 
+## Performance: vectorized fast paths + the native kernel
+
+**Measured (2026-06-07):** on a realistic messy 1M-row frame the two
+`series`-mode transforms `date_iso8601` and `phone_e164` were ~92% of the wall
+(27.6 s + 16.5 s of ~48 s) because each called a Python library
+(`dateutil` / `phonenumbers`) once per row via `map_elements` (~0.04-0.06 M
+rows/s). Always re-measure with `benchmarks/speed_benchmark.py` or the
+per-transform microbench before optimizing -- the win concentrates in a couple
+of transforms, not the whole library.
+
+- **`transforms/_fastpath.py::apply_with_residual`** is the shared three-tier
+  resolver: (1) a vectorized Polars `fast_expr` resolves the well-formed common
+  case in Rust, leaving uncertain rows null; (2) an optional native kernel runs
+  on just the residual; (3) the per-row `dateutil`/`phonenumbers` reference
+  settles whatever's left. On clean data tiers 2-3 never run. **Parity is safe
+  by construction**: each tier must agree with the reference on the rows it
+  resolves, so the fast path only claims rows it matches exactly. Result @ 1M:
+  `date_iso8601` 76x, `phone_e164` 19x, `phone_digits` 4.9x; ~14x end-to-end.
+- **Fast-path guards that are load-bearing for parity** (asserted over a random
+  corpus in `tests/transforms/test_fastpath_parity.py`): dates require a 4-digit
+  year (chrono's `%Y` greedily accepts 2-digit years -> 0093, but dateutil maps
+  them to 1993); E.164 only claims NANP `^[2-9]\d{9}$` / `^1[2-9]\d{9}$` with no
+  letters (a leading 1 on a 10-digit string is the country code to
+  `phonenumbers`).
+
+### goldenflow-native (optional compiled runtime)
+
+Mirrors `goldenmatch-native`. Separate maturin/PyO3 **abi3** crate at
+`packages/rust/extensions/native-flow/` (pymodule `_native`), shipped as the
+`goldenflow-native` wheel; `pip install goldenflow[native]`. Loader discover
+order in `goldenflow/core/_native_loader.py`: `goldenflow._native` (in-tree
+build via `scripts/build_native.py`) -> `goldenflow_native._native` (wheel) ->
+pure Python. In-tree `.so` is gitignored.
+
+- **Scope = the international phone family** (`phone_e164/national/country_code/
+  valid_arrow`), Arrow zero-copy in/out (`Series.to_arrow()` <-> kernel <->
+  `pl.from_arrow`), GIL released. Wired as the tier-2 `native_fn` of
+  `apply_with_residual`, so native only touches the residual the Polars fast
+  path couldn't normalize. Dates are deliberately NOT native (Polars already
+  vectorizes them; per-row chrono would be slower + reintroduce the 2-digit
+  hazard).
+- **`GOLDENFLOW_NATIVE`** env (mirrors GOLDENMATCH_NATIVE): `0` force Python,
+  `1` require native for ALL components with NO nanp_only restriction
+  (parity/bench lane -- WILL diverge on intl), `auto`/unset use native iff
+  importable AND in `_GATED_ON`.
+- **`_GATED_ON = {"phone"}` via NANP-only gating (parity-safe, on by default).**
+  Characterization showed the Rust `phonenumber` port is byte-identical to the
+  Python `phonenumbers` library EXCEPT (a) a `+CC` intl number parsed with the
+  mismatched `"US"` default region whose national number starts with `1`
+  (`+33142685300` -> native `+3342685300`; the port mis-applies US national-
+  prefix stripping), and (b) ambiguous leading-`1` inputs (`1234567890` ->
+  native `+1234567890` vs python `+11234567890`). TWO gates make native
+  authoritative only where proven: the kernel's `nanp_only` mode (emit only
+  country-code-1, else null -> Python) AND a canonical-NANP `^\+1[2-9]\d{9}$`
+  acceptance check in `_native.py` (drops the malformed 9-digit leading-1
+  results). Net: native resolves the canonical-NANP residual the Polars fast
+  path can't (alpha `1-800-FLOWERS`, extensions, `+1` forms) at ~4.3x; intl +
+  ambiguous defer to Python. `phone_country_code` is also gated (the code agrees
+  on all NANP); `phone_national`/`phone_validate` stay pure Python (no cheap
+  canonical check). Verified byte-identical to phonenumbers over a 60k mixed
+  corpus in `tests/transforms/test_native_parity.py`.
+- **Tier-1 no-"+" guard (load-bearing):** the Polars E.164 fast path must NOT
+  fire when the input contains `+` -- an intl `+CC` number can strip to exactly
+  10 digits starting 2-9 (German `+4930123456` -> `4930123456`) and be
+  mis-NANP'd to `+14930123456`. Regression-pinned in
+  `test_fastpath_parity.py::test_phone_e164_international_not_misnanped`.
+
 ## Streaming Module (streaming.py)
 
 `StreamProcessor` wraps `TransformEngine` for incremental processing:
@@ -289,6 +356,13 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 ```
 
 - **Version source**: `pyproject.toml` `[project] version` is canonical. `goldenflow/__init__.py:__version__` MUST match. They drifted in v1.1.x (pyproject=1.1.2, `__init__`=1.1.1) and shipped that way — fixed in 1.1.5. Bumping a release means touching both atomically.
+
+### goldenflow-native wheels
+
+The optional compiled runtime publishes SEPARATELY via `.github/workflows/publish-goldenflow-native.yml` (mirrors `publish-goldenmatch-native.yml`), on a release tagged **`goldenflow-native-v*`** — a DISTINCT tag from `goldenflow-v*` (Python) and `goldenflow-js-v*` (TS) so the publish workflows never cross-trigger. `workflow_dispatch` has a `ref` input (retro build from main HEAD) and a `publish` toggle (uncheck = build-matrix dry run, no upload). Builds abi3 wheels for linux x86_64/aarch64 (manylinux 2_28), windows x64, macOS x86_64+aarch64 (both on `macos-14`; `macos-13` Intel runners queue indefinitely), plus an sdist; uploads via `PYPI_TOKEN`/`skip-existing`.
+- **Version lives in THREE spots, bump in lockstep** (mirrors the goldenmatch-native lesson — maturin reads `[project].version` from `pyproject.toml`, NOT Cargo.toml): `packages/rust/extensions/native-flow/Cargo.toml` `[package].version`, `.../pyproject.toml` `[project].version`, and the `__version__` fallback in `.../python/goldenflow_native/__init__.py`. A republish without bumping pyproject rebuilds the old version and `skip-existing` silently no-ops.
+- **Tag-predates-workflow trap**: a tag pointing at a commit before this workflow existed won't fire it (Actions reads the workflow from the tag's commit). Re-tag at HEAD-of-main once landed, or use `gh workflow run publish-goldenflow-native.yml --ref main`.
+- The `goldenflow[native]` extra is NOT in `[all]` (the crate isn't on PyPI yet; an extra pointing at a non-PyPI package breaks `uv sync --all-packages`). uv resolves it locally via the root `[tool.uv.sources] goldenflow-native = { path = ... }`. Add to `[all]` only after the first wheel is on PyPI.
 
 ## Remote MCP Server
 

@@ -32,6 +32,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
+      native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
       distributed: ${{ steps.filter.outputs.distributed }}
@@ -170,6 +171,22 @@ jobs:
               - 'packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py'
               - 'packages/python/goldencheck/tests/core/test_native_parity.py'
               - 'scripts/build_goldencheck_native.py'
+            native_flow:
+              # GoldenFlow's optional native phone kernel — a standalone maturin
+              # workspace, so the `rust` job's cargo test --workspace never
+              # builds it and the python matrix runs goldenflow WITHOUT the ext
+              # (native path SKIPS). This lane builds the .so + runs the parity
+              # suite. Trigger on the crate, the extensions workspace manifest,
+              # the Python files it's wired into, and the build script.
+              - 'packages/rust/extensions/native-flow/**'
+              - 'packages/rust/extensions/Cargo.toml'
+              - 'packages/python/goldenflow/goldenflow/core/_native_loader.py'
+              - 'packages/python/goldenflow/goldenflow/transforms/_native.py'
+              - 'packages/python/goldenflow/goldenflow/transforms/phone.py'
+              - 'packages/python/goldenflow/goldenflow/transforms/_fastpath.py'
+              - 'packages/python/goldenflow/tests/transforms/test_native_parity.py'
+              - 'packages/python/goldenflow/tests/transforms/test_fastpath_parity.py'
+              - 'packages/python/goldenflow/scripts/build_native.py'
             goldenembed:
               # Standalone Rust embedding runtime (char n-gram featurize + ONNX
               # inference via ort). Own workspace, not in the `rust` job's
@@ -904,6 +921,99 @@ jobs:
           assert fp == "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3", fp
           assert _native_loader.native_enabled("hashing") is True
           print("OK: goldenmatch-native wheel loads via the split path; fingerprint vector matches")
+          PY
+
+  # GoldenFlow's optional native phone kernel is a standalone maturin workspace,
+  # so the `rust` job's cargo test --workspace never builds it and the python
+  # matrix runs goldenflow WITHOUT the ext (the native path SKIPS). This lane
+  # builds the in-tree goldenflow._native .so via build_native.py and runs the
+  # parity suite with the ext PRESENT, so the NANP-gated native path actually
+  # executes (GOLDENFLOW_NATIVE auto, plus the explicit 0/1 env tests) and is
+  # asserted byte-identical to the pure phonenumbers reference. Mirrors `native`.
+  native_flow:
+    needs: changes
+    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native-flow
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + fmt (native-flow crate)
+        working-directory: packages/rust/extensions/native-flow
+        run: |
+          cargo fmt --check
+          cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python packages/python/goldenflow/scripts/build_native.py
+      - name: Install pyarrow (zero-copy Series<->kernel bridge for the native path)
+        # goldenflow core doesn't depend on pyarrow (only the [native] extra
+        # does); without it the native runner returns None and the parity tests
+        # that import pyarrow error at collection. Install it explicitly.
+        run: uv pip install pyarrow
+      - name: Parity suite (ext present -> NANP-gated native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/goldenflow/tests/transforms/test_native_parity.py \
+            packages/python/goldenflow/tests/transforms/test_fastpath_parity.py \
+            packages/python/goldenflow/tests/transforms/test_phone.py \
+            packages/python/goldenflow/tests/transforms/test_dates.py \
+            -v
+
+  # goldenflow-native distribution smoke: build the SEPARATE maturin/abi3 wheel
+  # and prove the runtime loads through the wheel path. Distinct from
+  # `native_flow`, which builds the in-tree goldenflow._native .so via
+  # build_native.py. Here we deliberately DON'T run build_native.py, so the
+  # loader must fall back to `goldenflow_native._native` from the wheel.
+  native_flow_wheel:
+    needs: changes
+    if: needs.changes.outputs.native_flow == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native-flow
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      # Frontend only (pure-Python goldenflow); NO build_native.py, so
+      # `goldenflow._native` is absent and the loader must use the wheel.
+      - run: uv sync --all-packages
+      - name: Build the goldenflow-native wheel (maturin, abi3)
+        run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/native-flow/Cargo.toml --out dist
+      - name: Install the wheel + smoke-test the split
+        run: |
+          uv pip install pyarrow dist/goldenflow_native-*.whl
+          uv run python - <<'PY'
+          import pyarrow as pa
+          import goldenflow_native  # the separately-distributed runtime package
+          from goldenflow.core import _native_loader
+          mod = _native_loader.native_module()
+          assert mod is not None, "loader did not discover goldenflow_native"
+          assert mod.__name__ == "goldenflow_native._native", mod.__name__
+          assert _native_loader.native_enabled("phone") is True
+          # nanp_only kernel: NANP resolves, international -> null (Python settles)
+          out = mod.phone_e164_arrow(
+              pa.array(["(201) 555-0123", "+44 20 7946 0958"], type=pa.string()), "US", True
+          ).to_pylist()
+          assert out == ["+12015550123", None], out
+          print("OK: goldenflow-native wheel loads via the split path; nanp_only kernel correct")
           PY
 
   # Standalone Rust embedding runtime (goldenembed): builds the crate (which
