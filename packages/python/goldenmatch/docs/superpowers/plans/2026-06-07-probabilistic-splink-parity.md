@@ -36,10 +36,16 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       pairs on DBLP-ACM (2310 == 2310)**. 66 FS tests pass (9 new); 132 api/config
       tests green (model_path round-trips in YAML).
 
-## PR 3 — Phase 1b: supervised m
-- [ ] `estimate_m_from_labels(df, mk, labels)`.
-- [ ] Adapter: labels from review-queue/memory corrections store.
-- [ ] Gate: 200-label seed ≥ unsupervised EM F1 on DBLP-ACM.
+## PR 3 — Phase 1b: supervised m ✅ (2026-06-07)
+- [x] `estimate_m_from_labels(df, mk, labels)` — m = level frequency among
+      known matches (Laplace-smoothed), u from random pairs, no EM. `iterations=0`.
+- [x] Adapters: `labels_from_corrections` / `labels_from_memory_store` (memory
+      `Correction` decision=approve) + `labels_from_review_items` (ReviewItem
+      status=approved). Duck-typed; verified against the real classes.
+- [x] Gate: 200-label seed **ties** unsupervised EM on DBLP-ACM (F1 0.968 =
+      0.968, so ≥ holds). Honest note: EM is already optimal on clean DBLP-ACM,
+      so the supervised edge shows on noisier data. 74 FS tests (8 new); 149 incl
+      review-queue/memory green; ruff clean.
 
 ## PR 4 — Phase 2: FS waterfall explain
 - [ ] FS decomposition in `core/explain.py` (level, m, u, bits, prior, total, posterior).

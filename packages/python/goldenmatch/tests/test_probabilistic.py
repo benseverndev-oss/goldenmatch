@@ -903,3 +903,100 @@ class TestDedupeWithPersistedModel:
             )
         assert _parts(first) == _parts(baseline)
         assert _parts(second) == _parts(baseline)
+
+
+# ── Supervised m-training (Phase 1b) ───────────────────────────────────────
+
+
+def _supervised_df():
+    # 6 records: 3 true-match pairs (0-1, 2-3, 4-5) sharing zip blocks.
+    return pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3, 4, 5],
+        "first_name": ["John", "Jon", "Jane", "Jane", "Bob", "Bob"],
+        "last_name": ["Smith", "Smith", "Doe", "Doe", "Lee", "Lee"],
+        "zip": ["111", "111", "222", "222", "333", "333"],
+    })
+
+
+class TestEstimateMFromLabels:
+    def test_returns_direct_estimate(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1), (2, 3), (4, 5)], blocking_fields=["zip"])
+        assert em.iterations == 0          # no EM
+        assert em.converged is True
+        assert set(em.match_weights) == {"first_name", "last_name", "zip"}
+        assert em.match_weights["zip"] == [-3.0, 3.0]   # blocking -> fixed
+
+    def test_no_usable_labels_raises(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        with pytest.raises(ValueError, match="no usable labeled pairs"):
+            estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                   [(99, 100), (7, 7)], blocking_fields=["zip"])
+
+    def test_m_reflects_agreement_in_labels(self):
+        # Labeled matches always agree on last_name -> top-level m high ->
+        # positive top-level match weight.
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1), (2, 3), (4, 5)], blocking_fields=["zip"])
+        # last_name is 2-level (disagree/agree); agree weight must beat disagree.
+        w = em.match_weights["last_name"]
+        assert w[-1] > w[0]
+        # m for the agree level should dominate.
+        assert em.m_probs["last_name"][-1] > em.m_probs["last_name"][0]
+
+    def test_smoothing_prevents_zero_m(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1)], blocking_fields=["zip"])
+        for field, probs in em.m_probs.items():
+            assert all(p > 0 for p in probs), field
+
+    def test_scores_pairs_end_to_end(self):
+        from goldenmatch.core.probabilistic import (
+            estimate_m_from_labels,
+            probabilistic_block_scorer,
+        )
+        df = _supervised_df()
+        mk = _make_probabilistic_mk()
+        em = estimate_m_from_labels(df, mk, [(0, 1), (2, 3), (4, 5)],
+                                    blocking_fields=["zip"])
+        scorer = probabilistic_block_scorer(mk, em)
+        pairs = scorer(df)
+        assert isinstance(pairs, list)
+
+
+class TestLabelAdapters:
+    def test_labels_from_corrections_keeps_approve(self):
+        from types import SimpleNamespace as NS
+        from goldenmatch.core.probabilistic import labels_from_corrections
+        corr = [
+            NS(id_a=1, id_b=2, decision="approve"),
+            NS(id_a=3, id_b=4, decision="reject"),
+            NS(id_a=5, id_b=6, decision="approve"),
+        ]
+        assert labels_from_corrections(corr) == [(1, 2), (5, 6)]
+
+    def test_labels_from_review_items_keeps_approved(self):
+        from types import SimpleNamespace as NS
+        from goldenmatch.core.probabilistic import labels_from_review_items
+        items = [
+            NS(id_a=1, id_b=2, status="approved"),
+            NS(id_a=3, id_b=4, status="rejected"),
+            NS(id_a=5, id_b=6, status="pending"),
+        ]
+        assert labels_from_review_items(items) == [(1, 2)]
+
+    def test_labels_from_memory_store_duck_typed(self):
+        from types import SimpleNamespace as NS
+        from goldenmatch.core.probabilistic import labels_from_memory_store
+        store = NS(get_corrections=lambda ds: [
+            NS(id_a=7, id_b=8, decision="approve"),
+            NS(id_a=9, id_b=10, decision="reject"),
+        ])
+        assert labels_from_memory_store(store) == [(7, 8)]

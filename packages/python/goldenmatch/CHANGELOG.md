@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Supervised m-training from labels (Splink-parity Phase 1b).**
+  `estimate_m_from_labels(df, mk, labels)` is the supervised analog of
+  `train_em` (Splink's `estimate_m_from_label_column`): m is the observed
+  comparison-level frequency among known true-match pairs (Laplace-smoothed),
+  u stays from random pairs, no EM iteration. Label adapters pull positive
+  pairs straight from existing stores — `labels_from_corrections` /
+  `labels_from_memory_store` (memory `Correction`s with `decision='approve'`)
+  and `labels_from_review_items` (`ReviewItem`s with `status='approved'`).
+  Compose with Phase 1a: persist the result via `EMResult.save_json` and reuse
+  through `model_path`. Gate met — a 200-label seed ties unsupervised EM on
+  DBLP-ACM (F1 0.968; EM is already optimal on clean data, so the lever's edge
+  is on noisier inputs where unsupervised m drifts).
 - **FS model persistence — train-once, reuse (Splink-parity Phase 1a).**
   `EMResult` now serializes: `to_dict`/`from_dict` (versioned) + `save_json`/
   `load_json` (atomic write) + `validate_for(mk)` (raises `FSModelMismatchError`

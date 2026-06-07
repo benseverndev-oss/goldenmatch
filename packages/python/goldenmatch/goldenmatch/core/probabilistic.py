@@ -724,6 +724,181 @@ def load_or_train_em(
     return em
 
 
+def estimate_m_from_labels(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    labels: list[tuple[int, int]],
+    *,
+    n_sample_pairs: int = 10000,
+    blocking_fields: list[str] | None = None,
+    proportion_matched: float | None = None,
+    smoothing: float = 1.0,
+    seed: int = 42,
+) -> EMResult:
+    """Estimate Fellegi-Sunter m-probabilities directly from labeled matches.
+
+    The supervised analog of :func:`train_em` (Splink's
+    ``estimate_m_from_label_column``). Given known true-match pairs, m is the
+    observed comparison-level frequency among those matches — no EM iteration,
+    no convergence risk. u is still estimated from random pairs (overwhelmingly
+    non-matches), exactly as the unsupervised path does. This is usually the
+    single biggest accuracy lever in record linkage: even a few hundred labels
+    pin m far better than EM can infer it unsupervised.
+
+    Args:
+        df: DataFrame with ``__row_id__`` and the matchkey field columns.
+        mk: Probabilistic matchkey config.
+        labels: known true-match pairs as ``(row_id_a, row_id_b)``. Ordering and
+            duplicates don't matter; ids absent from ``df`` are dropped.
+        n_sample_pairs: random pairs sampled for the u estimate.
+        blocking_fields: fields used for blocking — given fixed weights (they
+            always agree within a block, so carry no learnable signal), matching
+            :func:`train_em`.
+        proportion_matched: within-block match-rate prior for posterior
+            calibration. Labels don't reveal the candidate universe, so this
+            defaults to a conservative 0.02 (the linear default calibration
+            ignores it; posterior users should pass the real rate).
+        smoothing: Laplace pseudo-count per level for the m estimate — guards a
+            level unseen among few labels from forcing m=0 (an infinite weight).
+        seed: random seed for the u-estimate pair sampling.
+
+    Returns:
+        EMResult (``iterations=0``, ``converged=True`` — a direct estimate).
+        Persist it with :meth:`EMResult.save_json` and reuse via
+        ``MatchkeyConfig.model_path`` (see :func:`load_or_train_em`).
+    """
+    if blocking_fields is None:
+        blocking_fields = []
+
+    cols = [f.field for f in mk.fields if f.field != "__record__"]
+    row_lookup: dict[int, dict] = {}
+    for row in df.select(["__row_id__"] + cols).to_dicts():
+        row_lookup[row["__row_id__"]] = row
+
+    # Keep only labels whose ids are present and distinct; canonicalize + dedup.
+    valid = {
+        (min(a, b), max(a, b))
+        for a, b in labels
+        if a != b and a in row_lookup and b in row_lookup
+    }
+    if not valid:
+        raise ValueError(
+            "estimate_m_from_labels: no usable labeled pairs (label ids must "
+            "exist in df['__row_id__'] and differ)."
+        )
+    label_pairs = list(valid)
+    if len(label_pairs) < 20:
+        logger.warning(
+            "estimate_m_from_labels: only %d labeled pair(s) — m estimates may "
+            "be noisy (smoothing=%.3g mitigates).", len(label_pairs), smoothing,
+        )
+
+    # ── u from RANDOM pairs (mirrors train_em Step 1) ──
+    random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    u_probs: dict[str, list[float]] = {}
+    if len(random_pairs) >= 10:
+        random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
+        for j, f in enumerate(mk.fields):
+            counts = [float((random_matrix[:, j] == lvl).sum()) for lvl in range(f.levels)]
+            total = sum(counts) + f.levels * 1e-6
+            u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+    else:
+        u_probs = _fallback_result(mk).u_probs
+    # Blocking fields: neutral u (random pairs give a biased u for them).
+    for f in mk.fields:
+        if f.field in blocking_fields:
+            u_probs[f.field] = [0.50, 0.50] if f.levels == 2 else [0.34, 0.33, 0.33]
+
+    # ── m from LABELED matches: observed level frequency (Laplace smoothed) ──
+    label_matrix = _build_comparison_matrix(label_pairs, row_lookup, mk)
+    m_probs: dict[str, list[float]] = {}
+    for j, f in enumerate(mk.fields):
+        counts = [float((label_matrix[:, j] == lvl).sum()) for lvl in range(f.levels)]
+        total = sum(counts) + f.levels * smoothing
+        m_probs[f.field] = [(c + smoothing) / total for c in counts]
+
+    # ── match weights (blocking fixed) — mirrors train_em ──
+    match_weights: dict[str, list[float]] = {}
+    for f in mk.fields:
+        if f.field in blocking_fields:
+            n = f.levels
+            match_weights[f.field] = [
+                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0 for k in range(n)
+            ]
+            continue
+        match_weights[f.field] = [
+            math.log2(max(m_probs[f.field][k], 1e-10) / max(u_probs[f.field][k], 1e-10))
+            for k in range(f.levels)
+        ]
+
+    _mono_mode = _fs_monotonic_mode()
+    if _mono_mode != "off":
+        repaired, adjusted = enforce_weight_monotonicity(
+            match_weights, skip_fields=blocking_fields,
+        )
+        if adjusted and _mono_mode == "enforce":
+            match_weights = repaired
+            logger.warning(
+                "Supervised FS match weights non-monotonic; isotonically "
+                "repaired field(s): %s (GOLDENMATCH_FS_MONOTONIC=enforce)",
+                ", ".join(adjusted),
+            )
+        elif adjusted:
+            logger.warning(
+                "Supervised FS match weights non-monotonic for field(s): %s — a "
+                "partial level outweighs exact agreement (left as-is).",
+                ", ".join(adjusted),
+            )
+
+    tf_freqs, tf_collision = _build_tf_tables(df, mk)
+
+    logger.info("Estimated m from %d labeled pairs (supervised; no EM)", len(label_pairs))
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=True,
+        iterations=0,
+        proportion_matched=proportion_matched if proportion_matched is not None else 0.02,
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
+    )
+
+
+def labels_from_corrections(corrections) -> list[tuple[int, int]]:
+    """Positive-match ``(id_a, id_b)`` labels from memory-store corrections.
+
+    Duck-typed over :class:`goldenmatch.core.memory.store.Correction` (any
+    object with ``id_a``, ``id_b``, ``decision``). Keeps only ``approve``
+    verdicts — confirmed true matches — which is what supervises m.
+    """
+    out: list[tuple[int, int]] = []
+    for c in corrections:
+        if str(getattr(c, "decision", "")).lower() == "approve":
+            out.append((int(c.id_a), int(c.id_b)))
+    return out
+
+
+def labels_from_review_items(items) -> list[tuple[int, int]]:
+    """Positive-match labels from review-queue items with ``status='approved'``.
+
+    Duck-typed over :class:`goldenmatch.core.review_queue.ReviewItem`.
+    """
+    out: list[tuple[int, int]] = []
+    for it in items:
+        if str(getattr(it, "status", "")).lower() == "approved":
+            out.append((int(it.id_a), int(it.id_b)))
+    return out
+
+
+def labels_from_memory_store(store, dataset: str | None = None) -> list[tuple[int, int]]:
+    """Convenience: pull approved-match labels straight from a MemoryStore.
+
+    Duck-typed over any store exposing ``get_corrections(dataset)``.
+    """
+    return labels_from_corrections(store.get_corrections(dataset))
+
+
 def _build_tf_tables(
     df: pl.DataFrame, mk: MatchkeyConfig,
 ) -> tuple[dict[str, dict[str, float]] | None, dict[str, float] | None]:
