@@ -325,6 +325,8 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
   (parity-tested).
 - block-scorer-contract output `(id_a, id_b, score)` feeding the unchanged
   `core/cluster.py` -> `core/golden.py` path via `__row_id__`
+- negative-evidence penalties applied on the matrix path (reuses the canonical
+  `_apply_negative_evidence` helper, same `final = max(0, score - penalty)` semantics)
 - **end-to-end**: `run_dedupe_df(df, cfg)` with `backend="gpu"` runs the full
   pipeline (block -> GPU score -> cluster -> golden) and clusters duplicates
   correctly (`tests/test_goldendb_gpu_backend.py::test_full_pipeline_dedupe_with_gpu_backend`)
@@ -337,7 +339,6 @@ NOT yet wired (future work):
   are now in (`GA2MInteractionCombiner`), but the main effects are still linear, and
   the interaction model is not yet wired into the block scorer's default combine
   (it's available for training/scoring via the API)
-- negative-evidence penalties (ignored with a warning if configured)
 - GPU wall-clock crossover measurement (the recall@k gate above remains the first
   thing to run on real GPU hardware)
 - scores are char-ngram cosine + an untrained combine, NOT calibrated against the

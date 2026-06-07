@@ -31,6 +31,7 @@ from goldenmatch.core.goldendb._combine import combine_matrices
 from goldenmatch.core.goldendb._encode import char_ngram_hashed, cosine_matrix
 from goldenmatch.core.goldendb.recall import coarse_encode, topk_candidates
 from goldenmatch.core.scorer import (
+    _apply_negative_evidence,
     _build_null_mask,
     _exact_score_matrix,
     _get_transformed_values,
@@ -180,12 +181,6 @@ def find_matches_gpu(
     if weights.sum() == 0.0:
         return []
 
-    if mk.negative_evidence:
-        logger.warning(
-            "GoldenDB backend (WIP): negative_evidence is configured but NOT yet "
-            "applied by the matrix path; scoring without it."
-        )
-
     prepped = _prep_fields(block_df, fields)
 
     if use_recall is None:
@@ -200,6 +195,24 @@ def find_matches_gpu(
 
     if len(rows_idx) == 0:
         return []
+
+    # v1.11 negative evidence: subtract per-pair penalty when an NE field
+    # disagrees, then re-threshold. Reuses the canonical scorer helper so the
+    # semantics match the production path (final = max(0, score - penalty)).
+    if mk.negative_evidence:
+        block_rows = block_df.to_dicts()
+        adjusted = []
+        for i, j, s in zip(rows_idx, cols_idx, scores):
+            ra = block_rows[int(i)]
+            rb = block_rows[int(j)]
+            ne_pair = {col: (ra.get(col), rb.get(col)) for col in ra}
+            penalty = _apply_negative_evidence(mk, ne_pair)
+            adjusted.append(max(0.0, float(s) - penalty))
+        scores = np.asarray(adjusted, dtype=np.float32)
+        keep = scores >= threshold
+        rows_idx, cols_idx, scores = rows_idx[keep], cols_idx[keep], scores[keep]
+        if len(rows_idx) == 0:
+            return []
 
     row_ids = block_df["__row_id__"].to_list()
     results: list[tuple[int, int, float]] = []

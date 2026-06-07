@@ -200,6 +200,31 @@ def test_find_matches_gpu_exclude_pairs():
     assert all({a, b} != {0, 1} for a, b, _s in pairs)
 
 
+def test_negative_evidence_penalizes_disagreeing_field():
+    from goldenmatch.config.schemas import NegativeEvidenceField
+
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "name": ["John Smith", "John Smith", "John Smith"],
+            "phone": ["5551111", "5551111", "5559999"],
+        }
+    )
+    mk = MatchkeyConfig(
+        name="m",
+        type="weighted",
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+        threshold=0.6,
+        negative_evidence=[
+            NegativeEvidenceField(field="phone", scorer="exact", threshold=0.5, penalty=0.5)
+        ],
+    )
+    keys = {frozenset((a, b)) for a, b, _ in find_matches_gpu(df, mk)}
+    assert frozenset((0, 1)) in keys      # same phone -> no penalty, stays matched
+    assert frozenset((0, 2)) not in keys  # phone disagrees -> penalised below threshold
+    assert frozenset((1, 2)) not in keys
+
+
 def test_find_matches_gpu_single_row_empty():
     df = pl.DataFrame({"__row_id__": [0], "name": ["solo"]})
     assert find_matches_gpu(df, _mk()) == []

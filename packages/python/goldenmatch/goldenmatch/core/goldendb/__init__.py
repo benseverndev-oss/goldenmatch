@@ -25,8 +25,14 @@
      recall is whatever the blocker produces -- Stage A is not wired)
    * trained shape functions / pairwise interaction terms by default
      (structure is present; the default is linear/weighted-average)
-   * negative-evidence penalties (ignored with a warning if configured)
+   * trained per-feature 1-D shape functions (main effects are linear; pairwise
+     interaction terms are available via ``GA2MInteractionCombiner`` but not yet the
+     block scorer's default combine)
    * GPU wall-clock validation (no GPU in the dev/CI environment)
+
+   Now wired: Stage A ANN recall (brute-force top-k), blocker-free dataset
+   resolution, a closed gradient-based training loop, GA2M pairwise interactions,
+   and negative-evidence penalties (reusing the canonical scorer helper).
 
    Scores from this backend are produced by char-ngram cosine + an UNTRAINED
    combine and are NOT calibrated against the production scorers. Treat any
