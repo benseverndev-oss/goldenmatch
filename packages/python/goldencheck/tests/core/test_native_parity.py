@@ -95,3 +95,65 @@ def test_native_disabled_env_forces_python(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setenv("GOLDENCHECK_NATIVE", "0")
     assert native_enabled("benford") is False
+
+
+# ---------------------------------------------------------------------------
+# Composite-key + functional-dependency parity
+# ---------------------------------------------------------------------------
+
+import polars as pl  # noqa: E402
+from goldencheck.relations import composite_key as ck  # noqa: E402
+
+
+def _random_keyless_df(seed: int, rows: int = 200) -> pl.DataFrame:
+    """A frame with no single-column key but some composite keys."""
+    rng = random.Random(seed)
+    a = [rng.randint(0, 4) for _ in range(rows)]
+    b = [rng.choice(["x", "y", "z"]) for _ in range(rows)]
+    c = [rng.randint(0, 6) for _ in range(rows)]
+    return pl.DataFrame({"a": a, "b": b, "c": c, "d": list(range(rows))})
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(8))
+def test_composite_key_search_parity(seed: int) -> None:
+    """Native composite-key search returns the same minimal-key index sets as
+    the pure-Python BFS, on identical candidate columns."""
+    df = _random_keyless_df(seed)
+    # Drop the unique 'd' so neither path early-exits on a single-column key.
+    df = df.drop("d")
+    candidates = ck._select_candidates(df, df.height)
+    if len(candidates) < 2:
+        pytest.skip("not enough candidates for this seed")
+    single_unique = [False] * len(candidates)
+
+    py = ck._python_search(df, candidates, df.height, ck.MAX_KEY_SIZE)
+    arrays = [df[col].to_arrow() for col in candidates]
+    nat = native_module().composite_key_search(arrays, ck.MAX_KEY_SIZE, single_unique)
+
+    # Compare as sets of sorted tuples (order within a key is already sorted).
+    assert {tuple(k) for k in nat} == {tuple(k) for k in py}
+
+
+@native_only
+def test_functional_dependency_parity() -> None:
+    import pyarrow as pa
+
+    def py_fd(lhs: list, rhs: list) -> bool:
+        seen: dict = {}
+        for left, right in zip(lhs, rhs):
+            if left in seen and seen[left] != right:
+                return False
+            seen.setdefault(left, right)
+        return True
+
+    cases = [
+        (["us", "us", "uk", "us"], ["NY", "CA", "LDN", "NY"]),     # not FD
+        (["a", "a", "b", "b"], [1, 1, 2, 2]),                       # FD holds
+        ([1, 2, 3, 1], [9, 9, 8, 9]),                               # FD holds
+        ([None, None, 1], ["x", "y", "z"]),                         # null grouping
+    ]
+    for lhs, rhs in cases:
+        l_arr = pa.array(lhs)
+        r_arr = pa.array(rhs)
+        assert native_module().functional_dependency_holds(l_arr, r_arr) == py_fd(lhs, rhs)

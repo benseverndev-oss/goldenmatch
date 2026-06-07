@@ -18,21 +18,65 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+/// Per-column domain size = max interned id + 1 (ids are dense 0..k from the
+/// caller's interner). Used to mixed-radix pack a row-tuple into one integer.
+fn domains(columns: &[&[u64]]) -> Vec<u128> {
+    columns
+        .iter()
+        .map(|c| c.iter().copied().max().unwrap_or(0) as u128 + 1)
+        .collect()
+}
+
 /// Exact number of distinct row-tuples over `subset` of the `columns`.
 ///
-/// `columns[c][r]` is the interned value of column `c` at row `r`; every column
-/// must have the same length (the row count). `subset` lists the column indices
-/// that form the tuple.
+/// Fast path: because interned ids are dense and key columns are low-
+/// cardinality, the subset's tuples usually fit a mixed-radix pack into a single
+/// `u128` (product of domains <= u128::MAX). That lets us count distinct tuples
+/// in an allocation-free `FxHashSet<u128>` -- far faster than hashing a boxed
+/// slice per row (which made the kernel lose to Polars). Falls back to the boxed
+/// tuple only when the packed domain would overflow.
 pub fn tuple_distinct_count(columns: &[&[u64]], subset: &[usize]) -> u64 {
+    let doms = domains(columns);
+    tuple_distinct_count_with(columns, subset, &doms)
+}
+
+fn tuple_distinct_count_with(columns: &[&[u64]], subset: &[usize], doms: &[u128]) -> u64 {
     let n_rows = columns.first().map(|c| c.len()).unwrap_or(0);
     if subset.is_empty() || n_rows == 0 {
         return 0;
     }
+
+    // Can the whole tuple be packed into one u128? product of selected domains.
+    let mut product: u128 = 1;
+    let mut packable = true;
+    for &c in subset {
+        match product.checked_mul(doms[c]) {
+            Some(p) => product = p,
+            None => {
+                packable = false;
+                break;
+            }
+        }
+    }
+
+    if packable {
+        let mut seen: FxHashSet<u128> = FxHashSet::default();
+        seen.reserve(n_rows);
+        #[allow(clippy::needless_range_loop)]
+        for r in 0..n_rows {
+            let mut packed: u128 = 0;
+            for &c in subset {
+                packed = packed * doms[c] + columns[c][r] as u128;
+            }
+            seen.insert(packed);
+        }
+        return seen.len() as u64;
+    }
+
+    // Rare fallback: domains too large to pack. Exact boxed-tuple counting.
     let mut seen: FxHashSet<Box<[u64]>> = FxHashSet::default();
     seen.reserve(n_rows);
     let mut tuple = vec![0u64; subset.len()];
-    // `r` indexes every selected column in lock-step; a range loop is the
-    // natural form here (not a single-column iterator).
     #[allow(clippy::needless_range_loop)]
     for r in 0..n_rows {
         for (slot, &c) in tuple.iter_mut().zip(subset.iter()) {
@@ -88,6 +132,9 @@ pub fn composite_key_search(
 
     let mut found: Vec<Vec<usize>> = Vec::new();
     let cap = max_size.min(candidates.len());
+    // Compute per-column domains once and reuse across every subset evaluation
+    // (the dominant cost otherwise re-scans for the max each time).
+    let doms = domains(columns);
 
     // BFS over subset sizes so we find the smallest keys first; prune any
     // subset that is a superset of a key already found.
@@ -106,7 +153,7 @@ pub fn composite_key_search(
                 if found.iter().any(|k| k.iter().all(|x| subset.contains(x))) {
                     continue;
                 }
-                if tuple_distinct_count(columns, &subset) == n_rows as u64 {
+                if tuple_distinct_count_with(columns, &subset, &doms) == n_rows as u64 {
                     found.push(subset);
                 } else {
                     next.push(subset);

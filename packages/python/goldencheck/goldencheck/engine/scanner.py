@@ -26,6 +26,7 @@ from goldencheck.profilers.sequence_detection import SequenceDetectionProfiler
 from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.profilers.uniqueness import UniquenessProfiler
 from goldencheck.relations.age_validation import AgeValidationProfiler
+from goldencheck.relations.composite_key import CompositeKeyProfiler
 from goldencheck.relations.identity_safe_pk import IdentitySafePkProfiler
 from goldencheck.relations.null_correlation import NullCorrelationProfiler
 from goldencheck.relations.numeric_cross import NumericCrossColumnProfiler
@@ -57,6 +58,9 @@ RELATION_PROFILERS = [
     # Identity Graph downstreams need source_pk_column to avoid record_id
     # collisions on duplicate raw rows.
     IdentitySafePkProfiler(),
+    # Discover minimal composite keys when no single-column key exists
+    # (kernel-backed via goldencheck[native]; pure-Python fallback otherwise).
+    CompositeKeyProfiler(),
 ]
 
 def _post_classification_checks(

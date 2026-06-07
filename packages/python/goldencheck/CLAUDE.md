@@ -48,9 +48,9 @@ goldencheck/
 
 Mirrors goldenmatch's native split. `goldencheck` stays pure-Python; `pip install
 goldencheck[native]` pulls a separate maturin/abi3 wheel (`goldencheck-native`)
-that accelerates the CPU-bound **deep-profiling** work (Benford conformance, and
-— landing next — composite-key & functional-dependency mining). The sampled
-scan path is already Polars/Arrow-vectorized and is NOT a native target.
+that accelerates the CPU-bound **deep-profiling** work (Benford conformance,
+composite-key discovery, functional-dependency primitive). The sampled scan path
+is already Polars/Arrow-vectorized and is NOT a native target.
 
 - **Crates:** `packages/rust/extensions/goldencheck-core/` (pyo3-free kernels, the
   `score-core` analogue) + `goldencheck-native/` (abi3 PyO3 shim, standalone
@@ -67,7 +67,22 @@ scan path is already Polars/Arrow-vectorized and is NOT a native target.
   `tests/core/test_native_parity.py` proves byte-identical output AND
   `benchmarks/deep_profile_benchmark.py` shows the wall moved. Benford: byte-identical
   (incl. exact powers-of-ten — the divisor is a correctly-rounded `1e{exp}` table,
-  NOT `powi`, matching Python's bignum `10**exp`), 17.6x faster on 1M rows.
+  NOT `powi`, matching Python's bignum `10**exp`), ~16x faster on 1M rows.
+- **Composite keys** (`relations/composite_key.py`): discovers minimal multi-column
+  keys when no single-column key exists. Runs only after the cheap early-out (a
+  single-column unique key short-circuits it), candidate cols capped at 12,
+  key size ≤ 3.
+- **LESSON — measure, the naive kernel LOST.** The first composite-key kernel hashed
+  a `Box<[u64]>` tuple per row and was **0.4x** (2.5x slower than Polars `n_unique`,
+  which is vectorized + multithreaded Rust). The gate caught it. Fix: interned ids
+  are dense + key columns low-cardinality, so mixed-radix **pack each row-tuple into
+  one `u128`** → allocation-free `FxHashSet<u128>` → **1.7x faster**. Don't gate a
+  kernel on "it's Rust"; gate on the measured wall vs the *Polars* baseline, which is
+  already fast.
+- **functional_dependency_holds** is exposed + parity-tested but NOT wired into
+  `baseline/constraints.py` — that path mines *approximate* FDs (confidence < 1.0);
+  the primitive is strict-only, so swapping it would change semantics. Left for a
+  future strict-FD use.
 - **Release:** tag `goldencheck-native-v*` fires `publish-goldencheck-native.yml`
   (distinct from Python `v*` / TS `goldencheck-js-v*`). Bump BOTH
   `Cargo.toml` and `pyproject.toml` `[project].version` in lockstep (maturin reads

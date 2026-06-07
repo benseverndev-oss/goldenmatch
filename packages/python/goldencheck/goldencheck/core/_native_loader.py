@@ -43,7 +43,15 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #     `_extract_leading_digits` value-for-value; tests/core/test_native_parity.py
 #     asserts the histogram (and therefore the chi-squared p-value) is identical
 #     on random + adversarial data.
-_GATED_ON: frozenset[str] = frozenset({"benford"})
+#   - composite_keys: minimal composite-key discovery
+#     (relations/composite_key.py). Integer-exact (distinct-tuple counting), so
+#     native and the pure-Python BFS return identical minimal-key sets; parity
+#     asserted in tests/core/test_native_parity.py.
+#   - functional_dependencies: A->B determinism primitive. Integer-exact; parity
+#     asserted in the same test module.
+_GATED_ON: frozenset[str] = frozenset(
+    {"benford", "composite_keys", "functional_dependencies"}
+)
 
 
 def native_module() -> Any:
@@ -80,6 +88,8 @@ def native_enabled(component: str) -> bool:
 # when its symbol is actually present on the loaded module.
 _COMPONENT_SYMBOLS: dict[str, str] = {
     "benford": "benford_leading_digits",
+    "composite_keys": "composite_key_search",
+    "functional_dependencies": "functional_dependency_holds",
 }
 
 

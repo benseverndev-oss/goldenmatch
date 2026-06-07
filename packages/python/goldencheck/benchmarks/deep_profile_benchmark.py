@@ -74,6 +74,42 @@ def bench_benford(rows: int) -> None:
         print("  native kernel    : (not built -- skipping)")
 
 
+def bench_composite_key(rows: int) -> None:
+    import polars as pl
+    from goldencheck.relations import composite_key as ck
+
+    print(f"\n## Composite-key search  (rows={rows:,})")
+    rng = random.Random(11)
+    # A keyless frame whose natural key is a 3-column combination.
+    df = pl.DataFrame({
+        "region": [rng.randint(0, 8) for _ in range(rows)],
+        "store": [rng.randint(0, 50) for _ in range(rows)],
+        "sku": [rng.randint(0, 400) for _ in range(rows)],
+        "day": [rng.randint(0, 90) for _ in range(rows)],
+        "qty": [rng.randint(1, 9) for _ in range(rows)],
+    })
+    candidates = ck._select_candidates(df, df.height)
+    single_unique = [False] * len(candidates)
+
+    def py() -> None:
+        ck._python_search(df, candidates, df.height, ck.MAX_KEY_SIZE)
+
+    py_wall = _median_wall(py, runs=3)
+    print(f"  pure-Python (Polars) : {py_wall * 1000:9.2f} ms")
+
+    if native_available():
+        arrays = [df[c].to_arrow() for c in candidates]
+
+        def nat() -> None:
+            native_module().composite_key_search(arrays, ck.MAX_KEY_SIZE, single_unique)
+
+        nat_wall = _median_wall(nat, runs=3)
+        speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")
+        print(f"  native kernel        : {nat_wall * 1000:9.2f} ms   ({speedup:.1f}x faster)")
+    else:
+        print("  native kernel        : (not built -- skipping)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1_000_000, help="row count per kernel")
@@ -82,8 +118,7 @@ def main() -> int:
     print("GoldenCheck native deep-profiling benchmark")
     print(f"native extension available: {native_available()}")
     bench_benford(args.rows)
-    # Future kernels (composite-key discovery, functional-dependency mining)
-    # plug in here as they land.
+    bench_composite_key(min(args.rows, 200_000))  # combinatorial; keep it sane
     return 0
 
 
