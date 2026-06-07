@@ -15,6 +15,7 @@ pytest --tb=short -v             # Run tests (550+ passing)
 ruff check .                     # Lint
 ruff check . --fix               # Auto-fix lint
 goldencheck data.csv --no-tui    # Scan a file (CLI output)
+goldencheck data.csv --deep      # Profile the FULL dataset (skip the 100K sample cap)
 goldencheck data.csv             # Scan with TUI
 goldencheck validate data.csv    # Validate against goldencheck.yml
 goldencheck diff old.csv new.csv # Compare two files
@@ -32,7 +33,7 @@ goldencheck/
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
 ├── baseline/      # Deep profiling: statistical, constraints, semantic, correlation, patterns, priors
 ├── drift/         # Drift detector (13 check types against saved baseline)
-├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation)
+├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation, composite-key, approx-duplicate)
 ├── semantic/      # Type classifier + suppression engine + domain packs (healthcare, finance, ecommerce)
 ├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
 ├── mcp/           # MCP server (count varies; see goldencheck mcp-serve --help for current)
@@ -83,6 +84,20 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   `baseline/constraints.py` — that path mines *approximate* FDs (confidence < 1.0);
   the primitive is strict-only, so swapping it would change semantics. Left for a
   future strict-FD use.
+
+## `--deep` mode + duplicate-row detection
+
+- **`--deep` / `scan_file(..., deep=True)`**: profiles the FULL population instead
+  of the default 100K `maybe_sample` cap (`engine/scanner.py`). Removes sampling
+  error on cardinality / uniqueness / rare-value / composite-key checks. Threaded
+  through `scan_file` / `scan_dataframe` / `scan_file_with_llm` and both CLI paths
+  (the `scan` command and the `goldencheck data.csv` shorthand parser in `main()`).
+- **`relations/approx_duplicate.py`**: exact + near-duplicate ROW detection
+  (`duplicate_rows`, `near_duplicate_rows` checks). Near = identical after
+  lowercasing / collapsing whitespace / dropping punctuation. Pure-Polars by
+  design — normalize+group-by is already a fast vectorized Polars path, so it is
+  NOT a native kernel (gate is "beat Polars"). Edit-distance fuzzy matching (typos
+  surviving normalization) is a heavier blocking+pairwise follow-up.
 - **Release:** tag `goldencheck-native-v*` fires `publish-goldencheck-native.yml`
   (distinct from Python `v*` / TS `goldencheck-js-v*`). Bump BOTH
   `Cargo.toml` and `pyproject.toml` `[project].version` in lockstep (maturin reads

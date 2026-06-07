@@ -114,10 +114,13 @@ def main(
     html = None
     baseline_path = None
     no_baseline = False
+    deep = False
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
             no_tui = True
+        elif arg == "--deep":
+            deep = True
         elif arg == "--json":
             json_output = True
         elif arg == "--llm-boost":
@@ -175,7 +178,7 @@ def main(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
-            baseline_path=baseline_path, no_baseline=no_baseline,
+            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep,
         )
 
 
@@ -195,6 +198,7 @@ def scan(
     html: Path | None = typer.Option(None, "--html", help="Generate HTML report at this path."),
     baseline_path: Path | None = typer.Option(None, "--baseline", help="Path to baseline YAML"),
     no_baseline: bool = typer.Option(False, "--no-baseline", help="Ignore baseline files"),
+    deep: bool = typer.Option(False, "--deep", help="Profile the full dataset (skip the 100K sample cap)."),
 ) -> None:
     """Profile one or more data files and report findings."""
     if smart and guided:
@@ -205,7 +209,7 @@ def scan(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
-            baseline_path=baseline_path, no_baseline=no_baseline,
+            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep,
         )
 
 
@@ -787,6 +791,7 @@ def _do_scan(
     html: Path | None = None,
     baseline_path: Path | None = None,
     no_baseline: bool = False,
+    deep: bool = False,
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
@@ -804,14 +809,16 @@ def _do_scan(
                         break
 
         if llm_boost:
-            findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain)
+            findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain, deep=deep)
         else:
-            findings, profile = scan_file(file, domain=domain, baseline=baseline)
+            findings, profile = scan_file(file, domain=domain, baseline=baseline, deep=deep)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
 
         # Progress message (to stderr so it doesn't pollute --json)
         sample_note = ""
-        if profile.row_count > 100_000:
+        if deep and profile.row_count > 100_000:
+            sample_note = ", full population (--deep)"
+        elif profile.row_count > 100_000:
             sample_note = ", sampled to 100,000"
         typer.echo(
             f"Scanned {profile.row_count:,} rows, {profile.column_count} columns{sample_note}",

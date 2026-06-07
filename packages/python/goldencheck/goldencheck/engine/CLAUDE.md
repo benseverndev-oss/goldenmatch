@@ -63,6 +63,12 @@ maybe_sample(df, max_rows=100_000)  # returns df unchanged if ≤ max_rows
 
 Default `sample_size` is `100_000`. Overridable via `scan_file(path, sample_size=N)`.
 
+`scan_file(path, deep=True)` (CLI `--deep`) bypasses sampling entirely and
+profiles the full population — `sample = df` instead of `maybe_sample(...)`. Use
+for exact cardinality/uniqueness/composite-key results; the native kernels
+(`goldencheck[native]`) carry the CPU-bound work. Threaded through
+`scan_dataframe` / `scan_file` / `scan_file_with_llm`.
+
 ## validator.py
 
 `validate_file(path, config)` checks columns against pinned rules in `goldencheck.yml`:
