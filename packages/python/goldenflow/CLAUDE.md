@@ -125,6 +125,62 @@ The `mode` field on `TransformInfo` controls how the engine applies a transform:
 
 The engine in `engine/transformer.py` dispatches based on `TransformInfo.mode` -- do not add mode-specific logic anywhere else.
 
+## Performance: vectorized fast paths + the native kernel
+
+**Measured (2026-06-07):** on a realistic messy 1M-row frame the two
+`series`-mode transforms `date_iso8601` and `phone_e164` were ~92% of the wall
+(27.6 s + 16.5 s of ~48 s) because each called a Python library
+(`dateutil` / `phonenumbers`) once per row via `map_elements` (~0.04-0.06 M
+rows/s). Always re-measure with `benchmarks/speed_benchmark.py` or the
+per-transform microbench before optimizing -- the win concentrates in a couple
+of transforms, not the whole library.
+
+- **`transforms/_fastpath.py::apply_with_residual`** is the shared three-tier
+  resolver: (1) a vectorized Polars `fast_expr` resolves the well-formed common
+  case in Rust, leaving uncertain rows null; (2) an optional native kernel runs
+  on just the residual; (3) the per-row `dateutil`/`phonenumbers` reference
+  settles whatever's left. On clean data tiers 2-3 never run. **Parity is safe
+  by construction**: each tier must agree with the reference on the rows it
+  resolves, so the fast path only claims rows it matches exactly. Result @ 1M:
+  `date_iso8601` 76x, `phone_e164` 19x, `phone_digits` 4.9x; ~14x end-to-end.
+- **Fast-path guards that are load-bearing for parity** (asserted over a random
+  corpus in `tests/transforms/test_fastpath_parity.py`): dates require a 4-digit
+  year (chrono's `%Y` greedily accepts 2-digit years -> 0093, but dateutil maps
+  them to 1993); E.164 only claims NANP `^[2-9]\d{9}$` / `^1[2-9]\d{9}$` with no
+  letters (a leading 1 on a 10-digit string is the country code to
+  `phonenumbers`).
+
+### goldenflow-native (optional compiled runtime)
+
+Mirrors `goldenmatch-native`. Separate maturin/PyO3 **abi3** crate at
+`packages/rust/extensions/native-flow/` (pymodule `_native`), shipped as the
+`goldenflow-native` wheel; `pip install goldenflow[native]`. Loader discover
+order in `goldenflow/core/_native_loader.py`: `goldenflow._native` (in-tree
+build via `scripts/build_native.py`) -> `goldenflow_native._native` (wheel) ->
+pure Python. In-tree `.so` is gitignored.
+
+- **Scope = the international phone family** (`phone_e164/national/country_code/
+  valid_arrow`), Arrow zero-copy in/out (`Series.to_arrow()` <-> kernel <->
+  `pl.from_arrow`), GIL released. Wired as the tier-2 `native_fn` of
+  `apply_with_residual`, so native only touches the residual the Polars fast
+  path couldn't normalize. Dates are deliberately NOT native (Polars already
+  vectorizes them; per-row chrono would be slower + reintroduce the 2-digit
+  hazard).
+- **`GOLDENFLOW_NATIVE`** env (mirrors GOLDENMATCH_NATIVE): `0` force Python,
+  `1` require native for ALL components (parity/bench lane -- WILL change
+  outputs where native diverges), `auto`/unset use native iff importable AND in
+  `_GATED_ON`.
+- **`_GATED_ON` is EMPTY by design (open parity gap).** The Rust `phonenumber`
+  port is NOT byte-identical to the Python `phonenumbers` library: it formats
+  some international national numbers differently (`+33 1 42 68 53 00` -> native
+  `+3342685300` vs python `+33142685300`, dropping the national leading digit;
+  ~6% of an intl-heavy corpus). It matches byte-for-byte on the NANP subset.
+  Until reconciled (metadata-version alignment, or a curated parity-safe
+  subset), phone stays ungated so `auto` never changes a cleaned value.
+  `tests/transforms/test_native_parity.py` pins both the NANP match and the
+  intl divergence. Measured native lift on the intl residual: ~5x (still
+  parse-per-row in Rust, but no Python interpreter overhead).
+
 ## Streaming Module (streaming.py)
 
 `StreamProcessor` wraps `TransformEngine` for incremental processing:

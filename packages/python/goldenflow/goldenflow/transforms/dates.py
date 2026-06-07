@@ -6,7 +6,7 @@ import polars as pl
 from dateutil import parser as dateutil_parser
 
 from goldenflow.transforms import register_transform
-from goldenflow.transforms._fastpath import apply_with_residual, _V
+from goldenflow.transforms._fastpath import _V, apply_with_residual
 
 
 def _parse_date(val: str | None) -> date | None:

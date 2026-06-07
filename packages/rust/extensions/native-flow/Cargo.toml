@@ -1,0 +1,42 @@
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature
+# is not unified with the bridge crate's `auto-initialize` feature — the two are
+# mutually incompatible. Mirrors packages/rust/extensions/native (goldenmatch).
+[workspace]
+
+[package]
+name = "goldenflow-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Native acceleration kernels for GoldenFlow (PyO3 extension module)"
+
+[lib]
+# Produces lib_native.so; maturin installs it as goldenflow_native/_native.
+# The #[pymodule] is `_native`, so the init symbol is PyInit__native.
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+# extension-module: don't link libpython (this .so is imported BY CPython).
+pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# Arrow C Data Interface for zero-copy kernel input/output (Utf8 / LargeUtf8
+# string buffers in, string/int/bool buffers out). default features off — we
+# only read/build array buffers, no csv/ipc/json/compute.
+arrow = { version = "55", default-features = false, features = ["pyarrow"] }
+# Phone parsing/formatting: a Rust port of Google's libphonenumber. Backs the
+# international phone kernel (E.164 / national / country-code / validity). Its
+# E.164 output is metadata-driven and matches the Python `phonenumbers`
+# library for valid numbers; the parity gate asserts this per installed
+# version, and any row it can't resolve falls back to Python (never worse).
+#
+# Dates are intentionally NOT a native kernel: GoldenFlow's Polars fast path
+# (str.to_date coalesce) already resolves the 4-digit-year formats in vectorized
+# Rust, and a per-row chrono parser would be slower while reintroducing the
+# 2-digit-year parity hazard. The ragged date tail stays on dateutil.
+phonenumber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

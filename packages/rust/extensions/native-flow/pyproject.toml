@@ -1,0 +1,35 @@
+# goldenflow-native — the optional native acceleration runtime for GoldenFlow,
+# shipped as a SEPARATE maturin/abi3 package (mirrors goldenmatch-native and the
+# polars / polars-runtime split). `goldenflow` stays a pure-Python wheel;
+# `pip install goldenflow[native]` pulls this, and
+# goldenflow.core._native_loader discovers it.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenflow-native"
+version = "0.1.0"
+description = "Optional native (Rust/PyO3) acceleration kernels for goldenflow"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
+# pyarrow provides the zero-copy bridge polars Series <-> Arrow array <-> kernel.
+dependencies = ["pyarrow>=10"]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: thin Python wrapper in python/goldenflow_native/; the compiled
+# abi3 ext lands at goldenflow_native/_native (pymodule `_native`).
+python-source = "python"
+module-name = "goldenflow_native._native"

@@ -4,7 +4,12 @@ import phonenumbers
 import polars as pl
 
 from goldenflow.transforms import register_transform
-from goldenflow.transforms._fastpath import apply_with_residual, _V
+from goldenflow.transforms._fastpath import _V, apply_with_residual
+from goldenflow.transforms._native import (
+    phone_country_code_native,
+    phone_e164_native,
+    phone_national_native,
+)
 
 _DEFAULT_REGION = "US"
 
@@ -55,7 +60,9 @@ def phone_e164(series: pl.Series) -> pl.Series:
             return val  # preserve original on failure
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
-    return apply_with_residual(series, _e164_fast_expr(), _format, pl.Utf8)
+    return apply_with_residual(
+        series, _e164_fast_expr(), _format, pl.Utf8, native_fn=phone_e164_native()
+    )
 
 
 @register_transform(
@@ -70,7 +77,12 @@ def phone_national(series: pl.Series) -> pl.Series:
             return val
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
 
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+    native = phone_national_native()
+    if native is None:
+        return series.map_elements(_format, return_dtype=pl.Utf8)
+    return apply_with_residual(
+        series, pl.lit(None, dtype=pl.Utf8), _format, pl.Utf8, native_fn=native
+    )
 
 
 @register_transform(
@@ -117,4 +129,9 @@ def phone_country_code(series: pl.Series) -> pl.Series:
             return None
         return parsed.country_code
 
-    return series.map_elements(_code, return_dtype=pl.Int64)
+    native = phone_country_code_native()
+    if native is None:
+        return series.map_elements(_code, return_dtype=pl.Int64)
+    return apply_with_residual(
+        series, pl.lit(None, dtype=pl.Int64), _code, pl.Int64, native_fn=native
+    )

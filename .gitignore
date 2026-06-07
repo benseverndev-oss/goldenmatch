@@ -71,3 +71,5 @@ packages/python/goldenmatch/goldenmatch/_native*.so
 # GoldenCheck's counterpart (packages/rust/extensions/goldencheck-native via
 # scripts/build_goldencheck_native.py). Same rationale.
 packages/python/goldencheck/goldencheck/_native*.so
+# Same, for goldenflow (built from packages/rust/extensions/native-flow).
+packages/python/goldenflow/goldenflow/_native*.so

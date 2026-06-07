@@ -13,10 +13,8 @@ import random
 import phonenumbers
 import polars as pl
 from dateutil import parser as dateutil_parser
-
 from goldenflow.transforms.dates import date_eu, date_iso8601, date_us
 from goldenflow.transforms.phone import phone_digits, phone_e164
-
 
 # --- references: the original per-row implementations ------------------------
 
