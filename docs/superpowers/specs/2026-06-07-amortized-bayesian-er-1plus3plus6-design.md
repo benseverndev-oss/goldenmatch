@@ -84,7 +84,27 @@ what ties the simulator's corruption model to the inference net.
 - **Compute** — amortized-clustering nets are finicky to train; budget for the simulator
   being the hard part (garbage corruption model → garbage posterior).
 
+## Step 1 result (2026-06-07 — real Febrl3 + DBLP-ACM)
+
+Run via `scripts/research/recon_er_experiment.py`; full tables in
+`scripts/research/RESULTS-3-reconstructability.md`. **Step-1 gate PASSES.**
+
+- **Viable, strongly on PII**: Febrl3 reconstructability ranks clusterings by F1
+  at Spearman **+0.944**, gold on top, monotone across over/under/mixed.
+- **Kernel is data-dependent**: bibliographic DBLP-ACM FAILS with char
+  Jaro-Winkler (+0.591) because titles/venues share vocabulary; an IDF-weighted
+  token kernel (discount common tokens) lifts it to +0.647 and clears the gate.
+  => *learn* the field reconstructor in step 2 rather than fixing a kernel.
+- **Over-merge precision-blindness persists** on bibliographic data regardless of
+  kernel, and the crude `size^2` prior does not rescue it (clusters are tiny).
+  => the precision half must be a **learned microclustering prior (#1)**, not a
+  size penalty. The experiment cleanly localises which half each piece owns.
+
 ## Decision
 
-Proceed with **step 1 only** as a measured experiment (see prototype). Gate the rest of the
-program on whether reconstructability actually ranks clusterings on real ER data.
+Step 1 cleared. Proceed to **step 2** (amortized partition head on simulated
+data) with two amendments forced by the data: (a) the reconstruction likelihood
+must use a *learned* field similarity, not a fixed kernel; (b) the microclustering
+prior must be *learned*, since a size penalty cannot supply the missing precision
+on templated data. Gate step 3 (active design) on step 2 producing a calibrated
+posterior.

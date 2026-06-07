@@ -33,13 +33,25 @@ python scripts/research/diff_er_pipeline.py --epochs 150
 Both degrade gracefully when their optional deps/data are absent (clean skip,
 exit 0) so they never break a bare checkout.
 
-## Key finding so far (from #3's local sanity runs)
+## Key finding (real data, 2026-06-07 — full results in `RESULTS-3-reconstructability.md`)
 
-Reconstructability **tracks F1 strongly on recall-side perturbations** (Spearman
-~0.9 on the synthetic harness) but is **precision-blind to over-merges that keep
-each record's twin** — a pure reconstruction *likelihood* cannot see false
-merges. That is not a bug: it empirically localises *which half* of the 1+3+6
-objective each piece owns — reconstructability (#3) supplies the recall
-likelihood, and the **microclustering prior (#1)** supplies the missing
-precision pressure on cluster size. A crude size-penalty stand-in is included
-only to illustrate the gap; the real prior is the amortized net's job (step 2).
+Run on **real Febrl3 and DBLP-ACM**, not just the synthetic harness:
+
+| Dataset | Kernel | Spearman(recon, F1) | gold argmax | gate |
+|---|---|---|---|---|
+| Febrl3 (PII) | char | **+0.944** | yes | PASS |
+| DBLP-ACM (bibliographic) | char | +0.591 | no | FAIL |
+| DBLP-ACM (bibliographic) | idf | **+0.647** | no | PASS |
+
+Three takeaways, all carried into the design note:
+1. **The likelihood is viable** — reconstructability ranks clusterings by F1 at
+   +0.944 on distinctive PII (gold on top, monotone decay). Step-1 gate clears.
+2. **The kernel is data-dependent**: char Jaro-Winkler wins on PII; bibliographic
+   text needs an **IDF-weighted token kernel** (discount shared venue/title
+   vocabulary) to clear the gate. => step 2 should *learn* the reconstructor,
+   not fix a kernel.
+3. **Over-merge precision-blindness persists** on bibliographic data regardless
+   of kernel — a pure reconstruction *likelihood* can't see false merges, and a
+   crude size penalty doesn't rescue it. => empirical case for pairing it with a
+   *learned* **microclustering prior (#1)**, which is the precision half of the
+   objective.

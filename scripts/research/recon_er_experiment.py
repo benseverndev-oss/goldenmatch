@@ -59,7 +59,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 
 # --------------------------------------------------------------------------- #
-# Similarity kernel (parameter-free, no training for v0).
+# Similarity kernels.
+#   "char" — parameter-free char Jaro-Winkler (good on distinctive PII).
+#   "idf"  — IDF-weighted token overlap; discounts common tokens (the
+#            name_freq_weighted_jw idea goldenmatch already ships). Built to
+#            test whether token-frequency weighting rescues low-entropy,
+#            templated text (bibliographic venues/titles) where "char" cannot
+#            tell true co-reference from shared vocabulary.
+# A kernel is a callable (field, a, b) -> float in [0, 1].
 # --------------------------------------------------------------------------- #
 try:  # rapidfuzz is a goldenmatch dep; prefer it but don't require it.
     from rapidfuzz.distance import JaroWinkler as _JW
@@ -80,14 +87,54 @@ except Exception:  # pragma: no cover - fallback path
 # --------------------------------------------------------------------------- #
 # Core: the reconstructability score.
 # --------------------------------------------------------------------------- #
+import math as _math  # noqa: E402
+
 Record = dict[str, str]
 Clustering = dict[int, list[str]]  # cluster_id -> member ids
+SimFn = Callable[[str, str, str], float]  # (field, a, b) -> [0,1]
 
 
-def _best_sim(value: str, others: list[str]) -> float:
+def char_kernel() -> SimFn:
+    return lambda _field, a, b: _sim(a, b)
+
+
+def _tokenize(s: str) -> list[str]:
+    return [t for t in "".join(c if c.isalnum() else " " for c in s.lower()).split() if t]
+
+
+def idf_kernel(records: dict[str, Record], fields: list[str]) -> SimFn:
+    """IDF-weighted token-overlap similarity, computed per field over the corpus.
+
+    sim(a,b) = sum(idf[t] for t in A&B) / sum(idf[t] for t in A|B)  (weighted
+    Jaccard). Rare, distinctive tokens dominate; ubiquitous ones (e.g. "VLDB",
+    "proceedings") contribute almost nothing — so two unrelated papers that
+    merely share a venue no longer look co-referent.
+    """
+    n = len(records) or 1
+    idf: dict[str, dict[str, float]] = {f: {} for f in fields}
+    for f in fields:
+        df_count: dict[str, int] = {}
+        for rec in records.values():
+            for t in set(_tokenize(rec.get(f, ""))):
+                df_count[t] = df_count.get(t, 0) + 1
+        idf[f] = {t: _math.log(1.0 + n / c) for t, c in df_count.items()}
+
+    def sim(field: str, a: str, b: str) -> float:
+        wa, wb = idf.get(field, {}), idf.get(field, {})
+        ta, tb = set(_tokenize(a)), set(_tokenize(b))
+        if not ta and not tb:
+            return 1.0
+        inter = sum(wa.get(t, 0.0) for t in (ta & tb))
+        union = sum(wb.get(t, 0.0) for t in (ta | tb))
+        return inter / union if union else 0.0
+
+    return sim
+
+
+def _best_sim(field: str, value: str, others: list[str], sim_fn: SimFn) -> float:
     best = 0.0
     for o in others:
-        s = _sim(value, o)
+        s = sim_fn(field, value, o)
         if s > best:
             best = s
             if best >= 0.999:
@@ -101,6 +148,7 @@ def reconstructability(
     fields: list[str],
     all_ids: list[str],
     rng: random.Random,
+    sim_fn: SimFn | None = None,
     k_bg: int = 24,
 ) -> float:
     """Intrinsic, label-free cluster-quality score in [0, 1] (0.5 = neutral).
@@ -131,6 +179,8 @@ def reconstructability(
            pressure on cluster size. The experiment reports both so the gap is
            visible, not hidden.
     """
+    if sim_fn is None:
+        sim_fn = char_kernel()
     # id -> set of co-cluster members, for background exclusion.
     cluster_of: dict[str, set[str]] = {}
     for members in clustering.values():
@@ -158,8 +208,8 @@ def reconstructability(
                 if not mates:
                     continue  # neutral singleton (slot = 0)
                 rv = rec_r.get(f, "")
-                mate_best = _best_sim(rv, [records[m].get(f, "") for m in mates])
-                bg_best = _best_sim(rv, [records[b].get(f, "") for b in bg]) if bg else 0.0
+                mate_best = _best_sim(f, rv, [records[m].get(f, "") for m in mates], sim_fn)
+                bg_best = _best_sim(f, rv, [records[b].get(f, "") for b in bg], sim_fn) if bg else 0.0
                 total += mate_best - bg_best
     mean_slot = total / count if count else 0.0
     return (mean_slot + 1.0) / 2.0  # map [-1,1] -> [0,1]
@@ -405,9 +455,11 @@ def load_dblp_acm(datasets_dir: Path) -> Loaded | None:
 # --------------------------------------------------------------------------- #
 # Experiment driver.
 # --------------------------------------------------------------------------- #
-def run(loaded: Loaded, seed: int = 0, beta: float = 1.0) -> int:
+def run(loaded: Loaded, seed: int = 0, beta: float = 1.0, kernel: str = "char") -> int:
     gold = gold_clustering(loaded.all_ids, loaded.gt_pairs)
     n = len(loaded.records)
+    sim_fn = (idf_kernel(loaded.records, loaded.fields)
+              if kernel == "idf" else char_kernel())
 
     # (label, f1, recon, combined)
     rows: list[tuple[str, float, float, float]] = []
@@ -415,7 +467,7 @@ def run(loaded: Loaded, seed: int = 0, beta: float = 1.0) -> int:
     def score(label: str, c: Clustering) -> None:
         # fresh seeded rng per clustering so background sampling is comparable
         rec = reconstructability(c, loaded.records, loaded.fields,
-                                 loaded.all_ids, random.Random(seed))
+                                 loaded.all_ids, random.Random(seed), sim_fn)
         pen = size_prior_penalty(c, n)
         rows.append((label, pairwise_f1(c, loaded.gt_pairs), rec, rec - beta * pen))
 
@@ -434,7 +486,8 @@ def run(loaded: Loaded, seed: int = 0, beta: float = 1.0) -> int:
     gold_comb_argmax = max(range(len(rows)), key=lambda i: combs[i]) == 0
 
     print(f"\n  records={n} fields={loaded.fields}")
-    print(f"  gold clusters={len(gold)} gt_pairs={len(loaded.gt_pairs)} beta={beta}\n")
+    print(f"  gold clusters={len(gold)} gt_pairs={len(loaded.gt_pairs)} "
+          f"beta={beta} kernel={kernel}\n")
     print(f"  {'clustering':<14} {'pair-F1':>8} {'recon':>8} {'recon-prior':>12}")
     print(f"  {'-'*14} {'-'*8} {'-'*8} {'-'*12}")
     for label, f1, rec, comb in rows:
@@ -490,6 +543,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--beta", type=float, default=1.0,
                     help="weight on the microclustering size prior in recon-prior")
+    ap.add_argument("--kernel", choices=["char", "idf"], default="char",
+                    help="similarity kernel: char Jaro-Winkler, or IDF-weighted "
+                         "token overlap (discounts common tokens)")
     args = ap.parse_args()
 
     loaded = _LOADERS[args.dataset](args)
@@ -500,7 +556,7 @@ def main() -> int:
             "`python scripts/run_benchmarks.py --datasets dblp-acm --download`)."
         )
         return 0
-    return run(loaded, seed=args.seed, beta=args.beta)
+    return run(loaded, seed=args.seed, beta=args.beta, kernel=args.kernel)
 
 
 if __name__ == "__main__":
