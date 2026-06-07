@@ -52,6 +52,46 @@ def _goldencheck_available() -> bool:
         return False
 
 
+def compute_quality_scores(
+    df: pl.DataFrame,
+    row_id_col: str = "__row_id__",
+) -> dict[tuple[int, str], float] | None:
+    """Per-cell quality weights for quality-weighted survivorship, keyed by
+    ``(__row_id__, column)`` so the golden-record builders prefer the
+    higher-quality value when merging a cluster (e.g. ``"California"`` over
+    ``"Californa"``; a real date over a ``2099`` one).
+
+    Delegates to ``goldencheck.cell_quality`` -- the single source of DQ truth.
+    Fail-open: returns ``None`` when goldencheck is absent, too old to expose
+    ``cell_quality``, or finds no penalized cells. Callers treat ``None`` as "no
+    weighting" and keep the fast survivorship path, so a clean frame has ZERO
+    behaviour/perf change -- weighting only kicks in when there are real issues.
+
+    ``cell_quality`` returns positional row indices; we remap them to
+    ``row_id_col`` so the builders' ``(row_id, col)`` lookups line up."""
+    if not _goldencheck_available() or row_id_col not in df.columns:
+        return None
+    try:
+        from goldencheck import cell_quality
+    except ImportError:
+        return None  # older goldencheck without the per-cell API
+
+    try:
+        positional = cell_quality(df)
+    except Exception:  # noqa: BLE001 - never let DQ scoring break a dedupe run
+        logger.debug("goldencheck.cell_quality failed; skipping quality weighting", exc_info=True)
+        return None
+    if not positional:
+        return None
+
+    row_ids = df[row_id_col].to_list()
+    scores: dict[tuple[int, str], float] = {}
+    for (idx, col), weight in positional.items():
+        if 0 <= idx < len(row_ids) and row_ids[idx] is not None:
+            scores[(int(row_ids[idx]), col)] = weight
+    return scores or None
+
+
 def run_quality_check(
     df: pl.DataFrame,
     config=None,
