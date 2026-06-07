@@ -81,6 +81,13 @@ class MatchkeyField(BaseModel):
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
     levels: int = 2  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
+    # Probabilistic-only: term-frequency (Winkler) weight adjustment. When True,
+    # an exact agreement on a *rare* value carries more match weight than on a
+    # *common* one (matching on "Zelinski" is stronger evidence than on
+    # "Smith"). Off by default — only meaningful for skewed-frequency
+    # categorical fields (names, cities). Applied by the vectorized FS scorer
+    # using per-value frequencies computed at EM-train time.
+    tf_adjustment: bool = False
     # Workbench-only hint: which kind of MatchkeyConfig to wrap this field
     # in when /preview / /run translate the flat row list into engine
     # MatchkeyConfigs. Optional + None-default so engine-internal callers

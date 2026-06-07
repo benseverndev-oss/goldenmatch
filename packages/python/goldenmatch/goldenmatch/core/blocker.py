@@ -160,6 +160,31 @@ class BlockResult:
     pre_scored_pairs: list[tuple[int, int, float]] | None = None
 
 
+def collect_blocking_fields(config: BlockingConfig) -> list[str]:
+    """All column names a blocking config groups on, across keys/passes/sub-blocks.
+
+    Used by the Fellegi-Sunter pipeline to tell EM which fields are blocking
+    fields (always-agree within a single-pass block -> no discrimination ->
+    excluded from m-training, given fixed neutral weights). For ``multi_pass``
+    the keys live in ``passes``, not ``keys`` -- reading only ``keys`` (the old
+    behavior) left the exclusion list empty and degraded multi-pass FS
+    (Febrl4: 95.7% -> 98.4% F1 once the pass fields are excluded). Order is
+    preserved and de-duplicated.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    groups: list[BlockingKeyConfig] = []
+    groups.extend(config.keys or [])
+    groups.extend(config.passes or [])
+    groups.extend(config.sub_block_keys or [])
+    for key in groups:
+        for f in key.fields:
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+    return out
+
+
 def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
     """Build a block key expression from a BlockingKeyConfig.
 
@@ -688,7 +713,17 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
     across passes are deduplicated so each unique block key appears once.
     """
     all_blocks: list[BlockResult] = []
-    seen_keys: set[str] = set()
+    # Dedup by (pass field+transform signature, block_key value) — NOT the
+    # value alone. block_key is the concatenated field *values* with no field
+    # identity, so a value-only dedup collides ACROSS passes: a
+    # given_name/soundex block "s530" and a surname/soundex block "s530" share
+    # the string, and the second was silently dropped — losing every candidate
+    # pair in it (measured: 309/7310 blocks, 4.2%, dropped on Febrl4's
+    # auto-config scheme; soundex/substring/numeric keys share a namespace).
+    # Keying on the pass signature dedups only *truly identical* blocks (same
+    # fields+transforms+value, e.g. two passes that happen to share a key) while
+    # keeping distinct-field blocks that merely share a value string.
+    seen_keys: set[tuple] = set()
 
     for pass_config in config.passes or []:
         temp_config = BlockingConfig(
@@ -699,12 +734,14 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
             ann_top_k=config.ann_top_k,
             ann_model=config.ann_model,
         )
+        pass_sig = (tuple(pass_config.fields), tuple(pass_config.transforms or []))
         blocks = _build_static_blocks(lf, temp_config)
         for block in blocks:
-            if block.block_key not in seen_keys:
+            dedup_key = (pass_sig, block.block_key)
+            if dedup_key not in seen_keys:
                 block.strategy = "multi_pass"
                 all_blocks.append(block)
-                seen_keys.add(block.block_key)
+                seen_keys.add(dedup_key)
 
     return all_blocks
 

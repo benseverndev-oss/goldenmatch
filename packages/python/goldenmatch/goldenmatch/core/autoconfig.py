@@ -1953,6 +1953,51 @@ def _maybe_promote_blocking_to_adaptive(
     return blocking.model_copy(update={"strategy": "adaptive"})
 
 
+def _maybe_prune_blocking_passes(
+    blocking: BlockingConfig | None,
+    df: pl.DataFrame,
+) -> BlockingConfig | None:
+    """Opt-in weak-positive-aware pruning of multi-pass blocking passes.
+
+    Default OFF. Enable via ``GOLDENMATCH_BLOCKING_PRUNE_PASSES=1``. The floor
+    is ``GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`` (default 1 = drop only
+    fully-redundant / all-noise passes, recall-safe). Higher floors trade a
+    little recall for fewer candidates while protecting high-precision passes
+    (the selector ranks by likely-match yield, NOT raw new-pair count, so a
+    sparse-but-precise pass like exact date-of-birth survives).
+
+    Runs on the auto-config sample (``df``); the surviving passes are applied to
+    the full dataset. No-op unless the strategy is ``multi_pass`` with >1 pass.
+    """
+    if blocking is None or blocking.strategy != "multi_pass":
+        return blocking
+    if os.environ.get("GOLDENMATCH_BLOCKING_PRUNE_PASSES", "").strip().lower() not in (
+        "1", "true", "yes", "on", "enabled",
+    ):
+        return blocking
+    passes = blocking.passes or []
+    if len(passes) <= 1:
+        return blocking
+    try:
+        floor = int(os.environ.get("GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS", "1"))
+    except ValueError:
+        floor = 1
+    try:
+        from goldenmatch.core.blocking_pass_selection import select_passes
+
+        result = select_passes(df, list(passes), min_marginal_weak_positive=floor)
+    except Exception:
+        logger.warning("blocking pass selection failed; keeping all passes", exc_info=True)
+        return blocking
+    if not result.dropped or not result.kept:
+        return blocking
+    logger.info(
+        "blocking pass selection: kept %d/%d passes (dropped %s)",
+        len(result.kept), len(passes), [list(p.fields) for p in result.dropped],
+    )
+    return blocking.model_copy(update={"passes": result.kept})
+
+
 # ── Model selection ────────────────────────────────────────────────────────
 
 def select_model(row_count: int, has_embedding_columns: bool, threshold: int = 50000) -> str | None:
@@ -2509,6 +2554,9 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
     blocking = _maybe_promote_blocking_to_adaptive(blocking, df.height)
+    # Opt-in (GOLDENMATCH_BLOCKING_PRUNE_PASSES=1): drop redundant/all-noise
+    # multi-pass passes by likely-match yield.
+    blocking = _maybe_prune_blocking_passes(blocking, df)
 
     # ── Data-driven strategy selection ──
 
@@ -2850,6 +2898,7 @@ def auto_configure_probabilistic_df(
             "identifier-like fields)."
         )
     blocking = build_blocking(profiles, df, llm_provider=llm_provider)
+    blocking = _maybe_prune_blocking_passes(blocking, df)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,
