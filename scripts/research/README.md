@@ -15,6 +15,7 @@ experiments** — the cheapest test of each idea's riskiest assumption.
 |---|---|---|
 | `recon_er_experiment.py` | **#3** self-supervised mutual reconstructability | Does masked-field reconstruction from cluster-mates rank clusterings by F1? (the likelihood-viability gate for the 1+3+6 program) — **step 1**, results in `RESULTS-3-reconstructability.md` |
 | `amortized_partition_er.py` | **#1** amortized neural partition posterior | Can one trained net emit a calibrated posterior over the ER partition, with a *learned* microclustering prior (no size penalty)? — **step 2**, results in `RESULTS-2-amortized-partition.md` |
+| `active_partition_er.py` | **#6** EIG active design over the partition posterior | Does picking labels by partition-EIG (transitivity-aware) beat per-pair uncertainty at equal budget? — **step 3**, results in `RESULTS-6-active-design.md` |
 | `diff_er_pipeline.py` | **#4** joint differentiable blocking+matching | Can a single global clustering loss backprop through a differentiable blocker so it learns to retain true pairs? |
 
 ## Running

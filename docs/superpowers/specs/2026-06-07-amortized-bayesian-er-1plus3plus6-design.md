@@ -120,12 +120,38 @@ what matters**, across 4 seeds:
   (F1≈0.03); scoring on cluster **mean** + interaction features + a learned
   empty prototype unlocked learning.
 
-## Decision
+## Step 3 result (2026-06-07 — EIG active design over the partition posterior)
 
-Steps 1 and 2 cleared. The amortized posterior is viable on simulated ER, with
-calibration and a learned prior as the robust wins. Proceed to **step 3**
-(EIG-over-partition active design, framing #6) — which first requires posterior
-**sampling** (not just greedy MAP) from the step-2 head. Parallel real-program
-work: a learned real-schema (string/LM) encoder, and a d-blink calibration
-cross-check on a small real set. F1 is at a floor (parity with an oracle-tuned
-baseline), to be lifted with capacity/training, not a blocker for step 3.
+Run via `scripts/research/active_partition_er.py`; full tables in
+`scripts/research/RESULTS-6-active-design.md`. **Step-3 gate PASSES.** Added
+posterior sampling to the step-2 head, then compared pair-selection strategies
+(identical posterior + identical must/cannot-link transitive-closure
+conditioning; only selection differs):
+
+- **EIG = H_b(p_ij) is exact** for a noiseless oracle: `I(A_ij; Z) = H_b(p_ij)`.
+- **Robust win — uncertainty collapse**: partition-EIG drives posterior pairwise
+  uncertainty down ~2.7x faster than per-pair static (1.18 vs 3.18 bits at 24
+  labels), ~14x faster than random.
+- **F1**: eig ≥ static at every budget (small edge averaged; widens in
+  sparse regimes — a smoke run hit eig's target in 16 labels vs static's 24).
+- **Transitivity does the work**: eig re-scores after each label, so the
+  must/cannot-link closure lets it skip logically-resolved induced pairs while
+  static keeps querying them.
+
+## Decision — full 1+3+6 loop demonstrated on simulated ER
+
+All three steps cleared on simulated data: reconstruction-as-likelihood (#3,
+step 1), amortized calibrated partition posterior with a learned microclustering
+prior (#1, step 2), and EIG-over-partition active design (#6, step 3). The
+program hangs together end-to-end.
+
+Remaining work before this is more than a proof-of-concept (none are blockers,
+all are flagged as TODOs in the runners):
+1. **Real-schema learned encoder** — swap the toy continuous-field simulator for
+   a string/LM encoder; reuse step-1's finding that the reconstructor must be
+   *learned*, not a fixed kernel. This is the highest-value next step.
+2. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
+3. **Soft Bayesian conditioning** in step 3 (reweight similar undetermined pairs,
+   not just logically-forced ones) + noisy-oracle handling.
+4. **Lift F1** (capacity / Set-Transformer encoder / more training) — currently a
+   floor (parity with an oracle-tuned baseline), not a ceiling.

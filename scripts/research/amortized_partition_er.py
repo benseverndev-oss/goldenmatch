@@ -254,6 +254,39 @@ if _HAVE_TORCH:
                 seen_sum = seen_sum + ei
             return assign, confidences, corrects
 
+        @torch.no_grad()
+        def sample_partition(self, sim: "SimDataset", temp: float = 1.0) -> list[int]:
+            """Draw ONE partition sample from q(partition | X): sequential
+            assignment, sampling each step from softmax(logits / temp) instead of
+            argmax. A pool of these is the Monte-Carlo posterior used by step 3.
+            Returns a cluster id per record (model cluster indices)."""
+            e = self.encode(sim.fields)
+            n = e.size(0)
+            order = torch.randperm(n).tolist()
+            total = e.sum(0)
+            sums: list[torch.Tensor] = []
+            counts: list[int] = []
+            assign = [0] * n
+            seen = e.new_zeros(self.d)
+            for ridx in order:
+                ei = e[ridx]
+                U = self.ctx(total - seen - ei)
+                means = (torch.stack([s / c for s, c in zip(sums, counts)])
+                         if sums else e.new_zeros(0, self.d))
+                cnt = torch.tensor(counts) if counts else torch.zeros(0)
+                logits = self._logits(ei, means, cnt, U)
+                p = torch.softmax(logits / temp, 0)
+                choice = int(torch.multinomial(p, 1))
+                if choice < len(sums):
+                    sums[choice] = sums[choice] + ei
+                    counts[choice] += 1
+                else:
+                    sums.append(ei.clone())
+                    counts.append(1)
+                assign[ridx] = choice
+                seen = seen + ei
+            return assign
+
 
 # --------------------------------------------------------------------------- #
 # Metrics.
