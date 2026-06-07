@@ -357,6 +357,13 @@ python -m build && source .testing/.env && python -m twine upload dist/*
 
 - **Version source**: `pyproject.toml` `[project] version` is canonical. `goldenflow/__init__.py:__version__` MUST match. They drifted in v1.1.x (pyproject=1.1.2, `__init__`=1.1.1) and shipped that way — fixed in 1.1.5. Bumping a release means touching both atomically.
 
+### goldenflow-native wheels
+
+The optional compiled runtime publishes SEPARATELY via `.github/workflows/publish-goldenflow-native.yml` (mirrors `publish-goldenmatch-native.yml`), on a release tagged **`goldenflow-native-v*`** — a DISTINCT tag from `goldenflow-v*` (Python) and `goldenflow-js-v*` (TS) so the publish workflows never cross-trigger. `workflow_dispatch` has a `ref` input (retro build from main HEAD) and a `publish` toggle (uncheck = build-matrix dry run, no upload). Builds abi3 wheels for linux x86_64/aarch64 (manylinux 2_28), windows x64, macOS x86_64+aarch64 (both on `macos-14`; `macos-13` Intel runners queue indefinitely), plus an sdist; uploads via `PYPI_TOKEN`/`skip-existing`.
+- **Version lives in THREE spots, bump in lockstep** (mirrors the goldenmatch-native lesson — maturin reads `[project].version` from `pyproject.toml`, NOT Cargo.toml): `packages/rust/extensions/native-flow/Cargo.toml` `[package].version`, `.../pyproject.toml` `[project].version`, and the `__version__` fallback in `.../python/goldenflow_native/__init__.py`. A republish without bumping pyproject rebuilds the old version and `skip-existing` silently no-ops.
+- **Tag-predates-workflow trap**: a tag pointing at a commit before this workflow existed won't fire it (Actions reads the workflow from the tag's commit). Re-tag at HEAD-of-main once landed, or use `gh workflow run publish-goldenflow-native.yml --ref main`.
+- The `goldenflow[native]` extra is NOT in `[all]` (the crate isn't on PyPI yet; an extra pointing at a non-PyPI package breaks `uv sync --all-packages`). uv resolves it locally via the root `[tool.uv.sources] goldenflow-native = { path = ... }`. Add to `[all]` only after the first wheel is on PyPI.
+
 ## Remote MCP Server
 
 Hosted on Railway, registered on Smithery:
