@@ -131,6 +131,38 @@ def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
     return {col: cnt / n for col, cnt in counts.items()}
 
 
+def fd_identity_scores(df: pl.DataFrame) -> dict[str, float] | None:
+    """Per-column data-driven "identity anchor" strength for FD-driven negative
+    evidence (door #3). ``d[col]`` is the strongest functional dependency the
+    column supports as a determinant (1.0 for a strict FD, ``1 - violations/rows``
+    for an approximate one) -- a column that determines other columns is, by
+    construction, a discriminative entity attribute, so disagreement on it is
+    negative evidence.
+
+    Delegates to ``goldencheck.functional_dependencies``. Fail-open: ``None`` when
+    goldencheck is absent/too old or no FDs are found.
+
+    Note: perfectly-unique keys (cardinality 1.0) are NOT surfaced -- FD discovery
+    excludes them as trivial determinants. The complementary signal for those is
+    format/structure consistency (a separate door); this catches identity anchors
+    with cardinality in [0.5, 1.0) that the name heuristic misses."""
+    if not _goldencheck_available():
+        return None
+    try:
+        from goldencheck import functional_dependencies
+    except ImportError:
+        return None  # older goldencheck without the FD API
+    try:
+        fds = functional_dependencies(df)
+    except Exception:  # noqa: BLE001 - never let FD discovery break auto-config
+        logger.debug("goldencheck.functional_dependencies failed; skipping", exc_info=True)
+        return None
+    if not fds:
+        return None
+    # one record per determinant; confidence is already the max it supports.
+    return {fd.determinant: fd.confidence for fd in fds} or None
+
+
 def run_quality_check(
     df: pl.DataFrame,
     config=None,
