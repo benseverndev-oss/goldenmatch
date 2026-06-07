@@ -110,6 +110,43 @@ def bench_composite_key(rows: int) -> None:
         print("  native kernel        : (not built -- skipping)")
 
 
+def bench_functional_dependency(rows: int) -> None:
+    import polars as pl
+    from goldencheck.relations import functional_dependency as fd
+
+    print(f"\n## Functional-dependency discovery  (rows={rows:,})")
+    rng = random.Random(13)
+    z2c: dict[int, int] = {}
+    zips = [rng.randint(0, 5000) for _ in range(rows)]
+    df = pl.DataFrame({
+        "zip": zips,
+        "city": [z2c.setdefault(z, rng.randint(0, 800)) for z in zips],  # zip->city strict
+        "dept": [rng.randint(0, 40) for _ in range(rows)],
+        "noise1": [rng.randint(0, 9) for _ in range(rows)],
+        "noise2": [rng.randint(0, 100) for _ in range(rows)],
+        "noise3": [rng.choice(["a", "b", "c", "d"]) for _ in range(rows)],
+    })
+    cols = fd._select_candidates(df, df.height)
+
+    def py() -> None:
+        fd._discover_polars(df, cols, df.height)
+
+    py_wall = _median_wall(py, runs=3)
+    print(f"  pure-Python (Polars) : {py_wall * 1000:9.2f} ms")
+
+    if native_available():
+        arrays = [df[c].to_arrow() for c in cols]
+
+        def nat() -> None:
+            native_module().discover_functional_dependencies(arrays)
+
+        nat_wall = _median_wall(nat, runs=3)
+        speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")
+        print(f"  native kernel        : {nat_wall * 1000:9.2f} ms   ({speedup:.1f}x faster)")
+    else:
+        print("  native kernel        : (not built -- skipping)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1_000_000, help="row count per kernel")
@@ -119,6 +156,7 @@ def main() -> int:
     print(f"native extension available: {native_available()}")
     bench_benford(args.rows)
     bench_composite_key(min(args.rows, 200_000))  # combinatorial; keep it sane
+    bench_functional_dependency(min(args.rows, 200_000))
     return 0
 
 

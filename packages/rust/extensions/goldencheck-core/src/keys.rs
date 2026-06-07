@@ -89,6 +89,11 @@ fn tuple_distinct_count_with(columns: &[&[u64]], subset: &[usize], doms: &[u128]
 
 /// Whether `lhs -> rhs` holds: every distinct `lhs` value maps to exactly one
 /// `rhs` value across all rows. Both slices must have the same length.
+///
+/// Early-exits on the first violation -- the edge over Polars' two-column
+/// `n_unique`, which materializes full distinct counts even for a pair that
+/// breaks on row 2. Most candidate pairs are NOT dependencies, so the bail-out
+/// dominates the batch discovery below.
 pub fn functional_dependency_holds(lhs: &[u64], rhs: &[u64]) -> bool {
     debug_assert_eq!(lhs.len(), rhs.len());
     let mut map: FxHashMap<u64, u64> = FxHashMap::default();
@@ -103,6 +108,47 @@ pub fn functional_dependency_holds(lhs: &[u64], rhs: &[u64]) -> bool {
         }
     }
     true
+}
+
+/// Discover all strict single-column functional dependencies among `columns`:
+/// every ordered pair `(det, dep)`, `det != dep`, for which `det -> dep` holds.
+///
+/// Interning each column once (the caller's job) and reusing it across every
+/// pair amortizes the hashing that Polars repeats per pair; combined with the
+/// early-exit above this is where the native path beats the vectorized
+/// baseline. Trivial pairs are skipped: a constant `dep` (domain 1) is implied
+/// by everything, and a unique `det` (all-distinct) implies everything.
+pub fn discover_functional_dependencies(columns: &[&[u64]]) -> Vec<(usize, usize)> {
+    let n_cols = columns.len();
+    let n_rows = columns.first().map(|c| c.len()).unwrap_or(0);
+    if n_cols < 2 || n_rows == 0 {
+        return Vec::new();
+    }
+    // Distinct-value count per column (cheap; reused for the trivial-pair skips).
+    let distinct: Vec<usize> = columns
+        .iter()
+        .map(|c| {
+            let mut s: FxHashSet<u64> = FxHashSet::default();
+            s.extend(c.iter().copied());
+            s.len()
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for det in 0..n_cols {
+        if distinct[det] == n_rows {
+            continue; // a key determines everything -- trivial
+        }
+        for dep in 0..n_cols {
+            if det == dep || distinct[dep] <= 1 {
+                continue; // constant dep is implied by everything -- trivial
+            }
+            if functional_dependency_holds(columns[det], columns[dep]) {
+                out.push((det, dep));
+            }
+        }
+    }
+    out
 }
 
 /// Search for **minimal** composite keys: column subsets of size `2..=max_size`
@@ -189,6 +235,25 @@ mod tests {
         let country = [9u64, 9, 8, 9];
         assert!(functional_dependency_holds(&city, &country));
         assert!(!functional_dependency_holds(&country, &city));
+    }
+
+    #[test]
+    fn discovers_fds_and_skips_trivial() {
+        // col0=zip (1,1,2,3), col1=city (10,10,10,30): zip->city holds; city->zip
+        // breaks (city 10 -> zip 1 then 2). col2 constant (skipped as dep).
+        // col3 unique (skipped as det).
+        let zip = [1u64, 1, 2, 3];
+        let city = [10u64, 10, 10, 30];
+        let constant = [7u64, 7, 7, 7];
+        let uniq = [1u64, 2, 3, 4];
+        let cols: Vec<&[u64]> = vec![&zip, &city, &constant, &uniq];
+        let fds = discover_functional_dependencies(&cols);
+        // zip->city present; city->zip absent; nothing -> constant (col2) since
+        // constant is skipped as a dep; uniq (col3) skipped as det.
+        assert!(fds.contains(&(0, 1)));
+        assert!(!fds.contains(&(1, 0)));
+        assert!(fds.iter().all(|&(_, dep)| dep != 2));
+        assert!(fds.iter().all(|&(det, _)| det != 3));
     }
 
     #[test]

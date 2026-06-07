@@ -33,7 +33,7 @@ goldencheck/
 ├── profilers/     # 10 column profilers (BaseProfiler ABC)
 ├── baseline/      # Deep profiling: statistical, constraints, semantic, correlation, patterns, priors
 ├── drift/         # Drift detector (13 check types against saved baseline)
-├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation, composite-key, approx-duplicate)
+├── relations/     # Cross-column profilers (temporal, null correlation, numeric cross, age validation, composite-key, approx-duplicate, functional-dependency)
 ├── semantic/      # Type classifier + suppression engine + domain packs (healthcare, finance, ecommerce)
 ├── llm/           # LLM boost (providers, prompts, merger, budget, rule generator)
 ├── mcp/           # MCP server (count varies; see goldencheck mcp-serve --help for current)
@@ -80,10 +80,16 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   one `u128`** → allocation-free `FxHashSet<u128>` → **1.7x faster**. Don't gate a
   kernel on "it's Rust"; gate on the measured wall vs the *Polars* baseline, which is
   already fast.
-- **functional_dependency_holds** is exposed + parity-tested but NOT wired into
-  `baseline/constraints.py` — that path mines *approximate* FDs (confidence < 1.0);
-  the primitive is strict-only, so swapping it would change semantics. Left for a
-  future strict-FD use.
+- **Strict FDs** (`relations/functional_dependency.py`): discovers exact
+  single-column functional dependencies (`zip -> city`) = redundant/lookup
+  columns, INFO, scan-path. The native `discover_functional_dependencies` kernel
+  interns each column once + reuses across all pairs + **early-exits on the first
+  violation** → **13.5x faster** than Polars recomputing a two-column `n_unique`
+  per pair (early-exit is the edge; this kernel genuinely beats Polars). Guards
+  (≥50 rows, skip constant deps / unique determinants, capped) keep it
+  low-false-positive. Still NOT wired into `baseline/constraints.py` — that mines
+  *approximate* FDs (confidence < 1.0); the kernel is strict-only, different
+  semantics.
 
 ## `--deep` mode + duplicate-row detection
 

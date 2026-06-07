@@ -157,3 +157,31 @@ def test_functional_dependency_parity() -> None:
         l_arr = pa.array(lhs)
         r_arr = pa.array(rhs)
         assert native_module().functional_dependency_holds(l_arr, r_arr) == py_fd(lhs, rhs)
+
+
+from goldencheck.relations import functional_dependency as fd  # noqa: E402
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(6))
+def test_discover_fd_parity(seed: int) -> None:
+    """Native FD discovery returns the same (det, dep) pairs as the Polars
+    n_unique-identity fallback, on identical candidate columns."""
+    rng = random.Random(seed)
+    n = 400
+    zips = [rng.randint(0, 30) for _ in range(n)]
+    z2c: dict[int, int] = {}
+    city = [z2c.setdefault(z, rng.randint(0, 20)) for z in zips]  # zip -> city strict
+    df = pl.DataFrame({
+        "zip": zips,
+        "city": city,
+        "flag": [rng.randint(0, 1) for _ in range(n)],
+        "amt": [rng.randint(0, 9) for _ in range(n)],
+    })
+    cols = fd._select_candidates(df, df.height)
+    if len(cols) < 2:
+        pytest.skip("not enough candidates")
+    py = set(fd._discover_polars(df, cols, df.height))
+    arrays = [df[c].to_arrow() for c in cols]
+    nat = set(native_module().discover_functional_dependencies(arrays))
+    assert nat == py

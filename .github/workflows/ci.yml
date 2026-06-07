@@ -165,6 +165,7 @@ jobs:
               - 'packages/python/goldencheck/goldencheck/baseline/statistical.py'
               - 'packages/python/goldencheck/goldencheck/drift/detector.py'
               - 'packages/python/goldencheck/goldencheck/relations/composite_key.py'
+              - 'packages/python/goldencheck/goldencheck/relations/functional_dependency.py'
               - 'packages/python/goldencheck/tests/core/test_native_parity.py'
               - 'scripts/build_goldencheck_native.py'
             goldenembed:
@@ -852,6 +853,7 @@ jobs:
             packages/python/goldencheck/tests/core/test_native_parity.py \
             packages/python/goldencheck/tests/relations/test_composite_key.py \
             packages/python/goldencheck/tests/relations/test_approx_duplicate.py \
+            packages/python/goldencheck/tests/relations/test_functional_dependency.py \
             -v
       - name: Required-native mode (GOLDENCHECK_NATIVE=1 must use the kernel)
         env:

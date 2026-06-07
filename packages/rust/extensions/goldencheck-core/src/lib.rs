@@ -16,4 +16,7 @@ mod benford;
 mod keys;
 
 pub use benford::benford_leading_digits;
-pub use keys::{composite_key_search, functional_dependency_holds, tuple_distinct_count};
+pub use keys::{
+    composite_key_search, discover_functional_dependencies, functional_dependency_holds,
+    tuple_distinct_count,
+};

@@ -184,3 +184,21 @@ pub fn functional_dependency_holds(
     }
     Ok(goldencheck_core::functional_dependency_holds(&l, &r))
 }
+
+/// Discover all strict single-column FDs `(det_idx, dep_idx)` among
+/// `field_arrays`. Interns each column once and reuses it across every pair
+/// (delegates to `goldencheck_core::discover_functional_dependencies`).
+#[pyfunction]
+pub fn discover_functional_dependencies(
+    field_arrays: Vec<PyArrowType<ArrayData>>,
+) -> PyResult<Vec<(usize, usize)>> {
+    if field_arrays.is_empty() {
+        return Ok(Vec::new());
+    }
+    let columns: Vec<Vec<u64>> = field_arrays
+        .into_iter()
+        .map(|a| intern_column(a.0))
+        .collect::<PyResult<_>>()?;
+    let refs: Vec<&[u64]> = columns.iter().map(|c| c.as_slice()).collect();
+    Ok(goldencheck_core::discover_functional_dependencies(&refs))
+}

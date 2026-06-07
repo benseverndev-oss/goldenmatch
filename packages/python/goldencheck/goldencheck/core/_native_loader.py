@@ -89,7 +89,7 @@ def native_enabled(component: str) -> bool:
 _COMPONENT_SYMBOLS: dict[str, str] = {
     "benford": "benford_leading_digits",
     "composite_keys": "composite_key_search",
-    "functional_dependencies": "functional_dependency_holds",
+    "functional_dependencies": "discover_functional_dependencies",
 }
 
 
