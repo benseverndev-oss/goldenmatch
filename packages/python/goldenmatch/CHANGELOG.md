@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **FS model persistence — train-once, reuse (Splink-parity Phase 1a).**
+  `EMResult` now serializes: `to_dict`/`from_dict` (versioned) + `save_json`/
+  `load_json` (atomic write) + `validate_for(mk)` (raises `FSModelMismatchError`
+  on field/level mismatch). New `MatchkeyConfig.model_path`: when set and the
+  file exists the trained model loads and EM is skipped; when absent EM runs and
+  the result is saved there. `load_or_train_em` is the shared seam all three
+  pipeline sites use (core pipeline x2, TUI engine). `dedupe_df(fs_model_path=...)`
+  is a convenience that points every un-pathed probabilistic matchkey at one
+  file. Verified byte-identical pairs on DBLP-ACM between a from-scratch run and
+  a load-from-disk run (2310 == 2310). Previously every dedupe retrained EM.
 - **FS match-weight monotonicity guard (Splink-parity Phase 0).** EM estimates
   m/u per comparison level independently, so a rare-but-discriminative middle
   level can outweigh exact agreement (DBLP-ACM `title`: partial 28.6 bits >

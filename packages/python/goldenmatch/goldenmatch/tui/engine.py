@@ -211,16 +211,15 @@ class MatchEngine:
             if mk.type == "probabilistic":
                 if config.blocking is None:
                     continue
-                from goldenmatch.core.probabilistic import score_probabilistic, train_em
+                from goldenmatch.core.probabilistic import load_or_train_em, score_probabilistic
                 blocks = build_blocks(combined_lf, config.blocking)
                 blocking_fields = []
                 if config.blocking and config.blocking.keys:
                     for bk in config.blocking.keys:
                         blocking_fields.extend(bk.fields)
-                em_result = train_em(
+                # Reuses mk.model_path when set (train-once), else trains.
+                em_result = load_or_train_em(
                     collected_df, mk,
-                    max_iterations=mk.em_iterations,
-                    convergence=mk.convergence_threshold,
                     blocks=blocks,
                     blocking_fields=blocking_fields,
                 )

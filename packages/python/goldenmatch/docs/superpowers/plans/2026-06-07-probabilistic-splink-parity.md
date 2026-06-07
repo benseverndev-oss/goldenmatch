@@ -25,10 +25,16 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       kept (Phase 3 input).
 - [x] Gate: DBLP-ACM F1 = 0.968 (no regression, default modes); 86 FS tests pass.
 
-## PR 2 — Phase 1a: model persistence
-- [ ] `EMResult.to_dict/from_dict/save_json/load_json`.
-- [ ] `MatchkeyConfig.model_path` + `dedupe_df(fs_model=...)`; skip `train_em` when supplied.
-- [ ] Gate: round-trip equality; saved-model run skips EM, byte-identical pairs.
+## PR 2 — Phase 1a: model persistence ✅ (2026-06-07)
+- [x] `EMResult.to_dict/from_dict` (versioned) + `save_json/load_json` (atomic)
+      + `validate_for(mk)` (`FSModelMismatchError` on field/level mismatch).
+- [x] `MatchkeyConfig.model_path` + `load_or_train_em` shared seam wired into
+      all three sites (core pipeline x2, TUI engine). `dedupe_df(fs_model_path=...)`
+      convenience kwarg. Cache semantics: path exists -> load + skip EM; absent
+      -> train + save.
+- [x] Gate: round-trip equality (unit) + saved-model run skips EM, **byte-identical
+      pairs on DBLP-ACM (2310 == 2310)**. 66 FS tests pass (9 new); 132 api/config
+      tests green (model_path round-trips in YAML).
 
 ## PR 3 — Phase 1b: supervised m
 - [ ] `estimate_m_from_labels(df, mk, labels)`.

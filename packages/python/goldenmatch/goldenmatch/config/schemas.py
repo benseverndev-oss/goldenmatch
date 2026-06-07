@@ -284,6 +284,12 @@ class MatchkeyConfig(BaseModel):
     convergence_threshold: float = 0.001
     link_threshold: float | None = None  # auto-computed if None
     review_threshold: float | None = None  # auto-computed if None
+    # Probabilistic-only: persisted EM model (Splink-style train-once -> reuse).
+    # When set and the file exists, the trained EMResult is loaded and EM is
+    # skipped; when set and absent, EM runs and the result is saved there.
+    # Ignored for non-probabilistic matchkeys. See core/probabilistic.py
+    # load_or_train_em.
+    model_path: str | None = None
 
     @model_validator(mode="after")
     def _validate_weighted(self) -> MatchkeyConfig:

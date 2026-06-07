@@ -198,6 +198,104 @@ class EMResult:
     tf_freqs: dict[str, dict[str, float]] | None = None
     tf_collision: dict[str, float] | None = None
 
+    # Bumped when the serialized shape changes incompatibly.
+    SCHEMA_VERSION = 1
+
+    def to_dict(self) -> dict:
+        """JSON-serializable snapshot of the trained model.
+
+        Every field is already JSON-native (dicts of float lists, scalars),
+        so this is a plain projection plus a version/type marker for
+        forward-compatible loading.
+        """
+        return {
+            "__type__": "goldenmatch.EMResult",
+            "__version__": EMResult.SCHEMA_VERSION,
+            "m_probs": self.m_probs,
+            "u_probs": self.u_probs,
+            "match_weights": self.match_weights,
+            "converged": self.converged,
+            "iterations": self.iterations,
+            "proportion_matched": self.proportion_matched,
+            "tf_freqs": self.tf_freqs,
+            "tf_collision": self.tf_collision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> EMResult:
+        """Reconstruct an EMResult from :meth:`to_dict` output."""
+        version = data.get("__version__", 1)
+        if version > cls.SCHEMA_VERSION:
+            raise ValueError(
+                f"FS model schema version {version} is newer than this "
+                f"goldenmatch supports ({cls.SCHEMA_VERSION}); upgrade goldenmatch."
+            )
+        try:
+            return cls(
+                m_probs=data["m_probs"],
+                u_probs=data["u_probs"],
+                match_weights=data["match_weights"],
+                converged=data["converged"],
+                iterations=data["iterations"],
+                proportion_matched=data["proportion_matched"],
+                tf_freqs=data.get("tf_freqs"),
+                tf_collision=data.get("tf_collision"),
+            )
+        except KeyError as exc:
+            raise ValueError(f"FS model dict is missing required key: {exc}") from exc
+
+    def save_json(self, path: str) -> None:
+        """Persist the trained model to ``path`` as JSON (atomic write)."""
+        import json
+        import tempfile
+
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(self.to_dict(), fh, indent=2, sort_keys=True)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    @classmethod
+    def load_json(cls, path: str) -> EMResult:
+        """Load a trained model previously written by :meth:`save_json`."""
+        import json
+
+        with open(path) as fh:
+            return cls.from_dict(json.load(fh))
+
+    def validate_for(self, mk: MatchkeyConfig) -> None:
+        """Raise if this model can't score ``mk`` (field / level mismatch).
+
+        A persisted model is only reusable against the same matchkey shape:
+        every field must have a match-weight vector whose length equals the
+        field's level count. Mismatch means the config changed since training,
+        so fail loudly rather than silently scoring with a stale model.
+        """
+        for f in mk.fields:
+            weights = self.match_weights.get(f.field)
+            if weights is None:
+                raise FSModelMismatchError(
+                    f"Persisted FS model has no weights for field '{f.field}'. "
+                    f"The matchkey changed since training — retrain or clear the "
+                    f"model_path."
+                )
+            if len(weights) != f.levels:
+                raise FSModelMismatchError(
+                    f"Persisted FS model for field '{f.field}' has {len(weights)} "
+                    f"levels but the matchkey expects {f.levels}. Retrain or clear "
+                    f"the model_path."
+                )
+
+
+class FSModelMismatchError(ValueError):
+    """A persisted FS model is incompatible with the matchkey being scored."""
+
 
 def comparison_vector(
     row_a: dict,
@@ -586,6 +684,44 @@ def train_em(
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
     )
+
+
+def load_or_train_em(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    *,
+    blocks: list | None = None,
+    blocking_fields: list[str] | None = None,
+    max_iterations: int | None = None,
+    convergence: float | None = None,
+) -> EMResult:
+    """Return a trained EMResult, reusing ``mk.model_path`` when present.
+
+    Splink-style train-once -> reuse: when ``mk.model_path`` is set and the
+    file exists, the persisted model is loaded, validated against ``mk`` (field
+    / level shape), and EM is skipped. When the path is set but absent, EM runs
+    and the trained model is saved there for next time. With no ``model_path``
+    this is exactly ``train_em``. The single seam all three pipeline call sites
+    (core pipeline x2, TUI engine) share.
+    """
+    path = getattr(mk, "model_path", None)
+    if path and os.path.exists(path):
+        em = EMResult.load_json(path)
+        em.validate_for(mk)  # raises FSModelMismatchError on shape mismatch
+        logger.info("Loaded FS model from %s (skipped EM training)", path)
+        return em
+
+    em = train_em(
+        df, mk,
+        max_iterations=max_iterations if max_iterations is not None else mk.em_iterations,
+        convergence=convergence if convergence is not None else mk.convergence_threshold,
+        blocks=blocks,
+        blocking_fields=blocking_fields,
+    )
+    if path:
+        em.save_json(path)
+        logger.info("Saved FS model to %s", path)
+    return em
 
 
 def _build_tf_tables(

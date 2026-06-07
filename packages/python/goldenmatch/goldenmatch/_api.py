@@ -325,6 +325,7 @@ def dedupe_df(
     allow_red_config: bool = False,
     exclude_columns: list[str] | None = None,
     planning_effort: str | None = None,
+    fs_model_path: str | None = None,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -341,6 +342,10 @@ def dedupe_df(
         llm_scorer: Enable LLM scoring for borderline pairs.
         backend: Processing backend: None (default), "ray".
         source_name: Source label for the DataFrame (default: "dataframe").
+        fs_model_path: Persisted Fellegi-Sunter model file. When set, every
+            probabilistic matchkey without its own ``model_path`` loads the
+            model from here (skipping EM) if it exists, or trains and saves it
+            there on first run (Splink-style train-once -> reuse).
 
     Returns:
         DedupeResult with golden records, clusters, dupes, unique, and stats.
@@ -410,6 +415,13 @@ def dedupe_df(
             config.llm_scorer = LLMScorerConfig(enabled=True)
         if llm_auto:
             config.llm_auto = llm_auto
+        # Splink-style train-once: point probabilistic matchkeys at a persisted
+        # model file (load-or-train-and-save). Only fills matchkeys that don't
+        # already carry their own model_path. No-op when there are none.
+        if fs_model_path:
+            for mk in getattr(config, "matchkeys", None) or []:
+                if getattr(mk, "type", None) == "probabilistic" and not mk.model_path:
+                    mk.model_path = fs_model_path
 
         # Merge kwarg-supplied exclude_columns into config.exclude_columns
         # so downstream pipeline steps that read off config (rather than

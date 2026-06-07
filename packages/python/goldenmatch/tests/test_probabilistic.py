@@ -774,3 +774,132 @@ class TestPosteriorThresholds:
         link, review = compute_thresholds(em, calibrated=True)
         assert link == 0.99
         assert review == 0.50
+
+
+# ── Model persistence (Phase 1a) ───────────────────────────────────────────
+
+
+class TestModelPersistence:
+    def _trained(self):
+        from goldenmatch.core.probabilistic import train_em
+        return train_em(_make_dedupe_df(), _make_probabilistic_mk(),
+                        n_sample_pairs=200, blocking_fields=["zip"])
+
+    def test_to_from_dict_roundtrip(self):
+        from goldenmatch.core.probabilistic import EMResult
+        em = self._trained()
+        back = EMResult.from_dict(em.to_dict())
+        assert back.m_probs == em.m_probs
+        assert back.u_probs == em.u_probs
+        assert back.match_weights == em.match_weights
+        assert back.proportion_matched == em.proportion_matched
+        assert back.converged == em.converged
+        assert back.iterations == em.iterations
+
+    def test_save_load_json_roundtrip(self, tmp_path):
+        from goldenmatch.core.probabilistic import EMResult
+        em = self._trained()
+        path = str(tmp_path / "model.json")
+        em.save_json(path)
+        loaded = EMResult.load_json(path)
+        assert loaded.match_weights == em.match_weights
+        assert loaded.to_dict() == em.to_dict()
+
+    def test_to_dict_has_version_marker(self):
+        em = self._trained()
+        d = em.to_dict()
+        assert d["__type__"] == "goldenmatch.EMResult"
+        assert d["__version__"] == 1
+
+    def test_from_dict_rejects_future_version(self):
+        from goldenmatch.core.probabilistic import EMResult
+        d = self._trained().to_dict()
+        d["__version__"] = 999
+        with pytest.raises(ValueError, match="newer than this"):
+            EMResult.from_dict(d)
+
+    def test_validate_for_detects_missing_field(self):
+        from goldenmatch.core.probabilistic import FSModelMismatchError
+        em = self._trained()
+        # A matchkey with a field the model never saw.
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="email", scorer="exact", levels=2),
+        ])
+        with pytest.raises(FSModelMismatchError, match="no weights for field"):
+            em.validate_for(mk)
+
+    def test_validate_for_detects_level_mismatch(self):
+        from goldenmatch.core.probabilistic import FSModelMismatchError
+        em = self._trained()  # first_name trained at 3 levels
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", levels=2),
+        ])
+        with pytest.raises(FSModelMismatchError, match="levels"):
+            em.validate_for(mk)
+
+    def test_load_or_train_saves_then_loads(self, tmp_path):
+        # First call (cache miss): trains and writes the file.
+        # Second call (cache hit): loads, skips EM. Both produce the same model.
+        from goldenmatch.core import probabilistic as p
+        path = str(tmp_path / "fs.json")
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk(model_path=path)
+
+        calls = {"n": 0}
+        real_train = p.train_em
+
+        def _counting_train(*a, **k):
+            calls["n"] += 1
+            return real_train(*a, **k)
+
+        p.train_em = _counting_train
+        try:
+            em1 = p.load_or_train_em(df, mk, blocking_fields=["zip"])
+            assert calls["n"] == 1
+            assert (tmp_path / "fs.json").exists()
+            em2 = p.load_or_train_em(df, mk, blocking_fields=["zip"])
+            assert calls["n"] == 1  # second call did NOT retrain
+        finally:
+            p.train_em = real_train
+        assert em2.match_weights == em1.match_weights
+
+    def test_load_or_train_no_path_is_plain_train(self):
+        from goldenmatch.core.probabilistic import load_or_train_em
+        mk = _make_probabilistic_mk()  # no model_path
+        em = load_or_train_em(_make_dedupe_df(), mk, blocking_fields=["zip"])
+        assert "first_name" in em.match_weights
+
+
+class TestDedupeWithPersistedModel:
+    def test_saved_model_run_is_byte_identical(self, tmp_path):
+        # Gate: a dedupe that loads a persisted FS model produces identical
+        # pairs/clusters to one that trains from scratch.
+        from goldenmatch import dedupe_df
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+        )
+
+        def _cfg(model_path=None):
+            return GoldenMatchConfig(
+                matchkeys=[_make_probabilistic_mk(model_path=model_path)],
+                blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+            )
+
+        df = _make_dedupe_df().drop("__row_id__")
+        # Baseline: train from scratch, no persistence.
+        baseline = dedupe_df(df, config=_cfg())
+        # First persisted run writes the model; second reads it (skips EM).
+        path = str(tmp_path / "m.json")
+        first = dedupe_df(df, config=_cfg(path))
+        assert (tmp_path / "m.json").exists()
+        second = dedupe_df(df, config=_cfg(path))
+
+        def _parts(r):
+            return sorted(
+                tuple(sorted(c["members"]))
+                for c in r.clusters.values() if len(c.get("members", [])) > 1
+            )
+        assert _parts(first) == _parts(baseline)
+        assert _parts(second) == _parts(baseline)

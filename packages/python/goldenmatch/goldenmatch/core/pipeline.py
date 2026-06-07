@@ -1332,15 +1332,14 @@ def _run_dedupe_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
-            em_result = train_em(
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 collected_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
@@ -2257,14 +2256,13 @@ def _run_match_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             blocks = build_blocks(combined_lf, config.blocking)
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
-            em_result = train_em(
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 combined_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
