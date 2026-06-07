@@ -162,6 +162,64 @@ def profile_fs(df: pl.DataFrame, fs_pairs: list[int], runs: int) -> None:
               f"  -> 1M ~ {per_us:.1f}s, 10M ~ {per_us * 10:.0f}s", flush=True)
 
 
+def _fs_cfg(backend):
+    """Probabilistic (Fellegi-Sunter) config over the synthetic person shape."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(name="fs", type="probabilistic", fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", levels=3,
+                          partial_threshold=0.85),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2,
+                          partial_threshold=0.85),
+            MatchkeyField(field="zip", scorer="exact", levels=2),
+        ])],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        backend=backend,
+    )
+
+
+def fs_bucket_sweep(ns: list[int], runs: int) -> None:
+    """FS on bucket vs polars-direct: speedup + cluster parity (Phase 3a gate).
+
+    Probabilistic matchkeys now ride the bucket orchestration (same em_result,
+    scorer-agnostic). This sweep proves the clusters are identical at each N and
+    reports the wall ratio.
+    """
+    from goldenmatch import dedupe_df
+
+    print("\n=== FS: bucket vs polars-direct — speedup + cluster parity ===", flush=True)
+    print(f"{'N':>7}  {'polars':>8}  {'bucket':>8}  {'ratio':>6}  clusters_identical",
+          flush=True)
+    for n in ns:
+        df = gen(n)
+        def run(backend):
+            walls, last = [], None
+            for _ in range(runs):
+                t0 = time.perf_counter()
+                last = dedupe_df(df, config=_fs_cfg(backend))
+                walls.append(time.perf_counter() - t0)
+            return statistics.median(walls), last
+        try:
+            pd_t, pd_r = run(None)
+            bk_t, bk_r = run("bucket")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {n:>7}  ERROR {type(exc).__name__}: {exc}", flush=True)
+            continue
+        identical = _partition(pd_r) == _partition(bk_r)
+        ratio = pd_t / bk_t if bk_t else float("nan")
+        print(f"  {n:>7}  {pd_t:7.2f}s  {bk_t:7.2f}s  {ratio:5.2f}x  {identical}", flush=True)
+        if not identical:
+            a, b = _partition(pd_r), _partition(bk_r)
+            print(f"           PARITY MISMATCH: polars-only={len(a - b)} bucket-only={len(b - a)}",
+                  flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ns", default="1000,5000,10000,30000,60000")
@@ -173,6 +231,7 @@ def main() -> int:
     fs_pairs = [int(x) for x in args.fs_pairs.split(",") if x.strip()]
     print(f"ns={ns}  fs_pairs={fs_pairs}  runs={args.runs}", flush=True)
     sweep(ns, args.runs)
+    fs_bucket_sweep(ns, args.runs)
     profile_fs(gen(max(ns)), fs_pairs, args.runs)
     return 0
 

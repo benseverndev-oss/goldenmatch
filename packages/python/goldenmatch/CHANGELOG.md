@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **FS on the bucket backend — scale-out via the shared orchestration
+  (Splink-parity Phase 3a).** Probabilistic (Fellegi-Sunter) matchkeys now ride
+  the same hash-bucketed, parallel `score_buckets` path weighted matchkeys use
+  (which carries the Ray / DataFusion distribution wiring), instead of a
+  sequential per-block Python loop. `score_buckets` takes an `em_result`;
+  `_score_one_bucket` dispatches probabilistic blocks to the EM-trained
+  vectorized FS scorer (`probabilistic_block_scorer`), keeping the raw FS field
+  columns through the slim projection. The pipeline routes FS through it when
+  `backend="bucket"`. Same `em_result` → **clusters identical to polars-direct**
+  (parity asserted at N=200/1000/3000 in tests + `scripts/bench_fs_and_stages.py`
+  `fs_bucket_sweep`). No new Rust — rides the numpy scorer; the native FS kernel
+  is Phase 3b. Previously FS ran single-node sequential only and every scale
+  backend declined it.
 - **FS-native explainability — match-weight waterfall (Splink-parity Phase 2).**
   `explain_pair_fs(row_a, row_b, mk, em_result)` decomposes a Fellegi-Sunter
   pair score into per-comparison log2(m/u) bit contributions (`FSWaterfall` /

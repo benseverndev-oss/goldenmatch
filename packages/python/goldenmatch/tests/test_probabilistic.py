@@ -1060,3 +1060,47 @@ class TestFSWaterfall:
         assert "prior" in text
         for f in mk.fields:
             assert f.field in text
+
+
+# ── FS on the bucket backend (Phase 3a) ────────────────────────────────────
+
+
+class TestFSBucketParity:
+    def _cfg(self, backend):
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+        )
+        return GoldenMatchConfig(
+            matchkeys=[_make_probabilistic_mk()],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+            backend=backend,
+        )
+
+    @staticmethod
+    def _parts(r):
+        return sorted(
+            tuple(sorted(c["members"]))
+            for c in r.clusters.values() if len(c.get("members", [])) > 1
+        )
+
+    def test_bucket_matches_polars_direct(self):
+        # FS clusters must be identical between polars-direct and the bucket
+        # backend (same em_result, scorer-agnostic orchestration).
+        from goldenmatch import dedupe_df
+        df = _make_dedupe_df().drop("__row_id__")
+        polars_r = dedupe_df(df, config=self._cfg(None))
+        bucket_r = dedupe_df(df, config=self._cfg("bucket"))
+        assert self._parts(bucket_r) == self._parts(polars_r)
+
+    def test_score_buckets_requires_em_for_probabilistic(self):
+        # The bucket scorer must refuse a probabilistic matchkey with no model.
+        import polars as pl
+        from goldenmatch.backends.score_buckets import score_buckets
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        df = pl.DataFrame({"__row_id__": [0, 1], "first_name": ["a", "a"],
+                           "last_name": ["b", "b"], "zip": ["1", "1"]})
+        with pytest.raises(ValueError, match="requires a trained em_result"):
+            score_buckets(df, BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+                          _make_probabilistic_mk(), set(), em_result=None)

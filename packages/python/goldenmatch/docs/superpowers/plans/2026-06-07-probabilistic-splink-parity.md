@@ -59,10 +59,23 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       93 FS/lineage/explain tests pass (4 new waterfall); ruff clean. (Pre-existing
       TUI async failures are a missing-pytest-asyncio env issue, not this change.)
 
-## PR 5 — Phase 3a: FS on bucket/Ray/Sail (numpy)
-- [ ] Accept `mk.type == "probabilistic"` in `score_buckets._resolve_fast_path` via `_resolve_probabilistic_fast_path`.
-- [ ] Per-block compute = `score_probabilistic_vectorized`.
-- [ ] Gate: bucket vs polars-direct cluster parity (extend `bench_fs_and_stages.py`); FS reaches weighted-path N.
+## PR 5 — Phase 3a: FS on bucket/Ray/Sail (numpy) ✅ (2026-06-07)
+- [x] Probabilistic matchkeys ride `score_buckets`: `_resolve_fast_path` already
+      declines them (fast_path_specs=None) → falls to `_score_one_bucket`, which
+      now dispatches to `probabilistic_block_scorer` (vectorized FS) when
+      `mk.type=='probabilistic'`. `score_buckets(em_result=...)`; slim projection
+      keeps raw FS field columns. (Used the production vectorized scorer, not the
+      orphaned `probabilistic_fast.py` scalar path — simpler + already the FS scorer.)
+- [x] Pipeline FS block routes through `score_buckets` when `backend=='bucket'`
+      (dedupe path, pipeline.py:1331). EM still samples within-block pairs;
+      `model_path` (Phase 1a) skips EM on reuse at scale.
+- [x] Gate: bucket vs polars-direct **cluster parity** at N=200/1000/3000 (unit
+      test `TestFSBucketParity` + `bench_fs_and_stages.py::fs_bucket_sweep`); FS
+      now reaches the same N the weighted bucket path does. 168 tests green incl.
+      bucket gate / multipass / febrl3 / native parity; ruff clean.
+- [ ] FOLLOW-UP: match-pipeline FS site (pipeline.py:2256, target/reference mode)
+      still uses the sequential path — route through `score_buckets(target_ids=...)`
+      once match-mode bucket parity is validated separately.
 
 ## PR 6 — Phase 3b: native FS kernel
 - [ ] `score_block_pairs_fs_arrow` in `rust/extensions/native/src/score.rs` (FS arithmetic + posterior/linear).
