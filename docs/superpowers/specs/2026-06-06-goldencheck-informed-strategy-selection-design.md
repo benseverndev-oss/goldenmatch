@@ -9,6 +9,24 @@ GoldenCheck profiling signal, and the controller's commit/fallback loop.
 T3 F1 0.257, precision **14.9%**), diagnosed 2026-06-06 against the real tier
 data (`scripts/dump_dqbench_er_tiers.py`).
 
+> ## ⚠️ Diagnosis correction (2026-06-06, post-implementation)
+>
+> Implementing this surfaced a **simpler, more correct root cause** than the
+> "heavy-tail collision" framing below. The phone value "shared by 170 rows"
+> was the **empty string** — T3's `_split_record_dupe` blanks out phone/address
+> for 60% of dupes, and `find_exact_matches` filtered nulls but **not empty
+> strings**, so every blank-phone record joined on `""` and Union-Find exploded
+> the clusters. **The shipped fix is `scorer._find_exact_match_ids` now
+> excluding blank/empty matchkey values** (a general correctness fix, not a
+> heuristic): **T3 F1 0.257 → 0.747** (precision 0.149 → 0.630), with **zero
+> regression** (DBLP-ACM 0.9641, Febrl3 0.9665, 379 exact-path tests green).
+>
+> The collision-aware strategy-selection below remains a **valid future idea for
+> *genuine* collisions** (a real identifier truly shared across distinct
+> entities — e.g. the residual 8-way email collisions that cap T3 at 0.63), but
+> it is **unvalidated** (a quick probabilistic-switch experiment *hurt* on one
+> fixture) and is **NOT** the T3 lever. Treat the phases below as exploratory.
+
 ## Context — what the diagnosis actually found
 
 Running zero-config on the real DQbench T3 (10k rows, 2k adversarial dupes):

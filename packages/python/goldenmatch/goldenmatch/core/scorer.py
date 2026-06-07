@@ -268,7 +268,15 @@ def _find_exact_match_ids(
     refactor: chunked, incremental, tui/engine, tests, benchmark scripts)."""
     mk_col = f"__mk_{mk.name}__"
     df = lf.select("__row_id__", mk_col).collect()
-    df = df.filter(pl.col(mk_col).is_not_null())
+    # Exclude null AND empty/blank matchkey values. Two records both missing a
+    # field (e.g. a blanked phone -> "") must NOT be an exact match: otherwise
+    # every blank-valued record joins on "" and Union-Find transitively explodes
+    # the clusters (the DQbench T3 precision collapse, 2026-06-06). Blank != a
+    # shared identity claim.
+    df = df.filter(
+        pl.col(mk_col).is_not_null()
+        & (pl.col(mk_col).cast(pl.Utf8, strict=False).str.strip_chars() != "")
+    )
     if df.height < 2:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
     joined = df.join(df, on=mk_col, suffix="_right").filter(

@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **Exact matchkeys no longer match on empty/blank values.** Two records both
+  missing a field (e.g. a blanked phone → `""`) are not a shared-identity claim;
+  previously `find_exact_matches` excluded nulls but not empty strings, so every
+  blank-valued record joined on `""` and Union-Find transitively exploded the
+  clusters. Diagnosed on the DQbench ER **T3** tier (precision 14.9%): the fix
+  lifts **T3 F1 0.257 → 0.747** with no regression on the clean canonical sets
+  (DBLP-ACM 0.9641, Febrl3 0.9665). Repro tool: `scripts/dump_dqbench_er_tiers.py`.
+
 ## [1.28.0] - 2026-06-06
 
 This release re-derives the **auto-config search strategy for the post-speedup cost model**.
