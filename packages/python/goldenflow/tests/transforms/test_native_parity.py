@@ -18,14 +18,19 @@ import random
 
 import phonenumbers
 import polars as pl
-import pyarrow as pa  # noqa: E402
 import pytest
 from goldenflow.core._native_loader import native_available, native_enabled, native_module
-from goldenflow.transforms._native import phone_e164_native  # noqa: E402
-from goldenflow.transforms.phone import phone_country_code, phone_e164  # noqa: E402
 
 if not native_available():
     pytest.skip("goldenflow-native not built/importable", allow_module_level=True)
+
+# pyarrow is only needed on the native path (the [native] extra pulls it). Skip
+# rather than error if it's absent, and import only after the native-available
+# gate so the pure-Python matrix lane never trips on it.
+pa = pytest.importorskip("pyarrow")
+
+from goldenflow.transforms._native import phone_e164_native  # noqa: E402
+from goldenflow.transforms.phone import phone_country_code, phone_e164  # noqa: E402
 
 # Use whichever kernel the loader resolved (in-tree build shadows the wheel).
 _native = native_module()
