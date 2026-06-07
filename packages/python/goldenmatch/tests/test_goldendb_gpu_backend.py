@@ -348,6 +348,41 @@ def test_resolve_dataset_gpu_finds_cross_block_duplicates():
 
 # ── the (id, cluster_id) handoff into the existing CPU clustering path ─────────
 
+def test_full_pipeline_dedupe_with_gpu_backend():
+    """End-to-end: run_dedupe_df with backend='gpu' clusters duplicates through the
+    real pipeline (block -> GPU score -> cluster -> golden)."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+    )
+    from goldenmatch.core.pipeline import run_dedupe_df
+
+    df = pl.DataFrame(
+        {
+            "name": ["John Smith", "Jon Smith", "Mary Jones", "Mary Jones", "Bob Brown"],
+            "city": ["NYC", "NYC", "LA", "LA", "SF"],
+        }
+    )
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="m",
+                type="weighted",
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+                threshold=0.6,
+            )
+        ],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])]),
+        backend="gpu",
+    )
+    res = run_dedupe_df(df, cfg, output_clusters=True)
+    member_sets = [set(c["members"]) for c in res["clusters"].values()]
+    assert {0, 1} in member_sets      # John Smith / Jon Smith (NYC block)
+    assert {2, 3} in member_sets      # Mary Jones / Mary Jones (LA block)
+    assert {4} in member_sets         # Bob Brown alone (SF block)
+
+
 def test_gpu_pairs_feed_cpu_clustering():
     """The spec's contract: the GPU emits (id_a, id_b, score); the unchanged CPU
     clustering path turns it into clusters keyed by __row_id__."""

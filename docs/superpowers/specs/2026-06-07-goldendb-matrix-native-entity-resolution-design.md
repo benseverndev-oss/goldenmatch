@@ -320,6 +320,9 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
   (parity-tested).
 - block-scorer-contract output `(id_a, id_b, score)` feeding the unchanged
   `core/cluster.py` -> `core/golden.py` path via `__row_id__`
+- **end-to-end**: `run_dedupe_df(df, cfg)` with `backend="gpu"` runs the full
+  pipeline (block -> GPU score -> cluster -> golden) and clusters duplicates
+  correctly (`tests/test_goldendb_gpu_backend.py::test_full_pipeline_dedupe_with_gpu_backend`)
 
 NOT yet wired (future work):
 - a true GPU-ANN index (FAISS / DiskANN) -- recall is brute-force top-k today
