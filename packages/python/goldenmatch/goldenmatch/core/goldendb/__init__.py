@@ -92,6 +92,7 @@ from goldenmatch.core.goldendb._encode import (  # noqa: E402
 )
 from goldenmatch.core.goldendb.recall import (  # noqa: E402
     coarse_encode,
+    faiss_available,
     topk_candidates,
 )
 from goldenmatch.core.goldendb.scorer import (  # noqa: E402
@@ -117,6 +118,7 @@ __all__ = [
     "GA2MCombiner",
     "GA2MInteractionCombiner",
     "coarse_encode",
+    "faiss_available",
     "topk_candidates",
     "find_matches_gpu",
     "resolve_dataset_gpu",

@@ -27,6 +27,7 @@ from goldenmatch.core.goldendb import (
     coarse_encode,
     combine_matrices,
     cosine_matrix,
+    faiss_available,
     find_matches_gpu,
     fit_field_weights,
     jax_available,
@@ -278,6 +279,57 @@ def test_coarse_encode_normalised():
     coarse = coarse_encode([emb], np.array([1.0]))
     norms = np.linalg.norm(coarse, axis=1)
     np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+
+def test_faiss_recall_matches_bruteforce():
+    """Exact FAISS IndexFlatIP and the brute-force scan must return the same
+    top-k candidate set. Uses continuous random vectors so cosine ties (which both
+    backends break arbitrarily and differently) don't make the comparison flaky."""
+    pytest.importorskip("faiss")
+    rng = np.random.default_rng(1)
+    mat = rng.random((50, 32)).astype(np.float32)
+    mat /= np.linalg.norm(mat, axis=1, keepdims=True)
+    bf = set(topk_candidates(mat, k=3, backend="bruteforce"))
+    fa = set(topk_candidates(mat, k=3, backend="faiss"))
+    assert bf == fa
+
+
+def test_faiss_ivf_recall_runs():
+    """The IVF (approximate) path executes and returns candidate pairs."""
+    pytest.importorskip("faiss")
+    from goldenmatch.core.goldendb.recall import _topk_faiss
+
+    rng = np.random.default_rng(0)
+    mat = rng.random((300, 32)).astype(np.float32)
+    mat /= np.linalg.norm(mat, axis=1, keepdims=True)
+    pairs = _topk_faiss(mat, k=5, min_sim=0.0, use_ivf=True, nlist=8, nprobe=8)
+    assert all(a < b for a, b in pairs)
+
+
+def test_recall_backend_auto_selects_faiss_when_available():
+    from goldenmatch.core.goldendb.recall import _resolve_backend
+
+    expected = "faiss" if faiss_available() else "bruteforce"
+    assert _resolve_backend(None) == expected
+    assert _resolve_backend("bruteforce") == "bruteforce"
+
+
+def test_resolve_dataset_gpu_with_faiss_backend(monkeypatch):
+    pytest.importorskip("faiss")
+    monkeypatch.setenv("GOLDENMATCH_GOLDENDB_RECALL_BACKEND", "faiss")
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 4],
+            "name": [
+                "Catherine Reed", "Katherine Reed",
+                "Sophie Lang", "Sofie Lang",
+                "Totally Different",
+            ],
+        }
+    )
+    keys = {frozenset((a, b)) for a, b, _ in resolve_dataset_gpu(df, _mk(0.5), k=4)}
+    assert frozenset((0, 1)) in keys
+    assert frozenset((2, 3)) in keys
 
 
 def test_recall_path_matches_dense_path():

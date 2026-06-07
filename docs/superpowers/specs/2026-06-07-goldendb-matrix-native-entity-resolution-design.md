@@ -316,8 +316,12 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
   weighted-average scorer consumes the trained weights (replaces F-S m/u estimation
   / the controller's weight search). Verified end-to-end: training upweights the
   label-predictive field and widens the match/non-match score gap.
-- **Stage A recall**: coarse-vector brute-force top-k shortlist
-  (`recall.py`) + a vectorised Stage B that scores only the shortlist. Two entry
+- **Stage A recall**: coarse-vector top-k shortlist (`recall.py`) + a vectorised
+  Stage B that scores only the shortlist. Two recall backends, auto-selected
+  (override `GOLDENMATCH_GOLDENDB_RECALL_BACKEND`): **FAISS** (`IndexFlatIP` exact,
+  `IndexIVFFlat` approximate for N>=50k; the spec's GPU-ANN step, runs on GPU with a
+  GPU faiss build) when installed, else a tiled JAX brute-force `matmul`. FAISS exact
+  and brute force return identical candidate sets (parity-tested). Two entry
   points: (a) auto-engaged inside large blocks (`n > ANN_THRESHOLD`) so the dense
   N^2 path is avoided, and (b) `resolve_dataset_gpu(df, mk)` -- **blocker-free**
   resolution over a whole dataset, finding duplicates a blocking key would separate
@@ -332,9 +336,9 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
   correctly (`tests/test_goldendb_gpu_backend.py::test_full_pipeline_dedupe_with_gpu_backend`)
 
 NOT yet wired (future work):
-- a true GPU-ANN index (FAISS / DiskANN) -- recall is brute-force top-k today
-  (good to ~1e5-1e6 vectors per the design doc); larger datasets and streaming
-  inserts need the indexed path
+- streaming / on-disk ANN (DiskANN / FreshVamana) for high-mutation incremental
+  inserts -- FAISS recall (flat + IVF) is wired now; the index is rebuilt per call,
+  so a persistent, incrementally-updated index is the next step
 - per-feature 1-D shape functions `f_i` (splines/lattices) -- pairwise interactions
   are now in (`GA2MInteractionCombiner`), but the main effects are still linear, and
   the interaction model is not yet wired into the block scorer's default combine

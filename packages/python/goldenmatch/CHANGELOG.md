@@ -22,9 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`fit_field_weights` / `apply_field_weights`) that learns per-field weights from labeled
   pairs and writes them back onto the matchkey, and GA2M pairwise interaction terms
   (`GA2MInteractionCombiner`) — a monotone, exactly-attributable `sim_i*sim_j` AND-gate that
-  beats the linear model on product-gate patterns, and negative-evidence penalties on the
-  matrix path. Not yet wired: a true GPU-ANN index (recall is brute force, good to
-  ~1e5–1e6 rows), per-feature 1-D shape functions, and GPU wall-clock validation. Lives in
+  beats the linear model on product-gate patterns, negative-evidence penalties on the
+  matrix path, and a FAISS recall backend (`IndexFlatIP` exact + `IndexIVFFlat` approximate,
+  auto-selected when faiss is installed, brute-force JAX fallback otherwise). Not yet wired:
+  streaming/on-disk ANN for incremental inserts, per-feature 1-D shape functions, and GPU
+  wall-clock validation. Lives in
   `goldenmatch/core/goldendb/`. Spec:
   `docs/superpowers/specs/2026-06-07-goldendb-matrix-native-entity-resolution-design.md`.
 
