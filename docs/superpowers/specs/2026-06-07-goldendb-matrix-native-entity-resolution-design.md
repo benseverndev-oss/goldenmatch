@@ -305,7 +305,12 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
 - char-ngram hashed per-field encoding -> L2-normalised matrices
 - per-field cosine via a JAX `matmul` (the GPU path; runs on CPU here)
 - GA2M weighted-average combine with EXACT additive attribution + monotonicity
-- a differentiable `jax.grad` training step for the probabilistic combine
+- a closed gradient-based training loop (`training.py`): `fit_field_weights` learns
+  per-field weights from labeled pairs by `jax.grad` BCE descent, and
+  `apply_field_weights` writes them back onto the matchkey so the normal
+  weighted-average scorer consumes the trained weights (replaces F-S m/u estimation
+  / the controller's weight search). Verified end-to-end: training upweights the
+  label-predictive field and widens the match/non-match score gap.
 - **Stage A recall**: coarse-vector brute-force top-k shortlist
   (`recall.py`) + a vectorised Stage B that scores only the shortlist. Two entry
   points: (a) auto-engaged inside large blocks (`n > ANN_THRESHOLD`) so the dense

@@ -92,6 +92,11 @@ from goldenmatch.core.goldendb.scorer import (  # noqa: E402
     resolve_dataset_gpu,
     score_blocks_gpu,
 )
+from goldenmatch.core.goldendb.training import (  # noqa: E402
+    apply_field_weights,
+    build_training_matrix,
+    fit_field_weights,
+)
 
 __all__ = [
     "EXPERIMENTAL",
@@ -108,4 +113,7 @@ __all__ = [
     "find_matches_gpu",
     "resolve_dataset_gpu",
     "score_blocks_gpu",
+    "build_training_matrix",
+    "fit_field_weights",
+    "apply_field_weights",
 ]

@@ -20,11 +20,14 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.goldendb import (
     GA2MCombiner,
+    apply_field_weights,
+    build_training_matrix,
     char_ngram_hashed,
     coarse_encode,
     combine_matrices,
     cosine_matrix,
     find_matches_gpu,
+    fit_field_weights,
     jax_available,
     resolve_dataset_gpu,
     score_blocks_gpu,
@@ -248,6 +251,77 @@ def test_recall_auto_selected_above_threshold(monkeypatch):
     df = _varied_block()
     pairs = gs.find_matches_gpu(df, _mk(0.55))      # use_recall=None -> auto
     assert any({a, b} == {0, 1} for a, b, _ in pairs)
+
+
+# ── gradient-based training: learn field weights from labels ──────────────────
+
+def _two_field_labeled():
+    """A frame where ``name`` predicts the label and ``noise`` does not."""
+    rng = np.random.default_rng(0)
+    base = ["alpha", "beta", "gamma", "delta"]
+    n = 40
+    names = [base[i % 4] for i in range(n)]
+    noise = [f"tok{int(rng.integers(0, 100000))}" for _ in range(n)]
+    df = pl.DataFrame(
+        {"__row_id__": list(range(n)), "name": names, "noise": noise}
+    )
+    mk = MatchkeyConfig(
+        name="m",
+        type="weighted",
+        fields=[
+            MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0),
+            MatchkeyField(field="noise", scorer="jaro_winkler", weight=1.0),
+        ],
+        threshold=0.5,
+    )
+    labeled = [
+        (a, b, 1.0 if names[a] == names[b] else 0.0)
+        for a in range(n)
+        for b in range(a + 1, n)
+    ]
+    return df, mk, labeled, names
+
+
+def test_build_training_matrix_shape_and_labels():
+    df, mk, labeled, _ = _two_field_labeled()
+    sims, labels = build_training_matrix(df, mk, labeled)
+    assert sims.shape == (len(labeled), 2)
+    assert labels.shape == (len(labeled),)
+    assert set(np.unique(labels)).issubset({0.0, 1.0})
+
+
+def test_fit_field_weights_upweights_informative_field():
+    df, mk, labeled, _ = _two_field_labeled()
+    _combiner, weights = fit_field_weights(df, mk, labeled, steps=300, lr=0.1)
+    # name carries the label signal; noise is random -> name weighted higher.
+    assert weights["name"] > weights["noise"]
+
+
+def test_apply_field_weights_updates_matchkey():
+    df, mk, labeled, _ = _two_field_labeled()
+    _combiner, weights = fit_field_weights(df, mk, labeled, steps=200, lr=0.1)
+    trained_mk = apply_field_weights(mk, weights)
+    by_name = {f.field: f.weight for f in trained_mk.fields}
+    assert by_name["name"] == pytest.approx(weights["name"])
+    assert by_name["noise"] == pytest.approx(weights["noise"])
+    # original mk untouched (model_copy)
+    assert all(f.weight == 1.0 for f in mk.fields)
+
+
+def test_training_loop_improves_precision_end_to_end():
+    """Learned weights should rank true (same-name) pairs above noise pairs better
+    than equal weights -- the full train->apply->score loop."""
+    df, mk, labeled, names = _two_field_labeled()
+    _combiner, weights = fit_field_weights(df, mk, labeled, steps=400, lr=0.1)
+    trained_mk = apply_field_weights(mk, weights)
+
+    def mean_gap(matchkey):
+        sims, labels = build_training_matrix(df, matchkey, labeled)
+        w = np.array([f.weight for f in matchkey.fields])
+        score = (sims * w).sum(axis=1) / w.sum()
+        return score[labels == 1].mean() - score[labels == 0].mean()
+
+    assert mean_gap(trained_mk) > mean_gap(mk)
 
 
 # ── blocker-free dataset resolution (the "approximate primitive join") ────────

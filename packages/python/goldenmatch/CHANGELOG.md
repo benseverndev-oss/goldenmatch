@@ -18,7 +18,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   experimental.** Includes a Stage A brute-force top-k ANN recall path
   (`goldenmatch.core.goldendb.recall`) that auto-engages on large blocks to avoid the dense
   N² matrix, plus `resolve_dataset_gpu(df, mk)` for **blocker-free** whole-dataset resolution
-  (finds duplicates a blocking key would separate). Not yet wired: a true GPU-ANN index
+  (finds duplicates a blocking key would separate), and a closed gradient-based training loop
+  (`fit_field_weights` / `apply_field_weights`) that learns per-field weights from labeled
+  pairs and writes them back onto the matchkey. Not yet wired: a true GPU-ANN index
   (recall is brute force, good to ~1e5–1e6 rows), trained shape functions / interaction terms,
   negative-evidence penalties, and GPU wall-clock validation. Lives in
   `goldenmatch/core/goldendb/`. Spec:

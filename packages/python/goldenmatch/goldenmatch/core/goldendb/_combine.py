@@ -138,6 +138,18 @@ class GA2MCombiner:
         return float(self._loss(self._jax_params(), np.asarray(sims, np.float64),
                                 np.asarray(labels, np.float64)))
 
+    def field_weights(self) -> np.ndarray:
+        """The learned, non-negative per-field weights (``softplus(w)``).
+
+        These can be written back onto a matchkey's field weights, so the
+        default weighted-average scorer consumes the gradient-trained weights
+        directly -- closing the training loop without a bespoke score path.
+        """
+        from goldenmatch.core.goldendb import require_jax
+
+        jax, jnp = require_jax()
+        return np.asarray(jax.nn.softplus(jnp.asarray(self.params.w)))
+
     def attribution(self, sims: np.ndarray) -> np.ndarray:
         """Exact additive per-field contribution to the (pre-sigmoid) weighted
         average. ``contributions.sum(axis=1)`` == the weighted-average term that
