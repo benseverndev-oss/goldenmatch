@@ -33,21 +33,38 @@ coalesce fast path already resolves the 4-digit-year formats in vectorized Rust,
 and a per-row `chrono` parser would be slower while reintroducing a 2-digit-year
 parity hazard. The ragged date tail stays on `dateutil`.
 
-## Gating & the open parity gap
+## Gating: NANP-only (parity-safe, on by default)
 
-`goldenflow.core._native_loader._GATED_ON` is **empty** by design. Measured
-parity against the installed `phonenumbers` library is **not** byte-identical:
-the Rust `phonenumber` port formats some international national numbers
-differently (e.g. `+33 1 42 68 53 00` → native `+3342685300` vs python
-`+33142685300` — it drops the national leading digit). Until that is reconciled
-(metadata-version alignment, or restricting native acceptance to a proven
-parity-safe subset such as NANP), `phone` stays out of `_GATED_ON`, so
-`GOLDENFLOW_NATIVE=auto` (the default) never uses it.
+`phone` **is** in `goldenflow.core._native_loader._GATED_ON`, so it runs under
+`GOLDENFLOW_NATIVE=auto` (the default) — but only in a provably parity-safe
+mode.
 
-- `GOLDENFLOW_NATIVE=1` enables it anyway (benchmark / parity lane).
-- The parity test `packages/python/goldenflow/tests/transforms/test_native_parity.py`
-  asserts native == `phonenumbers` on the NANP subset and pins the international
-  divergence so a future fix flips the gate deliberately.
+Characterization across 20 country metadata sets showed the Rust `phonenumber`
+port is byte-identical to the Python `phonenumbers` library **except** when a
+`+CC` international number is parsed with a mismatched default region (the
+transforms pass `"US"`) and its national number starts with `1` (e.g.
+`+33142685300` → native `+3342685300` — the port mis-applies US national-prefix
+stripping). It also diverges on ambiguous leading-`1` inputs (`1234567890` →
+native `+1234567890` vs python `+11234567890`).
+
+Two gates make native authoritative only where it's proven correct:
+
+1. **Kernel `nanp_only` mode** — emits a result only for country-code-1 numbers;
+   everything else returns null and falls back to Python.
+2. **Canonical-NANP acceptance** (in `transforms/_native.py`) — keeps only
+   `^\+1[2-9]\d{9}$` outputs, dropping the malformed 9-digit results the
+   leading-`1` ambiguity produces.
+
+So native resolves the canonical-NANP residual the Polars fast path can't reach
+(alpha like `1-800-FLOWERS`, extensions, `+1`-prefixed forms) ~4-5× faster, and
+everything international/ambiguous defers to Python. `phone_country_code` is also
+gated (country code agrees on all NANP); `phone_national`/`phone_validate` stay
+pure Python (no cheap canonical check). Verified byte-identical to
+`phonenumbers` over a 60k mixed corpus in
+`packages/python/goldenflow/tests/transforms/test_native_parity.py`.
+
+`GOLDENFLOW_NATIVE=0` forces pure Python; `=1` enables native for all components
+(bench/parity lane, no nanp_only restriction — will diverge on intl).
 
 ## Build
 

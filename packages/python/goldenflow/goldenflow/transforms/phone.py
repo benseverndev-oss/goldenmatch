@@ -8,7 +8,6 @@ from goldenflow.transforms._fastpath import _V, apply_with_residual
 from goldenflow.transforms._native import (
     phone_country_code_native,
     phone_e164_native,
-    phone_national_native,
 )
 
 _DEFAULT_REGION = "US"
@@ -18,10 +17,16 @@ _DEFAULT_REGION = "US"
 # 11 chars starting "1" + a 2-9 digit maps to +<11>. Both reproduce exactly
 # what phonenumbers.format_number(parse(val, "US"), E164) returns, so a row this
 # path resolves is identical to the per-row path (parity asserted over a random
-# corpus in tests/transforms/test_phone.py). The 2-9 guard avoids the
-# leading-"1" ambiguity (phonenumbers reads a leading 1 on a 10-digit string as
-# the country code); rows containing letters defer to phonenumbers' alpha
-# handling. Everything else falls through to the per-row path unchanged.
+# corpus in tests/transforms/test_fastpath_parity.py).
+#
+# Three guards keep it parity-safe:
+#   - the 2-9 area-code guard avoids the leading-"1" ambiguity (phonenumbers
+#     reads a leading 1 on a 10-digit string as the country code);
+#   - rows with letters defer to phonenumbers' alpha handling;
+#   - rows with a "+" defer too: an explicit "+CC" is international, and a
+#     foreign number can strip to exactly 10 digits starting 2-9 (e.g. German
+#     "+4930123456" -> "4930123456") which would otherwise be mis-NANP'd.
+# Everything excluded falls through to the per-row / native path unchanged.
 _NANP_10 = r"^[2-9]\d{9}$"
 _NANP_11 = r"^1[2-9]\d{9}$"
 _HAS_ALPHA = r"[A-Za-z]"
@@ -29,11 +34,11 @@ _HAS_ALPHA = r"[A-Za-z]"
 
 def _e164_fast_expr() -> pl.Expr:
     digits = pl.col(_V).str.replace_all(r"\D", "")
-    no_alpha = ~pl.col(_V).str.contains(_HAS_ALPHA)
+    eligible = ~pl.col(_V).str.contains(_HAS_ALPHA) & ~pl.col(_V).str.contains(r"\+")
     return (
-        pl.when(no_alpha & digits.str.contains(_NANP_10))
+        pl.when(eligible & digits.str.contains(_NANP_10))
         .then(pl.lit("+1") + digits)
-        .when(no_alpha & digits.str.contains(_NANP_11))
+        .when(eligible & digits.str.contains(_NANP_11))
         .then(pl.lit("+") + digits)
         .otherwise(None)
     )
@@ -77,12 +82,10 @@ def phone_national(series: pl.Series) -> pl.Series:
             return val
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
 
-    native = phone_national_native()
-    if native is None:
-        return series.map_elements(_format, return_dtype=pl.Utf8)
-    return apply_with_residual(
-        series, pl.lit(None, dtype=pl.Utf8), _format, pl.Utf8, native_fn=native
-    )
+    # No native path: the Rust port's national formatting diverges from
+    # phonenumbers on ambiguous leading-1 inputs (e.g. "1234567890"), and unlike
+    # E.164 there's no cheap canonical-form check to gate on. Stays pure Python.
+    return series.map_elements(_format, return_dtype=pl.Utf8)
 
 
 @register_transform(

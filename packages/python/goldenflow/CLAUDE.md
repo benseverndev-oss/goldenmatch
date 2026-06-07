@@ -167,19 +167,30 @@ pure Python. In-tree `.so` is gitignored.
   vectorizes them; per-row chrono would be slower + reintroduce the 2-digit
   hazard).
 - **`GOLDENFLOW_NATIVE`** env (mirrors GOLDENMATCH_NATIVE): `0` force Python,
-  `1` require native for ALL components (parity/bench lane -- WILL change
-  outputs where native diverges), `auto`/unset use native iff importable AND in
-  `_GATED_ON`.
-- **`_GATED_ON` is EMPTY by design (open parity gap).** The Rust `phonenumber`
-  port is NOT byte-identical to the Python `phonenumbers` library: it formats
-  some international national numbers differently (`+33 1 42 68 53 00` -> native
-  `+3342685300` vs python `+33142685300`, dropping the national leading digit;
-  ~6% of an intl-heavy corpus). It matches byte-for-byte on the NANP subset.
-  Until reconciled (metadata-version alignment, or a curated parity-safe
-  subset), phone stays ungated so `auto` never changes a cleaned value.
-  `tests/transforms/test_native_parity.py` pins both the NANP match and the
-  intl divergence. Measured native lift on the intl residual: ~5x (still
-  parse-per-row in Rust, but no Python interpreter overhead).
+  `1` require native for ALL components with NO nanp_only restriction
+  (parity/bench lane -- WILL diverge on intl), `auto`/unset use native iff
+  importable AND in `_GATED_ON`.
+- **`_GATED_ON = {"phone"}` via NANP-only gating (parity-safe, on by default).**
+  Characterization showed the Rust `phonenumber` port is byte-identical to the
+  Python `phonenumbers` library EXCEPT (a) a `+CC` intl number parsed with the
+  mismatched `"US"` default region whose national number starts with `1`
+  (`+33142685300` -> native `+3342685300`; the port mis-applies US national-
+  prefix stripping), and (b) ambiguous leading-`1` inputs (`1234567890` ->
+  native `+1234567890` vs python `+11234567890`). TWO gates make native
+  authoritative only where proven: the kernel's `nanp_only` mode (emit only
+  country-code-1, else null -> Python) AND a canonical-NANP `^\+1[2-9]\d{9}$`
+  acceptance check in `_native.py` (drops the malformed 9-digit leading-1
+  results). Net: native resolves the canonical-NANP residual the Polars fast
+  path can't (alpha `1-800-FLOWERS`, extensions, `+1` forms) at ~4.3x; intl +
+  ambiguous defer to Python. `phone_country_code` is also gated (the code agrees
+  on all NANP); `phone_national`/`phone_validate` stay pure Python (no cheap
+  canonical check). Verified byte-identical to phonenumbers over a 60k mixed
+  corpus in `tests/transforms/test_native_parity.py`.
+- **Tier-1 no-"+" guard (load-bearing):** the Polars E.164 fast path must NOT
+  fire when the input contains `+` -- an intl `+CC` number can strip to exactly
+  10 digits starting 2-9 (German `+4930123456` -> `4930123456`) and be
+  mis-NANP'd to `+14930123456`. Regression-pinned in
+  `test_fastpath_parity.py::test_phone_e164_international_not_misnanped`.
 
 ## Streaming Module (streaming.py)
 

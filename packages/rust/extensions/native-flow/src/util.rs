@@ -5,8 +5,8 @@
 //! Interface. Each mapper releases the GIL around the compute loop.
 
 use arrow::array::{
-    Array, ArrayData, BooleanBuilder, Int64Builder, LargeStringArray, StringArray, StringBuilder,
-    make_array,
+    make_array, Array, ArrayData, BooleanBuilder, Int64Builder, LargeStringArray, StringArray,
+    StringBuilder,
 };
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;

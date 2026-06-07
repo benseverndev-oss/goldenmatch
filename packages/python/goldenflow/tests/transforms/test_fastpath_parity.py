@@ -152,3 +152,14 @@ def test_phone_digits_parity():
     vals = _phone_corpus()
     s = pl.Series("ph", vals, dtype=pl.Utf8)
     assert phone_digits(s).to_list() == [_ref_digits(v) for v in vals]
+
+
+def test_phone_e164_international_not_misnanped(monkeypatch):
+    """Regression: an int'l +CC number can strip to exactly 10 digits starting
+    2-9 (e.g. German +4930123456 -> "4930123456"). Without the no-"+" guard the
+    Polars fast path would emit +14930123456. Pinned to the pure-Python path
+    (native off) so it isolates the Tier-1 fast path."""
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "0")
+    vals = ["+4930123456", "+49 30 123456", "+33142685300", "+1-201-555-0123", "(201) 555-0123"]
+    got = phone_e164(pl.Series("ph", vals)).to_list()
+    assert got == [_ref_e164(v) for v in vals]

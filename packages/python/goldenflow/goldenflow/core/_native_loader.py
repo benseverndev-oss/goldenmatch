@@ -36,16 +36,21 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 # Components whose native path has cleared parity and may run under
 # ``GOLDENFLOW_NATIVE=auto``. Add a name here ONLY after a parity sign-off.
 #
-# Currently EMPTY by design. The phone kernel is built and wired, but measured
-# parity against the installed ``phonenumbers`` library is NOT byte-identical:
-# the Rust ``phonenumber`` port formats some international national numbers
-# differently (e.g. "+33 1 42 68 53 00" -> native "+3342685300" vs python
-# "+33142685310"-style "+33142685300"; it drops the national leading digit).
-# Until that is reconciled (metadata-version alignment, or restricting native
-# acceptance to a proven parity-safe subset), ``phone`` stays out of _GATED_ON
-# so ``auto`` never silently changes a cleaned value. ``GOLDENFLOW_NATIVE=1``
-# still exercises it for benchmarking / the parity lane.
-_GATED_ON: frozenset[str] = frozenset()
+# Signed off 2026-06-07 (NANP-only gating):
+#   - phone: the phone kernel runs in ``nanp_only`` mode (the Python bridge
+#     passes it), so it emits a result ONLY for NANP numbers (country calling
+#     code 1) and null for everything else. Characterization across 20 country
+#     metadata sets showed the Rust ``phonenumber`` port is byte-identical to
+#     the Python ``phonenumbers`` library EXCEPT when a ``+CC`` international
+#     number is parsed with a mismatched default region ("US") and its national
+#     number starts with "1" (e.g. ``+33142685300`` -> native ``+3342685300``):
+#     the port mis-applies US national-prefix stripping. Those diverging
+#     outputs are never country-code-1, so restricting native to NANP results
+#     sidesteps the bug entirely; international rows fall back to the Python
+#     reference. Parity asserted over a NANP residual corpus (alpha, extensions,
+#     ambiguous leading-1, odd formats) AND a mixed intl corpus in
+#     tests/transforms/test_native_parity.py.
+_GATED_ON: frozenset[str] = frozenset({"phone"})
 
 
 def native_module() -> Any:
