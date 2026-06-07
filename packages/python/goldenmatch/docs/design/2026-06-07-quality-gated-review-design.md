@@ -159,3 +159,33 @@ In scope: the auto-merge→review downgrade in `gate_pairs` + the provenance rea
 Out of scope: the full explainable-provenance surface (lineage sidecar enrichment
 with quality reasons across ALL survivorship decisions — the larger door #6);
 changing match *scores*; door #2 (transform selection).
+
+---
+
+## 8. Implementation notes (as built, 2026-06-07)
+
+Status: IMPLEMENTED (mechanism + tests). Built on `main` (#794 already merged, so
+`cell_quality` is available).
+
+- **Bridge:** `core/quality.py::row_quality_floor(df)` — worst cell quality per
+  `__row_id__` (min over penalized cells), reusing `goldencheck.cell_quality`.
+  Fail-open: `None` when goldencheck absent, `__row_id__` missing, or clean.
+- **`gate_pairs`** gained keyword-only `row_quality` / `quality_floor=0.7` /
+  `reasons`. A would-be auto-merge with `min(q_a, q_b) < quality_floor` drops to
+  **review**; review/reject buckets are never touched. `row_quality=None` ⇒
+  byte-identical (22 existing review-queue tests pass). `reasons` (optional out
+  dict) carries the door-#6 provenance string for downgraded pairs.
+- **Enablement:** `_quality_gated_review_enabled()` → `GOLDENMATCH_QUALITY_GATED_REVIEW=1`,
+  **default OFF**. No config field (env-only, per the #795/#797 precedent).
+- **Wired surface:** `cli/review.py` (the `goldenmatch review` steward loop) — it
+  has the row-id'd `_df` cleanly. The downgrade reason is prepended to the
+  `ReviewItem` explanation (door #6). **TUI (`tui/app.py`) + agent (`core/agent.py`)
+  are NOT wired** — their `gate_pairs` calls don't have the row-id'd frame in
+  scope; #5 degrades safely there (no `row_quality` → unchanged gating). Wiring
+  them is a one-liner once their frame is threaded — a noted follow-up.
+- **Measurement deferred:** the planted-false-merge accuracy fixture (§5) is the
+  honest demonstration; there's no labeled "auto-merge was wrong" benchmark
+  wired, so value is shown on the mechanism + fixture, not a composite.
+- Tests: `tests/test_quality_gated_review.py` (8: downgrade, clean-stays,
+  review/reject-untouched, None-identical, sparse-map, provenance, + bridge
+  fail-open/flag).

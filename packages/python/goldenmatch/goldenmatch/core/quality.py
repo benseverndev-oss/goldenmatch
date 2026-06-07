@@ -163,6 +163,44 @@ def fd_identity_scores(df: pl.DataFrame) -> dict[str, float] | None:
     return {fd.determinant: fd.confidence for fd in fds} or None
 
 
+def row_quality_floor(
+    df: pl.DataFrame,
+    row_id_col: str = "__row_id__",
+) -> dict[int, float] | None:
+    """Per-row quality floor for quality-gated review routing (door #5).
+
+    ``floor[row_id]`` is the **worst** cell quality in that row (min over its
+    penalized cells) -- one suspect cell is enough to warrant a steward look.
+    Sparse: only rows with a penalized cell appear; callers treat a missing row
+    as 1.0 (clean). Reuses ``goldencheck.cell_quality``.
+
+    Fail-open: ``None`` when goldencheck is absent, the row-id column is missing
+    (some review surfaces reconstruct the frame), or the data is clean -- the
+    caller then leaves review gating unchanged."""
+    if not _goldencheck_available() or row_id_col not in df.columns:
+        return None
+    try:
+        from goldencheck import cell_quality
+    except ImportError:
+        return None
+    try:
+        positional = cell_quality(df)
+    except Exception:  # noqa: BLE001 - never let DQ scoring break review gating
+        logger.debug("goldencheck.cell_quality failed; skipping review quality gate", exc_info=True)
+        return None
+    if not positional:
+        return None
+
+    row_ids = df[row_id_col].to_list()
+    floor: dict[int, float] = {}
+    for (idx, _col), weight in positional.items():
+        if 0 <= idx < len(row_ids) and row_ids[idx] is not None:
+            rid = int(row_ids[idx])
+            if weight < floor.get(rid, 1.0):
+                floor[rid] = weight
+    return floor or None
+
+
 def run_quality_check(
     df: pl.DataFrame,
     config=None,
