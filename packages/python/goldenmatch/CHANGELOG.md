@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **FS accuracy analysis from labels — threshold sweep + m/u model report
+  (Splink-parity Phase 4).** `core/evaluate.py` gains `threshold_sweep`
+  (P/R/F1 at each candidate link cut, single O(P log P) descending sweep),
+  `recommend_threshold` (the max-F1 operating point), `fs_model_report`
+  (per-comparison m / u / log2(m/u) match-weight table + prior bits + EM
+  convergence — the data behind Splink's m/u + match-weight charts), and
+  `probability_two_random_records_match` (the EM within-block prior λ).
+  `goldenmatch evaluate --threshold-sweep` renders the operating-point curve,
+  the recommended cut, and the FS model report (via `MatchEngine`'s exposed
+  `scored_pairs` + `em_results`); `--output` includes a `threshold_sweep`
+  block. On DBLP-ACM the recommended posterior cut lands at 0.9999 (F1 0.968),
+  confirming the Phase 0 calibration finding.
 - **Native Rust FS kernel — opt-in (Splink-parity Phase 3b).** New
   `goldenmatch-native` kernel `score_block_pairs_fs` (FS arithmetic: per-field
   `sim → comparison level → log2(m/u)` weight sum → linear/posterior

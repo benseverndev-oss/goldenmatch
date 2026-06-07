@@ -97,7 +97,19 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       share the sim source) before considering default-ON; per-bucket arrow kernel
       for tiny-block FS scale.
 
-## PR 7 — Phase 3c + Phase 4: distributed validation + accuracy analysis
-- [ ] 5M FS dedupe on 16c/64GB within scale-envelope budget; F1 within tolerance on labeled slice.
-- [ ] Extend `evaluate`: ROC/PR + threshold→(P,R,F1) table + recommended cut; `probability_two_random_records_match`; m/u charts.
-- [ ] Gate: `goldenmatch evaluate` emits threshold table + recommended cut on an FS run.
+## PR 7 — Phase 4: accuracy analysis from labels ✅ (2026-06-07)
+- [x] `core/evaluate.py`: `threshold_sweep` (P/R/F1 per cut, single descending
+      sweep), `recommend_threshold` (max-F1 op point), `fs_model_report`
+      (per-comparison m/u/log2(m/u) bits + prior + convergence — the m/u chart
+      data), `probability_two_random_records_match` (EM within-block prior λ).
+- [x] `goldenmatch evaluate --threshold-sweep`: operating-point table +
+      recommended cut + FS m/u model report (via MatchEngine scored_pairs +
+      em_results); `--output` carries a `threshold_sweep` JSON block.
+- [x] Gate: CLI emits the threshold table + recommended cut on an FS run
+      (`TestThresholdSweepCLI`); DBLP-ACM recommended posterior cut = 0.9999
+      (F1 0.968), confirming Phase 0. 103 evaluate/probabilistic tests green; ruff clean.
+
+## PR 8 — Phase 3c: distributed FS validation (remaining)
+- [ ] 5M FS dedupe on 16c/64GB within scale-envelope budget; F1 within tolerance
+      on a labeled slice. (Mostly falls out of 3a + Phase-1a model serialization
+      across Ray workers — but it's an UNRUN gate; run it before claiming it.)
