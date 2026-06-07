@@ -107,6 +107,14 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   (`MIN_AVG_GROUP`) — a near-unique determinant has singleton groups that each
   look "consistent" and would otherwise inflate confidence to ~1.0.
 
+## Freshness (profilers/freshness.py)
+
+Date/datetime column profiler. **Future-dated** values (after "now") => WARNING
+(`future_dated`) — zero-config, unambiguous, no FP on historical data.
+**Staleness** (`stale_data`, INFO) is name-gated (update/event columns:
+`updated_at`, `last_seen`, ...) + generous `_STALE_DAYS=365` threshold, so
+legitimately-old historical data doesn't trip it. Pure-Polars (no kernel).
+
 ## `--deep` mode + duplicate-row detection
 
 - **`--deep` / `scan_file(..., deep=True)`**: profiles the FULL population instead
