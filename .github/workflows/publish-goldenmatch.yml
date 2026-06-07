@@ -11,8 +11,9 @@ on:
         default: ""
 
 permissions:
-  id-token: write
-  contents: read
+  id-token: write       # PyPI OIDC + cosign keyless signing
+  contents: write       # attach signed artifacts to the GitHub Release
+  attestations: write   # build-provenance attestation
 
 jobs:
   publish:
@@ -55,3 +56,35 @@ jobs:
           packages-dir: packages/python/goldenmatch/dist
           password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
+
+      # --- Signed-Releases (Scorecard): sign the wheel + sdist with cosign
+      # keyless and attach them, their .sigstore bundles, and a build-provenance
+      # attestation to the GitHub Release. Only on release events (the dispatch
+      # retro-publish path has no Release to attach to). Verify with:
+      #   cosign verify-blob --bundle goldenmatch-<v>-py3-none-any.whl.sigstore \
+      #     goldenmatch-<v>-py3-none-any.whl \
+      #     --certificate-identity-regexp 'github.com/benseverndev-oss/goldenmatch' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Install cosign
+        if: github.event_name == 'release'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      - name: Sign wheel + sdist (cosign keyless)
+        if: github.event_name == 'release'
+        run: |
+          for f in dist/*.whl dist/*.tar.gz; do
+            [ -e "$f" ] || continue
+            cosign sign-blob --yes --bundle "${f}.sigstore" "${f}"
+          done
+      - name: Attest build provenance (wheel)
+        if: github.event_name == 'release'
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-path: packages/python/goldenmatch/dist/*.whl
+      - name: Attach signed artifacts to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8  # v2
+        with:
+          files: |
+            packages/python/goldenmatch/dist/*.whl
+            packages/python/goldenmatch/dist/*.tar.gz
+            packages/python/goldenmatch/dist/*.sigstore
