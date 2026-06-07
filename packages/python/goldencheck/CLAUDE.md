@@ -19,6 +19,7 @@ goldencheck data.csv --deep      # Profile the FULL dataset (skip the 100K sampl
 goldencheck data.csv             # Scan with TUI
 goldencheck validate data.csv    # Validate against goldencheck.yml
 goldencheck diff old.csv new.csv # Compare two files
+goldencheck refs child.csv parent.csv --on fk=key  # Cross-file FK / referential integrity
 goldencheck fix data.csv         # Auto-fix (safe mode)
 goldencheck watch data/          # Poll directory for changes
 goldencheck scan data.csv --domain healthcare  # Domain-specific types
@@ -106,6 +107,15 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   guard, so violation sets match. **Key FP guard:** average group size >= 3
   (`MIN_AVG_GROUP`) — a near-unique determinant has singleton groups that each
   look "consistent" and would otherwise inflate confidence to ~1.0.
+
+## Referential integrity (engine/referential.py + `refs` CLI)
+
+Cross-FILE foreign-key validation (the scan path is single-file). `goldencheck
+refs child.csv parent.csv [--on child_col=parent_col ...]` checks the child's FK
+values are a subset of the parent's key: reports orphan rows, orphan rate
+(ERROR > 1%, else WARNING), and join cardinality (1:1/N:1/...). `--on` omitted =>
+auto-detect same-named columns that are a unique+non-null key on the parent.
+CI-friendly: exits non-zero per `--fail-on`. Pure-Polars (`is_in`); no kernel.
 
 ## Freshness (profilers/freshness.py)
 

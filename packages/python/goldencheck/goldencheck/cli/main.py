@@ -473,6 +473,48 @@ def diff(
 
 
 @app.command()
+def refs(
+    child: Path = typer.Argument(..., help="Child/fact file holding the foreign key(s)."),
+    parent: Path = typer.Argument(..., help="Parent/dimension file holding the key(s)."),
+    on: list[str] = typer.Option(
+        None, "--on",
+        help="FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect "
+             "same-named parent-key columns.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
+    fail_on: str = typer.Option("error", "--fail-on", help="CI exit threshold: error/warning/info."),
+) -> None:
+    """Check referential integrity (foreign keys) between two files.
+
+    Verifies that the child's FK values all exist in the parent's key, reporting
+    orphan rows, orphan rate, and join cardinality.
+
+        goldencheck refs orders.csv customers.csv --on customer_id=id
+    """
+    import json
+    from dataclasses import asdict
+
+    from goldencheck.engine.referential import referential_integrity_files
+    from goldencheck.models.finding import Severity
+
+    with _cli_error_handler():
+        findings = referential_integrity_files(child, parent, on=on or None)
+
+        if json_output:
+            typer.echo(json.dumps([asdict(f) for f in findings], indent=2, default=str))
+        else:
+            for f in sorted(findings, key=lambda x: x.severity, reverse=True):
+                label = {Severity.ERROR: "[red]ERROR[/]", Severity.WARNING: "[yellow]WARNING[/]",
+                         Severity.INFO: "[cyan]INFO[/]"}.get(f.severity, "?")
+                console.print(f"{label} {f.column}: {f.message}", highlight=False)
+                if f.sample_values:
+                    console.print(f"  e.g. {', '.join(f.sample_values)}", style="dim", highlight=False)
+
+        exit_code = report_ci(findings, fail_on)
+        raise typer.Exit(code=exit_code)
+
+
+@app.command()
 def watch(
     directory: Path = typer.Argument(..., help="Directory to watch."),
     interval: int = typer.Option(60, "--interval", "-i", help="Poll interval in seconds."),
