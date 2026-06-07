@@ -4,6 +4,7 @@ from __future__ import annotations
 __version__ = "1.3.0"
 
 # Core: scanner + models
+from goldencheck.cell_quality import cell_quality
 from goldencheck.config.loader import load_config
 
 # Config: schema, loader, writer
@@ -61,6 +62,7 @@ __all__ = [
     "scan_dataframe",
     "scan_file",
     "scan_file_with_llm",
+    "cell_quality",
     "Finding",
     "Severity",
     "DatasetProfile",
