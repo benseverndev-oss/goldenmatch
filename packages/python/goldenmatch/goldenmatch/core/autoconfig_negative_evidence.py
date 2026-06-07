@@ -25,6 +25,19 @@ _IDENTITY_SCORE_THRESHOLD = 0.75
 _CARDINALITY_THRESHOLD = 0.5
 _DEFAULT_NE_THRESHOLD = 0.4
 _DEFAULT_NE_PENALTY = 0.3
+# FD-driven NE (GoldenCheck door #3): a column that functionally determines
+# another at >= this confidence is admitted as a data-driven identity anchor,
+# even when the name-based identity_score misses it. OFF by default; enable with
+# GOLDENMATCH_FD_NEGATIVE_EVIDENCE=1 (the #662 kill-switch pattern). Spec:
+# docs/design/2026-06-07-fd-negative-evidence-design.md.
+_FD_ANCHOR_THRESHOLD = 0.95
+
+
+def _fd_negative_evidence_enabled() -> bool:
+    import os
+
+    val = os.environ.get("GOLDENMATCH_FD_NEGATIVE_EVIDENCE")
+    return val is not None and val.lower() in ("1", "true", "yes", "on")
 
 
 def _pick_scorer_for_column(col_name: str, col_type: str) -> tuple[list[str], str]:
@@ -118,6 +131,14 @@ def promote_negative_evidence(
 
     all_matchkeys = list(config.matchkeys or [])
 
+    # FD-driven identity anchors (door #3): d[col] = strongest FD col supports as
+    # a determinant. Empty unless the env flag is on -> byte-identical to before.
+    fd_scores: dict[str, float] = {}
+    if _fd_negative_evidence_enabled():
+        from goldenmatch.core.quality import fd_identity_scores
+
+        fd_scores = fd_identity_scores(df) or {}
+
     new_matchkeys: list[MatchkeyConfig] = []
     for mk in (config.matchkeys or []):
         # v1.12: walk weighted AND exact matchkeys; skip probabilistic + others
@@ -132,8 +153,17 @@ def promote_negative_evidence(
             # Already in NE list (idempotency guard)
             if col in existing_ne_fields:
                 continue
-            # Identity score gate (0.75 excludes cardinality-only fallback of 0.7)
-            if prior.identity_score < _IDENTITY_SCORE_THRESHOLD:
+            # Identity gate: the name/heuristic identity_score (>= 0.75) OR a
+            # data-driven FD anchor (col determines other cols at >= 0.95). The
+            # FD path admits high-cardinality identity anchors the name heuristic
+            # misses (oddly-named keys); fd_conf is 0 when the flag is off, so
+            # this reduces to the original gate.
+            fd_conf = fd_scores.get(col, 0.0)
+            admitted_via_fd = (
+                prior.identity_score < _IDENTITY_SCORE_THRESHOLD
+                and fd_conf >= _FD_ANCHOR_THRESHOLD
+            )
+            if prior.identity_score < _IDENTITY_SCORE_THRESHOLD and not admitted_via_fd:
                 continue
             # v1.12: apply _is_exact_matchkey_field gate ONLY on weighted branch.
             # The gate's rationale (anchor safety for NE-on-weighted) doesn't apply
@@ -167,17 +197,23 @@ def promote_negative_evidence(
             col_type_hint = ""
             transforms, scorer = _pick_scorer_for_column(col, col_type_hint)
 
+            # FD-admitted fields scale the penalty by FD confidence (capped at the
+            # default); name-admitted fields keep the default penalty.
+            penalty = _DEFAULT_NE_PENALTY
+            if admitted_via_fd:
+                penalty = round(_DEFAULT_NE_PENALTY * fd_conf, 4)
+
             new_ne.append(NegativeEvidenceField(
                 field=col,
                 transforms=transforms,
                 scorer=scorer,
                 threshold=_DEFAULT_NE_THRESHOLD,
-                penalty=_DEFAULT_NE_PENALTY,
+                penalty=penalty,
             ))
             logger.info(
                 "auto-config: promoted negative_evidence field=%s on matchkey=%s "
-                "(identity_score=%.2f, cardinality_ratio=%.2f, scorer=%s)",
-                col, mk.name, prior.identity_score, cardinality_ratio, scorer,
+                "(identity_score=%.2f, fd_conf=%.2f, cardinality_ratio=%.2f, scorer=%s)",
+                col, mk.name, prior.identity_score, fd_conf, cardinality_ratio, scorer,
             )
 
         # v1.12: when NE was added to an exact matchkey with threshold=None,

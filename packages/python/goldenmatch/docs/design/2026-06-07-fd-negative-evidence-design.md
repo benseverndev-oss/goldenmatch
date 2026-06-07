@@ -182,3 +182,42 @@ behind a flag, fail-open.
 Out of scope: changing the NE *scoring* mechanism in scorer.py; probabilistic
 matchkeys (NE already skips them); the other doors (#2 transforms, #4 threshold,
 #5 review, #6 provenance).
+
+---
+
+## 10. Implementation notes & deviations (as built, 2026-06-07)
+
+Status: IMPLEMENTED (mechanism + unit tests). Accuracy sweep deferred to CI.
+
+- **New GoldenCheck API:** `goldencheck.functional_dependencies(df, *,
+  min_confidence=0.95) -> list[FunctionalDependency{determinant, dependents,
+  confidence}]` — wraps the strict + approximate FD kernels into structured
+  records (one per determinant, `confidence` = the strongest it supports).
+  Exported from `goldencheck.__init__`.
+- **Bridge:** `goldenmatch/core/quality.py::fd_identity_scores(df)` — fail-open,
+  returns `{determinant: confidence}`.
+- **Wiring:** `promote_negative_evidence` gate becomes `cardinality >= 0.5 AND
+  (identity_score >= 0.75 OR fd_conf >= 0.95)`; FD-admitted fields scale the
+  penalty by `fd_conf` (capped at the default 0.3). Env-gated
+  `GOLDENMATCH_FD_NEGATIVE_EVIDENCE=1`, **default OFF**. No `QualityConfig` flag
+  (same call-site reasoning as #795 — no dead API). Flag off ⇒ `fd_scores={}` ⇒
+  gate reduces to the original `identity_score` check ⇒ **byte-identical**
+  (58 NE/autoconfig regression tests pass).
+
+- **KEY FINDING (limitation), surfaced while building:** FD discovery **excludes
+  perfectly-unique determinants** (cardinality 1.0) as *trivial* (a unique key
+  determines everything). So the *strongest* identity anchors — perfectly-unique
+  oddly-named keys — are **NOT** caught by this door. It catches identity anchors
+  with cardinality in **[0.5, 1.0)** that determine other columns (verified: an
+  `acct` column at cardinality 0.6 determining `name` is admitted). This narrows
+  the value vs the spec's framing but does not void it. The complement for
+  perfectly-unique oddly-named keys is a **format/structure-consistency** signal
+  (an ID has a regular shape) — a separate future door, NOT functional dependency.
+  This is the honest answer to §8's "marginal value is data-dependent".
+
+- **Measurement still pending (the gate):** the DQbench-non-regression +
+  Febrl/DBLP-ACM/NCVR sweep (§6) runs in CI, not this sandbox. Default stays OFF
+  until it passes.
+
+- Tests: goldencheck `tests/test_functional_dependencies.py` (5); goldenmatch
+  `tests/test_fd_negative_evidence.py` (5).
