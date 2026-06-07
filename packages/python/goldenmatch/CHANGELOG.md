@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+- **Multi-pass blocking no longer silently drops cross-pass blocks.**
+  `_build_multi_pass_blocks` deduplicated blocks by `block_key`, which is the
+  concatenated field *values* with no field identity — so a later pass's block
+  whose key string collided with an earlier pass on a different field (common
+  with soundex/substring/numeric keys, which share a value namespace) was
+  dropped, losing every candidate pair in it (measured 309/7310 = 4.2% of
+  blocks on Febrl4's auto-config scheme). Dedup is now keyed by the pass's
+  field+transform signature plus the value, so distinct-field blocks survive
+  while truly-identical blocks still dedup.
+- **Fellegi-Sunter multi-pass EM exclusion.** The FS pipeline collected the
+  blocking fields to exclude from EM training by reading `config.blocking.keys`
+  only — but `multi_pass` configs keep their keys in `.passes`, so the
+  exclusion list was empty and EM over-fit the always-agree blocking fields.
+  New `collect_blocking_fields()` gathers from keys + passes + sub_block_keys;
+  Febrl4 multi-pass FS improves 95.7% → 98.4% F1 (postcode-only single-key was
+  91.0%).
+
 ### Changed
 - **Fellegi-Sunter block scoring is now vectorized (default ON).** `score_probabilistic_vectorized`
   replaces the per-pair Python double loop with one `rapidfuzz.cdist` NxN matrix per field plus

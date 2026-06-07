@@ -1331,13 +1331,12 @@ def _run_dedupe_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
+            from goldenmatch.core.blocker import collect_blocking_fields
             from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
+            # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+            blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
             em_result = train_em(
                 collected_df, mk,
                 max_iterations=mk.em_iterations,
@@ -2257,12 +2256,11 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
+            from goldenmatch.core.blocker import collect_blocking_fields
             from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
+            # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+            blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
             em_result = train_em(
                 combined_df, mk,
                 max_iterations=mk.em_iterations,
