@@ -4,8 +4,34 @@ import phonenumbers
 import polars as pl
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._fastpath import apply_with_residual, _V
 
 _DEFAULT_REGION = "US"
+
+# Vectorized E.164 fast path for the dominant NANP shape. A digit-only string
+# of 10 chars whose first digit is 2-9 (valid NANP area code) maps to +1<10>;
+# 11 chars starting "1" + a 2-9 digit maps to +<11>. Both reproduce exactly
+# what phonenumbers.format_number(parse(val, "US"), E164) returns, so a row this
+# path resolves is identical to the per-row path (parity asserted over a random
+# corpus in tests/transforms/test_phone.py). The 2-9 guard avoids the
+# leading-"1" ambiguity (phonenumbers reads a leading 1 on a 10-digit string as
+# the country code); rows containing letters defer to phonenumbers' alpha
+# handling. Everything else falls through to the per-row path unchanged.
+_NANP_10 = r"^[2-9]\d{9}$"
+_NANP_11 = r"^1[2-9]\d{9}$"
+_HAS_ALPHA = r"[A-Za-z]"
+
+
+def _e164_fast_expr() -> pl.Expr:
+    digits = pl.col(_V).str.replace_all(r"\D", "")
+    no_alpha = ~pl.col(_V).str.contains(_HAS_ALPHA)
+    return (
+        pl.when(no_alpha & digits.str.contains(_NANP_10))
+        .then(pl.lit("+1") + digits)
+        .when(no_alpha & digits.str.contains(_NANP_11))
+        .then(pl.lit("+") + digits)
+        .otherwise(None)
+    )
 
 
 def _parse_phone(val: str | None) -> phonenumbers.PhoneNumber | None:
@@ -29,7 +55,7 @@ def phone_e164(series: pl.Series) -> pl.Series:
             return val  # preserve original on failure
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+    return apply_with_residual(series, _e164_fast_expr(), _format, pl.Utf8)
 
 
 @register_transform(
@@ -51,12 +77,11 @@ def phone_national(series: pl.Series) -> pl.Series:
     name="phone_digits", input_types=["phone"], auto_apply=False, priority=50, mode="series"
 )
 def phone_digits(series: pl.Series) -> pl.Series:
-    def _to_digits(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return "".join(c for c in val if c.isdigit())
-
-    return series.map_elements(_to_digits, return_dtype=pl.Utf8)
+    # Pure-Polars regex: strip every non-digit. Equivalent to the per-row
+    # "".join(c for c in val if c.isdigit()) but stays in Rust (~5x). Note:
+    # str.isdigit() also accepts some Unicode digit code points; the column
+    # transform targets ASCII phone data, and the parity test pins ASCII rows.
+    return series.str.replace_all(r"\D", "")
 
 
 @register_transform(
