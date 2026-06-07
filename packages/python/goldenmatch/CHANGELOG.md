@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Fellegi-Sunter block scoring is now vectorized (default ON).** `score_probabilistic_vectorized`
+  replaces the per-pair Python double loop with one `rapidfuzz.cdist` NxN matrix per field plus
+  numpy level/weight/normalize ops — the same vectorized path the fuzzy scorer already uses. ~9x
+  faster on full DBLP-ACM blocks (9.6s → 1.06s for 1.2M pairs) at ~99.96% pair parity. The pipeline
+  selects it via `probabilistic_block_scorer(mk, em)`; it falls back to the scalar path for
+  embedding/record_embedding scorers or when `GOLDENMATCH_FS_VECTORIZED=0`. The continuous-EM
+  E-step and `score_probabilistic_continuous` are vectorized too.
+- **DBLP-ACM Fellegi-Sunter benchmark corrected: 72.8% → 96.8% F1.** `run_v030_quick.py` was skipping
+  blocks >500 rows for performance, which capped recall at ~60% (every DBLP-ACM match is same-year).
+  With cheap vectorized scoring, full blocks are scored: P=97.8% / R=95.8% / F1=96.8%. Block-skip
+  for performance — not scoring or calibration — is the dominant FS recall lever.
+
+### Added
+- **Calibrated posterior scoring for Fellegi-Sunter (opt-in, `GOLDENMATCH_FS_CALIBRATED=posterior`).**
+  Turns the FS score into a true match probability `1/(1+2^-(log2(λ/(1-λ)) + ΣW))` using the
+  EM-estimated within-block prior (which the legacy linear min-max normalization discarded), so the
+  default 0.5 threshold is the Bayes boundary. Measured frontier-neutral (monotonic in the summed
+  weight, so it can't change F1) — a correctness/interpretability change. Default stays `linear`.
+  Public helpers: `prior_weight()`, `posterior_from_weight()`.
+- **Term-frequency (Winkler) weight adjustment for Fellegi-Sunter (opt-in per field,
+  `MatchkeyField.tf_adjustment=True`).** Exact agreement on a rare value carries more match weight
+  than on a common one. Frequencies are computed over the full column at EM-train time. No measurable
+  headroom on the available benchmarks (precision already saturated at 96–99.98%); ships as a
+  capability for skewed-frequency categorical fields (names/cities).
+
 ## [1.28.1] - 2026-06-07
 
 ### Fixed

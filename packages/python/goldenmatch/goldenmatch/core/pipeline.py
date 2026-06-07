@@ -1331,7 +1331,7 @@ def _run_dedupe_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import score_probabilistic, train_em
+            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
@@ -1349,37 +1349,16 @@ def _run_dedupe_pipeline(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
             )
-            # Fast path: pre-resolve per-field callables + level-mapping
-            # plan once per matchkey, then run an indexed Python loop per
-            # block. Resolved against the FIRST block_df so the xform
-            # column check sees a representative shape; subsequent blocks
-            # share the same columns. Falls back to score_probabilistic
-            # when any gate fails (model-backed scorer, levels > 3, missing
-            # xform column, etc).
-            from goldenmatch.core.probabilistic_fast import (
-                _resolve_probabilistic_fast_path,
-                score_probabilistic_fast,
-            )
-            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
-            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
-            _first_block_df: pl.DataFrame | None
-            if blocks:
-                _b0 = blocks[0].df
-                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
-            else:
-                _first_block_df = None
-            fast_spec = (
-                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
-                if _first_block_df is not None else None
-            )
+            # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
+            # + numpy level/weight/normalize, replacing the per-pair Python
+            # loop. This makes full-block scoring cheap enough that large
+            # blocks no longer have to be skipped for performance — the
+            # dominant FS recall lever. Falls back to the scalar path for
+            # model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0.
+            block_scorer = probabilistic_block_scorer(mk, em_result)
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                if fast_spec is not None:
-                    pairs = score_probabilistic_fast(
-                        block_df, fast_spec, exclude_pairs=matched_pairs,
-                    )
-                else:
-                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                pairs = block_scorer(block_df, matched_pairs)
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -2278,7 +2257,7 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import score_probabilistic, train_em
+            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = []
             if config.blocking and config.blocking.keys:
@@ -2291,30 +2270,12 @@ def _run_match_pipeline(
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
-            from goldenmatch.core.probabilistic_fast import (
-                _resolve_probabilistic_fast_path,
-                score_probabilistic_fast,
-            )
-            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
-            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
-            _first_block_df: pl.DataFrame | None
-            if blocks:
-                _b0 = blocks[0].df
-                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
-            else:
-                _first_block_df = None
-            fast_spec = (
-                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
-                if _first_block_df is not None else None
-            )
+            # Vectorized NxN-matrix scorer (falls back to the scalar per-pair
+            # path for model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0).
+            block_scorer = probabilistic_block_scorer(mk, em_result)
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                if fast_spec is not None:
-                    pairs = score_probabilistic_fast(
-                        block_df, fast_spec, exclude_pairs=matched_pairs,
-                    )
-                else:
-                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                pairs = block_scorer(block_df, matched_pairs)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
