@@ -100,11 +100,32 @@ Run via `scripts/research/recon_er_experiment.py`; full tables in
   => the precision half must be a **learned microclustering prior (#1)**, not a
   size penalty. The experiment cleanly localises which half each piece owns.
 
+## Step 2 result (2026-06-07 — amortized partition head on simulated data)
+
+Run via `scripts/research/amortized_partition_er.py` (NCP/DAC-style head +
+masked-field recon aux + learned empty-cluster prototype); full tables in
+`scripts/research/RESULTS-2-amortized-partition.md`. **Step-2 gate PASSES on
+what matters**, across 4 seeds:
+
+- **Calibration is robust**: ECE 0.014–0.030 every seed — assignment confidence
+  matches accuracy. This is the posterior property the program is built on, and
+  the threshold+CC baseline cannot provide it.
+- **The microclustering prior is LEARNED** to within ~0.01–0.02 of the true
+  new-cluster rate with **no size penalty** — validates amendment (b).
+- **Partition F1 is at PARITY** with a baseline charitably tuned (best-of-4 L2
+  thresholds on the eval set) — matched threshold-free in one forward pass. The
+  marginal cases were undertraining: seed 1 went 0.652→0.701 (over baseline)
+  from 300→600 epochs, prior tightening in lockstep.
+- Architecture lesson: sum-pooling collapsed the model to "always open new"
+  (F1≈0.03); scoring on cluster **mean** + interaction features + a learned
+  empty prototype unlocked learning.
+
 ## Decision
 
-Step 1 cleared. Proceed to **step 2** (amortized partition head on simulated
-data) with two amendments forced by the data: (a) the reconstruction likelihood
-must use a *learned* field similarity, not a fixed kernel; (b) the microclustering
-prior must be *learned*, since a size penalty cannot supply the missing precision
-on templated data. Gate step 3 (active design) on step 2 producing a calibrated
-posterior.
+Steps 1 and 2 cleared. The amortized posterior is viable on simulated ER, with
+calibration and a learned prior as the robust wins. Proceed to **step 3**
+(EIG-over-partition active design, framing #6) — which first requires posterior
+**sampling** (not just greedy MAP) from the step-2 head. Parallel real-program
+work: a learned real-schema (string/LM) encoder, and a d-blink calibration
+cross-check on a small real set. F1 is at a floor (parity with an oracle-tuned
+baseline), to be lifted with capacity/training, not a blocker for step 3.
