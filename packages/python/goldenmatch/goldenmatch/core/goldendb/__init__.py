@@ -77,6 +77,7 @@ def require_jax():
 
 from goldenmatch.core.goldendb._combine import (  # noqa: E402
     GA2MCombiner,
+    GA2MInteractionCombiner,
     combine_matrices,
 )
 from goldenmatch.core.goldendb._encode import (  # noqa: E402
@@ -108,6 +109,7 @@ __all__ = [
     "cosine_matrix",
     "combine_matrices",
     "GA2MCombiner",
+    "GA2MInteractionCombiner",
     "coarse_encode",
     "topk_candidates",
     "find_matches_gpu",

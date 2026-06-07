@@ -183,3 +183,106 @@ class GA2MCombiner:
             gain=float(new["gain"]),
         )
         return float(loss_val)
+
+
+class GA2MInteractionCombiner:
+    """GA2M with pairwise **interaction** terms -- the "2" in GA2M (JAX).
+
+    Logit form (additive, hence exactly attributable):
+
+        logit = bias + SUM_i a_i * sim_i + SUM_{i<j} c_ij * (sim_i * sim_j)
+        p     = sigmoid(logit)
+
+    Main weights ``a_i`` and interaction weights ``c_ij`` are ``softplus``-constrained
+    to be non-negative, so the score is monotone non-decreasing in every similarity
+    (more agreement, given the rest, never lowers the score). The product feature
+    ``sim_i * sim_j`` is the learnable "AND-gate" that captures effects a linear /
+    Fellegi-Sunter model cannot -- e.g. "a name match only counts when the address
+    also agrees". Attribution stays exact: ``logit == bias + main_contribs.sum() +
+    inter_contribs.sum()``.
+    """
+
+    def __init__(self, n_fields: int, seed: int = 0):
+        self.n_fields = n_fields
+        self.pairs = [(i, j) for i in range(n_fields) for j in range(i + 1, n_fields)]
+        self._pi = np.array([p[0] for p in self.pairs], dtype=np.int64)
+        self._pj = np.array([p[1] for p in self.pairs], dtype=np.int64)
+        rng = np.random.default_rng(seed)
+        self.params = {
+            "main": np.full(n_fields, 0.541324854) + rng.normal(0, 1e-3, n_fields),
+            "inter": np.zeros(len(self.pairs)) + rng.normal(0, 1e-3, len(self.pairs)),
+            "bias": np.array(-1.0),
+        }
+
+    def _predict_parts(self, params: dict, sims):
+        from goldenmatch.core.goldendb import require_jax
+
+        jax, jnp = require_jax()
+        a = jax.nn.softplus(params["main"])           # [K] >= 0
+        c = jax.nn.softplus(params["inter"])          # [P] >= 0
+        main_contrib = sims * a[None, :]              # [N, K]
+        prod = sims[:, self._pi] * sims[:, self._pj]  # [N, P]
+        inter_contrib = prod * c[None, :]            # [N, P]
+        logit = params["bias"] + main_contrib.sum(axis=1) + inter_contrib.sum(axis=1)
+        return logit, main_contrib, inter_contrib
+
+    def _logit(self, params: dict, sims):
+        logit, _m, _i = self._predict_parts(params, sims)
+        return logit
+
+    def _loss(self, params: dict, sims, labels):
+        from goldenmatch.core.goldendb import require_jax
+
+        _jax, jnp = require_jax()
+        logit = self._logit(params, sims)
+        p = jnp.clip(jax_sigmoid(logit), 1e-7, 1.0 - 1e-7)
+        return -jnp.mean(labels * jnp.log(p) + (1.0 - labels) * jnp.log(1.0 - p))
+
+    def _jax_params(self) -> dict:
+        from goldenmatch.core.goldendb import require_jax
+
+        _jax, jnp = require_jax()
+        return {k: jnp.asarray(v) for k, v in self.params.items()}
+
+    def predict(self, sims: np.ndarray) -> np.ndarray:
+        logit = np.asarray(self._logit(self._jax_params(), np.asarray(sims, np.float64)))
+        return 1.0 / (1.0 + np.exp(-logit))
+
+    def logit(self, sims: np.ndarray) -> np.ndarray:
+        return np.asarray(self._logit(self._jax_params(), np.asarray(sims, np.float64)))
+
+    def loss(self, sims: np.ndarray, labels: np.ndarray) -> float:
+        return float(self._loss(self._jax_params(), np.asarray(sims, np.float64),
+                                np.asarray(labels, np.float64)))
+
+    def attribution(self, sims: np.ndarray) -> dict:
+        """Exact additive decomposition of the logit. Returns
+        ``{"bias", "main": [N,K], "interactions": [N,P], "pairs": [(i,j)...]}``
+        with ``bias + main.sum(1) + interactions.sum(1) == logit(sims)``.
+        """
+        _logit, main, inter = self._predict_parts(self._jax_params(),
+                                                  np.asarray(sims, np.float64))
+        return {
+            "bias": float(self.params["bias"]),
+            "main": np.asarray(main),
+            "interactions": np.asarray(inter),
+            "pairs": list(self.pairs),
+        }
+
+    def train_step(self, sims: np.ndarray, labels: np.ndarray, lr: float = 0.1) -> float:
+        from goldenmatch.core.goldendb import require_jax
+
+        jax, _jnp = require_jax()
+        sims_j = jax.numpy.asarray(np.asarray(sims, np.float64))
+        labels_j = jax.numpy.asarray(np.asarray(labels, np.float64))
+        params = self._jax_params()
+        loss_val, grads = jax.value_and_grad(self._loss)(params, sims_j, labels_j)
+        self.params = {k: np.asarray(params[k] - lr * grads[k]) for k in params}
+        return float(loss_val)
+
+
+def jax_sigmoid(x):
+    from goldenmatch.core.goldendb import require_jax
+
+    jax, _jnp = require_jax()
+    return jax.nn.sigmoid(x)

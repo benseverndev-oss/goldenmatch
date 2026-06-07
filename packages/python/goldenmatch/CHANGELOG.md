@@ -20,8 +20,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   N² matrix, plus `resolve_dataset_gpu(df, mk)` for **blocker-free** whole-dataset resolution
   (finds duplicates a blocking key would separate), and a closed gradient-based training loop
   (`fit_field_weights` / `apply_field_weights`) that learns per-field weights from labeled
-  pairs and writes them back onto the matchkey. Not yet wired: a true GPU-ANN index
-  (recall is brute force, good to ~1e5–1e6 rows), trained shape functions / interaction terms,
+  pairs and writes them back onto the matchkey, and GA2M pairwise interaction terms
+  (`GA2MInteractionCombiner`) — a monotone, exactly-attributable `sim_i*sim_j` AND-gate that
+  beats the linear model on product-gate patterns. Not yet wired: a true GPU-ANN index
+  (recall is brute force, good to ~1e5–1e6 rows), per-feature 1-D shape functions,
   negative-evidence penalties, and GPU wall-clock validation. Lives in
   `goldenmatch/core/goldendb/`. Spec:
   `docs/superpowers/specs/2026-06-07-goldendb-matrix-native-entity-resolution-design.md`.

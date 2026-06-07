@@ -305,6 +305,11 @@ Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`, 22 tests):
 - char-ngram hashed per-field encoding -> L2-normalised matrices
 - per-field cosine via a JAX `matmul` (the GPU path; runs on CPU here)
 - GA2M weighted-average combine with EXACT additive attribution + monotonicity
+- GA2M **pairwise interaction terms** (`GA2MInteractionCombiner`): the "2" in
+  GA2M -- a learnable, monotone `sim_i * sim_j` AND-gate ("name match only counts
+  when address agrees") with exact additive attribution
+  (`bias + main.sum + interactions.sum == logit`). Beats the linear/F-S-style model
+  on a product-gate pattern (lower BCE), verified in tests.
 - a closed gradient-based training loop (`training.py`): `fit_field_weights` learns
   per-field weights from labeled pairs by `jax.grad` BCE descent, and
   `apply_field_weights` writes them back onto the matchkey so the normal
@@ -328,7 +333,10 @@ NOT yet wired (future work):
 - a true GPU-ANN index (FAISS / DiskANN) -- recall is brute-force top-k today
   (good to ~1e5-1e6 vectors per the design doc); larger datasets and streaming
   inserts need the indexed path
-- trained shape functions / pairwise interaction terms (structure is linear today)
+- per-feature 1-D shape functions `f_i` (splines/lattices) -- pairwise interactions
+  are now in (`GA2MInteractionCombiner`), but the main effects are still linear, and
+  the interaction model is not yet wired into the block scorer's default combine
+  (it's available for training/scoring via the API)
 - negative-evidence penalties (ignored with a warning if configured)
 - GPU wall-clock crossover measurement (the recall@k gate above remains the first
   thing to run on real GPU hardware)

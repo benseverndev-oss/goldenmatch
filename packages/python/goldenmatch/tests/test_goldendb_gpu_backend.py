@@ -20,6 +20,7 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.blocker import BlockResult
 from goldenmatch.core.goldendb import (
     GA2MCombiner,
+    GA2MInteractionCombiner,
     apply_field_weights,
     build_training_matrix,
     char_ngram_hashed,
@@ -139,6 +140,41 @@ def test_ga2m_attribution_sums_to_weighted_average():
     w = np.asarray(jax.nn.softplus(jax.numpy.asarray(c.params.w)))
     expected = (sims[0] * w).sum() / (w.sum() + 1e-9)
     np.testing.assert_allclose(contrib.sum(), expected, atol=1e-5)
+
+
+# ── GA2M pairwise interaction terms (the "2") ─────────────────────────────────
+
+def test_interaction_attribution_is_exact():
+    c = GA2MInteractionCombiner(n_fields=3)
+    sims = np.array([[0.3, 0.7, 0.5], [0.9, 0.1, 0.4]])
+    attr = c.attribution(sims)
+    recon = attr["bias"] + attr["main"].sum(axis=1) + attr["interactions"].sum(axis=1)
+    np.testing.assert_allclose(recon, c.logit(sims), atol=1e-5)
+
+
+def test_interaction_predict_monotone():
+    c = GA2MInteractionCombiner(n_fields=2)
+    low = c.predict(np.array([[0.2, 0.2]]))[0]
+    high = c.predict(np.array([[0.9, 0.9]]))[0]
+    assert high >= low
+
+
+def test_interaction_model_beats_linear_on_and_gate():
+    """label = (sim_a AND sim_b) via the product gate -- the interaction model
+    should fit it better (lower BCE) than a main-effects-only model."""
+    rng = np.random.default_rng(0)
+    sims = rng.random((400, 2))
+    labels = (sims[:, 0] * sims[:, 1] > 0.45).astype(float)
+
+    linear = GA2MCombiner(n_fields=2, seed=1)
+    for _ in range(400):
+        linear.train_step(sims, labels, lr=0.1)
+
+    inter = GA2MInteractionCombiner(n_fields=2, seed=1)
+    for _ in range(400):
+        inter.train_step(sims, labels, lr=0.3)
+
+    assert inter.loss(sims, labels) < linear.loss(sims, labels)
 
 
 # ── block scorer contract ─────────────────────────────────────────────────────
