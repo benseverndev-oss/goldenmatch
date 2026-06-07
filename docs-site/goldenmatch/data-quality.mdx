@@ -1,0 +1,71 @@
+---
+title: "Data-quality–aware matching"
+description: "How GoldenMatch uses GoldenCheck's data-quality signal to improve entity-resolution results, recall, precision, and trust — via fail-open, opt-in bridges."
+keywords: ["goldenmatch", "goldencheck", "data quality", "survivorship", "blocking", "negative evidence", "review", "entity resolution"]
+---
+
+When [GoldenCheck](/goldencheck/overview) is installed alongside GoldenMatch, its
+per-cell and per-column data-quality assessment can feed the matcher — improving
+which value survives a merge, which columns make safe blocking keys, which
+disagreements count against a match, and which confident merges deserve a human
+look.
+
+```bash
+pip install goldenmatch[quality]
+```
+
+Every integration is **fail-open and additive**: if GoldenCheck isn't installed,
+or the data is clean, the matcher behaves exactly as before. Each is the same
+shape — a bridge in `goldenmatch.core.quality` that reuses a GoldenCheck public
+API and returns nothing when there's no signal.
+
+## The four levers
+
+### Results — quality-weighted survivorship
+When building a cluster's golden record, prefer the **higher-quality** cell: the
+canonical spelling over a typo, a real date over a future-dated one. Driven by
+`GoldenRulesConfig.quality_weighting` (on by default; a no-op on clean data, so
+there's zero cost until there's an actual quality issue).
+
+### Recall — quality-aware blocking
+Edit-distance variants that survive normalization (`Californa` vs `California`)
+otherwise shard true duplicates into different blocks and are lost *before
+scoring runs*. With this on, GoldenMatch adds a fuzzy-tolerant blocking pass for
+flagged columns so the variants co-block. Purely additive — recall can only rise.
+
+```bash
+GOLDENMATCH_QUALITY_AWARE_BLOCKING=1
+```
+
+### Precision — FD-driven negative evidence
+A column that functionally determines others (`acct → name`) is a data-driven
+**identity anchor**, even when its name doesn't look like an id. Disagreement on
+such a column is strong evidence two records are *not* the same entity, so
+GoldenMatch admits it as a negative-evidence field the name heuristic would miss.
+
+```bash
+GOLDENMATCH_FD_NEGATIVE_EVIDENCE=1
+```
+
+### Trust — quality-gated review
+A confident match score measures string *agreement*, not whether that agreement
+rests on trustworthy *data*. A high-scoring pair built on a GoldenCheck-flagged
+cell is **held for review** instead of auto-merged — with the reason attached, so
+the steward sees why.
+
+```bash
+GOLDENMATCH_QUALITY_GATED_REVIEW=1
+```
+
+## Safety & posture
+
+- **Opt-in, default OFF** (except survivorship, which is a no-op when clean). With
+  a flag off, matching is byte-identical to GoldenCheck-free behaviour.
+- **Additive** — no door ever removes a match, a blocking key, or a decision; the
+  worst case for blocking/review is "more candidates / more review items".
+- **Benchmark-gated** — defaults flip on only after a measured win on the
+  reference ER datasets (DBLP-ACM / Febrl3 / NCVR), not on the assumption that
+  more quality info must help.
+
+GoldenCheck stays at the value/column level; entity resolution (including
+whole-record fuzzy matching) stays in GoldenMatch.
