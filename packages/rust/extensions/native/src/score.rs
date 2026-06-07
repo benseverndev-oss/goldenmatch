@@ -175,6 +175,133 @@ pub fn score_block_pairs(
     })
 }
 
+/// Map a per-field similarity to a comparison level, matching
+/// `core/probabilistic._levels_from_similarity`:
+///   2 levels: 1 if sim >= partial_threshold else 0
+///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
+///   N levels: count of k in 1..N with sim >= k/N (even spacing)
+#[inline]
+fn fs_level_from_sim(sim: f64, n_levels: u8, partial_threshold: f64) -> usize {
+    match n_levels {
+        2 => usize::from(sim >= partial_threshold),
+        3 => {
+            if sim >= 0.95 {
+                2
+            } else if sim >= partial_threshold {
+                1
+            } else {
+                0
+            }
+        }
+        n => {
+            let n = n as usize;
+            let mut lvl = 0usize;
+            for k in 1..n {
+                if sim >= (k as f64) / (n as f64) {
+                    lvl += 1;
+                }
+            }
+            lvl
+        }
+    }
+}
+
+/// Fellegi-Sunter sibling of [`score_block_pairs`]: instead of a weighted average
+/// of raw similarities, each field's similarity is mapped to a comparison LEVEL
+/// and the per-level match weight (log2(m/u), EM-trained) is summed, then turned
+/// into a 0-1 score the same two ways `score_probabilistic_vectorized` does:
+///
+///   calibrated (posterior): 1 / (1 + 2^-(prior_w + W)), W clamped to [-60, 60]
+///   linear:                 clamp((W - min_weight) / weight_range, 0, 1)
+///
+/// `field_values[f][r]` is the already-transform-applied value of field `f` for
+/// row `r`, block-sorted. A null on EITHER side maps to level 0 (disagree),
+/// matching `comparison_vector`. `match_weights[f]` has one weight per level.
+/// Scorers are score_one ids 0..=3 (jaro_winkler/levenshtein/token_sort/exact);
+/// soundex/embedding fields aren't native-eligible (caller falls back to numpy).
+///
+/// Parity with the numpy path is within rapidfuzz tolerance (same as the
+/// weighted kernel) — a pair could differ only if its normalized score sits
+/// within that tolerance of `threshold`. Asserted in tests/test_native_parity.py.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+pub fn score_block_pairs_fs(
+    py: Python<'_>,
+    row_ids: Vec<i64>,
+    block_sizes: Vec<usize>,
+    field_values: Vec<Vec<Option<String>>>,
+    scorer_ids: Vec<u8>,
+    levels: Vec<u8>,
+    partial_thresholds: Vec<f64>,
+    match_weights: Vec<Vec<f64>>,
+    calibrated: bool,
+    prior_w: f64,
+    min_weight: f64,
+    weight_range: f64,
+    threshold: f64,
+    exclude: Vec<(i64, i64)>,
+) -> Vec<(i64, i64, f64)> {
+    let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
+    let n_fields = scorer_ids.len();
+
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
+    let mut offset = 0usize;
+    for &size in &block_sizes {
+        spans.push((offset, size));
+        offset += size;
+    }
+
+    let normalize = |total_weight: f64| -> f64 {
+        if calibrated {
+            let logodds = (prior_w + total_weight).clamp(-60.0, 60.0);
+            1.0 / (1.0 + 2.0_f64.powf(-logodds))
+        } else if weight_range > 0.0 {
+            ((total_weight - min_weight) / weight_range).clamp(0.0, 1.0)
+        } else {
+            0.5
+        }
+    };
+
+    py.allow_threads(|| {
+        spans
+            .par_iter()
+            .flat_map_iter(|&(offset, size)| {
+                let mut local: Vec<(i64, i64, f64)> = Vec::new();
+                if size >= 2 {
+                    let end = offset + size;
+                    for i in offset..end - 1 {
+                        let ri = row_ids[i];
+                        for j in (i + 1)..end {
+                            let rj = row_ids[j];
+                            let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                            if exclude.contains(&pair_key) {
+                                continue;
+                            }
+                            let mut total_weight = 0.0_f64;
+                            for f in 0..n_fields {
+                                let level = match (&field_values[f][i], &field_values[f][j]) {
+                                    (Some(a), Some(b)) => {
+                                        let sim = score_one(scorer_ids[f], a, b);
+                                        fs_level_from_sim(sim, levels[f], partial_thresholds[f])
+                                    }
+                                    // Null on either side -> disagree (level 0).
+                                    _ => 0,
+                                };
+                                total_weight += match_weights[f][level];
+                            }
+                            let normalized = normalize(total_weight);
+                            if normalized >= threshold {
+                                local.push((pair_key.0, pair_key.1, normalized));
+                            }
+                        }
+                    }
+                }
+                local
+            })
+            .collect()
+    })
+}
+
 /// A block-sorted Utf8 column read zero-copy from an Arrow buffer. Polars emits
 /// `LargeUtf8` (i64 offsets) by default; plain pyarrow string arrays are `Utf8`
 /// (i32). Both are owned (Arc-backed -> `Send + Sync`) so the rayon closure can

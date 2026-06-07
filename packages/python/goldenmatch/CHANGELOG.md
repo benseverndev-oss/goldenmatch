@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Native Rust FS kernel — opt-in (Splink-parity Phase 3b).** New
+  `goldenmatch-native` kernel `score_block_pairs_fs` (FS arithmetic: per-field
+  `sim → comparison level → log2(m/u)` weight sum → linear/posterior
+  normalization), reusing the weighted kernel's rayon/`allow_threads` scaffold.
+  `score_probabilistic_native` + `probabilistic_block_scorer` prefer it when
+  built. **Opt-in, default OFF (`GOLDENMATCH_FS_NATIVE=1`)**: FS's discrete
+  comparison levels amplify the tiny rapidfuzz-rs-vs-Python-rapidfuzz float
+  differences — a similarity sitting exactly on a `partial_threshold` (token_sort
+  ratios are rationals, so common) can flip a level between the two libraries,
+  and with ~40-bit EM weights a single flip swings the score ~0.45 and can move a
+  pair across the link threshold. Measured **2.9x** on DBLP-ACM and **byte-exact**
+  vs numpy on non-boundary data; the numpy vectorized path stays the reproducible
+  default. Ineligible (→ numpy) for soundex/embedding scorers or TF-adjusted
+  fields; degrades gracefully when the published wheel lacks the symbol.
+  `goldenmatch-native` 0.1.3 → 0.1.4 (pyproject + Cargo lockstep; republish to
+  ship the symbol).
 - **FS on the bucket backend — scale-out via the shared orchestration
   (Splink-parity Phase 3a).** Probabilistic (Fellegi-Sunter) matchkeys now ride
   the same hash-bucketed, parallel `score_buckets` path weighted matchkeys use

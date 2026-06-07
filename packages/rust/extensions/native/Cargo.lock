@@ -453,16 +453,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-graph-core"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+]
+
+[[package]]
 name = "goldenmatch-native"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "arrow",
  "blake2",
  "goldenmatch-fingerprint-core",
+ "goldenmatch-graph-core",
+ "goldenmatch-score-core",
  "numpy",
  "pyo3",
- "rapidfuzz",
  "rayon",
+]
+
+[[package]]
+name = "goldenmatch-score-core"
+version = "0.1.0"
+dependencies = [
+ "rapidfuzz",
 ]
 
 [[package]]

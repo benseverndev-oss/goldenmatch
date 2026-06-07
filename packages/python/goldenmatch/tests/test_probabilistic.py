@@ -1104,3 +1104,92 @@ class TestFSBucketParity:
         with pytest.raises(ValueError, match="requires a trained em_result"):
             score_buckets(df, BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
                           _make_probabilistic_mk(), set(), em_result=None)
+
+
+# ── Native FS kernel (Phase 3b) ────────────────────────────────────────────
+
+
+def _native_fs_available():
+    try:
+        from goldenmatch.core import _native_loader
+        return _native_loader.native_available() and hasattr(
+            _native_loader.native_module(), "score_block_pairs_fs"
+        )
+    except Exception:
+        return False
+
+
+class TestNativeFSGating:
+    def test_default_off(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
+        assert p._fs_native_enabled() is False
+        assert p._fs_native_eligible(_make_probabilistic_mk()) is False
+
+    def test_declines_soundex_and_tf(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        if not _native_fs_available():
+            pytest.skip("native ext not built")
+        # soundex_match scorer is not a kernel scorer id -> ineligible.
+        mk_sx = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="soundex_match", levels=2),
+        ])
+        assert p._fs_native_eligible(mk_sx) is False
+        # tf_adjustment field -> ineligible (kernel has no TF tables).
+        mk_tf = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="exact", levels=2, tf_adjustment=True),
+        ])
+        assert p._fs_native_eligible(mk_tf) is False
+
+
+@pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")
+class TestNativeFSParity:
+    def _clean_df(self):
+        # Identical matches / very different non-matches -> no pair sits on a
+        # comparison-level boundary, so native == numpy exactly.
+        return pl.DataFrame({
+            "__row_id__": list(range(8)),
+            "first_name": ["alexander", "alexander", "bartholomew", "bartholomew",
+                           "christopher", "christopher", "wilhelmina", "wilhelmina"],
+            "last_name": ["smith", "smith", "delacroix", "delacroix",
+                          "wozniak", "wozniak", "abernathy", "abernathy"],
+            "zip": ["111", "111", "222", "222", "333", "333", "444", "444"],
+        })
+
+    def test_native_matches_numpy_on_clean_data(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core.blocker import build_blocks
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        df = self._clean_df()
+        mk = _make_probabilistic_mk()
+        blocks = build_blocks(df.lazy(), BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]))
+        em = p.train_em(df, mk, n_sample_pairs=100, blocks=blocks, blocking_fields=["zip"])
+        numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
+        native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
+        assert native_pairs == numpy_pairs
+
+    def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        mk = _make_probabilistic_mk()
+        em = p.train_em(_make_dedupe_df(), mk, n_sample_pairs=100, blocking_fields=["zip"])
+        scorer = p.probabilistic_block_scorer(mk, em)
+        # The native closure is named _native (see probabilistic_block_scorer).
+        assert scorer.__name__ == "_native"
+
+    def test_native_respects_exclude(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core.blocker import build_blocks
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        df = self._clean_df()
+        mk = _make_probabilistic_mk()
+        blocks = build_blocks(df.lazy(), BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]))
+        em = p.train_em(df, mk, n_sample_pairs=100, blocks=blocks, blocking_fields=["zip"])
+        all_pairs = p.score_probabilistic_native(df, mk, em, set())
+        excl = {(0, 1)}
+        kept = p.score_probabilistic_native(df, mk, em, excl)
+        assert (0, 1) not in {(a, b) for a, b, _s in kept}
+        assert len(kept) == len(all_pairs) - 1

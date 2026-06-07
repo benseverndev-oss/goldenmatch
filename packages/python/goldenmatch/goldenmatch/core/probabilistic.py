@@ -1522,17 +1522,123 @@ def _fs_vectorized_enabled() -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
+# Scorer-name -> native kernel id for the FS kernel (score_one ids 0..=3).
+# soundex/embedding/record_embedding are absent on purpose — those fields force
+# the numpy fallback (the kernel's score_one doesn't implement them).
+_NATIVE_FS_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+}
+
+
+def _fs_native_enabled() -> bool:
+    """Whether the native FS block kernel is active. **Opt-in, default OFF.**
+
+    Enable with `GOLDENMATCH_FS_NATIVE=1` (also needs the native ext built).
+    Unlike the weighted native kernel (default ON), FS stays opt-in because its
+    DISCRETE comparison levels amplify the tiny rapidfuzz-rs-vs-Python-rapidfuzz
+    float differences: a similarity sitting exactly on a `partial_threshold`
+    (token_sort ratios are rationals like 0.7 / 0.857, so this is common) can
+    flip a level between the two libraries, and with EM weights that can span
+    ~40 bits a single level flip swings the normalized score ~0.45 and can move
+    a pair across the link threshold. The numpy vectorized path is the default
+    so FS output is reproducible; native is a measured ~2.9x opt-in speedup for
+    callers who accept boundary-level differences (same CLASS as the documented
+    vectorized-vs-scalar FS parity, larger in per-pair magnitude).
+    """
+    val = os.environ.get("GOLDENMATCH_FS_NATIVE")
+    if val is None or val.strip().lower() not in ("1", "true", "yes", "on", "enabled"):
+        return False
+    from goldenmatch.core._native_loader import native_enabled
+    return native_enabled("block_scoring")
+
+
+def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
+    """Whether (mk) can use the native FS kernel.
+
+    Every field scorer must be one the kernel's score_one implements, and no
+    field may opt into TF adjustment (the kernel doesn't carry the per-value
+    frequency tables — those fields stay on the numpy path).
+    """
+    if not _fs_native_enabled():
+        return False
+    if not mk.fields:
+        return False
+    for f in mk.fields:
+        if f.scorer not in _NATIVE_FS_SCORER_IDS:
+            return False
+        if getattr(f, "tf_adjustment", False):
+            return False
+    try:
+        from goldenmatch.core._native_loader import native_module
+        return hasattr(native_module(), "score_block_pairs_fs")
+    except Exception:
+        return False
+
+
+def score_probabilistic_native(
+    block_df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score one block via the native Rust FS kernel (``score_block_pairs_fs``).
+
+    Output-equivalent (within rapidfuzz tolerance) to
+    ``score_probabilistic_vectorized``: same transformed values
+    (``_field_values_for_block``), same level mapping, same EM match weights,
+    same calibration + threshold. The kernel replaces the per-field numpy NxN
+    matrices with a single GIL-released per-pair Rust loop. Caller gates on
+    ``_fs_native_eligible``.
+    """
+    from goldenmatch.core._native_loader import native_module
+
+    if exclude_pairs is None:
+        exclude_pairs = set()
+    row_ids = block_df["__row_id__"].to_list()
+    n = len(row_ids)
+    if n < 2:
+        return []
+
+    calibrated = _fs_calibration_mode() == "posterior"
+    prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
+    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    weight_range = max_weight - min_weight
+    if mk.link_threshold is not None:
+        link_threshold = float(mk.link_threshold)
+    else:
+        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+
+    field_values = [_field_values_for_block(block_df, f, n) for f in mk.fields]
+    scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
+    levels = [int(f.levels) for f in mk.fields]
+    partials = [float(f.partial_threshold) for f in mk.fields]
+    weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
+    # Kernel canonicalizes pair_key to (min,max); pass exclude pre-canonicalized.
+    excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
+
+    pairs = native_module().score_block_pairs_fs(
+        row_ids, [n], field_values, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+    )
+    return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+
+
 def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
     """Pick the best block-scoring callable for (mk, em_result).
 
     Returns ``fn(block_df, exclude_pairs=None) -> list[(a, b, score)]``.
 
-    Prefers the vectorized NxN-matrix path when every field scorer can be
-    expressed as a matrix (the common case); falls back to the scalar
-    ``score_probabilistic`` for matchkeys with model-backed scorers
-    (embedding / record_embedding) or when explicitly disabled via
-    ``GOLDENMATCH_FS_VECTORIZED=0``.
+    Preference order: native Rust FS kernel (when built + all scorers are
+    jaro_winkler/levenshtein/token_sort/exact + no TF adjustment) -> vectorized
+    NxN-matrix numpy path -> scalar ``score_probabilistic`` (model-backed
+    scorers or ``GOLDENMATCH_FS_VECTORIZED=0``).
     """
+    if _fs_native_eligible(mk):
+        def _native(block_df, exclude_pairs=None):
+            return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
+        return _native
+
     use_vec = _fs_vectorized_enabled() and all(
         vectorized_scorer_supported(f.scorer) for f in mk.fields
     )
