@@ -2,6 +2,25 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-07 — GoldenFlow Arrow-native kernel shipped
+- New architecture node: [../architecture/goldenflow-native-kernel.md](../architecture/goldenflow-native-kernel.md)
+  and decision: [../decisions/0006-goldenflow-native-nanp-gating.md](../decisions/0006-goldenflow-native-nanp-gating.md).
+- Measured that GoldenFlow's `date_iso8601` + `phone_e164` were ~92 % of a 1M-row
+  run (per-row `dateutil`/`phonenumbers`). Shipped: (1) **vectorized Polars fast
+  paths** with a per-row fallback (`transforms/_fastpath.py::apply_with_residual`),
+  76× date / 19× phone, ~14× end-to-end, parity-safe; (2) the optional
+  `goldenflow-native` Rust/PyO3 abi3 kernel (`packages/rust/extensions/native-flow`)
+  for the phone residual, Arrow zero-copy, **NANP-only gated** so it's byte-identical
+  to `phonenumbers` by construction (the Rust port diverges on int'l/ambiguous
+  numbers; two gates confine it to country-code-1 + canonical NANP).
+- Infra mirrors `goldenmatch-native`: loader (`goldenflow/core/_native_loader.py`,
+  `GOLDENFLOW_NATIVE` 0/auto/1), `publish-goldenflow-native.yml` (per-platform abi3
+  wheels on `goldenflow-native-v*`), and two `native_flow` CI lanes (build + parity).
+- Promoted in [../planning/roadmap.md](../planning/roadmap.md) as an adjacent
+  Arrow-native arc. Docs-site updated in the same change: new
+  `goldenflow/performance.mdx` (+ overview card + nav). Code-level notes in
+  `packages/python/goldenflow/CLAUDE.md` + `packages/rust/extensions/native-flow/README.md`.
+
 ## 2026-06-06 — Auto-config search strategy after the engine speedup (v1.28.0)
 - New planning node: [../planning/autoconfig-search-strategy.md](../planning/autoconfig-search-strategy.md)
   — the thesis (the controller's search strategy was calibrated to a cost model the
@@ -101,4 +120,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-05
+**Classification:** meta/log • **Last updated:** 2026-06-07

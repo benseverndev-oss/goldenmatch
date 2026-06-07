@@ -91,7 +91,8 @@
             "group": "GoldenFlow",
             "pages": [
               "goldenflow/overview",
-              "goldenflow/cli"
+              "goldenflow/cli",
+              "goldenflow/performance"
             ]
           },
           {

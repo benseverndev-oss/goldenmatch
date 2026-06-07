@@ -6,6 +6,7 @@ import polars as pl
 from dateutil import parser as dateutil_parser
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._fastpath import _V, apply_with_residual
 
 
 def _parse_date(val: str | None) -> date | None:
@@ -18,6 +19,42 @@ def _parse_date(val: str | None) -> date | None:
 
 
 _YEAR_ONLY_RE = r"^\s*\d{4}\s*$"
+
+# Formats the vectorized fast path resolves entirely in Polars/Rust. Each is
+# either unambiguous (4-digit year anchors the field order) or matches
+# dateutil's default month-first interpretation, so a row this path resolves
+# is byte-identical to what `dateutil.parse(...).date()` would have produced —
+# the parity contract `apply_with_residual` relies on (asserted over a random
+# corpus in tests/transforms/test_dates.py). Anything not covered here (2-digit
+# years, times, exotic spellings) falls through to the per-row dateutil path.
+_DATE_FORMATS: tuple[str, ...] = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%b %d %Y",
+    "%B %d %Y",
+    "%d %b %Y",
+    "%d %B %Y",
+)
+
+
+def _parsed_date_expr() -> pl.Expr:
+    """Vectorized parse of the :data:`_V` column to a `pl.Date` (null where no
+    fast-path format matched).
+
+    Guarded on the presence of a 4-digit run: chrono's ``%Y`` greedily accepts
+    2-digit years (``"02/02/93"`` -> year 0093), but dateutil maps a 2-digit
+    year to 1993. Requiring a 4-digit year keeps the fast path off any 2-digit
+    -year input so those defer to the per-row dateutil reference — preserving
+    parity (see tests/transforms/test_fastpath_parity.py)."""
+    has_four_digit_year = pl.col(_V).str.contains(r"\d{4}")
+    parsed = pl.coalesce(
+        [pl.col(_V).str.to_date(fmt, strict=False) for fmt in _DATE_FORMATS]
+    )
+    return pl.when(has_four_digit_year).then(parsed).otherwise(None)
 
 
 @register_transform(
@@ -53,7 +90,10 @@ def date_iso8601(series: pl.Series) -> pl.Series:
         d = _parse_date(val)
         return d.isoformat() if d else val
 
-    return series.map_elements(_fmt, return_dtype=pl.Utf8)
+    # Vectorized fast path: parse the well-formed common formats in Rust and
+    # strftime to ISO; only rows the fast path can't resolve hit dateutil.
+    fast_iso = _parsed_date_expr().dt.strftime("%Y-%m-%d")
+    return apply_with_residual(series, fast_iso, _fmt, pl.Utf8)
 
 
 @register_transform(
@@ -66,7 +106,8 @@ def date_us(series: pl.Series) -> pl.Series:
         d = _parse_date(val)
         return d.strftime("%m/%d/%Y") if d else val
 
-    return series.map_elements(_fmt, return_dtype=pl.Utf8)
+    fast = _parsed_date_expr().dt.strftime("%m/%d/%Y")
+    return apply_with_residual(series, fast, _fmt, pl.Utf8)
 
 
 @register_transform(
@@ -79,7 +120,8 @@ def date_eu(series: pl.Series) -> pl.Series:
         d = _parse_date(val)
         return d.strftime("%d/%m/%Y") if d else val
 
-    return series.map_elements(_fmt, return_dtype=pl.Utf8)
+    fast = _parsed_date_expr().dt.strftime("%d/%m/%Y")
+    return apply_with_residual(series, fast, _fmt, pl.Utf8)
 
 
 @register_transform(

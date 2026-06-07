@@ -4,8 +4,44 @@ import phonenumbers
 import polars as pl
 
 from goldenflow.transforms import register_transform
+from goldenflow.transforms._fastpath import _V, apply_with_residual
+from goldenflow.transforms._native import (
+    phone_country_code_native,
+    phone_e164_native,
+)
 
 _DEFAULT_REGION = "US"
+
+# Vectorized E.164 fast path for the dominant NANP shape. A digit-only string
+# of 10 chars whose first digit is 2-9 (valid NANP area code) maps to +1<10>;
+# 11 chars starting "1" + a 2-9 digit maps to +<11>. Both reproduce exactly
+# what phonenumbers.format_number(parse(val, "US"), E164) returns, so a row this
+# path resolves is identical to the per-row path (parity asserted over a random
+# corpus in tests/transforms/test_fastpath_parity.py).
+#
+# Three guards keep it parity-safe:
+#   - the 2-9 area-code guard avoids the leading-"1" ambiguity (phonenumbers
+#     reads a leading 1 on a 10-digit string as the country code);
+#   - rows with letters defer to phonenumbers' alpha handling;
+#   - rows with a "+" defer too: an explicit "+CC" is international, and a
+#     foreign number can strip to exactly 10 digits starting 2-9 (e.g. German
+#     "+4930123456" -> "4930123456") which would otherwise be mis-NANP'd.
+# Everything excluded falls through to the per-row / native path unchanged.
+_NANP_10 = r"^[2-9]\d{9}$"
+_NANP_11 = r"^1[2-9]\d{9}$"
+_HAS_ALPHA = r"[A-Za-z]"
+
+
+def _e164_fast_expr() -> pl.Expr:
+    digits = pl.col(_V).str.replace_all(r"\D", "")
+    eligible = ~pl.col(_V).str.contains(_HAS_ALPHA) & ~pl.col(_V).str.contains(r"\+")
+    return (
+        pl.when(eligible & digits.str.contains(_NANP_10))
+        .then(pl.lit("+1") + digits)
+        .when(eligible & digits.str.contains(_NANP_11))
+        .then(pl.lit("+") + digits)
+        .otherwise(None)
+    )
 
 
 def _parse_phone(val: str | None) -> phonenumbers.PhoneNumber | None:
@@ -29,7 +65,9 @@ def phone_e164(series: pl.Series) -> pl.Series:
             return val  # preserve original on failure
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
-    return series.map_elements(_format, return_dtype=pl.Utf8)
+    return apply_with_residual(
+        series, _e164_fast_expr(), _format, pl.Utf8, native_fn=phone_e164_native()
+    )
 
 
 @register_transform(
@@ -44,6 +82,9 @@ def phone_national(series: pl.Series) -> pl.Series:
             return val
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
 
+    # No native path: the Rust port's national formatting diverges from
+    # phonenumbers on ambiguous leading-1 inputs (e.g. "1234567890"), and unlike
+    # E.164 there's no cheap canonical-form check to gate on. Stays pure Python.
     return series.map_elements(_format, return_dtype=pl.Utf8)
 
 
@@ -51,12 +92,11 @@ def phone_national(series: pl.Series) -> pl.Series:
     name="phone_digits", input_types=["phone"], auto_apply=False, priority=50, mode="series"
 )
 def phone_digits(series: pl.Series) -> pl.Series:
-    def _to_digits(val: str | None) -> str | None:
-        if val is None:
-            return None
-        return "".join(c for c in val if c.isdigit())
-
-    return series.map_elements(_to_digits, return_dtype=pl.Utf8)
+    # Pure-Polars regex: strip every non-digit. Equivalent to the per-row
+    # "".join(c for c in val if c.isdigit()) but stays in Rust (~5x). Note:
+    # str.isdigit() also accepts some Unicode digit code points; the column
+    # transform targets ASCII phone data, and the parity test pins ASCII rows.
+    return series.str.replace_all(r"\D", "")
 
 
 @register_transform(
@@ -92,4 +132,9 @@ def phone_country_code(series: pl.Series) -> pl.Series:
             return None
         return parsed.country_code
 
-    return series.map_elements(_code, return_dtype=pl.Int64)
+    native = phone_country_code_native()
+    if native is None:
+        return series.map_elements(_code, return_dtype=pl.Int64)
+    return apply_with_residual(
+        series, pl.lit(None, dtype=pl.Int64), _code, pl.Int64, native_fn=native
+    )
