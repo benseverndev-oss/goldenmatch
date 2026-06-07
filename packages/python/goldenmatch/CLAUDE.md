@@ -71,7 +71,8 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - Config: Pydantic models in `config/schemas.py`, YAML loading in `config/loader.py`
 - `config/schemas.py` has `MemoryConfig` (enabled, backend, path, trust, learning) and `LearningConfig` (threshold_min_corrections, weights_min_corrections). `GoldenMatchConfig.memory` is optional
 - `config/loader.py` normalizes golden_rules and standardization sections from flat YAML
-- `GoldenRulesConfig` fields: `auto_split: bool = True` (auto-split oversized clusters via MST), `quality_weighting: bool = True` (use GoldenCheck quality scores in survivorship, no-op without GoldenCheck), `weak_cluster_threshold: float = 0.3` (edge gap threshold for confidence downgrade)
+- `GoldenRulesConfig` fields: `auto_split: bool = True` (auto-split oversized clusters via MST), `quality_weighting: bool = True` (use GoldenCheck quality scores in survivorship), `weak_cluster_threshold: float = 0.3` (edge gap threshold for confidence downgrade)
+- **`quality_weighting` is WIRED (2026-06-07):** `pipeline._run_dedupe_pipeline` calls `core.quality.compute_quality_scores(collected_df)` (→ `goldencheck.cell_quality`, remapped positional→`__row_id__`) and threads the result into `build_golden_records_from_frames` / `build_golden_records_batch` and the `_polars_native_eligible` gate. Fail-open + SPARSE: `None` when goldencheck is absent OR the data is clean, so a non-None dict (which forces the slow per-row survivorship path off the fast columnar path) only appears when there are real per-cell issues — clean data keeps the fast path with zero change. Effect: a cluster's golden record prefers the canonical spelling over a typo, a real date over a future one. Was a documented no-op before this.
 
 ## Performance
 - Exact matching uses Polars self-join (not Python group_by + combinations)

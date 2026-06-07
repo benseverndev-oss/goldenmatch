@@ -1605,6 +1605,24 @@ def _run_dedupe_pipeline(
                 "Falling back to base rules.", exc,
             )
 
+    # Quality-weighted survivorship (GoldenRulesConfig.quality_weighting): when
+    # enabled AND goldencheck is installed, compute per-cell quality weights so
+    # the golden record prefers higher-quality values (canonical spelling over a
+    # typo, a real date over a 2099 one) when cluster members disagree.
+    # Fail-open + SPARSE: None when the data is clean or goldencheck is absent,
+    # which preserves the fast survivorship path (zero behaviour/perf change
+    # unless there are real quality issues). The field defaulted True but was a
+    # documented no-op until now.
+    quality_scores = None
+    if getattr(golden_rules, "quality_weighting", False):
+        from goldenmatch.core.quality import compute_quality_scores
+        with stage("golden_quality_scores"):
+            quality_scores = compute_quality_scores(collected_df)
+        if quality_scores:
+            logger.info(
+                "GoldenCheck quality weighting: %d penalized cell(s)", len(quality_scores)
+            )
+
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
     # the prior loop called `collected_df.filter(__row_id__.is_in(member_ids))`
@@ -1647,7 +1665,7 @@ def _run_dedupe_pipeline(
                 _golden_source,
                 cluster_frames,
                 golden_rules,
-                quality_scores=None,
+                quality_scores=quality_scores,
                 provenance=_provenance_on,
             )
     else:
@@ -1729,7 +1747,7 @@ def _run_dedupe_pipeline(
                 _provenance_on = config.output.lineage_provenance
                 _fast_eligible = (
                     not _provenance_on
-                    and _polars_native_eligible(golden_rules, quality_scores=None)
+                    and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
                 )
                 if _fast_eligible:
                     with stage("golden_build_records_df_fast"):
@@ -1760,6 +1778,7 @@ def _run_dedupe_pipeline(
                         }
                         golden_records = build_golden_records_batch(
                             multi_df, golden_rules,
+                            quality_scores=quality_scores,
                             provenance=_provenance_on,
                             cluster_pair_scores=cluster_pair_scores,
                         )
