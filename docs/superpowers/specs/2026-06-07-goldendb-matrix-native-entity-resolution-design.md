@@ -1,7 +1,13 @@
 # GoldenDB: matrix-native entity resolution (fuzzy-join-as-matmul)
 
 **Date:** 2026-06-07
-**Status:** design (exploration locked with Ben; pre-spec-review; no spike yet -- no GPU in env)
+**Status:** design + EXPERIMENTAL work-in-progress spike. The design was locked with
+Ben; an experimental, NOT-production-ready implementation of the `backend="gpu"`
+block scorer has since landed at `packages/python/goldenmatch/goldenmatch/core/goldendb/`
+(char-ngram encode -> JAX cosine matmul -> GA2M weighted-average combine with exact
+attribution + monotonicity + a `jax.grad` training step). Validated on CPU JAX
+(`tests/test_goldendb_gpu_backend.py`); GPU wall-clock is NOT validated (no GPU in
+env). See "Implementation status" below for what is and isn't wired.
 **Scope:** `packages/python/goldenmatch/goldenmatch/core/` (blocker, ann_blocker, scorer, pipeline, embedder), `packages/python/goldenmatch/goldenmatch/embeddings/`, `packages/python/goldenmatch/goldenmatch/db/ann_index.py`, `packages/rust/extensions/{score-core,native,goldenembed}`. New surface lands behind a `backend="gpu"` block-scorer; no existing path changes. The GPU backend stops at edge generation -- `core/cluster.py` (clustering / `ClusterFrames`) and `core/golden.py` (field promotion) are consumed unchanged via the Arrow/`__row_id__` handoff.
 **Related:**
   - `core/blocker.py`, `core/ann_blocker.py` -- the blocking/recall stages GoldenDB generalizes
@@ -285,7 +291,33 @@ spike, ordered by what most cheaply kills the idea:
 - Not a flat-concat embedding scorer (forbidden -- destroys attribution).
 - Not a single universal record embedding (blocks stay per-field).
 - No higher-than-pairwise interaction terms by default.
-- No spike/implementation in this change -- this is the design only; no GPU here.
+
+## Implementation status (EXPERIMENTAL / work in progress)
+
+An experimental `backend="gpu"` scorer has landed at
+`packages/python/goldenmatch/goldenmatch/core/goldendb/` (`_encode.py`,
+`_combine.py`, `scorer.py`), wired into `core/pipeline.py:_get_block_scorer()` and
+installable via `pip install goldenmatch[goldendb]`. It is loudly marked
+work-in-progress (module banner + a one-time runtime warning + CHANGELOG note) and
+is NOT production-validated.
+
+Landed (CPU-JAX validated in `tests/test_goldendb_gpu_backend.py`):
+- char-ngram hashed per-field encoding -> L2-normalised matrices
+- per-field cosine via a JAX `matmul` (the GPU path; runs on CPU here)
+- GA2M weighted-average combine with EXACT additive attribution + monotonicity
+- a differentiable `jax.grad` training step for the probabilistic combine
+- block-scorer-contract output `(id_a, id_b, score)` feeding the unchanged
+  `core/cluster.py` -> `core/golden.py` path via `__row_id__`
+
+NOT yet wired (future work):
+- cross-block ANN recall (Stage A) -- today it scores within the existing blocks,
+  so recall is whatever the blocker produces
+- trained shape functions / pairwise interaction terms (structure is linear today)
+- negative-evidence penalties (ignored with a warning if configured)
+- GPU wall-clock crossover measurement (the recall@k gate above remains the first
+  thing to run on real GPU hardware)
+- scores are char-ngram cosine + an untrained combine, NOT calibrated against the
+  production scorers
 
 ## Future direction
 

@@ -116,6 +116,15 @@ def _get_block_scorer(config: GoldenMatchConfig):
             score_blocks_datafusion,
         )
         return score_blocks_datafusion
+    if backend == "gpu":
+        # EXPERIMENTAL / WORK IN PROGRESS: GoldenDB matrix-native scorer
+        # (spec: docs/superpowers/specs/
+        # 2026-06-07-goldendb-matrix-native-entity-resolution-design.md).
+        # Encodes each matchkey field to a matrix, scores per-field cosine via a
+        # JAX matmul, and combines with a GA2M weighted-average. Scores are NOT
+        # production-validated; see goldenmatch.core.goldendb for caveats.
+        from goldenmatch.core.goldendb.scorer import score_blocks_gpu
+        return score_blocks_gpu
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,

@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added (experimental / work in progress)
+- **GoldenDB matrix-native scorer (`backend="gpu"`) — EXPERIMENTAL, NOT production-ready.**
+  A spike of the "entity resolution as a fuzzy self-join = matrix multiply" design. Encodes
+  each matchkey field to a char-ngram matrix, computes per-field cosine via a JAX `matmul`
+  (GPU when present, CPU otherwise), and combines them with a GA2M weighted-average that keeps
+  **exact** per-field attribution and a monotonicity guarantee; ships a differentiable
+  `jax.grad` training step for the probabilistic combine. Install with
+  `pip install goldenmatch[goldendb]`. **Scores are produced by char-ngram cosine + an
+  untrained combine and are NOT calibrated against the production scorers — treat output as
+  experimental.** Not yet wired: cross-block ANN recall, trained shape functions / interaction
+  terms, negative-evidence penalties, and GPU wall-clock validation. Lives in
+  `goldenmatch/core/goldendb/`. Spec:
+  `docs/superpowers/specs/2026-06-07-goldendb-matrix-native-entity-resolution-design.md`.
+
 ## [1.28.0] - 2026-06-06
 
 This release re-derives the **auto-config search strategy for the post-speedup cost model**.

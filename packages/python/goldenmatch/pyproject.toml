@@ -67,6 +67,14 @@ embeddings = [
     "sentence-transformers>=2.2",
     "faiss-cpu>=1.7",
 ]
+# EXPERIMENTAL / WORK IN PROGRESS: GoldenDB matrix-native backend (config
+# backend="gpu"). JAX powers the per-field cosine matmul + the differentiable
+# GA2M combine; install the matching GPU build of jax for GPU acceleration.
+# See goldenmatch/core/goldendb/ and docs/superpowers/specs/
+# 2026-06-07-goldendb-matrix-native-entity-resolution-design.md.
+goldendb = [
+    "jax>=0.4",
+]
 # In-house trainable embedder: ONNX export + onnxruntime inference. The numpy
 # forward pass works without these; they're needed only for .onnx export and the
 # onnxruntime-backed inference path.
