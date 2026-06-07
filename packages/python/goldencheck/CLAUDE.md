@@ -97,6 +97,15 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   low-false-positive. Still NOT wired into `baseline/constraints.py` — that mines
   *approximate* FDs (confidence < 1.0); the kernel is strict-only, different
   semantics.
+- **Approx-FD violations** (`relations/approx_fd.py`): the high-value sibling —
+  finds *near*-strict FDs and surfaces the ROWS that break them (`zip -> city`
+  holds 99.7%; the 0.3% are likely data-entry errors), `fd_violation` check,
+  WARNING. Native `discover_approximate_fds` + `fd_violation_rows` find the
+  per-determinant-group mode dependent and flag deviations; the Python fallback
+  replicates the identical first-seen interning + mode tie-break + avg-group
+  guard, so violation sets match. **Key FP guard:** average group size >= 3
+  (`MIN_AVG_GROUP`) — a near-unique determinant has singleton groups that each
+  look "consistent" and would otherwise inflate confidence to ~1.0.
 
 ## `--deep` mode + duplicate-row detection
 

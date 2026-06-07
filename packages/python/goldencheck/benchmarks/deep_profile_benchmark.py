@@ -181,6 +181,45 @@ def bench_fuzzy_values(n_distinct: int) -> None:
         print("  native kernel             : (not built -- skipping)")
 
 
+def bench_approximate_fd(rows: int) -> None:
+    import polars as pl
+    from goldencheck.relations import approx_fd as afd
+
+    print(f"\n## Approximate-FD violation discovery  (rows={rows:,})")
+    rng = random.Random(19)
+    z2c: dict[int, int] = {}
+    zips = [rng.randint(0, 500) for _ in range(rows)]
+    city = [z2c.setdefault(z, rng.randint(0, 80)) for z in zips]
+    for _ in range(rows // 1000):  # inject ~0.1% violations
+        city[rng.randrange(rows)] = rng.randint(81, 200)
+    df = pl.DataFrame({
+        "zip": zips, "city": city,
+        "dept": [rng.randint(0, 40) for _ in range(rows)],
+        "noise1": [rng.randint(0, 9) for _ in range(rows)],
+        "noise2": [rng.randint(0, 100) for _ in range(rows)],
+    })
+    cols = afd._select_candidates(df)
+
+    def py() -> None:
+        ids = [afd._intern(df[c].to_list()) for c in cols]
+        afd._discover_python(ids, df.height, afd._MIN_CONFIDENCE)
+
+    py_wall = _median_wall(py, runs=3)
+    print(f"  pure-Python : {py_wall * 1000:9.2f} ms")
+
+    if native_available():
+        arrays = [df[c].to_arrow() for c in cols]
+
+        def nat() -> None:
+            native_module().discover_approximate_fds(arrays, afd._MIN_CONFIDENCE)
+
+        nat_wall = _median_wall(nat, runs=3)
+        speedup = py_wall / nat_wall if nat_wall > 0 else float("inf")
+        print(f"  native kernel : {nat_wall * 1000:9.2f} ms   ({speedup:.1f}x faster)")
+    else:
+        print("  native kernel : (not built -- skipping)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=1_000_000, help="row count per kernel")
@@ -191,6 +230,7 @@ def main() -> int:
     bench_benford(args.rows)
     bench_composite_key(min(args.rows, 200_000))  # combinatorial; keep it sane
     bench_functional_dependency(min(args.rows, 200_000))
+    bench_approximate_fd(min(args.rows, 200_000))
     bench_fuzzy_values(2000)  # operates on a column's DISTINCT values
     return 0
 

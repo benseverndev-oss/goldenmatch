@@ -52,8 +52,12 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 #   - fuzzy_values: near-duplicate value clustering (trigram+prefix blocking +
 #     Levenshtein-ratio). The pure-Python fallback uses the identical metric +
 #     blocking, so cluster sets match; parity asserted in the same test module.
+#   - approximate_fd: near-FD violation detection (find the per-determinant-group
+#     mode dependent, flag deviating rows). The pure-Python fallback uses the
+#     identical first-seen interning + mode tie-break + avg-group guard, so the
+#     violation sets match; parity asserted in the same test module.
 _GATED_ON: frozenset[str] = frozenset(
-    {"benford", "composite_keys", "functional_dependencies", "fuzzy_values"}
+    {"benford", "composite_keys", "functional_dependencies", "fuzzy_values", "approximate_fd"}
 )
 
 
@@ -94,6 +98,7 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "composite_keys": "composite_key_search",
     "functional_dependencies": "discover_functional_dependencies",
     "fuzzy_values": "near_duplicate_value_clusters",
+    "approximate_fd": "discover_approximate_fds",
 }
 
 

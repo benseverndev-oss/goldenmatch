@@ -202,3 +202,44 @@ pub fn discover_functional_dependencies(
     let refs: Vec<&[u64]> = columns.iter().map(|c| c.as_slice()).collect();
     Ok(goldencheck_core::discover_functional_dependencies(&refs))
 }
+
+/// Discover *approximate* FDs `(det_idx, dep_idx, n_violations)` holding for a
+/// fraction of rows in `[min_confidence, 1.0)` (delegates to
+/// `goldencheck_core::discover_approximate_fds`).
+#[pyfunction]
+#[pyo3(signature = (field_arrays, min_confidence))]
+pub fn discover_approximate_fds(
+    field_arrays: Vec<PyArrowType<ArrayData>>,
+    min_confidence: f64,
+) -> PyResult<Vec<(usize, usize, usize)>> {
+    if field_arrays.is_empty() {
+        return Ok(Vec::new());
+    }
+    let columns: Vec<Vec<u64>> = field_arrays
+        .into_iter()
+        .map(|a| intern_column(a.0))
+        .collect::<PyResult<_>>()?;
+    let refs: Vec<&[u64]> = columns.iter().map(|c| c.as_slice()).collect();
+    Ok(goldencheck_core::discover_approximate_fds(
+        &refs,
+        min_confidence,
+    ))
+}
+
+/// Row indices where `dep` deviates from its per-`det`-group mode (the rows that
+/// break an otherwise-strong dependency). Delegates to
+/// `goldencheck_core::fd_violation_rows`.
+#[pyfunction]
+pub fn fd_violation_rows(
+    det: PyArrowType<ArrayData>,
+    dep: PyArrowType<ArrayData>,
+) -> PyResult<Vec<usize>> {
+    let d = intern_column(det.0)?;
+    let p = intern_column(dep.0)?;
+    if d.len() != p.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "fd_violation_rows: det and dep differ in length",
+        ));
+    }
+    Ok(goldencheck_core::fd_violation_rows(&d, &p))
+}

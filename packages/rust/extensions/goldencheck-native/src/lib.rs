@@ -23,6 +23,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys::composite_key_search, m)?)?;
     m.add_function(wrap_pyfunction!(keys::functional_dependency_holds, m)?)?;
     m.add_function(wrap_pyfunction!(keys::discover_functional_dependencies, m)?)?;
+    m.add_function(wrap_pyfunction!(keys::discover_approximate_fds, m)?)?;
+    m.add_function(wrap_pyfunction!(keys::fd_violation_rows, m)?)?;
     m.add_function(wrap_pyfunction!(fuzzy::near_duplicate_value_clusters, m)?)?;
     Ok(())
 }

@@ -213,3 +213,36 @@ def test_fuzzy_value_clusters_parity(seed: int) -> None:
     nat = native_module().near_duplicate_value_clusters(values, fv._MIN_SIMILARITY)
     # Compare as sets of frozensets (cluster identity, order-independent).
     assert {frozenset(c) for c in py} == {frozenset(c) for c in nat}
+
+
+from goldencheck.relations import approx_fd as afd  # noqa: E402
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(6))
+def test_approximate_fd_parity(seed: int) -> None:
+    """Native approx-FD discovery + violation rows match the pure-Python fallback
+    exactly (same interning, mode tie-break, avg-group guard)."""
+    rng = random.Random(seed)
+    n = 400
+    zips = [rng.randint(0, 15) for _ in range(n)]
+    z2c: dict[int, int] = {}
+    city = [z2c.setdefault(z, rng.randint(0, 12)) for z in zips]
+    # inject a few violations
+    for _ in range(rng.randint(1, 6)):
+        city[rng.randrange(n)] = rng.randint(13, 20)
+    df = pl.DataFrame({"zip": zips, "city": city, "noise": [rng.randint(0, 5) for _ in range(n)]})
+    cols = afd._select_candidates(df)
+
+    arrays = [df[c].to_arrow() for c in cols]
+    nat_triples = {(i, j, v) for i, j, v in
+                   native_module().discover_approximate_fds(arrays, afd._MIN_CONFIDENCE)}
+    cols_ids = [afd._intern(df[c].to_list()) for c in cols]
+    py_triples = set(afd._discover_python(cols_ids, n, afd._MIN_CONFIDENCE))
+    assert nat_triples == py_triples
+
+    # And the violation row sets match for each discovered pair.
+    for i, j, _v in nat_triples:
+        nat_rows = native_module().fd_violation_rows(arrays[i], arrays[j])
+        py_rows = afd._violation_rows(cols_ids[i], cols_ids[j])
+        assert nat_rows == py_rows

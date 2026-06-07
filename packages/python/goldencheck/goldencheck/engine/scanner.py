@@ -28,6 +28,7 @@ from goldencheck.profilers.type_inference import TypeInferenceProfiler
 from goldencheck.profilers.uniqueness import UniquenessProfiler
 from goldencheck.relations.age_validation import AgeValidationProfiler
 from goldencheck.relations.approx_duplicate import ApproxDuplicateProfiler
+from goldencheck.relations.approx_fd import ApproximateFDProfiler
 from goldencheck.relations.composite_key import CompositeKeyProfiler
 from goldencheck.relations.functional_dependency import FunctionalDependencyProfiler
 from goldencheck.relations.identity_safe_pk import IdentitySafePkProfiler
@@ -72,6 +73,8 @@ RELATION_PROFILERS = [
     # Discover strict single-column functional dependencies (redundant columns /
     # lookup relationships). Kernel-backed; pure-Polars fallback.
     FunctionalDependencyProfiler(),
+    # Surface rows that BREAK a near-strict FD (likely data-entry errors).
+    ApproximateFDProfiler(),
 ]
 
 def _post_classification_checks(
