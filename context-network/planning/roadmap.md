@@ -74,6 +74,19 @@ via a shared pyo3-free `graph-core` kernel + a `goldenmatch-embed` wheel over
 [../architecture/sql-native-extensions.md](../architecture/sql-native-extensions.md) +
 [../decisions/0005-sql-native-direct-udfs.md](../decisions/0005-sql-native-direct-udfs.md).
 
+## Adjacent — GoldenFlow Arrow-native kernel (SHIPPED 2026-06-07)
+Same Arrow-native theme, sibling package: GoldenFlow's date/phone normalization
+(was ~92 % of a 1M-row run, per-row `dateutil`/`phonenumbers`) is now vectorized
+Polars fast paths with a per-row fallback (76× date / 19× phone; ~14× end-to-end),
+plus an optional `goldenflow-native` Rust/PyO3 abi3 kernel (mirrors
+`goldenmatch-native`) for the phone residual — Arrow zero-copy, **NANP-only gated**
+so it's parity-safe with the `phonenumbers` library by construction. Includes the
+per-platform wheel publish workflow + two `native_flow` CI lanes. See
+[../architecture/goldenflow-native-kernel.md](../architecture/goldenflow-native-kernel.md)
++ [../decisions/0006-goldenflow-native-nanp-gating.md](../decisions/0006-goldenflow-native-nanp-gating.md).
+Open follow-up: publish the first `goldenflow-native` wheel, then promote
+`goldenflow[native]` into `[all]` + a marker-guarded default dep.
+
 ## Adjacent — auto-config search strategy after the engine speedup (v1.28.0, 2026-06-06)
 The mirror image of the scale arc: because execution got ~5x cheaper, the auto-config
 *brain* can now measure instead of extrapolate and use its power tools. v1.28.0 shipped the
@@ -88,4 +101,4 @@ successive-halving + an LLM-judge labeling objective are staged behind the tier 
   `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1`.
 
 ---
-**Classification:** planning/active • **Last updated:** 2026-06-05
+**Classification:** planning/active • **Last updated:** 2026-06-07
