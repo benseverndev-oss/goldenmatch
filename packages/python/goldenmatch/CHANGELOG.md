@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.28.1] - 2026-06-07
+
 ### Fixed
 - **Exact matchkeys no longer match on empty/blank values.** Two records both
   missing a field (e.g. a blanked phone → `""`) are not a shared-identity claim;
