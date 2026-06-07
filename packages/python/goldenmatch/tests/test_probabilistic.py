@@ -1000,3 +1000,63 @@ class TestLabelAdapters:
             NS(id_a=9, id_b=10, decision="reject"),
         ])
         assert labels_from_memory_store(store) == [(7, 8)]
+
+
+# ── FS waterfall explainability (Phase 2) ──────────────────────────────────
+
+
+class TestFSWaterfall:
+    def _em_and_mk(self):
+        from goldenmatch.core.probabilistic import train_em
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        em = train_em(df, mk, n_sample_pairs=300, blocking_fields=["zip"])
+        return df, mk, em
+
+    def test_bits_sum_to_total(self):
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "John", "last_name": "Smith", "zip": "90210"}
+        row_b = {"first_name": "Jon", "last_name": "Smith", "zip": "90210"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        # Per-field bits sum to total weight (the gate).
+        assert sum(c.weight_bits for c in wf.fields) == pytest.approx(wf.total_weight_bits)
+        # Prior + weight == final; posterior is the logistic of final bits.
+        assert wf.prior_bits + wf.total_weight_bits == pytest.approx(wf.final_bits)
+        assert wf.posterior == pytest.approx(1.0 / (1.0 + 2.0 ** (-wf.final_bits)))
+        assert len(wf.fields) == len(mk.fields)
+
+    def test_total_matches_scorer(self):
+        # The waterfall total must equal the weight the actual scorer sums.
+        from goldenmatch.core.probabilistic import comparison_vector, explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Alice", "last_name": "Brown", "zip": "30301"}
+        row_b = {"first_name": "Alicia", "last_name": "Brown", "zip": "30301"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        vec = comparison_vector(row_a, row_b, mk)
+        scorer_total = sum(em.match_weights[f.field][vec[k]] for k, f in enumerate(mk.fields))
+        assert wf.total_weight_bits == pytest.approx(scorer_total)
+
+    def test_field_records_level_and_values(self):
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Tom", "last_name": "Wilson", "zip": "20001"}
+        row_b = {"first_name": "Tom", "last_name": "Wilson", "zip": "20001"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        by_field = {c.field: c for c in wf.fields}
+        # last_name identical -> top level (agree) for a 2-level field.
+        assert by_field["last_name"].level == 1
+        assert by_field["last_name"].value_a == "Wilson"
+
+    def test_format_renders_and_sums(self):
+        from goldenmatch.core.explain import format_fs_waterfall
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Bob", "last_name": "Jones", "zip": "60601"}
+        row_b = {"first_name": "Robert", "last_name": "Jones", "zip": "60601"}
+        text = format_fs_waterfall(explain_pair_fs(row_a, row_b, mk, em))
+        assert "match-weight waterfall" in text
+        assert "posterior P(match)" in text
+        assert "prior" in text
+        for f in mk.fields:
+            assert f.field in text

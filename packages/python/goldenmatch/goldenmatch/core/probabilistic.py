@@ -1568,3 +1568,89 @@ def score_pair_probabilistic(
     if weight_range > 0:
         return (total_weight - min_weight) / weight_range
     return 0.5
+
+
+# ── FS explainability: match-weight waterfall (Phase 2) ─────────────────────
+
+
+@dataclass
+class FSFieldContribution:
+    """One field's contribution to a Fellegi-Sunter pair score."""
+
+    field: str
+    scorer: str
+    value_a: str | None
+    value_b: str | None
+    level: int            # comparison level (0=disagree .. n_levels-1=exact)
+    n_levels: int
+    m: float              # P(level | match)
+    u: float              # P(level | non-match)
+    weight_bits: float    # log2(m/u) — the bits this field adds to the score
+
+
+@dataclass
+class FSWaterfall:
+    """Per-comparison Fellegi-Sunter decomposition of a pair score.
+
+    The Splink-style match-weight waterfall: a starting prior (bits), one
+    signed bit contribution per field, summing to the total match weight, then
+    the posterior probability. ``prior_bits + total_weight_bits == final_bits``
+    and ``posterior == 1 / (1 + 2**-final_bits)`` by construction.
+    """
+
+    fields: list[FSFieldContribution]
+    prior_bits: float
+    total_weight_bits: float
+    final_bits: float
+    posterior: float
+    proportion_matched: float
+
+
+def explain_pair_fs(
+    row_a: dict,
+    row_b: dict,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+) -> FSWaterfall:
+    """Decompose a pair's Fellegi-Sunter score into per-field bit contributions.
+
+    Uses the SAME comparison vector + match weights the scorer uses
+    (:func:`score_probabilistic`), so ``total_weight_bits`` equals the summed
+    weight that produces the pair score. m/u are surfaced per field for
+    transparency; ``weight_bits`` is authoritative (it is what scoring sums, and
+    for blocking fields is a fixed prior, not literally log2(m/u)).
+    """
+    vec = comparison_vector(row_a, row_b, mk)
+    contribs: list[FSFieldContribution] = []
+    total = 0.0
+    for k, f in enumerate(mk.fields):
+        level = vec[k]
+        weights = em_result.match_weights.get(f.field, [])
+        wbits = float(weights[level]) if level < len(weights) else 0.0
+        m_list = em_result.m_probs.get(f.field, [])
+        u_list = em_result.u_probs.get(f.field, [])
+        m = float(m_list[level]) if level < len(m_list) else float("nan")
+        u = float(u_list[level]) if level < len(u_list) else float("nan")
+        va = row_a.get(f.field)
+        vb = row_b.get(f.field)
+        contribs.append(FSFieldContribution(
+            field=f.field,
+            scorer=getattr(f, "scorer", "?") or "?",
+            value_a=str(va) if va is not None else None,
+            value_b=str(vb) if vb is not None else None,
+            level=int(level),
+            n_levels=int(f.levels),
+            m=m,
+            u=u,
+            weight_bits=wbits,
+        ))
+        total += wbits
+    prior = prior_weight(em_result.proportion_matched)
+    return FSWaterfall(
+        fields=contribs,
+        prior_bits=prior,
+        total_weight_bits=total,
+        final_bits=prior + total,
+        posterior=posterior_from_weight(total, prior),
+        proportion_matched=em_result.proportion_matched,
+    )

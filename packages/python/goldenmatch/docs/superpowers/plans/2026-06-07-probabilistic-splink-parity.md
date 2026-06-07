@@ -47,10 +47,17 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       so the supervised edge shows on noisier data. 74 FS tests (8 new); 149 incl
       review-queue/memory green; ruff clean.
 
-## PR 4 — Phase 2: FS waterfall explain
-- [ ] FS decomposition in `core/explain.py` (level, m, u, bits, prior, total, posterior).
-- [ ] `lineage.py` probabilistic branch; `goldenmatch explain` waterfall.
-- [ ] Gate: per-comparison bits sum to total; unit test.
+## PR 4 — Phase 2: FS waterfall explain ✅ (2026-06-07)
+- [x] FS decomposition: `explain_pair_fs` + `FSWaterfall`/`FSFieldContribution`
+      (level, m, u, log2(m/u) bits, prior, total, posterior) in `probabilistic.py`;
+      `format_fs_waterfall` renderer in `core/explain.py`.
+- [x] `lineage.py` probabilistic branch (`fs_waterfall` per pair via
+      `build_lineage(em_results=...)`); `goldenmatch explain --pair` waterfall
+      panel; `EngineResult.em_results` exposes the trained models.
+- [x] Gate: per-comparison bits sum to total (unit test, `pytest.approx`), total
+      matches the scorer's summed weight, posterior reconstructs from final bits.
+      93 FS/lineage/explain tests pass (4 new waterfall); ruff clean. (Pre-existing
+      TUI async failures are a missing-pytest-asyncio env issue, not this change.)
 
 ## PR 5 — Phase 3a: FS on bucket/Ray/Sail (numpy)
 - [ ] Accept `mk.type == "probabilistic"` in `score_buckets._resolve_fast_path` via `_resolve_probabilistic_fast_path`.

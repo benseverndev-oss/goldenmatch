@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **FS-native explainability — match-weight waterfall (Splink-parity Phase 2).**
+  `explain_pair_fs(row_a, row_b, mk, em_result)` decomposes a Fellegi-Sunter
+  pair score into per-comparison log2(m/u) bit contributions (`FSWaterfall` /
+  `FSFieldContribution`): a starting prior in bits, one signed bit per field,
+  summing to the total match weight, then the posterior probability — by
+  construction the per-field bits sum to the total and `posterior == 1/(1+2**
+  -final_bits)`. `core.explain.format_fs_waterfall` renders the Splink-style
+  table. Surfaced through `goldenmatch explain --pair` (a second panel when a
+  probabilistic matchkey ran) and the lineage sidecar (`fs_waterfall` per pair
+  via `build_lineage(em_results=...)`). `MatchEngine`/`EngineResult` now expose
+  the trained `em_results`. Replaces the `score×weight` decomposition, which is
+  the *weighted*-matchkey view and meaningless for FS.
 - **Supervised m-training from labels (Splink-parity Phase 1b).**
   `estimate_m_from_labels(df, mk, labels)` is the supervised analog of
   `train_em` (Splink's `estimate_m_from_label_column`): m is the observed

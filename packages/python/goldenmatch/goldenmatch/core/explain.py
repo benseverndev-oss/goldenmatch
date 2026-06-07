@@ -133,6 +133,50 @@ def _fmt_val(val) -> str:
     return s
 
 
+# ── Fellegi-Sunter match-weight waterfall ─────────────────────────────────
+
+_FS_LEVEL_NAMES = {
+    2: ["disagree", "agree"],
+    3: ["disagree", "partial", "agree"],
+}
+
+
+def _fs_level_name(level: int, n_levels: int) -> str:
+    names = _FS_LEVEL_NAMES.get(n_levels)
+    if names and 0 <= level < len(names):
+        return names[level]
+    return f"level {level}"
+
+
+def format_fs_waterfall(waterfall) -> str:
+    """Render an :class:`~goldenmatch.core.probabilistic.FSWaterfall` as text.
+
+    A Splink-style waterfall: a prior in bits, one signed bit contribution per
+    comparison (log2 m/u), the summed match weight, and the posterior
+    probability. The per-field bits sum to ``total weight`` by construction.
+    """
+    def _num(x: float, fmt: str) -> str:
+        return format(x, fmt) if x == x else "n/a"  # x != x  -> NaN
+
+    lines = ["Fellegi-Sunter match-weight waterfall (bits = log2 m/u):"]
+    lines.append(f"  {'comparison':<16}{'level':<10}{'m':>8}{'u':>10}{'bits':>9}")
+    lines.append(
+        f"  {'prior':<16}{'λ=' + format(waterfall.proportion_matched, '.4g'):<10}"
+        f"{'':>8}{'':>10}{waterfall.prior_bits:>+9.2f}"
+    )
+    for c in waterfall.fields:
+        lvl = _fs_level_name(c.level, c.n_levels)
+        lines.append(
+            f"  {c.field:<16}{lvl:<10}{_num(c.m, '.3f'):>8}{_num(c.u, '.4f'):>10}"
+            f"{c.weight_bits:>+9.2f}"
+        )
+    lines.append("  " + "-" * 53)
+    lines.append(f"  {'total weight':<36}{waterfall.total_weight_bits:>+9.2f}")
+    lines.append(f"  {'final (prior + weight)':<36}{waterfall.final_bits:>+9.2f}")
+    lines.append(f"  {'posterior P(match)':<36}{waterfall.posterior:>9.4f}")
+    return "\n".join(lines)
+
+
 # ── Cluster Explanation ───────────────────────────────────────────────────
 
 
