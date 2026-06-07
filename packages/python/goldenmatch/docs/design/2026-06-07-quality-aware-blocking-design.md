@@ -188,3 +188,38 @@ Out of scope (later doors): general standardization-transform selection across
 the whole pipeline (Door #2), FD-based negative evidence (#3), threshold priors
 (#4), quality-gated review routing (#5). This spec touches only `build_blocking`
 and its inputs.
+
+---
+
+## 10. Implementation notes & deviations (as built, 2026-06-07)
+
+Status: IMPLEMENTED (mechanism + unit tests). Accuracy sweep deferred to CI.
+
+- **Gate is env-only for v1.** `GOLDENMATCH_QUALITY_AWARE_BLOCKING=1` enables it
+  (default OFF, per §7). The `QualityConfig.quality_aware_blocking` flag in §4
+  was **not** added — the two `build_blocking` call sites don't thread a quality
+  config, so a config field would be dead API. Config-driven enablement is a
+  follow-up if wanted. (Honest-default principle: no unwired flags.)
+- **No `ColumnProfile.block_shatter_risk` field.** `apply_quality_aware_blocking`
+  reads the `blocking_risk(df)` dict directly (less surface); profiles are used
+  only for `col_type` → transform choice.
+- **Implemented as a post-pass on the built config**, not inside `build_blocking`:
+  `apply_quality_aware_blocking(blocking, profiles, df)` runs right after each
+  `build_blocking(...)` call (before adaptive promotion). Converts `static` /
+  `multi_pass` to an explicit `multi_pass` union (original keys → passes + a
+  fuzzy-tolerant pass); other strategies pass through untouched.
+- **Conservative "already-tolerant" rule:** a field that already appears in a
+  pass carrying `soundex`/`metaphone`/`substring:*` is treated as fuzzy-tolerant
+  and gets no extra pass. Observed in the person-path e2e: the existing
+  geo/name fallback already emits `substring`/`soundex` passes, so the augmenter
+  correctly no-ops there. The add fires on the case it targets: a plain exact key
+  on a fuzzy categorical (e.g. product `brand`, `state`) with no tolerant pass.
+- **Fuzzy threshold inheritance:** the signal comes from `goldencheck.cell_quality`
+  (Levenshtein-ratio ≥ 0.82), so very short typos (`Jon`/`John`, ratio 0.75) are
+  intentionally NOT flagged — that threshold is tuned for precision in GoldenCheck.
+  Longer 1-char typos (`Californa`, `Catherina`) are caught.
+- **Transform by col_type:** `name` → `["lowercase","soundex"]` (phonetic, catches
+  early-character typos); else → `["lowercase","strip","substring:0:6"]` (prefix
+  block).
+- Tests: `tests/test_quality_aware_blocking.py` (9). Regression: autoconfig +
+  golden + pipeline + config suites green with default-OFF (byte-identical).
