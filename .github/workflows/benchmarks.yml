@@ -81,9 +81,11 @@ jobs:
         if: steps.prereqs.outputs.configured == 'true'
         run: |
           uv sync --all-packages
-          # recordlinkage powers Febrl3; dqbench ships the DQbench tier datasets.
-          # Both are bench-only, kept out of the package deps.
-          uv pip install recordlinkage dqbench || true
+          # recordlinkage powers Febrl3. DQbench is installed from the org repo,
+          # NOT PyPI: PyPI dqbench 1.0.0 is a stale slice with only the detection
+          # API (no EntityResolutionAdapter), so the ER lane needs the git version.
+          uv pip install recordlinkage || true
+          uv pip install "git+https://github.com/benseverndev-oss/dqbench" || true
 
       # Native kernels ship gated OFF by default; build them so a `native=true`
       # dispatch measures DQbench on the native path (the parity + composite

@@ -19,9 +19,9 @@ ncvoter_sample_10k.txt` (gitignored).
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import polars as pl
 
@@ -85,6 +85,75 @@ def build_ncvr_df_and_gt(
     df = pl.read_csv(
         ncvr_path, separator="\t", encoding="utf8-lossy", ignore_errors=True,
     )
+    return _sample_and_corrupt(df, seed=seed, n_base_cap=n_base_cap)
+
+
+# --- Synthetic NCVR-shaped generator (PII-free, committable) ----------------
+# The real NCVR sample carries real voters' names + home addresses (PII), so it
+# stays gitignored. This generator emits the SAME schema + value shapes from
+# syllable wordlists — every person is fabricated, zero PII — so the NCVR lane
+# can run in CI from a fresh clone with no secrets. Its F1 is its OWN committed
+# baseline, NOT the real-data 0.9719.
+_SYL = [
+    "an", "ber", "cha", "dle", "el", "fer", "gan", "hol", "ix", "jon", "kel",
+    "lor", "mor", "nor", "ol", "per", "quin", "ros", "sten", "tan", "ven",
+    "wes", "yor", "zel", "bre", "cle", "dar", "fen", "gil", "han",
+]
+_STREETS = [
+    "Oak St", "Main St", "Elm Ave", "Pine Rd", "Maple Dr", "Cedar Ln",
+    "Birch Way", "Walnut St", "Ash Ct", "Holly Blvd", "Dogwood Dr", "Magnolia Ave",
+]
+_CITIES = [
+    "RALEIGH", "DURHAM", "CHARLOTTE", "GREENSBORO", "ASHEVILLE", "CARY",
+    "WILMINGTON", "CONCORD", "GASTONIA", "APEX", "HICKORY", "SALISBURY",
+]
+
+
+def _syl_name(rng: random.Random, n_syl: int = 2) -> str:
+    return "".join(rng.choice(_SYL) for _ in range(n_syl)).capitalize()
+
+
+def generate_synthetic_ncvr(n: int = 10_000, seed: int = 7) -> pl.DataFrame:
+    """A PII-free, NCVR-SHAPED synthetic voter table (deterministic, committable).
+
+    Same columns + value shapes as the real NC voter file (``_KEEP_COLS``), but
+    fabricated from syllable wordlists so there is no real PII. Names are drawn
+    from a large combinatorial space so coincidental collisions are rare (a
+    realistic ER shape, unlike a tiny name pool).
+    """
+    rng = random.Random(seed)
+    rows = []
+    for i in range(n):
+        rows.append({
+            "ncid": f"SY{i:08d}",
+            "first_name": _syl_name(rng, 2),
+            "last_name": _syl_name(rng, rng.choice([2, 2, 3])),
+            "middle_name": _syl_name(rng, 1) if rng.random() < 0.6 else "",
+            "res_street_address": f"{rng.randint(100, 9999)} {rng.choice(_STREETS)}",
+            "res_city_desc": rng.choice(_CITIES),
+            "state_cd": "NC",
+            "zip_code": f"2{rng.randint(7000, 8999)}",
+            "birth_year": str(rng.randint(1940, 2004)),
+            "gender_code": rng.choice(["M", "F"]),
+        })
+    return pl.DataFrame(rows)
+
+
+def build_ncvr_synthetic_df_and_gt(
+    n: int = 10_000, seed: int = 42, n_base_cap: int = 5000,
+) -> tuple[pl.DataFrame, set[tuple[str, str]]]:
+    """Synthetic NCVR-shaped (combined_df, gt) — same sample+corrupt pipeline as
+    the real file, but PII-free and committable. Use when the real sample is
+    absent. Label results 'NCVR-synthetic' so they're never confused with the
+    real-data number."""
+    df = generate_synthetic_ncvr(n=n, seed=seed)
+    return _sample_and_corrupt(df, seed=seed, n_base_cap=n_base_cap)
+
+
+def _sample_and_corrupt(
+    df: pl.DataFrame, seed: int, n_base_cap: int,
+) -> tuple[pl.DataFrame, set[tuple[str, str]]]:
+    """Shared base-sample + corruption-dup GT construction (real & synthetic)."""
     df = df.filter(
         (pl.col("last_name").str.len_chars() > 1)
         & (pl.col("first_name").str.len_chars() > 1)
