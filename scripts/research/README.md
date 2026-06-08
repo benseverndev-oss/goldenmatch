@@ -21,6 +21,7 @@ experiments** — the cheapest test of each idea's riskiest assumption.
 | `richer_simulator.py` | **#1** realistic simulator (closes the boundary gap) | Does a richer simulator (high diversity + realistic corruption) fix step 5's over-merging? — **step 6**, `RESULTS-rich-simulator.md` (answer: **yes** — over-merge fixed, exact 60/60 cluster count, real F1 ~doubles to 0.61–0.68) |
 | `diff_er_pipeline.py` | **#4** joint differentiable blocking+matching | Can a single global clustering loss backprop through a differentiable blocker so it learns to retain true pairs? |
 | `landscape_er.py` | **topology/geometry** — ER as a sculpted attractor landscape | Does the landscape mechanism (carve basins / raise ridges / global re-flow) beat a discrete split/merge loop optimising the SAME objective? — `RESULTS-landscape-er.md` (answer: **no — COSMETIC**. With a calibrated objective it gives the *identical* partition to the discrete loop; an earlier "+0.10" win was a θ-calibration artifact) |
+| `recall_certificate.py` | **recall assurance** — unsupervised recall estimation via capture-recapture | Can capture-recapture across decorrelated matchers estimate a matcher's recall with NO labels? — `RESULTS-recall-certificate.md` (answer: **yes, early PASS** — tracks true recall within ~0.03–0.09 MAE with disjoint-field-group matchers; the first idea to clear its kill-criterion. Caveats: small-scale, accuracy-vs-independence tension) |
 
 ## Second research arc: ER as topology/geometry (2026-06-07, in progress)
 
@@ -39,6 +40,19 @@ split/merge loop (cosmetic), and a plain threshold often beats both. An earlier
 apparent "+0.10 F1" win was a θ-calibration artifact that vanished once the
 objective was fixed — see `RESULTS-landscape-er.md`. Same outcome shape as the
 1+3+6 arc: novelty validated by the scan, competitiveness not. Arc closed.
+
+## Third direction: unsupervised recall assurance (2026-06-07, early PASS)
+
+Derived *from* the two failures (don't compete on accuracy on saturated
+benchmarks at the clustering layer; find an unsaturated axis with no incumbent
+baseline). The unsolved operational problem: precision is cheap to estimate,
+recall is not — every ER deployment ships blind on recall. `recall_certificate.py`
+estimates recall with **no labels** via capture-recapture (the census-undercount
+dual-system math) across decorrelated matchers, and **clears its kill-criterion**:
+it tracks true recall within ~0.03 MAE (Febrl3, ≈unbiased) and ~0.09 MAE
+(DBLP-ACM, conservative). The first direction to pass a fair test — see
+`RESULTS-recall-certificate.md` for the trajectory (the accuracy-vs-independence
+tension) and the honest caveats (small-scale, schema-dependent sweet spot).
 
 ## Running
 
