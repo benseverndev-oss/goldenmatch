@@ -125,16 +125,44 @@ class Analyzer(Protocol):
 
 Ship four analyzers in the first cut (see Phasing). The registry pattern is the extensibility story; the four shipped analyzers are the proof.
 
+Two analyzer requirements the worked scenario below forced:
+
+- **`match.rates` reads GoldenMatch's recall certificate as a first-class input** (decision 4). When the match artifact carries a certificate (`goldenmatch … --certify`, shipped on this branch), `match.rates` emits `match.recall_estimate` *and* `match.recall_safe_bound` as distinct metrics. The **safe bound** is the one you alert on; it ties GoldenAnalysis to real shipped behavior instead of inventing a recall number, and it works unsupervised (no ground-truth labels).
+- **The report assembler sees every analyzer's output, not just one** (decision 3). Narrative generation ranks *co-moving* metrics across analyzers — the scenario's root cause was only visible by crossing `quality.rollup` + `flow.rows_changed` against the flagged `cluster.singleton_ratio`. So analyzers compute in isolation, but `AnalysisReport` assembly + narrative templating operate over the full metric set.
+
 ### Cross-run aggregation
 
 ```python
 # goldenanalysis/history.py
+Baseline = Literal["previous", "rolling_median", "last_known_good"] | str  # or a pinned run_id
+
 class ReportHistory:
-    """Append-only store of AnalysisReports keyed by (analysis_name, run_id)."""
+    """Append-only store of AnalysisReports keyed by (analysis_name, dataset, run_id)."""
     def append(self, report: AnalysisReport) -> None: ...
-    def trend(self, metric_key: str, last_n: int = 30) -> TrendSeries: ...
-    def detect_regressions(self, baseline: str = "previous",
-                           threshold_pct: float = 10.0) -> list[Regression]: ...
+    def trend(self, metric_key: str, dataset: str, last_n: int = 30) -> TrendSeries: ...
+    def detect_regressions(
+        self,
+        dataset: str,
+        baseline: Baseline = "rolling_median",
+        window: int = 7,                       # for rolling_median
+        policy: "RegressionPolicy | None" = None,
+    ) -> list[Regression]: ...
+```
+
+Three design points the worked scenario below forced (decisions 1, 2, 5):
+
+- **Keyed by `(analysis_name, dataset, run_id)`**, not `(analysis_name, run_id)`. A stable `dataset` identity is mandatory — otherwise last night's `customers` run gets compared against an unrelated table. `dataset` is carried on `AnalysisReport.source["dataset"]`.
+- **Baseline is a strategy, not "previous".** A *step* change is only legible against a stable window; `rolling_median` (default, `window`=7) is immune to one noisy night, where `previous` would alternately flag and un-flag. `last_known_good` and a pinned `run_id` are the other modes.
+- **Thresholds are per-metric, respecting `direction`** — a single global `%` let a recall-bound drop slip while catching a louder-but-less-important metric. See `RegressionPolicy` below.
+
+```python
+# goldenanalysis/models/policy.py
+class RegressionPolicy(BaseModel):
+    """Per-metric regression thresholds. Falls back to `default_pct` for unlisted keys.
+    `direction` comes from the Metric itself, so a 'lower_better' metric only
+    flags on an INCREASE and vice-versa."""
+    default_pct: float = 10.0
+    per_metric: dict[str, float] = {}          # e.g. {"match.recall_safe_bound": 2.0}
 ```
 
 Backend mirrors the identity store's pluggability: default JSONL on disk, optional SQLite, same `backend=` / `path=` / `connection=` constructor shape as `IdentityStore` so the suite has *one* persistence idiom.
@@ -155,10 +183,11 @@ report.to_json("report.json"); report.to_parquet("report.parquet")
 # Whole pipeline manifest
 report = ga.analyze_pipeline(pipe_result)
 
-# Cross-run
+# Cross-run (dataset identity is mandatory for comparability)
 hist = ga.ReportHistory(backend="sqlite", path=".golden/analysis.db")
-hist.append(report)
-regressions = hist.detect_regressions(threshold_pct=10.0)
+hist.append(report)                                   # report.source["dataset"] == "customers"
+policy = ga.RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+regressions = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
 ```
 
 CLI (Typer, mirrors the other packages' `[project.scripts]` convention):
@@ -166,9 +195,83 @@ CLI (Typer, mirrors the other packages' `[project.scripts]` convention):
 ```bash
 goldenanalysis report match_result.json --format markdown
 goldenanalysis report customers.parquet --analyzers frame.summary
-goldenanalysis trend --metric match.pair_count --history .golden/analysis.db --last 30
-goldenanalysis regressions --history .golden/analysis.db --threshold 10
+goldenanalysis trend --metric cluster.singleton_ratio --dataset customers --history .golden/analysis.db --last 14
+goldenanalysis regressions --dataset customers --history .golden/analysis.db --baseline rolling_median
 ```
+
+---
+
+## Worked scenario: "Why did last night's dedupe get worse?"
+
+This end-to-end story drove the design decisions folded into the sections above. It is grounded in behavior already shipped on this branch — GoldenMatch's **unsupervised recall certificate** (estimate + SAFE lower bound) — so "recall" here is a real, label-free number, not a hypothetical.
+
+**Cast.** Maya, a data steward. A nightly Airflow DAG runs `GoldenCheck → GoldenFlow → GoldenMatch.dedupe → identity_resolve` over `customers.parquet` (~4M rows) via GoldenPipe. She has no ground-truth labels — this is production data — so "recall" means the recall certificate, not a measured number.
+
+**1. The run happens (no GoldenAnalysis involved yet).** The DAG produces a `PipeResult` whose `artifacts` dict already carries every stage's output: scan report, transform stats, scored pairs, clusters, identity summary, and — because GoldenMatch ran `--certify` — a recall certificate `{estimate: 0.94, safe_bound: 0.89}`.
+
+**2. Analyze the run → one report.**
+
+```python
+import goldenanalysis as ga
+report = ga.analyze_pipeline(pipe_result)        # fans out to every analyzer whose inputs are present
+hist = ga.ReportHistory(backend="sqlite", path="s3cache/analysis.db")
+hist.append(report)                              # report.source["dataset"] == "customers"
+```
+
+`analyze_pipeline` runs `frame.summary`, `match.rates`, `cluster.distribution`, and `quality.rollup` because all their inputs are in the manifest. The resulting `AnalysisReport` (abridged):
+
+| metric.key | value | unit | direction |
+|---|---|---|---|
+| `match.pair_count` | 612,300 | pairs | neutral |
+| `match.recall_estimate` | 0.94 | ratio | higher_better |
+| `match.recall_safe_bound` | **0.89** | ratio | higher_better |
+| `cluster.count` | 1,840,210 | clusters | neutral |
+| `cluster.size_p95` | 4 | rows | neutral |
+| `cluster.singleton_ratio` | **0.71** | ratio | neutral |
+| `quality.findings_total` | 1,205 | findings | lower_better |
+| `flow.rows_changed` | 3,910,442 | rows | neutral |
+
+**3. The regression check fires.**
+
+```python
+policy = ga.RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+regs = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
+```
+
+The 7-night rolling median had `recall_safe_bound ≈ 0.97` and `singleton_ratio ≈ 0.58`. Tonight: `0.89` and `0.71`.
+
+```
+Regression(metric="match.recall_safe_bound", baseline=0.97, current=0.89, delta_pct=-8.2, flagged=True)   # 2% gate
+Regression(metric="cluster.singleton_ratio", baseline=0.58, current=0.71, delta_pct=+22.4, flagged=True)  # 10% gate
+```
+
+With a **global** 10% gate the recall-bound drop (-8.2%) would have slipped through; the per-metric 2% gate on `match.recall_safe_bound` catches it — exactly why decision 2 exists. More records are also landing as singletons: GoldenMatch is splitting things it used to merge.
+
+**4. Drill: which run, which metric, when did it move.**
+
+```python
+hist.trend(metric_key="cluster.singleton_ratio", dataset="customers", last_n=14)
+```
+
+returns a `TrendSeries` — flat at ~0.58 for 13 nights, then a *step* to 0.71 on the most recent. A step, not a drift: something changed between two runs. (A `baseline="previous"` would have compared two post-step nights and seen nothing — decision 1.)
+
+**5. Root-cause: cross the report against the other analyzers.** `quality.rollup` in the *same* report shows `quality.findings_total` jumped 410 → 1,205, almost all one new class: `email_blanked`. And `flow.rows_changed` is up 40%. The story assembles: a GoldenFlow rule started blanking malformed emails, GoldenMatch lost its strongest blocking key on those rows, they fell out into singletons — dragging the recall safe-bound down too. `report.narrative` says exactly this in prose, because it is templated from the flagged regressions + the largest co-moving metrics across analyzers (decision 3).
+
+**6. What Maya actually reads.** She never touches Python. The DAG wrote `report.to_markdown()` to the run folder and surfaced `cluster.singleton_ratio` as an Airflow XCom her alert watched. Or by hand:
+
+```bash
+goldenanalysis report s3cache/run-2026-06-08.json --format markdown
+goldenanalysis regressions --dataset customers --history s3cache/analysis.db --baseline rolling_median
+goldenanalysis trend --metric cluster.singleton_ratio --dataset customers --history s3cache/analysis.db --last 14
+```
+
+### The five decisions this scenario settled
+
+1. **Baseline is a strategy** (`rolling_median` default, plus `previous` / `last_known_good` / pinned `run_id`). A step change is only legible against a stable window. → folded into `ReportHistory.detect_regressions`.
+2. **Per-metric thresholds, not one global %**, respecting each `Metric.direction`. Recall regressions warrant a tighter gate than noisier metrics. → `RegressionPolicy`.
+3. **Narrative ranks co-moving metrics across analyzers.** Root cause was only visible by crossing analyzers, so report assembly + narrative see the full metric set. → folded into the analyzer-registry section.
+4. **The recall certificate is a first-class input.** `match.rates` emits `recall_estimate` + `recall_safe_bound`; the safe bound is the alerting metric. Ties the package to shipped, unsupervised behavior. → folded into the analyzer-registry section.
+5. **`ReportHistory` is keyed by `(analysis_name, dataset, run_id)`** with a stable `dataset` identity carried on `AnalysisReport.source["dataset"]`. → folded into `ReportHistory` + the API/CLI.
 
 ---
 
@@ -183,7 +286,8 @@ goldenanalysis/
   __init__.py            # analyze(), analyze_match(), analyze_pipeline(), ReportHistory
   _api.py
   py.typed
-  models/                # Metric, AnalysisTable, AnalysisReport, AnalyzerInput/Result
+  models/                # Metric, AnalysisTable, AnalysisReport, AnalyzerInput/Result,
+                         #   RegressionPolicy, Regression, TrendSeries
   adapters/              # match, check, flow, pipe, infermap, frame
   analyzers/             # base + the four shipped analyzers
   core/
@@ -287,7 +391,7 @@ The implementation PR(s) that follow are accepted when:
 3. **Four analyzers shipped** — `frame.summary`, `match.rates`, `cluster.distribution`, `quality.rollup` — each with a fixture-backed test asserting exact metric values.
 4. **`AnalysisReport` round-trips** JSON ↔ object ↔ Markdown ↔ Parquet; `schema_version == 1`.
 5. **Cross-surface parity:** `tests/parity/` (TS) and `test_report_schema.py` (Python) read the same committed fixtures and assert identical metric values and report keys.
-6. **`ReportHistory` cross-run:** append two reports, `detect_regressions(threshold_pct=10)` flags a seeded 12% drop and ignores a seeded 3% drop; deterministic.
+6. **`ReportHistory` cross-run:** keyed by `(analysis_name, dataset, run_id)`. With a `rolling_median` baseline over a seeded window, `detect_regressions("customers", policy=...)` flags a `match.recall_safe_bound` drop under its per-metric 2% gate that a global 10% gate would miss, ignores a 3% noise wobble on a default-gate metric, respects `Metric.direction`, and is deterministic. `baseline="previous"` over a post-step pair flags nothing (proving the step-vs-window distinction).
 7. **Native parity:** every primitive in `_GATED_ON` produces byte-identical output to the pure-Python reference under `GOLDENANALYSIS_NATIVE=1`; with the wheel absent, all paths fall back and tests still pass.
 8. **CI wired:** path-filter entry + matrix inclusion + native parity lane; doc-only changes to the package still skip code jobs.
 9. **Docs:** package README with quickstart, a "GoldenCheck vs GoldenAnalysis" disambiguation section, `CHANGELOG.md` at `0.1.0`, `server.json` + `golden-suite.json`.
