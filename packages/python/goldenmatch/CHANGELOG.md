@@ -7,6 +7,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Phase 3c bench harness — FS dedupe at scale (Splink-parity).**
+  `scripts/bench_fs_distributed.py` + `.github/workflows/bench-fs-distributed.yml`
+  (`workflow_dispatch` only — never runs in normal CI). Generates synthetic
+  person data with KNOWN injected duplicate pairs (GT exact in `__row_id__`
+  space), runs FS dedupe via `backend=bucket` (the Phase 3a scale path that
+  carries the Ray/DataFusion wiring), and reports wall + peak RSS + P/R/F1.
+  Inputs: rows, dup_frac, backend, runner, fs_native (opt-in native kernel).
+  The gate (5M wall/RSS budget + F1) is run on demand, not asserted from code.
+- **FS accuracy analysis from labels — threshold sweep + m/u model report
+  (Splink-parity Phase 4).** `core/evaluate.py` gains `threshold_sweep`
+  (P/R/F1 at each candidate link cut, single O(P log P) descending sweep),
+  `recommend_threshold` (the max-F1 operating point), `fs_model_report`
+  (per-comparison m / u / log2(m/u) match-weight table + prior bits + EM
+  convergence — the data behind Splink's m/u + match-weight charts), and
+  `probability_two_random_records_match` (the EM within-block prior λ).
+  `goldenmatch evaluate --threshold-sweep` renders the operating-point curve,
+  the recommended cut, and the FS model report (via `MatchEngine`'s exposed
+  `scored_pairs` + `em_results`); `--output` includes a `threshold_sweep`
+  block. On DBLP-ACM the recommended posterior cut lands at 0.9999 (F1 0.968),
+  confirming the Phase 0 calibration finding.
+- **Native Rust FS kernel — opt-in (Splink-parity Phase 3b).** New
+  `goldenmatch-native` kernel `score_block_pairs_fs` (FS arithmetic: per-field
+  `sim → comparison level → log2(m/u)` weight sum → linear/posterior
+  normalization), reusing the weighted kernel's rayon/`allow_threads` scaffold.
+  `score_probabilistic_native` + `probabilistic_block_scorer` prefer it when
+  built. **Opt-in, default OFF (`GOLDENMATCH_FS_NATIVE=1`)**: FS's discrete
+  comparison levels amplify the tiny rapidfuzz-rs-vs-Python-rapidfuzz float
+  differences — a similarity sitting exactly on a `partial_threshold` (token_sort
+  ratios are rationals, so common) can flip a level between the two libraries,
+  and with ~40-bit EM weights a single flip swings the score ~0.45 and can move a
+  pair across the link threshold. Measured **2.9x** on DBLP-ACM and **byte-exact**
+  vs numpy on non-boundary data; the numpy vectorized path stays the reproducible
+  default. Ineligible (→ numpy) for soundex/embedding scorers or TF-adjusted
+  fields; degrades gracefully when the published wheel lacks the symbol.
+  `goldenmatch-native` 0.1.3 → 0.1.4 (pyproject + Cargo lockstep; republish to
+  ship the symbol).
+- **FS on the bucket backend — scale-out via the shared orchestration
+  (Splink-parity Phase 3a).** Probabilistic (Fellegi-Sunter) matchkeys now ride
+  the same hash-bucketed, parallel `score_buckets` path weighted matchkeys use
+  (which carries the Ray / DataFusion distribution wiring), instead of a
+  sequential per-block Python loop. `score_buckets` takes an `em_result`;
+  `_score_one_bucket` dispatches probabilistic blocks to the EM-trained
+  vectorized FS scorer (`probabilistic_block_scorer`), keeping the raw FS field
+  columns through the slim projection. The pipeline routes FS through it when
+  `backend="bucket"`. Same `em_result` → **clusters identical to polars-direct**
+  (parity asserted at N=200/1000/3000 in tests + `scripts/bench_fs_and_stages.py`
+  `fs_bucket_sweep`). No new Rust — rides the numpy scorer; the native FS kernel
+  is Phase 3b. Previously FS ran single-node sequential only and every scale
+  backend declined it.
+- **FS-native explainability — match-weight waterfall (Splink-parity Phase 2).**
+  `explain_pair_fs(row_a, row_b, mk, em_result)` decomposes a Fellegi-Sunter
+  pair score into per-comparison log2(m/u) bit contributions (`FSWaterfall` /
+  `FSFieldContribution`): a starting prior in bits, one signed bit per field,
+  summing to the total match weight, then the posterior probability — by
+  construction the per-field bits sum to the total and `posterior == 1/(1+2**
+  -final_bits)`. `core.explain.format_fs_waterfall` renders the Splink-style
+  table. Surfaced through `goldenmatch explain --pair` (a second panel when a
+  probabilistic matchkey ran) and the lineage sidecar (`fs_waterfall` per pair
+  via `build_lineage(em_results=...)`). `MatchEngine`/`EngineResult` now expose
+  the trained `em_results`. Replaces the `score×weight` decomposition, which is
+  the *weighted*-matchkey view and meaningless for FS.
+- **Supervised m-training from labels (Splink-parity Phase 1b).**
+  `estimate_m_from_labels(df, mk, labels)` is the supervised analog of
+  `train_em` (Splink's `estimate_m_from_label_column`): m is the observed
+  comparison-level frequency among known true-match pairs (Laplace-smoothed),
+  u stays from random pairs, no EM iteration. Label adapters pull positive
+  pairs straight from existing stores — `labels_from_corrections` /
+  `labels_from_memory_store` (memory `Correction`s with `decision='approve'`)
+  and `labels_from_review_items` (`ReviewItem`s with `status='approved'`).
+  Compose with Phase 1a: persist the result via `EMResult.save_json` and reuse
+  through `model_path`. Gate met — a 200-label seed ties unsupervised EM on
+  DBLP-ACM (F1 0.968; EM is already optimal on clean data, so the lever's edge
+  is on noisier inputs where unsupervised m drifts).
+- **FS model persistence — train-once, reuse (Splink-parity Phase 1a).**
+  `EMResult` now serializes: `to_dict`/`from_dict` (versioned) + `save_json`/
+  `load_json` (atomic write) + `validate_for(mk)` (raises `FSModelMismatchError`
+  on field/level mismatch). New `MatchkeyConfig.model_path`: when set and the
+  file exists the trained model loads and EM is skipped; when absent EM runs and
+  the result is saved there. `load_or_train_em` is the shared seam all three
+  pipeline sites use (core pipeline x2, TUI engine). `dedupe_df(fs_model_path=...)`
+  is a convenience that points every un-pathed probabilistic matchkey at one
+  file. Verified byte-identical pairs on DBLP-ACM between a from-scratch run and
+  a load-from-disk run (2310 == 2310). Previously every dedupe retrained EM.
+- **FS match-weight monotonicity guard (Splink-parity Phase 0).** EM estimates
+  m/u per comparison level independently, so a rare-but-discriminative middle
+  level can outweigh exact agreement (DBLP-ACM `title`: partial 28.6 bits >
+  exact 11.9 bits). `enforce_weight_monotonicity` applies pool-adjacent-violators
+  isotonic regression per field. `GOLDENMATCH_FS_MONOTONIC` modes: `warn`
+  (default — detect + log, do NOT modify, the Splink posture), `enforce`
+  (isotonically repair), `off` (silent). Default `warn` is value-preserving
+  (DBLP-ACM F1 stays 0.968); `enforce` *trades* F1 there (0.968 → 0.941, the
+  inversion is genuine signal, not pure artifact) so it is opt-in. Sweep:
+  `scripts/bench_fs_calibration.py`. Spec/plan:
+  `docs/superpowers/{specs,plans}/2026-06-07-probabilistic-splink-parity*`.
 - **Weak-positive-aware blocking-pass selection (opt-in,
   `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1`).** `core/blocking_pass_selection.py::select_passes`
   prunes multi-pass blocking passes that contribute little, ranking by marginal
@@ -22,6 +116,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   in recall-critical passes; most useful at scale or as an explicit recall/cost knob.
 
 ### Fixed
+- **FS `posterior` calibration default cut corrected 0.50 → 0.99.** The opt-in
+  `GOLDENMATCH_FS_CALIBRATED=posterior` path was mis-tuned: `compute_thresholds`
+  returned the 0.5 Bayes boundary, but blocking inflates the within-block prior
+  so post-block pairs clear 0.5 trivially (DBLP-ACM F1 0.936 at 0.5). At the
+  measured 0.99 cut, posterior ties linear (F1 0.968, P 0.984). Default
+  calibration stays `linear` (flipping the headline score to a probability
+  shifts the distribution downstream clustering thresholds are tuned against —
+  deferred to Phase 4). Also removed the stale "default flipped to posterior
+  once measured" comment that never matched the code, and the bogus "57.6%
+  recall" figure (that was a block-skip artifact, not the linear calibration).
 - **Multi-pass blocking no longer silently drops cross-pass blocks.**
   `_build_multi_pass_blocks` deduplicated blocks by `block_key`, which is the
   concatenated field *values* with no field identity — so a later pass's block

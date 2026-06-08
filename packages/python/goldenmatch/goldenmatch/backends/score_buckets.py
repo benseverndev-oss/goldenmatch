@@ -350,6 +350,7 @@ def score_buckets(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    em_result=None,
 ) -> list[tuple[int, int, float]]:
     """Score all blocks via hash-bucketed partition_by, no per-block LazyFrame.
 
@@ -389,6 +390,16 @@ def score_buckets(
         return []
     if not blocking_config.keys:
         return []
+
+    # Probabilistic (Fellegi-Sunter) matchkeys ride the same bucket
+    # orchestration as weighted, but score each block with the EM-trained
+    # vectorized FS scorer instead of find_fuzzy_matches. The EM model must be
+    # supplied (trained once by the caller via load_or_train_em).
+    is_probabilistic = mk.type == "probabilistic"
+    if is_probabilistic and em_result is None:
+        raise ValueError(
+            "score_buckets: probabilistic matchkey requires a trained em_result."
+        )
 
     # Multi-pass blocking: iterate every pass and accumulate pairs. `passes`
     # is None for static / single-key configs, so fall back to `keys`.
@@ -446,6 +457,13 @@ def score_buckets(
             if "__source__" in prepared_df.columns:
                 keep.append("__source__")
             keep.extend(c for c in prepared_df.columns if c.startswith("__xform_"))
+            # Probabilistic scoring (score_probabilistic_vectorized) reads the
+            # RAW field columns and applies transforms itself, so keep them
+            # (the weighted fast path uses __xform_* and doesn't need these).
+            if is_probabilistic:
+                for f in mk.fields:
+                    if f.field in prepared_df.columns and f.field not in keep:
+                        keep.append(f.field)
             # Source fields the block-key expression reads. Multi-key blocking
             # (rare today) accumulates fields across every key in the config.
             block_key_sources: set[str] = set()
@@ -488,6 +506,15 @@ def score_buckets(
         source_lookup=source_lookup,
         target_ids=target_ids,
     )
+
+    # Probabilistic matchkeys decline the weighted fast path (fast_path_specs is
+    # None) and fall to _score_one_bucket, which dispatches to this FS scorer.
+    # Resolved once (vectorized NxN by default; scalar fallback for model-backed
+    # scorers) — mirrors the pipeline's probabilistic_block_scorer.
+    prob_scorer = None
+    if is_probabilistic:
+        from goldenmatch.core.probabilistic import probabilistic_block_scorer
+        prob_scorer = probabilistic_block_scorer(mk, em_result)
 
     # Native fast-path eligibility resolved ONCE: gated on, and every field's
     # scorer implemented by the native kernel. None -> Python per-pair loop.
@@ -784,11 +811,14 @@ def score_buckets(
                     if len(sources_in_block) < 2:
                         offset += size
                         continue
-                pairs = find_fuzzy_matches(
-                    block_df, mk,
-                    exclude_pairs=frozen_exclude,
-                    pre_scored_pairs=None,
-                )
+                if prob_scorer is not None:
+                    pairs = prob_scorer(block_df, frozen_exclude)
+                else:
+                    pairs = find_fuzzy_matches(
+                        block_df, mk,
+                        exclude_pairs=frozen_exclude,
+                        pre_scored_pairs=None,
+                    )
                 if across_files_only and source_lookup:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -883,7 +913,12 @@ def score_buckets(
             max_workers = min(n_non_empty_buckets, os.cpu_count() or 4)
             _ts = time.perf_counter()
             worker = _score_one_bucket_fast if fast_path_specs is not None else _score_one_bucket
-            path_label = "fast" if fast_path_specs is not None else "find_fuzzy_matches"
+            if fast_path_specs is not None:
+                path_label = "fast"
+            elif is_probabilistic:
+                path_label = "probabilistic_vectorized"
+            else:
+                path_label = "find_fuzzy_matches"
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
             if max_workers <= 1 or n_non_empty_buckets <= 2:
                 for bucket_df in non_empty_buckets:

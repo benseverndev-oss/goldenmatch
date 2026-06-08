@@ -1332,15 +1332,14 @@ def _run_dedupe_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
-            em_result = train_em(
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 collected_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
@@ -1348,6 +1347,30 @@ def _run_dedupe_pipeline(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
             )
+            # Bucket backend: score via the hash-bucketed parallel orchestration
+            # (the same path weighted matchkeys use, which inherits the Ray /
+            # DataFusion distribution wiring) instead of the sequential per-block
+            # loop. Same em_result, so clusters are identical to polars-direct
+            # (parity asserted in scripts/bench_fs_and_stages.py). EM still
+            # samples within-block pairs above; at true scale pair train-once via
+            # mk.model_path so EM is skipped on reuse.
+            if config.backend == "bucket":
+                from goldenmatch.backends.score_buckets import score_buckets
+                pairs = score_buckets(
+                    collected_df,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    across_files_only=across_files_only,
+                    source_lookup=source_lookup if across_files_only else None,
+                    em_result=em_result,
+                )
+                all_pairs.extend(pairs)
+                fuzzy_pair_count += len(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
             # + numpy level/weight/normalize, replacing the per-pair Python
             # loop. This makes full-block scoring cheap enough that large
@@ -2276,14 +2299,13 @@ def _run_match_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import probabilistic_block_scorer, train_em
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             blocks = build_blocks(combined_lf, config.blocking)
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
-            em_result = train_em(
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 combined_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )

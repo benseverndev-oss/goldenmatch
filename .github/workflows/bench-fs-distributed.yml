@@ -1,0 +1,100 @@
+name: bench-fs-distributed
+
+# Phase 3c — Fellegi-Sunter dedupe at scale on the bucket backend.
+# workflow_dispatch ONLY (never runs in normal CI). Confirms the Phase 3a
+# FS-on-bucket path holds at 5M+ rows: wall + peak RSS + F1 against known
+# injected duplicates. The bucket backend carries the Ray/DataFusion
+# distribution wiring, so a healthy single-node bucket run is the prerequisite
+# for the distributed claim.
+#
+# Dispatch:
+#   gh workflow run bench-fs-distributed.yml --ref claude/review-technical-work-en9SG \
+#     -f rows=5000000 -f backend=bucket
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Base row count (dups are added on top, dup_frac of this)"
+        required: false
+        default: "5000000"
+      dup_frac:
+        description: "Injected duplicate fraction (GT pairs = rows * dup_frac)"
+        required: false
+        default: "0.2"
+      backend:
+        description: "Backend (bucket = the scale-out path; polars-direct for a baseline)"
+        required: false
+        default: "bucket"
+      runner:
+        description: "Runner label (16c/64GB recommended for 5M)"
+        required: false
+        default: "large-new-64GB"
+      fs_native:
+        description: "Enable the opt-in native FS kernel (GOLDENMATCH_FS_NATIVE=1)"
+        required: false
+        default: "false"
+      build_native:
+        description: "Build the native extension before running"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 90
+    env:
+      # Explicit config is passed, so the controller never runs; keep memory off
+      # for determinism (mirrors the other bench lanes).
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      GOLDENMATCH_FS_NATIVE: ${{ inputs.fs_native == 'true' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        if: ${{ inputs.build_native == 'true' }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        if: ${{ inputs.build_native == 'true' }}
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension
+        if: ${{ inputs.build_native == 'true' }}
+        run: uv run python scripts/build_native.py
+
+      - name: FS dedupe at scale (wall + RSS + F1)
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
+            --rows "${{ inputs.rows }}" \
+            --dup-frac "${{ inputs.dup_frac }}" \
+            --backend "${{ inputs.backend }}" | tee /tmp/fs_dist.log
+          {
+            echo "### inputs"
+            echo "- rows=\`${{ inputs.rows }}\`  dup_frac=\`${{ inputs.dup_frac }}\`  backend=\`${{ inputs.backend }}\`"
+            echo "- runner=\`${{ inputs.runner }}\`  FS_NATIVE=\`${{ env.GOLDENMATCH_FS_NATIVE }}\`"
+            echo ""
+            # The driver prints a markdown block after the KEY=VALUE lines.
+            sed -n '/## bench-fs-distributed/,$p' /tmp/fs_dist.log
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fs-distributed-${{ inputs.rows }}-${{ inputs.backend }}
+          path: /tmp/fs_dist.log
+          retention-days: 30

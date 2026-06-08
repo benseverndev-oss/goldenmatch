@@ -34,6 +34,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::levenshtein_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
+    m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(score::build_exclude_set, m)?)?;

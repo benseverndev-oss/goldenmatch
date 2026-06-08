@@ -702,3 +702,497 @@ class TestEMWithBlockingFields:
         mk = _make_probabilistic_mk()
         result = train_em(df, mk, n_sample_pairs=100, blocking_fields=["zip"])
         assert result.u_probs["zip"] == [0.50, 0.50]
+
+
+# ── Weight monotonicity guard (Phase 0) ────────────────────────────────────
+
+
+class TestWeightMonotonicity:
+    def test_isotonic_already_monotone_unchanged(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        assert _isotonic_nondecreasing([-3.0, 1.0, 5.0]) == [-3.0, 1.0, 5.0]
+
+    def test_isotonic_pools_inversion(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        # partial (28.0) outweighs exact (12.0): pool to their mean.
+        out = _isotonic_nondecreasing([-2.0, 28.0, 12.0])
+        assert out[0] == -2.0
+        assert out[1] == out[2] == pytest.approx(20.0)
+        # result is non-decreasing
+        assert all(out[i] <= out[i + 1] + 1e-9 for i in range(len(out) - 1))
+
+    def test_isotonic_single_and_empty(self):
+        from goldenmatch.core.probabilistic import _isotonic_nondecreasing
+        assert _isotonic_nondecreasing([5.0]) == [5.0]
+        assert _isotonic_nondecreasing([]) == []
+
+    def test_enforce_reports_adjusted_and_skips_blocking(self):
+        from goldenmatch.core.probabilistic import enforce_weight_monotonicity
+        weights = {
+            "title": [-2.0, 28.0, 12.0],   # inverted
+            "year": [12.0, -3.0],          # inverted but blocking -> skipped
+            "authors": [-5.0, 3.0, 9.0],   # already monotone
+        }
+        out, adjusted = enforce_weight_monotonicity(weights, skip_fields=["year"])
+        assert adjusted == ["title"]
+        assert out["year"] == [12.0, -3.0]          # untouched
+        assert out["authors"] == [-5.0, 3.0, 9.0]   # untouched
+        assert out["title"][1] == out["title"][2]   # pooled
+
+    def test_mode_env_parsing(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.delenv("GOLDENMATCH_FS_MONOTONIC", raising=False)
+        assert p._fs_monotonic_mode() == "warn"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "enforce")
+        assert p._fs_monotonic_mode() == "enforce"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "0")
+        assert p._fs_monotonic_mode() == "off"
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "garbage")
+        assert p._fs_monotonic_mode() == "warn"
+
+    def test_warn_mode_does_not_modify_weights(self, monkeypatch):
+        # Default (warn) leaves EM weights as-is; enforce changes them.
+        from goldenmatch.core.probabilistic import train_em
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "off")
+        raw = train_em(df, mk, n_sample_pairs=200, blocking_fields=["zip"])
+        monkeypatch.setenv("GOLDENMATCH_FS_MONOTONIC", "warn")
+        warned = train_em(df, mk, n_sample_pairs=200, blocking_fields=["zip"])
+        assert warned.match_weights == raw.match_weights
+
+
+class TestPosteriorThresholds:
+    def test_calibrated_link_cut_is_high(self):
+        # Posterior default cut is 0.99, not the 0.5 Bayes boundary.
+        from goldenmatch.core.probabilistic import EMResult, compute_thresholds
+        em = EMResult(
+            m_probs={"name": [0.1, 0.9]}, u_probs={"name": [0.9, 0.1]},
+            match_weights={"name": [-3.0, 3.0]}, converged=True,
+            iterations=5, proportion_matched=0.05,
+        )
+        link, review = compute_thresholds(em, calibrated=True)
+        assert link == 0.99
+        assert review == 0.50
+
+
+# ── Model persistence (Phase 1a) ───────────────────────────────────────────
+
+
+class TestModelPersistence:
+    def _trained(self):
+        from goldenmatch.core.probabilistic import train_em
+        return train_em(_make_dedupe_df(), _make_probabilistic_mk(),
+                        n_sample_pairs=200, blocking_fields=["zip"])
+
+    def test_to_from_dict_roundtrip(self):
+        from goldenmatch.core.probabilistic import EMResult
+        em = self._trained()
+        back = EMResult.from_dict(em.to_dict())
+        assert back.m_probs == em.m_probs
+        assert back.u_probs == em.u_probs
+        assert back.match_weights == em.match_weights
+        assert back.proportion_matched == em.proportion_matched
+        assert back.converged == em.converged
+        assert back.iterations == em.iterations
+
+    def test_save_load_json_roundtrip(self, tmp_path):
+        from goldenmatch.core.probabilistic import EMResult
+        em = self._trained()
+        path = str(tmp_path / "model.json")
+        em.save_json(path)
+        loaded = EMResult.load_json(path)
+        assert loaded.match_weights == em.match_weights
+        assert loaded.to_dict() == em.to_dict()
+
+    def test_to_dict_has_version_marker(self):
+        em = self._trained()
+        d = em.to_dict()
+        assert d["__type__"] == "goldenmatch.EMResult"
+        assert d["__version__"] == 1
+
+    def test_from_dict_rejects_future_version(self):
+        from goldenmatch.core.probabilistic import EMResult
+        d = self._trained().to_dict()
+        d["__version__"] = 999
+        with pytest.raises(ValueError, match="newer than this"):
+            EMResult.from_dict(d)
+
+    def test_validate_for_detects_missing_field(self):
+        from goldenmatch.core.probabilistic import FSModelMismatchError
+        em = self._trained()
+        # A matchkey with a field the model never saw.
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="email", scorer="exact", levels=2),
+        ])
+        with pytest.raises(FSModelMismatchError, match="no weights for field"):
+            em.validate_for(mk)
+
+    def test_validate_for_detects_level_mismatch(self):
+        from goldenmatch.core.probabilistic import FSModelMismatchError
+        em = self._trained()  # first_name trained at 3 levels
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", levels=2),
+        ])
+        with pytest.raises(FSModelMismatchError, match="levels"):
+            em.validate_for(mk)
+
+    def test_load_or_train_saves_then_loads(self, tmp_path):
+        # First call (cache miss): trains and writes the file.
+        # Second call (cache hit): loads, skips EM. Both produce the same model.
+        from goldenmatch.core import probabilistic as p
+        path = str(tmp_path / "fs.json")
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk(model_path=path)
+
+        calls = {"n": 0}
+        real_train = p.train_em
+
+        def _counting_train(*a, **k):
+            calls["n"] += 1
+            return real_train(*a, **k)
+
+        p.train_em = _counting_train
+        try:
+            em1 = p.load_or_train_em(df, mk, blocking_fields=["zip"])
+            assert calls["n"] == 1
+            assert (tmp_path / "fs.json").exists()
+            em2 = p.load_or_train_em(df, mk, blocking_fields=["zip"])
+            assert calls["n"] == 1  # second call did NOT retrain
+        finally:
+            p.train_em = real_train
+        assert em2.match_weights == em1.match_weights
+
+    def test_load_or_train_no_path_is_plain_train(self):
+        from goldenmatch.core.probabilistic import load_or_train_em
+        mk = _make_probabilistic_mk()  # no model_path
+        em = load_or_train_em(_make_dedupe_df(), mk, blocking_fields=["zip"])
+        assert "first_name" in em.match_weights
+
+
+class TestDedupeWithPersistedModel:
+    def test_saved_model_run_is_byte_identical(self, tmp_path):
+        # Gate: a dedupe that loads a persisted FS model produces identical
+        # pairs/clusters to one that trains from scratch.
+        from goldenmatch import dedupe_df
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+        )
+
+        def _cfg(model_path=None):
+            return GoldenMatchConfig(
+                matchkeys=[_make_probabilistic_mk(model_path=model_path)],
+                blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+            )
+
+        df = _make_dedupe_df().drop("__row_id__")
+        # Baseline: train from scratch, no persistence.
+        baseline = dedupe_df(df, config=_cfg())
+        # First persisted run writes the model; second reads it (skips EM).
+        path = str(tmp_path / "m.json")
+        first = dedupe_df(df, config=_cfg(path))
+        assert (tmp_path / "m.json").exists()
+        second = dedupe_df(df, config=_cfg(path))
+
+        def _parts(r):
+            return sorted(
+                tuple(sorted(c["members"]))
+                for c in r.clusters.values() if len(c.get("members", [])) > 1
+            )
+        assert _parts(first) == _parts(baseline)
+        assert _parts(second) == _parts(baseline)
+
+
+# ── Supervised m-training (Phase 1b) ───────────────────────────────────────
+
+
+def _supervised_df():
+    # 6 records: 3 true-match pairs (0-1, 2-3, 4-5) sharing zip blocks.
+    return pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3, 4, 5],
+        "first_name": ["John", "Jon", "Jane", "Jane", "Bob", "Bob"],
+        "last_name": ["Smith", "Smith", "Doe", "Doe", "Lee", "Lee"],
+        "zip": ["111", "111", "222", "222", "333", "333"],
+    })
+
+
+class TestEstimateMFromLabels:
+    def test_returns_direct_estimate(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1), (2, 3), (4, 5)], blocking_fields=["zip"])
+        assert em.iterations == 0          # no EM
+        assert em.converged is True
+        assert set(em.match_weights) == {"first_name", "last_name", "zip"}
+        assert em.match_weights["zip"] == [-3.0, 3.0]   # blocking -> fixed
+
+    def test_no_usable_labels_raises(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        with pytest.raises(ValueError, match="no usable labeled pairs"):
+            estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                   [(99, 100), (7, 7)], blocking_fields=["zip"])
+
+    def test_m_reflects_agreement_in_labels(self):
+        # Labeled matches always agree on last_name -> top-level m high ->
+        # positive top-level match weight.
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1), (2, 3), (4, 5)], blocking_fields=["zip"])
+        # last_name is 2-level (disagree/agree); agree weight must beat disagree.
+        w = em.match_weights["last_name"]
+        assert w[-1] > w[0]
+        # m for the agree level should dominate.
+        assert em.m_probs["last_name"][-1] > em.m_probs["last_name"][0]
+
+    def test_smoothing_prevents_zero_m(self):
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(df, _make_probabilistic_mk(),
+                                    [(0, 1)], blocking_fields=["zip"])
+        for field, probs in em.m_probs.items():
+            assert all(p > 0 for p in probs), field
+
+    def test_scores_pairs_end_to_end(self):
+        from goldenmatch.core.probabilistic import (
+            estimate_m_from_labels,
+            probabilistic_block_scorer,
+        )
+        df = _supervised_df()
+        mk = _make_probabilistic_mk()
+        em = estimate_m_from_labels(df, mk, [(0, 1), (2, 3), (4, 5)],
+                                    blocking_fields=["zip"])
+        scorer = probabilistic_block_scorer(mk, em)
+        pairs = scorer(df)
+        assert isinstance(pairs, list)
+
+
+class TestLabelAdapters:
+    def test_labels_from_corrections_keeps_approve(self):
+        from types import SimpleNamespace as NS
+
+        from goldenmatch.core.probabilistic import labels_from_corrections
+        corr = [
+            NS(id_a=1, id_b=2, decision="approve"),
+            NS(id_a=3, id_b=4, decision="reject"),
+            NS(id_a=5, id_b=6, decision="approve"),
+        ]
+        assert labels_from_corrections(corr) == [(1, 2), (5, 6)]
+
+    def test_labels_from_review_items_keeps_approved(self):
+        from types import SimpleNamespace as NS
+
+        from goldenmatch.core.probabilistic import labels_from_review_items
+        items = [
+            NS(id_a=1, id_b=2, status="approved"),
+            NS(id_a=3, id_b=4, status="rejected"),
+            NS(id_a=5, id_b=6, status="pending"),
+        ]
+        assert labels_from_review_items(items) == [(1, 2)]
+
+    def test_labels_from_memory_store_duck_typed(self):
+        from types import SimpleNamespace as NS
+
+        from goldenmatch.core.probabilistic import labels_from_memory_store
+        store = NS(get_corrections=lambda ds: [
+            NS(id_a=7, id_b=8, decision="approve"),
+            NS(id_a=9, id_b=10, decision="reject"),
+        ])
+        assert labels_from_memory_store(store) == [(7, 8)]
+
+
+# ── FS waterfall explainability (Phase 2) ──────────────────────────────────
+
+
+class TestFSWaterfall:
+    def _em_and_mk(self):
+        from goldenmatch.core.probabilistic import train_em
+        df = _make_dedupe_df()
+        mk = _make_probabilistic_mk()
+        em = train_em(df, mk, n_sample_pairs=300, blocking_fields=["zip"])
+        return df, mk, em
+
+    def test_bits_sum_to_total(self):
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "John", "last_name": "Smith", "zip": "90210"}
+        row_b = {"first_name": "Jon", "last_name": "Smith", "zip": "90210"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        # Per-field bits sum to total weight (the gate).
+        assert sum(c.weight_bits for c in wf.fields) == pytest.approx(wf.total_weight_bits)
+        # Prior + weight == final; posterior is the logistic of final bits.
+        assert wf.prior_bits + wf.total_weight_bits == pytest.approx(wf.final_bits)
+        assert wf.posterior == pytest.approx(1.0 / (1.0 + 2.0 ** (-wf.final_bits)))
+        assert len(wf.fields) == len(mk.fields)
+
+    def test_total_matches_scorer(self):
+        # The waterfall total must equal the weight the actual scorer sums.
+        from goldenmatch.core.probabilistic import comparison_vector, explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Alice", "last_name": "Brown", "zip": "30301"}
+        row_b = {"first_name": "Alicia", "last_name": "Brown", "zip": "30301"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        vec = comparison_vector(row_a, row_b, mk)
+        scorer_total = sum(em.match_weights[f.field][vec[k]] for k, f in enumerate(mk.fields))
+        assert wf.total_weight_bits == pytest.approx(scorer_total)
+
+    def test_field_records_level_and_values(self):
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Tom", "last_name": "Wilson", "zip": "20001"}
+        row_b = {"first_name": "Tom", "last_name": "Wilson", "zip": "20001"}
+        wf = explain_pair_fs(row_a, row_b, mk, em)
+        by_field = {c.field: c for c in wf.fields}
+        # last_name identical -> top level (agree) for a 2-level field.
+        assert by_field["last_name"].level == 1
+        assert by_field["last_name"].value_a == "Wilson"
+
+    def test_format_renders_and_sums(self):
+        from goldenmatch.core.explain import format_fs_waterfall
+        from goldenmatch.core.probabilistic import explain_pair_fs
+        _df, mk, em = self._em_and_mk()
+        row_a = {"first_name": "Bob", "last_name": "Jones", "zip": "60601"}
+        row_b = {"first_name": "Robert", "last_name": "Jones", "zip": "60601"}
+        text = format_fs_waterfall(explain_pair_fs(row_a, row_b, mk, em))
+        assert "match-weight waterfall" in text
+        assert "posterior P(match)" in text
+        assert "prior" in text
+        for f in mk.fields:
+            assert f.field in text
+
+
+# ── FS on the bucket backend (Phase 3a) ────────────────────────────────────
+
+
+class TestFSBucketParity:
+    def _cfg(self, backend):
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+        )
+        return GoldenMatchConfig(
+            matchkeys=[_make_probabilistic_mk()],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+            backend=backend,
+        )
+
+    @staticmethod
+    def _parts(r):
+        return sorted(
+            tuple(sorted(c["members"]))
+            for c in r.clusters.values() if len(c.get("members", [])) > 1
+        )
+
+    def test_bucket_matches_polars_direct(self):
+        # FS clusters must be identical between polars-direct and the bucket
+        # backend (same em_result, scorer-agnostic orchestration).
+        from goldenmatch import dedupe_df
+        df = _make_dedupe_df().drop("__row_id__")
+        polars_r = dedupe_df(df, config=self._cfg(None))
+        bucket_r = dedupe_df(df, config=self._cfg("bucket"))
+        assert self._parts(bucket_r) == self._parts(polars_r)
+
+    def test_score_buckets_requires_em_for_probabilistic(self):
+        # The bucket scorer must refuse a probabilistic matchkey with no model.
+        import polars as pl
+        from goldenmatch.backends.score_buckets import score_buckets
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        df = pl.DataFrame({"__row_id__": [0, 1], "first_name": ["a", "a"],
+                           "last_name": ["b", "b"], "zip": ["1", "1"]})
+        with pytest.raises(ValueError, match="requires a trained em_result"):
+            score_buckets(df, BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+                          _make_probabilistic_mk(), set(), em_result=None)
+
+
+# ── Native FS kernel (Phase 3b) ────────────────────────────────────────────
+
+
+def _native_fs_available():
+    try:
+        from goldenmatch.core import _native_loader
+        return _native_loader.native_available() and hasattr(
+            _native_loader.native_module(), "score_block_pairs_fs"
+        )
+    except Exception:
+        return False
+
+
+class TestNativeFSGating:
+    def test_default_off(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
+        assert p._fs_native_enabled() is False
+        assert p._fs_native_eligible(_make_probabilistic_mk()) is False
+
+    def test_declines_soundex_and_tf(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        if not _native_fs_available():
+            pytest.skip("native ext not built")
+        # soundex_match scorer is not a kernel scorer id -> ineligible.
+        mk_sx = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="soundex_match", levels=2),
+        ])
+        assert p._fs_native_eligible(mk_sx) is False
+        # tf_adjustment field -> ineligible (kernel has no TF tables).
+        mk_tf = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="first_name", scorer="exact", levels=2, tf_adjustment=True),
+        ])
+        assert p._fs_native_eligible(mk_tf) is False
+
+
+@pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")
+class TestNativeFSParity:
+    def _clean_df(self):
+        # Identical matches / very different non-matches -> no pair sits on a
+        # comparison-level boundary, so native == numpy exactly.
+        return pl.DataFrame({
+            "__row_id__": list(range(8)),
+            "first_name": ["alexander", "alexander", "bartholomew", "bartholomew",
+                           "christopher", "christopher", "wilhelmina", "wilhelmina"],
+            "last_name": ["smith", "smith", "delacroix", "delacroix",
+                          "wozniak", "wozniak", "abernathy", "abernathy"],
+            "zip": ["111", "111", "222", "222", "333", "333", "444", "444"],
+        })
+
+    def test_native_matches_numpy_on_clean_data(self, monkeypatch):
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core import probabilistic as p
+        from goldenmatch.core.blocker import build_blocks
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        df = self._clean_df()
+        mk = _make_probabilistic_mk()
+        blocks = build_blocks(df.lazy(), BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]))
+        em = p.train_em(df, mk, n_sample_pairs=100, blocks=blocks, blocking_fields=["zip"])
+        numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
+        native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
+        assert native_pairs == numpy_pairs
+
+    def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        mk = _make_probabilistic_mk()
+        em = p.train_em(_make_dedupe_df(), mk, n_sample_pairs=100, blocking_fields=["zip"])
+        scorer = p.probabilistic_block_scorer(mk, em)
+        # The native closure is named _native (see probabilistic_block_scorer).
+        assert scorer.__name__ == "_native"
+
+    def test_native_respects_exclude(self, monkeypatch):
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core import probabilistic as p
+        from goldenmatch.core.blocker import build_blocks
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        df = self._clean_df()
+        mk = _make_probabilistic_mk()
+        blocks = build_blocks(df.lazy(), BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]))
+        em = p.train_em(df, mk, n_sample_pairs=100, blocks=blocks, blocking_fields=["zip"])
+        all_pairs = p.score_probabilistic_native(df, mk, em, set())
+        excl = {(0, 1)}
+        kept = p.score_probabilistic_native(df, mk, em, excl)
+        assert (0, 1) not in {(a, b) for a, b, _s in kept}
+        assert len(kept) == len(all_pairs) - 1

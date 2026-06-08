@@ -34,23 +34,30 @@ logger = logging.getLogger(__name__)
 #
 #   "linear"    — (W - W_min) / (W_max - W_min). Monotonic in W but NOT a
 #                 probability: a 0.50 cutoff lands at the midpoint of the
-#                 achievable weight range, which has no probabilistic meaning
-#                 and (on asymmetric-weight data) sits far above the Bayes
-#                 boundary. This is the historical behavior — precision-heavy,
-#                 recall-starved (98.8% / 57.6% on DBLP-ACM).
+#                 achievable weight range, which has no probabilistic meaning.
+#                 This is the default. With full-block scoring it measures
+#                 P=0.978 / R=0.958 / F1=0.968 on DBLP-ACM (the old "57.6%
+#                 recall" was a block-skip artifact, not the calibration).
 #
 #   "posterior" — the true FS match probability:
 #                     logodds = log2(λ/(1-λ)) + W
 #                     p       = 1 / (1 + 2^(-logodds))
 #                 where λ is the EM-estimated within-block match rate
-#                 (em_result.proportion_matched). This restores the prior the
-#                 EM step estimates and then the linear path discards, and the
-#                 score is an actual calibrated probability the user can reason
-#                 about. A 0.50 cutoff means "more likely a match than not".
+#                 (em_result.proportion_matched). The score is an actual
+#                 calibrated probability. Note the 0.50 Bayes cut is too
+#                 permissive in practice: blocking inflates the within-block
+#                 prior λ, so post-block pairs clear 0.50 easily. Measured on
+#                 DBLP-ACM, posterior matches linear's F1 only at a cut >= ~0.9
+#                 (0.50 -> F1 0.936; 0.99 -> F1 0.968, P 0.984). So the
+#                 calibrated default cut is 0.99, not 0.50 (compute_thresholds).
 #
 # Default resolved by `_fs_calibration_mode()`. `GOLDENMATCH_FS_CALIBRATED`
 # overrides: "1"/"posterior" -> posterior, "0"/"linear" -> linear.
-# NOTE: default flipped to "posterior" below once measured on DBLP-ACM/Febrl.
+# Default stays "linear": posterior ties (not beats) linear on F1, and flipping
+# the headline score from a normalized weight to a probability shifts the value
+# distribution the downstream clustering thresholds are tuned against — that
+# belongs in the Phase 4 calibration work, not here. Sweep:
+# scripts/bench_fs_calibration.py.
 _FS_CALIBRATION_DEFAULT = "linear"
 
 
@@ -92,6 +99,88 @@ def posterior_from_weight(total_weight: float, prior_w: float) -> float:
     return 1.0 / (1.0 + 2.0 ** (-logodds))
 
 
+def _isotonic_nondecreasing(values: list[float]) -> list[float]:
+    """Pool-adjacent-violators isotonic regression (non-decreasing).
+
+    Returns the non-decreasing sequence closest to ``values`` in squared
+    error — the minimal-change monotone projection. Used to enforce that
+    Fellegi-Sunter match weights increase with agreement level.
+    """
+    # Each block: [mean, pooled weight (count), size].
+    blocks: list[list[float]] = []
+    for v in values:
+        blocks.append([float(v), 1.0, 1])
+        while len(blocks) >= 2 and blocks[-2][0] > blocks[-1][0]:
+            v2, w2, s2 = blocks.pop()
+            v1, w1, s1 = blocks.pop()
+            merged = (v1 * w1 + v2 * w2) / (w1 + w2)
+            blocks.append([merged, w1 + w2, int(s1 + s2)])
+    out: list[float] = []
+    for mean, _w, size in blocks:
+        out.extend([mean] * int(size))
+    return out
+
+
+def _fs_monotonic_mode() -> str:
+    """Resolve the FS match-weight monotonicity mode: 'warn' | 'enforce' | 'off'.
+
+    Default is 'warn': detect a non-monotonic weight vector (a rare middle
+    level outweighing exact agreement) and log it, but leave the EM weights
+    untouched. This mirrors Splink, which surfaces non-monotonicity rather
+    than silently mangling it — and on measured data (DBLP-ACM) isotonically
+    pooling the inverted levels *regresses* F1 (0.968 -> 0.941, precision
+    0.978 -> 0.896), because near-exact title agreement is genuinely more
+    discriminative there than perfect agreement.
+
+    ``GOLDENMATCH_FS_MONOTONIC``:
+      - unset / 'warn'                 -> detect + warn, do not modify (default)
+      - 'enforce' / '1' / 'true' / 'on'-> apply isotonic (PAV) repair
+      - '0' / 'off' / 'disabled'       -> no detection, no warning
+    """
+    val = os.environ.get("GOLDENMATCH_FS_MONOTONIC")
+    if val is None:
+        return "warn"
+    v = val.strip().lower()
+    if v in ("0", "false", "no", "off", "disabled"):
+        return "off"
+    if v in ("1", "true", "yes", "on", "enforce"):
+        return "enforce"
+    return "warn"
+
+
+def enforce_weight_monotonicity(
+    match_weights: dict[str, list[float]],
+    skip_fields: list[str] | None = None,
+) -> tuple[dict[str, list[float]], list[str]]:
+    """Make each field's match weights non-decreasing across agreement levels.
+
+    Fellegi-Sunter weights are log2(m/u) per comparison level; with levels
+    ordered disagree -> ... -> exact-agree, a well-specified model has weights
+    that increase with the level. EM estimates m and u per level independently,
+    so a rare-but-discriminative middle level can outweigh exact agreement
+    (observed on DBLP-ACM title: partial 28.6 bits > exact 11.9 bits). That
+    inversion means "partial agreement is stronger evidence than exact
+    agreement", which is almost always a level-discretization artifact.
+
+    Applies pool-adjacent-violators isotonic regression per field. Returns the
+    (possibly adjusted) weights and the list of fields that changed.
+    ``skip_fields`` (e.g. blocking fields, whose weights are fixed and already
+    monotone) are passed through untouched.
+    """
+    skip = set(skip_fields or [])
+    adjusted: list[str] = []
+    out: dict[str, list[float]] = {}
+    for field, weights in match_weights.items():
+        if field in skip or len(weights) < 2:
+            out[field] = list(weights)
+            continue
+        fixed = _isotonic_nondecreasing(weights)
+        if any(abs(a - b) > 1e-9 for a, b in zip(fixed, weights)):
+            adjusted.append(field)
+        out[field] = fixed
+    return out, adjusted
+
+
 @dataclass
 class EMResult:
     """Result of EM training for Fellegi-Sunter model."""
@@ -108,6 +197,104 @@ class EMResult:
     # collision rate; the baseline an agreement is adjusted against).
     tf_freqs: dict[str, dict[str, float]] | None = None
     tf_collision: dict[str, float] | None = None
+
+    # Bumped when the serialized shape changes incompatibly.
+    SCHEMA_VERSION = 1
+
+    def to_dict(self) -> dict:
+        """JSON-serializable snapshot of the trained model.
+
+        Every field is already JSON-native (dicts of float lists, scalars),
+        so this is a plain projection plus a version/type marker for
+        forward-compatible loading.
+        """
+        return {
+            "__type__": "goldenmatch.EMResult",
+            "__version__": EMResult.SCHEMA_VERSION,
+            "m_probs": self.m_probs,
+            "u_probs": self.u_probs,
+            "match_weights": self.match_weights,
+            "converged": self.converged,
+            "iterations": self.iterations,
+            "proportion_matched": self.proportion_matched,
+            "tf_freqs": self.tf_freqs,
+            "tf_collision": self.tf_collision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> EMResult:
+        """Reconstruct an EMResult from :meth:`to_dict` output."""
+        version = data.get("__version__", 1)
+        if version > cls.SCHEMA_VERSION:
+            raise ValueError(
+                f"FS model schema version {version} is newer than this "
+                f"goldenmatch supports ({cls.SCHEMA_VERSION}); upgrade goldenmatch."
+            )
+        try:
+            return cls(
+                m_probs=data["m_probs"],
+                u_probs=data["u_probs"],
+                match_weights=data["match_weights"],
+                converged=data["converged"],
+                iterations=data["iterations"],
+                proportion_matched=data["proportion_matched"],
+                tf_freqs=data.get("tf_freqs"),
+                tf_collision=data.get("tf_collision"),
+            )
+        except KeyError as exc:
+            raise ValueError(f"FS model dict is missing required key: {exc}") from exc
+
+    def save_json(self, path: str) -> None:
+        """Persist the trained model to ``path`` as JSON (atomic write)."""
+        import json
+        import tempfile
+
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(self.to_dict(), fh, indent=2, sort_keys=True)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    @classmethod
+    def load_json(cls, path: str) -> EMResult:
+        """Load a trained model previously written by :meth:`save_json`."""
+        import json
+
+        with open(path) as fh:
+            return cls.from_dict(json.load(fh))
+
+    def validate_for(self, mk: MatchkeyConfig) -> None:
+        """Raise if this model can't score ``mk`` (field / level mismatch).
+
+        A persisted model is only reusable against the same matchkey shape:
+        every field must have a match-weight vector whose length equals the
+        field's level count. Mismatch means the config changed since training,
+        so fail loudly rather than silently scoring with a stale model.
+        """
+        for f in mk.fields:
+            weights = self.match_weights.get(f.field)
+            if weights is None:
+                raise FSModelMismatchError(
+                    f"Persisted FS model has no weights for field '{f.field}'. "
+                    f"The matchkey changed since training — retrain or clear the "
+                    f"model_path."
+                )
+            if len(weights) != f.levels:
+                raise FSModelMismatchError(
+                    f"Persisted FS model for field '{f.field}' has {len(weights)} "
+                    f"levels but the matchkey expects {f.levels}. Retrain or clear "
+                    f"the model_path."
+                )
+
+
+class FSModelMismatchError(ValueError):
+    """A persisted FS model is incompatible with the matchkey being scored."""
 
 
 def comparison_vector(
@@ -459,6 +646,31 @@ def train_em(
             weights.append(math.log2(m_val / u_val))
         match_weights[f.field] = weights
 
+    # Guard: FS match weights are expected non-decreasing in agreement level.
+    # EM can invert a rare-but-discriminative middle level above exact
+    # agreement. Default 'warn' surfaces it (Splink posture) without changing
+    # the weights; 'enforce' isotonically repairs them (measured to trade F1
+    # on some data — opt in deliberately).
+    _mono_mode = _fs_monotonic_mode()
+    if _mono_mode != "off":
+        repaired, adjusted = enforce_weight_monotonicity(
+            match_weights, skip_fields=blocking_fields,
+        )
+        if adjusted and _mono_mode == "enforce":
+            match_weights = repaired
+            logger.warning(
+                "FS match weights were non-monotonic; isotonically repaired "
+                "field(s): %s (GOLDENMATCH_FS_MONOTONIC=enforce)",
+                ", ".join(adjusted),
+            )
+        elif adjusted:
+            logger.warning(
+                "FS match weights are non-monotonic for field(s): %s — a partial "
+                "agreement level outweighs exact agreement. Left as-is (Splink "
+                "posture); set GOLDENMATCH_FS_MONOTONIC=enforce to isotonically "
+                "repair, or inspect the level thresholds.", ", ".join(adjusted),
+            )
+
     # Term-frequency tables for fields opting into Winkler TF adjustment.
     tf_freqs, tf_collision = _build_tf_tables(df, mk)
 
@@ -472,6 +684,219 @@ def train_em(
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
     )
+
+
+def load_or_train_em(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    *,
+    blocks: list | None = None,
+    blocking_fields: list[str] | None = None,
+    max_iterations: int | None = None,
+    convergence: float | None = None,
+) -> EMResult:
+    """Return a trained EMResult, reusing ``mk.model_path`` when present.
+
+    Splink-style train-once -> reuse: when ``mk.model_path`` is set and the
+    file exists, the persisted model is loaded, validated against ``mk`` (field
+    / level shape), and EM is skipped. When the path is set but absent, EM runs
+    and the trained model is saved there for next time. With no ``model_path``
+    this is exactly ``train_em``. The single seam all three pipeline call sites
+    (core pipeline x2, TUI engine) share.
+    """
+    path = getattr(mk, "model_path", None)
+    if path and os.path.exists(path):
+        em = EMResult.load_json(path)
+        em.validate_for(mk)  # raises FSModelMismatchError on shape mismatch
+        logger.info("Loaded FS model from %s (skipped EM training)", path)
+        return em
+
+    em = train_em(
+        df, mk,
+        max_iterations=max_iterations if max_iterations is not None else mk.em_iterations,
+        convergence=convergence if convergence is not None else mk.convergence_threshold,
+        blocks=blocks,
+        blocking_fields=blocking_fields,
+    )
+    if path:
+        em.save_json(path)
+        logger.info("Saved FS model to %s", path)
+    return em
+
+
+def estimate_m_from_labels(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    labels: list[tuple[int, int]],
+    *,
+    n_sample_pairs: int = 10000,
+    blocking_fields: list[str] | None = None,
+    proportion_matched: float | None = None,
+    smoothing: float = 1.0,
+    seed: int = 42,
+) -> EMResult:
+    """Estimate Fellegi-Sunter m-probabilities directly from labeled matches.
+
+    The supervised analog of :func:`train_em` (Splink's
+    ``estimate_m_from_label_column``). Given known true-match pairs, m is the
+    observed comparison-level frequency among those matches — no EM iteration,
+    no convergence risk. u is still estimated from random pairs (overwhelmingly
+    non-matches), exactly as the unsupervised path does. This is usually the
+    single biggest accuracy lever in record linkage: even a few hundred labels
+    pin m far better than EM can infer it unsupervised.
+
+    Args:
+        df: DataFrame with ``__row_id__`` and the matchkey field columns.
+        mk: Probabilistic matchkey config.
+        labels: known true-match pairs as ``(row_id_a, row_id_b)``. Ordering and
+            duplicates don't matter; ids absent from ``df`` are dropped.
+        n_sample_pairs: random pairs sampled for the u estimate.
+        blocking_fields: fields used for blocking — given fixed weights (they
+            always agree within a block, so carry no learnable signal), matching
+            :func:`train_em`.
+        proportion_matched: within-block match-rate prior for posterior
+            calibration. Labels don't reveal the candidate universe, so this
+            defaults to a conservative 0.02 (the linear default calibration
+            ignores it; posterior users should pass the real rate).
+        smoothing: Laplace pseudo-count per level for the m estimate — guards a
+            level unseen among few labels from forcing m=0 (an infinite weight).
+        seed: random seed for the u-estimate pair sampling.
+
+    Returns:
+        EMResult (``iterations=0``, ``converged=True`` — a direct estimate).
+        Persist it with :meth:`EMResult.save_json` and reuse via
+        ``MatchkeyConfig.model_path`` (see :func:`load_or_train_em`).
+    """
+    if blocking_fields is None:
+        blocking_fields = []
+
+    cols = [f.field for f in mk.fields if f.field != "__record__"]
+    row_lookup: dict[int, dict] = {}
+    for row in df.select(["__row_id__"] + cols).to_dicts():
+        row_lookup[row["__row_id__"]] = row
+
+    # Keep only labels whose ids are present and distinct; canonicalize + dedup.
+    valid = {
+        (min(a, b), max(a, b))
+        for a, b in labels
+        if a != b and a in row_lookup and b in row_lookup
+    }
+    if not valid:
+        raise ValueError(
+            "estimate_m_from_labels: no usable labeled pairs (label ids must "
+            "exist in df['__row_id__'] and differ)."
+        )
+    label_pairs = list(valid)
+    if len(label_pairs) < 20:
+        logger.warning(
+            "estimate_m_from_labels: only %d labeled pair(s) — m estimates may "
+            "be noisy (smoothing=%.3g mitigates).", len(label_pairs), smoothing,
+        )
+
+    # ── u from RANDOM pairs (mirrors train_em Step 1) ──
+    random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    u_probs: dict[str, list[float]] = {}
+    if len(random_pairs) >= 10:
+        random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
+        for j, f in enumerate(mk.fields):
+            counts = [float((random_matrix[:, j] == lvl).sum()) for lvl in range(f.levels)]
+            total = sum(counts) + f.levels * 1e-6
+            u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+    else:
+        u_probs = _fallback_result(mk).u_probs
+    # Blocking fields: neutral u (random pairs give a biased u for them).
+    for f in mk.fields:
+        if f.field in blocking_fields:
+            u_probs[f.field] = [0.50, 0.50] if f.levels == 2 else [0.34, 0.33, 0.33]
+
+    # ── m from LABELED matches: observed level frequency (Laplace smoothed) ──
+    label_matrix = _build_comparison_matrix(label_pairs, row_lookup, mk)
+    m_probs: dict[str, list[float]] = {}
+    for j, f in enumerate(mk.fields):
+        counts = [float((label_matrix[:, j] == lvl).sum()) for lvl in range(f.levels)]
+        total = sum(counts) + f.levels * smoothing
+        m_probs[f.field] = [(c + smoothing) / total for c in counts]
+
+    # ── match weights (blocking fixed) — mirrors train_em ──
+    match_weights: dict[str, list[float]] = {}
+    for f in mk.fields:
+        if f.field in blocking_fields:
+            n = f.levels
+            match_weights[f.field] = [
+                -3.0 + 6.0 * k / (n - 1) if n > 1 else 3.0 for k in range(n)
+            ]
+            continue
+        match_weights[f.field] = [
+            math.log2(max(m_probs[f.field][k], 1e-10) / max(u_probs[f.field][k], 1e-10))
+            for k in range(f.levels)
+        ]
+
+    _mono_mode = _fs_monotonic_mode()
+    if _mono_mode != "off":
+        repaired, adjusted = enforce_weight_monotonicity(
+            match_weights, skip_fields=blocking_fields,
+        )
+        if adjusted and _mono_mode == "enforce":
+            match_weights = repaired
+            logger.warning(
+                "Supervised FS match weights non-monotonic; isotonically "
+                "repaired field(s): %s (GOLDENMATCH_FS_MONOTONIC=enforce)",
+                ", ".join(adjusted),
+            )
+        elif adjusted:
+            logger.warning(
+                "Supervised FS match weights non-monotonic for field(s): %s — a "
+                "partial level outweighs exact agreement (left as-is).",
+                ", ".join(adjusted),
+            )
+
+    tf_freqs, tf_collision = _build_tf_tables(df, mk)
+
+    logger.info("Estimated m from %d labeled pairs (supervised; no EM)", len(label_pairs))
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=True,
+        iterations=0,
+        proportion_matched=proportion_matched if proportion_matched is not None else 0.02,
+        tf_freqs=tf_freqs,
+        tf_collision=tf_collision,
+    )
+
+
+def labels_from_corrections(corrections) -> list[tuple[int, int]]:
+    """Positive-match ``(id_a, id_b)`` labels from memory-store corrections.
+
+    Duck-typed over :class:`goldenmatch.core.memory.store.Correction` (any
+    object with ``id_a``, ``id_b``, ``decision``). Keeps only ``approve``
+    verdicts — confirmed true matches — which is what supervises m.
+    """
+    out: list[tuple[int, int]] = []
+    for c in corrections:
+        if str(getattr(c, "decision", "")).lower() == "approve":
+            out.append((int(c.id_a), int(c.id_b)))
+    return out
+
+
+def labels_from_review_items(items) -> list[tuple[int, int]]:
+    """Positive-match labels from review-queue items with ``status='approved'``.
+
+    Duck-typed over :class:`goldenmatch.core.review_queue.ReviewItem`.
+    """
+    out: list[tuple[int, int]] = []
+    for it in items:
+        if str(getattr(it, "status", "")).lower() == "approved":
+            out.append((int(it.id_a), int(it.id_b)))
+    return out
+
+
+def labels_from_memory_store(store, dataset: str | None = None) -> list[tuple[int, int]]:
+    """Convenience: pull approved-match labels straight from a MemoryStore.
+
+    Duck-typed over any store exposing ``get_corrections(dataset)``.
+    """
+    return labels_from_corrections(store.get_corrections(dataset))
 
 
 def _build_tf_tables(
@@ -772,16 +1197,20 @@ def compute_thresholds(
     that works well across datasets.
 
     When ``calibrated`` is True (posterior scoring), the default thresholds
-    are interpreted as probabilities: link at 0.5 ("more likely a match than
-    not", given the within-block prior) and a low review floor. The score is
-    already a probability so no percentile rescaling is applied.
+    are interpreted as probabilities. The link cut is 0.99, NOT the 0.5 Bayes
+    boundary: blocking inflates the within-block prior λ, so post-block pairs
+    clear 0.5 trivially (DBLP-ACM at 0.5 -> F1 0.936 vs 0.968 at 0.99 — see
+    scripts/bench_fs_calibration.py). The score is already a probability so no
+    percentile rescaling is applied.
     """
     if calibrated is None:
         calibrated = _fs_calibration_mode() == "posterior"
     if calibrated:
         # Posterior scores are calibrated probabilities; thresholds are
-        # absolute, not distribution-relative. 0.5 is the Bayes boundary.
-        return 0.50, 0.10
+        # absolute, not distribution-relative. 0.99 is the measured-best link
+        # cut on post-block pairs (the 0.5 Bayes boundary is too permissive
+        # once blocking inflates the prior).
+        return 0.99, 0.50
     if scored_weights and len(scored_weights) > 50:
         # Data-driven: use the distribution of actual pair scores
         sorted_w = sorted(scored_weights)
@@ -1093,17 +1522,123 @@ def _fs_vectorized_enabled() -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
+# Scorer-name -> native kernel id for the FS kernel (score_one ids 0..=3).
+# soundex/embedding/record_embedding are absent on purpose — those fields force
+# the numpy fallback (the kernel's score_one doesn't implement them).
+_NATIVE_FS_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+}
+
+
+def _fs_native_enabled() -> bool:
+    """Whether the native FS block kernel is active. **Opt-in, default OFF.**
+
+    Enable with `GOLDENMATCH_FS_NATIVE=1` (also needs the native ext built).
+    Unlike the weighted native kernel (default ON), FS stays opt-in because its
+    DISCRETE comparison levels amplify the tiny rapidfuzz-rs-vs-Python-rapidfuzz
+    float differences: a similarity sitting exactly on a `partial_threshold`
+    (token_sort ratios are rationals like 0.7 / 0.857, so this is common) can
+    flip a level between the two libraries, and with EM weights that can span
+    ~40 bits a single level flip swings the normalized score ~0.45 and can move
+    a pair across the link threshold. The numpy vectorized path is the default
+    so FS output is reproducible; native is a measured ~2.9x opt-in speedup for
+    callers who accept boundary-level differences (same CLASS as the documented
+    vectorized-vs-scalar FS parity, larger in per-pair magnitude).
+    """
+    val = os.environ.get("GOLDENMATCH_FS_NATIVE")
+    if val is None or val.strip().lower() not in ("1", "true", "yes", "on", "enabled"):
+        return False
+    from goldenmatch.core._native_loader import native_enabled
+    return native_enabled("block_scoring")
+
+
+def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
+    """Whether (mk) can use the native FS kernel.
+
+    Every field scorer must be one the kernel's score_one implements, and no
+    field may opt into TF adjustment (the kernel doesn't carry the per-value
+    frequency tables — those fields stay on the numpy path).
+    """
+    if not _fs_native_enabled():
+        return False
+    if not mk.fields:
+        return False
+    for f in mk.fields:
+        if f.scorer not in _NATIVE_FS_SCORER_IDS:
+            return False
+        if getattr(f, "tf_adjustment", False):
+            return False
+    try:
+        from goldenmatch.core._native_loader import native_module
+        return hasattr(native_module(), "score_block_pairs_fs")
+    except Exception:
+        return False
+
+
+def score_probabilistic_native(
+    block_df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score one block via the native Rust FS kernel (``score_block_pairs_fs``).
+
+    Output-equivalent (within rapidfuzz tolerance) to
+    ``score_probabilistic_vectorized``: same transformed values
+    (``_field_values_for_block``), same level mapping, same EM match weights,
+    same calibration + threshold. The kernel replaces the per-field numpy NxN
+    matrices with a single GIL-released per-pair Rust loop. Caller gates on
+    ``_fs_native_eligible``.
+    """
+    from goldenmatch.core._native_loader import native_module
+
+    if exclude_pairs is None:
+        exclude_pairs = set()
+    row_ids = block_df["__row_id__"].to_list()
+    n = len(row_ids)
+    if n < 2:
+        return []
+
+    calibrated = _fs_calibration_mode() == "posterior"
+    prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
+    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    weight_range = max_weight - min_weight
+    if mk.link_threshold is not None:
+        link_threshold = float(mk.link_threshold)
+    else:
+        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+
+    field_values = [_field_values_for_block(block_df, f, n) for f in mk.fields]
+    scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
+    levels = [int(f.levels) for f in mk.fields]
+    partials = [float(f.partial_threshold) for f in mk.fields]
+    weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
+    # Kernel canonicalizes pair_key to (min,max); pass exclude pre-canonicalized.
+    excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
+
+    pairs = native_module().score_block_pairs_fs(
+        row_ids, [n], field_values, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+    )
+    return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+
+
 def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
     """Pick the best block-scoring callable for (mk, em_result).
 
     Returns ``fn(block_df, exclude_pairs=None) -> list[(a, b, score)]``.
 
-    Prefers the vectorized NxN-matrix path when every field scorer can be
-    expressed as a matrix (the common case); falls back to the scalar
-    ``score_probabilistic`` for matchkeys with model-backed scorers
-    (embedding / record_embedding) or when explicitly disabled via
-    ``GOLDENMATCH_FS_VECTORIZED=0``.
+    Preference order: native Rust FS kernel (when built + all scorers are
+    jaro_winkler/levenshtein/token_sort/exact + no TF adjustment) -> vectorized
+    NxN-matrix numpy path -> scalar ``score_probabilistic`` (model-backed
+    scorers or ``GOLDENMATCH_FS_VECTORIZED=0``).
     """
+    if _fs_native_eligible(mk):
+        def _native(block_df, exclude_pairs=None):
+            return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
+        return _native
+
     use_vec = _fs_vectorized_enabled() and all(
         vectorized_scorer_supported(f.scorer) for f in mk.fields
     )
@@ -1139,3 +1674,89 @@ def score_pair_probabilistic(
     if weight_range > 0:
         return (total_weight - min_weight) / weight_range
     return 0.5
+
+
+# ── FS explainability: match-weight waterfall (Phase 2) ─────────────────────
+
+
+@dataclass
+class FSFieldContribution:
+    """One field's contribution to a Fellegi-Sunter pair score."""
+
+    field: str
+    scorer: str
+    value_a: str | None
+    value_b: str | None
+    level: int            # comparison level (0=disagree .. n_levels-1=exact)
+    n_levels: int
+    m: float              # P(level | match)
+    u: float              # P(level | non-match)
+    weight_bits: float    # log2(m/u) — the bits this field adds to the score
+
+
+@dataclass
+class FSWaterfall:
+    """Per-comparison Fellegi-Sunter decomposition of a pair score.
+
+    The Splink-style match-weight waterfall: a starting prior (bits), one
+    signed bit contribution per field, summing to the total match weight, then
+    the posterior probability. ``prior_bits + total_weight_bits == final_bits``
+    and ``posterior == 1 / (1 + 2**-final_bits)`` by construction.
+    """
+
+    fields: list[FSFieldContribution]
+    prior_bits: float
+    total_weight_bits: float
+    final_bits: float
+    posterior: float
+    proportion_matched: float
+
+
+def explain_pair_fs(
+    row_a: dict,
+    row_b: dict,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+) -> FSWaterfall:
+    """Decompose a pair's Fellegi-Sunter score into per-field bit contributions.
+
+    Uses the SAME comparison vector + match weights the scorer uses
+    (:func:`score_probabilistic`), so ``total_weight_bits`` equals the summed
+    weight that produces the pair score. m/u are surfaced per field for
+    transparency; ``weight_bits`` is authoritative (it is what scoring sums, and
+    for blocking fields is a fixed prior, not literally log2(m/u)).
+    """
+    vec = comparison_vector(row_a, row_b, mk)
+    contribs: list[FSFieldContribution] = []
+    total = 0.0
+    for k, f in enumerate(mk.fields):
+        level = vec[k]
+        weights = em_result.match_weights.get(f.field, [])
+        wbits = float(weights[level]) if level < len(weights) else 0.0
+        m_list = em_result.m_probs.get(f.field, [])
+        u_list = em_result.u_probs.get(f.field, [])
+        m = float(m_list[level]) if level < len(m_list) else float("nan")
+        u = float(u_list[level]) if level < len(u_list) else float("nan")
+        va = row_a.get(f.field)
+        vb = row_b.get(f.field)
+        contribs.append(FSFieldContribution(
+            field=f.field,
+            scorer=getattr(f, "scorer", "?") or "?",
+            value_a=str(va) if va is not None else None,
+            value_b=str(vb) if vb is not None else None,
+            level=int(level),
+            n_levels=int(f.levels),
+            m=m,
+            u=u,
+            weight_bits=wbits,
+        ))
+        total += wbits
+    prior = prior_weight(em_result.proportion_matched)
+    return FSWaterfall(
+        fields=contribs,
+        prior_bits=prior,
+        total_weight_bits=total,
+        final_bits=prior + total,
+        posterior=posterior_from_weight(total, prior),
+        proportion_matched=em_result.proportion_matched,
+    )

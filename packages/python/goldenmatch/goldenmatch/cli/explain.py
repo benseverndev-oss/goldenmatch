@@ -43,6 +43,7 @@ def explain_cmd(
     df = engine.data
     clusters = result.clusters
     scored_pairs = result.scored_pairs
+    em_results = getattr(result, "em_results", None) or {}
 
     if pair is not None:
         try:
@@ -51,7 +52,8 @@ def explain_cmd(
             console.print("[red]Error:[/red] --pair must be 'id_a,id_b' (two integers).")
             raise typer.Exit(code=2) from None
         lineage = build_lineage(
-            scored_pairs, df, cfg.get_matchkeys(), clusters, natural_language=True
+            scored_pairs, df, cfg.get_matchkeys(), clusters,
+            natural_language=True, em_results=em_results,
         )
         want = {(min(id_a, id_b), max(id_a, id_b))}
         match = next(
@@ -72,6 +74,8 @@ def explain_cmd(
             title=f"Pair ({id_a}, {id_b}) · score {match.get('score', 0.0):.3f}",
             border_style="#d4a017",
         ))
+        # FS-native waterfall when a probabilistic matchkey was trained.
+        _print_fs_waterfall(df, cfg.get_matchkeys(), em_results, id_a, id_b)
         return
 
     cinfo = clusters.get(cluster)
@@ -83,4 +87,33 @@ def explain_cmd(
         summary,
         title=f"Cluster {cluster} · {cinfo.get('size', '?')} records",
         border_style="#d4a017",
+    ))
+
+
+def _print_fs_waterfall(df, matchkeys, em_results, id_a: int, id_b: int) -> None:
+    """Render the Fellegi-Sunter match-weight waterfall for a pair, if available.
+
+    No-op unless a probabilistic matchkey ran and produced a trained model.
+    """
+    import polars as pl
+
+    from goldenmatch.core.explain import format_fs_waterfall
+    from goldenmatch.core.probabilistic import explain_pair_fs
+
+    mk = next(
+        (m for m in matchkeys if m.type == "probabilistic" and m.name in em_results),
+        None,
+    )
+    if mk is None:
+        return
+    try:
+        row_a = df.filter(pl.col("__row_id__") == id_a).to_dicts()[0]
+        row_b = df.filter(pl.col("__row_id__") == id_b).to_dicts()[0]
+    except IndexError:
+        return
+    wf = explain_pair_fs(row_a, row_b, mk, em_results[mk.name])
+    console.print(Panel(
+        format_fs_waterfall(wf),
+        title=f"Fellegi-Sunter waterfall · {mk.name}",
+        border_style="#4a7fd4",
     ))
