@@ -2,6 +2,29 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-07 — GoldenCheck Arrow-native expansion + GoldenCheck→GoldenMatch integration
+- Two new architecture nodes + one decision:
+  [../architecture/goldencheck-native-kernel.md](../architecture/goldencheck-native-kernel.md),
+  [../architecture/goldencheck-goldenmatch-integration.md](../architecture/goldencheck-goldenmatch-integration.md),
+  [../decisions/0007-goldencheck-goldenmatch-integration.md](../decisions/0007-goldencheck-goldenmatch-integration.md).
+- **GoldenCheck went from zero Rust to an optional `goldencheck-native` runtime**
+  (#793, merged) + a deep-profiling wave: Benford (~16×), composite-key (1.7×, after
+  the "naive kernel lost to Polars at 0.4× → u128 packing" fix), strict FD (12.8×),
+  fuzzy value clustering (76×), approximate-FD violations (15.5×) — each parity-exact
+  AND measured-to-beat-Polars. Plus `--deep` full-population mode, `refs` cross-file
+  referential integrity, freshness/staleness, and two bridge APIs (`cell_quality`,
+  `functional_dependencies`). Features Polars already wins (duplicate rows, refs,
+  freshness) stay pure-Polars on purpose.
+- **That quality signal now feeds GoldenMatch** through fail-open, default-OFF,
+  benchmark-gated bridges in `core/quality.py` — four doors: quality-weighted
+  survivorship (#794 ✅, wired the no-op `quality_weighting`), quality-aware blocking
+  (#795 ✅, recall), FD-driven negative evidence (#797 🟡, precision), quality-gated
+  review routing (#798 🟡, trust). Boundary held: value-level DQ in GoldenCheck,
+  entity resolution in GoldenMatch.
+- Process note logged in the decision: stacked PRs across squash-merges go `dirty`;
+  recovery is merge-base-to-main then rebase-child-onto-main (done #794→#797).
+- Docs-site: new `goldencheck/native.mdx` + `goldenmatch/data-quality.mdx`.
+
 ## 2026-06-07 — GoldenFlow Arrow-native kernel shipped
 - New architecture node: [../architecture/goldenflow-native-kernel.md](../architecture/goldenflow-native-kernel.md)
   and decision: [../decisions/0006-goldenflow-native-nanp-gating.md](../decisions/0006-goldenflow-native-nanp-gating.md).

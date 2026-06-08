@@ -108,6 +108,21 @@ is already Polars/Arrow-vectorized and is NOT a native target.
   (`MIN_AVG_GROUP`) — a near-unique determinant has singleton groups that each
   look "consistent" and would otherwise inflate confidence to ~1.0.
 
+## cell_quality (GoldenMatch survivorship bridge)
+
+`goldencheck.cell_quality(df) -> dict[(row_index, column), float]` — a SPARSE map
+of per-cell quality weights in (0,1] (missing = clean = 1.0). The bridge
+GoldenMatch consumes for quality-weighted survivorship (`GoldenRulesConfig.
+quality_weighting`): when merging a cluster it prefers the higher-quality cell.
+Signals (per-cell precise): fuzzy NON-canonical values (variant of the most-
+frequent spelling in a near-dup cluster) and future-dated cells. Nulls are NOT
+penalized (survivorship already ignores them). Skips `__`-prefixed internal cols.
+Reuses the fuzzy kernel + Python fallback. Public API (in `__init__`).
+
+## functional_dependencies (GoldenMatch negative-evidence bridge)
+
+`goldencheck.functional_dependencies(df, *, min_confidence=0.95) -> list[FunctionalDependency{determinant, dependents, confidence}]` — strict + approximate single-column FDs as structured records (one per determinant; `confidence` = strongest dependency, 1.0 = strict). Wraps the FD kernels (reuses `relations/functional_dependency.py` + `relations/approx_fd.py`). Consumed by GoldenMatch door #3 (FD-driven negative evidence). NOTE: perfectly-unique determinants (cardinality 1.0) are excluded as trivial — it surfaces anchors with cardinality in [0.5, 1.0). Public API (in `__init__`).
+
 ## Referential integrity (engine/referential.py + `refs` CLI)
 
 Cross-FILE foreign-key validation (the scan path is single-file). `goldencheck

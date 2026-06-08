@@ -1,0 +1,75 @@
+---
+title: "Native acceleration & deep profiling"
+description: "GoldenCheck's optional Rust/Arrow runtime and the deep-profiling checks it powers: composite keys, functional dependencies, fuzzy values, approximate-FD violations, plus --deep, referential integrity, and freshness."
+keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness"]
+---
+
+GoldenCheck is pure-Python and Polars-native, so the everyday sampled scan is
+already fast. For the CPU-heavy **deep-profiling** checks there's an optional
+compiled runtime, and the package falls back to pure Python when it isn't
+installed — behaviour is identical either way, native only changes wall-clock.
+
+```bash
+pip install goldencheck[native]
+```
+
+`goldencheck.core._native_loader` discovers the kernels automatically; nothing in
+your code changes. Control it with `GOLDENCHECK_NATIVE=auto|0|1` (`auto` is the
+default: use native where available, fall back otherwise).
+
+## How the kernels earn their place
+
+Every kernel had to clear two gates before being switched on by default: it must
+be **byte-identical / integer-exact** to the pure-Python reference, **and**
+measurably **faster than the Polars baseline** on a real workload. (One early
+kernel was actually *slower* than Polars and was rewritten before shipping — the
+rule is "beat Polars", not "it's Rust".) Checks where Polars already wins —
+duplicate-row detection, referential integrity, freshness — stay pure-Polars.
+
+| Check | Speedup | What it finds |
+|---|---|---|
+| Benford | ~16× | leading-digit anomalies in amount/count columns |
+| Composite-key discovery | 1.7× | minimal multi-column keys when no single column is unique |
+| Functional-dependency discovery | 12.8× | `zip → city`-style redundant / lookup columns |
+| Approximate-FD violations | 15.5× | the few rows that break a near-perfect dependency (likely data-entry errors) |
+| Fuzzy value clustering | 76× | inconsistent categorical encodings (`California` / `Californa` / `CALIFORNIA`) |
+
+## New deep-profiling checks
+
+- **Composite keys** — surfaces `(order_id, line_no)`-style natural keys.
+- **Functional dependencies** — exact `det → dep` relationships (a column is
+  derivable from another), and **approximate** ones where a handful of violating
+  rows are flagged as likely errors.
+- **Fuzzy values** — near-duplicate spellings within a column.
+- **Duplicate & near-duplicate rows** — exact, and rows identical after
+  normalization.
+- **Freshness / staleness** — future-dated timestamps (always on) and
+  name-gated staleness (`updated_at` that hasn't advanced).
+
+## `--deep` — profile the full population
+
+By default GoldenCheck samples large files to 100K rows. `--deep` profiles the
+**entire** dataset, removing sampling error on cardinality, uniqueness, and
+rare-value checks — the native kernels keep it affordable.
+
+```bash
+goldencheck data.csv --deep
+```
+
+## `refs` — cross-file referential integrity
+
+Validate that a child table's foreign keys all exist in a parent's key:
+
+```bash
+goldencheck refs orders.csv customers.csv --on customer_id=id
+```
+
+Reports orphan rows, the orphan rate, and join cardinality; exits non-zero when
+orphans exist (CI-friendly). Omit `--on` to auto-detect same-named key columns.
+
+## Quality signals for GoldenMatch
+
+The native fuzzy + FD kernels also back two public APIs that
+[GoldenMatch consumes for entity resolution](/goldenmatch/data-quality):
+`goldencheck.cell_quality(df)` (per-cell quality) and
+`goldencheck.functional_dependencies(df)` (discovered FDs).

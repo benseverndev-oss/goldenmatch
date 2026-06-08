@@ -4,6 +4,7 @@ from __future__ import annotations
 __version__ = "1.3.0"
 
 # Core: scanner + models
+from goldencheck.cell_quality import cell_quality
 from goldencheck.config.loader import load_config
 
 # Config: schema, loader, writer
@@ -33,6 +34,10 @@ from goldencheck.engine.triage import TriageResult, auto_triage
 
 # Engine: validator, confidence, triage, fixer, differ, reader
 from goldencheck.engine.validator import validate_file
+from goldencheck.functional_dependencies import (
+    FunctionalDependency,
+    functional_dependencies,
+)
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
 from goldencheck.notebook import ScanResult
@@ -61,6 +66,9 @@ __all__ = [
     "scan_dataframe",
     "scan_file",
     "scan_file_with_llm",
+    "cell_quality",
+    "functional_dependencies",
+    "FunctionalDependency",
     "Finding",
     "Severity",
     "DatasetProfile",

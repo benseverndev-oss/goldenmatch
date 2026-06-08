@@ -52,6 +52,117 @@ def _goldencheck_available() -> bool:
         return False
 
 
+def compute_quality_scores(
+    df: pl.DataFrame,
+    row_id_col: str = "__row_id__",
+) -> dict[tuple[int, str], float] | None:
+    """Per-cell quality weights for quality-weighted survivorship, keyed by
+    ``(__row_id__, column)`` so the golden-record builders prefer the
+    higher-quality value when merging a cluster (e.g. ``"California"`` over
+    ``"Californa"``; a real date over a ``2099`` one).
+
+    Delegates to ``goldencheck.cell_quality`` -- the single source of DQ truth.
+    Fail-open: returns ``None`` when goldencheck is absent, too old to expose
+    ``cell_quality``, or finds no penalized cells. Callers treat ``None`` as "no
+    weighting" and keep the fast survivorship path, so a clean frame has ZERO
+    behaviour/perf change -- weighting only kicks in when there are real issues.
+
+    ``cell_quality`` returns positional row indices; we remap them to
+    ``row_id_col`` so the builders' ``(row_id, col)`` lookups line up."""
+    if not _goldencheck_available() or row_id_col not in df.columns:
+        return None
+    try:
+        from goldencheck import cell_quality
+    except ImportError:
+        return None  # older goldencheck without the per-cell API
+
+    try:
+        positional = cell_quality(df)
+    except Exception:  # noqa: BLE001 - never let DQ scoring break a dedupe run
+        logger.debug("goldencheck.cell_quality failed; skipping quality weighting", exc_info=True)
+        return None
+    if not positional:
+        return None
+
+    row_ids = df[row_id_col].to_list()
+    scores: dict[tuple[int, str], float] = {}
+    for (idx, col), weight in positional.items():
+        if 0 <= idx < len(row_ids) and row_ids[idx] is not None:
+            scores[(int(row_ids[idx]), col)] = weight
+    return scores or None
+
+
+def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
+    """Per-column "block-shatter risk" for quality-aware blocking.
+
+    `risk[col]` is the fraction of rows whose value is an edit-distance variant
+    of a more-frequent value in that (string) column -- the records that would
+    shard off their canonical exact block and be lost to recall. Derived
+    fail-open by reusing `goldencheck.cell_quality`: every penalized cell in a
+    string column is such a fuzzy variant (the date/future-dated penalties live
+    on non-string columns and are excluded here).
+
+    Returns ``None`` when goldencheck is absent, too old, or the data is clean --
+    callers treat that as "no risk" and leave blocking unchanged."""
+    if not _goldencheck_available():
+        return None
+    try:
+        from goldencheck import cell_quality
+    except ImportError:
+        return None
+    n = df.height
+    if n == 0:
+        return None
+    try:
+        positional = cell_quality(df)
+    except Exception:  # noqa: BLE001 - never let DQ scoring break auto-config
+        logger.debug("goldencheck.cell_quality failed; skipping blocking risk", exc_info=True)
+        return None
+    if not positional:
+        return None
+
+    string_cols = {c for c, dt in zip(df.columns, df.dtypes) if dt == pl.Utf8}
+    counts: dict[str, int] = {}
+    for (_idx, col), _weight in positional.items():
+        if col in string_cols:
+            counts[col] = counts.get(col, 0) + 1
+    if not counts:
+        return None
+    return {col: cnt / n for col, cnt in counts.items()}
+
+
+def fd_identity_scores(df: pl.DataFrame) -> dict[str, float] | None:
+    """Per-column data-driven "identity anchor" strength for FD-driven negative
+    evidence (door #3). ``d[col]`` is the strongest functional dependency the
+    column supports as a determinant (1.0 for a strict FD, ``1 - violations/rows``
+    for an approximate one) -- a column that determines other columns is, by
+    construction, a discriminative entity attribute, so disagreement on it is
+    negative evidence.
+
+    Delegates to ``goldencheck.functional_dependencies``. Fail-open: ``None`` when
+    goldencheck is absent/too old or no FDs are found.
+
+    Note: perfectly-unique keys (cardinality 1.0) are NOT surfaced -- FD discovery
+    excludes them as trivial determinants. The complementary signal for those is
+    format/structure consistency (a separate door); this catches identity anchors
+    with cardinality in [0.5, 1.0) that the name heuristic misses."""
+    if not _goldencheck_available():
+        return None
+    try:
+        from goldencheck import functional_dependencies
+    except ImportError:
+        return None  # older goldencheck without the FD API
+    try:
+        fds = functional_dependencies(df)
+    except Exception:  # noqa: BLE001 - never let FD discovery break auto-config
+        logger.debug("goldencheck.functional_dependencies failed; skipping", exc_info=True)
+        return None
+    if not fds:
+        return None
+    # one record per determinant; confidence is already the max it supports.
+    return {fd.determinant: fd.confidence for fd in fds} or None
+
+
 def run_quality_check(
     df: pl.DataFrame,
     config=None,
