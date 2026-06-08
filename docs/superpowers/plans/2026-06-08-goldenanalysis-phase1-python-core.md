@@ -17,12 +17,12 @@
 ## Pre-flight requirements
 
 - `uv` installed; repo synced once (`uv sync` at repo root succeeds on `main`).
-- Working tree on the development branch `claude/goldencheck-rust-expansion-NmjWl`.
+- Working tree on a **fresh** development branch `feat/goldenanalysis-phase1-python-core`, cut from `main` (NOT the design branch, and NOT the merged `claude/goldencheck-rust-expansion-NmjWl` — that was #801).
 - `cargo`/`node` NOT required this phase.
 
 ## Conventions
 
-- All commands run from the **repo root** (`/home/user/goldenmatch`) unless stated. Note the CLAUDE.md gotcha: CI CWD = repo root, local CWD may = package dir. **Anchor every fixture path to `__file__`**, never a bare relative path.
+- All commands run from the **repo root** (the dir holding the top-level `pyproject.toml`; on the dev box this is `D:\show_case\goldenmatch`, on CI it's the checkout root) unless stated. Note the CLAUDE.md gotcha: CI CWD = repo root, local CWD may = package dir. **Anchor every fixture path to `__file__`**, never a bare relative path.
 - "Run red" = the new test fails for the expected reason (assertion/ImportError), not a collection error elsewhere.
 - "Run green" = `uv run pytest packages/python/goldenanalysis -x -q` passes.
 - Tests must be self-contained for `pytest -n auto` worker isolation: register analyzers/transforms **inside** the test that asserts on them; never rely on import-time global registration leaking across workers.
@@ -276,17 +276,24 @@ uv run goldenanalysis report packages/python/goldenanalysis/tests/fixtures/custo
 
 Expected: all tests pass, ruff clean, CLI prints a markdown report.
 
-- [ ] **Step 2:** Verify zero-dep claim — in a throwaway venv with ONLY `goldenanalysis` core installed (no goldenmatch/check/flow/pipe), `ga.analyze(df, ["frame.summary"])` works.
+- [ ] **Step 2:** Verify zero-dep claim — in a throwaway venv with ONLY `goldenanalysis` core installed (no goldenmatch/check/flow/pipe), `ga.analyze(df, ["frame.summary"])` works. (Windows venv scripts live under `Scripts\`, not `bin/`.)
 
 ```bash
+# POSIX
 python -m venv /tmp/ga-clean && /tmp/ga-clean/bin/pip install -q packages/python/goldenanalysis
 /tmp/ga-clean/bin/python -c "import polars as pl, goldenanalysis as ga; print(ga.analyze(pl.DataFrame({'a':[1,1,None]}), ['frame.summary']).metrics[0])"
+```
+
+```powershell
+# Windows (PowerShell)
+python -m venv $env:TEMP\ga-clean; & "$env:TEMP\ga-clean\Scripts\pip.exe" install -q packages/python/goldenanalysis
+& "$env:TEMP\ga-clean\Scripts\python.exe" -c "import polars as pl, goldenanalysis as ga; print(ga.analyze(pl.DataFrame({'a':[1,1,None]}), ['frame.summary']).metrics[0])"
 ```
 
 - [ ] **Step 3: Push** the branch (retry with backoff per repo git policy):
 
 ```bash
-for i in 1 2 3 4; do git push -u origin claude/goldencheck-rust-expansion-NmjWl && break || sleep $((2**i)); done
+for i in 1 2 3 4; do git push -u origin feat/goldenanalysis-phase1-python-core && break || sleep $((2**i)); done
 ```
 
 ---
