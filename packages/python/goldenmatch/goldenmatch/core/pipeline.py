@@ -190,6 +190,37 @@ from goldenmatch.output.writer import write_output
 logger = logging.getLogger(__name__)
 
 
+def _accumulate_block_candidate_pairs(
+    block_df: pl.DataFrame,
+    candidate_pairs: set[tuple[int, int]],
+) -> None:
+    """Add every within-block canonical ``(min, max)`` ``__row_id__`` pair to
+    ``candidate_pairs`` (the blocking ceiling for the bench pair dump).
+
+    The blocking ceiling is backend-independent — it is defined by the blocks
+    that ``build_blocks`` produced, not by which scorer (per-block vectorized
+    loop vs. the hash-bucket orchestration) actually compares them. Both the
+    polars-direct and the ``backend="bucket"`` probabilistic paths feed their
+    blocks through here so the candidate denominator is identical.
+
+    Caps quadratic blow-up on a pathological huge block (panel data has small
+    blocks; this is just a safety net) by skipping blocks over 20k members.
+    """
+    block_ids = block_df["__row_id__"].to_list()
+    if len(block_ids) > 20000:
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate dump for block "
+            "of size %d (> 20000 members) to avoid quadratic explosion",
+            len(block_ids),
+        )
+        return
+    for i in range(len(block_ids)):
+        id_i = block_ids[i]
+        for j in range(i + 1, len(block_ids)):
+            id_j = block_ids[j]
+            candidate_pairs.add((min(id_i, id_j), max(id_i, id_j)))
+
+
 def _dump_bench_pairs(
     dump_dir: str,
     candidate_pairs: set[tuple[int, int]],
@@ -1375,10 +1406,13 @@ def _run_dedupe_pipeline(
     # Opt-in bench hook: when GOLDENMATCH_BENCH_DUMP_PAIRS names a directory,
     # accumulate the within-block candidate set (the blocking ceiling) and the
     # emitted set (above-threshold pairs) across all probabilistic matchkeys,
-    # then dump both as parquet AFTER the loop. The env read + two empty-set
-    # inits below are unconditional (a dict lookup + two empty sets, negligible);
-    # all ACCUMULATION and I/O is guarded by `if _bench_dump_dir:`, so the unset
-    # path does no per-pair/per-block work and writes nothing.
+    # then dump both as parquet AFTER the loop. Works for BOTH the polars-direct
+    # per-block scorer and the backend="bucket" hash orchestration — the
+    # candidate ceiling is the same blocking-defined within-block set either way.
+    # The env read + two empty-set inits below are unconditional (a dict lookup +
+    # two empty sets, negligible); all ACCUMULATION and I/O is guarded by
+    # `if _bench_dump_dir:`, so the unset path does no per-pair/per-block work
+    # and writes nothing.
     _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
     _bench_candidate_pairs: set[tuple[int, int]] = set()
     _bench_emitted_pairs: set[tuple[int, int]] = set()
@@ -1425,6 +1459,22 @@ def _run_dedupe_pipeline(
                 fuzzy_pair_count += len(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
+                if _bench_dump_dir:
+                    # Candidate ceiling: enumerate within-block pairs from the
+                    # SAME blocks score_buckets consumes (blocking is backend-
+                    # independent). score_buckets already applied across-files
+                    # filtering, so `pairs` is the emitted set directly.
+                    for block in blocks:
+                        block_df = (
+                            block.df.collect()
+                            if isinstance(block.df, pl.LazyFrame)
+                            else block.df
+                        )
+                        _accumulate_block_candidate_pairs(
+                            block_df, _bench_candidate_pairs
+                        )
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
                 continue
             # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
             # + numpy level/weight/normalize, replacing the per-pair Python
@@ -1436,25 +1486,9 @@ def _run_dedupe_pipeline(
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
                 if _bench_dump_dir:
-                    # Blocking ceiling: every within-block canonical pair.
-                    # Cap quadratic blow-up on a pathological huge block
-                    # (panel data has small blocks; this is just a safety net).
-                    _block_ids = block_df["__row_id__"].to_list()
-                    if len(_block_ids) > 20000:
-                        logger.warning(
-                            "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate "
-                            "dump for block of size %d (> 20000 members) to "
-                            "avoid quadratic explosion",
-                            len(_block_ids),
-                        )
-                    else:
-                        for _i in range(len(_block_ids)):
-                            _id_i = _block_ids[_i]
-                            for _j in range(_i + 1, len(_block_ids)):
-                                _id_j = _block_ids[_j]
-                                _bench_candidate_pairs.add(
-                                    (min(_id_i, _id_j), max(_id_i, _id_j))
-                                )
+                    _accumulate_block_candidate_pairs(
+                        block_df, _bench_candidate_pairs
+                    )
                 pairs = block_scorer(block_df, matched_pairs)
                 if across_files_only:
                     pairs = [

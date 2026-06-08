@@ -85,10 +85,19 @@ def _probabilistic_config(df: pl.DataFrame):
     return auto_configure_probabilistic_df(df)
 
 
-def test_bench_dump_writes_candidate_and_emitted_pairs(tmp_path):
-    """With the env var set, the probabilistic branch dumps both parquets."""
+@pytest.mark.parametrize("backend", ["polars-direct", "bucket"])
+def test_bench_dump_writes_candidate_and_emitted_pairs(tmp_path, backend):
+    """With the env var set, the probabilistic branch dumps both parquets.
+
+    Exercised on both the default per-block (polars-direct) scorer AND the
+    backend="bucket" hash orchestration: the candidate ceiling is the same
+    blocking-defined within-block set regardless of which scorer compares them,
+    so both must dump a non-empty candidate set with emitted ⊆ candidates.
+    """
     df = _person_df()
     cfg = _probabilistic_config(df)
+    if backend == "bucket":
+        cfg.backend = "bucket"
 
     from goldenmatch import dedupe_df
 
