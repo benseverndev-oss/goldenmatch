@@ -1,0 +1,1 @@
+"""GoldenAnalysis command-line interface."""
