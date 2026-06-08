@@ -74,3 +74,5 @@ packages/python/goldencheck/goldencheck/_native*.so
 
 # Benchmark datasets downloaded at runtime (DBLP-ACM, etc.) — not committed.
 datasets/
+# Same, for goldenflow (built from packages/rust/extensions/native-flow).
+packages/python/goldenflow/goldenflow/_native*.so

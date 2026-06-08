@@ -45,6 +45,10 @@ llm = ["anthropic>=0.30", "openai>=1.30"]
 s3 = ["boto3>=1.34"]
 gcs = ["google-cloud-storage>=2.14"]
 agent = ["aiohttp>=3.14.0"]
+# Optional Rust/PyO3 acceleration runtime (mirrors goldenmatch[native]). Pulls
+# pyarrow for the zero-copy Series<->kernel bridge. Off by default at runtime --
+# see goldenflow.core._native_loader (GOLDENFLOW_NATIVE / _GATED_ON).
+native = ["goldenflow-native>=0.1.0", "pyarrow>=10"]
 all = ["goldenflow[check,excel,db,mcp,agent,s3,gcs]"]
 
 [project.scripts]

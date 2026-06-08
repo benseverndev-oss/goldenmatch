@@ -30,6 +30,7 @@ def build_lineage(
     clusters: dict[int, dict],
     max_pairs: int = 10000,
     natural_language: bool = False,
+    em_results: dict | None = None,
 ) -> list[dict]:
     """Build lineage records for scored pairs.
 
@@ -40,6 +41,9 @@ def build_lineage(
         clusters: Cluster results with membership info.
         max_pairs: Cap on lineage records (0 or None = no cap).
         natural_language: Whether to include NL explanations.
+        em_results: Trained Fellegi-Sunter models keyed by probabilistic
+            matchkey name. When present, each record gains an ``fs_waterfall``
+            field (per-comparison log2(m/u) bits, prior, posterior).
 
     Returns:
         List of lineage dicts, one per scored pair.
@@ -64,6 +68,15 @@ def build_lineage(
             fields = mk.fields
             threshold = mk.threshold or 0.80
             break
+
+    # FS waterfall source: first probabilistic matchkey with a trained model.
+    fs_mk = None
+    if em_results:
+        fs_mk = next(
+            (mk for mk in matchkeys
+             if mk.type == "probabilistic" and mk.name in em_results),
+            None,
+        )
 
     # Determine pair limit
     effective_max = max_pairs if max_pairs else len(scored_pairs)
@@ -101,6 +114,12 @@ def build_lineage(
             "fields": field_details,
         }
 
+        # Attach the Fellegi-Sunter match-weight waterfall when available.
+        if fs_mk is not None:
+            wf = _fs_waterfall_dict(row_a, row_b, fs_mk, em_results[fs_mk.name])
+            if wf is not None:
+                record["fs_waterfall"] = wf
+
         # Add natural language explanation
         if natural_language and field_details:
             from goldenmatch.core.explain import explain_pair_nl
@@ -115,6 +134,35 @@ def _serialize_provenance(provenance: list) -> list[dict]:
     """Serialize ClusterProvenance dataclasses to dicts."""
     from dataclasses import asdict
     return [asdict(p) for p in provenance]
+
+
+def _fs_waterfall_dict(row_a: dict, row_b: dict, mk, em_result) -> dict | None:
+    """Compute + serialize the FS match-weight waterfall for a pair (or None)."""
+    from goldenmatch.core.probabilistic import explain_pair_fs
+
+    try:
+        wf = explain_pair_fs(row_a, row_b, mk, em_result)
+    except Exception:  # noqa: BLE001 — lineage is best-effort, never fail a run
+        return None
+    return {
+        "prior_bits": round(wf.prior_bits, 4),
+        "total_weight_bits": round(wf.total_weight_bits, 4),
+        "final_bits": round(wf.final_bits, 4),
+        "posterior": round(wf.posterior, 6),
+        "proportion_matched": round(wf.proportion_matched, 6),
+        "fields": [
+            {
+                "field": c.field,
+                "scorer": c.scorer,
+                "level": c.level,
+                "n_levels": c.n_levels,
+                "m": round(c.m, 6) if c.m == c.m else None,
+                "u": round(c.u, 6) if c.u == c.u else None,
+                "weight_bits": round(c.weight_bits, 4),
+            }
+            for c in wf.fields
+        ],
+    }
 
 
 def save_lineage(

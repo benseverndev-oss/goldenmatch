@@ -2,6 +2,79 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-08 — Fellegi-Sunter → Splink parity (+ EM perf, scale-out, vendor reposition)
+- New architecture node + decision:
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md),
+  [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md).
+- **The `type: probabilistic` (Fellegi-Sunter) matchkey went from accuracy-competitive
+  scorer to a Splink-class probabilistic-linkage engine** (PR #800, Phases 0–4 +
+  the 3c bench): model lifecycle (`save_json`/`load_json` + `model_path`),
+  supervised m from labels (`estimate_m_from_labels` + review/memory adapters),
+  match-weight waterfall (`explain_pair_fs`, surfaced in `explain`/lineage),
+  posterior calibration, label-driven threshold/accuracy analysis (`evaluate
+  --threshold-sweep`), and scale-out on the shared `score_buckets` path (Phase 3a)
+  + an opt-in native Rust kernel (Phase 3b, `GOLDENMATCH_FS_NATIVE=1`). The
+  scale-out bet held: only one greenfield kernel function; everything else reused
+  the existing bucket/Ray/DataFusion substrate.
+- **The scale gate exposed the real bottleneck.** The 6M FS bench was
+  `train_em`-bound, not scoring-bound (the native kernel had already cut
+  `bucket_score` to ~14 s). `_sample_blocked_pairs` enumerated every within-block
+  pair (`O(Σ size_i²)`, ~140M tuples) before sampling 10K; fixed to a
+  block-stratified early-exit (PR #803, 13.7× `train_em`, ~100 s off the 6M wall,
+  peak RSS halved). A separate fix corrected the *bench's* ground truth from a
+  star to the entity clique (PR #802) — F1 was 0.825 only because the harness was
+  scoring true matches as false; corrected to 1.000.
+- **Measured 6M / `bucket` / 16c-64GB:** numpy 288.5 s / native 162.6 s (was 269 s),
+  11.3 GB peak RSS, F1 1.000. Recorded in `docs/scale-envelope.md`.
+- Docs-site: `goldenmatch/scoring.mdx` FS section rewritten (parity surface +
+  scale + corrected DBLP-ACM 0.968, dropping the stale 57.6%-recall artifact);
+  `reference/vendor-comparison.mdx` Splink row repositioned (FS feature parity
+  closed; Splink retains distributed-1B+ and interactive-charting edge).
+- Also corrects the goldencheck-integration node: #798 (quality-gated review)
+  shipped.
+
+## 2026-06-07 — GoldenCheck Arrow-native expansion + GoldenCheck→GoldenMatch integration
+- Two new architecture nodes + one decision:
+  [../architecture/goldencheck-native-kernel.md](../architecture/goldencheck-native-kernel.md),
+  [../architecture/goldencheck-goldenmatch-integration.md](../architecture/goldencheck-goldenmatch-integration.md),
+  [../decisions/0007-goldencheck-goldenmatch-integration.md](../decisions/0007-goldencheck-goldenmatch-integration.md).
+- **GoldenCheck went from zero Rust to an optional `goldencheck-native` runtime**
+  (#793, merged) + a deep-profiling wave: Benford (~16×), composite-key (1.7×, after
+  the "naive kernel lost to Polars at 0.4× → u128 packing" fix), strict FD (12.8×),
+  fuzzy value clustering (76×), approximate-FD violations (15.5×) — each parity-exact
+  AND measured-to-beat-Polars. Plus `--deep` full-population mode, `refs` cross-file
+  referential integrity, freshness/staleness, and two bridge APIs (`cell_quality`,
+  `functional_dependencies`). Features Polars already wins (duplicate rows, refs,
+  freshness) stay pure-Polars on purpose.
+- **That quality signal now feeds GoldenMatch** through fail-open, default-OFF,
+  benchmark-gated bridges in `core/quality.py` — four doors: quality-weighted
+  survivorship (#794 ✅, wired the no-op `quality_weighting`), quality-aware blocking
+  (#795 ✅, recall), FD-driven negative evidence (#797 🟡, precision), quality-gated
+  review routing (#798 🟡, trust). Boundary held: value-level DQ in GoldenCheck,
+  entity resolution in GoldenMatch.
+- Process note logged in the decision: stacked PRs across squash-merges go `dirty`;
+  recovery is merge-base-to-main then rebase-child-onto-main (done #794→#797).
+- Docs-site: new `goldencheck/native.mdx` + `goldenmatch/data-quality.mdx`.
+
+## 2026-06-07 — GoldenFlow Arrow-native kernel shipped
+- New architecture node: [../architecture/goldenflow-native-kernel.md](../architecture/goldenflow-native-kernel.md)
+  and decision: [../decisions/0006-goldenflow-native-nanp-gating.md](../decisions/0006-goldenflow-native-nanp-gating.md).
+- Measured that GoldenFlow's `date_iso8601` + `phone_e164` were ~92 % of a 1M-row
+  run (per-row `dateutil`/`phonenumbers`). Shipped: (1) **vectorized Polars fast
+  paths** with a per-row fallback (`transforms/_fastpath.py::apply_with_residual`),
+  76× date / 19× phone, ~14× end-to-end, parity-safe; (2) the optional
+  `goldenflow-native` Rust/PyO3 abi3 kernel (`packages/rust/extensions/native-flow`)
+  for the phone residual, Arrow zero-copy, **NANP-only gated** so it's byte-identical
+  to `phonenumbers` by construction (the Rust port diverges on int'l/ambiguous
+  numbers; two gates confine it to country-code-1 + canonical NANP).
+- Infra mirrors `goldenmatch-native`: loader (`goldenflow/core/_native_loader.py`,
+  `GOLDENFLOW_NATIVE` 0/auto/1), `publish-goldenflow-native.yml` (per-platform abi3
+  wheels on `goldenflow-native-v*`), and two `native_flow` CI lanes (build + parity).
+- Promoted in [../planning/roadmap.md](../planning/roadmap.md) as an adjacent
+  Arrow-native arc. Docs-site updated in the same change: new
+  `goldenflow/performance.mdx` (+ overview card + nav). Code-level notes in
+  `packages/python/goldenflow/CLAUDE.md` + `packages/rust/extensions/native-flow/README.md`.
+
 ## 2026-06-06 — Auto-config search strategy after the engine speedup (v1.28.0)
 - New planning node: [../planning/autoconfig-search-strategy.md](../planning/autoconfig-search-strategy.md)
   — the thesis (the controller's search strategy was calibrated to a cost model the
@@ -101,4 +174,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-05
+**Classification:** meta/log • **Last updated:** 2026-06-07

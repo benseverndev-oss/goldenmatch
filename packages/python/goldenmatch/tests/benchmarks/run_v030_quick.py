@@ -78,7 +78,7 @@ from goldenmatch.config.schemas import (
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.matchkey import compute_matchkeys
 from goldenmatch.core.probabilistic import (
-    score_probabilistic,
+    probabilistic_block_scorer,
     train_em,
 )
 from goldenmatch.core.scorer import score_blocks_parallel
@@ -131,14 +131,17 @@ print(f"    Training EM on {len(blocks_fs)} blocks...", flush=True)
 em = train_em(df, mk_fs, n_sample_pairs=15000, max_iterations=25, blocks=blocks_fs, blocking_fields=["year"])
 print(f"    EM: converged={em.converged}, iters={em.iterations}, match_rate={em.proportion_matched:.4f}", flush=True)
 
-print(f"    Scoring {len(blocks_fs)} blocks...", flush=True)
+print(f"    Scoring {len(blocks_fs)} blocks (vectorized, full blocks)...", flush=True)
+# Vectorized NxN scorer makes full-block scoring cheap, so we no longer skip
+# large blocks. The old `if block_df.height > 500: continue` perf band-aid was
+# capping recall at ~60% (all DBLP-ACM matches are same-year) and produced the
+# misleadingly low "57.6% recall / 72.8% F1" figure. Full-block scoring reaches
+# ~96.8% F1 in under a second.
+fs_scorer = probabilistic_block_scorer(mk_fs, em)
 pairs_fs = []
 for i, block in enumerate(blocks_fs):
     block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
-    if block_df.height > 500:
-        continue
-    p = score_probabilistic(block_df, mk_fs, em)
-    pairs_fs.extend(p)
+    pairs_fs.extend(fs_scorer(block_df))
     if (i + 1) % 20 == 0:
         print(f"    Block {i+1}/{len(blocks_fs)}, {len(pairs_fs)} pairs so far...", flush=True)
 

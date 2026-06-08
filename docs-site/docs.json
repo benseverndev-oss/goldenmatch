@@ -48,6 +48,7 @@
                   "goldenmatch/auto-config",
                   "goldenmatch/scoring",
                   "goldenmatch/blocking",
+                  "goldenmatch/data-quality",
                   "goldenmatch/pipeline",
                   "goldenmatch/backends-and-scale",
                   "goldenmatch/pprl",
@@ -84,6 +85,7 @@
             "pages": [
               "goldencheck/overview",
               "goldencheck/cli",
+              "goldencheck/native",
               "goldencheck/integrations"
             ]
           },
@@ -91,7 +93,8 @@
             "group": "GoldenFlow",
             "pages": [
               "goldenflow/overview",
-              "goldenflow/cli"
+              "goldenflow/cli",
+              "goldenflow/performance"
             ]
           },
           {

@@ -39,6 +39,10 @@ class EngineResult:
     unmatched: pl.DataFrame | None
     scored_pairs: list[tuple[int, int, float]]
     stats: EngineStats
+    # Trained Fellegi-Sunter models keyed by probabilistic matchkey name, for
+    # FS-native explainability (match-weight waterfall). None when no
+    # probabilistic matchkey ran.
+    em_results: dict[str, Any] | None = None
 
 
 @dataclass
@@ -188,6 +192,7 @@ class MatchEngine:
         # ── Score all pairs (cascading: exact first, then fuzzy) ──
         all_pairs: list[tuple[int, int, float]] = []
         matched_pairs: set[tuple[int, int]] = set()
+        em_results: dict[str, Any] = {}  # FS models by matchkey name (waterfall)
 
         # Phase 1: Exact matchkeys (fast)
         for mk in matchkeys:
@@ -211,19 +216,19 @@ class MatchEngine:
             if mk.type == "probabilistic":
                 if config.blocking is None:
                     continue
-                from goldenmatch.core.probabilistic import score_probabilistic, train_em
+                from goldenmatch.core.probabilistic import load_or_train_em, score_probabilistic
                 blocks = build_blocks(combined_lf, config.blocking)
                 blocking_fields = []
                 if config.blocking and config.blocking.keys:
                     for bk in config.blocking.keys:
                         blocking_fields.extend(bk.fields)
-                em_result = train_em(
+                # Reuses mk.model_path when set (train-once), else trains.
+                em_result = load_or_train_em(
                     collected_df, mk,
-                    max_iterations=mk.em_iterations,
-                    convergence=mk.convergence_threshold,
                     blocks=blocks,
                     blocking_fields=blocking_fields,
                 )
+                em_results[mk.name] = em_result
                 for block in blocks:
                     block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
                     pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
@@ -319,6 +324,7 @@ class MatchEngine:
             unmatched=None,
             scored_pairs=all_pairs,
             stats=stats,
+            em_results=em_results or None,
         )
 
     def auto_configure(self, domain: str | None = None) -> tuple[Any, ControllerTelemetry]:
@@ -421,6 +427,7 @@ class MatchEngine:
             unmatched=self._last_result.unmatched,
             scored_pairs=self._last_result.scored_pairs,
             stats=stats,
+            em_results=self._last_result.em_results,
         )
         return self._last_result
 
@@ -444,6 +451,7 @@ class MatchEngine:
             unmatched=self._last_result.unmatched,
             scored_pairs=self._last_result.scored_pairs,
             stats=stats,
+            em_results=self._last_result.em_results,
         )
         return self._last_result
 

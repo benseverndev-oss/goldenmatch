@@ -112,7 +112,21 @@ Key details:
 - u-probabilities estimated from random pairs and fixed during EM (Splink approach)
 - Blocking fields must be excluded from training (always agree within blocks)
 - Comparison vectors apply field transforms before scoring
-- Achieves 98.8% precision, 57.6% recall on DBLP-ACM
+- **Achieves P=0.978 / R=0.958 / F1=0.968 on DBLP-ACM** (full-block vectorized scoring). The old "98.8% / 57.6%" figure was a benchmark artifact — a per-block size cap, not the scorer.
+
+### Splink-parity surface
+
+The Fellegi-Sunter matchkey is a full probabilistic-linkage engine, not just a scorer:
+
+- **Model lifecycle (train-once, reuse).** `EMResult.save_json` / `load_json` + `MatchkeyConfig.model_path` (or `dedupe_df(fs_model_path=...)`) train EM once and reuse the model — no retraining per run.
+- **Supervised m from labels.** `estimate_m_from_labels(df, mk, labels)` (Splink's `estimate_m_from_label_column`) estimates m directly from known matches; adapters pull labels straight from the review-queue / memory corrections store.
+- **Match-weight waterfall.** `explain_pair_fs` decomposes a pair into per-comparison `log2(m/u)` bits + prior + posterior, surfaced in `goldenmatch explain --pair` and the lineage sidecar.
+- **Calibration.** `GOLDENMATCH_FS_CALIBRATED=posterior` turns the score into a true match probability `1/(1+2^-(log2(λ/(1-λ)) + ΣW))`; `linear` (default) is monotonic in the summed weight.
+- **Accuracy analysis from labels.** `goldenmatch evaluate --threshold-sweep` emits the precision/recall/F1 operating-point curve, a recommended cut, `probability_two_random_records_match`, and the per-comparison m/u match-weight report.
+
+### Scale-out
+
+Probabilistic matchkeys ride the **`bucket`** backend's hash-bucketed parallel scorer (the same path that carries the Ray / DataFusion distribution wiring), so they scale single-node the same way weighted matchkeys do. Measured **6M-row dedupe on a 16c/64GB node: 162.6 s (native) / 288.5 s (numpy), 11.3 GB peak RSS, F1 1.000** on synthetic data with entity-clique ground truth. An opt-in Rust kernel (`GOLDENMATCH_FS_NATIVE=1`) is ~10.8× on the scoring step for tiny-block workloads. See [scale envelope](/concepts/scale-envelope).
 
 ## LLM scoring
 

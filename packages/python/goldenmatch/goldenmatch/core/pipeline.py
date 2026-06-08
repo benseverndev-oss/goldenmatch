@@ -1331,17 +1331,15 @@ def _run_dedupe_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import score_probabilistic, train_em
+            from goldenmatch.core.blocker import collect_blocking_fields
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
-            em_result = train_em(
+            # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+            blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 collected_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
@@ -1349,37 +1347,40 @@ def _run_dedupe_pipeline(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
             )
-            # Fast path: pre-resolve per-field callables + level-mapping
-            # plan once per matchkey, then run an indexed Python loop per
-            # block. Resolved against the FIRST block_df so the xform
-            # column check sees a representative shape; subsequent blocks
-            # share the same columns. Falls back to score_probabilistic
-            # when any gate fails (model-backed scorer, levels > 3, missing
-            # xform column, etc).
-            from goldenmatch.core.probabilistic_fast import (
-                _resolve_probabilistic_fast_path,
-                score_probabilistic_fast,
-            )
-            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
-            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
-            _first_block_df: pl.DataFrame | None
-            if blocks:
-                _b0 = blocks[0].df
-                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
-            else:
-                _first_block_df = None
-            fast_spec = (
-                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
-                if _first_block_df is not None else None
-            )
+            # Bucket backend: score via the hash-bucketed parallel orchestration
+            # (the same path weighted matchkeys use, which inherits the Ray /
+            # DataFusion distribution wiring) instead of the sequential per-block
+            # loop. Same em_result, so clusters are identical to polars-direct
+            # (parity asserted in scripts/bench_fs_and_stages.py). EM still
+            # samples within-block pairs above; at true scale pair train-once via
+            # mk.model_path so EM is skipped on reuse.
+            if config.backend == "bucket":
+                from goldenmatch.backends.score_buckets import score_buckets
+                pairs = score_buckets(
+                    collected_df,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    across_files_only=across_files_only,
+                    source_lookup=source_lookup if across_files_only else None,
+                    em_result=em_result,
+                )
+                all_pairs.extend(pairs)
+                fuzzy_pair_count += len(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
+            # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
+            # + numpy level/weight/normalize, replacing the per-pair Python
+            # loop. This makes full-block scoring cheap enough that large
+            # blocks no longer have to be skipped for performance — the
+            # dominant FS recall lever. Falls back to the scalar path for
+            # model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0.
+            block_scorer = probabilistic_block_scorer(mk, em_result)
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                if fast_spec is not None:
-                    pairs = score_probabilistic_fast(
-                        block_df, fast_spec, exclude_pairs=matched_pairs,
-                    )
-                else:
-                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                pairs = block_scorer(block_df, matched_pairs)
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
@@ -1605,6 +1606,24 @@ def _run_dedupe_pipeline(
                 "Falling back to base rules.", exc,
             )
 
+    # Quality-weighted survivorship (GoldenRulesConfig.quality_weighting): when
+    # enabled AND goldencheck is installed, compute per-cell quality weights so
+    # the golden record prefers higher-quality values (canonical spelling over a
+    # typo, a real date over a 2099 one) when cluster members disagree.
+    # Fail-open + SPARSE: None when the data is clean or goldencheck is absent,
+    # which preserves the fast survivorship path (zero behaviour/perf change
+    # unless there are real quality issues). The field defaulted True but was a
+    # documented no-op until now.
+    quality_scores = None
+    if getattr(golden_rules, "quality_weighting", False):
+        from goldenmatch.core.quality import compute_quality_scores
+        with stage("golden_quality_scores"):
+            quality_scores = compute_quality_scores(collected_df)
+        if quality_scores:
+            logger.info(
+                "GoldenCheck quality weighting: %d penalized cell(s)", len(quality_scores)
+            )
+
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
     # the prior loop called `collected_df.filter(__row_id__.is_in(member_ids))`
@@ -1647,7 +1666,7 @@ def _run_dedupe_pipeline(
                 _golden_source,
                 cluster_frames,
                 golden_rules,
-                quality_scores=None,
+                quality_scores=quality_scores,
                 provenance=_provenance_on,
             )
     else:
@@ -1729,7 +1748,7 @@ def _run_dedupe_pipeline(
                 _provenance_on = config.output.lineage_provenance
                 _fast_eligible = (
                     not _provenance_on
-                    and _polars_native_eligible(golden_rules, quality_scores=None)
+                    and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
                 )
                 if _fast_eligible:
                     with stage("golden_build_records_df_fast"):
@@ -1760,6 +1779,7 @@ def _run_dedupe_pipeline(
                         }
                         golden_records = build_golden_records_batch(
                             multi_df, golden_rules,
+                            quality_scores=quality_scores,
                             provenance=_provenance_on,
                             cluster_pair_scores=cluster_pair_scores,
                         )
@@ -2278,43 +2298,23 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.probabilistic import score_probabilistic, train_em
+            from goldenmatch.core.blocker import collect_blocking_fields
+            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
-            em_result = train_em(
+            # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+            blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
+            # Reuses mk.model_path when set (Splink-style train-once), else trains.
+            em_result = load_or_train_em(
                 combined_df, mk,
-                max_iterations=mk.em_iterations,
-                convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
-            from goldenmatch.core.probabilistic_fast import (
-                _resolve_probabilistic_fast_path,
-                score_probabilistic_fast,
-            )
-            # Narrow to eager DataFrame for the gate. blocks[0].df is typed
-            # as DataFrame | LazyFrame; collect if lazy, else use as-is.
-            _first_block_df: pl.DataFrame | None
-            if blocks:
-                _b0 = blocks[0].df
-                _first_block_df = _b0.collect() if isinstance(_b0, pl.LazyFrame) else _b0
-            else:
-                _first_block_df = None
-            fast_spec = (
-                _resolve_probabilistic_fast_path(mk, _first_block_df, em_result)
-                if _first_block_df is not None else None
-            )
+            # Vectorized NxN-matrix scorer (falls back to the scalar per-pair
+            # path for model-backed scorers or GOLDENMATCH_FS_VECTORIZED=0).
+            block_scorer = probabilistic_block_scorer(mk, em_result)
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
-                if fast_spec is not None:
-                    pairs = score_probabilistic_fast(
-                        block_df, fast_spec, exclude_pairs=matched_pairs,
-                    )
-                else:
-                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                pairs = block_scorer(block_df, matched_pairs)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
