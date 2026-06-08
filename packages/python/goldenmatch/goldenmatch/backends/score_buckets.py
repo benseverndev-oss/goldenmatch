@@ -388,7 +388,12 @@ def score_buckets(
     """
     if prepared_df.height == 0:
         return []
-    if not blocking_config.keys:
+    # multi_pass blocking carries its keys in `.passes` with `.keys` empty;
+    # static/adaptive carry them in `.keys`. Guard on the union -- the scoring
+    # loop below iterates `passes or keys` (pass_keys), so checking only
+    # `.keys` here silently returned [] for every multi_pass config (FS or
+    # weighted) on the bucket backend.
+    if not (blocking_config.keys or blocking_config.passes):
         return []
 
     # Probabilistic (Fellegi-Sunter) matchkeys ride the same bucket

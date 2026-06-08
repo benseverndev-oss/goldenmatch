@@ -130,6 +130,35 @@ def test_oversized_block_skipped_matches_polars():
     assert bucket == polars  # both skip the 60-row block -> same (likely empty) clusters
 
 
+def test_bucket_multipass_passes_only_no_keys():
+    """multi_pass blocking with `passes` set but `keys` EMPTY must score on the
+    bucket backend, matching polars-direct.
+
+    Regression: score_buckets' entry guard read only `blocking_config.keys` and
+    returned [] when it was empty -- but multi_pass carries its keys in
+    `.passes` (the canonical shape auto-config and explicit configs emit). The
+    scoring loop already iterated `passes or keys`, so the guard silently
+    no-op'd every passes-only multi_pass config on the bucket backend (FS and
+    weighted alike). Every prior multipass test set BOTH keys and passes, so
+    the guard was never exercised on the True branch.
+    """
+    df = _fixture_df()
+    from goldenmatch.core.autoconfig import auto_configure_df
+    cfg = auto_configure_df(df)
+    cfg.blocking = BlockingConfig(
+        strategy="multi_pass",
+        keys=[],  # <-- the bug condition: passes-only
+        passes=[BlockingKeyConfig(fields=["city"]), BlockingKeyConfig(fields=["zip"])],
+    )
+    cfg.matchkeys = [_name_matchkey()]
+    assert not cfg.blocking.keys and cfg.blocking.passes
+
+    polars = _multi_member_clusters(df, cfg, "polars-direct")
+    bucket = _multi_member_clusters(df, cfg, "bucket")
+    assert frozenset({10, 11}) in bucket  # would be empty under the bug
+    assert bucket == polars
+
+
 def test_missing_pass_field_is_skipped():
     df = _fixture_df()  # has name/city/zip, NOT 'ssn'
     cfg = _two_pass_config()
