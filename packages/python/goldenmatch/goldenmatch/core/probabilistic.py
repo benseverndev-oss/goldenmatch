@@ -362,7 +362,15 @@ def _exp_prior(n: int) -> list[float]:
     return [r / sum(raw) for r in raw]
 
 
-def _train_em_per_rule(df, mk, passes, n_sample_pairs, max_iterations, convergence, seed):
+def _train_em_per_rule(
+    df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    passes: list[tuple[list[str], list]],
+    n_sample_pairs: int,
+    max_iterations: int,
+    convergence: float,
+    seed: int,
+) -> EMResult:
     """Per-rule (per-blocking-pass) EM: estimate each field's m from the passes where
     it is free to vary (held constant only in passes that block on it), average across
     those passes. u stays from random sampling for ALL fields (no neutral override).
@@ -424,7 +432,7 @@ def _train_em_per_rule(df, mk, passes, n_sample_pairs, max_iterations, convergen
         else:
             # free in NO pass -> fixed neutral prior (same shape as the single-run blocking-field path)
             n = f.levels
-            m_probs[f.field] = [r / sum(2 ** k for k in range(n)) for r in (2 ** k for k in range(n))]
+            m_probs[f.field] = _exp_prior(n)
             match_weights[f.field] = [(-3.0 + 6.0 * k / (n - 1)) if n > 1 else 3.0 for k in range(n)]
     tf_tables = _build_tf_tables(df, mk)
     return EMResult(m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,

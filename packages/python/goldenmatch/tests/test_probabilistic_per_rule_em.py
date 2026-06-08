@@ -6,6 +6,7 @@ from goldenmatch.core.probabilistic import (
     _build_comparison_matrix,
     _estimate_m_one_pass,
     _fs_per_rule_em_enabled,
+    train_em,
 )
 
 
@@ -43,9 +44,6 @@ def test_estimate_m_one_pass_skips_excluded_and_estimates_rest():
     assert m["city"] != [1/3, 2/3]
     # name was EXCLUDED -> left at the exponential prior
     assert m["name"] == [1/3, 2/3]
-
-
-from goldenmatch.core.probabilistic import train_em
 
 
 def _df_person():
