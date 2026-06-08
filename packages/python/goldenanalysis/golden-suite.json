@@ -1,0 +1,69 @@
+{
+  "name": "Golden Suite",
+  "description": "Data quality toolkit -- validate, transform, deduplicate, orchestrate, and analyze",
+  "version": "2026-06-08",
+  "tools": [
+    {
+      "name": "GoldenCheck",
+      "purpose": "Data quality validation",
+      "repo": "github.com/benseverndev-oss/goldencheck",
+      "install": "pip install goldencheck",
+      "mcp": {"command": "goldencheck mcp-serve", "tools": 19},
+      "a2a": {"command": "goldencheck agent-serve --port 8100", "skills": 9},
+      "cli": "goldencheck",
+      "python": "from goldencheck import scan_file, validate_file"
+    },
+    {
+      "name": "GoldenFlow",
+      "purpose": "Data transformation",
+      "repo": "github.com/benseverndev-oss/goldenflow",
+      "install": "pip install goldenflow",
+      "mcp": {"command": "goldenflow mcp-serve", "tools": 10},
+      "a2a": {"command": "goldenflow agent-serve --port 8150", "skills": 6},
+      "cli": "goldenflow",
+      "python": "from goldenflow import transform_file, transform_df"
+    },
+    {
+      "name": "GoldenMatch",
+      "purpose": "Entity resolution and deduplication",
+      "repo": "github.com/benseverndev-oss/goldenmatch",
+      "install": "pip install goldenmatch",
+      "mcp": {"command": "goldenmatch mcp-serve", "tools": 10},
+      "a2a": {"command": "goldenmatch agent-serve --port 8200", "skills": 8},
+      "cli": "goldenmatch",
+      "python": "from goldenmatch import dedupe_df, match_df"
+    },
+    {
+      "name": "GoldenPipe",
+      "purpose": "Pipeline orchestrator for the suite",
+      "repo": "github.com/benseverndev-oss/goldenpipe",
+      "install": "pip install goldenpipe[golden-suite]",
+      "mcp": {"command": "goldenpipe mcp-serve", "tools": 4},
+      "a2a": {"command": "goldenpipe agent-serve --port 8250", "skills": 4},
+      "cli": "goldenpipe",
+      "python": "from goldenpipe import run, run_df"
+    },
+    {
+      "name": "GoldenAnalysis",
+      "purpose": "Read-only cross-cutting analysis, metrics, and reporting",
+      "repo": "github.com/benseverndev-oss/goldenmatch",
+      "install": "pip install goldenanalysis",
+      "mcp": null,
+      "a2a": null,
+      "cli": "goldenanalysis",
+      "python": "from goldenanalysis import analyze"
+    },
+    {
+      "name": "goldenmatch-extensions",
+      "purpose": "SQL extensions for Postgres and DuckDB",
+      "repo": "github.com/benseverndev-oss/goldenmatch-extensions",
+      "install": "pip install goldenmatch-duckdb",
+      "mcp": null,
+      "a2a": null,
+      "cli": null,
+      "python": null
+    }
+  ],
+  "pipeline_order": ["goldencheck", "goldenflow", "goldenmatch", "goldenanalysis"],
+  "ports": {"goldencheck": 8100, "goldenflow": 8150, "goldenmatch": 8200, "goldenpipe": 8250}
+}
