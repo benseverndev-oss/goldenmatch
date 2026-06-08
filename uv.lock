@@ -1406,12 +1406,16 @@ agent = [
 all = [
     { name = "aiohttp" },
     { name = "fastapi" },
+    { name = "goldenanalysis" },
     { name = "goldencheck" },
     { name = "goldenflow" },
     { name = "goldenmatch" },
     { name = "mcp" },
     { name = "textual" },
     { name = "uvicorn" },
+]
+analysis = [
+    { name = "goldenanalysis" },
 ]
 api = [
     { name = "fastapi" },
@@ -1432,6 +1436,7 @@ flow = [
     { name = "goldenflow" },
 ]
 golden-suite = [
+    { name = "goldenanalysis" },
     { name = "goldencheck" },
     { name = "goldenflow" },
     { name = "goldenmatch" },
@@ -1450,6 +1455,8 @@ tui = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'agent'", specifier = ">=3.14.0" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110" },
+    { name = "goldenanalysis", marker = "extra == 'analysis'", editable = "packages/python/goldenanalysis" },
+    { name = "goldenanalysis", marker = "extra == 'golden-suite'", editable = "packages/python/goldenanalysis" },
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
     { name = "goldencheck", marker = "extra == 'golden-suite'", editable = "packages/python/goldencheck" },
     { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
@@ -1474,7 +1481,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30" },
 ]
-provides-extras = ["check", "flow", "match", "golden-suite", "tui", "api", "mcp", "agent", "all", "dev"]
+provides-extras = ["check", "flow", "match", "analysis", "golden-suite", "tui", "api", "mcp", "agent", "all", "dev"]
 
 [[package]]
 name = "goldensuite-mcp"
