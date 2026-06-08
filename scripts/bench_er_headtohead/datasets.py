@@ -167,7 +167,7 @@ def _febrl3() -> tuple[pl.DataFrame, pl.DataFrame]:
 
     pdf = df.reset_index()
     # The reset index column is the febrl record id (e.g. 'rec-123-org').
-    id_col = pdf.columns[0]
+    id_col = str(pdf.columns[0])
     records = pl.from_pandas(pdf).rename({id_col: "record_id"})
     records = records.with_columns(pl.col("record_id").cast(pl.Utf8))
 

@@ -32,7 +32,7 @@ def test_load_historical_50k_shape_or_skip():
 
 @pytest.mark.benchmark
 @pytest.mark.parametrize("name", ["dblp_acm", "febrl3", "ncvr", "synthetic_person"])
-def test_adapter_contract_or_skip(name):
+def test_adapter_contract_or_skip(name: str):
     mod = _load()
     try:
         records, truth = mod.load_dataset(name)
