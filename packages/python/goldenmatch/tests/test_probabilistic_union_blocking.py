@@ -32,21 +32,63 @@ def test_blocking_fields_none_is_empty():
     assert _collect_blocking_fields(None) == []
 
 
-def test_build_probabilistic_blocking_emits_capped_multipass():
+def test_build_probabilistic_blocking_augments_not_replaces():
     import polars as pl
-    from goldenmatch.core.autoconfig import _build_probabilistic_blocking, profile_columns
+    from goldenmatch.core.autoconfig import (
+        _build_probabilistic_blocking,
+        build_blocking,
+        profile_columns,
+    )
+    # person-shaped frame with name cols (build_blocking will pass on these)
+    # PLUS orthogonal cols (dob, postcode) that should be ADDED.
     df = pl.DataFrame({
-        "first_name": ["ann", "ann", "bob", "bob", "cara", "cara"] * 50,
-        "surname":    ["lee", "lee", "kim", "kim", "ng", "ng"] * 50,
-        "birth_year": ["1990", "1990", "1985", "1985", "1972", "1972"] * 50,
-        "postcode":   ["AA1", "AA1", "BB2", "BB2", "CC3", "CC3"] * 50,
+        "first_name": (["ann","bob","cara","dan","eve","fay","gus","hal"] * 40),
+        "surname":    (["lee","kim","ng","ono","poe","qiu","rao","sun"] * 40),
+        "dob":        ([f"19{y:02d}-01-01" for y in range(40)] * 8),
+        "postcode":   ([f"P{p:03d}" for p in range(40)] * 8),
     })
     profiles = profile_columns(df)
+    base = build_blocking(profiles, df)
+    base_passes = base.passes or base.keys or []
+    base_field_sets = {tuple(sorted(p.fields)) for p in base_passes}
+
     blocking = _build_probabilistic_blocking(profiles, df)
     assert blocking.strategy == "multi_pass"
     assert blocking.passes is not None
-    assert 1 <= len(blocking.passes) <= 4      # capped
-    assert blocking.skip_oversized is True
+    out_field_sets = {tuple(sorted(p.fields)) for p in blocking.passes}
+    # FLOOR PRESERVED: every base pass (with its transforms) survives
+    assert base_field_sets.issubset(out_field_sets), (
+        f"augment dropped base passes: base={base_field_sets} out={out_field_sets}")
+    # ORTHOGONAL ADDED: at least one pass references a column not used by base
+    base_fields = {f for p in base_passes for f in p.fields}
+    extra_fields = {f for p in blocking.passes for f in p.fields} - base_fields
+    assert extra_fields, "no orthogonal columns were added"
+
+
+def test_build_probabilistic_blocking_preserves_transforms_on_base_passes():
+    # The transforms build_blocking attached (soundex/substring/token_sort) are
+    # the recall drivers; augment must NOT strip them.
+    import polars as pl
+    from goldenmatch.core.autoconfig import (
+        _build_probabilistic_blocking,
+        build_blocking,
+        profile_columns,
+    )
+    df = pl.DataFrame({
+        "first_name": (["ann","bob","cara","dan"] * 80),
+        "surname":    (["lee","kim","ng","ono"] * 80),
+        "dob":        ([f"19{y:02d}-01-01" for y in range(40)] * 8),
+    })
+    profiles = profile_columns(df)
+    base = build_blocking(profiles, df)
+    base_passes = base.passes or base.keys or []
+    base_with_transforms = {(tuple(sorted(p.fields)), tuple(p.transforms))
+                            for p in base_passes if p.transforms}
+    out = _build_probabilistic_blocking(profiles, df)
+    out_with_transforms = {(tuple(sorted(p.fields)), tuple(p.transforms))
+                           for p in (out.passes or []) if p.transforms}
+    # every transform-bearing base pass is preserved verbatim
+    assert base_with_transforms.issubset(out_with_transforms)
 
 
 def test_probabilistic_dedupe_with_multipass_runs():
