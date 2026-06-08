@@ -134,5 +134,27 @@ def regressions(
         raise typer.Exit(1)
 
 
+@app.command(name="mcp-serve")
+def mcp_serve(
+    transport: str = typer.Option("stdio", "--transport", help="stdio | http"),
+    host: str = typer.Option("0.0.0.0", "--host"),
+    port: int = typer.Option(8300, "--port", help="HTTP port (A2A convention: Analysis = 8300)."),
+) -> None:
+    """Start the GoldenAnalysis MCP server (requires the [mcp] extra)."""
+    try:
+        from goldenanalysis.mcp import server as mcp_server
+    except ImportError as exc:  # pragma: no cover - exercised only without the extra
+        typer.echo(f"MCP not available: {exc} (install goldenanalysis[mcp])", err=True)
+        raise typer.Exit(1) from exc
+
+    if transport == "http":
+        mcp_server.run_server_http(host=host, port=port)
+    elif transport == "stdio":
+        mcp_server.run_server()
+    else:
+        typer.echo(f"unknown --transport {transport!r} (want stdio|http)", err=True)
+        raise typer.Exit(2)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
