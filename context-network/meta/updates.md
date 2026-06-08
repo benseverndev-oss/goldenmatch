@@ -2,6 +2,37 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-08 — Fellegi-Sunter → Splink parity (+ EM perf, scale-out, vendor reposition)
+- New architecture node + decision:
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md),
+  [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md).
+- **The `type: probabilistic` (Fellegi-Sunter) matchkey went from accuracy-competitive
+  scorer to a Splink-class probabilistic-linkage engine** (PR #800, Phases 0–4 +
+  the 3c bench): model lifecycle (`save_json`/`load_json` + `model_path`),
+  supervised m from labels (`estimate_m_from_labels` + review/memory adapters),
+  match-weight waterfall (`explain_pair_fs`, surfaced in `explain`/lineage),
+  posterior calibration, label-driven threshold/accuracy analysis (`evaluate
+  --threshold-sweep`), and scale-out on the shared `score_buckets` path (Phase 3a)
+  + an opt-in native Rust kernel (Phase 3b, `GOLDENMATCH_FS_NATIVE=1`). The
+  scale-out bet held: only one greenfield kernel function; everything else reused
+  the existing bucket/Ray/DataFusion substrate.
+- **The scale gate exposed the real bottleneck.** The 6M FS bench was
+  `train_em`-bound, not scoring-bound (the native kernel had already cut
+  `bucket_score` to ~14 s). `_sample_blocked_pairs` enumerated every within-block
+  pair (`O(Σ size_i²)`, ~140M tuples) before sampling 10K; fixed to a
+  block-stratified early-exit (PR #803, 13.7× `train_em`, ~100 s off the 6M wall,
+  peak RSS halved). A separate fix corrected the *bench's* ground truth from a
+  star to the entity clique (PR #802) — F1 was 0.825 only because the harness was
+  scoring true matches as false; corrected to 1.000.
+- **Measured 6M / `bucket` / 16c-64GB:** numpy 288.5 s / native 162.6 s (was 269 s),
+  11.3 GB peak RSS, F1 1.000. Recorded in `docs/scale-envelope.md`.
+- Docs-site: `goldenmatch/scoring.mdx` FS section rewritten (parity surface +
+  scale + corrected DBLP-ACM 0.968, dropping the stale 57.6%-recall artifact);
+  `reference/vendor-comparison.mdx` Splink row repositioned (FS feature parity
+  closed; Splink retains distributed-1B+ and interactive-charting edge).
+- Also corrects the goldencheck-integration node: #798 (quality-gated review)
+  shipped.
+
 ## 2026-06-07 — GoldenCheck Arrow-native expansion + GoldenCheck→GoldenMatch integration
 - Two new architecture nodes + one decision:
   [../architecture/goldencheck-native-kernel.md](../architecture/goldencheck-native-kernel.md),
