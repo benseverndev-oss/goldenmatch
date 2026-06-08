@@ -273,7 +273,14 @@ def _sample_blocked_pairs(
     return all_block_pairs
 
 
-def _estimate_m_one_pass(comp_matrix, mk, u_probs, excluded, max_iterations, convergence):
+def _estimate_m_one_pass(
+    comp_matrix: np.ndarray,
+    mk: MatchkeyConfig,
+    u_probs: dict[str, list[float]],
+    excluded: set[str],
+    max_iterations: int,
+    convergence: float,
+) -> tuple[dict[str, list[float]], float, bool, int]:
     """One EM run: estimate m for fields NOT in `excluded` (the run's blocking fields,
     held constant in this block). Returns (m_probs, p_match, converged, iterations).
     m_probs covers ALL fields (excluded ones keep the exponential prior; callers ignore
