@@ -15,6 +15,7 @@ goldenpipe = { workspace = true }
 infermap = { workspace = true }
 goldensuite-mcp = { workspace = true }
 goldencheck-types = { workspace = true }
+goldenanalysis = { workspace = true }
 # goldenmatch-native is the optional compiled runtime (goldenmatch[native]).
 # It's NOT a workspace member (it's a maturin/Rust crate under packages/rust/),
 # so point uv at the path for dev/CI resolution. uv reads its static PEP 621
