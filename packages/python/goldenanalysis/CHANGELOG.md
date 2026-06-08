@@ -4,6 +4,33 @@ All notable changes to GoldenAnalysis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.0] - unreleased
+
+Phase 2a — suite consumption. Produce an `AnalysisReport` from real suite outputs.
+
+### Added
+- `ga.analyze_match(result, *, certificate=None)` — analyze a GoldenMatch
+  `DedupeResult` (`match.rates` + `cluster.distribution`).
+- `ga.analyze_pipeline(result)` — analyze a GoldenPipe `PipeResult`, fanning out to
+  every analyzer whose consumed artifacts are present.
+- Analyzers: `match.rates` (pair count, match rate, threshold, recall estimate +
+  safe bound from a certificate, mean score, score histogram), `cluster.distribution`
+  (count, singleton ratio, size quantiles, reduction ratio, size histogram),
+  `quality.rollup` (findings totals + GoldenCheck score + GoldenFlow rows-changed /
+  rules-fired, degrading per-producer).
+- Adapters: `match` / `flow` / `pipe` (duck-typed, no eager suite imports) and
+  `check` (lazy `goldencheck` import behind the `[check]` extra; pure `from_scan`
+  seam). They populate a standardized `AnalyzerInput.artifacts` vocabulary.
+
+### Notes
+- `match.recall_estimate` flows automatically once `goldenmatch.dedupe_df(...,
+  certify=True)` attaches a `RecallEstimate` (goldenmatch PR); `match.recall_safe_bound`
+  needs a labelled audit and is supplied via `certificate=`. Both degrade silently
+  when absent.
+- `frame.summary` does not run under `analyze_pipeline` (a `PipeResult` exposes no
+  input frame). Cross-run `ReportHistory` / regression detection / narrative are
+  Phase 2b.
+
 ## [0.1.0] - 2026-06-08
 
 Phase 1 — Python core. The generic frame path, end to end.

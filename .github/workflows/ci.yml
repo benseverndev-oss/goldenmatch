@@ -302,6 +302,14 @@ jobs:
       # carries a loud no-importorskip guard that fails if this install is missing.
       - if: matrix.pkg == 'goldenmatch'
         run: uv pip install 'datafusion>=53,<54'
+      # GoldenAnalysis's suite adapters consume goldenmatch/goldencheck/goldenflow/
+      # goldenpipe outputs. uv sync --all-packages installs those workspace members,
+      # but install the [match,check,flow,pipe] extras explicitly so the real-producer
+      # integration tests (tests/integration/) actually RUN rather than self-skip via
+      # their importlib.find_spec markers — the same false-green guard as the
+      # goldenmatch datafusion lane above.
+      - if: matrix.pkg == 'goldenanalysis'
+        run: uv pip install -e 'packages/python/goldenanalysis[match,check,flow,pipe]'
       # Ruff config is driven by the root pyproject.toml [tool.ruff.lint] section
       # (F/I/B-narrowed/UP). Drop the --select override so pyproject's select+ignore wins.
       - run: uv run ruff check packages/python/${{ matrix.pkg }}

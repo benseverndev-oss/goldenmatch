@@ -19,15 +19,24 @@ from typing import TYPE_CHECKING, Any
 
 __version__ = "0.1.0"
 
-__all__ = ["analyze", "AnalysisReport", "Metric", "__version__"]
+__all__ = [
+    "analyze",
+    "analyze_match",
+    "analyze_pipeline",
+    "AnalysisReport",
+    "Metric",
+    "__version__",
+]
 
 if TYPE_CHECKING:
-    from goldenanalysis._api import analyze
+    from goldenanalysis._api import analyze, analyze_match, analyze_pipeline
     from goldenanalysis.models import AnalysisReport, Metric
 
 # Map exported name -> (submodule, attribute). Resolved on first access.
 _LAZY: dict[str, tuple[str, str]] = {
     "analyze": ("goldenanalysis._api", "analyze"),
+    "analyze_match": ("goldenanalysis._api", "analyze_match"),
+    "analyze_pipeline": ("goldenanalysis._api", "analyze_pipeline"),
     "AnalysisReport": ("goldenanalysis.models", "AnalysisReport"),
     "Metric": ("goldenanalysis.models", "Metric"),
 }
