@@ -80,6 +80,8 @@ jobs:
               - 'packages/python/goldensuite-mcp/**'
             python_goldencheck_types:
               - 'packages/python/goldencheck-types/**'
+            python_goldenanalysis:
+              - 'packages/python/goldenanalysis/**'
             typescript:
               - 'packages/typescript/**'
               - 'package.json'
@@ -255,7 +257,7 @@ jobs:
           set -euo pipefail
           PKGS=()
           if [ "$ALL" = "true" ]; then
-            PKGS=(goldenmatch goldencheck goldencheck-types goldenflow goldenpipe infermap goldensuite-mcp)
+            PKGS=(goldenmatch goldencheck goldencheck-types goldenflow goldenpipe infermap goldensuite-mcp goldenanalysis)
           else
             [ "${{ steps.filter.outputs.python_goldenmatch }}" = "true" ]       && PKGS+=(goldenmatch)
             [ "${{ steps.filter.outputs.python_goldencheck }}" = "true" ]       && PKGS+=(goldencheck)
@@ -264,6 +266,7 @@ jobs:
             [ "${{ steps.filter.outputs.python_goldenpipe }}" = "true" ]        && PKGS+=(goldenpipe)
             [ "${{ steps.filter.outputs.python_infermap }}" = "true" ]          && PKGS+=(infermap)
             [ "${{ steps.filter.outputs.python_goldensuite_mcp }}" = "true" ]   && PKGS+=(goldensuite-mcp)
+            [ "${{ steps.filter.outputs.python_goldenanalysis }}" = "true" ]    && PKGS+=(goldenanalysis)
           fi
           if [ ${#PKGS[@]} -eq 0 ]; then
             echo "pkgs=[]" >> "$GITHUB_OUTPUT"
