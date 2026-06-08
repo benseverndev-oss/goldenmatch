@@ -1,0 +1,114 @@
+---
+title: "Amortized Bayesian ER (exploratory)"
+description: "A documented research arc exploring a novel entity-resolution design: an amortized, calibrated neural posterior over the partition, with a learned reconstruction likelihood and EIG-driven active labelling. Honest outcome: mechanisms validated, not accuracy-competitive."
+keywords: ["research", "entity resolution", "amortized inference", "Bayesian", "active learning", "calibration", "negative result"]
+---
+
+<Note>
+  This is an **exploratory research arc**, not a shipped feature. It is documented
+  here for honesty and reuse. The headline outcome is a **partial / negative
+  result**: the novel mechanisms work, but the prototype is **not
+  accuracy-competitive** with GoldenMatch's existing zero-config controller.
+  Source, prototypes, and per-step results live in `scripts/research/` in the
+  repository.
+</Note>
+
+## What this was
+
+A 2026-06 exploration of attacking entity resolution in a deliberately novel way,
+rather than tuning the existing pipeline. It began with a deep-research scan for
+genuine white space across six reframings of ER, then prototyped and stress-tested
+the most promising combination end-to-end.
+
+The combination, called **program 1+3+6**, treats ER as one amortized engine:
+
+- **(1) Amortized Bayesian partition posterior** — one trained network emits
+  `p(partition | records)` in a single forward pass, no per-dataset MCMC,
+  amortized *across* datasets.
+- **(3) Reconstruction-as-likelihood** — instead of a hand-coded distortion model,
+  *learn* the co-reference signal as "can a record's masked field be reconstructed
+  from its cluster-mates?"
+- **(6) EIG active design** — choose the human/LLM label that maximally collapses
+  the **partition** posterior's entropy (not per-pair uncertainty), so transitivity
+  resolves many induced pairs per label.
+
+The posterior is meant to make GoldenMatch's existing "tells you when it's unsure"
+confidence (see [auto-config](/goldenmatch/auto-config)) principled rather than
+heuristic.
+
+## White-space scan
+
+Each framing was checked against the literature for genuine novelty. Summary of
+where the open territory is:
+
+| Framing | Status | Closest prior art |
+|---|---|---|
+| Amortized neural posterior over the ER partition | open (shrinking) | `blink`/`d-blink` (MCMC); Beraha–Favaro 2025 (VI); NCP/DAC (clustering, not ER) |
+| Reconstruction-as-likelihood (cross-record masked field) | open | Bayesian distortion models; Picket (within-row); IDEC (regularizer) |
+| EIG active design over the partition posterior | open | ALIAS/DIAL (per-pair); ITACC 2025 (non-Bayesian, needs K) |
+| MDL / compression as a global ER objective | half-open | NCD-for-ER pairwise (2009); LLM-as-compressor 2025 (negative result) |
+| Region/box/Gaussian entity embeddings | open | Query2Box/BoxE (KG, not ER) |
+| Joint differentiable blocking + matching | open | DIAL, Co-Learning'24, MutualER'24 (all iterative, not backprop) |
+
+## What was built and what each step found
+
+Six runnable prototypes under `scripts/research/`, each a kill-criterion experiment
+with an honest `RESULTS-*.md` writeup.
+
+| Step | Question | Outcome |
+|---|---|---|
+| 1 — reconstructability | Does masked-field reconstruction from cluster-mates rank clusterings by F1? | **Yes** — Spearman +0.944 on real Febrl3; data-dependent kernel (char for PII, IDF for bibliographic); precision-blind to over-merge (motivates a learned prior). |
+| 2 — amortized head | Calibrated posterior + learned microclustering prior, no size penalty? | **Yes** — ECE 0.01–0.03, learned new-cluster rate within ~0.01 of truth; F1 at parity with an oracle-tuned baseline. |
+| 3 — EIG active design | Does partition-EIG beat per-pair uncertainty at equal label budget? | **Yes** — collapses posterior uncertainty ~2.7× faster than per-pair; transitivity does the work. |
+| 4 — string encoder | Does a from-scratch encoder trained on a simulator transfer zero-shot to real schemas? | **No** — memorised the simulator's vocabulary; real F1 0.03 (over-fragments). Localised the bottleneck to the encoder. |
+| 5 — pretrained encoder | Does a frozen pretrained text encoder fix transfer? | **Largely** — real F1 0.03 → 0.42, calibrated zero-shot; but now over-merges. |
+| 6 — richer simulator | Does a realistic simulator fix the over-merge? | **Yes** — exact cluster counts (60/60), real F1 ~doubles (0.61–0.68), still calibrated. |
+
+## The honest bottom line
+
+The novel mechanisms held up under test. As an **ER system**, the prototype is not
+good:
+
+| Approach | real Febrl3 F1 | real DBLP-ACM F1 |
+|---|---:|---:|
+| This work (amortized, zero-shot) | ~0.68 | ~0.61 |
+| Trivial char-similarity + connected components (tuned) | ~0.85 | ~0.85 |
+| **GoldenMatch zero-config controller** (production) | **0.944** | **0.964** |
+
+It loses to a ~15-line baseline and is far behind the production
+[auto-config](/goldenmatch/auto-config) it was exploring alternatives to.
+
+**Why the ceiling is structural.** The residual gap is recall on hard typos, and the
+only fix is a much stronger encoder — but fine-tuning an encoder on matching pairs
+*is* supervised entity matching, already solved (Ditto ≈ 98% on DBLP-ACM).
+Amortization / zero-shot is precisely what costs the accuracy. And these benchmarks
+are near-saturated (incumbents at 0.94–0.96), so there was no accuracy headroom for
+novelty — the test favours the incumbent.
+
+## What's worth keeping
+
+- **The mechanisms and their evidence** — reconstructability as a label-free
+  cluster-quality signal, a calibrated amortized partition posterior, and
+  EIG-over-partition active selection are each independently interesting and
+  reproducible.
+- **The diagnosis** — for amortized ER, the encoder and the simulator (not the
+  inference head) are the gating problems; a pretrained encoder + realistic
+  simulator recover most of the transfer.
+- **The reframing** — if this line is ever revived, it should be as a
+  **calibrated-uncertainty / label-efficiency** play on **hard regimes** (messy
+  product data, cross-org [PPRL](/goldenmatch/pprl)), not as an accuracy play on
+  saturated structured benchmarks.
+
+## Reproduce
+
+Everything is in `scripts/research/` (torch + sentence-transformers; recordlinkage
+for Febrl3). Each prototype prints its own gate and writes a `RESULTS-*.md`. The
+full design and verdict are in
+`docs/superpowers/specs/2026-06-07-amortized-bayesian-er-1plus3plus6-design.md`.
+
+```bash
+python scripts/research/recon_er_experiment.py --dataset febrl3        # step 1
+python scripts/research/amortized_partition_er.py --epochs 300         # step 2
+python scripts/research/active_partition_er.py --train-epochs 220      # step 3
+python scripts/research/pretrained_transfer_er.py --simulator rich     # steps 5–6
+```
