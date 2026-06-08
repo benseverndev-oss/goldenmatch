@@ -12,9 +12,12 @@ tests/benchmarks/datasets/.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
 DATASETS_DIR = REPO / "packages" / "python" / "goldenmatch" / "tests" / "benchmarks" / "datasets"
@@ -25,13 +28,20 @@ class DatasetUnavailable(RuntimeError):
 
 
 def _historical_50k() -> tuple[pl.DataFrame, pl.DataFrame]:
-    # Preferred: splink ships the parquet via splink_datasets.
     df = None
     try:
         from splink import splink_datasets  # type: ignore
-        pdf = splink_datasets.historical_50k
-        df = pl.from_pandas(pdf)
-    except Exception:
+    except ImportError:
+        splink_datasets = None  # type: ignore
+    if splink_datasets is not None:
+        try:
+            df = pl.from_pandas(splink_datasets.historical_50k)  # type: ignore
+        except Exception as e:  # splink present but dataset unusable -> try vendored
+            logger.warning(
+                "splink_datasets.historical_50k failed (%s); trying vendored parquet", e
+            )
+            df = None
+    if df is None:
         vendored = DATASETS_DIR / "historical_50k.parquet"
         if not vendored.exists():
             raise DatasetUnavailable(

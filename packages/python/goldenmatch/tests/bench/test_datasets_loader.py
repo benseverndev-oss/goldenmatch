@@ -9,10 +9,12 @@ SPEC = REPO / "scripts" / "bench_er_headtohead" / "datasets.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("bench_datasets", SPEC)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
+@pytest.mark.benchmark
 def test_load_historical_50k_shape_or_skip():
     mod = _load()
     try:

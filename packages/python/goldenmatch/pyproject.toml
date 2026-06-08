@@ -166,7 +166,7 @@ web = [
 bench = [
     "splink>=4.0",
     "duckdb>=0.10",
-    "pyarrow>=15",
+    "pyarrow>=15",  # splink 4.x requires pyarrow>=15 (stricter than core >=10)
 ]
 all = [
     "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web]",
