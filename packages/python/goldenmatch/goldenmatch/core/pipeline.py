@@ -190,6 +190,31 @@ from goldenmatch.output.writer import write_output
 logger = logging.getLogger(__name__)
 
 
+def _collect_blocking_fields(blocking) -> list[str]:
+    """Fields that are agree-by-construction within their block, so EM must
+    treat them as blocking fields (neutral priors). Under strategy='multi_pass'
+    the fields live in `passes`, not `keys` -- collect the union of both so EM
+    does not try to learn m/u for always-agree fields (which collapses the
+    weights). Conservative over-approximation under union blocking (a field
+    anchoring one pass is not agree in pairs from another pass), but conservative
+    means never-wrong-merges; per the spec's Stage 1d this is intentional.
+    """
+    if blocking is None:
+        return []
+    fields: list[str] = []
+    for kc in (blocking.keys or []):
+        fields.extend(kc.fields)
+    for pc in (blocking.passes or []):
+        fields.extend(pc.fields)
+    seen: set[str] = set()
+    out: list[str] = []
+    for f in fields:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
 def _dump_bench_pairs(
     dump_dir: str,
     candidate_pairs: set[tuple[int, int]],
@@ -1389,10 +1414,7 @@ def _run_dedupe_pipeline(
             from goldenmatch.core.probabilistic import score_probabilistic, train_em
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
+            blocking_fields = _collect_blocking_fields(config.blocking)
             em_result = train_em(
                 collected_df, mk,
                 max_iterations=mk.em_iterations,
@@ -2363,10 +2385,7 @@ def _run_match_pipeline(
                 continue
             from goldenmatch.core.probabilistic import score_probabilistic, train_em
             blocks = build_blocks(combined_lf, config.blocking)
-            blocking_fields = []
-            if config.blocking and config.blocking.keys:
-                for bk in config.blocking.keys:
-                    blocking_fields.extend(bk.fields)
+            blocking_fields = _collect_blocking_fields(config.blocking)
             em_result = train_em(
                 combined_df, mk,
                 max_iterations=mk.em_iterations,
