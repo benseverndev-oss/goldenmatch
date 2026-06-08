@@ -56,6 +56,40 @@ pairs. (The 800-row subsample gave the same picture: FP-aware 0.998 vs true 1.00
 - Systems here are single-field fuzzy configs; production would use the real
   multi_pass / multi-matchkey provenance as the K systems (cleaner, one pipeline run).
 
+## Stronger test at lower true-recall
+
+Phase 0's first runs sat at true recall ~0.99 (the union of decorrelated field
+systems catches nearly everything — that's *why* multi-pass works). Dropping to
+fewer systems (k) genuinely lowers union recall, giving a real sub-1.0 test:
+
+| k real systems | FP-aware estimate | TRUE recall | err |
+|---:|---:|---:|---:|
+| 3 | 0.941 | **0.928** | 0.012 |
+| 4 | 0.983 | 0.988 | 0.005 |
+| 5 | 0.993 | 0.993 | 0.000 |
+
+At k=3 true recall is genuinely 0.928 and the estimate tracks within 0.012 (mild
++0.013 optimism, consistent with the homogeneity bias). (Raising the per-field
+*threshold* did NOT vary recall — `dedupe_df(fuzzy={f:x})`'s value isn't a
+per-field cutoff; fewer systems is the real lever.)
+
+## Phase 1 — productized into the package
+
+Landed in `packages/python/goldenmatch/`:
+- `goldenmatch/core/recall_certificate.py` — the pure FP-aware estimator
+  (`estimate_recall(pairsets)` + `clusters_to_pairs`); 5 unit tests in
+  `tests/test_recall_certificate.py` (incl. the FP-robustness property). No
+  pipeline deps.
+- `goldenmatch evaluate --certify` — runs each matchkey/pass as a decorrelated
+  system (falls back to splitting a multi-field matchkey into per-field systems
+  for >=3), then prints the unsupervised recall estimate. `--gt` is now optional.
+  End-to-end verified: estimates 85.7% on a synthetic dedup set via the real
+  pipeline; existing `test_evaluate.py` stays green.
+
+Point estimate only (the safe lower bound needs the sub-threshold stratum =
+blocker-provenance plumbing, Phase 2). Single-run multi_pass provenance (vs the
+current per-matchkey re-runs) is the Phase-2 perf optimization.
+
 ## Conclusion
 
 The estimator works on GoldenMatch's real pipeline output, not just synthetic
