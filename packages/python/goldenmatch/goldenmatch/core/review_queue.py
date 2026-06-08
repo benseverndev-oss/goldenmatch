@@ -143,10 +143,25 @@ def why_for_correction(
     return f"Pair ({id_a}, {id_b}) flagged at score {score:.2f}."
 
 
+def _quality_gated_review_enabled() -> bool:
+    """Door #5: route high-score pairs built on GoldenCheck-flagged cells to
+    review instead of auto-merge. OFF by default (the #662 kill-switch pattern);
+    enable with GOLDENMATCH_QUALITY_GATED_REVIEW=1.
+    Spec: docs/design/2026-06-07-quality-gated-review-design.md."""
+    import os
+
+    val = os.environ.get("GOLDENMATCH_QUALITY_GATED_REVIEW")
+    return val is not None and val.lower() in ("1", "true", "yes", "on")
+
+
 def gate_pairs(
     pairs: list[tuple[int, int, float]],
     merge_threshold: float = 0.95,
     review_threshold: float = 0.75,
+    *,
+    row_quality: dict[int, float] | None = None,
+    quality_floor: float = 0.7,
+    reasons: dict[tuple[int, int], str] | None = None,
 ) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]], list[tuple[int, int, float]]]:
     """Split scored pairs into auto-merged, review, and auto-rejected buckets.
 
@@ -155,6 +170,15 @@ def gate_pairs(
     pairs : list of (id_a, id_b, score) tuples
     merge_threshold : scores strictly above this are auto-merged
     review_threshold : scores >= this (and <= merge_threshold) go to review
+    row_quality : optional ``{row_id: worst_cell_quality}`` (door #5). When
+        provided, a pair that would auto-merge but whose worse record falls below
+        ``quality_floor`` is **downgraded to review** instead — a confident score
+        on GoldenCheck-flagged data is exactly what a steward should see. This is
+        **downgrade-only**: review/reject pairs are never touched (zero recall
+        cost), and ``row_quality=None`` is byte-identical to the original gating.
+    quality_floor : a pair is held for review when ``min(q_a, q_b) < quality_floor``.
+    reasons : optional mutable dict; when passed, downgraded pairs get a
+        human-readable provenance string keyed by ``(id_a, id_b)`` (door #6).
 
     Returns
     -------
@@ -166,6 +190,18 @@ def gate_pairs(
 
     for id_a, id_b, score in pairs:
         if score > merge_threshold:
+            if row_quality is not None:
+                q = min(row_quality.get(id_a, 1.0), row_quality.get(id_b, 1.0))
+                if q < quality_floor:
+                    review.append((id_a, id_b, score))
+                    if reasons is not None:
+                        reasons[(id_a, id_b)] = (
+                            f"auto-merge held for review: a matched record has a "
+                            f"low-quality value (quality {q:.2f} < {quality_floor:.2f}, "
+                            f"flagged by GoldenCheck) — the high score may rest on "
+                            f"suspect data."
+                        )
+                    continue
             auto_merged.append((id_a, id_b, score))
         elif score >= review_threshold:
             review.append((id_a, id_b, score))

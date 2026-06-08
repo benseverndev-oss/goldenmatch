@@ -61,6 +61,7 @@ def review_cmd(
         queue_path = _derive_review_queue_path(cfg) or ".goldenmatch/review_queue.db"
 
     df: pl.DataFrame | None = None
+    quality_reasons: dict[tuple[int, int], str] = {}
     if files:
         from goldenmatch.cli.dedupe import _parse_file_source, _resolve_column_maps
         from goldenmatch.core.pipeline import run_dedupe
@@ -71,7 +72,25 @@ def review_cmd(
         result = run_dedupe(file_specs, cfg)
         df = result.get("_df")
         scored_pairs = result.get("scored_pairs", []) or []
-        _, review_pairs, _ = gate_pairs(scored_pairs, merge_threshold, review_threshold)
+        # Door #5: optionally downgrade high-score auto-merges built on
+        # GoldenCheck-flagged cells to review (fail-open; OFF unless
+        # GOLDENMATCH_QUALITY_GATED_REVIEW=1 and the row-id'd frame is present).
+        from goldenmatch.core.review_queue import _quality_gated_review_enabled
+
+        row_quality = None
+        if _quality_gated_review_enabled() and df is not None:
+            from goldenmatch.core.quality import row_quality_floor
+
+            row_quality = row_quality_floor(df)
+        _, review_pairs, _ = gate_pairs(
+            scored_pairs, merge_threshold, review_threshold,
+            row_quality=row_quality, reasons=quality_reasons,
+        )
+        if quality_reasons:
+            console.print(
+                f"[dim]{len(quality_reasons)} confident merge(s) held for review on "
+                f"data-quality grounds.[/dim]"
+            )
         console.print(f"[dim]{len(review_pairs)} pair(s) fell in the review band.[/dim]")
     else:
         review_pairs = []
@@ -90,6 +109,10 @@ def review_cmd(
         explanation = why_for_correction(
             a, b, df, matchkey_fields, score=score, use_llm=False
         )
+        # Door #6: prepend the data-quality reason so the steward sees WHY a
+        # confident pair was surfaced rather than auto-merged.
+        if (a, b) in quality_reasons:
+            explanation = f"{quality_reasons[(a, b)]} {explanation}"
         rq.add(job, a, b, score, explanation)
 
     # Surface both the fresh job and the pipeline's stale-correction job.
