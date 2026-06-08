@@ -1,6 +1,9 @@
+import os
+
 import polars as pl
 import pytest
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+from goldenmatch.core.autoconfig import _blocking_candidate_budget_k
 from goldenmatch.core.blocker import _build_block_key_expr
 from goldenmatch.core.chunked import ChunkedMatcher
 from goldenmatch.db.blocking import build_blocking_query
@@ -49,3 +52,13 @@ def test_chunked_block_key_honors_field_transforms():
     inst = object.__new__(ChunkedMatcher)
     got = inst._block_key_column(df, cfg)["__block_key__"].to_list()
     assert got == expected == ["smith||1990", "jones||1985"]
+
+
+def test_blocking_candidate_budget_k_default_and_override():
+    assert _blocking_candidate_budget_k() == 25
+    for raw, expected in [("10", 10), ("100", 100), ("0", 25), ("-5", 25), ("junk", 25)]:
+        os.environ["GOLDENMATCH_BLOCKING_CANDIDATE_BUDGET_K"] = raw
+        try:
+            assert _blocking_candidate_budget_k() == expected
+        finally:
+            os.environ.pop("GOLDENMATCH_BLOCKING_CANDIDATE_BUDGET_K", None)

@@ -577,6 +577,24 @@ def _noise_aware_scorer(col_type: str, scorer: str) -> str:
     return scorer
 
 
+_BLOCKING_CANDIDATE_BUDGET_K_DEFAULT = 25
+
+
+def _blocking_candidate_budget_k() -> int:
+    """Candidate-pair budget per record for selective probabilistic blocking
+    (budget = K * N deduped-union candidate pairs). Override via
+    GOLDENMATCH_BLOCKING_CANDIDATE_BUDGET_K (the dump PR-curve sweep calibrates it).
+    Invalid / non-positive values fall back to the default."""
+    raw = os.environ.get("GOLDENMATCH_BLOCKING_CANDIDATE_BUDGET_K")
+    if raw is None:
+        return _BLOCKING_CANDIDATE_BUDGET_K_DEFAULT
+    try:
+        v = int(raw.strip())
+    except (ValueError, AttributeError):
+        return _BLOCKING_CANDIDATE_BUDGET_K_DEFAULT
+    return v if v > 0 else _BLOCKING_CANDIDATE_BUDGET_K_DEFAULT
+
+
 def _is_short_code(p: ColumnProfile) -> bool:
     """#491: detect short alphanumeric *code* columns (SKU, part-no, plan-code).
 
