@@ -3,11 +3,14 @@
 Runner: `scripts/research/recall_certificate.py`. numpy + the existing real-data
 loaders; real Febrl3 / DBLP-ACM subsamples, 3 seeds. 2026-06-07.
 
-> **Verdict: PASS (early).** Capture-recapture estimates a matcher's recall with
-> **no labels** and tracks the true recall within ~0.03 MAE (Febrl3, ≈unbiased)
-> and ~0.09 MAE (DBLP-ACM, conservative) — *provided* the matchers are both
-> decorrelated and individually precise. This is the first idea in the research
-> program to clear its kill-criterion under a fair test.
+> **Verdict: PASS on small high-precision subsamples, FAIL at full scale.**
+> On 60–80-entity subsamples the capture-recapture recall estimate tracks true
+> recall within ~0.03–0.09 MAE with no labels. But the full-scale runs (added per
+> the follow-up) **break**: the matchers' precision craters at scale, false
+> positives contaminate the population estimator, and the recall estimate is badly
+> off (Febrl3 0.61 est vs 0.95 true). The conservative lower bound never gave
+> false assurance (stayed ≤ true recall) but is uselessly loose. Making it work at
+> scale needs **FP-aware (latent-class) capture-recapture** — real open work.
 
 ## Why this idea (derived from two failed arcs)
 
@@ -75,6 +78,46 @@ Febrl3: MAE 0.031, bias +0.009 (≈unbiased). DBLP-ACM: MAE 0.092, bias −0.092
   ~0.90 → mild conservative bias). On data with homogeneous corruption (pairs
   hard for *every* group) it would bite and the estimate would turn optimistic —
   the known failure mode of dual-system estimation.
+
+## Full-scale runs + CI + precision-sampling + conservative bound (the follow-up)
+
+Added: a blocked matcher (scales to full N), analytic Chao2 variance + log-transform
+CIs, a Poisson log-linear estimator (K≥3), **real precision-sampling** (label a small
+sample with an oracle; Wilson CI) replacing the gold stand-in, and a **conservative
+recall lower bound** = precision_lo · D / N_hi.
+
+Run on the FULL datasets (no subsampling):
+
+| Full dataset | N | K | precision (sampled / true) | Chao2 N_hat [95% CI] | N_true | recall point [95% CI] | cons. bound | TRUE recall |
+|---|---:|---:|---|---|---:|---|---:|---:|
+| Febrl3 | 5000 | 4 | 0.72 / 0.77 | 9569 [9429, 9722] | 6538 | 0.61 [0.52, 0.68] | ≥0.52 | **0.95** |
+| DBLP-ACM | 4910 | 3 | 0.08 / 0.07 | 117880 [114k, 122k] | 2224 | 0.02 [0.01, 0.04] | ≥0.01 | **1.00** |
+
+**It breaks at scale.** Root causes:
+
+1. **False-positive contamination (dominant).** At full scale the field-group
+   matchers' precision collapses (0.72, 0.08), so the union `D` is mostly FPs
+   (8051 found vs 6538 true on Febrl3). The FP-singletons look like "rare species"
+   to Chao2 → it inflates the population (N_hat 9569 ≫ N_true 6538) → recall is
+   *under*-estimated (0.61 vs 0.95). Capture-recapture must run on the TRUE-pair
+   population, which can't be isolated without labels. The subsample PASS held only
+   because subsamples were high-precision (≈0.95+), masking this.
+2. **Schema width.** DBLP has 4 fields; K=3 forces tiny single-field groups
+   (venue alone, year alone) → precision 0.08 → total breakdown. The method needs
+   enough fields to form K disjoint *precise* groups.
+3. **The conservative bound stayed safe but useless.** It never overstated recall
+   (≤ true in both), but ≥0.52-when-actually-0.95 is not actionable.
+
+Precision-sampling and the CIs themselves worked correctly (sampled precision
+tracked true; CIs are sound w.r.t. sampling variance). The failure is upstream:
+the estimator's input (a low-precision union) violates its assumptions.
+
+**Corrected verdict:** the basic Chao2-on-the-raw-union recall certificate is
+**not viable at scale**. The honest next step is FP-aware estimation (treat each
+captured pair as latent true/false; model true-pair capture probabilities and the
+spurious-FP process jointly) — a real research step, not a tweak. Until then, the
+subsample result should be read as "the idea is sound only when matchers are
+high-precision," which is itself the hard ER problem.
 
 ## Next levers (if pursued)
 

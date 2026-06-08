@@ -121,30 +121,135 @@ def chao2(capture_counts: dict[tuple[int, int], int], K: int) -> float:
     return D + f * Q1 * (Q1 - 1) / 2.0
 
 
-def lincoln_petersen(n1: int, n2: int, n12: int) -> float:
-    """Chapman bias-corrected 2-system estimator."""
-    if n12 == 0:
-        return float("inf")
-    return (n1 + 1) * (n2 + 1) / (n12 + 1) - 1
+def chao2_var(counts: dict, K: int) -> float:
+    """Analytic variance of the Chao2 estimator (Chao 1987, incidence form)."""
+    D = len(counts)
+    Q1 = sum(1 for v in counts.values() if v == 1)
+    Q2 = sum(1 for v in counts.values() if v == 2)
+    c = (K - 1) / K if K > 1 else 1.0
+    if Q2 == 0:
+        return 0.0
+    r = Q1 / Q2
+    return Q2 * ((c / 2) * r ** 2 + c ** 2 * r ** 3 + (c ** 2 / 4) * r ** 4)
+
+
+def log_ci(N_hat: float, D: int, var: float, z: float = 1.96):
+    """Chao's log-transformed CI: keeps the lower bound >= D (can't estimate
+    fewer than observed) and gives an asymmetric interval on N."""
+    f0 = max(N_hat - D, 1e-9)
+    if var <= 0:
+        return N_hat, N_hat
+    C = np.exp(z * np.sqrt(np.log(1.0 + var / f0 ** 2)))
+    return D + f0 / C, D + f0 * C
+
+
+def loglinear_independence(histories: list[tuple[int, ...]], K: int) -> float:
+    """Poisson log-linear (main-effects/independence) multiple-systems estimate
+    via IRLS. Generalises Lincoln-Petersen to K lists; the missing all-zero cell
+    is exp(intercept). (Pairwise-interaction terms — which model matcher
+    CORRELATION — need K>=4 cells to be estimable; flagged, not fit here.)"""
+    from collections import Counter
+    cells = Counter(histories)
+    keys = list(cells.keys())
+    # need >= 3 lists and more observed cells than params, else the missing cell
+    # isn't identifiable (saturated -> garbage extrapolation).
+    if K < 3 or len(keys) <= 1 + K:
+        return float("nan")
+    y = np.array([cells[k] for k in keys], dtype=float)
+    X = np.array([[1.0] + list(k) for k in keys], dtype=float)  # intercept + K mains
+    beta = np.zeros(X.shape[1])
+    for _ in range(50):
+        mu = np.exp(X @ beta)
+        Wd = mu
+        XtWX = X.T @ (X * Wd[:, None])
+        z = X @ beta + (y - mu) / np.maximum(mu, 1e-9)
+        try:
+            beta_new = np.linalg.solve(XtWX, X.T @ (Wd * z))
+        except np.linalg.LinAlgError:
+            return float("nan")
+        if np.max(np.abs(beta_new - beta)) < 1e-8:
+            beta = beta_new
+            break
+        beta = beta_new
+    missing = float(np.exp(beta[0]))   # all-zero history -> only intercept active
+    return len(histories) + missing    # D observed + estimated hidden cell
+
+
+def wilson_ci(k: int, n: int, z: float = 1.96):
+    """Wilson score interval for a binomial proportion (precision sampling)."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    d = 1 + z ** 2 / n
+    centre = (p + z ** 2 / (2 * n)) / d
+    half = (z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2))) / d
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def sample_precision(union: list, gold: set, n_sample: int, rng):
+    """REAL precision sampling: label a small uniform sample of predicted pairs
+    with an oracle (here gold, used ONLY on the sample — the legitimately-cheap
+    production operation). Returns (p_hat, p_lo, p_hi) with a Wilson CI."""
+    if not union:
+        return 0.0, 0.0, 0.0
+    idx = rng.sample(range(len(union)), min(n_sample, len(union)))
+    k = sum(1 for t in (union[i] for i in idx) if t in gold)
+    n = len(idx)
+    lo, hi = wilson_ci(k, n)
+    return k / n, lo, hi
 
 
 # --------------------------------------------------------------------------- #
-def group_matcher(records, group: list[int]) -> set[tuple[int, int]]:
-    """A matcher over a DISJOINT field group: precise enough (uses several
-    fields) yet decorrelated from matchers on other groups (uses different
-    evidence). Pairs with group-restricted IDF-Jaccard >= calibrated theta."""
-    sub = [[r[f] for f in group] for r in records]
-    Wg = build_affinity(sub)
-    thg = default_theta(Wg)
+def group_matcher(records, group: list[int], max_post: int = 150) -> set[tuple[int, int]]:
+    """A matcher over a DISJOINT field group, BLOCKED so it scales to full
+    datasets: candidate pairs share a non-ubiquitous token in the group's fields;
+    keep those with group-restricted IDF-Jaccard >= calibrated theta. Precise
+    enough (several fields) yet decorrelated from other groups (different fields).
+    """
+    toks = []
+    for r in records:
+        s: set[str] = set()
+        for f in group:
+            v = r[f] if f < len(r) else ""
+            for t in "".join(c if c.isalnum() else " " for c in v.lower()).split():
+                s.add(t)
+        toks.append(s)
     n = len(records)
-    pairs: set[tuple[int, int]] = set()
-    xs, ys = np.where(np.triu(Wg, 1) >= thg)
-    for i, j in zip(xs.tolist(), ys.tolist()):
-        pairs.add((i, j))
-    return pairs
+    df: dict[str, int] = {}
+    for s in toks:
+        for t in s:
+            df[t] = df.get(t, 0) + 1
+    idf = {t: __import__("math").log(1.0 + n / c) for t, c in df.items()}
+    # inverted index; skip ubiquitous tokens (huge blocks) for tractability
+    inv: dict[str, list[int]] = {}
+    for i, s in enumerate(toks):
+        for t in s:
+            inv.setdefault(t, []).append(i)
+    cand: set[tuple[int, int]] = set()
+    for t, members in inv.items():
+        if len(members) > max_post:
+            continue
+        for a in range(len(members)):
+            for b in range(a + 1, len(members)):
+                i, j = members[a], members[b]
+                cand.add((i, j) if i < j else (j, i))
+    # affinity on candidates; calibrate theta = mean+2std of candidate affinities
+    affs = {}
+    for (i, j) in cand:
+        a, b = toks[i], toks[j]
+        if not a and not b:
+            continue
+        inter = sum(idf[t] for t in (a & b))
+        union = sum(idf[t] for t in (a | b))
+        affs[(i, j)] = inter / union if union else 0.0
+    vals = np.array(list(affs.values())) if affs else np.array([0.0])
+    theta = float(vals.mean() + 2.0 * vals.std()) if vals.size > 3 else 0.3
+    return {p for p, w in affs.items() if w >= theta}
 
 
-def run(records, gold_labels, n_groups: int = 3):
+def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: int = 0):
+    import random
+    rng = random.Random(seed)
     n_fields = len(records[0])
     gp = gold_pairs(np.asarray(gold_labels))
 
@@ -154,29 +259,40 @@ def run(records, gold_labels, n_groups: int = 3):
     pred_sets = [group_matcher(records, g) for g in groups]
     pred_sets = [ps for ps in pred_sets if ps]
     K = len(pred_sets)
-    union: set[tuple[int, int]] = set().union(*pred_sets) if pred_sets else set()
-
-    # capture counts over the UNION of predicted pairs
-    counts: dict[tuple[int, int], int] = {}
-    for ps in pred_sets:
-        for p in ps:
-            counts[p] = counts.get(p, 0) + 1
-
-    # ----- the estimate (NO gold) -----
-    N_hat = chao2(counts, K)
+    union_set: set[tuple[int, int]] = set().union(*pred_sets) if pred_sets else set()
+    union = sorted(union_set)
     D = len(union)
-    recall_hat = D / N_hat if N_hat > 0 else 0.0
 
-    # ----- the truth (gold; the estimator never sees this) -----
-    tp = len(union & gp)
+    # capture counts + capture histories over the union
+    counts: dict[tuple[int, int], int] = {p: 0 for p in union}
+    hist: dict[tuple[int, int], list[int]] = {p: [0] * K for p in union}
+    for gi, ps in enumerate(pred_sets):
+        for p in ps:
+            counts[p] += 1
+            hist[p][gi] = 1
+    histories = [tuple(hist[p]) for p in union]
+
+    # ----- population estimates (NO gold) -----
+    N_chao = chao2(counts, K)
+    N_var = chao2_var(counts, K)
+    N_lo, N_hi = log_ci(N_chao, D, N_var)
+    N_ll = loglinear_independence(histories, K)
+
+    # ----- REAL precision sampling (oracle on a small sample only) -----
+    p_hat, p_lo, p_hi = sample_precision(union, gp, n_precision, rng)
+
+    # ----- recall point + 95% CI + CONSERVATIVE lower bound -----
+    def rec(found, N):
+        return found / N if N > 0 else 0.0
+    recall_point = rec(p_hat * D, N_chao)
+    recall_hi = rec(p_hi * D, N_lo)               # optimistic end
+    recall_lo = rec(p_lo * D, N_hi)               # conservative end (safety bound)
+
+    # ----- truth (gold; never seen by the estimator) -----
+    tp = len(union_set & gp)
     true_recall = tp / len(gp) if gp else 0.0
     true_precision = tp / D if D else 0.0
-    # what the estimate SHOULD target: precision-corrected found-true / N_true
-    # recall_hat uses D (incl. false positives) as "found"; report both.
-    recall_hat_pc = (true_precision * D) / N_hat if N_hat > 0 else 0.0
 
-    # independence diagnostic: mean Jaccard overlap between matcher capture sets
-    # of TRUE pairs (high overlap => correlated => optimistic bias)
     overlaps = []
     for a in range(len(pred_sets)):
         for b in range(a + 1, len(pred_sets)):
@@ -185,8 +301,9 @@ def run(records, gold_labels, n_groups: int = 3):
                 overlaps.append(len(ta & tb) / len(ta | tb))
     mean_overlap = float(np.mean(overlaps)) if overlaps else 0.0
 
-    return dict(K=K, D=D, N_true=len(gp), N_hat=N_hat,
-                recall_hat=recall_hat, recall_hat_pc=recall_hat_pc,
+    return dict(K=K, D=D, N_true=len(gp), N_chao=N_chao, N_lo=N_lo, N_hi=N_hi,
+                N_ll=N_ll, p_hat=p_hat, p_lo=p_lo, p_hi=p_hi,
+                recall_point=recall_point, recall_lo=recall_lo, recall_hi=recall_hi,
                 true_recall=true_recall, true_precision=true_precision,
                 mean_overlap=mean_overlap)
 
@@ -196,45 +313,48 @@ def main() -> int:
     ap.add_argument("--dataset", choices=["febrl3", "dblp-acm"], default="febrl3")
     ap.add_argument("--datasets-dir", type=Path, default=Path("datasets"))
     ap.add_argument("--max-entities", type=int, default=80)
-    ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--full", action="store_true", help="use the FULL dataset")
     ap.add_argument("--groups", type=int, default=3,
-                    help="number of disjoint field groups (decorrelated matchers)")
+                    help="number of disjoint field groups (>=3 enables log-linear)")
+    ap.add_argument("--precision-sample", type=int, default=80,
+                    help="# pairs labelled by the oracle to estimate precision")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    rows = []
-    for seed in range(args.seeds):
-        real = _load_real(args.dataset, args.datasets_dir, args.max_entities, seed)
-        if real is None:
-            print(f"  [{args.dataset}] unavailable — install recordlinkage / fetch DBLP-ACM.")
-            return 0
-        records, gold = real
-        rows.append(run(records, gold, n_groups=args.groups))
+    max_ent = 10 ** 9 if args.full else args.max_entities
+    real = _load_real(args.dataset, args.datasets_dir, max_ent, args.seed)
+    if real is None:
+        print(f"  [{args.dataset}] unavailable — install recordlinkage / fetch DBLP-ACM.")
+        return 0
+    records, gold = real
+    r = run(records, gold, n_groups=args.groups,
+            n_precision=args.precision_sample, seed=args.seed)
 
-    print(f"\n  dataset={args.dataset}  (K decorrelated field-matchers, "
-          f"capture-recapture recall estimate vs truth)\n")
-    print(f"  {'seed':>4} {'K':>3} {'found':>6} {'N_true':>7} {'N_hat':>7} "
-          f"{'recall_hat':>10} {'recall_hat_pc':>13} {'true_recall':>11} {'prec':>6} {'overlap':>8}")
-    for s, r in enumerate(rows):
-        print(f"  {s:>4} {r['K']:>3} {r['D']:>6} {r['N_true']:>7} {r['N_hat']:>7.0f} "
-              f"{r['recall_hat']:>10.3f} {r['recall_hat_pc']:>13.3f} "
-              f"{r['true_recall']:>11.3f} {r['true_precision']:>6.2f} {r['mean_overlap']:>8.2f}")
-
-    # tracking: does recall_hat_pc (precision-corrected) track true_recall?
-    rh = np.array([r["recall_hat_pc"] for r in rows])
-    tr = np.array([r["true_recall"] for r in rows])
-    mae = float(np.mean(np.abs(rh - tr)))
-    print(f"\n  mean |recall_hat_pc - true_recall| = {mae:.3f}")
-    bias = float(np.mean(rh - tr))
-    print(f"  mean signed bias (est - true)        = {bias:+.3f}  "
-          f"({'optimistic' if bias > 0 else 'conservative'})")
-    print("\n  KILL-CRITERION:")
-    if mae < 0.10:
-        print(f"   PASS — capture-recapture tracks true recall within {mae:.3f} MAE "
-              "with no labels. An unsupervised recall gauge looks viable.")
+    scope = "FULL" if args.full else f"{args.max_entities}-entity subsample"
+    print(f"\n  dataset={args.dataset} ({scope})  N={len(records)}  "
+          f"K={r['K']} disjoint field-group matchers  precision-sample={args.precision_sample}\n")
+    print(f"  population (true pairs):  N_true={r['N_true']}   found(D)={r['D']}")
+    print(f"    Chao2  N_hat = {r['N_chao']:.0f}   95% CI [{r['N_lo']:.0f}, {r['N_hi']:.0f}]")
+    if r['N_ll'] == r['N_ll']:    # not nan
+        print(f"    log-linear (indep) N_hat = {r['N_ll']:.0f}")
     else:
-        print(f"   FAIL — estimate is off by {mae:.3f} MAE; the independence/"
-              "heterogeneity bias dominates (see overlap column). Not yet usable.")
-    print()
+        print(f"    log-linear (indep) N_hat = n/a (needs K>=3 non-empty groups)")
+    print(f"  precision (sampled, n={args.precision_sample}): "
+          f"p_hat={r['p_hat']:.3f}  Wilson CI [{r['p_lo']:.3f}, {r['p_hi']:.3f}]  "
+          f"(true={r['true_precision']:.3f})")
+    print(f"  matcher overlap (indep diagnostic): {r['mean_overlap']:.2f}\n")
+    print(f"  RECALL estimate (no labels):  point={r['recall_point']:.3f}   "
+          f"95% CI [{r['recall_lo']:.3f}, {r['recall_hi']:.3f}]")
+    print(f"  >>> CONSERVATIVE lower bound (safety): recall >= {r['recall_lo']:.3f}")
+    print(f"  TRUE recall (gold, never seen):       {r['true_recall']:.3f}")
+
+    covered = r['recall_lo'] <= r['true_recall'] <= r['recall_hi']
+    safe = r['recall_lo'] <= r['true_recall'] + 1e-9
+    print("\n  VERDICT:")
+    print(f"   - 95% CI covers true recall:            {'YES' if covered else 'NO'}")
+    print(f"   - conservative bound is a true LOWER bound: {'YES' if safe else 'NO (optimistic — unsafe)'}")
+    print("   (Conservative bound is sound w.r.t. sampling variance; heterogeneity\n"
+          "    — pairs hard for EVERY group — can still make it optimistic. See overlap.)\n")
     return 0
 
 
