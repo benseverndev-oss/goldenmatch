@@ -211,21 +211,27 @@ def _dump_bench_pairs(
     Each file is written atomically (``.tmp`` then ``os.replace``) so a reader
     never sees a partial parquet.
     """
-    os.makedirs(dump_dir, exist_ok=True)
-    for name, pairs in (
-        ("candidate_pairs.parquet", candidate_pairs),
-        ("emitted_pairs.parquet", emitted_pairs),
-    ):
-        a_col = [p[0] for p in pairs]
-        b_col = [p[1] for p in pairs]
-        frame = pl.DataFrame(
-            {"a": a_col, "b": b_col},
-            schema={"a": pl.Int64, "b": pl.Int64},
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        for name, pairs in (
+            ("candidate_pairs.parquet", candidate_pairs),
+            ("emitted_pairs.parquet", emitted_pairs),
+        ):
+            a_col = [p[0] for p in pairs]
+            b_col = [p[1] for p in pairs]
+            frame = pl.DataFrame(
+                {"a": a_col, "b": b_col},
+                schema={"a": pl.Int64, "b": pl.Int64},
+            )
+            final_path = os.path.join(dump_dir, name)
+            tmp_path = final_path + ".tmp"
+            frame.write_parquet(tmp_path)
+            os.replace(tmp_path, final_path)
+    except Exception as exc:  # observability must never abort a dedupe run
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: failed to write pair dump to %s: %s",
+            dump_dir, exc,
         )
-        final_path = os.path.join(dump_dir, name)
-        tmp_path = final_path + ".tmp"
-        frame.write_parquet(tmp_path)
-        os.replace(tmp_path, final_path)
 
 
 def _extract_matchkey_columns(config: GoldenMatchConfig) -> list[str]:
@@ -1372,8 +1378,9 @@ def _run_dedupe_pipeline(
     # then dump both as parquet AFTER the loop. Fully no-op (no accumulation,
     # no I/O) when the env var is unset; every line below is guarded by it.
     _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
-    _bench_candidate_pairs: set[tuple[int, int]] = set()
-    _bench_emitted_pairs: set[tuple[int, int]] = set()
+    if _bench_dump_dir:
+        _bench_candidate_pairs: set[tuple[int, int]] = set()
+        _bench_emitted_pairs: set[tuple[int, int]] = set()
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
