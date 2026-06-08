@@ -175,6 +175,56 @@ def loglinear_independence(histories: list[tuple[int, ...]], K: int) -> float:
     return len(histories) + missing    # D observed + estimated hidden cell
 
 
+def fp_robust_recall(counts: dict, K: int, z: float = 1.96):
+    """FP-AWARE recall estimate via the FP-free higher-order capture cells.
+
+    Key insight: with DECORRELATED matchers, false positives are almost all
+    SINGLETONS (a spurious token-match in one field group rarely coincides in
+    another), so the multi-capture cells f_k (k>=2) are ~free of FPs. Fit the
+    true-pair capture model from ONLY those reliable cells, ignoring the
+    FP-contaminated singleton cell f_1 entirely.
+
+    Under a homogeneous binomial capture model, E[f_k] = N_true * C(K,k)
+    p^k (1-p)^(K-k), so  log f_k - log C(K,k) = const + k*log(p/(1-p)). Regress
+    that on k for k>=2 -> slope = logit(p) -> recall of the union = P(captured>=1)
+    = 1 - (1-p)^K. The hidden true pairs (f_0) and true singletons (f_1) are
+    extrapolated by the model; the observed (contaminated) f_1 is never used.
+
+    Caveat: still assumes capture HOMOGENEITY across true pairs (heterogeneity ->
+    optimistic) and that FPs don't co-occur across matchers (decorrelation)."""
+    import math
+    ck = {k: 0 for k in range(1, K + 1)}
+    for v in counts.values():
+        if 1 <= v <= K:
+            ck[v] += 1
+    pts = [(k, ck[k]) for k in range(2, K + 1) if ck[k] > 0]  # FP-free cells
+    if len(pts) < 2:
+        return dict(recall=float("nan"), recall_lo=float("nan"),
+                    recall_hi=float("nan"), p=float("nan"), N_hat=float("nan"))
+    xs = np.array([k for k, _ in pts], dtype=float)
+    ys = np.array([math.log(c) - math.log(math.comb(K, k)) for k, c in pts])
+    A = np.vstack([np.ones_like(xs), xs]).T
+    coef, *_ = np.linalg.lstsq(A, ys, rcond=None)
+    b = coef[1]
+    p = 1.0 / (1.0 + math.exp(-b))
+    recall = 1.0 - (1.0 - p) ** K
+    # slope SE -> CI on p -> CI on recall (lower p => lower recall = conservative)
+    n = len(xs)
+    if n > 2:
+        resid = ys - A @ coef
+        sxx = float(((xs - xs.mean()) ** 2).sum())
+        se_b = math.sqrt((resid @ resid) / (n - 2) / sxx) if sxx > 0 else abs(b)
+    else:
+        se_b = abs(b) * 0.5            # crude for the 2-point (K=3) case
+    p_lo = 1.0 / (1.0 + math.exp(-(b - z * se_b)))
+    p_hi = 1.0 / (1.0 + math.exp(-(b + z * se_b)))
+    P_ge2 = 1.0 - (1.0 - p) ** K - K * p * (1.0 - p) ** (K - 1)
+    c_ge2 = sum(ck[k] for k in range(2, K + 1))
+    N_hat = c_ge2 / P_ge2 if P_ge2 > 1e-9 else float("nan")
+    return dict(recall=recall, recall_lo=1.0 - (1.0 - p_lo) ** K,
+                recall_hi=1.0 - (1.0 - p_hi) ** K, p=p, N_hat=N_hat)
+
+
 def wilson_ci(k: int, n: int, z: float = 1.96):
     """Wilson score interval for a binomial proportion (precision sampling)."""
     if n == 0:
@@ -277,6 +327,7 @@ def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: in
     N_var = chao2_var(counts, K)
     N_lo, N_hi = log_ci(N_chao, D, N_var)
     N_ll = loglinear_independence(histories, K)
+    fpr = fp_robust_recall(counts, K)   # FP-aware estimate (ignores contaminated f1)
 
     # ----- REAL precision sampling (oracle on a small sample only) -----
     p_hat, p_lo, p_hi = sample_precision(union, gp, n_precision, rng)
@@ -304,7 +355,7 @@ def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: in
     return dict(K=K, D=D, N_true=len(gp), N_chao=N_chao, N_lo=N_lo, N_hi=N_hi,
                 N_ll=N_ll, p_hat=p_hat, p_lo=p_lo, p_hi=p_hi,
                 recall_point=recall_point, recall_lo=recall_lo, recall_hi=recall_hi,
-                true_recall=true_recall, true_precision=true_precision,
+                fpr=fpr, true_recall=true_recall, true_precision=true_precision,
                 mean_overlap=mean_overlap)
 
 
@@ -343,18 +394,29 @@ def main() -> int:
           f"p_hat={r['p_hat']:.3f}  Wilson CI [{r['p_lo']:.3f}, {r['p_hi']:.3f}]  "
           f"(true={r['true_precision']:.3f})")
     print(f"  matcher overlap (indep diagnostic): {r['mean_overlap']:.2f}\n")
-    print(f"  RECALL estimate (no labels):  point={r['recall_point']:.3f}   "
-          f"95% CI [{r['recall_lo']:.3f}, {r['recall_hi']:.3f}]")
-    print(f"  >>> CONSERVATIVE lower bound (safety): recall >= {r['recall_lo']:.3f}")
-    print(f"  TRUE recall (gold, never seen):       {r['true_recall']:.3f}")
+    fpr = r['fpr']
+    print(f"  RECALL — naive (Chao2 on raw union, FP-contaminated):")
+    print(f"      point={r['recall_point']:.3f}  95% CI [{r['recall_lo']:.3f}, {r['recall_hi']:.3f}]")
+    print(f"  RECALL — FP-aware (higher-order cells, p={fpr['p']:.3f}, ignores f1):")
+    if fpr['recall'] == fpr['recall']:   # not nan
+        print(f"      point={fpr['recall']:.3f}  95% CI [{fpr['recall_lo']:.3f}, {fpr['recall_hi']:.3f}]")
+        print(f"      >>> CONSERVATIVE lower bound (safety): recall >= {fpr['recall_lo']:.3f}")
+    else:
+        print(f"      n/a (need >=2 multi-capture cells; raise K / use a wider-schema dataset)")
+    print(f"  TRUE recall (gold, never seen):  {r['true_recall']:.3f}")
 
-    covered = r['recall_lo'] <= r['true_recall'] <= r['recall_hi']
-    safe = r['recall_lo'] <= r['true_recall'] + 1e-9
-    print("\n  VERDICT:")
-    print(f"   - 95% CI covers true recall:            {'YES' if covered else 'NO'}")
-    print(f"   - conservative bound is a true LOWER bound: {'YES' if safe else 'NO (optimistic — unsafe)'}")
-    print("   (Conservative bound is sound w.r.t. sampling variance; heterogeneity\n"
-          "    — pairs hard for EVERY group — can still make it optimistic. See overlap.)\n")
+    print("\n  VERDICT (FP-aware vs naive):")
+    if fpr['recall'] == fpr['recall']:
+        err_fp = abs(fpr['recall'] - r['true_recall'])
+        err_naive = abs(r['recall_point'] - r['true_recall'])
+        print(f"   - FP-aware |err|  = {err_fp:.3f}   (naive |err| = {err_naive:.3f})")
+        print(f"   - FP-aware fixes the contamination: "
+              f"{'YES' if err_fp < err_naive - 0.05 else 'NO / marginal'}")
+        safe = fpr['recall_lo'] <= r['true_recall'] + 1e-9
+        print(f"   - conservative bound is a true LOWER bound: "
+              f"{'YES' if safe else 'NO (optimistic — unsafe)'}")
+    print("   (FP-aware ignores the contaminated singleton cell; residual error is\n"
+          "    capture HETEROGENEITY — pairs hard for every group — not FPs.)\n")
     return 0
 
 

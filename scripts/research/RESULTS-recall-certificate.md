@@ -3,14 +3,15 @@
 Runner: `scripts/research/recall_certificate.py`. numpy + the existing real-data
 loaders; real Febrl3 / DBLP-ACM subsamples, 3 seeds. 2026-06-07.
 
-> **Verdict: PASS on small high-precision subsamples, FAIL at full scale.**
-> On 60–80-entity subsamples the capture-recapture recall estimate tracks true
-> recall within ~0.03–0.09 MAE with no labels. But the full-scale runs (added per
-> the follow-up) **break**: the matchers' precision craters at scale, false
-> positives contaminate the population estimator, and the recall estimate is badly
-> off (Febrl3 0.61 est vs 0.95 true). The conservative lower bound never gave
-> false assurance (stayed ≤ true recall) but is uselessly loose. Making it work at
-> scale needs **FP-aware (latent-class) capture-recapture** — real open work.
+> **Verdict (current): the FP-aware estimator rescues the full-scale POINT
+> estimate; the conservative SAFETY bound is improved but not yet guaranteed.**
+> Naive Chao2-on-the-raw-union breaks at scale (FP contamination: Febrl3 0.64 est
+> vs 0.95 true). The FP-aware estimator — fit the true-pair capture model from the
+> FP-free higher-order cells (k≥2), ignore the contaminated singleton cell —
+> brings the full-scale point estimate to **0.966 vs 0.953 true (err 0.013)** on
+> Febrl3 with no labels. Remaining: the conservative lower bound can be mildly
+> optimistic under capture heterogeneity (K=4 bound 0.963 > 0.953 true; K=5 safe),
+> and narrow schemas (≤4 fields) can't form enough decorrelated-precise groups.
 
 ## Why this idea (derived from two failed arcs)
 
@@ -118,6 +119,46 @@ captured pair as latent true/false; model true-pair capture probabilities and th
 spurious-FP process jointly) — a real research step, not a tweak. Until then, the
 subsample result should be read as "the idea is sound only when matchers are
 high-precision," which is itself the hard ER problem.
+
+## FP-aware (latent-class) estimator — the rescue
+
+The full-scale failure was FP contamination of Chao2. Fix (the latent-class idea
+made concrete): with DECORRELATED matchers, false positives are almost all
+SINGLETONS (a spurious token match in one field group rarely coincides in
+another), so the multi-capture cells f_k (k≥2) are ~FP-free. Fit the true-pair
+capture model from ONLY those cells and ignore the contaminated f_1. Under a
+homogeneous binomial capture model, `log f_k - log C(K,k) = const + k·logit(p)`,
+so regressing on k (k≥2) gives p, and recall of the union = 1 − (1−p)^K.
+
+Full-scale results (FP-aware vs naive):
+
+| Full dataset | K | naive recall (err) | **FP-aware recall (err)** | cons. bound | TRUE recall |
+|---|---:|---|---|---:|---:|
+| Febrl3 | 4 | 0.642 (0.311) | **0.966 (0.013)** | 0.963 (unsafe by 0.01) | 0.953 |
+| Febrl3 | 5 | 0.761 (0.107) | **0.831 (0.037)** | 0.687 (safe) | 0.868 |
+| DBLP-ACM | 3 | 0.017 (0.98) | 0.009 (0.99) | 0.000 (safe, useless) | 1.000 |
+
+**What worked:** ignoring f_1 collapsed the full-scale point error from 0.31 →
+0.01 on Febrl3. The point recall estimate is now accurate at full scale with no
+labels — the dominant (FP-contamination) failure is fixed.
+
+**What's still open:**
+1. **The conservative bound is not reliably safe.** The homogeneous-p model is
+   mildly *optimistic* under capture heterogeneity (easy pairs over-represented in
+   the fitted cells), and with few capture cells (low K) the slope CI is
+   overconfident — at K=4 the "lower bound" (0.963) sat *above* true recall
+   (0.953). K=5 (more cells → wider CI) restored safety. A genuinely safe bound
+   needs a heterogeneity-robust model (mixture-of-p / non-parametric lower bound),
+   not the homogeneous fit. This is the remaining research.
+2. **Narrow schemas fail.** DBLP-ACM (4 fields) can't form ≥3 decorrelated-precise
+   groups; the matchers degenerate (p≈0). Needs a richer feature space (more
+   fields, or multi-modal decorrelation: blocking-axis / encoder diversity).
+3. Still assumes matcher **independence** within each class; correlated true-pair
+   captures would bias p.
+
+**Net:** the recall *point* estimate is now viable at full scale on a wide-schema
+dataset — a real step from "broken." The recall *certificate* (a trustworthy lower
+bound) is not done: heterogeneity-robust bounding is the open problem.
 
 ## Next levers (if pursued)
 
