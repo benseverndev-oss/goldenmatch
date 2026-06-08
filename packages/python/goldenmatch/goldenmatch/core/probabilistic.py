@@ -442,13 +442,25 @@ def _sample_blocked_pairs(
 ) -> list[tuple[int, int]]:
     """Sample within-block pairs for EM training.
 
-    This produces a much higher match rate than random sampling because
-    records in the same block are more likely to be true matches.
+    Within-block pairs have a far higher true-match rate than random pairs, so
+    they're what EM needs to estimate m. We only need ``n_pairs`` of them. The
+    blocks are visited in RANDOM order and we STOP once enough pairs are
+    gathered — the old loop enumerated EVERY within-block pair across EVERY
+    block (O(Σ size_i^2): ~140M tuples on a 6M-row / 150K-block run) and then
+    sampled down to ``n_pairs``, which dominated ``train_em`` wall at scale
+    (~110s of a 117s EM step). A few dozen random blocks give a representative,
+    block-stratified sample. Deterministic (fixed ``seed``).
     """
     rng = random.Random(seed)
+    order = list(range(len(blocks)))
+    rng.shuffle(order)
+    # Headroom over n_pairs so the post-dedup downsample still has enough to
+    # draw from even when blocks overlap or are tiny.
+    target = n_pairs * 3
     all_block_pairs: list[tuple[int, int]] = []
 
-    for block in blocks:
+    for bi in order:
+        block = blocks[bi]
         block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
         row_ids = block_df["__row_id__"].to_list()
         if len(row_ids) < 2:
@@ -462,6 +474,8 @@ def _sample_blocked_pairs(
             for j in range(i + 1, len(sampled_ids)):
                 all_block_pairs.append((min(sampled_ids[i], sampled_ids[j]),
                                         max(sampled_ids[i], sampled_ids[j])))
+        if len(all_block_pairs) >= target:
+            break
 
     # Deduplicate and sample down if too many
     all_block_pairs = list(set(all_block_pairs))
