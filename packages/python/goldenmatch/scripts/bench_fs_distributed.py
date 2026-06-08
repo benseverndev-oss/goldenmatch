@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import random
 import resource
-import sys
 import time
 
 import polars as pl

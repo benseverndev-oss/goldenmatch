@@ -974,6 +974,7 @@ class TestEstimateMFromLabels:
 class TestLabelAdapters:
     def test_labels_from_corrections_keeps_approve(self):
         from types import SimpleNamespace as NS
+
         from goldenmatch.core.probabilistic import labels_from_corrections
         corr = [
             NS(id_a=1, id_b=2, decision="approve"),
@@ -984,6 +985,7 @@ class TestLabelAdapters:
 
     def test_labels_from_review_items_keeps_approved(self):
         from types import SimpleNamespace as NS
+
         from goldenmatch.core.probabilistic import labels_from_review_items
         items = [
             NS(id_a=1, id_b=2, status="approved"),
@@ -994,6 +996,7 @@ class TestLabelAdapters:
 
     def test_labels_from_memory_store_duck_typed(self):
         from types import SimpleNamespace as NS
+
         from goldenmatch.core.probabilistic import labels_from_memory_store
         store = NS(get_corrections=lambda ds: [
             NS(id_a=7, id_b=8, decision="approve"),
@@ -1158,8 +1161,8 @@ class TestNativeFSParity:
         })
 
     def test_native_matches_numpy_on_clean_data(self, monkeypatch):
-        from goldenmatch.core import probabilistic as p
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core import probabilistic as p
         from goldenmatch.core.blocker import build_blocks
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
         df = self._clean_df()
@@ -1180,8 +1183,8 @@ class TestNativeFSParity:
         assert scorer.__name__ == "_native"
 
     def test_native_respects_exclude(self, monkeypatch):
-        from goldenmatch.core import probabilistic as p
         from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+        from goldenmatch.core import probabilistic as p
         from goldenmatch.core.blocker import build_blocks
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
         df = self._clean_df()
