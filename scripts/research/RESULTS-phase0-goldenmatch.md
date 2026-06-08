@@ -90,6 +90,55 @@ Point estimate only (the safe lower bound needs the sub-threshold stratum =
 blocker-provenance plumbing, Phase 2). Single-run multi_pass provenance (vs the
 current per-matchkey re-runs) is the Phase-2 perf optimization.
 
+## Phase 2 — audit-calibrated safe bound in the package
+
+Landed in `packages/python/goldenmatch/`:
+- `core/recall_certificate.py`: added `audit_calibrated_bound(...)` + `wilson_ci(...)`
+  — the safe lower bound (Wilson-lower on stratum-A precision, Wilson-upper on
+  stratum-B miss rate; blocking-completeness via the stratum-C check). Pure;
+  9 unit tests total (incl. the safety property `recall_lower <= true` and
+  tightens-with-labels).
+- `cli/evaluate.py`: `--certify --audit-out sample.csv` emits a stratified audit
+  sample (A = full-config matched, B = sub-threshold = relaxed-threshold matches
+  minus strict, C = no-feature pairs) + a `.meta.json` of stratum sizes; the
+  steward labels the `is_match` column; `--certify --audit-in sample.csv` prints
+  the audit-calibrated SAFE lower bound. Round-trip verified end-to-end: safe
+  bound 95.6% <= true recall 1.0, blocking-completeness check passes.
+
+Design fix surfaced during integration: stratum A must be the **full-config**
+matched set (high precision), not the union of low-precision decorrelated systems
+(whose precision is ~0, making `found = precision*|A|` collapse). The decorrelated
+systems are for the point estimate; the audit strata come from the full config.
+
+### The emit/ingest flow IS the labeling-surface integration
+
+`--audit-out` -> label -> `--audit-in` is the non-interactive, testable form of the
+Inspector loop: select an audit sample, a steward labels it, compute the bound.
+The Inspector GUI / Learning-Memory path is the same flow with a UI writing the
+labels (the sampled pairs become review items; their approve/reject decisions are
+the `is_match` labels).
+
+## Staged (NOT shipped — cannot be verified in this environment)
+
+These are thin wrappers over the now-tested core; deliberately not shipped as
+unverified production surface code (this env lacks `fastapi`/`mcp`, so their test
+suites can't run). Exact wiring:
+- **Single-run blocker provenance**: requires propagating the matchkey id into
+  `EngineResult.scored_pairs` (`(a,b,score)` -> `(a,b,score,matchkey)`) so one
+  pipeline pass yields capture histories. Signature change ripples across
+  scorer/cluster/chunked — risky; the per-system runs used today give the same
+  provenance correctly, just slower. Defer behind a measured need.
+- **MCP tool**: add a `certify_recall` Tool to `AGENT_TOOLS` (`mcp/agent_tools.py`)
+  + dispatch handler that loads the df+config, calls the CLI's `_build_systems` +
+  `_system_pairsets` + `estimate_recall`, returns the dict; bump the server card
+  tool count.
+- **REST endpoint**: add `POST /certify-recall` to `api/server.py` (auth-gated)
+  returning the same dict.
+- **Controller signal**: surface the estimate via `web/controller_telemetry.py::
+  serialize_telemetry` (the single cross-surface serializer) and raise a
+  low-recall warning alongside `ControllerNotConfidentError`. Note: computing the
+  estimate inside auto-config costs K extra runs, so gate it behind an opt-in.
+
 ## Conclusion
 
 The estimator works on GoldenMatch's real pipeline output, not just synthetic

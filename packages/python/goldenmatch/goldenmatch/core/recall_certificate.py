@@ -115,6 +115,66 @@ def estimate_recall(pairsets: list[set[Pair]]) -> RecallEstimate:
     return RecallEstimate(recall, K, len(union), p, mean_overlap, hist, True, note)
 
 
+def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion k/n."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    d = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = (z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)) / d
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+@dataclass
+class RecallCertificate:
+    """Audit-calibrated recall certificate. `recall_lower` is a SAFE lower bound
+    (conditional on blocking completeness — that true matches share >=1 feature,
+    i.e. appear as a candidate in some system). A capture-data-only safe bound is
+    impossible (the invisible-to-every-system tail is unbounded); the audit
+    measures the miss mass directly instead."""
+    recall: float | None
+    recall_lower: float | None      # the safety bound
+    recall_upper: float | None
+    found_pairs: int                # |stratum A| (matched union)
+    candidate_pairs: int            # |stratum B| (sub-threshold candidates)
+    audit_labels: int
+    blocking_complete: bool | None  # stratum-C check (None = not run)
+    note: str = ""
+
+
+def audit_calibrated_bound(
+    found_size: int, sub_size: int,
+    a_true: int, a_n: int,          # audit of stratum A (matched): true count / sampled
+    b_true: int, b_n: int,          # audit of stratum B (sub-threshold): true / sampled
+    c_true: int | None = None, c_n: int | None = None,  # stratum C (no-feature) check
+) -> RecallCertificate:
+    """Compute a SAFE recall lower bound from stratified audit counts.
+
+    recall = found / (found + missed), where found = precision(A)*|A| and
+    missed = true_rate(B)*|B|. The safe bound under-counts found (Wilson-lower on
+    A) and over-counts missed (Wilson-upper on B). Stratum C (pairs sharing no
+    feature) is assumed non-matching under blocking completeness; if audited
+    (c_n given) and any are true, the assumption is flagged violated.
+    """
+    pA, pA_lo, pA_hi = (a_true / a_n if a_n else 0.0, *wilson_ci(a_true, a_n))
+    pB, pB_lo, pB_hi = (b_true / b_n if b_n else 0.0, *wilson_ci(b_true, b_n))
+
+    def _rec(found, missed):
+        return found / (found + missed) if (found + missed) > 0 else None
+
+    recall = _rec(pA * found_size, pB * sub_size)
+    recall_lo = _rec(pA_lo * found_size, pB_hi * sub_size)      # conservative
+    recall_hi = _rec(pA_hi * found_size, pB_lo * sub_size)      # optimistic
+    blocking_complete = None if c_n is None else (c_true == 0)
+    note = ("safe lower bound under blocking completeness; tightens with more "
+            "audit labels")
+    if blocking_complete is False:
+        note += "; WARNING: blocking-completeness check FAILED (true pairs share no feature) -> bound NOT safe"
+    return RecallCertificate(recall, recall_lo, recall_hi, found_size, sub_size,
+                             a_n + b_n + (c_n or 0), blocking_complete, note)
+
+
 def clusters_to_pairs(clusters) -> set[Pair]:
     """Convert a dedupe `clusters` dict (cluster -> {'members': [row_id,...]}) to
     the set of within-cluster (row_id, row_id) pairs."""
