@@ -165,6 +165,47 @@ measured wall-clock at that scale.
 
 ---
 
+## Fellegi-Sunter (probabilistic) matchkeys at scale
+
+`type: probabilistic` (the EM-trained Fellegi-Sunter matchkey) rides the
+**`bucket`** backend's hash-bucketed parallel orchestration — the same path
+weighted matchkeys use — so it scales single-node the same way. Two perf
+levers are specific to FS:
+
+- **Native FS kernel (opt-in, `GOLDENMATCH_FS_NATIVE=1`).** A Rust per-pair
+  scorer (`goldenmatch-native::score_block_pairs_fs`) replaces the numpy NxN
+  matrices. Default OFF — FS's discrete comparison levels amplify tiny
+  rapidfuzz float differences at exact `partial_threshold` values, so numpy is
+  the reproducible default and native is an accept-the-tradeoff speedup.
+- **EM trains on a block-stratified sample**, not the full block universe
+  (`_sample_blocked_pairs` early-exits) — without that, `train_em` enumerates
+  every within-block pair (`O(Σ size_i²)`) and dominates the wall at scale.
+
+### Measured — 6M rows, `backend=bucket`, 16c/64GB (`large-new-64GB`)
+
+Synthetic person data (5M base + 1M injected duplicates, entity-clique ground
+truth), `dedupe_df` wall (gen excluded). Both runs produce byte-identical
+clusters, so F1 is the same; native only changes the scoring step.
+
+| FS scoring path | Wall | Peak RSS | `bucket_score` | F1 (P/R) |
+|---|---|---|---|---|
+| numpy (default)            | **288.5 s** | 11.3 GB | 136.6 s | 1.000 (1.000/1.000) |
+| native (`FS_NATIVE=1`)     | **162.6 s** | 11.3 GB | **12.7 s** | 1.000 (1.000/1.000) |
+
+The native kernel is **~10.8× on the scoring step** (136.6 s → 12.7 s) — larger
+than its DBLP-ACM micro-bench (2.9×) because this shape is 125K tiny blocks
+(~48 rows each), exactly where the numpy path's per-block matrix-allocation
+overhead dominates and the Rust per-pair loop removes it. By Amdahl the total
+is 1.77× (the rest is GoldenCheck scan + clustering + golden, unchanged by the
+kernel). Reproduce: `bench-fs-distributed.yml` (`workflow_dispatch`).
+
+Recall the prior, slower figures (numpy 388 s / native 269 s, F1 0.825) were
+pre-fix: `train_em` block-pair sampling was un-bounded (PR #803, ~100 s saved
+and peak RSS halved) and the bench's F1 was scored against a *star* ground
+truth instead of the entity *clique* (PR #802).
+
+---
+
 ## Block-size failure modes
 
 The biggest single performance lever is the blocking key. The backends
