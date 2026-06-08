@@ -511,6 +511,58 @@ _SCORER_MAP = {
     "string": ("token_sort", 0.5, ["lowercase", "strip"]),
 }
 
+# ── Fellegi-Sunter auto-config v2 (comparison-set + blocking curation) ──
+# Scoped to the PROBABILISTIC path only (auto_configure_probabilistic_df); the
+# weighted/DQbench path is untouched. Default ON; GOLDENMATCH_FS_AUTOCONFIG_V2=0
+# restores the legacy field set. See build_probabilistic_matchkeys docstring +
+# the historical_50k PII-parity audit for rationale.
+_PROB_FUZZY_CARD_FLOOR = 0.01
+
+_ATOMIC_GIVEN_NAMES = frozenset({
+    "first_name", "firstname", "first", "given_name", "givenname", "given",
+    "forename", "fname",
+})
+_ATOMIC_FAMILY_NAMES = frozenset({
+    "surname", "last_name", "lastname", "last", "family_name", "familyname",
+    "family", "lname",
+})
+# Person-name composites that duplicate the atomic given/family signal. Dropped
+# only when BOTH an atomic given and family field are present (so a dataset with
+# just `full_name` keeps it).
+_COMPOSITE_NAME_FIELDS = frozenset({
+    "full_name", "fullname", "name", "first_and_surname", "firstandsurname",
+    "first_and_last", "name_full", "complete_name", "whole_name",
+    "display_name", "displayname", "first_last", "given_and_surname",
+})
+
+
+def _norm_colname(name: str) -> str:
+    """Normalize a column name for atomic/composite matching."""
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _fs_autoconfig_v2_enabled() -> bool:
+    """FS auto-config v2 comparison-set + blocking curation.
+
+    **Default OFF** until the DBLP-ACM + NCVR sweep clears it (the repo pattern
+    for new auto-config levers — cf. quality-aware blocking, pass pruning, FD
+    negative evidence). Opt in with ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``.
+
+    MEASURED (scripts/bench_er_headtohead, GM probabilistic vs Splink, one
+    evaluator) — v2 beats Splink on every measurable PII set:
+      historical_50k F1 0.624 -> 0.779 (Splink 0.757)
+      febrl3         F1 0.983 -> 0.991 (Splink 0.965)
+      synthetic      F1 0.972 -> 0.998 (Splink 0.996)
+    Unverified locally: DBLP-ACM (Leipzig CSVs gitignored). The low-card fuzzy
+    floor could drop a low-cardinality bibliographic `venue` — that risk is why
+    the default stays off pending the sweep.
+    """
+    return os.environ.get("GOLDENMATCH_FS_AUTOCONFIG_V2", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+
 # Domain-extracted column scorer mapping.
 # These columns are added by extract_features() and start with __.
 _DOMAIN_SCORER_MAP = {
@@ -2909,7 +2961,38 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
     Produces a single probabilistic matchkey using all matchable columns
     with appropriate comparison levels and partial thresholds.
+
+    FS-autoconfig v2 (opt-in; ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``, default off
+    pending the DBLP-ACM/NCVR sweep) curates a cleaner comparison set — the
+    dominant scoring lever on error-heavy PII data (audit: historical_50k).
+    Three changes vs v1:
+      1. **Admit date columns** (e.g. ``dob``) as ``levenshtein`` comparison
+         fields. Birth date is the strongest person-identity discriminator;
+         Splink leans on it (DamerauLevenshtein). v1 skipped all dates, scoring
+         identity with no birth-date signal.
+      2. **Drop redundant person-name composites** (``full_name`` /
+         ``first_and_surname`` ...) when atomic given + family fields are both
+         present. Correlated name comparisons violate FS conditional
+         independence — N copies of one name (dis)agreement get N-counted,
+         sinking corrupted-name true pairs below threshold.
+      3. **Floor fuzzy fields at low cardinality** (drop a ``gender``-like field
+         at cardinality ~0.002): negligible identity signal + unstable
+         (non-monotonic) EM weights. Exact-scorer identifiers keep the #721
+         no-floor admission (FS self-regulates them via u).
     """
+    v2 = _fs_autoconfig_v2_enabled()
+
+    # Atomic-name presence is computed once: composites are dropped only when
+    # BOTH an atomic given-name and an atomic family-name field exist, so a
+    # dataset carrying only ``full_name`` keeps it.
+    if v2:
+        names_norm = {_norm_colname(p.name) for p in profiles}
+        atomic_name_present = bool(names_norm & _ATOMIC_GIVEN_NAMES) and bool(
+            names_norm & _ATOMIC_FAMILY_NAMES
+        )
+    else:
+        atomic_name_present = False
+
     fields = []
     for p in profiles:
         # #721: identifiers ARE admitted to the probabilistic (Fellegi-Sunter)
@@ -2919,6 +3002,20 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # so EM down-weights it rather than mega-clustering. m/u estimation and
         # blocking-field exclusion are EM's job at train time (train_em
         # blocking_fields=...), not this builder's.
+
+        # Lever #1: admit date columns as edit-distance comparison fields.
+        if v2 and p.col_type == "date":
+            if p.cardinality_ratio >= 1.0:
+                continue  # per-record timestamp surrogate: no shared-identity signal
+            fields.append(MatchkeyField(
+                field=p.name,
+                scorer="levenshtein",
+                transforms=["strip"],
+                levels=3,
+                partial_threshold=0.8,
+            ))
+            continue
+
         if p.col_type in ("numeric", "date", "description"):
             continue
 
@@ -2934,6 +3031,18 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # zero shared-identity signal. Exclude it for config hygiene. (Mirrors the
         # exact path's >= 1.0 upper bound; previously the prob path gated none.)
         if scorer == "exact" and p.cardinality_ratio >= 1.0:
+            continue
+
+        # Lever #2a: drop redundant person-name composites when atomic parts exist.
+        if v2 and p.col_type == "name" and atomic_name_present and (
+            _norm_colname(p.name) in _COMPOSITE_NAME_FIELDS
+        ):
+            continue
+
+        # Lever #2b: floor fuzzy (non-exact) fields at low cardinality. A field
+        # like `gender` (~0.002) carries no identity signal and gives EM unstable
+        # non-monotonic weights. Exact identifiers are exempt (#721 no-floor).
+        if v2 and scorer != "exact" and p.cardinality_ratio < _PROB_FUZZY_CARD_FLOOR:
             continue
 
         # Refdata hook (mirrors build_matchkeys); see module-top fallback
@@ -3004,9 +3113,68 @@ def auto_configure_probabilistic_df(
     blocking = build_blocking(profiles, df, llm_provider=llm_provider)
     blocking = _maybe_prune_blocking_passes(blocking, df)
     blocking = apply_quality_aware_blocking(blocking, profiles, df)
+    # Lever #3: diversify onto orthogonal stable keys (date-year, postcode/zip,
+    # identifier) so the FS candidate set isn't gated entirely on (corrupted)
+    # name keys. Purely additive — recall ceiling can only rise.
+    blocking = _diversify_probabilistic_blocking(blocking, profiles)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,
         golden_rules=GoldenRulesConfig(default_strategy="most_complete"),
         output=OutputConfig(),
     )
+
+
+def _diversify_probabilistic_blocking(
+    blocking: BlockingConfig | None, profiles: list[ColumnProfile]
+) -> BlockingConfig | None:
+    """Add orthogonal stable-key blocking passes for the probabilistic path.
+
+    Auto-config blocking tends to key entirely on the name column(s); on
+    error-heavy PII data that caps the candidate ceiling (audit: historical_50k
+    blocking_recall 0.585 — 42% of true pairs never co-block because their names
+    are corrupted even though dob/postcode agree). This appends single-field
+    passes on orthogonal anchors — a date column's YEAR (``substring:0:4``) and
+    postcode/zip/identifier columns — mirroring Splink's rule union. Purely
+    additive (recall can only rise; scoring still decides precision). Skips
+    high-null and perfectly-unique columns, and any (field, transforms) signature
+    already present. Opt-in via ``GOLDENMATCH_FS_AUTOCONFIG_V2=1`` (default off).
+    """
+    if blocking is None or not _fs_autoconfig_v2_enabled():
+        return blocking
+
+    existing: set[tuple] = set()
+    for k in list(blocking.keys or []) + list(blocking.passes or []):
+        existing.add((tuple(k.fields), tuple(k.transforms or [])))
+
+    new_passes: list[BlockingKeyConfig] = []
+
+    def _add(fields: list[str], transforms: list[str]) -> None:
+        sig = (tuple(fields), tuple(transforms))
+        if sig not in existing:
+            new_passes.append(BlockingKeyConfig(fields=fields, transforms=transforms))
+            existing.add(sig)
+
+    for p in profiles:
+        # Additive passes tolerate higher null rates than a primary key: the
+        # static blocker filters null/sentinel block keys (blocker.py ~272), so a
+        # null-valued row is simply absent from THIS pass (no giant null block)
+        # while still covered by the name passes. Error-heavy PII (historical_50k
+        # dob/postcode ~24% null) is exactly where these keys matter most.
+        if p.null_rate > 0.6:
+            continue
+        if p.col_type == "date":
+            _add([p.name], ["substring:0:4"])  # birth YEAR — tolerant of day/month errors
+        elif p.col_type in ("zip", "identifier", "phone") and p.cardinality_ratio < 1.0:
+            _add([p.name], ["strip"])
+
+    if not new_passes:
+        return blocking
+
+    # Fold into a multi_pass union; keep the original keys/passes as passes.
+    base_passes = list(blocking.passes or []) or list(blocking.keys or [])
+    return blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "passes": base_passes + new_passes,
+        "auto_select": False,
+    })
