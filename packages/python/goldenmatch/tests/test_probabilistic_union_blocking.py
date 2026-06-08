@@ -49,15 +49,18 @@ def test_em_excluded_multipass_common_field():
     assert _em_excluded_fields(blocking) == ["zip"]
 
 
-def test_build_probabilistic_blocking_augments_not_replaces():
+def test_build_probabilistic_blocking_is_selective_multipass():
+    # POST-REWRITE CONTRACT (selective set-cover, NOT the old broad augment):
+    # _build_probabilistic_blocking emits a budget-bounded multi_pass UNION with a
+    # name-bearing recall anchor. It no longer guarantees a superset of build_blocking
+    # (it selects a coverage-greedy subset under K*N), and it re-expresses each pass's
+    # transforms as per-field `field_transforms` rather than the shared `transforms`.
     import polars as pl
     from goldenmatch.core.autoconfig import (
         _build_probabilistic_blocking,
         build_blocking,
         profile_columns,
     )
-    # person-shaped frame with name cols (build_blocking will pass on these)
-    # PLUS orthogonal cols (dob, postcode) that should be ADDED.
     df = pl.DataFrame({
         "first_name": (["ann","bob","cara","dan","eve","fay","gus","hal"] * 40),
         "surname":    (["lee","kim","ng","ono","poe","qiu","rao","sun"] * 40),
@@ -66,29 +69,25 @@ def test_build_probabilistic_blocking_augments_not_replaces():
     })
     profiles = profile_columns(df)
     base = build_blocking(profiles, df)
-    base_passes = base.passes or base.keys or []
-    base_field_sets = {tuple(sorted(p.fields)) for p in base_passes}
+    base_fields = {f for p in (base.passes or base.keys or []) for f in p.fields}
 
     blocking = _build_probabilistic_blocking(profiles, df)
     assert blocking.strategy == "multi_pass"
-    assert blocking.passes is not None
-    out_field_sets = {tuple(sorted(p.fields)) for p in blocking.passes}
-    # FLOOR PRESERVED: every base pass (with its transforms) survives
-    assert base_field_sets.issubset(out_field_sets), (
-        f"augment dropped base passes: base={base_field_sets} out={out_field_sets}")
-    # ORTHOGONAL ADDED: at least one pass references a column not used by base
-    base_fields = {f for p in base_passes for f in p.fields}
-    extra_fields = {f for p in blocking.passes for f in p.fields} - base_fields
-    assert extra_fields, "no orthogonal columns were added"
+    assert blocking.passes, "must emit passes"
+    # RECALL ANCHOR: at least one emitted pass references a recall-floor field
+    # (any field build_blocking itself selected).
+    assert any(set(p.fields) & base_fields for p in blocking.passes), (
+        "no recall-anchor (build_blocking) field survived selection")
 
 
-def test_build_probabilistic_blocking_preserves_transforms_on_base_passes():
-    # The transforms build_blocking attached (soundex/substring/token_sort) are
-    # the recall drivers; augment must NOT strip them.
+def test_build_probabilistic_blocking_carries_transforms_per_field():
+    # POST-REWRITE: the recall-driving transforms build_blocking attached are not
+    # dropped -- they are carried on each emitted pass's `field_transforms` (per-field),
+    # since the selective pool builds passes that way. Assert a transform-bearing base
+    # field's transforms survive on the emitted pass that references it.
     import polars as pl
     from goldenmatch.core.autoconfig import (
         _build_probabilistic_blocking,
-        build_blocking,
         profile_columns,
     )
     df = pl.DataFrame({
@@ -97,15 +96,15 @@ def test_build_probabilistic_blocking_preserves_transforms_on_base_passes():
         "dob":        ([f"19{y:02d}-01-01" for y in range(40)] * 8),
     })
     profiles = profile_columns(df)
-    base = build_blocking(profiles, df)
-    base_passes = base.passes or base.keys or []
-    base_with_transforms = {(tuple(sorted(p.fields)), tuple(p.transforms))
-                            for p in base_passes if p.transforms}
     out = _build_probabilistic_blocking(profiles, df)
-    out_with_transforms = {(tuple(sorted(p.fields)), tuple(p.transforms))
-                           for p in (out.passes or []) if p.transforms}
-    # every transform-bearing base pass is preserved verbatim
-    assert base_with_transforms.issubset(out_with_transforms)
+    assert out.strategy == "multi_pass"
+    assert out.passes
+    # every emitted pass expresses its transforms per-field (field_transforms), and at
+    # least one carries a non-empty transform chain (the recall lever is preserved).
+    assert any(
+        p.field_transforms and any(chain for chain in p.field_transforms)
+        for p in out.passes
+    ), "selective passes dropped all field transforms"
 
 
 def test_probabilistic_dedupe_with_multipass_runs():

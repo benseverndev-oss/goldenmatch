@@ -2995,116 +2995,49 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     )]
 
 
-def _build_probabilistic_blocking(
-    profiles: list[ColumnProfile],
-    df: pl.DataFrame,
-    max_extra_passes: int = 5,
-) -> BlockingConfig:
-    """Derive a Splink-style multi-pass UNION blocking config for the
-    probabilistic path by AUGMENTING ``build_blocking``'s output, NOT
-    replacing it.
-
-    ``build_blocking`` already emits the transform-rich, recall-driving passes
-    (e.g. ``[first_name]`` with ``['lowercase','soundex']``,
-    ``[surname]`` with ``['lowercase','substring:0:5']``,
-    ``[name]`` with ``['lowercase','token_sort','substring:0:8']``). Those
-    transforms ARE the recall lever -- soundex/substring catch the typo'd
-    name pairs that bare-field equality misses. The earlier bare-field
-    implementation dropped them, which REGRESSED blocking recall: on
-    ``historical_50k`` (50578 rows, 303961 GT pairs), ``build_blocking`` alone
-    scored 0.5556 while the bare-field replacement scored 0.4482.
-
-    This rewrite keeps ``build_blocking``'s passes verbatim (recall FLOOR
-    preserved) and ADDS orthogonal-key union passes for columns NOT already
-    covered by the base passes -- the F-S recall lift. dob/postcode/birthplace
-    union passes lift ``historical_50k`` from 0.556 to ~0.75. Result invariant:
-    ``passes`` is a superset of ``build_blocking``'s passes.
-
-    Reuses core/blocker.py::_build_multi_pass_blocks via strategy='multi_pass'.
-    """
-    from goldenmatch.core.indicators import compute_column_priors
-
-    # 1. Start from build_blocking's good, transform-rich output.
+def _build_probabilistic_blocking(profiles, df):
+    """Selective compound blocking for the probabilistic path: pick a union of passes
+    under a K*N candidate budget via coverage-greedy set-cover (compounds preferred),
+    keeping a name-bearing recall anchor. Replaces the old broad-single-key augment
+    that flooded candidates (8.84M on historical_50k -> 3.4% precision ceiling).
+    Degenerate input (no orthogonal fields / profiling failure) -> build_blocking."""
     base = build_blocking(profiles, df)
-    # 2. Normalize to a flat passes list (multi_pass paths populate .passes;
-    #    static/exact/composite/canopy paths populate .keys only).
-    base_passes: list[BlockingKeyConfig] = (
-        list(base.passes) if base.passes else list(base.keys or [])
-    )
-    covered_fields = {f for p in base_passes for f in p.fields}
+    base_passes = list(base.passes) if base.passes else list(base.keys or [])
+    name_fields = {f for p in base_passes for f in p.fields}
 
     try:
-        priors = compute_column_priors(df)
+        pool = _candidate_blocking_passes(profiles, df)
     except Exception:
-        priors = {}
+        logger.warning("selective blocking pool build failed; falling back to build_blocking", exc_info=True)
+        return base
 
-    def _identity(name: str) -> float:
-        p = priors.get(name)
-        return p.identity_score if p is not None else 0.0
-
-    def _null_rate(name: str) -> float:
-        return df[name].null_count() / df.height if df.height else 1.0
-
-    # 3. Eligible ORTHOGONAL columns: NOT already covered by base, good
-    #    blocking keys. Unlike the matchkey builder, date is ALLOWED here --
-    #    dob-like date columns are excellent orthogonal blocking keys (the
-    #    historical_50k recall lift came largely from a [dob] pass).
-    def _orthogonal(p: ColumnProfile) -> bool:
-        return (
-            p.name not in covered_fields
-            and p.col_type != "description"
-            and p.col_type != "numeric"  # free-text/measure numerics aren't blocking keys
-            and _null_rate(p.name) <= 0.20
-            and 0.02 <= p.cardinality_ratio < 1.0
-        )
-
-    # Rank by cardinality_ratio desc (higher card -> smaller, safer blocks),
-    # tie-broken by identity_score.
-    candidates = sorted(
-        (p for p in profiles if _orthogonal(p)),
-        key=lambda p: (p.cardinality_ratio, _identity(p.name)),
-        reverse=True,
+    # Degenerate: pool is just single-field name passes (no compounds/orthogonals)
+    # -> fall back to build_blocking. NOTE: a multi-field compound from build_blocking
+    # itself (geo/compound paths) has len(fields)>1 -> proceeds (it IS selective).
+    has_compound_or_orthogonal = any(
+        len(p.fields) > 1 or not (set(p.fields) & name_fields) for p in pool
     )
-
-    # Anchor for compound passes: the single most-common base field (first
-    # base pass's first field). None when there are no base passes.
-    anchor: str | None = None
-    if base_passes and base_passes[0].fields:
-        anchor = base_passes[0].fields[0]
-
-    extra: list[BlockingKeyConfig] = []
-    seen: set[frozenset[str]] = {frozenset(p.fields) for p in base_passes}
-
-    for c in candidates:
-        if len(extra) >= max_extra_passes:
-            break
-        if c.cardinality_ratio >= 0.30:
-            # High card -> single-key blocks are small/safe.
-            fields = [c.name]
-        elif anchor is not None:
-            # Moderate card -> single-key would be too broad; pair with the
-            # strongest base/name field for a tighter compound block.
-            fields = [c.name, anchor]
-        else:
-            # No base field to anchor against -> fall back to single key.
-            fields = [c.name]
-        key = frozenset(fields)
-        if key in seen:
-            continue
-        seen.add(key)
-        extra.append(BlockingKeyConfig(fields=fields))
-
-    passes = base_passes + extra
-
-    # 6. Degenerate: no base passes AND no orthogonal cols -> never regress.
-    if not passes:
+    if not has_compound_or_orthogonal:
         return base
 
     n = df.height
+    budget = _blocking_candidate_budget_k() * max(n, 1)
+    stats = []
+    for p in pool:
+        count, cov = _estimate_pass_stats(p, df)
+        if count > 0:
+            stats.append((p, count, cov))
+    if not stats:
+        return base
+
+    selected = _select_passes_within_budget(stats, budget, name_fields=name_fields)
+    if not selected:
+        return base
+
     fallback_block = max(1000, min(10_000, n // 200)) if n else 5000
     return BlockingConfig(
         strategy="multi_pass",
-        passes=passes,
+        passes=selected,
         max_block_size=base.max_block_size or fallback_block,
         skip_oversized=base.skip_oversized,
     )

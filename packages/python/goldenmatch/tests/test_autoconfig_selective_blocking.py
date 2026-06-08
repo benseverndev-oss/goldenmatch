@@ -5,9 +5,11 @@ import pytest
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig import (
     _blocking_candidate_budget_k,
+    _build_probabilistic_blocking,
     _candidate_blocking_passes,
     _estimate_pass_stats,
     _select_passes_within_budget,
+    build_blocking,
     profile_columns,
 )
 from goldenmatch.core.blocker import _build_block_key_expr
@@ -144,3 +146,25 @@ def test_select_always_emits_a_name_bearing_pass():
     selected = _select_passes_within_budget(pool, budget=10, name_fields={"surname"})
     assert selected, "must never return an empty config"
     assert any("surname" in p.fields for p in selected)
+
+
+def test_build_probabilistic_blocking_within_budget_and_name_bearing():
+    df = _person_df()
+    profiles = profile_columns(df)
+    cfg = _build_probabilistic_blocking(profiles, df)
+    assert cfg.strategy == "multi_pass"
+    assert cfg.passes, "must emit passes"
+    name_fields = {"first_name", "surname"}
+    assert any(any(f in name_fields for f in p.fields) for p in cfg.passes)
+
+
+def test_build_probabilistic_blocking_degenerate_fallback():
+    # name-only df -> no orthogonal fields -> fall back to build_blocking unchanged
+    df = pl.DataFrame({
+        "first_name": ["ann", "ann", "bob", "bob"],
+        "surname":    ["lee", "lee", "kim", "kim"],
+    })
+    profiles = profile_columns(df)
+    cfg = _build_probabilistic_blocking(profiles, df)
+    base = build_blocking(profiles, df)
+    assert (cfg.passes or cfg.keys) == (base.passes or base.keys)
