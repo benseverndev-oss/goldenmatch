@@ -223,28 +223,13 @@ class ChunkedMatcher:
     def _block_key_column(
         self, df: pl.DataFrame, key_config: Any,
     ) -> pl.DataFrame:
-        """Add a ``__block_key__`` column to a DataFrame.
-
-        Mirrors ``goldenmatch.core.blocker._build_block_key_expr`` but
-        kept inline so this module doesn't have to dance with the
-        underscore-prefixed helper. Concatenates the configured
-        blocking fields with ``||`` after applying ``transforms``.
+        """Add a ``__block_key__`` column by delegating to
+        ``blocker._build_block_key_expr`` (single source of truth: native
+        fast path, shared AND per-field transforms).
         """
-        from goldenmatch.utils.transforms import apply_transforms
+        from goldenmatch.core.blocker import _build_block_key_expr
 
-        if key_config.transforms:
-            field_exprs = [
-                pl.col(field).map_elements(
-                    lambda val, t=key_config.transforms: apply_transforms(val, t),
-                    return_dtype=pl.Utf8,
-                )
-                for field in key_config.fields
-            ]
-        else:
-            field_exprs = [pl.col(field).cast(pl.Utf8) for field in key_config.fields]
-
-        key_expr = pl.concat_str(field_exprs, separator="||").alias("__block_key__")
-        return df.with_columns(key_expr)
+        return df.with_columns(_build_block_key_expr(key_config))
 
     def _slim_columns(self, matchkeys: list) -> set[str]:
         """Columns to keep on the cross-chunk index slice.

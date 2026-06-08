@@ -30,7 +30,7 @@ def build_blocking_query(
 
     for key_config in blocking_config.keys:
         field_conditions = []
-        for field_name in key_config.fields:
+        for i, field_name in enumerate(key_config.fields):
             value = record.get(field_name)
             if value is None:
                 continue
@@ -38,8 +38,15 @@ def build_blocking_query(
             col_expr = _quote_ident(field_name)
             val_expr = _escape_value(str(value))
 
+            # Per-field transforms (field_transforms[i]) override the shared
+            # `transforms` chain when set; otherwise every field uses `transforms`.
+            if key_config.field_transforms is not None:
+                field_xf = key_config.field_transforms[i]
+            else:
+                field_xf = key_config.transforms
+
             # Apply transforms to both column and value
-            for transform in key_config.transforms:
+            for transform in field_xf:
                 col_expr, val_expr = _apply_sql_transform(col_expr, val_expr, transform)
 
             field_conditions.append(f"{col_expr} = {val_expr}")

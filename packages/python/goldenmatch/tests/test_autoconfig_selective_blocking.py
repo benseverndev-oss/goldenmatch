@@ -25,3 +25,31 @@ def test_field_transforms_none_matches_shared_transforms():
 def test_field_transforms_length_must_match_fields():
     with pytest.raises(ValueError):
         BlockingKeyConfig(fields=["surname", "dob"], field_transforms=[["lowercase"]])
+
+
+from goldenmatch.config.schemas import BlockingConfig
+from goldenmatch.db.blocking import build_blocking_query
+
+
+def test_db_blocking_query_honors_field_transforms():
+    cfg = BlockingConfig(keys=[BlockingKeyConfig(
+        fields=["surname", "dob"],
+        field_transforms=[["soundex"], ["substring:0:4"]],
+    )])
+    sql = build_blocking_query("people", {"surname": "Smith", "dob": "1990-05-01"}, cfg).lower()
+    assert "soundex(" in sql      # surname -> soundex()
+    assert "substring(" in sql    # dob -> substring(col, 1, 4)
+
+
+def test_chunked_block_key_honors_field_transforms():
+    from goldenmatch.core.blocker import _build_block_key_expr
+    from goldenmatch.core.chunked import ChunkedMatcher
+    df = pl.DataFrame({"surname": ["SMITH", "Jones"], "dob": ["1990-05-01", "1985-12-30"]})
+    cfg = BlockingKeyConfig(fields=["surname", "dob"], field_transforms=[["lowercase"], ["substring:0:4"]])
+    expected = df.lazy().with_columns(_build_block_key_expr(cfg)).collect()["__block_key__"].to_list()
+    # _block_key_column uses self only to be a method (reads no instance state),
+    # so an uninitialized instance is sufficient and avoids constructing a full
+    # GoldenMatchConfig.
+    inst = object.__new__(ChunkedMatcher)
+    got = inst._block_key_column(df, cfg)["__block_key__"].to_list()
+    assert got == expected == ["smith||1990", "jones||1985"]
