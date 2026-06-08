@@ -145,13 +145,34 @@ step 1), amortized calibrated partition posterior with a learned microclustering
 prior (#1, step 2), and EIG-over-partition active design (#6, step 3). The
 program hangs together end-to-end.
 
-Remaining work before this is more than a proof-of-concept (none are blockers,
-all are flagged as TODOs in the runners):
-1. **Real-schema learned encoder** — swap the toy continuous-field simulator for
-   a string/LM encoder; reuse step-1's finding that the reconstructor must be
-   *learned*, not a fixed kernel. This is the highest-value next step.
-2. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
-3. **Soft Bayesian conditioning** in step 3 (reweight similar undetermined pairs,
-   not just logically-forced ones) + noisy-oracle handling.
-4. **Lift F1** (capacity / Set-Transformer encoder / more training) — currently a
-   floor (parity with an oracle-tuned baseline), not a ceiling.
+## Step 4 result (2026-06-07 — real-schema encoder, sim-to-real transfer probe)
+
+Run via `scripts/research/real_schema_encoder.py`; full tables in
+`scripts/research/RESULTS-real-schema-encoder.md`. **Negative transfer result —
+the honest gating finding.** A learned, schema-agnostic char-trigram string
+encoder feeds the step-2/3 head, trained ONLY on a string simulator:
+
+- **In-distribution YES**: held-out simulated F1 0.880, right cluster count.
+- **Zero-shot to real schemas NO**: REAL Febrl3 F1 0.030 (head opens 148 clusters
+  for 60 true entities — over-fragments), REAL DBLP-ACM F1 0.035, while the plain
+  char+CC baseline gets ~0.89–0.92.
+- **Bottleneck is the encoder/simulator, not the head**: the from-scratch trigram
+  embeddings memorise the simulator's narrow vocabulary; real records hash into
+  buckets the model never trained, so real co-referents aren't close. (Also fixed
+  a reproducibility bug — process-randomised `hash()` → crc32.)
+
+## Decision — proof-of-concept complete; one gating problem identified
+
+The 1+3+6 loop holds end-to-end on simulated ER (steps 1–3), AND step 4 cleanly
+localises the gating obstacle for real data: **the record encoder**. The partition
+head, learned prior, and EIG design are not the problem; the sim-to-real embedding
+gap is. Highest-value next move, in order:
+1. **Pretrained general text encoder** (char-level or sentence-transformer) as the
+   record featurizer — universal geometry, amortize only the head. This is the
+   most likely fix for the step-4 transfer failure (trades the no-heavy-deps stance).
+2. **Richer simulator** (real name/address/title dictionaries + realistic
+   corruption) and/or light per-domain unsupervised adaptation (concedes pure
+   zero-shot for cheap transfer).
+3. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
+4. **Soft Bayesian conditioning** in step 3 + noisy-oracle handling; **lift F1**
+   (capacity / Set-Transformer encoder) — currently a floor, not a ceiling.
