@@ -1,7 +1,4 @@
-from goldenmatch.config.schemas import (
-    BlockingConfig, BlockingKeyConfig, GoldenMatchConfig,
-    MatchkeyConfig, MatchkeyField,
-)
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.pipeline import _collect_blocking_fields
 
 
