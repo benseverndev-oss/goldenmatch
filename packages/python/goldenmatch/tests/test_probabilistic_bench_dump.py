@@ -142,7 +142,7 @@ def test_bench_dump_noop_when_env_unset(tmp_path):
     written = list(tmp_path.glob("*.parquet"))
     assert written == [], f"hook wrote files with env unset: {written}"
     # Scoring still ran: the unset path must not accidentally no-op matching.
-    assert result.dupes.height > 0, (
+    assert result.dupes is not None and result.dupes.height > 0, (
         "dedupe produced no duplicate pairs with env unset -- scoring silently no-oped"
     )
 

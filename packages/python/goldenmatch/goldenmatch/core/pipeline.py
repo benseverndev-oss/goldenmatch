@@ -1375,12 +1375,13 @@ def _run_dedupe_pipeline(
     # Opt-in bench hook: when GOLDENMATCH_BENCH_DUMP_PAIRS names a directory,
     # accumulate the within-block candidate set (the blocking ceiling) and the
     # emitted set (above-threshold pairs) across all probabilistic matchkeys,
-    # then dump both as parquet AFTER the loop. Fully no-op (no accumulation,
-    # no I/O) when the env var is unset; every line below is guarded by it.
+    # then dump both as parquet AFTER the loop. The env read + two empty-set
+    # inits below are unconditional (a dict lookup + two empty sets, negligible);
+    # all ACCUMULATION and I/O is guarded by `if _bench_dump_dir:`, so the unset
+    # path does no per-pair/per-block work and writes nothing.
     _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
-    if _bench_dump_dir:
-        _bench_candidate_pairs: set[tuple[int, int]] = set()
-        _bench_emitted_pairs: set[tuple[int, int]] = set()
+    _bench_candidate_pairs: set[tuple[int, int]] = set()
+    _bench_emitted_pairs: set[tuple[int, int]] = set()
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
