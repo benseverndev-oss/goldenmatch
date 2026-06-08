@@ -7,6 +7,19 @@ export { availableAnalyzers, loadAnalyzer, frameCompatibleAnalyzers } from "./re
 export { FrameSummaryAnalyzer } from "./analyzers/frameSummary.js";
 export * as aggregate from "./aggregate.js";
 export { SCHEMA_VERSION } from "./types.js";
+
+// Cross-run (edge-safe): regression decision logic, report-level queries, narrative.
+export {
+  baselineValue,
+  defaultPolicy,
+  deltaPct,
+  isRegression,
+  policyThreshold,
+} from "./regressions.js";
+export type { Baseline, Regression, RegressionPolicy, TrendSeries } from "./regressions.js";
+export { buildTrend, detectRegressions } from "./history.js";
+export type { DetectOptions } from "./history.js";
+export { buildNarrative } from "./narrative.js";
 export type {
   Analyzer,
   AnalyzerInfo,
