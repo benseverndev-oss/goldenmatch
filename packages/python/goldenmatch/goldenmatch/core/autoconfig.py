@@ -1944,6 +1944,8 @@ def _candidate_blocking_passes(profiles, df):
     name_fields = {f for p in base_passes for f in p.fields}
 
     def _null_rate(name):
+        # Full-df null rate (NOT the sampled ColumnProfile.null_rate): the 0.20
+        # blocking-safety gate shouldn't trust a sample estimate.
         return df[name].null_count() / df.height if df.height else 1.0
 
     def _orthogonal(p):
@@ -1985,16 +1987,23 @@ def _candidate_blocking_passes(profiles, df):
         # date_iso8601 runs before autoconfig). Other orthogonals: no transform.
         return ["substring:0:4"] if o_profile.col_type == "date" else []
 
+    by_name = {p.name: p for p in profiles}
     # 2. Compounds: each base name pass's PRIMARY field x each orthogonal.
+    #    Skip date-typed primaries: a full-date x orthogonal compound is near-unique
+    #    (the date is uncoarsened as a primary) and recalls almost nothing. The date
+    #    still pairs with names as a COARSENED orthogonal below.
     for p in base_passes:
         if not p.fields:
             continue
-        name_field = p.fields[0]
-        name_xf = list(p.transforms or [])
+        primary_field = p.fields[0]
+        prof = by_name.get(primary_field)
+        if prof is not None and prof.col_type == "date":
+            continue
+        primary_xf = list(p.transforms or [])
         for o in orthogonals:
-            if o.name == name_field:
+            if o.name == primary_field:
                 continue
-            _add([name_field, o.name], [name_xf, _coarsen(o)])
+            _add([primary_field, o.name], [primary_xf, _coarsen(o)])
 
     # 3. Self-selective orthogonal single-keys (high cardinality only).
     for o in orthogonals:
