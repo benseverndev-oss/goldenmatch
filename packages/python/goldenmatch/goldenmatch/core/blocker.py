@@ -653,7 +653,7 @@ def _build_blocks_per_pass(
     (build_blocks unions+dedupes across passes and loses which pass a block came from --
     per-rule EM needs that identity to know which fields were held constant per run)."""
     passes = blocking.passes if blocking.passes else (blocking.keys or [])
-    out = []
+    out: list[tuple[list[str], list[BlockResult]]] = []
     for p in passes:
         cfg = BlockingConfig(keys=[p], max_block_size=blocking.max_block_size,
                              skip_oversized=blocking.skip_oversized)
