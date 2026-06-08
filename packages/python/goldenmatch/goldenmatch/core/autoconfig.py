@@ -2061,6 +2061,55 @@ def _estimate_pass_stats(pass_cfg, df):
     return candidate_count, coverage
 
 
+def _select_passes_within_budget(pool, budget, name_fields=None):
+    """Greedy coverage-per-candidate set-cover under a candidate budget.
+
+    pool: list of (BlockingKeyConfig, candidate_count, coverage_set).
+    budget: max total candidate_count (K * N) of the selected union.
+    name_fields: set of field names considered recall-bearing; the result is
+    guaranteed to include >= 1 name-bearing pass (recall anchor), overriding the
+    budget if necessary (a name-less probabilistic config is never acceptable).
+
+    Returns list[BlockingKeyConfig]. Stops when no remaining pass fits the budget or
+    the best marginal coverage is zero (saturated)."""
+    name_fields = name_fields or set()
+    remaining = list(pool)
+    covered: set[int] = set()
+    spent = 0
+    selected: list[BlockingKeyConfig] = []
+
+    def _is_name(cfg):
+        return any(f in name_fields for f in cfg.fields)
+
+    while remaining:
+        best = None  # (ratio, idx)
+        for idx, (cfg, count, cov) in enumerate(remaining):
+            if count <= 0 or spent + count > budget:
+                continue
+            new = len(cov - covered)
+            if new <= 0:
+                continue
+            ratio = new / count
+            if best is None or ratio > best[0]:
+                best = (ratio, idx)
+        if best is None:
+            break
+        cfg, count, cov = remaining.pop(best[1])
+        selected.append(cfg)
+        covered |= cov
+        spent += count
+
+    # Recall anchor: guarantee >= 1 name-bearing pass, overriding the budget if no
+    # name-bearing pass fit. Pick the most-covering name-bearing pass from the pool.
+    if name_fields and not any(_is_name(c) for c in selected):
+        name_candidates = [(cfg, cov) for (cfg, count, cov) in pool if _is_name(cfg)]
+        if name_candidates:
+            anchor = max(name_candidates, key=lambda t: len(t[1]))[0]
+            selected.append(anchor)
+
+    return selected
+
+
 def _maybe_promote_blocking_to_adaptive(
     blocking: BlockingConfig | None,
     n_rows: int,

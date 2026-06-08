@@ -7,6 +7,7 @@ from goldenmatch.core.autoconfig import (
     _blocking_candidate_budget_k,
     _candidate_blocking_passes,
     _estimate_pass_stats,
+    _select_passes_within_budget,
     profile_columns,
 )
 from goldenmatch.core.blocker import _build_block_key_expr
@@ -108,3 +109,38 @@ def test_estimate_pass_stats_exact_count_and_coverage():
     N = 6
     expected = {0*N+1, 0*N+2, 1*N+2, 3*N+4}  # smith pairs + jones pair, canonical min*N+max
     assert coverage == expected
+
+
+def _mkpass(fields):
+    return BlockingKeyConfig(fields=list(fields))
+
+def test_select_respects_budget_and_is_coverage_greedy():
+    # pool entries: (pass, candidate_count, coverage_set)
+    name = _mkpass(["surname"])                 # broad, expensive, covers {1,2,3,4}
+    cA   = _mkpass(["surname", "dob"])           # tight, covers {1,2}
+    cB   = _mkpass(["surname", "postcode"])      # tight, covers {3,4}
+    cDup = _mkpass(["surname", "city"])          # tight but REDUNDANT, covers {1,2}
+    pool = [
+        (name, 100, {1, 2, 3, 4}),
+        (cA, 10, {1, 2}),
+        (cB, 10, {3, 4}),
+        (cDup, 10, {1, 2}),
+    ]
+    selected = _select_passes_within_budget(pool, budget=25)
+    fsets = {tuple(p.fields) for p in selected}
+    # within budget 25: the broad name (100) does NOT fit; cA + cB (20) cover everything,
+    # cDup adds zero NEW coverage so it is NOT chosen.
+    assert ("surname", "dob") in fsets and ("surname", "postcode") in fsets
+    assert ("surname",) not in fsets          # too expensive for the budget
+    assert ("surname", "city") not in fsets   # redundant, no marginal coverage
+    # total candidate_count of the selection is within budget
+    cost = {("surname",): 100, ("surname","dob"): 10, ("surname","postcode"): 10, ("surname","city"): 10}
+    assert sum(cost[tuple(p.fields)] for p in selected) <= 25
+
+def test_select_always_emits_a_name_bearing_pass():
+    # budget too tight for even the cheapest name-bearing pass -> anchor override
+    name = _mkpass(["surname"])
+    pool = [(name, 1000, {1, 2, 3})]
+    selected = _select_passes_within_budget(pool, budget=10, name_fields={"surname"})
+    assert selected, "must never return an empty config"
+    assert any("surname" in p.fields for p in selected)
