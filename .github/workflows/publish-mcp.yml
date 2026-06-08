@@ -35,6 +35,7 @@ on:
           - goldenflow
           - goldenpipe
           - infermap
+          - goldenanalysis
         default: all
 
 permissions:
@@ -71,11 +72,14 @@ jobs:
             elif [[ "$TAG" == goldenmatch-duckdb-v* ]]; then : noop  # not on registry
             elif [[ "$TAG" == goldenmatch-pg-v* ]];     then : noop  # not on registry
             elif [[ "$TAG" == goldensuite-mcp-v* ]];    then : noop  # aggregator -- transitively exposes sub-package tools
+            elif [[ "$TAG" == goldenanalysis-native-v* ]]; then : noop  # not on registry
+            elif [[ "$TAG" == goldenanalysis-js-v* ]];  then : noop
+            elif [[ "$TAG" == goldenanalysis-v* ]];     then PKGS+=(goldenanalysis)
             elif [[ "$TAG" == v* ]];                    then PKGS+=(goldenmatch)
             fi
           else
             if [ "$DISPATCH_PKG" = "all" ]; then
-              PKGS=(goldenmatch goldencheck goldenflow goldenpipe infermap)
+              PKGS=(goldenmatch goldencheck goldenflow goldenpipe infermap goldenanalysis)
             else
               PKGS=("$DISPATCH_PKG")
             fi
