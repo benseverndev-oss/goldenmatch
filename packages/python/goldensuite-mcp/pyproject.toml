@@ -30,6 +30,7 @@ dependencies = [
     "goldenflow[mcp]",
     "goldenpipe[mcp]",
     "infermap[mcp]",
+    "goldenanalysis[mcp]",
     "uvicorn>=0.30",
     "starlette>=1.0.1",
 ]
@@ -52,6 +53,7 @@ goldencheck = { workspace = true }
 goldenflow = { workspace = true }
 goldenpipe = { workspace = true }
 infermap = { workspace = true }
+goldenanalysis = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["goldensuite_mcp"]
