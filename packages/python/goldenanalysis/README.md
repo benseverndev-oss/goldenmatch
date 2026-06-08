@@ -40,8 +40,7 @@ goldenanalysis report customers.parquet --analyzers frame.summary --format markd
 goldenanalysis report report.json --format markdown      # re-render a saved report
 ```
 
-`trend` and `regressions` are visible in `--help` but are stubs until `0.2.0`
-(they need cross-run `ReportHistory`).
+`trend` and `regressions` operate over a saved run history (see **Cross-run** below).
 
 ## Over the suite (`0.2.0`)
 
@@ -60,6 +59,33 @@ report = ga.analyze_pipeline(pipe_result)
 `match.recall_safe_bound` when you pass an audit-calibrated certificate
 (`analyze_match(result, certificate=...)`) — the safe bound needs a labelled
 sample, so it can't be computed automatically. Both degrade silently when absent.
+
+## Cross-run — trend + regression detection (`0.2.0`)
+
+Store reports over time, then trend a metric or detect regressions without ground
+truth:
+
+```python
+hist = ga.ReportHistory(backend="jsonl", path=".golden/analysis.jsonl")  # or backend="sqlite"
+hist.append(report)                                  # keyed by (dataset, run_id)
+
+hist.trend("cluster.singleton_ratio", "customers")   # -> TrendSeries
+
+policy = ga.RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+regs = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
+print(report.to_markdown(regs))                      # callout + Δ-vs-baseline column
+```
+
+The `Baseline` is a strategy (`rolling_median` default — immune to one noisy night
+— plus `previous` / `last_known_good`), and `RegressionPolicy` thresholds are
+per-metric and respect each metric's `direction` (a `higher_better` metric only
+flags on a drop). CLI:
+
+```bash
+goldenanalysis trend --metric cluster.singleton_ratio --dataset customers --history .golden/analysis.jsonl
+goldenanalysis regressions --dataset customers --history .golden/analysis.jsonl \
+  --policy "match.recall_safe_bound=2" --fail-on-regression   # exit 1 on a flagged regression (CI gate)
+```
 
 ## GoldenCheck vs GoldenAnalysis
 

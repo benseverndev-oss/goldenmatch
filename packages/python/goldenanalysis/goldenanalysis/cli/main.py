@@ -17,8 +17,6 @@ app = typer.Typer(
     help="Measure and report across the Golden Suite (read-only).",
 )
 
-_FUTURE = "available in goldenanalysis 0.2.0 (ReportHistory)"
-
 
 @app.command()
 def report(
@@ -60,27 +58,80 @@ def report(
     typer.echo(text)
 
 
+def _open_history(history: Path):
+    """Open a ReportHistory, inferring the backend from the path suffix."""
+    from goldenanalysis.history import ReportHistory
+
+    backend = "sqlite" if history.suffix.lower() in (".db", ".sqlite") else "jsonl"
+    return ReportHistory(backend=backend, path=history)
+
+
+def _parse_policy(spec: str | None):
+    """Parse ``--policy`` (JSON object or ``key=pct,key=pct``) into a RegressionPolicy."""
+    from goldenanalysis.models import RegressionPolicy
+
+    if not spec:
+        return RegressionPolicy()
+    spec = spec.strip()
+    if spec.startswith("{"):
+        import json
+
+        data = json.loads(spec)
+        return RegressionPolicy(
+            default_pct=data.get("default_pct", 10.0), per_metric=data.get("per_metric", {})
+        )
+    per_metric = {}
+    for pair in spec.split(","):
+        if "=" in pair:
+            key, val = pair.split("=", 1)
+            per_metric[key.strip()] = float(val)
+    return RegressionPolicy(per_metric=per_metric)
+
+
 @app.command()
 def trend(
     metric: str = typer.Option(..., "--metric", help="Metric key to trend, e.g. cluster.singleton_ratio."),
     dataset: str = typer.Option(..., "--dataset"),
-    history: Path = typer.Option(..., "--history", help="ReportHistory backend path."),
+    history: Path = typer.Option(..., "--history", help="ReportHistory path (.jsonl or .db)."),
     last: int = typer.Option(30, "--last"),
 ) -> None:
-    """Trend a metric over a run history. (stub)"""
-    typer.echo(f"`trend` is {_FUTURE}.", err=True)
-    raise typer.Exit(1)
+    """Trend a metric over a run history."""
+    series = _open_history(history).trend(metric, dataset, last_n=last)
+    if not series.points:
+        typer.echo(f"no history for {metric!r} on dataset {dataset!r}")
+        return
+    typer.echo(f"# {metric} — {dataset} (last {len(series.points)})")
+    typer.echo("| run_id | value |")
+    typer.echo("|---|---|")
+    for run_id, value in series.points:
+        typer.echo(f"| {run_id} | {value:g} |")
 
 
 @app.command()
 def regressions(
     dataset: str = typer.Option(..., "--dataset"),
-    history: Path = typer.Option(..., "--history", help="ReportHistory backend path."),
+    history: Path = typer.Option(..., "--history", help="ReportHistory path (.jsonl or .db)."),
     baseline: str = typer.Option("rolling_median", "--baseline"),
+    window: int = typer.Option(7, "--window"),
+    policy: str | None = typer.Option(None, "--policy", help='Per-metric gates: JSON or "key=pct,key=pct".'),
+    fail_on_regression: bool = typer.Option(
+        False, "--fail-on-regression", help="Exit 1 if any regression is flagged (CI gate)."
+    ),
 ) -> None:
-    """Detect metric regressions vs a baseline. (stub)"""
-    typer.echo(f"`regressions` is {_FUTURE}.", err=True)
-    raise typer.Exit(1)
+    """Detect metric regressions vs a baseline."""
+    flagged = _open_history(history).detect_regressions(
+        dataset, baseline=baseline, window=window, policy=_parse_policy(policy)
+    )
+    if not flagged:
+        typer.echo(f"no regressions on dataset {dataset!r}")
+        return
+    typer.echo(f"# {len(flagged)} regression(s) — {dataset}")
+    typer.echo("| metric | baseline | current | delta |")
+    typer.echo("|---|---|---|---|")
+    for r in flagged:
+        typer.echo(f"| {r.metric} | {r.baseline:g} | {r.current:g} | {r.delta_pct:+.1f}% |")
+    if fail_on_regression:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover

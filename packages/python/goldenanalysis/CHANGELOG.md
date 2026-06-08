@@ -22,14 +22,31 @@ Phase 2a — suite consumption. Produce an `AnalysisReport` from real suite outp
   `check` (lazy `goldencheck` import behind the `[check]` extra; pure `from_scan`
   seam). They populate a standardized `AnalyzerInput.artifacts` vocabulary.
 
+Phase 2b — cross-run. Trend + regression detection over a run history.
+
+- `ReportHistory(backend="jsonl"|"sqlite", path=...)` — append-only store of
+  `AnalysisReport`s keyed by `(analysis_name, dataset, run_id)`; mirrors the
+  IdentityStore constructor idiom. JSONL default, SQLite optional (durable); both
+  stdlib, no new deps.
+- `hist.trend(metric_key, dataset)` → `TrendSeries`; `hist.detect_regressions(
+  dataset, baseline=..., policy=...)` → flagged `Regression`s. `Baseline` is a
+  strategy (`rolling_median` default / `previous` / `last_known_good`); `RegressionPolicy`
+  carries per-metric percent gates and respects each `Metric.direction`.
+- Narrative generation (`narrative.build_narrative`) — names the worst flagged
+  regression + co-moving metrics; `to_markdown(regressions=...)` adds the callout +
+  Δ column (byte-identical to Phase 1 without it).
+- The `goldenanalysis trend` / `regressions` CLI are now real (no longer stubs),
+  with `--policy` and `--fail-on-regression` (CI gate).
+
 ### Notes
 - `match.recall_estimate` flows automatically once `goldenmatch.dedupe_df(...,
   certify=True)` attaches a `RecallEstimate` (goldenmatch PR); `match.recall_safe_bound`
   needs a labelled audit and is supplied via `certificate=`. Both degrade silently
   when absent.
 - `frame.summary` does not run under `analyze_pipeline` (a `PipeResult` exposes no
-  input frame). Cross-run `ReportHistory` / regression detection / narrative are
-  Phase 2b.
+  input frame).
+- `last_known_good` baseline is v1-aliased to `previous` until a per-run health
+  signal exists (documented follow-up).
 
 ## [0.1.0] - 2026-06-08
 

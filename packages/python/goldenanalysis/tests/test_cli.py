@@ -35,13 +35,60 @@ def test_report_writes_out(tmp_path: Path) -> None:
     assert "frame.row_count" in out.read_text(encoding="utf-8")
 
 
-def test_trend_stub_is_honest() -> None:
-    result = runner.invoke(app, ["trend", "--metric", "x", "--dataset", "d", "--history", "h.db"])
-    assert result.exit_code == 1
-    assert "0.2.0" in result.output
+def _seed_history(path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from goldenanalysis.history import ReportHistory
+    from goldenanalysis.models import AnalysisReport, Metric
+
+    hist = ReportHistory(backend="jsonl", path=path)
+
+    def night(run_id: str, recall: float, singleton: float) -> AnalysisReport:
+        return AnalysisReport(
+            run_id=run_id,
+            generated_at=datetime(2026, 6, 8, tzinfo=UTC),
+            source={"dataset": "customers"},
+            metrics=[
+                Metric(key="match.recall_safe_bound", value=recall, unit="ratio", direction="higher_better"),
+                Metric(key="cluster.singleton_ratio", value=singleton, unit="ratio", direction="neutral"),
+            ],
+        )
+
+    for i in range(7):
+        hist.append(night(f"n{i}", 0.97, 0.58))
+    hist.append(night("n7", 0.89, 0.71))
 
 
-def test_regressions_stub_is_honest() -> None:
-    result = runner.invoke(app, ["regressions", "--dataset", "d", "--history", "h.db"])
+def test_trend_command(tmp_path: Path) -> None:
+    hpath = tmp_path / "h.jsonl"
+    _seed_history(hpath)
+    result = runner.invoke(
+        app, ["trend", "--metric", "cluster.singleton_ratio", "--dataset", "customers", "--history", str(hpath)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "0.71" in result.output and "n7" in result.output
+
+
+def test_regressions_command(tmp_path: Path) -> None:
+    hpath = tmp_path / "h.jsonl"
+    _seed_history(hpath)
+    result = runner.invoke(
+        app,
+        ["regressions", "--dataset", "customers", "--history", str(hpath), "--policy", "match.recall_safe_bound=2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "match.recall_safe_bound" in result.output
+
+
+def test_regressions_fail_on_regression_exits_1(tmp_path: Path) -> None:
+    hpath = tmp_path / "h.jsonl"
+    _seed_history(hpath)
+    result = runner.invoke(
+        app,
+        [
+            "regressions", "--dataset", "customers", "--history", str(hpath),
+            "--policy", "match.recall_safe_bound=2", "--fail-on-regression",
+        ],
+    )
     assert result.exit_code == 1
-    assert "0.2.0" in result.output
+    assert "match.recall_safe_bound" in result.output
