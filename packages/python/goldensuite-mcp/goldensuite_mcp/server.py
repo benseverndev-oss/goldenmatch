@@ -106,6 +106,20 @@ def _adapt_infermap() -> tuple[list[Tool], Callable[[str, dict], dict]]:
     return _normalize_tools(list(im.TOOLS)), dispatch
 
 
+def _adapt_goldenanalysis() -> tuple[list[Tool], Callable[[str, dict], dict]]:
+    from goldenanalysis.mcp import server as ga
+
+    handlers = ga.HANDLERS
+
+    def dispatch(name: str, args: dict) -> dict:
+        h = handlers.get(name)
+        if h is None:
+            return {"error": f"goldenanalysis: unknown tool {name!r}"}
+        return h(args)
+
+    return _normalize_tools(list(ga.TOOLS)), dispatch
+
+
 # Order determines first-wins precedence on tool-name collisions.
 # Goldenmatch is the headline package, so its tools win; the others register
 # only their unshadowed names. Adjust this order to change precedence.
@@ -115,6 +129,7 @@ _SUITE_ORDER: list[tuple[str, Callable[[], tuple[list[Tool], Callable[[str, dict
     ("goldenflow", _adapt_goldenflow),
     ("goldenpipe", _adapt_goldenpipe),
     ("infermap", _adapt_infermap),
+    ("goldenanalysis", _adapt_goldenanalysis),
 ]
 
 
