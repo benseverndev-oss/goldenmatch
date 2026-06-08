@@ -2013,6 +2013,54 @@ def _candidate_blocking_passes(profiles, df):
     return pool
 
 
+# Per-block row-id cap for the coverage signal: pathologically large blocks are
+# subsampled (deterministic, sorted-first-K) so coverage enumeration stays bounded.
+# candidate_count stays EXACT (from full block sizes); only the coverage pair-set is
+# capped. 150 -> at most C(150,2)=11175 pairs per oversized block.
+_COVERAGE_BLOCK_CAP = 150
+
+def _estimate_pass_stats(pass_cfg, df):
+    """Return (candidate_count, coverage) for a candidate pass.
+
+    candidate_count: EXACT sum over blocks of C(size, 2) (the budget is enforced on
+    this). coverage: set of canonical record-pair ids (min*N + max) the pass blocks
+    together, with per-block row-ids capped at _COVERAGE_BLOCK_CAP for boundedness.
+    Pair-ids are global (independent of the pass) so set ops across passes compose."""
+    from goldenmatch.core.blocker import _build_block_key_expr
+
+    n = df.height
+    if n < 2:
+        return 0, set()
+    key_expr = _build_block_key_expr(pass_cfg)
+    grouped = (
+        df.lazy()
+        .with_row_index("__rid__")
+        .with_columns(key_expr)
+        .filter(
+            pl.col("__block_key__").is_not_null()
+            & (pl.col("__block_key__").str.strip_chars() != "")
+        )
+        .group_by("__block_key__")
+        .agg(pl.col("__rid__"))
+        .collect()
+    )
+    candidate_count = 0
+    coverage: set[int] = set()
+    for rids in grouped["__rid__"].to_list():
+        size = len(rids)
+        if size < 2:
+            continue
+        candidate_count += size * (size - 1) // 2
+        sample = sorted(rids)[:_COVERAGE_BLOCK_CAP]
+        for i in range(len(sample)):
+            a = sample[i]
+            for j in range(i + 1, len(sample)):
+                b = sample[j]
+                lo, hi = (a, b) if a < b else (b, a)
+                coverage.add(lo * n + hi)
+    return candidate_count, coverage
+
+
 def _maybe_promote_blocking_to_adaptive(
     blocking: BlockingConfig | None,
     n_rows: int,

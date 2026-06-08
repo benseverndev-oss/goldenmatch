@@ -6,6 +6,7 @@ from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig import (
     _blocking_candidate_budget_k,
     _candidate_blocking_passes,
+    _estimate_pass_stats,
     profile_columns,
 )
 from goldenmatch.core.blocker import _build_block_key_expr
@@ -93,3 +94,17 @@ def test_candidate_pool_has_name_passes_and_compounds():
     assert any("substring:0:4" in t for t in dc.field_transforms[dob_i])      # date coarsened
     other_i = 1 - dob_i
     assert all("substring:0:4" not in t for t in dc.field_transforms[other_i])  # name NOT coarsened
+
+
+def test_estimate_pass_stats_exact_count_and_coverage():
+    # surname blocks: {smith: rows 0,1,2} (3 -> C(3,2)=3 pairs), {jones: rows 3,4} (1 pair), lee singleton (0)
+    df = pl.DataFrame({
+        "surname": ["smith", "smith", "smith", "jones", "jones", "lee"],
+        "dob":     ["x", "x", "x", "y", "y", "z"],
+    })
+    cfg = BlockingKeyConfig(fields=["surname"])
+    count, coverage = _estimate_pass_stats(cfg, df)
+    assert count == 3 + 1  # 4 candidate pairs
+    N = 6
+    expected = {0*N+1, 0*N+2, 1*N+2, 3*N+4}  # smith pairs + jones pair, canonical min*N+max
+    assert coverage == expected
