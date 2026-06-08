@@ -40,5 +40,7 @@ export function toMarkdown(report: AnalysisReport): string {
     lines.push("");
   }
 
-  return lines.join("\n").replace(/\s+$/, "") + "\n";
+  // `.trimEnd()` (not a `/\s+$/` regex) strips trailing whitespace incl. newlines
+  // with no polynomial-ReDoS risk (CodeQL js/polynomial-redos).
+  return lines.join("\n").trimEnd() + "\n";
 }
