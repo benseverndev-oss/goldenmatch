@@ -1934,6 +1934,76 @@ def build_blocking(
     return BlockingConfig(keys=[BlockingKeyConfig(fields=[profiles[0].name])], skip_oversized=True)
 
 
+def _candidate_blocking_passes(profiles, df):
+    """Build the POOL of candidate blocking passes for selective probabilistic
+    blocking: build_blocking's transform-rich name passes (recall floor) + per-field
+    transformed compounds (name x orthogonal, date coarsened to year) + self-selective
+    orthogonal single-keys. Returns list[BlockingKeyConfig] (not yet budget-selected)."""
+    base = build_blocking(profiles, df)
+    base_passes = list(base.passes) if base.passes else list(base.keys or [])
+    name_fields = {f for p in base_passes for f in p.fields}
+
+    def _null_rate(name):
+        return df[name].null_count() / df.height if df.height else 1.0
+
+    def _orthogonal(p):
+        # A date column is an orthogonal blocking signal even when build_blocking
+        # already emitted it as a standalone recall pass (#438): the design wants
+        # name x date(year) compounds, so date-typed cols are exempt from the
+        # name_fields exclusion. All other base-pass fields stay excluded.
+        not_a_name_field = p.name not in name_fields or p.col_type == "date"
+        return (
+            not_a_name_field
+            and p.col_type not in ("description", "numeric")
+            and _null_rate(p.name) <= 0.20
+            and 0.02 <= p.cardinality_ratio < 1.0
+        )
+
+    orthogonals = [p for p in profiles if _orthogonal(p)]
+
+    pool: list[BlockingKeyConfig] = []
+    seen: set[tuple] = set()
+
+    def _add(fields, field_transforms):
+        ft = tuple(tuple(t) for t in field_transforms) if field_transforms else None
+        key = (tuple(fields), ft)
+        if key in seen:
+            return
+        seen.add(key)
+        if field_transforms is None:
+            pool.append(BlockingKeyConfig(fields=list(fields)))
+        else:
+            pool.append(BlockingKeyConfig(fields=list(fields), field_transforms=field_transforms))
+
+    # 1. Name / recall-floor passes verbatim (express their shared transforms per-field).
+    for p in base_passes:
+        ft = [list(p.transforms or []) for _ in p.fields]
+        _add(list(p.fields), ft if any(ft) else None)
+
+    def _coarsen(o_profile):
+        # date orthogonals -> year via substring:0:4 (ISO leading-year; GoldenFlow
+        # date_iso8601 runs before autoconfig). Other orthogonals: no transform.
+        return ["substring:0:4"] if o_profile.col_type == "date" else []
+
+    # 2. Compounds: each base name pass's PRIMARY field x each orthogonal.
+    for p in base_passes:
+        if not p.fields:
+            continue
+        name_field = p.fields[0]
+        name_xf = list(p.transforms or [])
+        for o in orthogonals:
+            if o.name == name_field:
+                continue
+            _add([name_field, o.name], [name_xf, _coarsen(o)])
+
+    # 3. Self-selective orthogonal single-keys (high cardinality only).
+    for o in orthogonals:
+        if o.cardinality_ratio >= 0.30:
+            _add([o.name], [_coarsen(o)] if _coarsen(o) else None)
+
+    return pool
+
+
 def _maybe_promote_blocking_to_adaptive(
     blocking: BlockingConfig | None,
     n_rows: int,
