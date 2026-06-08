@@ -29,6 +29,8 @@ goldenmatch-native = { path = "packages/rust/extensions/native" }
 goldencheck-native = { path = "packages/rust/extensions/goldencheck-native" }
 # Same pattern for goldenflow's optional compiled runtime (goldenflow[native]).
 goldenflow-native = { path = "packages/rust/extensions/native-flow" }
+# Same pattern for goldenanalysis's optional compiled runtime (goldenanalysis[native]).
+goldenanalysis-native = { path = "packages/rust/extensions/analysis-native" }
 
 [dependency-groups]
 dev = [

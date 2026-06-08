@@ -1,0 +1,41 @@
+# goldenanalysis-native -- the optional native acceleration runtime for
+# GoldenAnalysis, shipped as a SEPARATE maturin/abi3 package (mirrors goldencheck's
+# native / goldencheck-native split). `goldenanalysis` stays a pure-Python wheel;
+# `pip install goldenanalysis[native]` pulls this, and
+# goldenanalysis.core._native_loader discovers it.
+#
+# The crate also builds via scripts/build_analysis_native.py for in-tree local dev
+# (drops goldenanalysis/_native.abi3.so); both paths share the same `_native`
+# pymodule, so the loader can import either.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "goldenanalysis-native"
+version = "0.1.0"
+description = "Optional native (Rust/PyO3) acceleration kernels for goldenanalysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ben Severn", email = "ben@bensevern.dev" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+
+[tool.maturin]
+# Mixed layout: the thin Python wrapper lives in python/goldenanalysis_native/; the
+# compiled abi3 ext lands at goldenanalysis_native/_native (pymodule `_native`, so
+# the last path component matches and no Rust rename is needed).
+python-source = "python"
+module-name = "goldenanalysis_native._native"
+# One abi3 wheel per platform spans CPython 3.11-3.13 (pyo3 abi3-py311 in
+# Cargo.toml). extension-module (no libpython link) is already a default pyo3
+# feature on the crate, so maturin inherits it.

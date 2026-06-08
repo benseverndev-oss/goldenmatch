@@ -915,6 +915,9 @@ match = [
 mcp = [
     { name = "mcp" },
 ]
+native = [
+    { name = "goldenanalysis-native" },
+]
 pipe = [
     { name = "goldenpipe" },
 ]
@@ -929,6 +932,7 @@ suite = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110" },
     { name = "goldenanalysis", extras = ["match", "check", "flow", "pipe"], marker = "extra == 'suite'", editable = "packages/python/goldenanalysis" },
+    { name = "goldenanalysis-native", marker = "extra == 'native'", directory = "packages/rust/extensions/analysis-native" },
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", marker = "extra == 'flow'", editable = "packages/python/goldenflow" },
     { name = "goldenmatch", marker = "extra == 'match'", editable = "packages/python/goldenmatch" },
@@ -944,7 +948,12 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30" },
 ]
-provides-extras = ["match", "check", "flow", "pipe", "suite", "mcp", "api", "dev"]
+provides-extras = ["match", "check", "flow", "pipe", "suite", "native", "mcp", "api", "dev"]
+
+[[package]]
+name = "goldenanalysis-native"
+version = "0.1.0"
+source = { directory = "packages/rust/extensions/analysis-native" }
 
 [[package]]
 name = "goldencheck"

@@ -104,6 +104,27 @@ GoldenCheck / GoldenFlow / GoldenMatch / GoldenPipe / InferMap outputs — it do
 not replace GoldenCheck's ingest-time profiling, and GoldenCheck does not import
 GoldenAnalysis.
 
+## Native accelerator (optional, `goldenanalysis[native]`)
+
+An optional Rust accelerator for the heavy aggregation primitives, gated exactly
+like `goldenmatch[native]` / `goldencheck[native]`:
+
+```bash
+pip install goldenanalysis[native]   # pulls the separate goldenanalysis-native wheel
+```
+
+The pure-Python/Polars path stays the **default and the byte-identical reference**.
+The compiled kernel (`analysis-core` pyo3-free + `analysis-native` abi3 wheel)
+mirrors `core/aggregate.py`'s `histogram` / `quantile` value-for-value, reading
+input as a Float64 Arrow array (zero-copy). The loader gate
+(`core/_native_loader.py`, `GOLDENANALYSIS_NATIVE=auto|0|1`) only uses a primitive
+once it's in `_GATED_ON` — which is **empty by design**: a primitive is added only
+after `tests/core/test_native_parity.py` proves byte-identical output **and**
+`benchmarks/aggregate_benchmark.py` shows the wall actually moved on a real shape
+(the pure loops are tight and the native path pays an Arrow-marshalling cost, so
+"it's Rust" is not enough). In-tree dev build:
+`uv run python scripts/build_analysis_native.py`.
+
 ## License
 
 MIT.
