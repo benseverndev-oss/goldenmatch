@@ -1481,6 +1481,7 @@ name = "goldensuite-mcp"
 version = "0.2.0"
 source = { editable = "packages/python/goldensuite-mcp" }
 dependencies = [
+    { name = "goldenanalysis", extra = ["mcp"] },
     { name = "goldencheck", extra = ["mcp"] },
     { name = "goldenflow", extra = ["mcp"] },
     { name = "goldenmatch", extra = ["mcp"] },
@@ -1499,6 +1500,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "goldenanalysis", extras = ["mcp"], editable = "packages/python/goldenanalysis" },
     { name = "goldencheck", extras = ["mcp"], editable = "packages/python/goldencheck" },
     { name = "goldenflow", extras = ["mcp"], editable = "packages/python/goldenflow" },
     { name = "goldenmatch", extras = ["mcp"], editable = "packages/python/goldenmatch" },
