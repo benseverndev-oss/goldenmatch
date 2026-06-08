@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+
 import pytest
 
 # test file is at packages/python/goldenmatch/tests/bench/test_*.py
@@ -27,3 +28,16 @@ def test_load_historical_50k_shape_or_skip():
     assert records.height > 1000
     rec_ids = set(records["record_id"].to_list())
     assert set(truth["record_id"].to_list()).issubset(rec_ids)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", ["dblp_acm", "febrl3", "ncvr", "synthetic_person"])
+def test_adapter_contract_or_skip(name):
+    mod = _load()
+    try:
+        records, truth = mod.load_dataset(name)
+    except mod.DatasetUnavailable as e:
+        pytest.skip(f"{name} unavailable: {e}")
+    assert "record_id" in records.columns
+    assert set(truth.columns) >= {"record_id", "cluster_id"}
+    assert set(truth["record_id"].to_list()).issubset(set(records["record_id"].to_list()))
