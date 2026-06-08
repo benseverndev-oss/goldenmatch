@@ -32,6 +32,7 @@ jobs:
       duckdb_extensions: ${{ steps.filter.outputs.duckdb_extensions }}
       native: ${{ steps.filter.outputs.native }}
       goldencheck_native: ${{ steps.filter.outputs.goldencheck_native }}
+      analysis_native: ${{ steps.filter.outputs.analysis_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
       embed: ${{ steps.filter.outputs.embed }}
@@ -173,6 +174,17 @@ jobs:
               - 'packages/python/goldencheck/goldencheck/profilers/fuzzy_values.py'
               - 'packages/python/goldencheck/tests/core/test_native_parity.py'
               - 'scripts/build_goldencheck_native.py'
+            analysis_native:
+              # GoldenAnalysis's optional native accelerator (analysis-core/native,
+              # PyO3, standalone workspace). Builds the .so and runs the parity
+              # suite (which SKIPS when the ext is absent), so without this lane
+              # the histogram/quantile kernels are UNTESTED in CI.
+              - 'packages/rust/extensions/analysis-native/**'
+              - 'packages/rust/extensions/analysis-core/**'
+              - 'packages/python/goldenanalysis/goldenanalysis/core/_native_loader.py'
+              - 'packages/python/goldenanalysis/goldenanalysis/core/aggregate.py'
+              - 'packages/python/goldenanalysis/tests/core/test_native_parity.py'
+              - 'scripts/build_analysis_native.py'
             native_flow:
               # GoldenFlow's optional native phone kernel — a standalone maturin
               # workspace, so the `rust` job's cargo test --workspace never
@@ -891,6 +903,53 @@ jobs:
         env:
           GOLDENCHECK_NATIVE: "1"
         run: uv run pytest packages/python/goldencheck/tests/core -q
+
+  # GoldenAnalysis native parity: the analysis-native ext (PyO3, standalone
+  # workspace) isn't built by the `rust` job. This lane clippy's the crates,
+  # builds the .so into the goldenanalysis package, and runs the parity suite —
+  # which `skipif`s when the ext is absent. Parity asserts the native histogram/
+  # quantile match pure-Python byte-for-byte, incl. a GOLDENANALYSIS_NATIVE=1
+  # required-mode run. `_GATED_ON` is empty, so this proves the kernels are READY,
+  # not yet wired into the pure path (the wall-verified flip is a follow-up).
+  goldenanalysis_native:
+    needs: changes
+    if: needs.changes.outputs.analysis_native == 'true' || needs.changes.outputs.ci_workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/analysis-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: clippy + test (analysis-core, pyo3-free kernels)
+        working-directory: packages/rust/extensions/analysis-core
+        run: |
+          cargo clippy -- -D warnings
+          cargo test
+      - name: clippy (analysis-native ext crate)
+        working-directory: packages/rust/extensions/analysis-native
+        run: cargo clippy --release -- -D warnings
+      - name: Build native extension into the package
+        # No --offline: CI has network + a cold cache on first run.
+        run: uv run python scripts/build_analysis_native.py
+      - name: Parity suite (ext present -> native path runs, not skips)
+        run: |
+          uv run pytest \
+            packages/python/goldenanalysis/tests/core/test_native_parity.py \
+            -v
+      - name: Required-native mode (GOLDENANALYSIS_NATIVE=1 must import the wheel)
+        env:
+          GOLDENANALYSIS_NATIVE: "1"
+        run: uv run pytest packages/python/goldenanalysis/tests/core -q
 
   # goldenmatch-native distribution smoke: build the SEPARATE maturin/abi3
   # wheel (the polars / polars-runtime split) and prove the runtime loads
