@@ -111,8 +111,11 @@ def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
     from goldenmatch.core.matchkey import _try_native_chain
 
     field_exprs: list[pl.Expr] = []
-    for field_name in key_config.fields:
-        transforms = key_config.transforms or []
+    for i, field_name in enumerate(key_config.fields):
+        if key_config.field_transforms is not None:
+            transforms = key_config.field_transforms[i] or []
+        else:
+            transforms = key_config.transforms or []
         native = _try_native_chain(field_name, transforms) if transforms else None
         if native is not None:
             field_exprs.append(native)

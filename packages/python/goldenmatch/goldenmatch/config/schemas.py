@@ -343,11 +343,21 @@ class MatchkeyConfig(BaseModel):
 class BlockingKeyConfig(BaseModel):
     fields: list[str]
     transforms: list[str] = Field(default_factory=list)
+    # Optional per-field transform chains, aligned 1:1 with `fields`. When set,
+    # field_transforms[i] applies to fields[i] (overriding `transforms`). Default
+    # None preserves the shared-`transforms` behavior. Lets a compound key soundex
+    # the name component AND year-coarsen the date component in one pass.
+    field_transforms: list[list[str]] | None = None
 
     @model_validator(mode="after")
     def _validate_fields_nonempty(self) -> BlockingKeyConfig:
         if not self.fields:
             raise ValueError("Blocking key must have at least one field.")
+        if self.field_transforms is not None and len(self.field_transforms) != len(self.fields):
+            raise ValueError(
+                "field_transforms must align 1:1 with fields "
+                f"({len(self.field_transforms)} != {len(self.fields)})."
+            )
         return self
 
 
