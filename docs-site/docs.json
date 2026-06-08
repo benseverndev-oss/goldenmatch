@@ -121,7 +121,8 @@
           {
             "group": "Research",
             "pages": [
-              "research/amortized-bayesian-er"
+              "research/amortized-bayesian-er",
+              "research/landscape-sculpting-er"
             ]
           }
         ]
