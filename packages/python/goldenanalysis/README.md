@@ -43,6 +43,24 @@ goldenanalysis report report.json --format markdown      # re-render a saved rep
 `trend` and `regressions` are visible in `--help` but are stubs until `0.2.0`
 (they need cross-run `ReportHistory`).
 
+## Over the suite (`0.2.0`)
+
+With the relevant extra installed (`pip install goldenanalysis[match,check,flow,pipe]`):
+
+```python
+# A GoldenMatch dedupe result -> match.rates + cluster.distribution
+report = ga.analyze_match(dedupe_result)
+
+# A whole-pipeline manifest -> every analyzer whose artifacts are present
+report = ga.analyze_pipeline(pipe_result)
+```
+
+`match.rates` emits `match.recall_estimate` when GoldenMatch ran
+`dedupe_df(..., certify=True)` (it attaches an unsupervised `RecallEstimate`), and
+`match.recall_safe_bound` when you pass an audit-calibrated certificate
+(`analyze_match(result, certificate=...)`) — the safe bound needs a labelled
+sample, so it can't be computed automatically. Both degrade silently when absent.
+
 ## GoldenCheck vs GoldenAnalysis
 
 They are easy to confuse and are deliberately distinct:
