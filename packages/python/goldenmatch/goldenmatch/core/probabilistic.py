@@ -328,6 +328,111 @@ def _estimate_m_one_pass(
     return m_probs, p_match, converged, iterations
 
 
+def _build_tf_tables(df: pl.DataFrame, mk: MatchkeyConfig) -> dict[str, dict[str, float]]:
+    """Per-field relative-frequency tables for tf_adjust fields, keyed on the SAME
+    transformed value the scorer/xform-column sees (apply_transforms(str(value),
+    f.transforms))."""
+    from goldenmatch.utils.transforms import apply_transforms
+
+    tf_tables: dict[str, dict[str, float]] = {}
+    for f in mk.fields:
+        if not getattr(f, "tf_adjust", False):
+            continue
+        vals = df[f.field].to_list()
+        counts: dict[str, int] = {}
+        total = 0
+        for v in vals:
+            if v is None:
+                continue
+            key = str(v)
+            if f.transforms:
+                key = apply_transforms(key, f.transforms)
+            counts[key] = counts.get(key, 0) + 1
+            total += 1
+        if total:
+            tf_tables[f.field] = {k: c / total for k, c in counts.items()}
+    return tf_tables
+
+
+def _exp_prior(n: int) -> list[float]:
+    """Exponential level prior [2**k / sum(2**k)] -- the same per-field m initializer
+    _estimate_m_one_pass uses. Reused to neutralize a blocked field's per-pass E-step
+    contribution (setting its pass-u equal to its held m zeroes its log-odds)."""
+    raw = [2 ** k for k in range(n)]
+    return [r / sum(raw) for r in raw]
+
+
+def _train_em_per_rule(df, mk, passes, n_sample_pairs, max_iterations, convergence, seed):
+    """Per-rule (per-blocking-pass) EM: estimate each field's m from the passes where
+    it is free to vary (held constant only in passes that block on it), average across
+    those passes. u stays from random sampling for ALL fields (no neutral override).
+    A field free in NO pass keeps the fixed neutral prior (the always-blocked fallback)."""
+    cols = [f.field for f in mk.fields if f.field != "__record__"]
+    row_lookup = {r["__row_id__"]: r for r in df.select(["__row_id__"] + cols).to_dicts()}
+    # u from random pairs -- shared, NO neutral override (random u is unbiased for all fields)
+    random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    if len(random_pairs) < 10:
+        return _fallback_result(mk)
+    random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
+    u_probs = {}
+    for j, f in enumerate(mk.fields):
+        counts = [float((random_matrix[:, j] == lv).sum()) for lv in range(f.levels)]
+        total = sum(counts) + f.levels * 1e-6
+        u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+    # per-pass EM, collect m estimates for fields free in that pass
+    m_runs = {f.field: [] for f in mk.fields}
+    p_matches = []
+    converged_any = False
+    iters_max = 0
+    for field_set, blocks in passes:
+        pair_list = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
+        if len(pair_list) < 10:
+            logger.info("per-rule EM: pass %s skipped (only %d pairs)", field_set, len(pair_list))
+            continue
+        comp = _build_comparison_matrix(pair_list, row_lookup, mk)
+        excluded = set(field_set)
+        # Neutralize the blocked field's per-pass E-step contribution: hold its u at the
+        # same exponential m-prior _estimate_m_one_pass holds its m at, so log_m == log_u
+        # (zero log-odds) for the blocked field within this pass. The blocked field agrees
+        # in every within-block pair; with its high prior-m over its LOW random u it would
+        # otherwise inject a large constant match-boost and saturate p_match (collapsing the
+        # discriminating fields' disagreement penalties). The GLOBAL random u_probs is
+        # unchanged and is what feeds EMResult + the final log2(m_bar/u) weights.
+        pass_u = {
+            f.field: (_exp_prior(f.levels) if f.field in excluded else list(u_probs[f.field]))
+            for f in mk.fields
+        }
+        m_pass, p_match, conv, iters = _estimate_m_one_pass(
+            comp, mk, pass_u, excluded, max_iterations, convergence)
+        p_matches.append(p_match)
+        converged_any = converged_any or conv
+        iters_max = max(iters_max, iters)
+        for f in mk.fields:
+            if f.field not in excluded:
+                m_runs[f.field].append(m_pass[f.field])
+    if all(len(v) == 0 for v in m_runs.values()):
+        return _fallback_result(mk)  # every pass thin
+    # combine: average across runs where the field was free; fixed prior if free in none
+    m_probs, match_weights = {}, {}
+    for f in mk.fields:
+        runs = m_runs[f.field]
+        if runs:
+            m_probs[f.field] = [float(np.mean([r[lv] for r in runs])) for lv in range(f.levels)]
+            match_weights[f.field] = [
+                math.log2(max(m_probs[f.field][lv], 1e-10) / max(u_probs[f.field][lv], 1e-10))
+                for lv in range(f.levels)]
+        else:
+            # free in NO pass -> fixed neutral prior (same shape as the single-run blocking-field path)
+            n = f.levels
+            m_probs[f.field] = [r / sum(2 ** k for k in range(n)) for r in (2 ** k for k in range(n))]
+            match_weights[f.field] = [(-3.0 + 6.0 * k / (n - 1)) if n > 1 else 3.0 for k in range(n)]
+    tf_tables = _build_tf_tables(df, mk)
+    return EMResult(m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,
+                    converged=converged_any, iterations=iters_max,
+                    proportion_matched=(float(np.mean(p_matches)) if p_matches else 0.05),
+                    tf_tables=(tf_tables or None))
+
+
 def train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -337,6 +442,7 @@ def train_em(
     seed: int = 42,
     blocks: list | None = None,
     blocking_fields: list[str] | None = None,
+    passes: list | None = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -357,10 +463,17 @@ def train_em(
         seed: Random seed for pair sampling.
         blocks: Optional list of BlockResult for within-block sampling.
         blocking_fields: Fields used for blocking (excluded from EM training).
+        passes: Optional list of (field_set, blocks) per blocking pass. When given
+            and per-rule EM is enabled, routes to the per-rule path that estimates
+            each field's m from the passes where it varies and averages across them.
 
     Returns:
         EMResult with trained m/u probabilities and match weights.
     """
+    if passes is not None and _fs_per_rule_em_enabled():
+        return _train_em_per_rule(df, mk, passes, n_sample_pairs, max_iterations,
+                                  convergence, seed)
+
     if blocking_fields is None:
         blocking_fields = []
 
@@ -439,29 +552,7 @@ def train_em(
         match_weights[f.field] = weights
 
     # ── Step 4: build per-field relative-frequency tables for tf_adjust fields ──
-    # Key on the SAME transformed value the scorer/xform-column sees:
-    # apply_transforms(str(value), f.transforms). This matches both the slow
-    # path's lookup (comparison_vector str()s then transforms) AND the fast
-    # path's materialized __xform_<sig>__ column (cast(Utf8) then transforms).
-    from goldenmatch.utils.transforms import apply_transforms
-
-    tf_tables: dict[str, dict[str, float]] = {}
-    for f in mk.fields:
-        if not getattr(f, "tf_adjust", False):
-            continue
-        vals = df[f.field].to_list()
-        counts: dict[str, int] = {}
-        total = 0
-        for v in vals:
-            if v is None:
-                continue
-            key = str(v)
-            if f.transforms:
-                key = apply_transforms(key, f.transforms)
-            counts[key] = counts.get(key, 0) + 1
-            total += 1
-        if total:
-            tf_tables[f.field] = {k: c / total for k, c in counts.items()}
+    tf_tables = _build_tf_tables(df, mk)
 
     return EMResult(
         m_probs=m_probs,
