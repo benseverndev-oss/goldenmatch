@@ -2801,6 +2801,65 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     )]
 
 
+def _build_probabilistic_blocking(
+    profiles: list[ColumnProfile],
+    df: pl.DataFrame,
+    max_passes: int = 4,
+) -> BlockingConfig:
+    """Derive a Splink-style multi-pass UNION blocking config for the
+    probabilistic path. Each pass is a conjunction of identity-ish fields;
+    union over passes lifts blocking recall (the F-S recall lever). Capped at
+    `max_passes` to bound the pair budget; oversized blocks are skipped.
+
+    Reuses core/blocker.py::_build_multi_pass_blocks via strategy='multi_pass'.
+    """
+    from goldenmatch.core.indicators import compute_column_priors
+
+    try:
+        priors = compute_column_priors(df)
+    except Exception:
+        priors = {}
+
+    def _identity(name: str) -> float:
+        p = priors.get(name)
+        return p.identity_score if p is not None else 0.0
+
+    def _eligible(p: ColumnProfile) -> bool:
+        null_rate = df[p.name].null_count() / df.height if df.height else 1.0
+        return (
+            p.col_type not in ("numeric", "date", "description")
+            and 0.01 <= p.cardinality_ratio < 1.0
+            and null_rate <= 0.20
+        )
+
+    ranked = sorted(
+        (p for p in profiles if _eligible(p)),
+        key=lambda p: (_identity(p.name), p.cardinality_ratio),
+        reverse=True,
+    )
+    passes: list[BlockingKeyConfig] = []
+    # Single-key passes on the strongest identity columns.
+    for p in ranked[:2]:
+        passes.append(BlockingKeyConfig(fields=[p.name]))
+    # 2-field conjunctions of the next strongest pairs (orthogonal coverage).
+    for i in range(0, min(len(ranked) - 1, 4), 2):
+        if len(passes) >= max_passes:
+            break
+        passes.append(BlockingKeyConfig(fields=[ranked[i].name, ranked[i + 1].name]))
+    passes = passes[:max_passes]
+    if not passes:
+        return build_blocking(profiles, df)
+
+    n = df.height
+    max_safe_block = max(1000, min(10_000, n // 200)) if n else 5000
+    return BlockingConfig(
+        strategy="multi_pass",
+        passes=passes,
+        max_block_size=max_safe_block,
+        skip_oversized=True,
+    )
+
+
 def auto_configure_probabilistic_df(
     df: pl.DataFrame | pl.LazyFrame,
     llm_provider: str | None = None,
@@ -2834,7 +2893,7 @@ def auto_configure_probabilistic_df(
             "perfectly-unique surrogate keys; provide name/address/email/phone/"
             "identifier-like fields)."
         )
-    blocking = build_blocking(profiles, df, llm_provider=llm_provider)
+    blocking = _build_probabilistic_blocking(profiles, df)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,
