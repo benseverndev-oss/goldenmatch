@@ -3003,7 +3003,16 @@ def _build_probabilistic_blocking(profiles, df):
     Degenerate input (no orthogonal fields / profiling failure) -> build_blocking."""
     base = build_blocking(profiles, df)
     base_passes = list(base.passes) if base.passes else list(base.keys or [])
-    name_fields = {f for p in base_passes for f in p.fields}
+    name_fields = {f for p in base_passes for f in p.fields}   # all base fields (degenerate check)
+    by_name = {p.name: p for p in profiles}
+    # Recall anchor must guarantee a NAME-recall pass survives, NOT just any base-pass
+    # field. build_blocking emits a [dob] DATE recall pass (#438), so dob is in
+    # name_fields; a [dob] pass must NOT satisfy the recall anchor. Exclude date-typed
+    # fields so the anchor binds to the soundex/substring name-recall passes.
+    anchor_fields = {
+        f for f in name_fields
+        if by_name.get(f) is None or by_name[f].col_type != "date"
+    }
 
     try:
         pool = _candidate_blocking_passes(profiles, df)
@@ -3030,7 +3039,7 @@ def _build_probabilistic_blocking(profiles, df):
     if not stats:
         return base
 
-    selected = _select_passes_within_budget(stats, budget, name_fields=name_fields)
+    selected = _select_passes_within_budget(stats, budget, name_fields=anchor_fields)
     if not selected:
         return base
 
