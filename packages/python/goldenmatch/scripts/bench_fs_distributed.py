@@ -7,10 +7,11 @@ checked, not just that it runs). The bucket backend is what carries the Ray /
 DataFusion distribution wiring, so a healthy single-node bucket run is the
 prerequisite for the distributed claim.
 
-Synthetic shape: distributed surnames (no soundex collapse) + injected
-near-duplicates (a typo'd name sharing the block key) whose (base, dup) row
-indices ARE the ground truth — `dedupe_df` assigns `__row_id__` by input row
-position, so the GT is exact in row-id space.
+Synthetic shape: high-entropy distinct names (so different people are
+separable) + injected near-duplicates (a typo'd name + shared email + block
+key). Each base row is an entity; a base may be duplicated more than once.
+Ground truth is the full per-entity CLIQUE (all within-entity pairs), exact in
+`__row_id__` space since `dedupe_df` assigns row-id by input position.
 
 Usage:
     uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
@@ -28,18 +29,31 @@ import time
 
 import polars as pl
 
-_SURN = [
-    "smith", "jones", "taylor", "brown", "williams", "wilson", "johnson",
-    "davies", "robinson", "wright", "thompson", "evans", "walker", "white",
-    "roberts", "green", "hall", "wood", "harris", "martin", "jackson", "clarke",
-    "clark", "turner", "hill", "scott", "cooper", "morris", "ward", "moore",
-]
-_FIRST = [
-    "alexander", "benjamin", "charlotte", "daniel", "eleanor", "frederick",
-    "grace", "harriet", "isabella", "jonathan", "katherine", "lawrence",
-    "margaret", "nicholas", "olivia", "patricia", "quentin", "rebecca",
-    "samuel", "theodore", "ursula", "victoria", "william", "zachary",
-]
+
+# Realistic name diversity: real person data has 10^4-10^5 distinct surnames, so
+# two random people sharing (or even looking similar to) another's name in a
+# small block is rare. A tiny pool (30 surnames) manufactures coincidental
+# same-name non-duplicates that are ambiguous to ANY matcher; a syllable-
+# concatenation pool manufactures shared-PREFIX names that jaro_winkler (prefix-
+# weighted) scores as false partials. Both are generator artifacts, not FS
+# weaknesses. Generate high-entropy names with VARIED prefixes so genuinely
+# different people are separable (low pairwise jaro_winkler).
+def _build_pools(n_each: int = 60_000, seed: int = 1) -> tuple[list[str], list[str]]:
+    rng = random.Random(seed)
+    cons, vow = "bcdfghjklmnprstvwz", "aeiou"
+
+    def _name() -> str:
+        # 3-4 CV syllables -> length 6-8, first letter spread across 18 consonants
+        # so prefixes are high-entropy (no jaro prefix clustering).
+        return "".join(rng.choice(cons) + rng.choice(vow)
+                       for _ in range(rng.randint(3, 4)))
+
+    surn = list({_name() for _ in range(n_each * 2)})[:n_each]
+    first = list({_name() for _ in range(n_each * 2)})[:n_each]
+    return surn, first
+
+
+_SURN, _FIRST = _build_pools()
 
 
 def _typo(s: str, rng: random.Random) -> str:
@@ -50,11 +64,21 @@ def _typo(s: str, rng: random.Random) -> str:
 
 
 def gen_with_gt(n: int, dup_frac: float, seed: int):
-    """Return (df, ground_truth_pairs). __row_id__ == input row position, so
-    the injected (base_idx, dup_idx) pairs are GT directly."""
+    """Return (df, ground_truth_pairs). __row_id__ == input row position.
+
+    Ground truth is the full per-entity CLIQUE: every base row is its own
+    entity, every dup carries its base's entity id, and GT = all within-entity
+    pairs. A base can be duplicated more than once, so an entity may have 3+
+    rows -- the dup<->dup pairs are true matches too, and clustering finds them,
+    so GT must be the clique (a star base->dup GT would wrongly score those as
+    false positives). Dups copy an ORIGINAL base (not another dup) so entity
+    membership is unambiguous."""
+    import itertools
+
     rng = random.Random(seed)
     n_zip = max(1, n // 40)
     rows: list[dict] = []
+    entity: list[int] = []  # entity id per row (row index of the base)
     for i in range(n):
         f, l = rng.choice(_FIRST), rng.choice(_SURN)
         rows.append({
@@ -62,19 +86,27 @@ def gen_with_gt(n: int, dup_frac: float, seed: int):
             "email": f"{f}.{l}.{i}@example.com",
             "zip": f"{rng.randrange(n_zip):05d}",
         })
-    gt: set[tuple[int, int]] = set()
+        entity.append(i)
     n_dups = int(n * dup_frac)
     for _ in range(n_dups):
-        base_idx = rng.randrange(len(rows))
+        base_idx = rng.randrange(n)  # ORIGINAL bases only (no dup-of-dup chains)
         src = rows[base_idx]
-        dup_idx = len(rows)
         rows.append({
             "first_name": _typo(src["first_name"], rng),
             "last_name": src["last_name"],
             "email": src["email"],  # exact agree on email -> strong FS signal
             "zip": src["zip"],
         })
-        gt.add((min(base_idx, dup_idx), max(base_idx, dup_idx)))
+        entity.append(base_idx)
+
+    groups: dict[int, list[int]] = {}
+    for idx, e in enumerate(entity):
+        groups.setdefault(e, []).append(idx)
+    gt: set[tuple[int, int]] = set()
+    for members in groups.values():
+        if len(members) >= 2:
+            for a, b in itertools.combinations(members, 2):
+                gt.add((a, b))
     # NOTE: order preserved (no shuffle) so row position == __row_id__ == GT idx.
     return pl.DataFrame(rows), gt
 
