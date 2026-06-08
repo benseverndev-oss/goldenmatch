@@ -92,6 +92,11 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _jaccard_score_single(val_a, val_b)
     elif scorer == "qgram":
         return _qgram_score_single(val_a, val_b)
+    elif scorer == "ensemble":
+        jw = JaroWinkler.similarity(val_a, val_b)
+        ts = token_sort_ratio(val_a, val_b) / 100.0
+        sx = (1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0) * 0.8
+        return max(jw, ts, sx)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
