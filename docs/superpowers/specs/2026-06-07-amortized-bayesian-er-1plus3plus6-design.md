@@ -161,18 +161,31 @@ encoder feeds the step-2/3 head, trained ONLY on a string simulator:
   buckets the model never trained, so real co-referents aren't close. (Also fixed
   a reproducibility bug — process-randomised `hash()` → crc32.)
 
-## Decision — proof-of-concept complete; one gating problem identified
+## Step 5 result (2026-06-07 — frozen pretrained encoder fixes most of the gap)
 
-The 1+3+6 loop holds end-to-end on simulated ER (steps 1–3), AND step 4 cleanly
-localises the gating obstacle for real data: **the record encoder**. The partition
-head, learned prior, and EIG design are not the problem; the sim-to-real embedding
-gap is. Highest-value next move, in order:
-1. **Pretrained general text encoder** (char-level or sentence-transformer) as the
-   record featurizer — universal geometry, amortize only the head. This is the
-   most likely fix for the step-4 transfer failure (trades the no-heavy-deps stance).
-2. **Richer simulator** (real name/address/title dictionaries + realistic
-   corruption) and/or light per-domain unsupervised adaptation (concedes pure
-   zero-shot for cheap transfer).
-3. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
-4. **Soft Bayesian conditioning** in step 3 + noisy-oracle handling; **lift F1**
-   (capacity / Set-Transformer encoder) — currently a floor, not a ceiling.
+Run via `scripts/research/pretrained_transfer_er.py`; full tables in
+`scripts/research/RESULTS-pretrained-transfer.md`. **Step-4 hypothesis CONFIRMED.**
+Swapping the from-scratch trigram encoder for frozen MiniLM (head trained only on
+simulated embeddings, zero-shot eval on real):
+
+- REAL Febrl3 F1 **0.03 -> 0.42** (~14x), DBLP-ACM **0.035 -> 0.21** (~6x).
+- **Well-calibrated zero-shot on real data** (ECE 0.08-0.09) — the posterior
+  property, holding on never-seen data.
+- Still below the tuned char+CC baseline (0.42 vs 0.95); failure mode FLIPPED from
+  over-fragmentation (step 4) to OVER-MERGING (33 clusters vs 60 true). The residual
+  gap is a sim-vs-real decision-BOUNDARY mismatch, not an encoder problem.
+
+## Decision — encoder hypothesis validated; residual gap is the boundary
+
+The 1+3+6 loop holds end-to-end on simulated ER (steps 1–3); step 4 localised the
+gating obstacle to the encoder; step 5 confirmed it — a pretrained text encoder is
+the right featurizer and recovers most of the transfer. Remaining work, in order:
+1. **Close the boundary gap** (the now-dominant issue): a richer/realistic
+   simulator so the simulated within/between-entity distance distribution matches
+   real data, OR light per-domain calibration (one temperature/threshold fit on the
+   target corpus) to correct the over-merge. Pure-zero-shot-to-competitive is the
+   open gap.
+2. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
+3. **Soft Bayesian conditioning** in step 3 + noisy-oracle handling; **lift F1**
+   (bigger head / Set-Transformer context, matched train/eval sizes) — held-out sim
+   is only 0.74, so the head itself still has slack.
