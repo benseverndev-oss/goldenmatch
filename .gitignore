@@ -76,3 +76,6 @@ packages/python/goldencheck/goldencheck/_native*.so
 datasets/
 # Same, for goldenflow (built from packages/rust/extensions/native-flow).
 packages/python/goldenflow/goldenflow/_native*.so
+# Same, for goldenanalysis (built from packages/rust/extensions/analysis-native
+# via scripts/build_analysis_native.py).
+packages/python/goldenanalysis/goldenanalysis/_native*.so
