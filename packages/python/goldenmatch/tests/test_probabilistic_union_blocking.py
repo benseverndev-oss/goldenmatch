@@ -1,8 +1,10 @@
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
-from goldenmatch.core.pipeline import _collect_blocking_fields
+from goldenmatch.core.pipeline import _em_excluded_fields
 
 
-def test_blocking_fields_include_passes():
+def test_em_excluded_multipass_is_intersection_empty():
+    # No field appears in BOTH passes -> nothing is agree-by-construction
+    # everywhere -> exclude nothing (EM can estimate m/u for all of them).
     blocking = BlockingConfig(
         strategy="multi_pass",
         passes=[
@@ -10,26 +12,41 @@ def test_blocking_fields_include_passes():
             BlockingKeyConfig(fields=["surname"]),
         ],
     )
-    assert set(_collect_blocking_fields(blocking)) == {"first_name", "birth_year", "surname"}
+    assert _em_excluded_fields(blocking) == []
 
 
-def test_blocking_fields_include_keys_only_still_works():
+def test_em_excluded_single_static_key():
+    # Single static key = one pass; its fields always agree within block -> exclude.
     blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
-    assert set(_collect_blocking_fields(blocking)) == {"zip"}
+    assert _em_excluded_fields(blocking) == ["zip"]
 
 
-def test_blocking_fields_union_of_keys_and_passes_deduped():
+def test_em_excluded_intersection_of_overlapping_passes():
+    # zip is in EVERY pass (always agrees); surname/first_name each only in one.
     blocking = BlockingConfig(
         strategy="multi_pass",
-        keys=[BlockingKeyConfig(fields=["zip"])],
-        passes=[BlockingKeyConfig(fields=["zip", "surname"])],
+        passes=[
+            BlockingKeyConfig(fields=["zip", "surname"]),
+            BlockingKeyConfig(fields=["zip", "first_name"]),
+        ],
     )
-    # union, de-duplicated, order-preserving not required by the assertion
-    assert set(_collect_blocking_fields(blocking)) == {"zip", "surname"}
+    assert _em_excluded_fields(blocking) == ["zip"]
 
 
-def test_blocking_fields_none_is_empty():
-    assert _collect_blocking_fields(None) == []
+def test_em_excluded_none_is_empty():
+    assert _em_excluded_fields(None) == []
+
+
+def test_em_excluded_multipass_common_field():
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[
+            BlockingKeyConfig(fields=["zip", "a"]),
+            BlockingKeyConfig(fields=["zip", "b"]),
+            BlockingKeyConfig(fields=["zip"]),
+        ],
+    )
+    assert _em_excluded_fields(blocking) == ["zip"]
 
 
 def test_build_probabilistic_blocking_augments_not_replaces():
