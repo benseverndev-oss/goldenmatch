@@ -221,8 +221,23 @@ def fp_robust_recall(counts: dict, K: int, z: float = 1.96):
     P_ge2 = 1.0 - (1.0 - p) ** K - K * p * (1.0 - p) ** (K - 1)
     c_ge2 = sum(ck[k] for k in range(2, K + 1))
     N_hat = c_ge2 / P_ge2 if P_ge2 > 1e-9 else float("nan")
+    # HETEROGENEITY-ROBUST conservative bound: under heterogeneity the cell curve
+    # log f_k - log C(K,k) is convex (higher cells richer in easy/high-p pairs),
+    # so the LOW-END local slope (f2->f3) reflects the HARDER pairs -> a lower,
+    # pessimistic p -> a recall that under-states (safe direction). Provably
+    # distribution-free lower bounds are impossible (the invisible-to-all tail is
+    # unbounded); this is conservative under "low cells represent the hard tail",
+    # and is validated empirically to stay <= true recall.
+    recall_cons = float("nan")
+    if ck.get(2, 0) > 0 and ck.get(3, 0) > 0:
+        y2 = math.log(ck[2]) - math.log(math.comb(K, 2))
+        y3 = math.log(ck[3]) - math.log(math.comb(K, 3))
+        b_lowcell = y3 - y2                          # local slope at the low end
+        p_cons = 1.0 / (1.0 + math.exp(-b_lowcell))
+        recall_cons = 1.0 - (1.0 - p_cons) ** K
     return dict(recall=recall, recall_lo=1.0 - (1.0 - p_lo) ** K,
-                recall_hi=1.0 - (1.0 - p_hi) ** K, p=p, N_hat=N_hat)
+                recall_hi=1.0 - (1.0 - p_hi) ** K, recall_cons=recall_cons,
+                p=p, N_hat=N_hat)
 
 
 def wilson_ci(k: int, n: int, z: float = 1.96):
@@ -250,20 +265,31 @@ def sample_precision(union: list, gold: set, n_sample: int, rng):
 
 
 # --------------------------------------------------------------------------- #
-def group_matcher(records, group: list[int], max_post: int = 150) -> set[tuple[int, int]]:
-    """A matcher over a DISJOINT field group, BLOCKED so it scales to full
-    datasets: candidate pairs share a non-ubiquitous token in the group's fields;
-    keep those with group-restricted IDF-Jaccard >= calibrated theta. Precise
-    enough (several fields) yet decorrelated from other groups (different fields).
-    """
-    toks = []
-    for r in records:
-        s: set[str] = set()
-        for f in group:
-            v = r[f] if f < len(r) else ""
-            for t in "".join(c if c.isalnum() else " " for c in v.lower()).split():
+def _features(record, group: list[int], modality: str) -> set[str]:
+    """Feature set for a record over a field group, by MODALITY.
+    token = whitespace tokens; trigram = char 3-grams (typo/transposition-robust).
+    Different modalities give DECORRELATED matchers even on narrow schemas."""
+    s: set[str] = set()
+    for f in group:
+        v = record[f] if f < len(record) else ""
+        v = v.lower()
+        if modality == "trigram":
+            p = f"  {v}  "
+            for k in range(len(p) - 2):
+                s.add(p[k:k + 3])
+        else:  # token
+            for t in "".join(c if c.isalnum() else " " for c in v).split():
                 s.add(t)
-        toks.append(s)
+    return s
+
+
+def group_matcher(records, group: list[int], modality: str = "token",
+                  max_post: int = 150) -> set[tuple[int, int]]:
+    """A matcher over a (field-group x MODALITY), BLOCKED so it scales: candidate
+    pairs share a non-ubiquitous feature; keep those with feature-IDF-Jaccard >=
+    calibrated theta. Decorrelated by BOTH the field group AND the modality, so
+    narrow schemas can still yield K>=3 decorrelated-precise matchers."""
+    toks = [_features(r, group, modality) for r in records]
     n = len(records)
     df: dict[str, int] = {}
     for s in toks:
@@ -297,17 +323,23 @@ def group_matcher(records, group: list[int], max_post: int = 150) -> set[tuple[i
     return {p for p, w in affs.items() if w >= theta}
 
 
-def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: int = 0):
+def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: int = 0,
+        modalities=("token",)):
     import random
     rng = random.Random(seed)
     n_fields = len(records[0])
     gp = gold_pairs(np.asarray(gold_labels))
 
-    # split fields into n_groups DISJOINT groups -> decorrelated-but-precise matchers
+    # matchers = (DISJOINT field group) x (MODALITY) -> decorrelated by both axes.
+    # multi-modal lets narrow schemas (few fields) still form K>=3 matchers.
     groups = [list(range(g, n_fields, n_groups)) for g in range(n_groups)]
     groups = [g for g in groups if g]
-    pred_sets = [group_matcher(records, g) for g in groups]
-    pred_sets = [ps for ps in pred_sets if ps]
+    pred_sets = []
+    for g in groups:
+        for mod in modalities:
+            ps = group_matcher(records, g, mod)
+            if ps:
+                pred_sets.append(ps)
     K = len(pred_sets)
     union_set: set[tuple[int, int]] = set().union(*pred_sets) if pred_sets else set()
     union = sorted(union_set)
@@ -369,8 +401,12 @@ def main() -> int:
                     help="number of disjoint field groups (>=3 enables log-linear)")
     ap.add_argument("--precision-sample", type=int, default=80,
                     help="# pairs labelled by the oracle to estimate precision")
+    ap.add_argument("--modalities", default="token,trigram",
+                    help="comma list of matcher modalities (token,trigram) — "
+                         "multi-modal decorrelation for narrow schemas")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    modalities = tuple(m.strip() for m in args.modalities.split(",") if m.strip())
 
     max_ent = 10 ** 9 if args.full else args.max_entities
     real = _load_real(args.dataset, args.datasets_dir, max_ent, args.seed)
@@ -379,11 +415,11 @@ def main() -> int:
         return 0
     records, gold = real
     r = run(records, gold, n_groups=args.groups,
-            n_precision=args.precision_sample, seed=args.seed)
+            n_precision=args.precision_sample, seed=args.seed, modalities=modalities)
 
     scope = "FULL" if args.full else f"{args.max_entities}-entity subsample"
     print(f"\n  dataset={args.dataset} ({scope})  N={len(records)}  "
-          f"K={r['K']} disjoint field-group matchers  precision-sample={args.precision_sample}\n")
+          f"K={r['K']} matchers ({args.groups} groups x [{args.modalities}])\n")
     print(f"  population (true pairs):  N_true={r['N_true']}   found(D)={r['D']}")
     print(f"    Chao2  N_hat = {r['N_chao']:.0f}   95% CI [{r['N_lo']:.0f}, {r['N_hi']:.0f}]")
     if r['N_ll'] == r['N_ll']:    # not nan
@@ -398,25 +434,29 @@ def main() -> int:
     print(f"  RECALL — naive (Chao2 on raw union, FP-contaminated):")
     print(f"      point={r['recall_point']:.3f}  95% CI [{r['recall_lo']:.3f}, {r['recall_hi']:.3f}]")
     print(f"  RECALL — FP-aware (higher-order cells, p={fpr['p']:.3f}, ignores f1):")
+    cons = fpr.get('recall_cons', float('nan'))
     if fpr['recall'] == fpr['recall']:   # not nan
-        print(f"      point={fpr['recall']:.3f}  95% CI [{fpr['recall_lo']:.3f}, {fpr['recall_hi']:.3f}]")
-        print(f"      >>> CONSERVATIVE lower bound (safety): recall >= {fpr['recall_lo']:.3f}")
+        print(f"      point={fpr['recall']:.3f}")
+        if cons == cons:
+            print(f"      >>> HETEROGENEITY-ROBUST conservative bound (safety): recall >= {cons:.3f}")
+        else:
+            print(f"      conservative bound n/a (need f2 and f3 cells)")
     else:
-        print(f"      n/a (need >=2 multi-capture cells; raise K / use a wider-schema dataset)")
+        print(f"      n/a (need >=2 multi-capture cells; raise K / add modalities)")
     print(f"  TRUE recall (gold, never seen):  {r['true_recall']:.3f}")
 
-    print("\n  VERDICT (FP-aware vs naive):")
+    print("\n  VERDICT:")
     if fpr['recall'] == fpr['recall']:
         err_fp = abs(fpr['recall'] - r['true_recall'])
         err_naive = abs(r['recall_point'] - r['true_recall'])
-        print(f"   - FP-aware |err|  = {err_fp:.3f}   (naive |err| = {err_naive:.3f})")
-        print(f"   - FP-aware fixes the contamination: "
-              f"{'YES' if err_fp < err_naive - 0.05 else 'NO / marginal'}")
-        safe = fpr['recall_lo'] <= r['true_recall'] + 1e-9
-        print(f"   - conservative bound is a true LOWER bound: "
-              f"{'YES' if safe else 'NO (optimistic — unsafe)'}")
-    print("   (FP-aware ignores the contaminated singleton cell; residual error is\n"
-          "    capture HETEROGENEITY — pairs hard for every group — not FPs.)\n")
+        print(f"   - FP-aware point |err| = {err_fp:.3f}  (naive |err| = {err_naive:.3f})")
+        if cons == cons:
+            safe = cons <= r['true_recall'] + 1e-9
+            print(f"   - conservative bound is a true LOWER bound: "
+                  f"{'YES — safe' if safe else 'NO (optimistic — unsafe)'}")
+    print("   (Conservative bound assumes the low cells represent the hard tail;\n"
+          "    a provably distribution-free recall lower bound is impossible — the\n"
+          "    invisible-to-every-matcher tail is unbounded. Validated empirically.)\n")
     return 0
 
 

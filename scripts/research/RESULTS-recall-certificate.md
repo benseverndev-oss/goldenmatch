@@ -3,15 +3,18 @@
 Runner: `scripts/research/recall_certificate.py`. numpy + the existing real-data
 loaders; real Febrl3 / DBLP-ACM subsamples, 3 seeds. 2026-06-07.
 
-> **Verdict (current): the FP-aware estimator rescues the full-scale POINT
-> estimate; the conservative SAFETY bound is improved but not yet guaranteed.**
-> Naive Chao2-on-the-raw-union breaks at scale (FP contamination: Febrl3 0.64 est
-> vs 0.95 true). The FP-aware estimator — fit the true-pair capture model from the
-> FP-free higher-order cells (k≥2), ignore the contaminated singleton cell —
-> brings the full-scale point estimate to **0.966 vs 0.953 true (err 0.013)** on
-> Febrl3 with no labels. Remaining: the conservative lower bound can be mildly
-> optimistic under capture heterogeneity (K=4 bound 0.963 > 0.953 true; K=5 safe),
-> and narrow schemas (≤4 fields) can't form enough decorrelated-precise groups.
+> **Verdict (final): the unsupervised recall POINT estimate works at full scale
+> on wide AND narrow schemas; a trustworthy SAFETY lower bound is NOT obtainable
+> from the capture data alone.**
+> - FP-aware estimator (ignore the FP-contaminated singleton cell, fit the
+>   true-pair capture model from k≥2) + multi-modal decorrelation gives a
+>   full-scale, label-free recall POINT estimate within ~0.001–0.04 of true on
+>   both Febrl3 (0.999 vs 1.000) and DBLP-ACM (0.962 vs 1.000).
+> - But the heterogeneity-robust **lower bound FAILS**: in every config where true
+>   recall < 1.0 the "conservative" bound came out *above* true recall (e.g.
+>   0.969 vs 0.953). Even the lowest reliable cell (f2) is drawn from easier
+>   (captured-≥2) pairs, so the invisible hard tail can't be bounded from observed
+>   cells. A safe certificate needs an external assumption / small labeled audit.
 
 ## Why this idea (derived from two failed arcs)
 
@@ -159,6 +162,57 @@ labels — the dominant (FP-contamination) failure is fixed.
 **Net:** the recall *point* estimate is now viable at full scale on a wide-schema
 dataset — a real step from "broken." The recall *certificate* (a trustworthy lower
 bound) is not done: heterogeneity-robust bounding is the open problem.
+
+## Heterogeneity-robust bound + multi-modal decorrelation (the follow-up)
+
+Two more upgrades were attempted; one worked, one hit a fundamental wall.
+
+### Multi-modal decorrelation (Part 2) — WORKED
+
+Decorrelation no longer comes only from disjoint field groups (which needs many
+fields) but from **modality × field-group**: each matcher uses token-Jaccard OR
+char-trigram-Jaccard over its field group. Different modalities catch different
+errors (trigrams are typo/transposition-robust), so narrow schemas yield K≥3
+decorrelated matchers.
+
+| Full dataset | matchers | FP-aware recall point | TRUE | err |
+|---|---|---:|---:|---:|
+| DBLP-ACM (4 fields) | 2 groups × {token,trigram} | **0.962** | 1.000 | 0.038 |
+| Febrl3 | 3 groups × {token,trigram} | **0.999** | 1.000 | 0.001 |
+
+DBLP-ACM, which totally broke before (0.009, err 0.99, single-field groups
+precision 0.08), now gives an accurate point estimate. Multi-modal decorrelation
+fixes the narrow-schema failure for the POINT estimate.
+
+### Heterogeneity-robust SAFE lower bound (Part 1) — FAILED
+
+Goal: a recall lower bound that stays ≤ true recall under capture heterogeneity.
+Attempt: under heterogeneity the cell curve `log f_k − log C(K,k)` is convex
+(higher cells richer in easy pairs), so the low-end slope (f2→f3) reflects the
+harder pairs → a lower, pessimistic p → `recall = 1−(1−p)^K` should under-state.
+
+Validation on configs where true recall < 1.0 (the only cases that test it):
+
+| config | conservative bound | TRUE recall | safe? |
+|---|---:|---:|---|
+| Febrl3 g4 token | 0.969 | 0.953 | **NO** |
+| Febrl3 g5 token | 0.919 | 0.868 | **NO** |
+| Febrl3 g6 token | 0.936 | 0.932 | **NO** |
+
+The bound is optimistic (unsafe) in every non-trivial case. (Earlier "safe"
+verdicts were artifacts of true recall = 1.0, where any bound ≤ 1 is trivially
+safe.) **Why it's fundamental:** even f2 — the lowest FP-free cell — is drawn
+from pairs captured ≥ 2 times, i.e. the *easier* pairs. The genuinely hard pairs
+(captured 0–1 times) are invisible or FP-contaminated, and **no function of the
+observed higher-order cells can recover the invisible-to-every-matcher tail**, so
+no observed-cell estimator can safely lower-bound recall. The convexity trick
+narrows the optimism but cannot remove it.
+
+**Conclusion:** a provably-safe, label-free recall lower bound is **impossible** —
+it requires an external assumption (e.g. "no true pair has per-matcher capture
+prob < p_min") or a small labeled audit to bound the hard-tail mass. The
+unsupervised method delivers an accurate POINT estimate but not a trustworthy
+CERTIFICATE.
 
 ## Next levers (if pursued)
 

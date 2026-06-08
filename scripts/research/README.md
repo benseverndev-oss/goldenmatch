@@ -21,7 +21,7 @@ experiments** — the cheapest test of each idea's riskiest assumption.
 | `richer_simulator.py` | **#1** realistic simulator (closes the boundary gap) | Does a richer simulator (high diversity + realistic corruption) fix step 5's over-merging? — **step 6**, `RESULTS-rich-simulator.md` (answer: **yes** — over-merge fixed, exact 60/60 cluster count, real F1 ~doubles to 0.61–0.68) |
 | `diff_er_pipeline.py` | **#4** joint differentiable blocking+matching | Can a single global clustering loss backprop through a differentiable blocker so it learns to retain true pairs? |
 | `landscape_er.py` | **topology/geometry** — ER as a sculpted attractor landscape | Does the landscape mechanism (carve basins / raise ridges / global re-flow) beat a discrete split/merge loop optimising the SAME objective? — `RESULTS-landscape-er.md` (answer: **no — COSMETIC**. With a calibrated objective it gives the *identical* partition to the discrete loop; an earlier "+0.10" win was a θ-calibration artifact) |
-| `recall_certificate.py` | **recall assurance** — unsupervised recall estimation via capture-recapture | Can capture-recapture across decorrelated matchers estimate a matcher's recall with NO labels? — `RESULTS-recall-certificate.md`. Naive Chao2 breaks at full scale (FP contamination), but the **FP-aware estimator** (fit p from FP-free higher-order capture cells, ignore the contaminated singleton cell) **rescues the full-scale point estimate: 0.966 vs 0.953 true, err 0.013, no labels.** Open: a heterogeneity-robust *safety lower bound*, and wide-enough schemas (DBLP's 4 fields too narrow) |
+| `recall_certificate.py` | **recall assurance** — unsupervised recall estimation via capture-recapture | Can capture-recapture estimate a matcher's recall with NO labels? — `RESULTS-recall-certificate.md`. **POINT estimate: YES** — FP-aware estimator (fit p from FP-free higher-order cells) + **multi-modal decorrelation** (token×trigram × field-groups) give a full-scale label-free recall estimate within ~0.001–0.04 of true on both Febrl3 (0.999) and DBLP-ACM (0.962, narrow schema fixed). **SAFE lower bound: NO** — a trustworthy recall lower bound is impossible from the capture data alone (the invisible hard-pair tail is unbounded; every conservative attempt was optimistic when true recall < 1). Needs an external assumption / labeled audit |
 
 ## Second research arc: ER as topology/geometry (2026-06-07, in progress)
 
@@ -49,14 +49,18 @@ baseline). The unsolved operational problem: precision is cheap to estimate,
 recall is not — every ER deployment ships blind on recall. `recall_certificate.py`
 estimates recall with **no labels** via capture-recapture (the census-undercount
 dual-system math) across decorrelated matchers, and **clears its kill-criterion**:
-it tracks true recall within ~0.03–0.09 MAE on small high-precision subsamples.
-**But the full-scale runs break it**: at scale the matchers' precision collapses,
-false positives contaminate the population estimator, and the recall estimate is
-badly off (Febrl3 0.61 est vs 0.95 true). The conservative bound never overstated
-recall (safe) but is uselessly loose. Net: the basic Chao2-on-the-raw-union
-certificate is not viable at scale; making it work needs FP-aware (latent-class)
-capture-recapture — real open work. See `RESULTS-recall-certificate.md` for the
-full-scale tables and the FP-contamination root cause.
+it tracks true recall on small subsamples, but naive Chao2 **breaks at full scale**
+(FP contamination). Two fixes followed: the **FP-aware estimator** (fit p from the
+FP-free higher-order capture cells, ignore the contaminated singleton cell) and
+**multi-modal decorrelation** (token×trigram modalities × field-groups). Together
+they give an accurate, label-free recall **point estimate** at full scale on wide
+AND narrow schemas (Febrl3 0.999, DBLP-ACM 0.962 vs true 1.0). **But a trustworthy
+recall *lower bound* proved impossible from the capture data alone** — every
+conservative attempt (incl. a heterogeneity-robust low-cell bound) came out *above*
+true recall whenever true < 1.0, because the invisible-to-every-matcher hard tail
+can't be bounded from observed cells. Net: unsupervised recall *point estimation*
+works; a safety *certificate* needs an external assumption / small labeled audit.
+See `RESULTS-recall-certificate.md`.
 
 ## Running
 
