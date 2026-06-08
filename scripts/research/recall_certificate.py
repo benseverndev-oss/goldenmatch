@@ -320,7 +320,8 @@ def group_matcher(records, group: list[int], modality: str = "token",
         affs[(i, j)] = inter / union if union else 0.0
     vals = np.array(list(affs.values())) if affs else np.array([0.0])
     theta = float(vals.mean() + 2.0 * vals.std()) if vals.size > 3 else 0.3
-    return {p for p, w in affs.items() if w >= theta}
+    passed = {p for p, w in affs.items() if w >= theta}
+    return passed, cand            # captured pairs, and the blocking candidate pool
 
 
 def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: int = 0,
@@ -335,9 +336,11 @@ def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: in
     groups = [list(range(g, n_fields, n_groups)) for g in range(n_groups)]
     groups = [g for g in groups if g]
     pred_sets = []
+    cand_all: set[tuple[int, int]] = set()    # all blocking candidates (any matcher)
     for g in groups:
         for mod in modalities:
-            ps = group_matcher(records, g, mod)
+            ps, cand = group_matcher(records, g, mod)
+            cand_all |= cand
             if ps:
                 pred_sets.append(ps)
     K = len(pred_sets)
@@ -371,6 +374,39 @@ def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: in
     recall_hi = rec(p_hi * D, N_lo)               # optimistic end
     recall_lo = rec(p_lo * D, N_hi)               # conservative end (safety bound)
 
+    # ----- AUDIT-CALIBRATED bound: directly measure the miss mass with ~50 labels.
+    # Strata: (A) captured union, (B) sub-threshold candidates (shared a feature,
+    # captured by none) = where recoverable missed-true pairs live, (C) no-feature
+    # pairs (assumed non-matches under blocking completeness; C is also audited to
+    # CHECK that assumption). recall = found / (found + missed), with Wilson CIs;
+    # conservative bound under-counts found (p_lo) and over-counts missed (p_hi).
+    n_aud = max(10, n_precision)
+    sub = sorted(cand_all - union_set)            # stratum B
+    pA, pA_lo, pA_hi = sample_precision(union, gp, n_aud, rng)        # true-rate in A
+    pB, pB_lo, pB_hi = sample_precision(sub, gp, n_aud, rng)          # true-rate in B
+    # stratum C check: random pairs sharing no matcher feature -> expect ~0 true
+    n = len(records)
+    cset = cand_all | {(i, i) for i in range(n)}
+    cC_true = 0
+    cC_n = 0
+    tries = 0
+    while cC_n < n_aud and tries < n_aud * 50:
+        i = rng.randrange(n); j = rng.randrange(n)
+        tries += 1
+        if i == j:
+            continue
+        pr = (i, j) if i < j else (j, i)
+        if pr in cset:
+            continue
+        cC_n += 1
+        if pr in gp:
+            cC_true += 1
+    found_a = pA * len(union_set)
+    missed_a = pB * len(sub)
+    recall_audit = found_a / (found_a + missed_a) if (found_a + missed_a) > 0 else 0.0
+    fa_lo, ma_hi = pA_lo * len(union_set), pB_hi * len(sub)
+    recall_audit_lo = fa_lo / (fa_lo + ma_hi) if (fa_lo + ma_hi) > 0 else 0.0
+
     # ----- truth (gold; never seen by the estimator) -----
     tp = len(union_set & gp)
     true_recall = tp / len(gp) if gp else 0.0
@@ -388,7 +424,10 @@ def run(records, gold_labels, n_groups: int = 3, n_precision: int = 80, seed: in
                 N_ll=N_ll, p_hat=p_hat, p_lo=p_lo, p_hi=p_hi,
                 recall_point=recall_point, recall_lo=recall_lo, recall_hi=recall_hi,
                 fpr=fpr, true_recall=true_recall, true_precision=true_precision,
-                mean_overlap=mean_overlap)
+                mean_overlap=mean_overlap,
+                recall_audit=recall_audit, recall_audit_lo=recall_audit_lo,
+                sub_size=len(sub), pB=pB, pB_hi=pB_hi,
+                cC_true=cC_true, cC_n=cC_n, n_aud=n_aud)
 
 
 def main() -> int:
@@ -443,9 +482,19 @@ def main() -> int:
             print(f"      conservative bound n/a (need f2 and f3 cells)")
     else:
         print(f"      n/a (need >=2 multi-capture cells; raise K / add modalities)")
+    print(f"  RECALL — AUDIT-calibrated (~{r['n_aud']}/stratum labels, measures miss mass):")
+    print(f"      point={r['recall_audit']:.3f}  "
+          f"sub-threshold stratum |B|={r['sub_size']} true-rate={r['pB']:.3f}")
+    print(f"      >>> SAFE lower bound (blocking-completeness): recall >= {r['recall_audit_lo']:.3f}")
+    print(f"      blocking-completeness check (stratum C): {r['cC_true']}/{r['cC_n']} "
+          f"no-feature pairs were true {'(assumption holds)' if r['cC_true'] == 0 else '(VIOLATED!)'}")
     print(f"  TRUE recall (gold, never seen):  {r['true_recall']:.3f}")
 
     print("\n  VERDICT:")
+    sa = r['recall_audit_lo'] <= r['true_recall'] + 1e-9
+    print(f"   - audit point |err| = {abs(r['recall_audit'] - r['true_recall']):.3f}")
+    print(f"   - AUDIT-calibrated bound is a true LOWER bound: "
+          f"{'YES — SAFE' if sa else 'NO (optimistic — unsafe)'}")
     if fpr['recall'] == fpr['recall']:
         err_fp = abs(fpr['recall'] - r['true_recall'])
         err_naive = abs(r['recall_point'] - r['true_recall'])

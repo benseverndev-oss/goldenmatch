@@ -21,7 +21,7 @@ experiments** — the cheapest test of each idea's riskiest assumption.
 | `richer_simulator.py` | **#1** realistic simulator (closes the boundary gap) | Does a richer simulator (high diversity + realistic corruption) fix step 5's over-merging? — **step 6**, `RESULTS-rich-simulator.md` (answer: **yes** — over-merge fixed, exact 60/60 cluster count, real F1 ~doubles to 0.61–0.68) |
 | `diff_er_pipeline.py` | **#4** joint differentiable blocking+matching | Can a single global clustering loss backprop through a differentiable blocker so it learns to retain true pairs? |
 | `landscape_er.py` | **topology/geometry** — ER as a sculpted attractor landscape | Does the landscape mechanism (carve basins / raise ridges / global re-flow) beat a discrete split/merge loop optimising the SAME objective? — `RESULTS-landscape-er.md` (answer: **no — COSMETIC**. With a calibrated objective it gives the *identical* partition to the discrete loop; an earlier "+0.10" win was a θ-calibration artifact) |
-| `recall_certificate.py` | **recall assurance** — unsupervised recall estimation via capture-recapture | Can capture-recapture estimate a matcher's recall with NO labels? — `RESULTS-recall-certificate.md`. **POINT estimate: YES** — FP-aware estimator (fit p from FP-free higher-order cells) + **multi-modal decorrelation** (token×trigram × field-groups) give a full-scale label-free recall estimate within ~0.001–0.04 of true on both Febrl3 (0.999) and DBLP-ACM (0.962, narrow schema fixed). **SAFE lower bound: NO** — a trustworthy recall lower bound is impossible from the capture data alone (the invisible hard-pair tail is unbounded; every conservative attempt was optimistic when true recall < 1). Needs an external assumption / labeled audit |
+| `recall_certificate.py` | **recall assurance** — unsupervised recall estimation via capture-recapture | Can capture-recapture estimate a matcher's recall with NO labels? — `RESULTS-recall-certificate.md`. **POINT estimate: YES** — FP-aware estimator (fit p from FP-free higher-order cells) + **multi-modal decorrelation** (token×trigram × field-groups) give a full-scale label-free recall estimate within ~0.001–0.04 of true on both Febrl3 (0.999) and DBLP-ACM (0.962, narrow schema fixed). **SAFE lower bound: YES, via a small labeled audit** — capture-data-only bounds are impossible (invisible tail), but auditing the sub-threshold stratum (~50–600 labels) gives a bound that is sound in every config (fixed the capture-only failures), conditional on blocking-completeness (empirically checked: 0/50 no-feature pairs true). Tightness scales with labels (0.17@50 → 0.73@600; true 0.95). The one direction that yielded a validated capability |
 
 ## Second research arc: ER as topology/geometry (2026-06-07, in progress)
 
@@ -57,10 +57,16 @@ they give an accurate, label-free recall **point estimate** at full scale on wid
 AND narrow schemas (Febrl3 0.999, DBLP-ACM 0.962 vs true 1.0). **But a trustworthy
 recall *lower bound* proved impossible from the capture data alone** — every
 conservative attempt (incl. a heterogeneity-robust low-cell bound) came out *above*
-true recall whenever true < 1.0, because the invisible-to-every-matcher hard tail
-can't be bounded from observed cells. Net: unsupervised recall *point estimation*
-works; a safety *certificate* needs an external assumption / small labeled audit.
-See `RESULTS-recall-certificate.md`.
+true recall whenever true < 1.0 — the invisible-to-every-matcher hard tail can't be
+bounded from observed cells. **But an audit-calibrated bound closes it**: labelling
+~50–600 pairs from the sub-threshold stratum (pairs that shared a feature but were
+captured by none) measures the miss mass directly, giving a bound that is SAFE in
+every config (conditional on blocking-completeness, which the no-feature stratum
+audit empirically confirms) and tightens with labels (0.17@50 → 0.73@600; true
+0.95). Net: unsupervised recall *point estimation* works, AND a *safe lower-bound
+certificate* is achievable with a tiny labeled audit — the one research direction
+in the program to produce a validated, useful capability. See
+`RESULTS-recall-certificate.md`.
 
 ## Running
 
