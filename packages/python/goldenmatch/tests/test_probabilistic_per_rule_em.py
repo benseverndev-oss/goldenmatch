@@ -117,3 +117,24 @@ def test_per_rule_fallback_for_always_blocked_field():
     passes = _passes_blocks(df, [["name"], ["name"]])
     em = train_em(df, mk, passes=passes)
     assert em.match_weights["name"] == [-3.0, 3.0]  # fixed 2-level prior
+
+
+def test_pipeline_per_rule_em_runs_end_to_end(monkeypatch):
+    import goldenmatch.core.probabilistic as P
+    from goldenmatch import dedupe_df
+    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+    calls = {"n": 0}
+    orig = P._train_em_per_rule
+    def spy(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+    monkeypatch.setattr(P, "_train_em_per_rule", spy)
+    df = pl.DataFrame({
+        "first_name": ["ann","ann","bob","bobby","cara","cara","dan","eve"],
+        "surname":    ["lee","lee","kim","kim","ng","ng","ono","poe"],
+        "dob":        ["1990","1990","1985","1985","1972","1972","1965","1959"],
+    })
+    cfg = auto_configure_probabilistic_df(df)
+    res = dedupe_df(df, config=cfg)
+    assert res is not None  # per-rule EM path executes, no crash
+    assert calls["n"] >= 1, "per-rule EM path was not taken (passes not wired into the pipeline)"

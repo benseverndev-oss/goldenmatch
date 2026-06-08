@@ -645,6 +645,22 @@ def _build_multi_pass_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[B
     return all_blocks
 
 
+def _build_blocks_per_pass(
+    lf: pl.LazyFrame, blocking: BlockingConfig
+) -> list[tuple[list[str], list[BlockResult]]]:
+    """Return [(field_set, blocks), ...] -- one entry per blocking pass (or per key when
+    no passes). Reuses the static block builder per pass so pass identity is retained
+    (build_blocks unions+dedupes across passes and loses which pass a block came from --
+    per-rule EM needs that identity to know which fields were held constant per run)."""
+    passes = blocking.passes if blocking.passes else (blocking.keys or [])
+    out = []
+    for p in passes:
+        cfg = BlockingConfig(keys=[p], max_block_size=blocking.max_block_size,
+                             skip_oversized=blocking.skip_oversized)
+        out.append((list(p.fields), build_blocks(lf, cfg)))
+    return out
+
+
 def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
     """Build blocks using ANN (approximate nearest neighbor) on embeddings.
 

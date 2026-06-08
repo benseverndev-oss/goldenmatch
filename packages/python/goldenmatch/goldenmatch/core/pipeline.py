@@ -19,7 +19,7 @@ from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
 from goldenmatch.core.bench import record_metric, record_metrics, stage
 from goldenmatch.core.block_analyzer import analyze_blocking
-from goldenmatch.core.blocker import build_blocks
+from goldenmatch.core.blocker import _build_blocks_per_pass, build_blocks
 from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
 from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
 from goldenmatch.core.scorer import (
@@ -1417,12 +1417,14 @@ def _run_dedupe_pipeline(
             # Build blocks first, then train EM on within-block pairs
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = _em_excluded_fields(config.blocking)
+            passes = _build_blocks_per_pass(combined_lf, config.blocking)
             em_result = train_em(
                 collected_df, mk,
                 max_iterations=mk.em_iterations,
                 convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
+                passes=passes,
             )
             logger.info(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
@@ -2388,12 +2390,14 @@ def _run_match_pipeline(
             from goldenmatch.core.probabilistic import score_probabilistic, train_em
             blocks = build_blocks(combined_lf, config.blocking)
             blocking_fields = _em_excluded_fields(config.blocking)
+            passes = _build_blocks_per_pass(combined_lf, config.blocking)
             em_result = train_em(
                 combined_df, mk,
                 max_iterations=mk.em_iterations,
                 convergence=mk.convergence_threshold,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
+                passes=passes,
             )
             from goldenmatch.core.probabilistic_fast import (
                 _resolve_probabilistic_fast_path,
