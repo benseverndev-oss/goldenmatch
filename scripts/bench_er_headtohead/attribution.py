@@ -12,12 +12,23 @@ All inputs are sets of canonical (min,max) record-id pairs:
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import Any
 
-def _canon(pairs):
+# record ids are str or int (both order-comparable, both hashable); Any keeps
+# min()/max() happy without over-constraining the bench helper.
+Pair = tuple[Any, Any]
+
+
+def _canon(pairs: Iterable[Pair]) -> set[Pair]:
     return {(min(a, b), max(a, b)) for a, b in pairs}
 
 
-def attribution(gt_pairs, candidate_pairs, emitted_pairs) -> dict:
+def attribution(
+    gt_pairs: Iterable[Pair],
+    candidate_pairs: Iterable[Pair],
+    emitted_pairs: Iterable[Pair],
+) -> dict[str, float]:
     gt = _canon(gt_pairs)
     cand = _canon(candidate_pairs)
     emit = _canon(emitted_pairs)
@@ -35,7 +46,7 @@ def attribution(gt_pairs, candidate_pairs, emitted_pairs) -> dict:
     }
 
 
-def truth_to_pairs(truth) -> set:
+def truth_to_pairs(truth: Any) -> set[Pair]:
     """Expand a {record_id, cluster_id} frame into within-cluster GT pairs."""
     from itertools import combinations
     pairs = set()
