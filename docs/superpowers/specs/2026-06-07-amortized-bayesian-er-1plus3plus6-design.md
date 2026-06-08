@@ -1,7 +1,8 @@
 # Amortized Bayesian Entity Resolution (program 1+3+6)
 
-**Status:** brainstorm / research design. Not scheduled. No code in `goldenmatch/` yet —
-exploratory prototypes live under `scripts/research/`.
+**Status:** CLOSED — exploratory. Mechanisms validated; **NOT accuracy-competitive** on
+saturated benchmarks. Not scheduled, no code in `goldenmatch/`. Prototypes + results live
+under `scripts/research/`. See the **Final verdict** at the bottom before reviving this.
 **Date:** 2026-06-07
 **Provenance:** deep-research white-space scan of six novel ER framings (2026-06-07). This
 note merges three of them — (1) amortized Bayesian partition inference, (3) self-supervised
@@ -203,3 +204,48 @@ Remaining work (diminishing returns; none blocking the thesis):
    beyond 60-entity subsamples; multi-seed CIs.
 4. **Lift the head** (Set-Transformer context, matched train/eval sizes) — held-out
    sim still ~0.70, so the head has slack independent of the encoder.
+
+---
+
+## Final verdict (2026-06-07) — exploratory; mechanisms validated, NOT competitive
+
+Read this before reviving the program.
+
+**What it proved.** All six framings have genuine, verified white space (the
+2026-06-07 scan), and each mechanism held up under test: reconstructability ranks
+clusterings by F1 (+0.94 on real Febrl3); the amortized head emits a calibrated
+posterior with a *learned* microclustering prior; partition-EIG beats per-pair
+active selection; and a pretrained encoder + richer simulator took **zero-shot**
+real-ER F1 from 0.03 to ~0.6–0.68 with correct cluster counts and calibration.
+
+**What it did NOT prove — the honest bottom line.** As an ER *system* it is not
+good:
+
+| | real Febrl3 F1 | real DBLP-ACM F1 |
+|---|---:|---:|
+| This work (amortized, zero-shot) | ~0.68 | ~0.61 |
+| Trivial char-sim + connected-components (tuned) | ~0.85 | ~0.85 |
+| **GoldenMatch's existing zero-config controller** | **0.944** | **0.964** |
+
+It loses to a ~15-line baseline and is far behind the production system it was
+exploring alternatives to.
+
+**Why the ceiling is structural.** The residual gap is recall on hard typos, and
+the only fix is a much stronger encoder — but fine-tuning the encoder on matching
+pairs *is* supervised entity matching, already solved (Ditto ≈ 98% on DBLP-ACM).
+Amortization/zero-shot is exactly what costs the accuracy: you get amortization or
+SOTA F1, not both cheaply. Also, these benchmarks are near-saturated (incumbents at
+0.94–0.96), so there was never accuracy headroom for novelty here — the test
+favoured the incumbent from the start.
+
+**Where (if anywhere) this is worth reviving.** Not as an accuracy play. Only if
+reframed around its actual novel value — **calibrated uncertainty** and
+**label-efficiency** (the EIG result) — and evaluated on **hard regimes** (messy
+product data, cross-org/PPRL) where 0.6 may be respectable and calibration matters,
+rather than on saturated structured benchmarks. Even then, GoldenMatch already has
+active sampling and a confidence-gating controller (ADR-0001), so the marginal value
+is modest.
+
+**Disposition:** kept as a documented research arc (prototypes + per-step RESULTS
+under `scripts/research/`, public writeup in the docs Research section). Do not
+treat as a product proposal. Do not re-run expecting a win on Febrl3/DBLP-ACM.
