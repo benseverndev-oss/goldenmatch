@@ -175,17 +175,31 @@ simulated embeddings, zero-shot eval on real):
   over-fragmentation (step 4) to OVER-MERGING (33 clusters vs 60 true). The residual
   gap is a sim-vs-real decision-BOUNDARY mismatch, not an encoder problem.
 
-## Decision — encoder hypothesis validated; residual gap is the boundary
+## Step 6 result (2026-06-07 — richer simulator closes the boundary gap)
 
-The 1+3+6 loop holds end-to-end on simulated ER (steps 1–3); step 4 localised the
-gating obstacle to the encoder; step 5 confirmed it — a pretrained text encoder is
-the right featurizer and recovers most of the transfer. Remaining work, in order:
-1. **Close the boundary gap** (the now-dominant issue): a richer/realistic
-   simulator so the simulated within/between-entity distance distribution matches
-   real data, OR light per-domain calibration (one temperature/threshold fit on the
-   target corpus) to correct the over-merge. Pure-zero-shot-to-competitive is the
-   open gap.
+Run via `pretrained_transfer_er.py --simulator rich` (`richer_simulator.py`);
+full tables in `scripts/research/RESULTS-rich-simulator.md`. **Hypothesis
+CONFIRMED**, controlled A/B on identical real subsets:
+
+- **Over-merging fixed**: cluster count goes from 38/41 (basic sim) to **exactly
+  60/60 true** on both real Febrl3 and DBLP-ACM with the richer simulator.
+- Real F1 ~doubles: Febrl3 0.42->0.68, DBLP-ACM 0.27->0.61, zero-shot, calibrated
+  (ECE 0.09). Residual ~0.17-0.23 below the tuned char+CC baseline is now a
+  RECALL gap on hard typos, not over-merging.
+
+## Decision — zero-shot ER on real data is functional; arc summary
+
+The encoder arc resolved the sim-to-real gap with two targeted fixes — pretrained
+encoder (step 5) + richer simulator (step 6) — taking real zero-shot F1 from ~0.03
+to ~0.6-0.68 with **correct cluster counts and calibration**. The 1+3+6 program is
+now a working, calibrated, zero-shot ER system on real data, within ~0.2 F1 of a
+tuned classical baseline.
+
+Remaining work (diminishing returns; none blocking the thesis):
+1. **Close the recall gap** to the baseline: a stronger/ER-tuned text encoder for
+   hard typos, or light per-domain temperature calibration (concede pure zero-shot).
 2. **d-blink calibration cross-check** on a small real set where MCMC is feasible.
-3. **Soft Bayesian conditioning** in step 3 + noisy-oracle handling; **lift F1**
-   (bigger head / Set-Transformer context, matched train/eval sizes) — held-out sim
-   is only 0.74, so the head itself still has slack.
+3. **Soft Bayesian conditioning** + noisy-oracle handling in step 3; scale evals
+   beyond 60-entity subsamples; multi-seed CIs.
+4. **Lift the head** (Set-Transformer context, matched train/eval sizes) — held-out
+   sim still ~0.70, so the head has slack independent of the encoder.

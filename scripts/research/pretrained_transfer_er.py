@@ -43,6 +43,7 @@ from real_schema_encoder import (  # noqa: E402
     ece,
     simulate_strings,
 )
+from richer_simulator import simulate_strings_rich  # noqa: E402
 
 if _HAVE_TORCH:
     import torch
@@ -204,9 +205,12 @@ def main() -> int:
     ap.add_argument("--entities", type=int, default=12)
     ap.add_argument("--train-pool", type=int, default=160, help="cached sim datasets")
     ap.add_argument("--max-real-entities", type=int, default=60)
+    ap.add_argument("--simulator", choices=["basic", "rich"], default="rich",
+                    help="basic = step-4 toy; rich = richer_simulator (step-6 fix)")
     ap.add_argument("--datasets-dir", type=Path, default=Path("datasets"))
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    sim_fn = simulate_strings_rich if args.simulator == "rich" else simulate_strings
 
     if not _HAVE_TORCH:
         print("  torch not installed — architecture-only here.")
@@ -223,10 +227,10 @@ def main() -> int:
     encoder = get_encoder()
 
     # pre-generate + embed a pool of simulated datasets ONCE (encoder is frozen)
-    print(f"  embedding {args.train_pool} simulated datasets (cached)...")
+    print(f"  embedding {args.train_pool} simulated datasets (cached, simulator={args.simulator})...")
     pool = []
     for _ in range(args.train_pool):
-        recs, labs = simulate_strings(args.entities, rng)
+        recs, labs = sim_fn(args.entities, rng)
         pool.append((embed(encoder, recs), labs))
 
     model = ProjHead()
@@ -250,7 +254,7 @@ def main() -> int:
 
     print("\n  --- ZERO-SHOT evaluation (head trained ONLY on simulated embeddings) ---")
     erng = random.Random(args.seed + 777)
-    recs, labs = simulate_strings(args.entities, erng)
+    recs, labs = sim_fn(args.entities, erng)
     _report("held-out simulated", model, recs, labs, embed(encoder, recs))
     real = _load_real("febrl3", args.datasets_dir, args.max_real_entities, args.seed)
     if real:

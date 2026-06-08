@@ -307,8 +307,15 @@ def _load_real(name: str, datasets_dir: Path, max_entities: int, seed: int):
     if loaded is None:
         return None
     gold = R.gold_clustering(loaded.all_ids, loaded.gt_pairs)  # cid -> [ids]
+    # Deterministic subset across processes: sort clusters by CONTENT signature
+    # first (cluster ids depend on hash-randomised set iteration in the GT->CC
+    # step, so list(gold) order is not reproducible), THEN seeded-shuffle.
+    def _sig(cid):
+        return tuple(sorted(
+            " ".join(str(loaded.records[r].get(f, "")) for f in loaded.fields)
+            for r in gold[cid]))
+    cids = sorted(gold, key=_sig)
     rng = random.Random(seed)
-    cids = list(gold)
     rng.shuffle(cids)
     chosen = cids[:max_entities]
     records, labels = [], []
