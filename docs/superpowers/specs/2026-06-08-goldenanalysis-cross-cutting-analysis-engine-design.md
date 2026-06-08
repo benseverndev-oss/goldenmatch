@@ -123,7 +123,7 @@ class Analyzer(Protocol):
     def run(self, inp: AnalyzerInput) -> AnalyzerResult: ...   # metrics + tables
 ```
 
-Ship four analyzers in the first cut (see Phasing). The registry pattern is the extensibility story; the four shipped analyzers are the proof.
+Ship four analyzers in the first cut (see Phasing). The registry pattern is the extensibility story; the four shipped analyzers are the proof. Their exact metric keys, units, and directions are enumerated in **Appendix A — Metric catalog**; a fully filled-in report is in **Appendix B**.
 
 Two analyzer requirements the worked scenario below forced:
 
@@ -427,6 +427,132 @@ Each phase is an independent, releasable PR; Phase 1 alone is a usable product.
 - **`scored_pairs` availability for `match.rates`.** Same coupling noted in the GoldenPipe identity spec: a `DedupeResult` may not retain `scored_pairs` by default. The adapter degrades gracefully — it computes what the available artifacts support and records *which* metrics it could not compute in `report.source`, rather than failing.
 - **Native parity drift / wheel skew.** The exact `goldenmatch-native` footguns (symbol-skew slow fallback, pyproject-vs-Cargo version drift, ship-vs-wall confusion) apply verbatim. Start `_GATED_ON` empty; add primitives one parity-proven, wall-verified step at a time.
 - **Parquet as a core dependency.** polars+pyarrow already in the suite's dependency graph, so `to_parquet` adds no new heavyweight dep; the generic frame path needs polars regardless.
+
+---
+
+## Appendix A — Metric catalog (first cut)
+
+The exact metrics the four shipped analyzers emit. Keys are dotted and stable (the cross-run contract — renaming one breaks `ReportHistory` comparability, so a rename is a `schema_version` bump). `dir` is `Metric.direction`; `H`=higher_better, `L`=lower_better, `·`=neutral. Tables are emitted alongside metrics but are not individually thresholded.
+
+### `frame.summary` — generic frame, zero suite deps (always available)
+
+| key | unit | dir | notes |
+|---|---|---|---|
+| `frame.row_count` | rows | · | |
+| `frame.column_count` | columns | · | |
+| `frame.null_ratio_mean` | ratio | L | mean across columns |
+| `frame.duplicate_row_ratio` | ratio | L | exact-duplicate rows / rows |
+| `frame.memory_bytes` | bytes | · | estimated in-memory size |
+| *table* `per_column` | — | — | column, dtype, null_ratio, n_unique |
+
+### `match.rates` — from GoldenMatch result + recall certificate
+
+| key | unit | dir | notes |
+|---|---|---|---|
+| `match.pair_count` | pairs | · | scored pairs above threshold |
+| `match.match_rate` | ratio | · | matched records / input records |
+| `match.threshold` | score | · | decision threshold used |
+| `match.recall_estimate` | ratio | H | from the certificate (unsupervised) |
+| `match.recall_safe_bound` | ratio | H | **the alerting metric** (SAFE lower bound) |
+| `match.mean_pair_score` | score | · | central tendency of accepted pairs |
+| *table* `score_histogram` | — | — | binned pair-score distribution |
+
+Degrades gracefully (Risks §3): if `scored_pairs` or the certificate is absent, the unavailable keys are omitted and listed in `report.source["unavailable"]` rather than failing.
+
+### `cluster.distribution` — from GoldenMatch clusters
+
+| key | unit | dir | notes |
+|---|---|---|---|
+| `cluster.count` | clusters | · | |
+| `cluster.record_count` | rows | · | clustered input records |
+| `cluster.singleton_ratio` | ratio | · | size-1 clusters / clusters |
+| `cluster.size_p50` / `size_p95` / `size_max` | rows | · | size quantiles |
+| `cluster.reduction_ratio` | ratio | · | `1 − clusters / records` (dedup rate) |
+| *table* `cluster_size_histogram` | — | — | size bucket → count |
+
+### `quality.rollup` — from GoldenCheck scan + GoldenFlow stats
+
+Rolls up both quality producers (a single "is the data healthy" view), hence both `quality.*` and `flow.*` keys live here.
+
+| key | unit | dir | notes |
+|---|---|---|---|
+| `quality.findings_total` | findings | L | |
+| `quality.columns_with_findings` | columns | L | |
+| `quality.score` | ratio | H | overall GoldenCheck quality score, if emitted |
+| `flow.rows_changed` | rows | · | from GoldenFlow transform stats |
+| `flow.rules_fired` | count | · | |
+| *table* `findings_by_class` | — | — | finding class → count (e.g. `email_blanked → 1188`) |
+
+New analyzers extend this catalog by registering at the `goldenanalysis.analyzers` entry-point; they own their `<namespace>.*` key prefix.
+
+---
+
+## Appendix B — Example `AnalysisReport` (the scenario's run)
+
+The full report `ga.analyze_pipeline(pipe_result)` produces in the worked scenario, as persisted JSON (tables truncated for length):
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "2026-06-08T02:14:07Z#customers",
+  "generated_at": "2026-06-08T06:31:55Z",
+  "source": {
+    "dataset": "customers",
+    "producer": "goldenpipe",
+    "stages": "goldencheck.scan,goldenflow.transform,goldenmatch.dedupe,goldenmatch.identity_resolve",
+    "certificate": "present",
+    "unavailable": ""
+  },
+  "metrics": [
+    {"key": "frame.row_count", "value": 4012880, "unit": "rows", "direction": "neutral"},
+    {"key": "match.pair_count", "value": 612300, "unit": "pairs", "direction": "neutral"},
+    {"key": "match.match_rate", "value": 0.31, "unit": "ratio", "direction": "neutral"},
+    {"key": "match.threshold", "value": 0.82, "unit": "score", "direction": "neutral"},
+    {"key": "match.recall_estimate", "value": 0.94, "unit": "ratio", "direction": "higher_better"},
+    {"key": "match.recall_safe_bound", "value": 0.89, "unit": "ratio", "direction": "higher_better"},
+    {"key": "cluster.count", "value": 1840210, "unit": "clusters", "direction": "neutral"},
+    {"key": "cluster.singleton_ratio", "value": 0.71, "unit": "ratio", "direction": "neutral"},
+    {"key": "cluster.size_p95", "value": 4, "unit": "rows", "direction": "neutral"},
+    {"key": "cluster.reduction_ratio", "value": 0.54, "unit": "ratio", "direction": "neutral"},
+    {"key": "quality.findings_total", "value": 1205, "unit": "findings", "direction": "lower_better"},
+    {"key": "flow.rows_changed", "value": 3910442, "unit": "rows", "direction": "neutral"}
+  ],
+  "tables": [
+    {"name": "cluster_size_histogram", "columns": ["size", "count"],
+     "rows": [[1, 1306549], [2, 401203], [3, 88210], ["4+", 44248]]},
+    {"name": "findings_by_class", "columns": ["class", "count"],
+     "rows": [["email_blanked", 1188], ["phone_unparseable", 12], ["name_empty", 5]]}
+  ],
+  "narrative": "Recall safe-bound fell to 0.89 (rolling-median baseline 0.97; -8.2%, over the 2% gate for this metric). The co-moving signals are a singleton-ratio step from 0.58 to 0.71 and a quality regression of +795 findings, almost all 'email_blanked' (1188). Likely cause: a GoldenFlow rule began blanking malformed emails, removing a primary blocking key and splitting affected records into singletons.",
+  "analyzers_run": ["frame.summary", "match.rates", "cluster.distribution", "quality.rollup"]
+}
+```
+
+`report.to_markdown()` renders this for Maya as:
+
+```markdown
+# Analysis — customers (run 2026-06-08T02:14:07Z)
+
+> ⚠️ **1 regression flagged.** Recall safe-bound 0.97 → 0.89 (-8.2%, gate 2%).
+
+Recall safe-bound fell to 0.89 (rolling-median baseline 0.97; -8.2%, over the
+2% gate for this metric). The co-moving signals are a singleton-ratio step from
+0.58 to 0.71 and a quality regression of +795 findings, almost all
+'email_blanked' (1188). Likely cause: a GoldenFlow rule began blanking malformed
+emails, removing a primary blocking key and splitting affected records into singletons.
+
+| Metric | Value | Δ vs baseline |
+|---|---|---|
+| match.recall_safe_bound | 0.89 | 🔴 -8.2% |
+| cluster.singleton_ratio | 0.71 | 🔴 +22.4% |
+| quality.findings_total  | 1,205 | 🔴 +194% |
+| match.pair_count        | 612,300 | +1.1% |
+| cluster.reduction_ratio | 0.54 | -0.6% |
+
+**Findings by class:** email_blanked 1188 · phone_unparseable 12 · name_empty 5
+```
+
+The committed parity fixtures (acceptance §5) are exactly this report's JSON, so Python and TS must both produce it byte-for-byte from the same input artifacts.
 
 ---
 
