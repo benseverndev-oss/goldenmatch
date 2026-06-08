@@ -60,11 +60,16 @@ class AnalysisReport(BaseModel):
         """Parse a report back from its JSON form (lossless round-trip)."""
         return cls.model_validate_json(data)
 
-    def to_markdown(self) -> str:
-        """Render a human-readable Markdown report."""
+    def to_markdown(self, regressions: list[Any] | None = None) -> str:
+        """Render a human-readable Markdown report.
+
+        When ``regressions`` (a list of ``Regression``) is supplied, a flagged-
+        regression callout and a Δ-vs-baseline column are added; otherwise the
+        output is the plain Phase-1 form.
+        """
         from goldenanalysis.render import format_markdown
 
-        return format_markdown(self)
+        return format_markdown(self, regressions)
 
     def to_parquet(self, path: str | Path) -> Path:
         """Write the long-form metric frame (key/value/unit/direction).

@@ -35,6 +35,20 @@ def test_markdown_contains_header_and_keys() -> None:
         assert m.key in md
 
 
+def test_markdown_with_regressions_adds_callout_and_delta() -> None:
+    from goldenanalysis.models import Regression
+
+    report = _report()
+    key = report.metrics[0].key
+    regs = [Regression(metric=key, baseline=10.0, current=5.0, delta_pct=-50.0, flagged=True, direction="higher_better")]
+    md = report.to_markdown(regs)
+    assert "regression(s) flagged" in md
+    assert "Δ vs baseline" in md
+    assert "-50.0%" in md
+    # Without regressions the output is the plain Phase-1 form (no delta column).
+    assert "Δ vs baseline" not in report.to_markdown()
+
+
 def test_parquet_one_row_per_metric(tmp_path: Path) -> None:
     report = _report()
     out = tmp_path / "report.parquet"
