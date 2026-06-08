@@ -660,8 +660,13 @@ class TestComputeThresholdsEdgeCases:
         link, review = compute_thresholds(em, weights)
         assert 0.25 <= review < link <= 0.95
 
-    def test_few_scored_weights_uses_defaults(self):
-        """With fewer than 50 weights, uses fixed defaults."""
+    def test_few_scored_weights_uses_defaults(self, monkeypatch):
+        """With fewer than 50 weights, uses fixed defaults.
+
+        The fixed default is sigmoid-aware (match-probability scale) by
+        default; the legacy min-max default (0.50, 0.35) is restored under
+        the GOLDENMATCH_FS_SIGMOID=0 kill-switch.
+        """
         em = EMResult(
             m_probs={"name": [0.1, 0.9]},
             u_probs={"name": [0.9, 0.1]},
@@ -671,11 +676,18 @@ class TestComputeThresholdsEdgeCases:
             proportion_matched=0.05,
         )
         weights = [0.5] * 30  # too few
+        # Default (sigmoid): match-probability scale.
+        monkeypatch.delenv("GOLDENMATCH_FS_SIGMOID", raising=False)
+        link, review = compute_thresholds(em, weights)
+        assert link == 0.9
+        assert review == 0.5
+        # Kill-switch: legacy min-max default, byte-identical to pre-sigmoid.
+        monkeypatch.setenv("GOLDENMATCH_FS_SIGMOID", "0")
         link, review = compute_thresholds(em, weights)
         assert link == 0.50
         assert review == 0.35
 
-    def test_no_scored_weights(self):
+    def test_no_scored_weights(self, monkeypatch):
         em = EMResult(
             m_probs={"name": [0.1, 0.9]},
             u_probs={"name": [0.9, 0.1]},
@@ -684,6 +696,13 @@ class TestComputeThresholdsEdgeCases:
             iterations=5,
             proportion_matched=0.05,
         )
+        # Default (sigmoid): match-probability scale.
+        monkeypatch.delenv("GOLDENMATCH_FS_SIGMOID", raising=False)
+        link, review = compute_thresholds(em)
+        assert link == 0.9
+        assert review == 0.5
+        # Kill-switch: legacy min-max default, byte-identical to pre-sigmoid.
+        monkeypatch.setenv("GOLDENMATCH_FS_SIGMOID", "0")
         link, review = compute_thresholds(em)
         assert link == 0.50
         assert review == 0.35

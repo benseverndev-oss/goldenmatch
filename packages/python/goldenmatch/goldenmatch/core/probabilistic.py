@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
 from dataclasses import dataclass
 from itertools import combinations
@@ -26,6 +27,26 @@ from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core.scorer import score_field
 
 logger = logging.getLogger(__name__)
+
+
+def _fs_sigmoid_enabled() -> bool:
+    """Splink-style sigmoid match-probability normalization (default ON).
+
+    The probabilistic scorers convert the summed log2-Bayes match weight W to
+    a match probability via P = 1 / (1 + 2^(-W)) -- the Splink convention --
+    instead of the legacy min-max normalization. min-max is pathological: one
+    high-variance EM weight inflates the running max, so a pair agreeing on all
+    the name fields can normalize below a 0.5 threshold and be rejected.
+
+    GOLDENMATCH_FS_SIGMOID=0/false/disabled/no restores the legacy min-max
+    normalization byte-identically.
+    """
+    return os.environ.get("GOLDENMATCH_FS_SIGMOID", "1").strip().lower() not in (
+        "0",
+        "false",
+        "disabled",
+        "no",
+    )
 
 
 @dataclass
@@ -642,7 +663,16 @@ def compute_thresholds(
     If scored_weights are provided (actual pair weight distribution),
     uses percentile-based thresholds. Otherwise uses a fixed default
     that works well across datasets.
+
+    Under sigmoid normalization (the default, GOLDENMATCH_FS_SIGMOID on) the
+    scores are match-probabilities, so the thresholds are interpreted on the
+    (0,1) match-probability scale: the fixed default is (0.9, 0.5) and the
+    data-driven link clamp ceiling is raised to 0.99. Under the kill-switch
+    (min-max) the legacy (0.50, 0.35) default and [0.40, 0.95] link clamp
+    are restored exactly.
     """
+    sigmoid = _fs_sigmoid_enabled()
+
     if scored_weights and len(scored_weights) > 50:
         # Data-driven: use the distribution of actual pair scores
         sorted_w = sorted(scored_weights)
@@ -658,11 +688,21 @@ def compute_thresholds(
         review_idx = max(0, min(review_idx, n - 1))
         review_norm = sorted_w[review_idx]
 
+        if sigmoid:
+            # Match-probability scale: don't cap a sane link below a
+            # high match-prob; keep the review floor at the match-prob midpoint.
+            link = round(max(0.5, min(0.99, link_norm)), 4)
+            review = round(max(0.5, min(link - 0.05, review_norm)), 4)
+            return link, review
         return round(max(0.40, min(0.95, link_norm)), 4), round(max(0.25, min(link_norm - 0.05, review_norm)), 4)
 
-    # Fixed defaults that work well with pre-blocked pairs
-    # 0.50 is permissive enough to catch partial matches while
-    # still filtering clear non-matches (which score near 0)
+    # Fixed defaults that work well with pre-blocked pairs.
+    if sigmoid:
+        # Match-probability scale: 0.9 link / 0.5 review (a pair with
+        # net-positive evidence -- W > 0 -- clears the review band).
+        return 0.9, 0.5
+    # Legacy min-max default: 0.50 is permissive enough to catch partial
+    # matches while still filtering clear non-matches (which score near 0).
     return 0.50, 0.35
 
 
@@ -688,10 +728,14 @@ def score_probabilistic(
 
     row_ids = block_df["__row_id__"].to_list()
 
-    # Compute weight range for normalization
+    # Compute weight range for legacy min-max normalization. Kept even under
+    # sigmoid so the kill-switch path is byte-identical.
     max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
     min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
     weight_range = max_weight - min_weight
+
+    # Resolve normalization mode once (no per-pair env reads).
+    sigmoid = _fs_sigmoid_enabled()
 
     # Determine threshold
     if mk.link_threshold is not None:
@@ -717,7 +761,10 @@ def score_probabilistic(
                 total_weight += em_result.match_weights[f.field][vec[k]]
 
             # Normalize to 0-1
-            if weight_range > 0:
+            if sigmoid:
+                # Splink-style match probability; already in (0,1).
+                normalized = 1.0 / (1.0 + 2.0 ** (-total_weight))
+            elif weight_range > 0:
                 normalized = (total_weight - min_weight) / weight_range
             else:
                 normalized = 0.5
@@ -745,6 +792,9 @@ def score_pair_probabilistic(
     for k, f in enumerate(mk.fields):
         total_weight += em_result.match_weights[f.field][vec[k]]
 
+    if _fs_sigmoid_enabled():
+        # Splink-style match probability; already in (0,1).
+        return 1.0 / (1.0 + 2.0 ** (-total_weight))
     if weight_range > 0:
         return (total_weight - min_weight) / weight_range
     return 0.5

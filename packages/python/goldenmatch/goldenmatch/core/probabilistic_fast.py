@@ -162,6 +162,12 @@ def score_probabilistic_fast(
     if exclude_pairs is None:
         exclude_pairs = set()
 
+    from goldenmatch.core.probabilistic import _fs_sigmoid_enabled
+
+    # Resolve normalization mode once (no per-pair env reads). Matches the
+    # slow path's branch in score_probabilistic.
+    sigmoid = _fs_sigmoid_enabled()
+
     field_specs, link_threshold, _max_weight, min_weight, weight_range = spec
     n_fields = len(field_specs)
     row_ids = block_df["__row_id__"].to_list()
@@ -226,7 +232,10 @@ def score_probabilistic_fast(
 
             # Normalize and threshold. Identical to score_probabilistic's
             # final block.
-            if weight_range > 0:
+            if sigmoid:
+                # Splink-style match probability; already in (0,1).
+                normalized = 1.0 / (1.0 + 2.0 ** (-weight_sum))
+            elif weight_range > 0:
                 normalized = (weight_sum - min_weight) / weight_range
             else:
                 normalized = 0.5
