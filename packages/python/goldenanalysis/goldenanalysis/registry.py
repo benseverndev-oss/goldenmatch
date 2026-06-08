@@ -18,6 +18,9 @@ _GROUP = "goldenanalysis.analyzers"
 # Fallback: name -> (module, class). Mirror pyproject's [project.entry-points].
 _FALLBACK: dict[str, tuple[str, str]] = {
     "frame.summary": ("goldenanalysis.analyzers.frame_summary", "FrameSummaryAnalyzer"),
+    "match.rates": ("goldenanalysis.analyzers.match_rates", "MatchRatesAnalyzer"),
+    "cluster.distribution": ("goldenanalysis.analyzers.cluster_dist", "ClusterDistributionAnalyzer"),
+    "quality.rollup": ("goldenanalysis.analyzers.quality_rollup", "QualityRollupAnalyzer"),
 }
 
 

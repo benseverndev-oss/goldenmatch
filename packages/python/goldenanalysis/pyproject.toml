@@ -50,6 +50,9 @@ Author = "https://bensevern.dev"
 
 [project.entry-points."goldenanalysis.analyzers"]
 "frame.summary" = "goldenanalysis.analyzers.frame_summary:FrameSummaryAnalyzer"
+"match.rates" = "goldenanalysis.analyzers.match_rates:MatchRatesAnalyzer"
+"cluster.distribution" = "goldenanalysis.analyzers.cluster_dist:ClusterDistributionAnalyzer"
+"quality.rollup" = "goldenanalysis.analyzers.quality_rollup:QualityRollupAnalyzer"
 
 [build-system]
 requires = ["hatchling"]

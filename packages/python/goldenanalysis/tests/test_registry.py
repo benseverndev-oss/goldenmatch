@@ -15,6 +15,13 @@ def test_available_includes_frame_summary() -> None:
     assert "frame.summary" in available_analyzers()
 
 
+def test_all_phase2a_analyzers_registered() -> None:
+    expected = {"frame.summary", "match.rates", "cluster.distribution", "quality.rollup"}
+    assert expected.issubset(set(available_analyzers()))
+    for name in expected:
+        assert load_analyzer(name).info.name == name
+
+
 def test_unknown_analyzer_raises() -> None:
     import pytest
 
