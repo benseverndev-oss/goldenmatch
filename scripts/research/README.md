@@ -20,7 +20,7 @@ experiments** — the cheapest test of each idea's riskiest assumption.
 | `pretrained_transfer_er.py` | **#1** frozen pretrained encoder + zero-shot transfer | Does a FROZEN pretrained text encoder fix step 4's transfer failure? — **step 5**, `RESULTS-pretrained-transfer.md` (answer: **largely yes** — real F1 jumps 6–14x and is calibrated, though still below a tuned baseline). `--simulator {basic,rich}` selects the step-6 fix. |
 | `richer_simulator.py` | **#1** realistic simulator (closes the boundary gap) | Does a richer simulator (high diversity + realistic corruption) fix step 5's over-merging? — **step 6**, `RESULTS-rich-simulator.md` (answer: **yes** — over-merge fixed, exact 60/60 cluster count, real F1 ~doubles to 0.61–0.68) |
 | `diff_er_pipeline.py` | **#4** joint differentiable blocking+matching | Can a single global clustering loss backprop through a differentiable blocker so it learns to retain true pairs? |
-| `landscape_er.py` | **topology/geometry** — ER as a sculpted attractor landscape | Does the landscape mechanism (carve basins / raise ridges / global re-flow) beat a discrete split/merge loop optimising the SAME objective? — `RESULTS-landscape-er.md` (answer: **yes on bibliographic data, +0.10 F1 across seeds**; a wash on PII; small-scale) |
+| `landscape_er.py` | **topology/geometry** — ER as a sculpted attractor landscape | Does the landscape mechanism (carve basins / raise ridges / global re-flow) beat a discrete split/merge loop optimising the SAME objective? — `RESULTS-landscape-er.md` (answer: **no — COSMETIC**. With a calibrated objective it gives the *identical* partition to the discrete loop; an earlier "+0.10" win was a θ-calibration artifact) |
 
 ## Second research arc: ER as topology/geometry (2026-06-07, in progress)
 
@@ -33,10 +33,12 @@ sculpted landscape (no Hopfield/energy/attractor ER exists), and the
 bidirectional add/split polarity is unattested in density-landscape clustering;
 the only crowded angle is the iterative-refinement *loop* itself (pBlocking,
 Gruenheid, Sayari), so novelty rests on the *mechanism*. `landscape_er.py` is the
-kill-criterion prototype and it **passes** (regime-specific). Status: promising,
-early — see `RESULTS-landscape-er.md` for the honest caveats (small subsamples,
-imperfect objective, not yet competitive with the production controller in
-absolute terms).
+kill-criterion prototype and it **FAILS**: with a calibrated correlation-clustering
+objective the landscape mechanism gives the *identical* partition to a discrete
+split/merge loop (cosmetic), and a plain threshold often beats both. An earlier
+apparent "+0.10 F1" win was a θ-calibration artifact that vanished once the
+objective was fixed — see `RESULTS-landscape-er.md`. Same outcome shape as the
+1+3+6 arc: novelty validated by the scan, competitiveness not. Arc closed.
 
 ## Running
 

@@ -14,7 +14,7 @@ tests the empirical question head-on:
 
 FAIR-FIGHT DESIGN — everything shared except the mechanism:
   * same affinity graph W (IDF-token-weighted Jaccard over all fields),
-  * same MDL-style cost ledger (every move accepted iff it lowers total bits),
+  * same correlation-clustering objective (every move accepted iff it lowers it),
   * same Fiedler 2-cut primitive for proposing splits,
   * same initial partition (connected components of W at a moderate threshold).
 Only the MECHANISM differs:
@@ -48,6 +48,50 @@ if str(_HERE) not in sys.path:
 
 from amortized_partition_er import pairwise_f1  # noqa: E402
 from real_schema_encoder import _load_real  # noqa: E402
+import richer_simulator as RR  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic MULTI-SOURCE-CONFLICT regime: distinctive entities + spurious
+# BRIDGES (shared placeholder/boilerplate values used by a few unrelated
+# entities -> high cross-entity affinity). NO single threshold separates these
+# (bridge affinity rivals within-entity affinity), but graph STRUCTURE can cut
+# them. This is the "shared-value collapse" (info@ email) the design flagged,
+# and the scan predicted is where the ridge-raising mechanism should matter.
+# --------------------------------------------------------------------------- #
+def simulate_conflict(n_entities: int, rng, bridge_rate: float = 0.6):
+    import random
+    sizes = RR._sample_cluster_sizes(n_entities, rng)
+    # placeholder pool: distinctive multi-token phrases, each shared by a few
+    # unrelated entities (moderate frequency -> survives IDF -> a real bridge).
+    n_ph = max(2, n_entities // 5)
+    placeholders = [
+        f"{rng.choice(RR.STREET)} {rng.choice(RR.CITY)} {rng.randint(100,999)}"
+        for _ in range(n_ph)
+    ]
+    ent_ph: dict[int, str] = {}
+    for e in range(n_entities):
+        if rng.random() < 0.5:                      # ~half the entities bridged
+            ent_ph[e] = rng.choice(placeholders)
+    records, labels = [], []
+    for e, sz in enumerate(sizes):
+        truth = RR._truth(rng)
+        for _ in range(sz):
+            rec = RR._make_record(truth, rng)
+            if e in ent_ph and rng.random() < bridge_rate:
+                # overwrite SEVERAL fields with the shared placeholder so the
+                # cross-entity bridge affinity exceeds theta (genuinely fools a
+                # threshold); the bridge stays a SPARSE cut (only bridged records),
+                # so graph structure can still separate the two entity-cliques.
+                ph_tok = ent_ph[e].split()
+                fields_to_hit = rng.sample(range(len(rec)), min(4, len(rec)))
+                for fi, tok in zip(fields_to_hit, ph_tok + ph_tok):
+                    rec[fi] = tok
+            records.append(rec)
+            labels.append(e)
+    idx = list(range(len(records)))
+    rng.shuffle(idx)
+    return [records[i] for i in idx], [labels[i] for i in idx]
 
 
 # --------------------------------------------------------------------------- #
@@ -61,7 +105,10 @@ def _tokens(fields: list[str]) -> set[str]:
     return out
 
 
-def build_affinity(records: list[list[str]], knn: int = 12) -> np.ndarray:
+def build_affinity(records: list[list[str]]) -> np.ndarray:
+    """Dense IDF-token-weighted Jaccard affinity in [0,1]. Dense (not kNN) so the
+    correlation-clustering objective sees every true pair (sparsifying would
+    penalise gold for grouping true co-referents that missed the kNN cut)."""
     n = len(records)
     toks = [_tokens(r) for r in records]
     df: dict[str, int] = {}
@@ -79,45 +126,40 @@ def build_affinity(records: list[list[str]], knn: int = 12) -> np.ndarray:
             union = sum(idf[t] for t in (a | b))
             w = inter / union if union else 0.0
             W[i, j] = W[j, i] = w
-    # kNN-sparsify: keep each row's top-`knn` edges (symmetrised). Makes the
-    # terrain a graph with real ridges/valleys rather than a dense blob.
-    if knn and knn < n:
-        keep = np.zeros_like(W, dtype=bool)
-        for i in range(n):
-            idx = np.argsort(-W[i])[:knn]
-            keep[i, idx] = True
-        keep = keep | keep.T
-        W = W * keep
     return W
 
 
 # --------------------------------------------------------------------------- #
-# Shared MDL-style cost ledger (lower = better). Same for both methods.
-#   model bits: K clusters cost K * log2(N)
-#   data bits : each record coded by mean affinity to its cluster-mates;
-#               a poorly-explained record (low mate affinity / singleton) is
-#               expensive -> penalises both over-merge (dilutes affinity) and
-#               under-merge (singletons get the background floor).
+# Shared objective: CORRELATION CLUSTERING (the canonical ER clustering
+# objective; "(Almost) All of ER" calls it the most natural setting). Lower =
+# fewer disagreements. With signed weights S = affinity - theta:
+#   within-cluster pair: pay max(0, -S) = max(0, theta - aff)   [grouped unlike]
+#   across-cluster pair: pay max(0,  S) = max(0, aff - theta)   [split alike]
+# theta is the precision/recall knob (data-driven by default). Penalises BOTH
+# over-merge and under-merge symmetrically; its optimum sits near gold.
 # --------------------------------------------------------------------------- #
-def cost(labels: np.ndarray, W: np.ndarray, floor: float = 0.02,
-         model_weight: float = 1.0) -> float:
-    n = len(labels)
-    K = len(set(labels.tolist()))
-    bits = model_weight * K * math.log2(max(2, n))
-    groups: dict[int, list[int]] = {}
-    for i, c in enumerate(labels.tolist()):
-        groups.setdefault(c, []).append(i)
-    for members in groups.values():
-        if len(members) == 1:
-            bits += -math.log2(floor)            # singleton: background floor
-            continue
-        m = np.array(members)
-        sub = W[np.ix_(m, m)]
-        k = len(m)
-        mate_mean = (sub.sum(1)) / (k - 1)       # mean affinity to cluster-mates
-        for a in mate_mean:
-            bits += -math.log2(max(floor, a))
-    return bits
+def cost(labels: np.ndarray, W: np.ndarray, theta: float) -> float:
+    labels = np.asarray(labels)
+    S = W - theta
+    same = labels[:, None] == labels[None, :]
+    M = np.where(same, np.maximum(0.0, -S), np.maximum(0.0, S))
+    return float(np.triu(M, 1).sum())
+
+
+def default_theta(W: np.ndarray) -> float:
+    """Unsupervised theta = mean + 2*std of nonzero affinities.
+
+    The affinity distribution is junk-dominated (most nonzero pairs share one
+    low-IDF token, mean ~0.05) with a thin high tail of true co-referents.
+    mean+2std sits just above the junk and below the true-pair mass; verified to
+    put connected-components F1 >= 0.98 on clean Febrl3/DBLP-ACM subsamples
+    (median is too low -> over-merge; Otsu lands in the tail -> all-singletons).
+    """
+    nz = W[np.triu_indices_from(W, 1)]
+    nz = nz[nz > 0]
+    if nz.size < 4:
+        return 0.2
+    return float(nz.mean() + 2.0 * nz.std())
 
 
 # --------------------------------------------------------------------------- #
@@ -201,11 +243,11 @@ def _propagate(W: np.ndarray, attractors: list[int], alpha=0.85, iters=30):
 
 
 def landscape_loop(W0: np.ndarray, init_labels: np.ndarray,
-                   max_iter: int = 60, lam: float = 1.0):
+                   max_iter: int = 60, theta: float = 0.3):
     W = W0.copy()
     attractors = _medoids(init_labels, W)
     labels, settle, margin = _propagate(W, attractors)
-    best = cost(_relabel(labels), W0, model_weight=lam)
+    best = cost(_relabel(labels), W0, theta=theta)
     moves = 0
     for _ in range(max_iter):
         improved = False
@@ -225,7 +267,7 @@ def landscape_loop(W0: np.ndarray, init_labels: np.ndarray,
             ra = int(ri[np.argmax(W[np.ix_(ri, ri)].sum(1))])
             new_attr = [a for a in attractors if a not in members] + [la, ra]
             lab2, _, _ = _propagate(Wt, new_attr)
-            c2 = cost(_relabel(lab2), W0, model_weight=lam)
+            c2 = cost(_relabel(lab2), W0, theta=theta)
             if c2 < best - 1e-9:
                 W, attractors, labels = Wt, new_attr, lab2
                 best, improved, moves = c2, True, moves + 1
@@ -245,7 +287,7 @@ def landscape_loop(W0: np.ndarray, init_labels: np.ndarray,
             for _, x, y in cand[:20]:
                 new_attr = [a for kk, a in enumerate(attractors) if kk != y]
                 lab2, _, _ = _propagate(W, new_attr)
-                c2 = cost(_relabel(lab2), W0, model_weight=lam)
+                c2 = cost(_relabel(lab2), W0, theta=theta)
                 if c2 < best - 1e-9:
                     attractors, labels = new_attr, lab2
                     best, improved, moves = c2, True, moves + 1
@@ -260,7 +302,7 @@ def landscape_loop(W0: np.ndarray, init_labels: np.ndarray,
                 continue
             new_attr = attractors + [i]
             lab2, _, _ = _propagate(W, new_attr)
-            c2 = cost(_relabel(lab2), W0, model_weight=lam)
+            c2 = cost(_relabel(lab2), W0, theta=theta)
             if c2 < best - 1e-9:
                 attractors, labels = new_attr, lab2
                 best, improved, moves = c2, True, moves + 1
@@ -276,9 +318,9 @@ def landscape_loop(W0: np.ndarray, init_labels: np.ndarray,
 # Same cost ledger, same Fiedler split, NO terrain, NO global re-flow.
 # --------------------------------------------------------------------------- #
 def discrete_loop(W: np.ndarray, init_labels: np.ndarray, max_iter: int = 200,
-                  lam: float = 1.0):
+                  theta: float = 0.3):
     labels = _relabel(init_labels.copy())
-    best = cost(labels, W, model_weight=lam)
+    best = cost(labels, W, theta=theta)
     moves = 0
     for _ in range(max_iter):
         improved = False
@@ -294,7 +336,7 @@ def discrete_loop(W: np.ndarray, init_labels: np.ndarray, max_iter: int = 200,
             newid = labels.max() + 1
             for j in right:
                 trial[j] = newid
-            t = cost(_relabel(trial), W, model_weight=lam)
+            t = cost(_relabel(trial), W, theta=theta)
             if t < best - 1e-9:
                 labels, best, improved, moves = _relabel(trial), t, True, moves + 1
                 break
@@ -313,7 +355,7 @@ def discrete_loop(W: np.ndarray, init_labels: np.ndarray, max_iter: int = 200,
         for _, ci, cj in pairs[:20]:
             trial = labels.copy()
             trial[trial == cj] = ci
-            t = cost(_relabel(trial), W, model_weight=lam)
+            t = cost(_relabel(trial), W, theta=theta)
             if t < best - 1e-9:
                 labels, best, improved, moves = _relabel(trial), t, True, moves + 1
                 break
@@ -333,7 +375,7 @@ def discrete_loop(W: np.ndarray, init_labels: np.ndarray, max_iter: int = 200,
             if best_c != ci:
                 trial = labels.copy()
                 trial[i] = best_c
-                t = cost(_relabel(trial), W, model_weight=lam)
+                t = cost(_relabel(trial), W, theta=theta)
                 if t < best - 1e-9:
                     labels, best, improved, moves = _relabel(trial), t, True, moves + 1
                     break
@@ -355,30 +397,39 @@ def _f1(labels, gold_labels) -> float:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dataset", choices=["febrl3", "dblp-acm"], default="febrl3")
+    ap.add_argument("--dataset", choices=["febrl3", "dblp-acm", "synth-conflict"],
+                    default="febrl3")
+    ap.add_argument("--bridge-rate", type=float, default=0.6,
+                    help="synth-conflict: prob a bridged entity's record uses the placeholder")
     ap.add_argument("--datasets-dir", type=Path, default=Path("datasets"))
     ap.add_argument("--max-entities", type=int, default=80)
     ap.add_argument("--init-thresh", type=float, default=0.5)
-    ap.add_argument("--model-weight", type=float, default=0.4,
-                    help="weight on the K*log2(N) model term in the MDL ledger")
+    ap.add_argument("--theta", type=float, default=None,
+                    help="correlation-clustering threshold; default = median nonzero affinity")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    real = _load_real(args.dataset, args.datasets_dir, args.max_entities, args.seed)
-    if real is None:
-        print(f"  [{args.dataset}] unavailable — install recordlinkage / fetch DBLP-ACM.")
-        return 0
-    records, gold = real
+    if args.dataset == "synth-conflict":
+        import random
+        records, gold = simulate_conflict(args.max_entities, random.Random(args.seed),
+                                          bridge_rate=args.bridge_rate)
+    else:
+        real = _load_real(args.dataset, args.datasets_dir, args.max_entities, args.seed)
+        if real is None:
+            print(f"  [{args.dataset}] unavailable — install recordlinkage / fetch DBLP-ACM.")
+            return 0
+        records, gold = real
     gold = np.array(gold)
     W = build_affinity(records)
     n = len(records)
 
+    theta = args.theta if args.theta is not None else default_theta(W)
     init = _connected_components(W, args.init_thresh)
     init_f1 = _f1(init, gold)
 
-    land_lab, land_cost, land_moves = landscape_loop(W, init, lam=args.model_weight)
-    disc_lab, disc_cost, disc_moves = discrete_loop(W, init, lam=args.model_weight)
-    gold_cost = cost(_relabel(gold), W, model_weight=args.model_weight)
+    land_lab, land_cost, land_moves = landscape_loop(W, init, theta=theta)
+    disc_lab, disc_cost, disc_moves = discrete_loop(W, init, theta=theta)
+    gold_cost = cost(_relabel(gold), W, theta=theta)
 
     def k(lab):
         return len(set(np.asarray(lab).tolist()))
@@ -386,7 +437,9 @@ def main() -> int:
     print(f"\n  dataset={args.dataset}  N={n}  true_entities={k(gold)}\n")
     print(f"  {'method':<22} {'F1':>7} {'clusters':>9} {'cost(bits)':>11} {'moves':>6}")
     print(f"  {'-'*22} {'-'*7} {'-'*9} {'-'*11} {'-'*6}")
-    print(f"  {'init (CC@thresh)':<22} {init_f1:>7.3f} {k(init):>9} {cost(_relabel(init), W, model_weight=args.model_weight):>11.0f} {'-':>6}")
+    cc_theta = _connected_components(W, theta)
+    print(f"  {'CC @ theta (no struct)':<22} {_f1(cc_theta, gold):>7.3f} {k(cc_theta):>9} {cost(_relabel(cc_theta), W, theta=theta):>11.0f} {'-':>6}")
+    print(f"  {'init (CC@thresh)':<22} {init_f1:>7.3f} {k(init):>9} {cost(_relabel(init), W, theta=theta):>11.0f} {'-':>6}")
     print(f"  {'discrete split/merge':<22} {_f1(disc_lab, gold):>7.3f} {k(disc_lab):>9} {disc_cost:>11.0f} {disc_moves:>6}")
     print(f"  {'LANDSCAPE sculpting':<22} {_f1(land_lab, gold):>7.3f} {k(land_lab):>9} {land_cost:>11.0f} {land_moves:>6}")
     print(f"  {'gold (reference)':<22} {1.0:>7.3f} {k(gold):>9} {gold_cost:>11.0f} {'-':>6}")

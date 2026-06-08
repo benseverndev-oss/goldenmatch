@@ -1,76 +1,84 @@
 # Landscape-sculpting ER vs discrete split/merge — kill-criterion results
 
 Runner: `scripts/research/landscape_er.py`. numpy + the existing real-data
-loaders; real Febrl3 / DBLP-ACM subsamples (70 entities), 3 seeds. 2026-06-07.
+loaders; real Febrl3 / DBLP-ACM subsamples + a synthetic multi-source-conflict
+regime. 2026-06-07.
 
-```bash
-python scripts/research/landscape_er.py --dataset dblp-acm --max-entities 70 --seed 0
-```
+> **Verdict: FAIL — the mechanism is COSMETIC.** Under a fair comparison with a
+> *calibrated* objective, the landscape loop produces the **same partition** as a
+> discrete split/merge loop, and a plain threshold often beats both. An earlier
+> apparent win was a θ-calibration artifact (corrected below).
 
 ## The test
 
 The prior-art scan found the iterative add/split ER loop is partly anticipated
-(pBlocking, Gruenheid, Sayari), so the only defensible novelty is the
-**mechanism**: sculpting a potential/attractor landscape (carve basins, raise
-ridges, global re-flow) instead of discrete graph edits. Kill-criterion: **does
-the landscape mechanism beat a discrete split/merge loop that optimises the SAME
-objective on the SAME graph?** Everything is shared except the mechanism — same
-IDF-token affinity graph, same MDL-style cost ledger, same Fiedler 2-cut, same
-init, and both have split + merge (+ carve / move) moves. Only the mechanism
-differs: landscape routes marbles by clamped label-propagation and splits by
-raising a ridge (zeroing cut edges) + **global re-flow**; discrete relabels
-directly with no terrain and no re-flow.
+(pBlocking, Gruenheid, Sayari); the only defensible novelty is the **mechanism**:
+sculpting a potential/attractor landscape (carve basins, raise ridges, global
+re-flow) instead of discrete graph edits. Kill-criterion: **does the landscape
+mechanism beat a discrete split/merge loop optimising the SAME objective on the
+SAME graph?** Everything shared except the mechanism (affinity graph,
+correlation-clustering objective, Fiedler 2-cut, init, symmetric move sets).
 
-## Results (3 seeds each)
+## What happened, in order (the honest trail)
 
-| Dataset | seed | discrete F1 | landscape F1 | Δ | clusters disc / land / true |
-|---|---|---:|---:|---:|---:|
-| Febrl3 (PII) | 0 | 0.888 | 0.906 | +0.018 | 47 / 56 / 70 |
-| Febrl3 | 1 | 0.840 | 0.831 | −0.009 | 41 / 48 / 70 |
-| Febrl3 | 2 | 0.875 | 0.889 | +0.014 | 47 / 58 / 70 |
-| **DBLP-ACM** (bibliographic) | 0 | 0.752 | **0.897** | **+0.145** | 54 / 65 / 70 |
-| **DBLP-ACM** | 1 | 0.826 | **0.898** | **+0.072** | 58 / 64 / 70 |
-| **DBLP-ACM** | 2 | 0.840 | **0.917** | **+0.077** | 58 / 63 / 70 |
+**1. First run — apparent win, but it was an artifact.** With an MDL-ish ledger
+and θ = median nonzero affinity, the landscape beat discrete by +0.07–0.145 F1 on
+DBLP-ACM across seeds. **This was wrong.** θ=median (≈0.02) was far below the
+affinity's signal band, so the objective's optimum was gross over-merge; the
+landscape merely chased that broken objective slightly less aggressively. Not a
+real mechanism advantage.
 
-Means: Febrl3 discrete 0.868 vs landscape 0.875 (**+0.008, a wash**); DBLP-ACM
-discrete 0.806 vs landscape 0.904 (**+0.098, consistent across all seeds**).
+**2. Fixed the objective (task a).** Switched to the canonical
+**correlation-clustering** objective `S = aff − θ` and a calibrated, unsupervised
+θ = mean + 2·std of nonzero affinities (median → over-merge; Otsu → all-singletons;
+mean+2std puts connected-components F1 ≥ 0.98 on clean subsamples). With a correct
+θ, **clean data is essentially solved by a threshold**, and:
 
-## Verdict: PASS — the mechanism earns its keep, regime-specifically
+| Clean data (calibrated θ) | CC@θ | discrete | landscape |
+|---|---:|---:|---:|
+| Febrl3 (40 ent) | — | 0.917 | **0.917 (identical)** |
+| DBLP-ACM (40 ent) | — | 1.000 | **1.000 (identical)** |
 
-1. **On bibliographic data the landscape mechanism clearly and consistently beats
-   the discrete loop** (+0.07 to +0.145 F1, every seed). On PII it's a wash.
-2. **It wins F1 while reaching HIGHER cost than discrete.** Discrete optimises the
-   shared objective *more* (lower bits) but over-merges; the landscape's global
-   re-flow lands closer to the true cluster count (DBLP 63–65 vs discrete 54–58,
-   true 70) and scores higher F1. So the advantage is an **inductive bias**: the
-   ridge-raising + global re-flow **resists over-merging**, which is exactly the
-   failure mode DBLP-ACM's shared title/venue vocabulary induces (cf. the step-1
-   finding that bibliographic data over-merges under naive affinity).
-3. This is a genuine mechanistic difference the discrete loop **structurally
-   cannot reproduce** — its local relabel can't re-route the rest of the graph
-   when a barrier goes up.
+The mechanism is **cosmetic** — identical partitions.
 
-## Honest caveats
+**3. Built the multi-source-conflict regime (task b).** Distinctive entities +
+spurious BRIDGES (shared placeholder values across a few unrelated entities), so
+no single θ separates and connected-components should fail. Strong bridges,
+3 seeds:
 
-- **Small subsamples** (N≈120–184, 70 entities), 3 seeds — promising, not
-  conclusive. Needs full-scale runs and more seeds with CIs.
-- **The shared objective is still imperfect** (both undershoot the true cluster
-  count; discrete reaches lower bits than gold). The landscape "wins" partly by
-  NOT fully optimising a miscalibrated objective — a better objective could
-  change the gap in either direction. A cleaner objective is the next dependency.
-- **Regime-specific**: no benefit on PII. The scan predicted the mechanism should
-  matter most where over-merge/conflict is severe; bibliographic data is a mild
-  version of that, genuine multi-source conflict would be the real test.
-- vs. the existing GoldenMatch zero-config controller (DBLP-ACM F1 0.964), this
-  prototype (≈0.90 on a 70-entity subsample, untuned) is not yet competitive in
-  absolute terms — but unlike the 1+3+6 arc it shows a real per-mechanism edge.
+| synth-conflict (60 ent) | CC@θ | discrete | landscape |
+|---|---:|---:|---:|
+| seed 0 | **0.842** | 0.757 | 0.757 (identical) |
+| seed 1 | **0.964** | 0.911 | 0.911 (identical) |
+| seed 2 | **0.952** | 0.855 | 0.855 (identical) |
 
-## Next levers (if pursued)
+Still **cosmetic** (identical every seed), and the refinement loops *underperform*
+a plain threshold (CC@θ) here — the split/merge moves hurt.
 
-1. **A better-calibrated objective** (the current MDL surrogate's optimum sits
-   below the true cluster count) — the highest-value fix; both methods are
-   currently capped by it.
-2. **A genuine multi-source-conflict regime** to test where the scan says the
-   landscape should shine most (raising ridges to resolve cross-source conflicts).
-3. **Full-scale + multi-seed CIs**, and a comparison against GoldenMatch's
-   controller, not just the discrete loop.
+## Why it's cosmetic (mechanistic explanation)
+
+Given the **same objective** and the **same split proposals**, a greedy hill-climb
+reaches the same local optimum whether a move is expressed as "relabel a cluster"
+(discrete) or "raise a ridge + add attractors + globally re-flow" (landscape). The
+landscape is a different *route* to the same destination, not a different
+destination. Global re-flow changes nothing when the proposals and the acceptance
+criterion are shared.
+
+## Verdict: the topology/landscape framing does NOT earn its keep
+
+- **Novel** (the six-angle scan confirmed ER-as-sculpted-landscape is unoccupied)
+  but **empirically cosmetic** under a fair, calibrated comparison — the same
+  outcome shape as the 1+3+6 arc: novelty validated, competitiveness not.
+- The one apparent win was a θ-artifact; fixing the objective erased it.
+- Where the affinity is clean, a threshold already solves it; where it has
+  conflicts, the *shared objective + shared cut primitive* determine the result,
+  not the mechanism.
+
+## What would have to be true for it to matter (not pursued)
+
+The mechanism could only help if it changed the *proposals* or the *objective* —
+e.g., the ridge geometry proposing cuts a Fiedler-on-the-discrete-graph wouldn't
+find, or the landscape encoding a constraint the correlation-clustering objective
+can't. With shared proposals + objective, it cannot. Chasing a hand-crafted
+regime where it happens to win would be p-hacking; the disciplined call is to
+**close the arc here** with the negative result documented.
