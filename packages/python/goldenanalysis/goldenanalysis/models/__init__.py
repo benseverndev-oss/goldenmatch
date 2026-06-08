@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from goldenanalysis.models.analyzer import AnalyzerInfo, AnalyzerInput, AnalyzerResult
+from goldenanalysis.models.policy import (
+    Baseline,
+    Regression,
+    RegressionPolicy,
+    TrendSeries,
+)
 from goldenanalysis.models.report import (
     AnalysisReport,
     AnalysisTable,
@@ -18,4 +24,8 @@ __all__ = [
     "AnalyzerInfo",
     "AnalyzerInput",
     "AnalyzerResult",
+    "Baseline",
+    "RegressionPolicy",
+    "Regression",
+    "TrendSeries",
 ]

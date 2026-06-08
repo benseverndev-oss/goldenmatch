@@ -25,12 +25,15 @@ __all__ = [
     "analyze_pipeline",
     "AnalysisReport",
     "Metric",
+    "ReportHistory",
+    "RegressionPolicy",
     "__version__",
 ]
 
 if TYPE_CHECKING:
     from goldenanalysis._api import analyze, analyze_match, analyze_pipeline
-    from goldenanalysis.models import AnalysisReport, Metric
+    from goldenanalysis.history import ReportHistory
+    from goldenanalysis.models import AnalysisReport, Metric, RegressionPolicy
 
 # Map exported name -> (submodule, attribute). Resolved on first access.
 _LAZY: dict[str, tuple[str, str]] = {
@@ -39,6 +42,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "analyze_pipeline": ("goldenanalysis._api", "analyze_pipeline"),
     "AnalysisReport": ("goldenanalysis.models", "AnalysisReport"),
     "Metric": ("goldenanalysis.models", "Metric"),
+    "ReportHistory": ("goldenanalysis.history", "ReportHistory"),
+    "RegressionPolicy": ("goldenanalysis.models", "RegressionPolicy"),
 }
 
 
