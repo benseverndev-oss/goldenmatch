@@ -30,9 +30,12 @@ check = ["goldencheck>=1.2.0"]
 flow = ["goldenflow>=1.1.5"]
 pipe = ["goldenpipe>=1.2.0"]
 suite = ["goldenanalysis[match,check,flow,pipe]"]
-# native = ["goldenanalysis-native"]  # lands in Phase 4 with the analysis-core/analysis-native crates.
-# Deferred deliberately: an extra pointing at a not-yet-published package breaks
-# `uv sync --all-packages` repo-wide (see packages/python/CLAUDE.md, the goldenmatch[native] bite).
+# Optional Rust accelerator (analysis-core/analysis-native crates, Phase 4). The
+# matching `[tool.uv.sources] goldenanalysis-native = { path = ... }` at the repo
+# root lets `uv sync` resolve this workspace-locally without PyPI -- the extra +
+# the path source land in LOCKSTEP (see packages/python/CLAUDE.md, the
+# goldenmatch[native] uv-sync bite).
+native = ["goldenanalysis-native>=0.1.0"]
 mcp = ["mcp>=1.0"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
