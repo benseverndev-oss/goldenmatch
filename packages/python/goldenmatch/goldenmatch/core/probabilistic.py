@@ -49,6 +49,13 @@ def _fs_sigmoid_enabled() -> bool:
     )
 
 
+def _fs_per_rule_em_enabled() -> bool:
+    """Per-rule EM (estimate each field's m from runs where it is free) -- default ON.
+    GOLDENMATCH_FS_PER_RULE_EM=0/false/disabled/no restores the single-run EM."""
+    return os.environ.get("GOLDENMATCH_FS_PER_RULE_EM", "1").strip().lower() not in (
+        "0", "false", "disabled", "no")
+
+
 # Term-frequency adjustment bounds. The adjusted u for a shared value is clamped
 # into [TF_MIN_U, TF_MAX_U] so a hapax (freq -> 0) can't blow the weight up
 # unboundedly and a ubiquitous value can't drive u above 0.5 (which would make
@@ -266,6 +273,54 @@ def _sample_blocked_pairs(
     return all_block_pairs
 
 
+def _estimate_m_one_pass(comp_matrix, mk, u_probs, excluded, max_iterations, convergence):
+    """One EM run: estimate m for fields NOT in `excluded` (the run's blocking fields,
+    held constant in this block). Returns (m_probs, p_match, converged, iterations).
+    m_probs covers ALL fields (excluded ones keep the exponential prior; callers ignore
+    those). Vectorized E-step identical to the inline loop it replaces. The extra return
+    values (p_match/converged/iterations) preserve what train_em's EMResult needs so the
+    single-run refactor is behavior-preserving (existing tests assert converged/iterations)."""
+    n_pairs = comp_matrix.shape[0]
+    p_match = 0.02
+    m_probs = {}
+    for f in mk.fields:
+        raw = [2 ** k for k in range(f.levels)]
+        m_probs[f.field] = [r / sum(raw) for r in raw]
+    converged = False
+    iteration = 0
+    for iteration in range(max_iterations):
+        old_m = {k: list(v) for k, v in m_probs.items()}
+        log_m = np.zeros(n_pairs); log_u = np.zeros(n_pairs)
+        for j, f in enumerate(mk.fields):
+            levels_j = comp_matrix[:, j]
+            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+            log_m += m_table[levels_j]; log_u += u_table[levels_j]
+        log_match = math.log(max(p_match, 1e-10)) + log_m
+        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
+        max_log = np.maximum(log_match, log_nonmatch)
+        e_match = np.exp(log_match - max_log); e_nonmatch = np.exp(log_nonmatch - max_log)
+        posteriors = e_match / (e_match + e_nonmatch)
+        total_match = posteriors.sum()
+        p_match = max(total_match / n_pairs, 1e-6)
+        for j, f in enumerate(mk.fields):
+            if f.field in excluded:
+                continue
+            new_m = [0.0] * f.levels
+            for level in range(f.levels):
+                mask = comp_matrix[:, j] == level
+                new_m[level] = (posteriors[mask].sum() + 1e-6) / (total_match + f.levels * 1e-6)
+            m_probs[f.field] = new_m
+        max_delta = max((abs(m_probs[f.field][k] - old_m[f.field][k])
+                         for f in mk.fields if f.field not in excluded
+                         for k in range(f.levels)), default=0.0)
+        if max_delta < convergence:
+            converged = True
+            break
+    iterations = iteration + 1
+    return m_probs, p_match, converged, iterations
+
+
 def train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -347,77 +402,12 @@ def train_em(
         return _fallback_result(mk)
 
     comp_matrix = _build_comparison_matrix(pairs, row_lookup, mk)
-    n_pairs = len(pairs)
-    _n_fields = len(mk.fields)
-
-    # Initialize m with strong priors (matches mostly agree at highest level)
-    p_match = 0.02  # conservative prior
-    m_probs = {}
-    for j, f in enumerate(mk.fields):
-        n_levels = f.levels
-        # Exponential prior: highest level gets most mass
-        raw = [2 ** k for k in range(n_levels)]
-        total = sum(raw)
-        m_probs[f.field] = [r / total for r in raw]
 
     # ── Step 3: EM iterations — only update m, fix u ──
-    converged = False
-    for iteration in range(max_iterations):
-        old_m = {k: list(v) for k, v in m_probs.items()}
-
-        # E-step: compute posterior P(match | comparison vector).
-        # Vectorized over pairs (this was the FS-training bottleneck: a
-        # per-pair Python loop with math.log/exp -- ~1.1s of a 1.46s
-        # train_em at n_sample_pairs=10000). Per-field log-prob lookup tables
-        # are gathered by level and summed left-to-right (j = 0..n_fields-1),
-        # matching the scalar accumulation order so results stay
-        # bit-identical to the loop it replaces.
-        log_m = np.zeros(n_pairs)
-        log_u = np.zeros(n_pairs)
-        for j, f in enumerate(mk.fields):
-            levels_j = comp_matrix[:, j]
-            m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
-            u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
-            log_m += m_table[levels_j]
-            log_u += u_table[levels_j]
-
-        log_match = math.log(max(p_match, 1e-10)) + log_m
-        log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
-
-        max_log = np.maximum(log_match, log_nonmatch)
-        e_match = np.exp(log_match - max_log)
-        e_nonmatch = np.exp(log_nonmatch - max_log)
-        posteriors = e_match / (e_match + e_nonmatch)
-
-        # M-step: update ONLY m_probs and p_match (u is fixed)
-        total_match = posteriors.sum()
-        p_match = max(total_match / n_pairs, 1e-6)
-
-        for j, f in enumerate(mk.fields):
-            if f.field in blocking_fields:
-                continue  # skip blocked fields
-            n_levels = f.levels
-            new_m = [0.0] * n_levels
-            for level in range(n_levels):
-                mask = comp_matrix[:, j] == level
-                new_m[level] = (posteriors[mask].sum() + 1e-6) / (total_match + n_levels * 1e-6)
-            m_probs[f.field] = new_m
-
-        # Check convergence (only m changes)
-        max_delta = 0.0
-        for f in mk.fields:
-            if f.field in blocking_fields:
-                continue
-            for k in range(f.levels):
-                max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
-
-        if max_delta < convergence:
-            converged = True
-            logger.info("EM converged after %d iterations (delta=%.6f)", iteration + 1, max_delta)
-            break
-
+    m_probs, p_match, converged, iterations = _estimate_m_one_pass(
+        comp_matrix, mk, u_probs, set(blocking_fields), max_iterations, convergence)
     if not converged:
-        logger.warning("EM did not converge after %d iterations (delta=%.6f)", max_iterations, max_delta)
+        logger.warning("EM did not converge after %d iterations", max_iterations)
 
     # Compute match weights: log2(m/u)
     # For blocking fields, use fixed priors since EM can't learn from
@@ -471,7 +461,7 @@ def train_em(
         u_probs=u_probs,
         match_weights=match_weights,
         converged=converged,
-        iterations=min(iteration + 1, max_iterations) if not converged else iteration + 1,
+        iterations=iterations,
         proportion_matched=p_match,
         tf_tables=(tf_tables or None),
     )
