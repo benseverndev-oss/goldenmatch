@@ -361,6 +361,24 @@ AGENT_TOOLS = [
             "required": ["base_file", "new_records"],
         },
     ),
+    Tool(
+        name="certify_recall",
+        description=(
+            "Estimate match RECALL without ground truth (unsupervised). Treats "
+            "each auto-configured matchkey/pass as a decorrelated system and uses "
+            "capture-recapture over their overlaps to estimate how many true "
+            "matches were missed. Returns a point estimate (a safe lower bound "
+            "additionally needs a small labelled audit; see `goldenmatch evaluate "
+            "--certify --audit-out`). Needs >=3 decorrelated systems."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Dataset to dedupe + certify"},
+            },
+            "required": ["file_path"],
+        },
+    ),
 ]
 
 _AGENT_TOOL_NAMES = frozenset(t.name for t in AGENT_TOOLS)
@@ -784,5 +802,27 @@ def _dispatch(
             cfg,
             threshold=args.get("threshold"),
         )
+
+    if name == "certify_recall":
+        import polars as pl
+
+        from goldenmatch.core.recall_certificate import certify_recall_df
+
+        file_path = args["file_path"]
+        try:
+            df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        except FileNotFoundError:
+            return {"error": f"File not found: {file_path}"}
+        except Exception as exc:
+            return {"error": f"Could not read CSV '{file_path}': {exc}"}
+        est = certify_recall_df(df)
+        return {
+            "estimated_recall": est.recall,
+            "n_systems": est.n_systems,
+            "found_pairs": est.found_pairs,
+            "system_overlap": round(est.mean_overlap, 3),
+            "estimable": est.estimable,
+            "note": est.note,
+        }
 
     return {"error": f"Unknown agent tool: {name}"}
