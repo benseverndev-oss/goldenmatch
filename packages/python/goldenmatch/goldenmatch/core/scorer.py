@@ -93,10 +93,7 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
     elif scorer == "qgram":
         return _qgram_score_single(val_a, val_b)
     elif scorer == "ensemble":
-        jw = JaroWinkler.similarity(val_a, val_b)
-        ts = token_sort_ratio(val_a, val_b) / 100.0
-        sx = (1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0) * 0.8
-        return max(jw, ts, sx)
+        return _ensemble_score_single(val_a, val_b)
     else:
         # Check plugin registry
         from goldenmatch.plugins.registry import PluginRegistry
@@ -530,6 +527,19 @@ def _soundex_score_matrix(values: list) -> np.ndarray:
 def _hex_to_bits(hex_str: str) -> np.ndarray:
     """Convert hex-encoded bloom filter to a numpy uint8 byte array."""
     return np.frombuffer(bytes.fromhex(hex_str), dtype=np.uint8)
+
+
+def _ensemble_score_single(val_a: str, val_b: str) -> float:
+    """Scalar ensemble = max(jaro_winkler, token_sort, soundex_match*0.8).
+
+    Matches the matrix path's ensemble definition (max of the same three
+    sub-scorers) element-wise. Used by score_field('ensemble') and the
+    probabilistic fast path so prob-fast == prob-slow on ensemble fields.
+    """
+    jw = JaroWinkler.similarity(val_a, val_b)
+    ts = token_sort_ratio(val_a, val_b) / 100.0
+    sx = (1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0) * 0.8
+    return max(jw, ts, sx)
 
 
 def _dice_score_single(val_a: str, val_b: str) -> float:

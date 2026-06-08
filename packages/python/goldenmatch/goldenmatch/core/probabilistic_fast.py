@@ -15,7 +15,10 @@ per-pair work at gate time so the scoring loop never:
 Gate eligibility (`_resolve_probabilistic_fast_path`):
   - mk.type == "probabilistic"
   - For every mk.field:
-      - scorer resolves via `_resolve_score_pair_callable`
+      - scorer resolves via `_resolve_score_pair_callable`, OR is `ensemble`
+        (special-cased to `_ensemble_score_single` -- the bucket/weighted fast
+        path declines ensemble, but the probabilistic path uses the same scalar
+        ensemble as its own slow path, so prob-fast == prob-slow holds)
       - `__xform_<sig>__` column exists in `prepared_df`
       - field.levels in {2, 3} (N>3 unsupported in fast path v1; falls back
         to the slow `score_probabilistic` path)
@@ -64,7 +67,8 @@ def _resolve_probabilistic_fast_path(
     everything not handled here):
       - mk.type == "probabilistic"
       - For every mk.field: scorer resolves via _resolve_score_pair_callable
-        (rules out embedding/record_embedding/unknown plugins) AND its
+        (rules out embedding/record_embedding/unknown plugins) OR is `ensemble`
+        (special-cased to _ensemble_score_single; see module docstring) AND its
         precomputed xform column is in prepared_df AND levels in {2, 3}.
       - em_result has match_weights for every field.
     """
@@ -81,9 +85,20 @@ def _resolve_probabilistic_fast_path(
     min_weight = 0.0
     for f in mk.fields:
         # Per-pair callable. None when scorer is model-backed or unknown.
-        fn = _resolve_score_pair_callable(f.scorer)
-        if fn is None:
-            return None
+        # `ensemble` is special-cased: the bucket/weighted fast path
+        # deliberately DECLINES it (its per-pair ensemble diverged from the
+        # MATRIX ensemble used by find_fuzzy_matches), but the probabilistic
+        # path never touches the matrix ensemble -- its scalar source of truth
+        # is score_field(a, b, "ensemble") == _ensemble_score_single, which the
+        # slow path (comparison_vector) also uses. So matching prob-fast to
+        # prob-slow here is safe and keeps the bucket/weighted decline intact.
+        if f.scorer == "ensemble":
+            from goldenmatch.core.scorer import _ensemble_score_single
+            fn = _ensemble_score_single
+        else:
+            fn = _resolve_score_pair_callable(f.scorer)
+            if fn is None:
+                return None
         # Precomputed xform column must exist (precompute_matchkey_transforms
         # iterates all matchkey fields, including probabilistic ones).
         xform_col = _xform_sig(f)
