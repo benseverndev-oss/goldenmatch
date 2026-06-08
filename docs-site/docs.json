@@ -120,6 +120,13 @@
             "pages": [
               "reference/vendor-comparison"
             ]
+          },
+          {
+            "group": "Research",
+            "pages": [
+              "research/amortized-bayesian-er",
+              "research/landscape-sculpting-er"
+            ]
           }
         ]
       }
