@@ -175,6 +175,44 @@ def audit_calibrated_bound(
                              a_n + b_n + (c_n or 0), blocking_complete, note)
 
 
+def build_decorrelated_systems(matchkeys) -> list[list]:
+    """K decorrelated systems from a config's matchkeys/passes. If <3 matchkeys,
+    split a multi-field matchkey into per-field systems (each field a pass)."""
+    systems: list[list] = [[mk] for mk in matchkeys]
+    if len(systems) < 3:
+        for mk in matchkeys:
+            flds = getattr(mk, "fields", None) or []
+            if len(flds) >= 3:
+                systems = [
+                    [mk.model_copy(update={"fields": [f], "name": f"{mk.name}__f{i}"})]
+                    for i, f in enumerate(flds)
+                ]
+                break
+    return systems
+
+
+def certify_recall_df(df, config=None) -> RecallEstimate:
+    """Unsupervised recall estimate for a DataFrame (no ground truth). Runs each
+    matchkey/pass as a decorrelated system through the real pipeline and applies
+    the FP-aware capture-recapture estimator. Used by the CLI, MCP tool, and REST
+    endpoint. Lazy imports keep core import-light and avoid pipeline cycles."""
+    from goldenmatch._api import dedupe_df
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    if config is None:
+        config = auto_configure_df(df, confidence_required=False)
+    systems = build_decorrelated_systems(config.get_matchkeys())
+    pairsets: list[set[Pair]] = []
+    for sys_mks in systems:
+        sub = config.model_copy(update={"matchkeys": sys_mks})
+        res = dedupe_df(df, config=sub)
+        clusters = getattr(res, "clusters", None)
+        if clusters is None and isinstance(res, dict):
+            clusters = res.get("clusters")
+        pairsets.append(clusters_to_pairs(clusters or {}))
+    return estimate_recall(pairsets)
+
+
 def clusters_to_pairs(clusters) -> set[Pair]:
     """Convert a dedupe `clusters` dict (cluster -> {'members': [row_id,...]}) to
     the set of within-cluster (row_id, row_id) pairs."""

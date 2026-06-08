@@ -118,26 +118,33 @@ The Inspector GUI / Learning-Memory path is the same flow with a UI writing the
 labels (the sampled pairs become review items; their approve/reject decisions are
 the `is_match` labels).
 
-## Staged (NOT shipped — cannot be verified in this environment)
+## Phase 2 (cont.) — surface wiring (web/MCP deps installed; tested)
 
-These are thin wrappers over the now-tested core; deliberately not shipped as
-unverified production surface code (this env lacks `fastapi`/`mcp`, so their test
-suites can't run). Exact wiring:
+Unified the orchestration in `core/recall_certificate.py::certify_recall_df(df,
+config)` (build decorrelated systems -> per-system `dedupe_df` -> `estimate_recall`),
+then exposed it on two surfaces, both tested (133 passed across REST + MCP + cert
++ evaluate, no regressions):
+
+- **MCP tool** `certify_recall` (`mcp/agent_tools.py` Tool + `_dispatch` handler;
+  card + count bumped 54 -> 55 incl. the `test_total_tool_count` assertion). Loads
+  the CSV, returns `{estimated_recall, n_systems, found_pairs, system_overlap,
+  estimable, note}`. Tests in `tests/test_recall_surfaces.py`.
+- **REST endpoint** `POST /certify-recall` (`api/server.py`, stdlib http.server,
+  auth-gated) -> `MatchServer.certify_recall()` over the loaded data, same dict.
+
+## Staged (deliberately deferred, with rationale)
+
 - **Single-run blocker provenance**: requires propagating the matchkey id into
   `EngineResult.scored_pairs` (`(a,b,score)` -> `(a,b,score,matchkey)`) so one
   pipeline pass yields capture histories. Signature change ripples across
   scorer/cluster/chunked — risky; the per-system runs used today give the same
   provenance correctly, just slower. Defer behind a measured need.
-- **MCP tool**: add a `certify_recall` Tool to `AGENT_TOOLS` (`mcp/agent_tools.py`)
-  + dispatch handler that loads the df+config, calls the CLI's `_build_systems` +
-  `_system_pairsets` + `estimate_recall`, returns the dict; bump the server card
-  tool count.
-- **REST endpoint**: add `POST /certify-recall` to `api/server.py` (auth-gated)
-  returning the same dict.
-- **Controller signal**: surface the estimate via `web/controller_telemetry.py::
-  serialize_telemetry` (the single cross-surface serializer) and raise a
-  low-recall warning alongside `ControllerNotConfidentError`. Note: computing the
-  estimate inside auto-config costs K extra runs, so gate it behind an opt-in.
+- **Controller auto-signal**: computing the estimate inside `auto_configure`
+  costs K extra full-pipeline runs (the controller's sample iterations don't
+  produce per-system matched pairs), so auto-emitting it on every config would be
+  expensive. The on-demand MCP tool + REST endpoint + `evaluate --certify` ARE the
+  recall signal; auto-wiring it into controller telemetry is left as an opt-in
+  (`serialize_telemetry`) gated on a flag, not on the default path.
 
 ## Conclusion
 
