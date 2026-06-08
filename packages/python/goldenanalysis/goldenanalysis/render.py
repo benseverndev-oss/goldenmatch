@@ -23,7 +23,7 @@ def _fmt_value(value: float | int | str, unit: str | None) -> str:
     return f"{text} {unit}" if unit else text
 
 
-def format_markdown(report: "AnalysisReport") -> str:
+def format_markdown(report: AnalysisReport) -> str:
     dataset = report.source.get("dataset", "frame")
     lines: list[str] = [f"# Analysis — {dataset} (run {report.run_id})", ""]
 

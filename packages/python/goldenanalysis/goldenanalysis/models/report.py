@@ -56,7 +56,7 @@ class AnalysisReport(BaseModel):
         return text
 
     @classmethod
-    def from_json(cls, data: str | bytes) -> "AnalysisReport":
+    def from_json(cls, data: str | bytes) -> AnalysisReport:
         """Parse a report back from its JSON form (lossless round-trip)."""
         return cls.model_validate_json(data)
 

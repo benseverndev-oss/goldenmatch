@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from goldenanalysis.core import _native_loader as nl
 
 

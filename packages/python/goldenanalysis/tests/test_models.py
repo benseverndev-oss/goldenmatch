@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from goldenanalysis.models import (
     AnalysisReport,
@@ -28,7 +28,7 @@ def test_metric_direction_literal() -> None:
 def test_report_defaults() -> None:
     r = AnalysisReport(
         run_id="r1",
-        generated_at=datetime(2026, 6, 8, tzinfo=timezone.utc),
+        generated_at=datetime(2026, 6, 8, tzinfo=UTC),
         source={},
         metrics=[],
         tables=[],
@@ -41,7 +41,7 @@ def test_report_defaults() -> None:
 def test_report_json_roundtrip() -> None:
     r = AnalysisReport(
         run_id="r1",
-        generated_at=datetime(2026, 6, 8, tzinfo=timezone.utc),
+        generated_at=datetime(2026, 6, 8, tzinfo=UTC),
         source={"dataset": "customers"},
         metrics=[Metric(key="frame.row_count", value=3, unit="rows")],
         tables=[AnalysisTable(name="per_column", columns=["c"], rows=[["a"]])],

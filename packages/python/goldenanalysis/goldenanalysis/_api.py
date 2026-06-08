@@ -8,7 +8,7 @@ Phase 1 is the generic frame path only. Suite entry points (``analyze_match``,
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -67,7 +67,7 @@ def analyze(
         tables.extend(result.tables)
         ran.append(name)
 
-    gen = generated_at or datetime.now(timezone.utc)
+    gen = generated_at or datetime.now(UTC)
     rid = run_id or f"{gen.isoformat()}#{ds}"
     source = {"dataset": ds, "producer": "frame"}
     if unavailable:

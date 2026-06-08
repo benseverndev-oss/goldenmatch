@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import polars as pl
-
 from goldenanalysis.adapters import FrameArtifactAdapter
 
 

@@ -7,7 +7,6 @@ so the asserted values are the contract.
 from __future__ import annotations
 
 import polars as pl
-
 from goldenanalysis.core import aggregate as agg
 
 

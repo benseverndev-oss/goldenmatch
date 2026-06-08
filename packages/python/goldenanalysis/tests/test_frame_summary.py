@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import polars as pl
-
 from fixtures import build_customers_small, ensure_customers_small
-
 from goldenanalysis.adapters import FrameArtifactAdapter
 from goldenanalysis.analyzers.frame_summary import FrameSummaryAnalyzer
 

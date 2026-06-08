@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from typer.testing import CliRunner
-
 import goldenanalysis as ga
 from fixtures import ensure_customers_small
 from goldenanalysis.cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
