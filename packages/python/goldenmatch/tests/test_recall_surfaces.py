@@ -4,7 +4,6 @@ from __future__ import annotations
 import random
 
 import polars as pl
-import pytest
 
 
 def _dupe_df(n_entities: int = 40) -> pl.DataFrame:
