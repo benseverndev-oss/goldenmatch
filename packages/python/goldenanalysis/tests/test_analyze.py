@@ -32,6 +32,7 @@ def test_analyze_named_dataset_in_runid() -> None:
 
 def test_analyze_records_unavailable() -> None:
     df = pl.DataFrame({"a": [1]})
-    report = ga.analyze(df, analyzers=["frame.summary", "match.rates"])
+    # "does.not.exist" is not a registered analyzer -> recorded as unavailable.
+    report = ga.analyze(df, analyzers=["frame.summary", "does.not.exist"])
     assert report.analyzers_run == ["frame.summary"]
-    assert "match.rates" in report.source["unavailable"]
+    assert "does.not.exist" in report.source["unavailable"]
