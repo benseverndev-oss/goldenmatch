@@ -46,10 +46,16 @@ if TYPE_CHECKING:
 
 
 # Per-field spec for the probabilistic fast path:
-#   (xform_col, score_pair_fn, levels, partial_threshold, weights_per_level)
+#   (xform_col, score_pair_fn, levels, partial_threshold, weights_per_level,
+#    tf_table)
 # weights_per_level is em_result.match_weights[field], a list whose length
 # equals levels (so we can index by level without dict lookup).
-ProbFieldSpec = tuple[str, Any, int, float, list[float]]
+# tf_table is None when the field is not TF-adjusted; otherwise a
+# (freq_dict, m_exact, u_exact) tuple. freq_dict is keyed on the SAME
+# transformed value the materialized __xform_<sig>__ column holds, so the
+# inner loop can look up freq_v directly from xform_arrays[k][i].
+ProbTfTable = tuple[dict[str, float], float, float]
+ProbFieldSpec = tuple[str, Any, int, float, list[float], "ProbTfTable | None"]
 
 
 def _resolve_probabilistic_fast_path(
@@ -112,12 +118,23 @@ def _resolve_probabilistic_fast_path(
         weights = em_result.match_weights.get(f.field)
         if not weights or len(weights) != f.levels:
             return None
+        # TF adjustment plan for this field, if opted in AND the EM built a
+        # frequency table for it. Do NOT disqualify the fast path for tf_adjust.
+        tf_table: ProbTfTable | None = None
+        if (getattr(f, "tf_adjust", False)
+                and em_result.tf_tables
+                and f.field in em_result.tf_tables):
+            top = f.levels - 1
+            m_exact = max(em_result.m_probs[f.field][top], 1e-10)
+            u_exact = max(em_result.u_probs[f.field][top], 1e-10)
+            tf_table = (em_result.tf_tables[f.field], m_exact, u_exact)
         field_specs.append((
             xform_col,
             fn,
             int(f.levels),
             float(f.partial_threshold),
             [float(w) for w in weights],
+            tf_table,
         ))
         max_weight += max(weights)
         min_weight += min(weights)
@@ -162,7 +179,7 @@ def score_probabilistic_fast(
     if exclude_pairs is None:
         exclude_pairs = set()
 
-    from goldenmatch.core.probabilistic import _fs_sigmoid_enabled
+    from goldenmatch.core.probabilistic import _fs_sigmoid_enabled, _tf_adjusted_weight
 
     # Resolve normalization mode once (no per-pair env reads). Matches the
     # slow path's branch in score_probabilistic.
@@ -182,12 +199,16 @@ def score_probabilistic_fast(
     levels_list: list[int] = []
     partial_thresholds: list[float] = []
     weights_list: list[list[float]] = []
-    for xform_col, fn, levels, partial_threshold, weights in field_specs:
+    tf_tables: list[ProbTfTable | None] = []
+    tf_n_distinct: list[int] = []
+    for xform_col, fn, levels, partial_threshold, weights, tf_table in field_specs:
         xform_arrays.append(block_df[xform_col].to_list())
         score_fns.append(fn)
         levels_list.append(levels)
         partial_thresholds.append(partial_threshold)
         weights_list.append(weights)
+        tf_tables.append(tf_table)
+        tf_n_distinct.append(len(tf_table[0]) if tf_table is not None else 0)
 
     results: list[tuple[int, int, float]] = []
     for i in range(n_rows):
@@ -228,6 +249,18 @@ def score_probabilistic_fast(
                         level = 1
                     else:
                         level = 0
+                # TF adjustment at the exact-agree (top) level only. va is the
+                # already-transformed xform value, so it indexes the TF table
+                # built on apply_transforms(str(value), transforms) directly.
+                tf_table = tf_tables[k]
+                if tf_table is not None and level == lvls - 1:
+                    freq_dict, m_exact, u_exact = tf_table
+                    freq_v = freq_dict.get(va)
+                    if freq_v is not None:
+                        weight_sum += _tf_adjusted_weight(
+                            m_exact, u_exact, freq_v, tf_n_distinct[k]
+                        )
+                        continue
                 weight_sum += weights_list[k][level]
 
             # Normalize and threshold. Identical to score_probabilistic's

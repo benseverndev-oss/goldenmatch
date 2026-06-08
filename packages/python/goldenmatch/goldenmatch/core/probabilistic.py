@@ -49,6 +49,33 @@ def _fs_sigmoid_enabled() -> bool:
     )
 
 
+# Term-frequency adjustment bounds. The adjusted u for a shared value is clamped
+# into [TF_MIN_U, TF_MAX_U] so a hapax (freq -> 0) can't blow the weight up
+# unboundedly and a ubiquitous value can't drive u above 0.5 (which would make
+# agreement net-negative evidence beyond what the model can justify).
+TF_MIN_U = float(os.environ.get("GOLDENMATCH_TF_MIN_U", "1e-6"))
+TF_MAX_U = float(os.environ.get("GOLDENMATCH_TF_MAX_U", "0.5"))
+
+
+def _tf_adjusted_weight(
+    m_exact: float, u_exact: float, freq_v: float, n_distinct: int
+) -> float:
+    """Splink scale-the-base TF adjustment for the exact-agree (top) level.
+
+      freq_avg = 1/n_distinct ;  u_v = clamp(u_exact * freq_v / freq_avg, TF_MIN_U, TF_MAX_U)
+      weight   = log2(m_exact / u_v)
+
+    Rarer shared value -> freq_v<freq_avg -> smaller u_v -> LARGER weight. A value of
+    average frequency returns the base weight log2(m_exact/u_exact). Common value ->
+    larger u_v -> weight collapses toward/below 0 (agreeing on a ubiquitous value is weak
+    evidence). Bounds keep hapax/huge extremes sane.
+    """
+    freq_avg = 1.0 / max(n_distinct, 1)
+    u_v = u_exact * (freq_v / freq_avg) if freq_avg > 0 else u_exact
+    u_v = min(max(u_v, TF_MIN_U), TF_MAX_U)
+    return math.log2(max(m_exact, 1e-10) / u_v)
+
+
 @dataclass
 class EMResult:
     """Result of EM training for Fellegi-Sunter model."""
@@ -59,6 +86,10 @@ class EMResult:
     converged: bool
     iterations: int
     proportion_matched: float  # estimated match rate in the data
+    # Per-field relative-frequency table for tf_adjust fields, keyed on the SAME
+    # transformed value the scorer/xform-column sees. None when no field opts in.
+    # Trailing default keeps every existing EMResult(...) call site valid.
+    tf_tables: dict[str, dict[str, float]] | None = None
 
 
 def comparison_vector(
@@ -410,6 +441,31 @@ def train_em(
             weights.append(math.log2(m_val / u_val))
         match_weights[f.field] = weights
 
+    # ── Step 4: build per-field relative-frequency tables for tf_adjust fields ──
+    # Key on the SAME transformed value the scorer/xform-column sees:
+    # apply_transforms(str(value), f.transforms). This matches both the slow
+    # path's lookup (comparison_vector str()s then transforms) AND the fast
+    # path's materialized __xform_<sig>__ column (cast(Utf8) then transforms).
+    from goldenmatch.utils.transforms import apply_transforms
+
+    tf_tables: dict[str, dict[str, float]] = {}
+    for f in mk.fields:
+        if not getattr(f, "tf_adjust", False):
+            continue
+        vals = df[f.field].to_list()
+        counts: dict[str, int] = {}
+        total = 0
+        for v in vals:
+            if v is None:
+                continue
+            key = str(v)
+            if f.transforms:
+                key = apply_transforms(key, f.transforms)
+            counts[key] = counts.get(key, 0) + 1
+            total += 1
+        if total:
+            tf_tables[f.field] = {k: c / total for k, c in counts.items()}
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -417,6 +473,7 @@ def train_em(
         converged=converged,
         iterations=min(iteration + 1, max_iterations) if not converged else iteration + 1,
         proportion_matched=p_match,
+        tf_tables=(tf_tables or None),
     )
 
 
@@ -758,7 +815,24 @@ def score_probabilistic(
             # Sum match weights
             total_weight = 0.0
             for k, f in enumerate(mk.fields):
-                total_weight += em_result.match_weights[f.field][vec[k]]
+                level = vec[k]
+                top = f.levels - 1
+                if (em_result.tf_tables and getattr(f, "tf_adjust", False)
+                        and f.field in em_result.tf_tables and level == top):
+                    raw = row_a.get(f.field)
+                    val = str(raw) if raw is not None else None
+                    if val is not None and f.transforms:
+                        from goldenmatch.utils.transforms import apply_transforms
+                        val = apply_transforms(val, f.transforms)
+                    tft = em_result.tf_tables[f.field]
+                    if val is not None and val in tft:
+                        m_exact = max(em_result.m_probs[f.field][top], 1e-10)
+                        u_exact = max(em_result.u_probs[f.field][top], 1e-10)
+                        total_weight += _tf_adjusted_weight(
+                            m_exact, u_exact, tft[val], len(tft)
+                        )
+                        continue
+                total_weight += em_result.match_weights[f.field][level]
 
             # Normalize to 0-1
             if sigmoid:
@@ -790,7 +864,22 @@ def score_pair_probabilistic(
 
     total_weight = 0.0
     for k, f in enumerate(mk.fields):
-        total_weight += em_result.match_weights[f.field][vec[k]]
+        level = vec[k]
+        top = f.levels - 1
+        if (em_result.tf_tables and getattr(f, "tf_adjust", False)
+                and f.field in em_result.tf_tables and level == top):
+            raw = row_a.get(f.field)
+            val = str(raw) if raw is not None else None
+            if val is not None and f.transforms:
+                from goldenmatch.utils.transforms import apply_transforms
+                val = apply_transforms(val, f.transforms)
+            tft = em_result.tf_tables[f.field]
+            if val is not None and val in tft:
+                m_exact = max(em_result.m_probs[f.field][top], 1e-10)
+                u_exact = max(em_result.u_probs[f.field][top], 1e-10)
+                total_weight += _tf_adjusted_weight(m_exact, u_exact, tft[val], len(tft))
+                continue
+        total_weight += em_result.match_weights[f.field][level]
 
     if _fs_sigmoid_enabled():
         # Splink-style match probability; already in (0,1).
