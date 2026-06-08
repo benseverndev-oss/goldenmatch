@@ -109,7 +109,12 @@ One PR per checklist group; each lands with tests + CHANGELOG + a measured gate.
       (`TestThresholdSweepCLI`); DBLP-ACM recommended posterior cut = 0.9999
       (F1 0.968), confirming Phase 0. 103 evaluate/probabilistic tests green; ruff clean.
 
-## PR 8 — Phase 3c: distributed FS validation (remaining)
-- [ ] 5M FS dedupe on 16c/64GB within scale-envelope budget; F1 within tolerance
-      on a labeled slice. (Mostly falls out of 3a + Phase-1a model serialization
-      across Ray workers — but it's an UNRUN gate; run it before claiming it.)
+## PR 8 — Phase 3c: distributed FS validation (bench wired, UNRUN)
+- [x] Bench harness wired: `scripts/bench_fs_distributed.py` (synthetic data with
+      KNOWN injected dup pairs → wall + peak RSS + P/R/F1 via `backend=bucket`)
+      + `.github/workflows/bench-fs-distributed.yml` (`workflow_dispatch` only,
+      `large-new-64GB`, opt-in native via `fs_native`, builds the native ext).
+      Smoke-validated at 4K rows (R=1.0). YAML valid, ruff clean.
+- [ ] RUN IT: dispatch `bench-fs-distributed.yml` at rows=5000000 on 16c/64GB;
+      record wall/RSS/F1. This is the actual gate — deliberately NOT asserted from
+      code (needs a real beefy runner). Once green, Splink parity is complete.

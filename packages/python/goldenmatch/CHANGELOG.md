@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Phase 3c bench harness — FS dedupe at scale (Splink-parity).**
+  `scripts/bench_fs_distributed.py` + `.github/workflows/bench-fs-distributed.yml`
+  (`workflow_dispatch` only — never runs in normal CI). Generates synthetic
+  person data with KNOWN injected duplicate pairs (GT exact in `__row_id__`
+  space), runs FS dedupe via `backend=bucket` (the Phase 3a scale path that
+  carries the Ray/DataFusion wiring), and reports wall + peak RSS + P/R/F1.
+  Inputs: rows, dup_frac, backend, runner, fs_native (opt-in native kernel).
+  The gate (5M wall/RSS budget + F1) is run on demand, not asserted from code.
 - **FS accuracy analysis from labels — threshold sweep + m/u model report
   (Splink-parity Phase 4).** `core/evaluate.py` gains `threshold_sweep`
   (P/R/F1 at each candidate link cut, single O(P log P) descending sweep),
