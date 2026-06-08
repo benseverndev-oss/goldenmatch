@@ -28,7 +28,7 @@ This page summarizes the entity-resolution landscape as recorded in the reposito
 
 | Engine | License | Where it beats GoldenMatch | Where GoldenMatch beats it |
 |--------|---------|----------------------------|----------------------------|
-| Splink (UK MoJ) | MIT | Throughput (1B+ rows); PII F1 on Febrl (0.998). | Non-PII accuracy (DBLP-ACM 0.964 vs 0.728); zero-config; polyglot; AI-native; PPRL. |
+| Splink (UK MoJ) | MIT | Distributed Fellegi-Sunter at 1B+ rows (Spark); PII F1 on Febrl (0.998); mature interactive m/u + comparison-viewer charts. | Non-PII accuracy (DBLP-ACM 0.964 vs 0.728); zero-config; polyglot; AI-native; PPRL. **FS feature parity closed:** GoldenMatch's `type: probabilistic` matchkey now has EM-trained m/u, supervised m from labels, model persistence, match-weight waterfall, posterior calibration, and label-driven threshold analysis — plus FS scale-out on the bucket/Ray path (measured 6M dedupe in 162.6 s / 11.3 GB single-node). |
 | dedupe.io | BSD | Cleanest active-learning UX in OSS. | Accuracy without labels; throughput at scale; polyglot; AI-native; PPRL. |
 | RecordLinkage Toolkit | BSD | DBLP-ACM F1 0.923 (narrowly). | Throughput, scale, PPRL, AI-native, zero-config, polyglot. |
 | Zingg | AGPL + commercial | Native Spark scale. | MIT license; polyglot; AI-native; zero-config; PPRL. |
