@@ -94,6 +94,51 @@ class TestRunDedupe:
         assert (tmp_path / "out_test_golden.csv").exists()
         assert (tmp_path / "out_test_clusters.csv").exists()
 
+    def test_file_path_prep_cache_seed_includes_height(
+        self, sample_csv, sample_csv_b, monkeypatch
+    ):
+        """run_dedupe must seed the prep cache with (id, height), not bare id().
+
+        Regression for a CI flake (`test_dedupe_across_files_only` asserting
+        `5 == 8`): the file path defaulted to a bare ``id(combined_lf)`` cache
+        seed. ``combined_lf`` is GC-eligible the moment run_dedupe returns, so
+        CPython recycles its id() slot for the next call. A 1-file 5-row dedupe
+        followed by a same-schema 2-file 8-row dedupe could then collide on the
+        recycled id and serve the stale 5-row prepared frame. Including height
+        in the seed disambiguates same-schema/different-row inputs.
+        """
+        import goldenmatch.core.pipeline as pipeline_mod
+
+        captured = {}
+        real = pipeline_mod._run_dedupe_pipeline
+
+        def _spy(combined_lf, *args, **kwargs):
+            captured["seed"] = kwargs.get("_prep_cache_seed")
+            return real(combined_lf, *args, **kwargs)
+
+        monkeypatch.setattr(pipeline_mod, "_run_dedupe_pipeline", _spy)
+
+        cfg = GoldenMatchConfig(
+            matchkeys=[
+                MatchkeyConfig(
+                    name="email_key",
+                    fields=[MatchkeyField(column="email", transforms=["lowercase", "strip"])],
+                    comparison="exact",
+                )
+            ],
+            golden_rules=GoldenRulesConfig(default=GoldenFieldRule(strategy="most_complete")),
+        )
+        run_dedupe(
+            files=[(sample_csv, "source_a"), (sample_csv_b, "source_b")],
+            config=cfg,
+        )
+        seed = captured["seed"]
+        assert isinstance(seed, tuple) and len(seed) == 2, (
+            f"expected an (id, height) prep-cache seed, got {seed!r}"
+        )
+        # sample_csv has 5 rows, sample_csv_b has 3 -> combined height is 8.
+        assert seed[1] == 8, f"prep-cache seed height should be 8, got {seed[1]}"
+
 
 class TestRunMatch:
     def test_exact_match(self, sample_csv, sample_csv_b, tmp_path):
