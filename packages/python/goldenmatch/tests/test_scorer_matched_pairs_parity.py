@@ -142,6 +142,7 @@ from goldenmatch.core.blocker import BlockResult  # noqa: E402
 from goldenmatch.core.scorer import (  # noqa: E402
     pairs_df_to_list,
     score_blocks_columnar,
+    score_blocks_parallel,
 )
 
 
@@ -205,3 +206,83 @@ def test_columnar_guard_default_preserves_side_effect():
     matched: set = set()
     score_blocks_columnar([b], _name_mk(), matched)
     assert len(matched) > 0, "default behavior must keep building matched_pairs"
+
+
+# ── Stage 2: the list-path guard ─────────────────────────────────────
+# score_blocks_parallel is the DEFAULT scorer (columnar is opt-in). The 1M
+# profile measured ~100s of matched_pairs min/max/set.add on this path, and
+# for a single-matchkey list config matched_pairs is DEAD (never consumed) —
+# same situation as columnar. So the same guard eliminates ~17% of the
+# default-path wall for the common single-matchkey case. The pipeline passes
+# track_matched=False ONLY when no later pass consumes the set; these tests
+# prove (a) the guard skips the build without changing the returned pairs and
+# (b) it is LOAD-BEARING — skipping on a CONSUMED pass changes the next pass.
+
+
+def test_parallel_guard_sequential_branch_skips_set_output_identical():
+    """<=2 blocks: track_matched=False skips the matched_pairs build; the
+    returned pair LIST is identical."""
+    b = _block([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+    mk = _name_mk()
+
+    tracked: set = set()
+    out_tracked = score_blocks_parallel([b], mk, tracked, track_matched=True)
+    skipped: set = set()
+    out_skipped = score_blocks_parallel([b], mk, skipped, track_matched=False)
+
+    assert sorted(out_tracked) == sorted(out_skipped), \
+        "returned pair list must NOT depend on whether matched_pairs is built"
+    assert len(skipped) == 0, "track_matched=False must leave matched_pairs untouched"
+    assert len(tracked) > 0, "track_matched=True must still populate the exclude set"
+
+
+def test_parallel_guard_parallel_branch_skips_set_output_identical():
+    """>2 blocks (ThreadPoolExecutor branch): same guard, same parity."""
+    blocks = [
+        _block([(1, "John Smith"), (2, "Jon Smith")], "b1"),
+        _block([(10, "Alice Anderson"), (11, "Alice Andersen")], "b2"),
+        _block([(20, "Bob Brown"), (21, "Bob Browne")], "b3"),
+    ]
+    mk = _name_mk()
+
+    tracked: set = set()
+    out_tracked = score_blocks_parallel(blocks, mk, tracked, track_matched=True)
+    skipped: set = set()
+    out_skipped = score_blocks_parallel(blocks, mk, skipped, track_matched=False)
+
+    assert sorted(out_tracked) == sorted(out_skipped)
+    assert len(skipped) == 0
+    assert len(tracked) > 0
+
+
+def test_parallel_guard_default_preserves_side_effect():
+    """Default must still populate matched_pairs (the cross-pass contract)."""
+    b = _block([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+    matched: set = set()
+    score_blocks_parallel([b], _name_mk(), matched)
+    assert len(matched) > 0
+
+
+def test_parallel_guard_is_load_bearing_on_a_consumed_pass():
+    """The guard MUST stay on (track_matched=True) for a pass whose set a
+    LATER pass consumes. Proof: skipping the build on pass 1 makes pass 2 see
+    an empty exclude and re-emit pairs pass 1 already found -> different output.
+    This is why the pipeline computes track_matched from 'is there a later
+    consuming pass', and never blanket-False."""
+    b = _block([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+    mk = _name_mk()
+
+    # Correct: pass 1 records its pairs; pass 2 excludes them.
+    correct: set = set()
+    score_blocks_parallel([b], mk, correct, track_matched=True)
+    p2_correct = score_blocks_parallel([b], mk, correct)
+
+    # Wrong: pass 1 skips recording; pass 2 sees an empty exclude and re-emits.
+    wrong: set = set()
+    score_blocks_parallel([b], mk, wrong, track_matched=False)
+    p2_wrong = score_blocks_parallel([b], mk, wrong)
+
+    assert sorted(p2_correct) != sorted(p2_wrong), (
+        "guard is not load-bearing — exclusion semantics broken; "
+        f"correct_pass2={sorted(p2_correct)}, wrong_pass2={sorted(p2_wrong)}"
+    )

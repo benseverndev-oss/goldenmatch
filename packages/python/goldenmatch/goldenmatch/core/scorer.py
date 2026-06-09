@@ -1107,6 +1107,7 @@ def score_blocks_parallel(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    track_matched: bool = True,
 ) -> list[tuple[int, int, float]]:
     """Score all blocks in parallel using threads.
 
@@ -1123,6 +1124,13 @@ def score_blocks_parallel(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
+        track_matched: when True (default) the per-pass exclude set is
+            populated as before. When False the ``matched_pairs.add``
+            bookkeeping is skipped -- the caller passes False ONLY when no
+            later matchkey pass consumes the set (single-matchkey configs,
+            or the last consuming pass). At 1M / 131M pairs that per-pair
+            min/max/set.add was ~100s of the default-path wall. The returned
+            pair list is identical either way; only the side effect differs.
 
     Returns:
         All fuzzy pairs found across blocks.
@@ -1151,8 +1159,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
         _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
         return all_pairs
 
@@ -1222,8 +1231,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
             completed += 1
             if completed % log_interval == 0:
                 logger.info(
