@@ -1360,7 +1360,6 @@ jobs:
             DECLARE
               n_comp INT;
               pd RECORD;
-              n_rows INT;
             BEGIN
               -- connected_components: empty edge list -> every id is a singleton.
               SELECT count(DISTINCT component) INTO n_comp
@@ -1372,17 +1371,16 @@ jobs:
               END IF;
 
               -- pair_dedup: all three inputs canonicalize to (1,2); keep max 0.7.
-              SELECT count(*) INTO n_rows FROM goldenmatch.goldenmatch_pair_dedup(
+              -- One invocation, aggregated so cardinality (dedup collapsed to a
+              -- single pair) and the kept values are asserted together. (min/max
+              -- over the one row == that row; n<>1 also catches a 0- or N-row
+              -- dedup failure, with NULL value comparisons short-circuited by it.)
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b, max(s) AS s INTO pd
+              FROM goldenmatch.goldenmatch_pair_dedup(
                 ARRAY[1, 1, 2]::BIGINT[], ARRAY[2, 2, 1]::BIGINT[],
                 ARRAY[0.3, 0.7, 0.5]::DOUBLE PRECISION[]);
-              IF n_rows <> 1 THEN
-                RAISE EXCEPTION 'pair_dedup: expected 1 canonical pair, got %', n_rows;
-              END IF;
-              SELECT a, b, s INTO pd FROM goldenmatch.goldenmatch_pair_dedup(
-                ARRAY[1, 1, 2]::BIGINT[], ARRAY[2, 2, 1]::BIGINT[],
-                ARRAY[0.3, 0.7, 0.5]::DOUBLE PRECISION[]);
-              IF pd.a <> 1 OR pd.b <> 2 OR abs(pd.s - 0.7) > 1e-9 THEN
-                RAISE EXCEPTION 'pair_dedup max: expected (1,2,0.7), got (%,%,%)', pd.a, pd.b, pd.s;
+              IF pd.n <> 1 OR pd.a <> 1 OR pd.b <> 2 OR abs(pd.s - 0.7) > 1e-9 THEN
+                RAISE EXCEPTION 'pair_dedup: expected exactly (1,2,0.7), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
               END IF;
 
               -- record_fingerprint: stable across key order (fields sorted by name).
