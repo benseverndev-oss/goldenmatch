@@ -1369,8 +1369,12 @@ def _run_dedupe_pipeline(
                         # gate can't break an otherwise-eligible run.
                         try:
                             from goldenmatch.core.scorer import score_blocks_columnar
+                            # Eligibility guarantees a single weighted matchkey,
+                            # so matched_pairs is never consumed by a later pass
+                            # -- skip building it (the profiled ~104s of per-pair
+                            # min/max/set.add at 1M / 131M pairs).
                             _columnar_pairs_df = score_blocks_columnar(
-                                blocks, mk, matched_pairs,
+                                blocks, mk, matched_pairs, track_matched=False,
                             )
                             fuzzy_pair_count += _columnar_pairs_df.height
                             continue

@@ -128,3 +128,80 @@ def test_two_matchkey_dedupe_is_deterministic_baseline():
     # Sanity: the config actually produced clusters (the test exercises real
     # scoring + clustering, not an empty no-op).
     assert a[1] > 0, "expected at least one cluster from the synthetic near-duplicates"
+
+
+# ── Stage 1: the columnar guard ──────────────────────────────────────
+# score_blocks_columnar is only ever called by the pipeline on the
+# single-weighted-matchkey columnar path (_is_columnar_eligible requires
+# len(matchkeys) == 1), so its matched_pairs side effect is STRUCTURALLY
+# DEAD — nothing consumes it. `track_matched=False` lets the caller skip
+# building it (the profiled ~104s). These unit tests prove the guard skips
+# the build WITHOUT changing the returned pair stream.
+
+from goldenmatch.core.blocker import BlockResult  # noqa: E402
+from goldenmatch.core.scorer import (  # noqa: E402
+    pairs_df_to_list,
+    score_blocks_columnar,
+)
+
+
+def _block(records: list[tuple[int, str]], block_key: str = "k") -> BlockResult:
+    df = pl.DataFrame({
+        "__row_id__": [r[0] for r in records],
+        "__source__": ["fixture"] * len(records),
+        "name": [r[1] for r in records],
+    })
+    return BlockResult(block_key=block_key, df=df.lazy())
+
+
+def _name_mk() -> MatchkeyConfig:
+    return MatchkeyConfig(
+        name="test", type="weighted", threshold=0.85,
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+    )
+
+
+def test_columnar_guard_sequential_branch_skips_set_output_identical():
+    """<=2 blocks (sequential branch): track_matched=False skips the
+    matched_pairs build; the returned DataFrame is byte-identical."""
+    b = _block([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+    mk = _name_mk()
+
+    tracked: set = set()
+    out_tracked = score_blocks_columnar([b], mk, tracked, track_matched=True)
+    skipped: set = set()
+    out_skipped = score_blocks_columnar([b], mk, skipped, track_matched=False)
+
+    assert pairs_df_to_list(out_tracked.sort(["id_a", "id_b"])) == \
+        pairs_df_to_list(out_skipped.sort(["id_a", "id_b"])), \
+        "returned pair stream must NOT depend on whether matched_pairs is built"
+    assert len(skipped) == 0, "track_matched=False must leave matched_pairs untouched"
+    assert len(tracked) > 0, "track_matched=True must still populate the exclude set"
+
+
+def test_columnar_guard_parallel_branch_skips_set_output_identical():
+    """>2 blocks (ThreadPoolExecutor branch): same guard, same parity."""
+    blocks = [
+        _block([(1, "John Smith"), (2, "Jon Smith")], "b1"),
+        _block([(10, "Alice Anderson"), (11, "Alice Andersen")], "b2"),
+        _block([(20, "Bob Brown"), (21, "Bob Browne")], "b3"),
+    ]
+    mk = _name_mk()
+
+    tracked: set = set()
+    out_tracked = score_blocks_columnar(blocks, mk, tracked, track_matched=True)
+    skipped: set = set()
+    out_skipped = score_blocks_columnar(blocks, mk, skipped, track_matched=False)
+
+    assert sorted(pairs_df_to_list(out_tracked)) == sorted(pairs_df_to_list(out_skipped))
+    assert len(skipped) == 0
+    assert len(tracked) > 0
+
+
+def test_columnar_guard_default_preserves_side_effect():
+    """Default (track_matched omitted) must still populate matched_pairs —
+    the existing contract every non-pipeline caller relies on."""
+    b = _block([(1, "John Smith"), (2, "Jon Smith"), (3, "John Smyth")])
+    matched: set = set()
+    score_blocks_columnar([b], _name_mk(), matched)
+    assert len(matched) > 0, "default behavior must keep building matched_pairs"
