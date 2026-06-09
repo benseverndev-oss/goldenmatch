@@ -7,6 +7,7 @@
 //! `packages/python/goldenmatch/docs/design/2026-05-25-rust-acceleration-spec.md`.
 use pyo3::prelude::*;
 
+mod bloom;
 mod cluster;
 mod featurize;
 mod hash;
@@ -42,5 +43,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(bloom::bloom_clk_batch, m)?)?;
     Ok(())
 }

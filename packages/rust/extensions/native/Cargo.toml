@@ -6,7 +6,7 @@
 
 [package]
 name = "goldenmatch-native"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
@@ -38,6 +38,11 @@ goldenmatch-score-core = { path = "../score-core" }
 # this extension module share one behavior-exact path.
 goldenmatch-graph-core = { path = "../graph-core" }
 rayon = "1.12.0"
+# CLK bloom-filter hashing (bloom.rs) -- MUST match Python hashlib.sha256 /
+# hmac.new(..., sha256) byte-for-byte. sha2 is also a transitive dep via
+# fingerprint-core; pinned here explicitly because bloom.rs uses it directly.
+sha2 = "0.10"
+hmac = "0.12"
 # Arrow C Data Interface for zero-copy kernel input (see score.rs
 # score_block_pairs_arrow). `pyarrow` brings the PyArrowType FFI bridge;
 # default features (csv/ipc/json/compute) are off — we only read array buffers.
