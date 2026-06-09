@@ -266,6 +266,15 @@ mod tests {
         let w = vec![1.0f32; nf * dim];
         let out = project_one("john", &w, nf, dim, 2, 3, true, "#", &SEED);
         let norm: f32 = out.iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-5 || norm == 0.0, "got {norm}");
+        assert!((norm - 1.0).abs() < 1e-5, "expected unit norm, got {norm}");
+    }
+
+    #[test]
+    fn project_one_empty_text_is_zero_vector() {
+        let dim = 4usize;
+        let nf = 8usize;
+        let w = vec![1.0f32; nf * dim];
+        let out = project_one("   ", &w, nf, dim, 2, 3, true, "#", &SEED);
+        assert!(out.iter().all(|&v| v == 0.0), "expected zero vector, got {out:?}");
     }
 }

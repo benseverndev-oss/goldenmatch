@@ -751,9 +751,13 @@ mod tests {
 
     #[test]
     fn soundex_code_table() {
-        assert_eq!(soundex_code('B'), b'1');
-        assert_eq!(soundex_code('R'), b'6');
-        assert_eq!(soundex_code('A'), b'0');
+        assert_eq!(soundex_code('B'), b'1'); // B F P V
+        assert_eq!(soundex_code('C'), b'2'); // C G J K Q S X Z
+        assert_eq!(soundex_code('D'), b'3'); // D T
+        assert_eq!(soundex_code('L'), b'4'); // L
+        assert_eq!(soundex_code('M'), b'5'); // M N
+        assert_eq!(soundex_code('R'), b'6'); // R
+        assert_eq!(soundex_code('A'), b'0'); // vowels / other
     }
 
     #[test]

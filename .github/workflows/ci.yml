@@ -826,6 +826,7 @@ jobs:
         # can link libpython (--no-default-features turns it off). Covers
         # soundex/featurize/pairs-math/C-ABI logic that the Python parity suite
         # only exercises indirectly. Build below still uses default features.
+        timeout-minutes: 5
         working-directory: packages/rust/extensions/native
         env:
           PYO3_PYTHON: /usr/bin/python3
