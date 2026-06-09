@@ -452,7 +452,15 @@ def _sample_blocked_pairs(
     block-stratified sample. Deterministic (fixed ``seed``).
     """
     rng = random.Random(seed)
-    order = list(range(len(blocks)))
+    # Determinism: `blocks` can arrive in a non-deterministic order (parallel /
+    # hash-bucketed construction; varies by machine/core-count), so a seeded
+    # shuffle of bare indices still draws a different training sample run-to-run.
+    # Sort by the stable, already-computed block_key FIRST so the seeded shuffle
+    # permutes a canonical order -> reproducible sample (no extra collect; block_key
+    # is a string attribute set at construction). Ties (rare cross-pass key
+    # collisions) fall back to the original index, adjacent same-key blocks being
+    # near-equivalent anyway.
+    order = sorted(range(len(blocks)), key=lambda i: (str(getattr(blocks[i], "block_key", "")), i))
     rng.shuffle(order)
     # Headroom over n_pairs so the post-dedup downsample still has enough to
     # draw from even when blocks overlap or are tiny.
@@ -462,7 +470,7 @@ def _sample_blocked_pairs(
     for bi in order:
         block = blocks[bi]
         block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
-        row_ids = block_df["__row_id__"].to_list()
+        row_ids = sorted(block_df["__row_id__"].to_list())  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
         # Limit per-block pairs for large blocks
