@@ -113,17 +113,20 @@ like `goldenmatch[native]` / `goldencheck[native]`:
 pip install goldenanalysis[native]   # pulls the separate goldenanalysis-native wheel
 ```
 
-The pure-Python/Polars path stays the **default and the byte-identical reference**.
-The compiled kernel (`analysis-core` pyo3-free + `analysis-native` abi3 wheel)
-mirrors `core/aggregate.py`'s `histogram` / `quantile` value-for-value, reading
-input as a Float64 Arrow array (zero-copy). The loader gate
-(`core/_native_loader.py`, `GOLDENANALYSIS_NATIVE=auto|0|1`) only uses a primitive
-once it's in `_GATED_ON` — which is **empty by design**: a primitive is added only
-after `tests/core/test_native_parity.py` proves byte-identical output **and**
-`benchmarks/aggregate_benchmark.py` shows the wall actually moved on a real shape
-(the pure loops are tight and the native path pays an Arrow-marshalling cost, so
-"it's Rust" is not enough). In-tree dev build:
-`uv run python scripts/build_analysis_native.py`.
+The pure-Python path stays the **default and the byte-identical reference**. The
+compiled kernel (`analysis-core` pyo3-free + `analysis-native` abi3 wheel) mirrors
+`core/aggregate.py`'s `histogram` / `quantile` value-for-value, reading input as a
+Float64 Arrow array (zero-copy). The loader gate (`core/_native_loader.py`,
+`GOLDENANALYSIS_NATIVE=auto|0|1`) uses a primitive only once it's in `_GATED_ON` —
+which holds **`histogram` and `quantile`**: both proved byte-identical
+(`tests/core/test_native_parity.py`) **and** measured **5.8–9.9x faster** than the
+pure Python loop on Linux x86_64 at 1M–10M rows, *including* the list→Arrow
+conversion the dispatch pays (`benchmarks/aggregate_benchmark.py` +
+`bench-analysis-native.yml`). A new primitive joins only after the same two gates
+clear — "it's Rust" is never enough (the goldencheck composite-key kernel was 2.5x
+*slower* until the gate caught it). With `goldenanalysis[native]` installed, the
+`auto` default uses the native path automatically; `GOLDENANALYSIS_NATIVE=0` forces
+pure. In-tree dev build: `uv run python scripts/build_analysis_native.py`.
 
 ## License
 

@@ -31,10 +31,13 @@ except Exception:  # noqa: BLE001 - any import/load failure falls back below
 
 
 # Components whose native path has cleared parity and may run under
-# ``GOLDENANALYSIS_NATIVE=auto``. EMPTY until Phase 4 — a primitive joins this set
-# only after a parity test proves byte-identical output AND the wall is measured to
-# move (heed the goldenmatch-native footguns in the root CLAUDE.md).
-_GATED_ON: frozenset[str] = frozenset()
+# ``GOLDENANALYSIS_NATIVE=auto``. ``histogram`` / ``quantile`` joined after
+# ``test_native_parity.py`` proved byte-identical output AND the wall was measured to
+# move on the target env: 5.8-9.9x faster than the pure Python loop on Linux x86_64
+# at 1M-10M rows, INCLUDING the list->Arrow conversion the dispatch pays (the
+# ``bench-analysis-native.yml`` A/B harness). A new primitive joins only after the
+# same two gates clear (heed the goldenmatch-native footguns in the root CLAUDE.md).
+_GATED_ON: frozenset[str] = frozenset({"histogram", "quantile"})
 
 
 def native_module() -> Any:
