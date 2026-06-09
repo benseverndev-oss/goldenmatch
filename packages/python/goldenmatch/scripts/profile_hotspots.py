@@ -115,7 +115,10 @@ def _profile_columnar_path(blocks: list, cfg: GoldenMatchConfig, all_ids: list[i
     mk = cfg.matchkeys[0]
     matched: set[tuple[int, int]] = set()
     t0 = time.perf_counter()
-    pairs_df = score_blocks_columnar(blocks, mk, matched)
+    # Mirror the pipeline's columnar caller: eligibility guarantees a single
+    # matchkey, so matched_pairs is never consumed -> track_matched=False
+    # (the guard that eliminates the per-pair min/max/set.add hot spot).
+    pairs_df = score_blocks_columnar(blocks, mk, matched, track_matched=False)
     clusters = build_clusters_columnar(pairs_df, all_ids=all_ids)
     wall = time.perf_counter() - t0
     return pairs_df.height, len(clusters), wall
