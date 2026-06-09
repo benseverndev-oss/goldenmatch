@@ -63,3 +63,46 @@ def test_hand_built_mode_unchanged_int_ids(tmp_path):
     if res["status"] == "ok":
         t = pq.read_table(pred)
         assert pa.types.is_integer(t.schema.field("record_id").type)
+
+
+def test_bakeoff_table_assembly_and_missing_engine():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_bakeoff", HERE / "run_bakeoff.py")
+    rb = importlib.util.module_from_spec(spec); spec.loader.exec_module(rb)
+    stub = {
+      "febrl3": {
+        "gm_zeroconfig": ({"status":"ok","dedupe_wall_seconds":3.1,"peak_rss_mb":900.0,"scored_pairs":12000},
+                          {"pairwise":{"precision":0.99,"recall":0.98,"f1":0.985},"bcubed":{"f1":0.97}}),
+        "gm_probabilistic": ({"status":"ok","dedupe_wall_seconds":4.0,"peak_rss_mb":950.0,"scored_pairs":15000},
+                          {"pairwise":{"precision":0.99,"recall":0.99,"f1":0.991},"bcubed":{"f1":0.98}}),
+        "splink": ({"status":"ok","dedupe_wall_seconds":8.0,"peak_rss_mb":1200.0,"scored_pairs":20000},
+                          {"pairwise":{"precision":0.97,"recall":0.96,"f1":0.965},"bcubed":{"f1":0.95}}),
+      },
+      "dblp_acm": {
+        "gm_zeroconfig": ({"status":"ok","dedupe_wall_seconds":2.0,"peak_rss_mb":800.0,"scored_pairs":9000},
+                          {"pairwise":{"precision":0.9,"recall":0.86,"f1":0.879},"bcubed":{"f1":0.86}}),
+        "gm_probabilistic": ({"status":"ok","dedupe_wall_seconds":2.2,"peak_rss_mb":810.0,"scored_pairs":9100},
+                          {"pairwise":{"precision":0.9,"recall":0.86,"f1":0.879},"bcubed":{"f1":0.86}}),
+        "splink": ({"status":"skipped","error":"bibliographic out of scope"}, None),
+      },
+    }
+    rows = rb.build_rows(stub)
+    skips = [r for r in rows if r["dataset"]=="dblp_acm" and r["engine"]=="splink"]
+    assert skips and skips[0]["status"]=="skipped" and skips[0].get("f1") in (None,"")
+    # throughput computed when wall+pairs present
+    febrl_gm = [r for r in rows if r["dataset"]=="febrl3" and r["engine"]=="gm_zeroconfig"][0]
+    assert febrl_gm["throughput_pairs_per_s"] == round(12000/3.1)
+    md = rb.render_md(rows)
+    assert "febrl3" in md and "peak" in md.lower() and ("throughput" in md.lower() or "pairs/s" in md.lower())
+    assert "ratio" in md.lower() or "delta" in md.lower()  # GM-vs-Splink delta block
+
+
+def test_bakeoff_tolerates_null_rss(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_bakeoff", HERE / "run_bakeoff.py")
+    rb = importlib.util.module_from_spec(spec); spec.loader.exec_module(rb)
+    stub = {"febrl3": {"gm_zeroconfig": ({"status":"ok","dedupe_wall_seconds":3.0,"peak_rss_mb":None,"scored_pairs":100},
+                       {"pairwise":{"precision":1.0,"recall":1.0,"f1":1.0},"bcubed":{"f1":1.0}})}}
+    rows = rb.build_rows(stub)
+    md = rb.render_md(rows)  # must not crash on null RSS
+    assert "febrl3" in md
