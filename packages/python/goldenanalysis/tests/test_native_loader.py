@@ -1,4 +1,4 @@
-"""Native-loader gate contract (Phase 1: pure fallback, _GATED_ON empty)."""
+"""Native-loader gate contract (pure fallback; histogram/quantile gated since P4)."""
 
 from __future__ import annotations
 
@@ -26,5 +26,7 @@ def test_require_native_raises_when_absent(monkeypatch: pytest.MonkeyPatch) -> N
             nl.native_enabled("anything")
 
 
-def test_gated_on_is_empty() -> None:
-    assert nl._GATED_ON == frozenset()
+def test_gated_on_holds_the_measured_primitives() -> None:
+    # histogram + quantile joined _GATED_ON after the P4 measured flip (5.8-9.9x on
+    # Linux, byte-identical parity). A new primitive joins only after the same gates.
+    assert nl._GATED_ON == frozenset({"histogram", "quantile"})
