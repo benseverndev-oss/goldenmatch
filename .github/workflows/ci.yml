@@ -767,6 +767,15 @@ jobs:
           workspaces: packages/rust/extensions
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
+      # The standalone pyo3-free sibling crates (graph-core, score-core) are
+      # each their own [workspace], so `cargo test --workspace` above (which
+      # only builds the `bridge` member) never touches them. Their logic IS
+      # exercised indirectly (native parity + the datafusion FFI tests), but
+      # their own unit tests + clippy were dead in CI. Run them explicitly.
+      - run: cargo test --manifest-path graph-core/Cargo.toml
+      - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path score-core/Cargo.toml
+      - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
 
   # Native acceleration extension (PyO3). The crate is a standalone workspace
   # (its `extension-module` pyo3 feature is incompatible with the bridge's

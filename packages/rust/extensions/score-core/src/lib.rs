@@ -70,3 +70,33 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         _ => 0.0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jaro_winkler_identity_and_disjoint() {
+        assert_eq!(jaro_winkler_similarity("abc", "abc"), 1.0);
+        assert_eq!(jaro_winkler_similarity("abc", "xyz"), 0.0);
+    }
+
+    #[test]
+    fn levenshtein_identity_and_disjoint() {
+        assert_eq!(levenshtein_similarity("abc", "abc"), 1.0);
+        let s = levenshtein_similarity("abc", "abx");
+        assert!((s - (2.0 / 3.0)).abs() < 1e-9, "got {s}");
+    }
+
+    #[test]
+    fn token_sort_is_order_invariant_on_0_100_scale() {
+        assert_eq!(token_sort_ratio("a b", "b a"), 100.0);
+    }
+
+    #[test]
+    fn score_one_dispatches_by_id() {
+        // id=3 is exact match; score_one returns [0,1] (NOT the *100 token_sort_ratio scale)
+        assert_eq!(score_one(3, "abc", "abc"), 1.0);
+        assert_eq!(score_one(3, "abc", "abd"), 0.0);
+    }
+}
