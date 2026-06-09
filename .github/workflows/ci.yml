@@ -1313,6 +1313,17 @@ jobs:
           cp sql/goldenmatch_pg--0.6.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.5.0--0.6.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
 
+      - name: cargo pgrx test (runs the #[pg_test] suite in a managed PG)
+        # The pgrx test harness builds a fresh extension into its own initdb'd
+        # instance (cargo pgrx init ran above) and runs every #[pg_test]. Without
+        # this, the kernels.rs pg_tests never execute. Pinned to the pg16 leg --
+        # the tests are pyo3-free pure logic (graph-core/fingerprint-core), so
+        # they're PG-major-independent and one leg is sufficient coverage.
+        if: matrix.pg == '16'
+        timeout-minutes: 20
+        working-directory: packages/rust/extensions/postgres
+        run: cargo pgrx test --no-default-features --features "pg16 pg_test" pg16
+
       - name: Expose goldenmatch to Postgres' Python interpreter
         # Postgres runs as user `postgres` under a different Python than the
         # one this workflow's `pip install` modified. The `.pth` redirect
