@@ -169,6 +169,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   headroom on the available benchmarks (precision already saturated at 96–99.98%); ships as a
   capability for skewed-frequency categorical fields (names/cities).
 
+## [1.29.0] - 2026-06-09
+
+### Added
+- **Probabilistic (Fellegi-Sunter) auto-config v2 -- comparison-set + blocking
+  curation (default ON; kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores
+  the legacy field set).** Scoped to the probabilistic path only
+  (`build_probabilistic_matchkeys` + `auto_configure_probabilistic_df`); the
+  weighted/DQbench path is untouched. Four levers fix the auto-built
+  Fellegi-Sunter comparison set that under-performed Splink on error-heavy PII
+  and mega-matched on bibliographic data: (1) admit `date`/dob columns as
+  `levenshtein` comparison fields (v1 dropped all dates -- the strongest person
+  discriminator); (2) drop redundant person-name composites (full_name /
+  first_and_surname) when atomic given+family fields are present, and floor fuzzy
+  fields at very low cardinality (exact identifiers keep the no-floor admission);
+  (3) additively diversify blocking onto orthogonal stable keys (date YEAR via
+  substring, plus postcode/zip/identifier passes); (4) admit `description`
+  (titles) and `multi_name` (authors) as `token_sort` comparison fields. With v2
+  the zero-config probabilistic path now matches or beats Splink on the shared
+  `bench_er_headtohead` head-to-head panel (pairwise F1, one evaluator):
+  historical_50k 0.779 vs 0.757, febrl3 0.991 vs 0.965, synthetic_person 0.998
+  vs 0.996, dblp_acm 0.879 (Splink skips). `GOLDENMATCH_FS_AUTOCONFIG_V2=0` is
+  byte-identical to the legacy field set.
+
 ## [1.28.1] - 2026-06-07
 
 ### Fixed

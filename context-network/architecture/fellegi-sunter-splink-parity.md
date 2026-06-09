@@ -8,6 +8,8 @@ the suite's Arrow-native / engine-maturity arc.
 
 **Status:** SHIPPED (2026-06-08). Roadmap delivered across PRs #800 (Phases
 0–4 + 3c bench harness), #802 (bench ground-truth fix), #803 (EM sampling perf).
+Accuracy arc shipped 2026-06-09: #821 (head-to-head bench panel) + #823
+(FS auto-config v2) now *beat* Splink on the shared evaluator (see below).
 **Decision:** [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md).
 **Code-level notes:** `packages/python/goldenmatch/CLAUDE.md` (Fellegi-Sunter
 section), `docs/scale-envelope.md` (FS-at-scale), `docs-site/goldenmatch/scoring.mdx`.
@@ -65,8 +67,58 @@ The EM fix shaved ~100 s off both paths and halved peak RSS; native is ~10.8×
 on the scoring step (tiny-block regime). Original pre-fix figures (269 s / 0.825)
 were the un-bounded EM + the star-GT bench bug.
 
+## Accuracy arc — beating Splink (auto-config v2, #821 panel + #823)
+The engine arc closed *feature* parity; the accuracy arc closes the head-to-head.
+A shared evaluator (`scripts/bench_er_headtohead`, pairwise F1, one harness for
+both engines) replaced ad-hoc per-dataset numbers, then **FS auto-config v2**
+(#823) made the probabilistic auto-config *outscore* Splink on it.
+
+**Scope.** v2 touches the probabilistic auto-config path only
+(`auto_configure_probabilistic_df` / `build_probabilistic_matchkeys`); the
+weighted/DQbench path and zero-config `dedupe_df` are untouched. Default-ON;
+kill-switch `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy selection
+byte-identically.
+
+**Four levers:**
+1. **Admit dates as a discriminator.** `dob` / date columns enter as a
+   `levenshtein` field (v1 discarded them outright).
+2a. **Drop redundant person-name composites.** When atomic given + family
+   exist, drop `full_name` / `first_and_surname` composites (no new signal,
+   just correlated weight).
+2b. **Low-cardinality fuzzy floor** — give low-distinct fields a fuzzy
+   comparison instead of exact-only.
+3. **`_diversify_probabilistic_blocking`** — *additively* diversify blocking
+   onto orthogonal stable keys (date-year + postcode/zip). Recall-POSITIVE
+   (adds passes, never removes the primary).
+4. **Admit description (title) + multi_name (authors) as `token_sort`** —
+   fixes the DBLP-ACM venue-only mega-match (the 0.003 → 0.879 jump).
+
+**Head-to-head (pairwise F1, shared `bench_er_headtohead` evaluator):**
+| Dataset | GM before | GM v2 | Splink |
+|---|---|---|---|
+| historical_50k (Splink's flagship) | 0.624 | **0.779** | 0.757 |
+| febrl3 | 0.983 | **0.991** | 0.965 |
+| synthetic_person | 0.972 | **0.998** | 0.996 |
+| dblp_acm (bibliographic) | 0.003 | **0.879** | (Splink skips) |
+
+**Honest framing (this is pairwise F1, not the cited cluster metric).** These
+are pairwise F1 under one shared evaluator. The often-cited ~0.97 Splink number
+on historical_50k is a *cluster/entity-level* metric, NOT exhaustive
+within-cluster pairwise F1 — a local diagnostic ran Splink 4.0.16 and it scores
+~0.75 *pairwise* on this dataset under the same harness (recall-bound:
+historical_50k has 5156 clusters, mean size ~10, no single field exceeds 0.60
+recall, so the pairwise blocking ceiling for *any* engine is ~0.93). The claim
+is "GoldenMatch matches/beats Splink head-to-head on the same evaluator," NOT
+"0.97 pairwise."
+
+**Verification:** 3925 tests pass; 22 in `test_fs_autoconfig_v2.py`; flag=0 is
+byte-identical to legacy.
+
 ## Where Splink still leads
 Distributed Fellegi-Sunter at 1B+ rows on Spark, and the mature interactive
 m/u + comparison-viewer charting UI. GoldenMatch's FS scale-out is measured
 single-node at 6M and inherits the bucket → Ray path; the charting is
 data-export (`fs_model_report`, the waterfall) rather than a hosted dashboard.
+On *PII accuracy*, though, Splink no longer leads — the head-to-head above flips
+that on the shared evaluator (historical_50k 0.779 vs 0.757, synthetic_person
+0.998 vs 0.996).
