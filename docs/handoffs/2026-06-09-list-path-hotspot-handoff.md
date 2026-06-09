@@ -57,9 +57,27 @@ With `matched_pairs` removed, the list-path profile re-ranked. Three new top ite
 | 2 | `_build_clusters_dict_path` | ~127s | `packages/python/goldenmatch/goldenmatch/core/cluster.py:840` |
 | 3 | `compute_cluster_confidence` | ~58s | `packages/python/goldenmatch/goldenmatch/core/cluster.py:1290` |
 
-### Candidate #1 — `_emit_scoring_profile` (START HERE, but verify first)
+### Candidate #1 — `_emit_scoring_profile` ✅ RESOLVED in PR #840
 
-This is the headline candidate **and the biggest trap.** Read `scorer.py:41-68`:
+> **UPDATE (post-#840): the verify-first step was done, and the kill-hypothesis below is
+> *refuted* — in the good direction.** The full production pass *does* run with a null emitter
+> (every `profile_capture()` lives in the auto-config controller's sample iterations;
+> `_run_dedupe_pipeline` / `run_dedupe_df` have none). **But "null emitter" does NOT mean
+> "nothing to optimize"** — the original reasoning below missed that the expensive work
+> (`histogram_20` + `hartigan_dip` over every scored pair + the `mass_*` passes) is computed
+> *unconditionally, before* `current_emitter()` is ever consulted; only `set_scoring` is the no-op.
+> So on the full pass that ~149s was **computed and immediately discarded** — the exact #837
+> `matched_pairs` dead-work pattern, not a measurement artifact. Fix (PR #840): a
+> `has_active_emitter()` predicate + an early `return` at the top of `_emit_scoring_profile`,
+> before the profile is built. Byte-identical when a capture *is* active (the sample-iteration
+> path the controller reads); scored-pair output unchanged on every path. Still owes the 1M
+> `large-new-64GB` wall confirmation via `profile-hotspots` (structural win is guaranteed ≥ 0
+> and free). **Lesson for the next reader: "the consumer is a no-op when X" only kills a hot spot
+> if the *production of the discarded value* is also gated on X — here it wasn't.**
+
+Original analysis (kept for context; the blockquote's "artifact ⇒ nothing to optimize" branch is
+the part that was wrong). This was the headline candidate **and the biggest trap.** Read
+`scorer.py:41-68`:
 
 ```python
 def _emit_scoring_profile(pairs, threshold, *, candidates_compared=0, per_field_variance=None):
@@ -84,10 +102,12 @@ stack (zero cost when no capture is active)."* The auto-config **controller** ca
 is active. The question that decides whether candidate #1 is real or a profiling artifact:
 
 > **On the final full-1M `run_dedupe` pass (not the sample iterations), is the ProfileEmitter
-> active?** If it is null there, the ~149s only exists because the profiler harness captures —
-> i.e. it's a measurement artifact and there is **nothing to optimize in production.** If it IS
-> active on the full pass, then `hartigan_dip(scores)` sorting all ~131M scored pairs is a genuine
-> production cost and worth attacking.
+> active?** ~~If it is null there, the ~149s only exists because the profiler harness captures —
+> i.e. it's a measurement artifact and there is nothing to optimize in production.~~ **(WRONG — see
+> the RESOLVED note above: it IS null on the full pass, but the histogram/dip/`mass_*` are computed
+> before the emitter is checked, so the cost is real dead work either way, deletable by an early
+> return.)** If it IS active on the full pass, then `hartigan_dip(scores)` sorting all ~131M scored
+> pairs is a genuine production cost and worth attacking.
 
 **Do this before anything else.** Concretely:
 1. Trace where capture is pushed/popped around the full dedupe (`grep -rn "bench_capture\|ProfileEmitter\|push.*emitter\|current_emitter" packages/python/goldenmatch/goldenmatch/core/`),
