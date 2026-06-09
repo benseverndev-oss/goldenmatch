@@ -8,7 +8,6 @@ byte parity lives in tests/test_native_bloom_parity.py (skipped without the ext)
 from __future__ import annotations
 
 import pytest
-
 from goldenmatch.utils import transforms as T
 
 VALUES = ["john smith", "jon smyth", "a", "", "o'brien", "москва"]
