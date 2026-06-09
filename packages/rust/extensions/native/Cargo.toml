@@ -18,10 +18,18 @@ description = "Native acceleration kernels for GoldenMatch (PyO3 extension modul
 name = "_native"
 crate-type = ["cdylib"]
 
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 # abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
-# extension-module: don't link libpython (this .so is imported BY CPython).
-pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# extension-module is a DEFAULT feature (not always-on) so `cargo test
+# --no-default-features` can link the test binary against libpython. maturin
+# (native_wheel lane) and scripts/build_native.py both build with default
+# features, so the shipped wheel/.so still gets extension-module. See the
+# pyo3 FAQ "I can't run cargo test".
+pyo3 = { version = ">=0.23.3, <0.25", features = ["abi3-py311"] }
 # BLAKE2b for the char-n-gram feature hashing kernel — must match Python
 # hashlib.blake2b(digest_size=8) byte-for-byte (see featurize.rs).
 blake2 = "0.10"

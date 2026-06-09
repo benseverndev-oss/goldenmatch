@@ -320,3 +320,30 @@ pub extern "C" fn gm_record_fingerprint(json_utf8: *const c_char, out_hex: *mut 
         _ => 1,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::os::raw::c_char;
+
+    #[test]
+    fn gm_record_fingerprint_c_abi_matches_pinned_vector() {
+        let json = CString::new(r#"{"a":"x"}"#).unwrap();
+        let mut out = [0 as c_char; 65];
+        let rc = gm_record_fingerprint(json.as_ptr(), out.as_mut_ptr());
+        assert_eq!(rc, 0);
+        let bytes: Vec<u8> = out[..64].iter().map(|&c| c as u8).collect();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3"
+        );
+        assert_eq!(out[64], 0, "missing NUL terminator");
+    }
+
+    #[test]
+    fn gm_record_fingerprint_null_ptr_returns_error() {
+        let mut out = [0 as c_char; 65];
+        assert_eq!(gm_record_fingerprint(std::ptr::null(), out.as_mut_ptr()), 1);
+    }
+}

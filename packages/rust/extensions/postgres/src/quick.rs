@@ -294,11 +294,7 @@ pub fn goldenmatch_identity_conflicts(dataset: String, db_path: String) -> Strin
 
 /// List identities filtered by ``dataset`` / ``status`` (empty = no filter).
 #[pg_extern]
-pub fn goldenmatch_identity_list(
-    dataset: String,
-    status: String,
-    db_path: String,
-) -> String {
+pub fn goldenmatch_identity_list(dataset: String, status: String, db_path: String) -> String {
     match goldenmatch_bridge::api::identity_list(&dataset, &status, &db_path) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),

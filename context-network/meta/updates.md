@@ -2,6 +2,38 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-06-09 — FS auto-config v2: GoldenMatch now BEATS Splink on accuracy (#823)
+- Updated the architecture node + decision:
+  [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md)
+  (new "Accuracy arc — beating Splink" section + softened "Where Splink still
+  leads": Splink no longer leads on PII accuracy),
+  [../decisions/0008-fellegi-sunter-splink-parity.md](../decisions/0008-fellegi-sunter-splink-parity.md)
+  (appended an accuracy-arc update; Status line bumped).
+- **The probabilistic (Fellegi-Sunter) auto-config now beats Splink head-to-head**
+  (#823, "FS auto-config v2", default-ON; kill-switch
+  `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores legacy byte-identically). Scope is the
+  probabilistic auto-config path only (`auto_configure_probabilistic_df` /
+  `build_probabilistic_matchkeys`); weighted/DQbench + zero-config `dedupe_df` are
+  untouched. Four levers: (1) admit `dob`/date columns as a `levenshtein`
+  discriminator (v1 discarded them); (2a) drop redundant person-name composites
+  when atomic given+family exist; (2b) low-cardinality fuzzy floor;
+  (3) `_diversify_probabilistic_blocking` — *additive*, recall-positive blocking
+  diversification onto orthogonal stable keys (date-year + postcode/zip);
+  (4) admit description (title) + multi_name (authors) as `token_sort` (fixes the
+  DBLP-ACM venue-only mega-match). #821 built the shared head-to-head evaluator
+  (`scripts/bench_er_headtohead`) the claim rests on.
+- **Measured (pairwise F1, shared evaluator):** historical_50k (Splink's flagship)
+  0.624 → 0.779 vs Splink 0.757; febrl3 0.983 → 0.991 vs 0.965; synthetic_person
+  0.972 → 0.998 vs 0.996; dblp_acm 0.003 → 0.879 (Splink skips it).
+- **Honest framing preserved:** these are *pairwise* F1 under one shared harness.
+  The often-cited ~0.97 Splink historical_50k number is a *cluster*-level metric,
+  not exhaustive pairwise; a local diagnostic ran Splink 4.0.16 and it scores
+  ~0.75 pairwise here (recall-bound — 5156 clusters, mean size ~10, no field
+  exceeds 0.60 recall → ~0.93 pairwise ceiling for any engine). Claim is
+  "matches/beats Splink on the same evaluator," not "0.97 pairwise."
+- Verification: 3925 tests pass (22 in `test_fs_autoconfig_v2.py`); flag=0
+  byte-identical to legacy.
+
 ## 2026-06-08 — Fellegi-Sunter → Splink parity (+ EM perf, scale-out, vendor reposition)
 - New architecture node + decision:
   [../architecture/fellegi-sunter-splink-parity.md](../architecture/fellegi-sunter-splink-parity.md),
@@ -174,4 +206,4 @@ Newest first. One entry per meaningful change to the network.
 - Committed to git on branch `chore/context-network`.
 
 ---
-**Classification:** meta/log • **Last updated:** 2026-06-07
+**Classification:** meta/log • **Last updated:** 2026-06-09

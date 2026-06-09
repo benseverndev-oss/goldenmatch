@@ -218,3 +218,63 @@ pub fn char_ngram_features<'py>(
     };
     PyBytes::new(py, bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEED: [u8; 8] = 42u64.to_le_bytes();
+
+    #[test]
+    fn prepare_lowercases_collapses_and_wraps() {
+        assert_eq!(prepare("  John   SMITH ", true, "#"), "#john smith#");
+        assert_eq!(prepare("John Smith", false, "#"), "#John Smith#");
+    }
+
+    #[test]
+    fn prepare_empty_stays_empty_no_boundary() {
+        assert_eq!(prepare("   ", true, "#"), "");
+        assert_eq!(prepare("", true, "#"), "");
+    }
+
+    #[test]
+    fn hash_gram_is_deterministic_and_in_range() {
+        let (i1, s1) = hash_gram(&SEED, "abc", 64);
+        let (i2, s2) = hash_gram(&SEED, "abc", 64);
+        assert_eq!((i1, s1), (i2, s2));
+        assert!(i1 < 64);
+        assert!(s1 == 1.0 || s1 == -1.0);
+    }
+
+    #[test]
+    fn featurize_one_is_l2_unit_norm_for_nonempty() {
+        let row = featurize_one("john smith", 256, 2, 3, true, "#", &SEED);
+        let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5, "expected unit norm, got {norm}");
+    }
+
+    #[test]
+    fn featurize_one_empty_text_is_zero_vector() {
+        let row = featurize_one("   ", 256, 2, 3, true, "#", &SEED);
+        assert!(row.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn project_one_is_l2_unit_norm_for_nonempty() {
+        let dim = 4usize;
+        let nf = 8usize;
+        let w = vec![1.0f32; nf * dim];
+        let out = project_one("john", &w, nf, dim, 2, 3, true, "#", &SEED);
+        let norm: f32 = out.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5, "expected unit norm, got {norm}");
+    }
+
+    #[test]
+    fn project_one_empty_text_is_zero_vector() {
+        let dim = 4usize;
+        let nf = 8usize;
+        let w = vec![1.0f32; nf * dim];
+        let out = project_one("   ", &w, nf, dim, 2, 3, true, "#", &SEED);
+        assert!(out.iter().all(|&v| v == 0.0), "expected zero vector, got {out:?}");
+    }
+}

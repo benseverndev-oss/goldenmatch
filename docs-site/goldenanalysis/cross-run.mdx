@@ -1,0 +1,75 @@
+---
+title: "Cross-run analysis"
+description: "Trend metrics across a run history and flag regressions versus a baseline, with a deterministic narrative."
+keywords: ["goldenanalysis", "cross-run", "trend", "regression detection", "report history", "drift"]
+---
+
+A single report tells you about one run. The cross-run layer answers "how did this run compare to last week?" — trend, drift, and regression detection over a stored history of reports.
+
+## ReportHistory
+
+`ReportHistory` is an append-only store of `AnalysisReport`s, keyed by `(analysis_name, dataset, run_id)`. It defaults to **JSONL** (a reports log is the natural fit) with **SQLite** optional — both stdlib, no new dependencies.
+
+```python
+from goldenanalysis import ReportHistory
+
+hist = ReportHistory(path=".golden/analysis.jsonl")   # backend inferred from suffix
+hist.append(report)                                    # after each run
+
+series = hist.trend("cluster.singleton_ratio", "customers", last_n=30)
+flagged = hist.detect_regressions("customers")
+```
+
+## Regression detection
+
+Regression flags are **direction-aware** and **per-metric**. The baseline is a *strategy*, not just "the previous value":
+
+- `rolling_median` (default) — the median of the last *window* runs; immune to one noisy night, where `previous` would alternately flag and un-flag.
+- `previous` / `last_known_good` — the most recent historical value.
+- a pinned `run_id`.
+
+Thresholds come from a `RegressionPolicy` and respect each metric's `direction`: a `higher_better` metric (recall) flags only on a **drop**, a `lower_better` metric (finding counts) only on a **rise**, `neutral` either way.
+
+```python
+from goldenanalysis import RegressionPolicy
+
+policy = RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+flagged = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
+```
+
+The worked example: a per-metric **2% gate on `match.recall_safe_bound`** catches a 0.97 → 0.89 recall drop that a global 10% gate would miss — exactly the kind of quiet quality regression a nightly pipeline should alert on.
+
+## Narrative
+
+`build_narrative(report, regressions)` produces a deterministic, ASCII-clean one-paragraph summary: it names the largest-magnitude flagged regression, lists co-moving metrics across analyzers, and surfaces the most common quality finding. Because root cause is often only visible by crossing analyzers, the narrative sees the full metric set.
+
+## CLI
+
+```bash
+# trend one metric across the run history
+goldenanalysis trend --metric cluster.singleton_ratio --dataset customers \
+  --history .golden/analysis.jsonl
+
+# detect regressions vs a baseline; exit 1 on any flag (a CI gate)
+goldenanalysis regressions --dataset customers --history .golden/analysis.jsonl \
+  --policy "match.recall_safe_bound=2" --fail-on-regression
+```
+
+<Note>
+  `--fail-on-regression` makes GoldenAnalysis a drop-in nightly-pipeline gate: store a report after each run, then fail the job when a direction-aware, per-metric threshold trips.
+</Note>
+
+## TypeScript
+
+The cross-run layer is ported to TypeScript too. The decision logic (`detectRegressions`, `buildTrend`, `buildNarrative`) is edge-safe in `goldenanalysis/core`; the file-backed `ReportHistory` (JSONL) lives in `goldenanalysis/node`.
+
+```ts
+import { ReportHistory } from "goldenanalysis/node";
+
+const hist = new ReportHistory({ path: ".golden/analysis.jsonl" });
+hist.append(report);
+const flagged = hist.detectRegressions("customers", {
+  baseline: "rolling_median",
+  policy: { defaultPct: 10, perMetric: { "match.recall_safe_bound": 2 } },
+});
+```
