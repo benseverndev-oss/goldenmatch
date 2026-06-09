@@ -60,13 +60,49 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
             let sb = token_sort_string(b);
             fuzz::ratio(sa.chars(), sb.chars())
         }
-        3 => {
-            if a == b {
-                1.0
-            } else {
-                0.0
-            }
-        }
+        // id=3 = exact match. Guard arm collapses the if/else into the match
+        // (clippy::collapsible-match under CI's stable toolchain); scorer_id==3
+        // with a!=b falls through to the catch-all 0.0, same as every other id.
+        3 if a == b => 1.0,
         _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jaro_winkler_identity_and_disjoint() {
+        assert_eq!(jaro_winkler_similarity("abc", "abc"), 1.0);
+        assert_eq!(jaro_winkler_similarity("abc", "xyz"), 0.0);
+    }
+
+    #[test]
+    fn levenshtein_identity_and_disjoint() {
+        assert_eq!(levenshtein_similarity("abc", "abc"), 1.0);
+        let s = levenshtein_similarity("abc", "abx");
+        assert!((s - (2.0 / 3.0)).abs() < 1e-9, "got {s}");
+    }
+
+    #[test]
+    fn token_sort_is_order_invariant_on_0_100_scale() {
+        assert_eq!(token_sort_ratio("a b", "b a"), 100.0);
+    }
+
+    #[test]
+    fn score_one_dispatches_by_id() {
+        // id=3 is exact match; score_one returns [0,1] (NOT the *100 token_sort_ratio scale)
+        assert_eq!(score_one(3, "abc", "abc"), 1.0);
+        assert_eq!(score_one(3, "abc", "abd"), 0.0);
+    }
+
+    #[test]
+    fn score_one_id2_is_unscaled_not_100_scale() {
+        // score_one(id=2) returns fuzz::ratio on [0,1], NOT token_sort_ratio's
+        // *100 form. This asymmetry is load-bearing (the PyO3 score_field_matrix
+        // path divides by 100, never here). Pinned so a silent unification breaks.
+        assert_eq!(score_one(2, "a b", "b a"), 1.0);
+        assert_eq!(token_sort_ratio("a b", "b a"), 100.0);
     }
 }
