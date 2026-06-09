@@ -1,0 +1,58 @@
+name: Bench analysis-native (A/B)
+
+# A/B harness for the GoldenAnalysis native aggregation kernels (histogram /
+# quantile). Builds the abi3 ext into the package + runs the bench at scale,
+# printing pure vs native_raw vs native+conv to the step summary. This is the
+# measurement that decides the _native_loader._GATED_ON flip -- Linux is the
+# target env for goldenanalysis[native] users (the #688 "measure on the target
+# env" lesson). workflow_dispatch only; never runs on push/PR.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/commit to build + bench (default: the dispatch ref)"
+        required: false
+        default: ""
+      rows:
+        description: "Comma-separated row counts to bench"
+        required: false
+        default: "1000000,10000000"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/analysis-native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build the native ext into the package
+        run: uv run python scripts/build_analysis_native.py
+      - name: Bench (pure vs native_raw vs native+conv)
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          {
+            echo '## analysis-native A/B bench (histogram / quantile)'
+            echo ''
+            echo '```'
+            IFS=',' read -ra ROWS <<< "${{ inputs.rows }}"
+            for n in "${ROWS[@]}"; do
+              uv run python packages/python/goldenanalysis/benchmarks/aggregate_benchmark.py --rows "$n"
+              echo ''
+            done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

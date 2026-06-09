@@ -190,6 +190,81 @@ from goldenmatch.output.writer import write_output
 logger = logging.getLogger(__name__)
 
 
+def _accumulate_block_candidate_pairs(
+    block_df: pl.DataFrame,
+    candidate_pairs: set[tuple[int, int]],
+) -> None:
+    """Add every within-block canonical ``(min, max)`` ``__row_id__`` pair to
+    ``candidate_pairs`` (the blocking ceiling for the bench pair dump).
+
+    The blocking ceiling is backend-independent — it is defined by the blocks
+    that ``build_blocks`` produced, not by which scorer (per-block vectorized
+    loop vs. the hash-bucket orchestration) actually compares them. Both the
+    polars-direct and the ``backend="bucket"`` probabilistic paths feed their
+    blocks through here so the candidate denominator is identical.
+
+    Caps quadratic blow-up on a pathological huge block (panel data has small
+    blocks; this is just a safety net) by skipping blocks over 20k members.
+    """
+    block_ids = block_df["__row_id__"].to_list()
+    if len(block_ids) > 20000:
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate dump for block "
+            "of size %d (> 20000 members) to avoid quadratic explosion",
+            len(block_ids),
+        )
+        return
+    for i in range(len(block_ids)):
+        id_i = block_ids[i]
+        for j in range(i + 1, len(block_ids)):
+            id_j = block_ids[j]
+            candidate_pairs.add((min(id_i, id_j), max(id_i, id_j)))
+
+
+def _dump_bench_pairs(
+    dump_dir: str,
+    candidate_pairs: set[tuple[int, int]],
+    emitted_pairs: set[tuple[int, int]],
+) -> None:
+    """Write candidate + emitted pair sets to parquet for the bench harness.
+
+    Opt-in, env-gated companion to the ``GOLDENMATCH_BENCH_DUMP_PAIRS`` hook in
+    the probabilistic dedupe branch. Pairs are canonical ``(min, max)`` tuples
+    in internal ``__row_id__`` space (the harness remaps to record_id later).
+
+    Two files land in ``dump_dir``:
+      - ``candidate_pairs.parquet`` (cols ``a``, ``b``): all within-block
+        candidate pairs across every probabilistic matchkey (the blocking
+        ceiling).
+      - ``emitted_pairs.parquet`` (cols ``a``, ``b``): the pairs the
+        probabilistic scorer emitted above threshold.
+
+    Each file is written atomically (``.tmp`` then ``os.replace``) so a reader
+    never sees a partial parquet.
+    """
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        for name, pairs in (
+            ("candidate_pairs.parquet", candidate_pairs),
+            ("emitted_pairs.parquet", emitted_pairs),
+        ):
+            a_col = [p[0] for p in pairs]
+            b_col = [p[1] for p in pairs]
+            frame = pl.DataFrame(
+                {"a": a_col, "b": b_col},
+                schema={"a": pl.Int64, "b": pl.Int64},
+            )
+            final_path = os.path.join(dump_dir, name)
+            tmp_path = final_path + ".tmp"
+            frame.write_parquet(tmp_path)
+            os.replace(tmp_path, final_path)
+    except Exception as exc:  # observability must never abort a dedupe run
+        logger.warning(
+            "GOLDENMATCH_BENCH_DUMP_PAIRS: failed to write pair dump to %s: %s",
+            dump_dir, exc,
+        )
+
+
 def _extract_matchkey_columns(config: GoldenMatchConfig) -> list[str]:
     """Extract unique field names from all matchkeys in config."""
     cols = set()
@@ -725,13 +800,24 @@ def run_dedupe(
         offset += len(collected)
         frames.append(collected.lazy())
 
-    combined_lf = pl.concat([f.collect() for f in frames]).lazy()
+    combined_df = pl.concat([f.collect() for f in frames])
+    combined_lf = combined_df.lazy()
 
     return _run_dedupe_pipeline(
         combined_lf, config, matchkeys,
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
+        # Seed the prep cache with (id, height) like the dedupe_df path. The
+        # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
+        # fresh object that's GC-eligible the moment this call returns, so
+        # CPython readily recycles its ``id()`` slot for the NEXT run_dedupe
+        # call. Two calls with the same schema + prep signature but different
+        # row counts (e.g. a 1-file 5-row dedupe followed by a 2-file 8-row
+        # across_files_only dedupe) would otherwise collide on the recycled id
+        # and serve the stale prepared frame -- silently dropping the second
+        # input's extra rows. Height disambiguates same-schema/different-rows.
+        _prep_cache_seed=(id(combined_lf), combined_df.height),
     )
 
 
@@ -1327,6 +1413,20 @@ def _run_dedupe_pipeline(
         })
 
     # Phase 2b: Probabilistic matchkeys (Fellegi-Sunter with EM)
+    #
+    # Opt-in bench hook: when GOLDENMATCH_BENCH_DUMP_PAIRS names a directory,
+    # accumulate the within-block candidate set (the blocking ceiling) and the
+    # emitted set (above-threshold pairs) across all probabilistic matchkeys,
+    # then dump both as parquet AFTER the loop. Works for BOTH the polars-direct
+    # per-block scorer and the backend="bucket" hash orchestration — the
+    # candidate ceiling is the same blocking-defined within-block set either way.
+    # The env read + two empty-set inits below are unconditional (a dict lookup +
+    # two empty sets, negligible); all ACCUMULATION and I/O is guarded by
+    # `if _bench_dump_dir:`, so the unset path does no per-pair/per-block work
+    # and writes nothing.
+    _bench_dump_dir = os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS")
+    _bench_candidate_pairs: set[tuple[int, int]] = set()
+    _bench_emitted_pairs: set[tuple[int, int]] = set()
     for mk in matchkeys:
         if mk.type == "probabilistic":
             if config.blocking is None:
@@ -1370,6 +1470,22 @@ def _run_dedupe_pipeline(
                 fuzzy_pair_count += len(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
+                if _bench_dump_dir:
+                    # Candidate ceiling: enumerate within-block pairs from the
+                    # SAME blocks score_buckets consumes (blocking is backend-
+                    # independent). score_buckets already applied across-files
+                    # filtering, so `pairs` is the emitted set directly.
+                    for block in blocks:
+                        block_df = (
+                            block.df.collect()
+                            if isinstance(block.df, pl.LazyFrame)
+                            else block.df
+                        )
+                        _accumulate_block_candidate_pairs(
+                            block_df, _bench_candidate_pairs
+                        )
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
                 continue
             # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
             # + numpy level/weight/normalize, replacing the per-pair Python
@@ -1380,6 +1496,10 @@ def _run_dedupe_pipeline(
             block_scorer = probabilistic_block_scorer(mk, em_result)
             for block in blocks:
                 block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+                if _bench_dump_dir:
+                    _accumulate_block_candidate_pairs(
+                        block_df, _bench_candidate_pairs
+                    )
                 pairs = block_scorer(block_df, matched_pairs)
                 if across_files_only:
                     pairs = [
@@ -1389,6 +1509,14 @@ def _run_dedupe_pipeline(
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
+                if _bench_dump_dir:
+                    for a, b, _s in pairs:
+                        _bench_emitted_pairs.add((min(a, b), max(a, b)))
+
+    if _bench_dump_dir:
+        _dump_bench_pairs(
+            _bench_dump_dir, _bench_candidate_pairs, _bench_emitted_pairs
+        )
 
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:

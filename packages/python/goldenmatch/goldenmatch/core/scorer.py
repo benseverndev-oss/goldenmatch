@@ -86,6 +86,25 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
         return 1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+    elif scorer == "ensemble":
+        # Scalar twin of the NxN `ensemble` branch in `_fuzzy_score_matrix`:
+        # element-wise max of jaro_winkler, token_sort, and soundex*0.8. The
+        # vectorized scoring path already handles `ensemble`, but EM training
+        # routes through this scalar path (comparison_vector ->
+        # _build_comparison_matrix -> score_field). Without this case, a
+        # probabilistic matchkey whose auto-config assigns `ensemble` (any
+        # `name` field — autoconfig.py build_probabilistic_matchkeys) raises
+        # `Unknown scorer` at train time and the Fellegi-Sunter path can't run
+        # at all. Soundex is wrapped defensively (jellyfish.soundex can raise on
+        # non-alpha input) so that component just drops instead of failing the
+        # whole pair.
+        jw = JaroWinkler.similarity(val_a, val_b)
+        ts = token_sort_ratio(val_a, val_b) / 100.0
+        try:
+            sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        except Exception:
+            sx = 0.0
+        return max(jw, ts, sx)
     elif scorer == "dice":
         return _dice_score_single(val_a, val_b)
     elif scorer == "jaccard":

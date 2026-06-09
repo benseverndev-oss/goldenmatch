@@ -972,6 +972,19 @@ Head-to-head against Splink, Dedupe, and RecordLinkage on two datasets. GoldenMa
 
 **Key takeaway:** GoldenMatch is the most consistent performer — top-2 F1 on both datasets with zero training data. Splink dominates structured PII but struggles on non-PII. RecordLinkage wins DBLP-ACM but lags on PII.
 
+### Probabilistic Auto-Config vs Splink (v1.29)
+
+A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the **probabilistic auto-config v2** comparison-set curation (default-on; `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy field set), GoldenMatch's zero-config probabilistic path **matches or beats Splink on every measured dataset** in the shared `bench_er_headtohead` evaluator (pairwise F1, one evaluator for both tools):
+
+| Dataset | GoldenMatch (probabilistic v2) | Splink |
+|---|---|---|
+| historical_50k | **0.779** | 0.757 |
+| febrl3 | **0.991** | 0.965 |
+| synthetic_person | **0.998** | 0.996 |
+| dblp_acm | **0.879** | (skips) |
+
+The v2 levers: admit `date`/dob columns as `levenshtein` comparison fields, drop redundant person-name composites, additively diversify blocking onto orthogonal stable keys, and admit `description`/`multi_name` as `token_sort` fields. This is independent of the zero-config/weighted DBLP-ACM and NCVR numbers above.
+
 ### Zero-Config Controller (v1.8)
 
 The introspective auto-config controller iterates on ComplexityProfile signals to reach hand-tuned-or-better accuracy with no user configuration.

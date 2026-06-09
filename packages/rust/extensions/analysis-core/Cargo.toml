@@ -1,0 +1,21 @@
+# analysis-core -- pyo3-free aggregation kernels for GoldenAnalysis. The byte-
+# identical Rust mirror of goldenanalysis/core/aggregate.py's pure-Python
+# histogram + quantile loops. The pyo3 + Arrow C Data Interface shims live in the
+# sibling `analysis-native` crate, which path-depends on this one. Keeping the
+# kernel pyo3-free means it can later back a DataFusion/DuckDB SQL surface (as
+# `score-core`/`graph-core` do for goldenmatch) without dragging in CPython.
+# Excluded from the bridge workspace (packages/rust/extensions/Cargo.toml).
+[package]
+name = "analysis-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <ben@bensevern.dev>"]
+description = "Pyo3-free aggregation kernels for GoldenAnalysis (histogram, quantile)"
+
+[lib]
+name = "analysis_core"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

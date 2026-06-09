@@ -95,7 +95,29 @@ importers:
         version: 8.0.10(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4)
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@24.12.2)(jsdom@29.1.1)(vite@8.0.10(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
+
+  packages/typescript/goldenanalysis:
+    dependencies:
+      commander:
+        specifier: ^13.0.0
+        version: 13.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.39
+      rimraf:
+        specifier: ^5.0.0
+        version: 5.0.10
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.14)(typescript@5.9.3)(yaml@2.8.4)
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
 
   packages/typescript/goldencheck:
     dependencies:
@@ -123,7 +145,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
       yaml:
         specifier: ^2.7.0
         version: 2.8.4
@@ -151,7 +173,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
 
   packages/typescript/goldenflow:
     dependencies:
@@ -173,7 +195,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
       yaml:
         specifier: ^2.7.0
         version: 2.8.4
@@ -204,7 +226,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
       yaml:
         specifier: ^2.7.0
         version: 2.8.4
@@ -238,7 +260,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
       yaml:
         specifier: ^2.7.0
         version: 2.8.4
@@ -266,7 +288,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4)
+        version: 4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
 
 packages:
 
@@ -2472,6 +2494,7 @@ packages:
       '@vitest/ui': 4.1.5
       happy-dom: '*'
       jsdom: '*'
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -4590,7 +4613,7 @@ snapshots:
       jiti: 1.21.7
       yaml: 2.8.4
 
-  vitest@4.1.5(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4):
+  vitest@4.1.5(@types/node@20.19.39)(jsdom@29.1.1)(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4)):
     dependencies:
       '@vitest/expect': 4.1.5
       '@vitest/mocker': 4.1.5(vite@8.0.10(@types/node@20.19.39)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
@@ -4616,20 +4639,9 @@ snapshots:
       '@types/node': 20.19.39
       jsdom: 29.1.1
     transitivePeerDependencies:
-      - '@vitejs/devtools'
-      - esbuild
-      - jiti
-      - less
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
-  vitest@4.1.5(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(jsdom@29.1.1)(yaml@2.8.4):
+  vitest@4.1.5(@types/node@24.12.2)(jsdom@29.1.1)(vite@8.0.10(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4)):
     dependencies:
       '@vitest/expect': 4.1.5
       '@vitest/mocker': 4.1.5(vite@8.0.10(@types/node@24.12.2)(esbuild@0.27.7)(jiti@1.21.7)(yaml@2.8.4))
@@ -4655,18 +4667,7 @@ snapshots:
       '@types/node': 24.12.2
       jsdom: 29.1.1
     transitivePeerDependencies:
-      - '@vitejs/devtools'
-      - esbuild
-      - jiti
-      - less
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
   w3c-xmlserializer@5.0.0:
     dependencies:

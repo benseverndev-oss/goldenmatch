@@ -16,17 +16,17 @@ import pytest
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def test_total_tool_count_is_54():
+def test_total_tool_count_is_55():
     from goldenmatch.mcp.agent_tools import AGENT_TOOLS
     from goldenmatch.mcp.identity_tools import IDENTITY_TOOLS
     from goldenmatch.mcp.memory_tools import MEMORY_TOOLS
     from goldenmatch.mcp.server import _BASE_TOOLS, TOOLS
 
-    assert len(AGENT_TOOLS) == 16
+    assert len(AGENT_TOOLS) == 17   # +1 certify_recall
     assert len(MEMORY_TOOLS) == 7
     assert len(IDENTITY_TOOLS) == 7
     assert len(_BASE_TOOLS) == 24
-    assert len(TOOLS) == 54
+    assert len(TOOLS) == 55
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))

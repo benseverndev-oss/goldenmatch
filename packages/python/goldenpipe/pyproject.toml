@@ -30,7 +30,11 @@ dependencies = [
 check = ["goldencheck>=0.5.0"]
 flow = ["goldenflow>=0.1.0"]
 match = ["goldenmatch>=1.2.0"]
-golden-suite = ["goldencheck>=0.5.0", "goldenflow>=0.1.0", "goldenmatch>=1.2.0"]
+# Optional terminal reporting stage (goldenanalysis.report) -- read-only metrics
+# over the run's artifacts. goldenanalysis is a workspace member (root uv.sources),
+# so dev/CI resolve it locally; the published wheel resolves it from PyPI.
+analysis = ["goldenanalysis>=0.1.0"]
+golden-suite = ["goldencheck>=0.5.0", "goldenflow>=0.1.0", "goldenmatch>=1.2.0", "goldenanalysis>=0.1.0"]
 tui = ["textual>=1.0"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
 mcp = ["mcp>=1.0"]
@@ -54,6 +58,7 @@ Author = "https://bensevern.dev"
 "goldenflow.transform" = "goldenpipe.adapters.flow:TransformStage"
 "goldenmatch.dedupe" = "goldenpipe.adapters.match:DedupeStage"
 "goldenmatch.identity_resolve" = "goldenpipe.adapters.identity:IdentityResolveStage"
+"goldenanalysis.report" = "goldenpipe.adapters.analysis:AnalysisReportStage"
 
 [build-system]
 requires = ["hatchling"]

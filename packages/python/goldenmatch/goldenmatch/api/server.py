@@ -16,6 +16,7 @@ Endpoints:
     POST /reviews/decide      Approve or reject a pair (steward action)
     POST /shatter             Break a cluster into singletons
     POST /unmerge             Pull a record out of its cluster
+    POST /certify-recall      Estimate match recall without ground truth
 """
 
 from __future__ import annotations
@@ -379,6 +380,25 @@ class MatchServer:
             return {"available": False, "source": None}
         return self._last_telemetry
 
+    def certify_recall(self) -> dict:
+        """Unsupervised recall estimate (no ground truth) over the loaded data,
+        via capture-recapture across the config's matchkeys/passes. Point
+        estimate; a safe lower bound needs a labelled audit (CLI --audit-out)."""
+        from goldenmatch.core.recall_certificate import certify_recall_df
+
+        df = getattr(self.engine, "data", None)
+        if df is None:
+            return {"error": "no data loaded"}
+        est = certify_recall_df(df, self.config)
+        return {
+            "estimated_recall": est.recall,
+            "n_systems": est.n_systems,
+            "found_pairs": est.found_pairs,
+            "system_overlap": round(est.mean_overlap, 3),
+            "estimable": est.estimable,
+            "note": est.note,
+        }
+
 
 # Global server instance
 _server_instance: MatchServer | None = None
@@ -539,6 +559,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 threshold = float(data.get("threshold", 0.0))
                 result = _server_instance.unmerge_record_op(record_id, threshold)
                 self._json_response(result, 404 if "error" in result else 200)
+        elif path == "/certify-recall":
+            result = _server_instance.certify_recall()
+            self._json_response(result, 400 if "error" in result else 200)
         else:
             self._json_response({"error": "Not found"}, 404)
 
