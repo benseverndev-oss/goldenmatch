@@ -725,3 +725,41 @@ where
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soundex_characterizes_implementation_output() {
+        assert_eq!(soundex("Robert"), "R163");
+        assert_eq!(soundex("Ashcraft"), "A261");
+        assert_eq!(soundex("Tymczak"), "T522");
+    }
+
+    #[test]
+    fn soundex_pads_short_codes_to_four() {
+        assert_eq!(soundex("Lee").len(), 4);
+        assert_eq!(soundex("A"), "A000");
+    }
+
+    #[test]
+    fn soundex_non_alpha_is_empty() {
+        assert_eq!(soundex("123"), "");
+        assert_eq!(soundex(""), "");
+    }
+
+    #[test]
+    fn soundex_code_table() {
+        assert_eq!(soundex_code('B'), b'1');
+        assert_eq!(soundex_code('R'), b'6');
+        assert_eq!(soundex_code('A'), b'0');
+    }
+
+    #[test]
+    fn compute_pairwise_symmetric_mirrors_upper_triangle() {
+        let a = vec!["x".to_string(), "y".to_string()];
+        let out = compute_pairwise(&a, &a, true, |p, q| if p == q { 1.0 } else { 0.3 });
+        assert_eq!(out, vec![1.0, 0.3, 0.3, 1.0]);
+    }
+}

@@ -821,6 +821,17 @@ jobs:
         run: |
           cargo clippy -- -D warnings
           cargo test
+      - name: Unit-test the native kernels (pure-Rust helpers)
+        # extension-module is gated behind a default feature so the test binary
+        # can link libpython (--no-default-features turns it off). Covers
+        # soundex/featurize/pairs-math/C-ABI logic that the Python parity suite
+        # only exercises indirectly. Build below still uses default features.
+        working-directory: packages/rust/extensions/native
+        env:
+          PYO3_PYTHON: /usr/bin/python3
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpython3-dev
+          cargo test --no-default-features
       - name: Build native extension into the package
         # No --offline: CI has network + a cold cache on first run.
         run: uv run python scripts/build_native.py
@@ -831,6 +842,7 @@ jobs:
         run: |
           uv run pytest \
             packages/python/goldenmatch/tests/test_native_parity.py \
+            packages/python/goldenmatch/tests/test_native_block_seq_parity.py \
             packages/python/goldenmatch/tests/test_record_fingerprint.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_embeddings.py \
