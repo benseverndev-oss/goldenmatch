@@ -99,4 +99,13 @@ mod tests {
         assert_eq!(score_one(3, "abc", "abc"), 1.0);
         assert_eq!(score_one(3, "abc", "abd"), 0.0);
     }
+
+    #[test]
+    fn score_one_id2_is_unscaled_not_100_scale() {
+        // score_one(id=2) returns fuzz::ratio on [0,1], NOT token_sort_ratio's
+        // *100 form. This asymmetry is load-bearing (the PyO3 score_field_matrix
+        // path divides by 100, never here). Pinned so a silent unification breaks.
+        assert_eq!(score_one(2, "a b", "b a"), 1.0);
+        assert_eq!(token_sort_ratio("a b", "b a"), 100.0);
+    }
 }
