@@ -974,16 +974,19 @@ Head-to-head against Splink, Dedupe, and RecordLinkage on two datasets. GoldenMa
 
 ### Probabilistic Auto-Config vs Splink (v1.29)
 
-A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the **probabilistic auto-config v2** comparison-set curation (default-on; `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy field set), GoldenMatch's zero-config probabilistic path **matches or beats Splink on every measured dataset** in the shared `bench_er_headtohead` evaluator (pairwise F1, one evaluator for both tools):
+A separate result for the `type: probabilistic` (Fellegi-Sunter) path. With the **probabilistic auto-config v2** comparison-set curation (default-on; `GOLDENMATCH_FS_AUTOCONFIG_V2=0` restores the legacy field set), GoldenMatch's zero-config probabilistic path **matches or beats Splink on every dataset Splink scores** in the shared `bench_er_headtohead` evaluator (pairwise F1, one evaluator for both tools):
 
 | Dataset | GoldenMatch (probabilistic v2) | Splink |
 |---|---|---|
-| historical_50k | **0.779** | 0.757 |
+| historical_50k | **0.778** | 0.757 |
 | febrl3 | **0.991** | 0.965 |
 | synthetic_person | **0.998** | 0.996 |
-| dblp_acm | **0.879** | (skips) |
+
+GoldenMatch also wins at the cluster level on `historical_50k` (B-cubed F1 0.844 vs 0.789). These numbers are **deterministic and reproducible** as of #829, which fixed a non-deterministic EM training-pair sample that previously swung `historical_50k` F1 between 0.64 and 0.80 run-to-run. The full three-engine accuracy + performance bake-off (including wall / peak RSS / throughput, and the `gm_zeroconfig` controller path) is committed at `docs/benchmarks/2026-06-09-splink-bakeoff.md`.
 
 The v2 levers: admit `date`/dob columns as `levenshtein` comparison fields, drop redundant person-name composites, additively diversify blocking onto orthogonal stable keys, and admit `description`/`multi_name` as `token_sort` fields. This is independent of the zero-config/weighted DBLP-ACM and NCVR numbers above.
+
+**On `dblp_acm` (bibliographic), use the weighted path, not probabilistic.** Splink skips `dblp_acm`, and the probabilistic auto-config is weak there (pairwise F1 0.377, recall-bound). The zero-config **weighted** controller is the right tool for bibliographic shape — it scores 0.964 on DBLP-ACM (see the Zero-Config Controller table below).
 
 ### Zero-Config Controller (v1.8)
 
