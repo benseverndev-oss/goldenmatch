@@ -58,10 +58,19 @@ def _scorer_of(mks, field):
     return next(f.scorer for f in mks[0].fields if f.field == field)
 
 
-# ── default OFF: byte-identical legacy field set ──────────────────────────────
+# ── default ON; explicit =0 restores byte-identical legacy field set ──────────
 
-def test_default_off_is_legacy(monkeypatch):
-    monkeypatch.delenv(ON, raising=False)
+def test_default_unset_is_v2(monkeypatch):
+    monkeypatch.delenv(ON, raising=False)  # default flipped ON 2026-06-09
+    fields = _fields(build_probabilistic_matchkeys(_person_profiles()))
+    # v2 curates: dob admitted, name composites + low-card gender dropped.
+    assert "dob" in fields
+    assert "full_name" not in fields and "first_and_surname" not in fields
+    assert "gender" not in fields
+
+
+def test_explicit_off_is_legacy(monkeypatch):
+    monkeypatch.setenv(ON, "0")
     fields = _fields(build_probabilistic_matchkeys(_person_profiles()))
     # legacy keeps all 4 name fields + gender, and drops the date.
     assert "full_name" in fields and "first_and_surname" in fields
@@ -69,7 +78,7 @@ def test_default_off_is_legacy(monkeypatch):
     assert "dob" not in fields
 
 
-@pytest.mark.parametrize("val", ["0", "false", "off", "no", "", "disabled"])
+@pytest.mark.parametrize("val", ["0", "false", "off", "no", "disabled"])
 def test_falsey_values_keep_legacy(monkeypatch, val):
     monkeypatch.setenv(ON, val)
     fields = _fields(build_probabilistic_matchkeys(_person_profiles()))
@@ -147,7 +156,7 @@ def _biblio_profiles():
 
 
 def test_lever4_off_drops_freetext(monkeypatch):
-    monkeypatch.delenv(ON, raising=False)
+    monkeypatch.setenv(ON, "0")
     fields = set(_fields(build_probabilistic_matchkeys(_biblio_profiles())))
     # legacy: title/authors dropped -> only venue survives (the mega-match bug).
     assert "title" not in fields and "authors" not in fields
@@ -184,7 +193,7 @@ def _base_blocking():
 
 
 def test_lever3_off_is_noop(monkeypatch):
-    monkeypatch.delenv(ON, raising=False)
+    monkeypatch.setenv(ON, "0")
     b = _base_blocking()
     out = _diversify_probabilistic_blocking(b, _person_profiles())
     assert [p.fields for p in (out.passes or [])] == [["full_name"]]

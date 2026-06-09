@@ -544,9 +544,10 @@ def _norm_colname(name: str) -> str:
 def _fs_autoconfig_v2_enabled() -> bool:
     """FS auto-config v2 comparison-set + blocking curation.
 
-    **Default OFF** until the DBLP-ACM + NCVR sweep clears it (the repo pattern
-    for new auto-config levers — cf. quality-aware blocking, pass pruning, FD
-    negative evidence). Opt in with ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``.
+    **Default ON (2026-06-09).** ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` (or
+    ``false``/``off``/``no``/``disabled``) restores the legacy field set. Flipped
+    on after the curated set beat Splink on every measurable dataset and the
+    DBLP-ACM mega-match was fixed (lever #4) — no remaining measured regression.
 
     MEASURED (scripts/bench_er_headtohead, GM probabilistic vs Splink, one
     evaluator) — v2 beats Splink on every PII set AND unbreaks bibliographic:
@@ -555,11 +556,11 @@ def _fs_autoconfig_v2_enabled() -> bool:
       synthetic      F1 0.972 -> 0.998 (Splink 0.996)
       dblp_acm       F1 0.003 -> 0.879 (auto-config was a venue-only mega-match)
     The `venue` low-card-floor worry did NOT materialize (venue card 0.010 >
-    floor 0.01). Default stays off pending the in-CI DBLP-ACM/NCVR sweep
-    (.github/workflows/bench-probabilistic.yml panel-v1-v2 lane).
+    floor 0.01). The panel-v1-v2 lane in bench-probabilistic.yml is the standing
+    v1-vs-v2 regression check.
     """
-    return os.environ.get("GOLDENMATCH_FS_AUTOCONFIG_V2", "0").lower() in (
-        "1", "true", "on", "yes", "enabled",
+    return os.environ.get("GOLDENMATCH_FS_AUTOCONFIG_V2", "1").lower() not in (
+        "0", "false", "off", "no", "disabled",
     )
 
 
@@ -2963,8 +2964,8 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
     Produces a single probabilistic matchkey using all matchable columns
     with appropriate comparison levels and partial thresholds.
 
-    FS-autoconfig v2 (opt-in; ``GOLDENMATCH_FS_AUTOCONFIG_V2=1``, default off
-    pending the DBLP-ACM/NCVR sweep) curates a cleaner comparison set — the
+    FS-autoconfig v2 (default ON since 2026-06-09; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0``
+    restores the legacy field set) curates a cleaner comparison set — the
     dominant scoring lever on error-heavy PII data (audit: historical_50k) and
     the fix for bibliographic data (DBLP-ACM). Four changes vs v1:
       1. **Admit date columns** (e.g. ``dob``) as ``levenshtein`` comparison
@@ -3162,7 +3163,7 @@ def _diversify_probabilistic_blocking(
     postcode/zip/identifier columns — mirroring Splink's rule union. Purely
     additive (recall can only rise; scoring still decides precision). Skips
     high-null and perfectly-unique columns, and any (field, transforms) signature
-    already present. Opt-in via ``GOLDENMATCH_FS_AUTOCONFIG_V2=1`` (default off).
+    already present. Default ON; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` disables it.
     """
     if blocking is None or not _fs_autoconfig_v2_enabled():
         return blocking
