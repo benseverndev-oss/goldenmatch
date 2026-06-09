@@ -105,7 +105,10 @@ def _profile_list_path(blocks: list, cfg: GoldenMatchConfig, all_ids: list[int])
     mk = cfg.matchkeys[0]
     matched: set[tuple[int, int]] = set()
     t0 = time.perf_counter()
-    pairs = score_blocks_parallel(blocks, mk, matched)
+    # Single matchkey -> the pipeline passes track_matched=False (matched_pairs
+    # is never consumed by a later pass). Mirror that so the profile reflects
+    # the production single-matchkey default path, not the dead-set build.
+    pairs = score_blocks_parallel(blocks, mk, matched, track_matched=False)
     clusters = build_clusters(pairs, all_ids=all_ids)
     wall = time.perf_counter() - t0
     return len(pairs), len(clusters), wall
