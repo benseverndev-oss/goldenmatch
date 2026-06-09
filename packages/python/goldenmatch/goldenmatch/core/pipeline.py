@@ -800,13 +800,24 @@ def run_dedupe(
         offset += len(collected)
         frames.append(collected.lazy())
 
-    combined_lf = pl.concat([f.collect() for f in frames]).lazy()
+    combined_df = pl.concat([f.collect() for f in frames])
+    combined_lf = combined_df.lazy()
 
     return _run_dedupe_pipeline(
         combined_lf, config, matchkeys,
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
+        # Seed the prep cache with (id, height) like the dedupe_df path. The
+        # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
+        # fresh object that's GC-eligible the moment this call returns, so
+        # CPython readily recycles its ``id()`` slot for the NEXT run_dedupe
+        # call. Two calls with the same schema + prep signature but different
+        # row counts (e.g. a 1-file 5-row dedupe followed by a 2-file 8-row
+        # across_files_only dedupe) would otherwise collide on the recycled id
+        # and serve the stale prepared frame -- silently dropping the second
+        # input's extra rows. Height disambiguates same-schema/different-rows.
+        _prep_cache_seed=(id(combined_lf), combined_df.height),
     )
 
 
