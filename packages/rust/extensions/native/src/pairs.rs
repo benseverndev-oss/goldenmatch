@@ -96,3 +96,33 @@ pub fn block_histogram(block_sizes: Vec<i64>) -> (usize, i64, i64, i64, i64, i64
     };
     (count, total, max, pct(0.5), pct(0.95), pct(0.99))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonicalize_pairs_orders_min_max_preserving_score() {
+        let got = canonicalize_pairs(vec![(2, 1, 0.5), (1, 3, 0.9)]);
+        assert_eq!(got, vec![(1, 2, 0.5), (1, 3, 0.9)]);
+    }
+
+    #[test]
+    fn candidate_pair_count_sums_n_choose_2() {
+        assert_eq!(candidate_pair_count(vec![3]), 3);
+        assert_eq!(candidate_pair_count(vec![4]), 6);
+        assert_eq!(candidate_pair_count(vec![3, 4]), 9);
+        assert_eq!(candidate_pair_count(vec![1, 0]), 0);
+    }
+
+    #[test]
+    fn candidate_pair_count_large_block_does_not_overflow_i64_via_i128() {
+        assert_eq!(candidate_pair_count(vec![1_000_000]), 499_999_500_000);
+    }
+
+    #[test]
+    fn block_histogram_nearest_rank_percentiles() {
+        assert_eq!(block_histogram(vec![4, 1, 3, 2]), (4, 10, 4, 2, 4, 4));
+        assert_eq!(block_histogram(vec![]), (0, 0, 0, 0, 0, 0));
+    }
+}

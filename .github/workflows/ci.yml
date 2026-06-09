@@ -787,9 +787,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          workspaces: packages/rust/extensions
+          workspaces: |
+            packages/rust/extensions
+            packages/rust/extensions/graph-core
+            packages/rust/extensions/score-core
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
+      # The standalone pyo3-free sibling crates (graph-core, score-core) are
+      # each their own [workspace], so `cargo test --workspace` above (which
+      # only builds the `bridge` member) never touches them. Their logic IS
+      # exercised indirectly (native parity + the datafusion FFI tests), but
+      # their own unit tests + clippy were dead in CI. Run them explicitly.
+      - run: cargo test --manifest-path graph-core/Cargo.toml
+      - run: cargo clippy --manifest-path graph-core/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path score-core/Cargo.toml
+      - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
 
   # Native acceleration extension (PyO3). The crate is a standalone workspace
   # (its `extension-module` pyo3 feature is incompatible with the bridge's
@@ -832,6 +844,18 @@ jobs:
         run: |
           cargo clippy -- -D warnings
           cargo test
+      - name: Unit-test the native kernels (pure-Rust helpers)
+        # extension-module is gated behind a default feature so the test binary
+        # can link libpython (--no-default-features turns it off). Covers
+        # soundex/featurize/pairs-math/C-ABI logic that the Python parity suite
+        # only exercises indirectly. Build below still uses default features.
+        timeout-minutes: 5
+        working-directory: packages/rust/extensions/native
+        env:
+          PYO3_PYTHON: /usr/bin/python3
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpython3-dev
+          cargo test --no-default-features
       - name: Build native extension into the package
         # No --offline: CI has network + a cold cache on first run.
         run: uv run python scripts/build_native.py
@@ -842,6 +866,7 @@ jobs:
         run: |
           uv run pytest \
             packages/python/goldenmatch/tests/test_native_parity.py \
+            packages/python/goldenmatch/tests/test_native_block_seq_parity.py \
             packages/python/goldenmatch/tests/test_record_fingerprint.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_embeddings.py \
@@ -1393,6 +1418,48 @@ jobs:
               IF fp <> '7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3' THEN
                 RAISE EXCEPTION 'goldenmatch_record_fingerprint mismatch: %', fp;
               END IF;
+            END $$;
+          EOSQL
+          # graph + fingerprint SQL surface. These assert the edge cases the
+          # kernels.rs #[pg_test]s describe, end-to-end against a real CREATE
+          # EXTENSION. (`cargo pgrx test` can't run for this crate -- it needs
+          # pgrx SQL schema generation, which is broken here, so the SQL is
+          # hand-maintained; see the crate CLAUDE.md + kernels.rs mod tests.)
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            DO $$
+            DECLARE
+              n_comp INT;
+              pd RECORD;
+            BEGIN
+              -- connected_components: empty edge list -> every id is a singleton.
+              SELECT count(DISTINCT component) INTO n_comp
+              FROM goldenmatch.goldenmatch_connected_components(
+                ARRAY[]::BIGINT[], ARRAY[]::BIGINT[], ARRAY[]::DOUBLE PRECISION[],
+                ARRAY[10, 20, 30]::BIGINT[]);
+              IF n_comp <> 3 THEN
+                RAISE EXCEPTION 'connected_components empty-edge: expected 3 singletons, got %', n_comp;
+              END IF;
+
+              -- pair_dedup: all three inputs canonicalize to (1,2); keep max 0.7.
+              -- One invocation, aggregated so cardinality (dedup collapsed to a
+              -- single pair) and the kept values are asserted together. (min/max
+              -- over the one row == that row; n<>1 also catches a 0- or N-row
+              -- dedup failure, with NULL value comparisons short-circuited by it.)
+              SELECT count(*) AS n, min(a) AS a, min(b) AS b, max(s) AS s INTO pd
+              FROM goldenmatch.goldenmatch_pair_dedup(
+                ARRAY[1, 1, 2]::BIGINT[], ARRAY[2, 2, 1]::BIGINT[],
+                ARRAY[0.3, 0.7, 0.5]::DOUBLE PRECISION[]);
+              IF pd.n <> 1 OR pd.a <> 1 OR pd.b <> 2 OR abs(pd.s - 0.7) > 1e-9 THEN
+                RAISE EXCEPTION 'pair_dedup: expected exactly (1,2,0.7), got n=% (%,%,%)', pd.n, pd.a, pd.b, pd.s;
+              END IF;
+
+              -- record_fingerprint: stable across key order (fields sorted by name).
+              IF goldenmatch.goldenmatch_record_fingerprint('{"x":"1","y":"2"}')
+                 <> goldenmatch.goldenmatch_record_fingerprint('{"y":"2","x":"1"}') THEN
+                RAISE EXCEPTION 'record_fingerprint not key-order independent';
+              END IF;
+
+              RAISE NOTICE 'graph + fingerprint SQL surface assertions passed';
             END $$;
           EOSQL
           # goldenflow_* transforms (fail-open: pass input through if goldenflow absent).
