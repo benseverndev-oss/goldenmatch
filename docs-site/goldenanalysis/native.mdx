@@ -1,0 +1,38 @@
+---
+title: "Native accelerator"
+description: "An optional Rust kernel for the heavy aggregation primitives, gated only after a measured wall-clock win."
+keywords: ["goldenanalysis", "native", "rust", "pyo3", "histogram", "quantile", "performance"]
+---
+
+The heavy aggregation primitives — `histogram` and `quantile`, run over the score and cluster-size arrays of large results — have an optional Rust kernel, gated exactly like `goldenmatch[native]` / `goldencheck[native]`.
+
+```bash
+pip install goldenanalysis[native]   # pulls the separate goldenanalysis-native wheel
+```
+
+The pure-Python path stays the **default and the byte-identical reference**. The compiled kernel (`analysis-core`, a pyo3-free crate, plus the `analysis-native` abi3 wheel) mirrors `core/aggregate.py` value-for-value, reading input as a Float64 Arrow array (zero-copy). With the wheel installed, `GOLDENANALYSIS_NATIVE=auto` (the default) uses the native path automatically; `GOLDENANALYSIS_NATIVE=0` forces pure.
+
+## Gate on the measured wall, not "it's Rust"
+
+A primitive is used only once it is in `_native_loader._GATED_ON`, which it joins after **two** gates clear: a parity test proves byte-identical output, **and** the wall-clock is measured to actually move on the target environment. The pure loops are tight, and the native path pays a list→Arrow conversion cost, so "it's compiled" is never enough — the goldencheck composite-key kernel was once 2.5x *slower* than its baseline, and the gate caught it.
+
+`histogram` and `quantile` cleared both gates. The A/B harness (`bench-analysis-native.yml`, on Linux x86_64) measured the **realistic dispatch** — a Python list converted to Arrow, then the kernel, exactly what the call sites pay:
+
+| Primitive | 1M rows | 10M rows |
+|-----------|---------|----------|
+| `histogram` | 9.9x faster | 9.2x faster |
+| `quantile` | 5.8x faster | 6.6x faster |
+
+The Arrow conversion turns out to be far cheaper than the pure-Python loops, so the native path wins decisively even including it.
+
+## How it stays honest
+
+- **Two crates, mirrored.** `analysis-core` (pyo3-free) holds the kernel logic so it can later back a SQL surface; `analysis-native` is the thin abi3 PyO3 + Arrow shim over it.
+- **Parity is a CI gate.** A dedicated lane builds the wheel and runs the parity suite under `GOLDENANALYSIS_NATIVE=1`, including an end-to-end test that the public `aggregate.histogram` / `quantile` dispatch is byte-identical to the pure path.
+- **No behavior change without the wheel.** With no native extension installed, `auto` resolves to the pure path; results are identical whether or not native is present.
+
+In-tree dev build (no maturin needed):
+
+```bash
+uv run python scripts/build_analysis_native.py
+```

@@ -69,9 +69,9 @@ The suite is a single monorepo:
 
 ```text
 packages/
-├── python/       goldenmatch, goldencheck, goldenflow, goldenpipe, infermap, goldensuite-mcp
-├── typescript/   goldenmatch, goldencheck, goldenflow, infermap
-├── rust/         extensions (Postgres pgrx + DuckDB UDFs)
+├── python/       goldenmatch, goldencheck, goldenflow, goldenpipe, goldenanalysis, infermap, goldensuite-mcp
+├── typescript/   goldenmatch, goldencheck, goldenflow, goldenanalysis, infermap
+├── rust/         extensions (Postgres pgrx + DuckDB UDFs, incl. analysis-core/native)
 ├── dbt/          dbt-goldencheck
 └── actions/      goldencheck GitHub Action
 examples/         Python, TypeScript, and Airflow DAG demos
