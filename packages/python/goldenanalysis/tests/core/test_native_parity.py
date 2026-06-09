@@ -1,7 +1,9 @@
 """Parity: the native ``histogram`` / ``quantile`` kernels must produce
-byte-identical output to the pure-Python reference in
-``goldenanalysis.core.aggregate``. This is the gate that lets a primitive sit in
-``_native_loader._GATED_ON`` (run under ``GOLDENANALYSIS_NATIVE=auto``).
+byte-identical output to the pure-Python reference (``aggregate._*_pure``). This is
+the gate that let them sit in ``_native_loader._GATED_ON`` (run under
+``GOLDENANALYSIS_NATIVE=auto``). The reference is the ``_*_pure`` helpers, NOT the
+public ``aggregate.histogram`` / ``quantile`` -- those now DISPATCH to native when
+gated, so comparing against them would be native-vs-native.
 
 Skips cleanly when the native extension isn't built (pure-Python-only env). The
 loader-gate tests at the bottom run WITHOUT the wheel (they don't import polars).
@@ -23,30 +25,28 @@ native_only = pytest.mark.skipif(
 )
 
 
-def _f64(values):
+def _f64(values: list):
     import pyarrow as pa
 
     return pa.array(values, type=pa.float64())
 
 
-def _assert_histogram_parity(values, bins) -> None:
+def _assert_histogram_parity(values: list, bins: int) -> None:
     from goldenanalysis.core import aggregate
 
     native = native_module().histogram(_f64(values), bins)
-    pure = aggregate.histogram(values, bins)
-    assert native == pure
+    assert native == aggregate._histogram_pure(values, bins)
 
 
-def _assert_quantile_parity(values, q) -> None:
+def _assert_quantile_parity(values: list, q: float) -> None:
     from goldenanalysis.core import aggregate
 
     native = native_module().quantile(_f64(values), q)
-    pure = aggregate.quantile(values, q)
-    assert native == pure
+    assert native == aggregate._quantile_pure(values, q)
 
 
 # ---------------------------------------------------------------------------
-# Parity (native present)
+# Parity (native present) -- native kernel vs the pure reference helpers
 # ---------------------------------------------------------------------------
 
 
@@ -88,12 +88,12 @@ def test_parity_adversarial_magnitudes() -> None:
 def test_parity_drops_nulls() -> None:
     # Null slots must be dropped (their backing f64 is undefined), matching the
     # pure path which only sees the non-null values.
-    arr = _f64([1.5, None, 200.0, None, 9.9, None])
-    non_null = [1.5, 200.0, 9.9]
     from goldenanalysis.core import aggregate
 
-    assert native_module().histogram(arr, 10) == aggregate.histogram(non_null, 10)
-    assert native_module().quantile(arr, 0.5) == aggregate.quantile(non_null, 0.5)
+    arr = _f64([1.5, None, 200.0, None, 9.9, None])
+    non_null = [1.5, 200.0, 9.9]
+    assert native_module().histogram(arr, 10) == aggregate._histogram_pure(non_null, 10)
+    assert native_module().quantile(arr, 0.5) == aggregate._quantile_pure(non_null, 0.5)
 
 
 @native_only
@@ -102,6 +102,25 @@ def test_parity_empty_and_all_equal() -> None:
     _assert_quantile_parity([], 0.5)
     _assert_histogram_parity([2.0, 2.0, 2.0], 4)
     _assert_quantile_parity([7.0], 0.5)
+
+
+@native_only
+@pytest.mark.parametrize("seed", range(4))
+def test_public_dispatch_matches_pure(monkeypatch: pytest.MonkeyPatch, seed: int) -> None:
+    """The PUBLIC ``aggregate.histogram`` / ``quantile`` dispatch (native, gated, =1)
+    is byte-identical to the pure path (=0) -- the end-to-end gate guarantee."""
+    from goldenanalysis.core import aggregate
+
+    rng = random.Random(seed)
+    values = [rng.uniform(-100.0, 1000.0) for _ in range(5000)]
+
+    monkeypatch.setenv("GOLDENANALYSIS_NATIVE", "1")  # force native dispatch
+    native_hist = aggregate.histogram(values, 10)
+    native_q = aggregate.quantile(values, 0.95)
+
+    monkeypatch.setenv("GOLDENANALYSIS_NATIVE", "0")  # force pure
+    assert native_hist == aggregate.histogram(values, 10)
+    assert native_q == aggregate.quantile(values, 0.95)
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +136,13 @@ def test_disabled_env_forces_python(monkeypatch: pytest.MonkeyPatch) -> None:
     assert native_enabled("quantile") is False
 
 
-def test_auto_with_empty_gated_on_uses_python(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_GATED_ON is empty until a wall-verified flip, so `auto` is always pure --
-    even when a wheel is importable."""
+def test_auto_gates_histogram_and_quantile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """histogram/quantile are gated, so under `auto` they use native iff a wheel is
+    importable. A non-gated component always stays pure."""
     monkeypatch.setenv("GOLDENANALYSIS_NATIVE", "auto")
-    assert native_enabled("histogram") is False
-    assert native_enabled("quantile") is False
+    assert native_enabled("histogram") is native_available()
+    assert native_enabled("quantile") is native_available()
+    assert native_enabled("frame.row_count") is False  # not in _GATED_ON
 
 
 @pytest.mark.skipif(native_available(), reason="wheel present -> =1 does not raise")
