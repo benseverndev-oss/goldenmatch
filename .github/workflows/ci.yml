@@ -782,9 +782,22 @@ jobs:
     defaults:
       run:
         working-directory: packages/rust/extensions
+    env:
+      # The bridge crate links libpython via pyo3 auto-initialize; pin the
+      # interpreter pyo3 embeds to the system python3 we install goldenmatch into
+      # below, so the bridge tests can import it at runtime.
+      PYO3_PYTHON: /usr/bin/python3
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      # The bridge embeds CPython and calls the goldenmatch Python API. Install it
+      # into that interpreter so the bridge tests actually exercise the marshalling
+      # surface instead of self-skipping (GOLDENMATCH_BRIDGE_REQUIRE_PY=1 turns a
+      # skip into a hard failure). Mirrors the rust_pgrx lane's install dance.
+      - name: Install goldenmatch into the bridge's embedded interpreter
+        run: |
+          sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
+          sudo python3 -m pip install --break-system-packages goldenmatch pyarrow
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           workspaces: |
@@ -792,6 +805,10 @@ jobs:
             packages/rust/extensions/graph-core
             packages/rust/extensions/score-core
       - run: cargo test --workspace
+        # Bridge tests now hard-require goldenmatch (installed above) -- a Python
+        # import/marshalling failure fails the lane instead of silently skipping.
+        env:
+          GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
       - run: cargo clippy --workspace -- -D warnings
       # The standalone pyo3-free sibling crates (graph-core, score-core) are
       # each their own [workspace], so `cargo test --workspace` above (which

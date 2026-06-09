@@ -1707,6 +1707,20 @@ pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String,
 mod tests {
     use super::*;
 
+    /// Handle a failed bridge call. CI sets `GOLDENMATCH_BRIDGE_REQUIRE_PY=1` so
+    /// a failure of the embedded-Python / goldenmatch call is a HARD test failure
+    /// -- the bridge marshalling surface must actually be exercised, not silently
+    /// skipped (these tests self-skipped before, so the whole bridge was
+    /// effectively untested in CI). Locally the var is unset, so a missing
+    /// `goldenmatch` package prints a skip notice and the test passes, keeping
+    /// `cargo test` usable on a dev box without the package installed.
+    fn require_or_skip(err: BridgeError, what: &str) {
+        if std::env::var("GOLDENMATCH_BRIDGE_REQUIRE_PY").as_deref() == Ok("1") {
+            panic!("{what}: goldenmatch required in CI but the bridge call failed: {err}");
+        }
+        eprintln!("Skipping {what} (goldenmatch not installed): {err}");
+    }
+
     #[test]
     fn test_memory_stats_empty_store() {
         // Exercises the full pyo3 path: MemoryStore open, count_corrections,
@@ -1721,7 +1735,7 @@ mod tests {
                 assert!(json.contains("\"adjustments\": []"), "got: {}", json);
                 assert!(json.contains("\"last_learn_time\": null"), "got: {}", json);
             }
-            Err(e) => eprintln!("Skipping (goldenmatch not installed): {}", e),
+            Err(e) => require_or_skip(e, "memory_stats_empty_store"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1737,22 +1751,19 @@ mod tests {
                 assert!(json.contains("\"count\": 0"), "got: {}", json);
                 assert!(json.contains("\"adjustments\": []"), "got: {}", json);
             }
-            Err(e) => eprintln!("Skipping (goldenmatch not installed): {}", e),
+            Err(e) => require_or_skip(e, "memory_learn_below_threshold"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_score_strings() {
-        // Requires goldenmatch installed
         match score_strings("John Smith", "Jon Smyth", "jaro_winkler") {
             Ok(score) => {
                 assert!(score > 0.7);
                 assert!(score < 1.0);
             }
-            Err(e) => {
-                eprintln!("Skipping test (goldenmatch not installed): {}", e);
-            }
+            Err(e) => require_or_skip(e, "score_strings"),
         }
     }
 
@@ -1760,7 +1771,7 @@ mod tests {
     fn test_score_strings_exact() {
         match score_strings("hello", "hello", "exact") {
             Ok(score) => assert_eq!(score, 1.0),
-            Err(e) => eprintln!("Skipping: {}", e),
+            Err(e) => require_or_skip(e, "score_strings_exact"),
         }
     }
 
@@ -1778,7 +1789,7 @@ mod tests {
                 assert!(!result.stats_json.is_empty());
                 // Structured clusters come from `dedupe_clusters`, not a JSON blob here.
             }
-            Err(e) => eprintln!("Skipping: {}", e),
+            Err(e) => require_or_skip(e, "dedupe_basic"),
         }
     }
 
@@ -1793,7 +1804,7 @@ mod tests {
                 assert!(score > 0.5);
                 assert!(score <= 1.0);
             }
-            Err(e) => eprintln!("Skipping: {}", e),
+            Err(e) => require_or_skip(e, "score_pair"),
         }
     }
 }
