@@ -1107,6 +1107,7 @@ def score_blocks_parallel(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    track_matched: bool = True,
 ) -> list[tuple[int, int, float]]:
     """Score all blocks in parallel using threads.
 
@@ -1123,6 +1124,13 @@ def score_blocks_parallel(
         across_files_only: Filter to cross-source pairs only.
         source_lookup: Row ID to source name mapping.
         target_ids: For match mode — filter to target/ref cross pairs.
+        track_matched: when True (default) the per-pass exclude set is
+            populated as before. When False the ``matched_pairs.add``
+            bookkeeping is skipped -- the caller passes False ONLY when no
+            later matchkey pass consumes the set (single-matchkey configs,
+            or the last consuming pass). At 1M / 131M pairs that per-pair
+            min/max/set.add was ~100s of the default-path wall. The returned
+            pair list is identical either way; only the side effect differs.
 
     Returns:
         All fuzzy pairs found across blocks.
@@ -1151,8 +1159,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
         _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
         return all_pairs
 
@@ -1222,8 +1231,9 @@ def score_blocks_parallel(
                     if (a in target_ids) != (b in target_ids)
                 ]
             all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
+            if track_matched:
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
             completed += 1
             if completed % log_interval == 0:
                 logger.info(
@@ -1500,6 +1510,7 @@ def score_blocks_columnar(
     across_files_only: bool = False,
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
+    track_matched: bool = True,
 ) -> pl.DataFrame:
     """Phase 1c-real columnar block scorer. Mirrors
     :func:`score_blocks_parallel`'s thread-pool structure but uses
@@ -1520,6 +1531,13 @@ def score_blocks_columnar(
         source_lookup, target_ids: same semantics as
         ``score_blocks_parallel``. ``matched_pairs`` is mutated in
         place as the contract requires.
+        track_matched: when True (default) the per-pass exclude set is
+            populated as before. When False the ``matched_pairs.add``
+            bookkeeping is skipped entirely -- the pipeline's columnar
+            path is single-matchkey by eligibility, so no later pass
+            ever consumes the set and building it is pure waste (the
+            profiled ~104s at 1M / 131M pairs). The returned pair stream
+            is identical either way; only the side effect differs.
 
     Returns:
         Polars DataFrame with ``PAIR_STREAM_SCHEMA`` shape.
@@ -1544,12 +1562,14 @@ def score_blocks_columnar(
             if not df_pairs.is_empty():
                 # Update matched_pairs side effect (per-block, before
                 # concat so order is consistent with the list path).
-                for a, b in zip(
-                    df_pairs["id_a"].to_list(),
-                    df_pairs["id_b"].to_list(),
-                    strict=True,
-                ):
-                    matched_pairs.add((min(a, b), max(a, b)))
+                # Skipped when track_matched=False (set is never consumed).
+                if track_matched:
+                    for a, b in zip(
+                        df_pairs["id_a"].to_list(),
+                        df_pairs["id_b"].to_list(),
+                        strict=True,
+                    ):
+                        matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
         if not frames:
             return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
@@ -1578,12 +1598,13 @@ def score_blocks_columnar(
             if target_ids is not None and not df_pairs.is_empty():
                 df_pairs = _filter_target_ids_df(df_pairs, target_ids)
             if not df_pairs.is_empty():
-                for a, b in zip(
-                    df_pairs["id_a"].to_list(),
-                    df_pairs["id_b"].to_list(),
-                    strict=True,
-                ):
-                    matched_pairs.add((min(a, b), max(a, b)))
+                if track_matched:
+                    for a, b in zip(
+                        df_pairs["id_a"].to_list(),
+                        df_pairs["id_b"].to_list(),
+                        strict=True,
+                    ):
+                        matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
             completed += 1
             if completed % log_interval == 0:

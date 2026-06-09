@@ -1219,11 +1219,24 @@ def _run_dedupe_pipeline(
     fuzzy_pair_count = 0
     total_blocks = 0
     block_size_samples: list[int] = []
+    # matched_pairs is the cross-pass exclude set. A weighted pass's additions
+    # are consumed ONLY by a LATER scoring pass (another weighted matchkey, or
+    # any probabilistic matchkey). When nothing later consumes them, the
+    # per-pair min/max/set.add build is pure waste (~100s at 1M / 131M pairs on
+    # the default list path) -- pass track_matched=False to skip it. The exact
+    # loop's prior writes are this pass's EXCLUDE (read at entry), unaffected.
+    _weighted_mks = [m for m in matchkeys if m.type == "weighted"]
+    _last_weighted_mk = _weighted_mks[-1] if _weighted_mks else None
+    _has_probabilistic_pass = any(m.type == "probabilistic" for m in matchkeys)
     with stage("fuzzy_scoring"):
         for mk in matchkeys:
             if mk.type == "weighted":
                 if config.blocking is None:
                     continue
+                # True iff a later scoring pass will read matched_pairs.
+                _mp_consumed_after = (
+                    mk is not _last_weighted_mk
+                ) or _has_probabilistic_pass
                 # Bucket backend: skip build_blocks entirely. The bucket
                 # scorer derives block-key + bucket assignment from
                 # `collected_df` in a single eager pass and partitions
@@ -1369,8 +1382,12 @@ def _run_dedupe_pipeline(
                         # gate can't break an otherwise-eligible run.
                         try:
                             from goldenmatch.core.scorer import score_blocks_columnar
+                            # Eligibility guarantees a single weighted matchkey,
+                            # so matched_pairs is never consumed by a later pass
+                            # -- skip building it (the profiled ~104s of per-pair
+                            # min/max/set.add at 1M / 131M pairs).
                             _columnar_pairs_df = score_blocks_columnar(
-                                blocks, mk, matched_pairs,
+                                blocks, mk, matched_pairs, track_matched=False,
                             )
                             fuzzy_pair_count += _columnar_pairs_df.height
                             continue
@@ -1389,11 +1406,21 @@ def _run_dedupe_pipeline(
                     # narrow the dynamic dispatch and flags every union
                     # arm against the str values -- intentional dynamic
                     # dispatch, suppress.
+                    # Only the parallel scorer accepts track_matched; the
+                    # ray/duckdb/datafusion scorers would reject the kwarg, so
+                    # pass it solely when no later pass consumes matched_pairs
+                    # AND we're on the parallel path (the False-skip win).
+                    # dict[str, object] so the bool value sits alongside the
+                    # str key_mode_kwargs (store_path/signature).
+                    _scorer_kwargs: dict[str, object] = {}
+                    _scorer_kwargs.update(key_mode_kwargs)
+                    if block_scorer is score_blocks_parallel and not _mp_consumed_after:
+                        _scorer_kwargs["track_matched"] = False
                     pairs = block_scorer(
                         blocks, mk, matched_pairs,
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
-                        **key_mode_kwargs,  # pyright: ignore[reportArgumentType]
+                        **_scorer_kwargs,  # pyright: ignore[reportArgumentType]
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
