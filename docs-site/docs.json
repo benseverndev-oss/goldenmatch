@@ -104,6 +104,14 @@
             ]
           },
           {
+            "group": "GoldenAnalysis",
+            "pages": [
+              "goldenanalysis/overview",
+              "goldenanalysis/cross-run",
+              "goldenanalysis/native"
+            ]
+          },
+          {
             "group": "InferMap",
             "pages": [
               "infermap/overview"
