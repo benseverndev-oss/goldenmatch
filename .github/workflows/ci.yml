@@ -1319,10 +1319,20 @@ jobs:
         # this, the kernels.rs pg_tests never execute. Pinned to the pg16 leg --
         # the tests are pyo3-free pure logic (graph-core/fingerprint-core), so
         # they're PG-major-independent and one leg is sufficient coverage.
+        # NOTE: this runs BEFORE "Expose goldenmatch to Postgres' Python
+        # interpreter" because every current #[pg_test] is pyo3-free (graph-core
+        # / fingerprint-core, no embedded CPython). If bridge-backed pg_tests
+        # (quick.rs / pipeline.rs / correction.rs) are added later, MOVE this
+        # step below that Expose step so `import goldenmatch` resolves in-backend.
         if: matrix.pg == '16'
         timeout-minutes: 20
         working-directory: packages/rust/extensions/postgres
-        run: cargo pgrx test --no-default-features --features "pg16 pg_test" pg16
+        run: |
+          set -o pipefail
+          cargo pgrx test pg16 2>&1 | tee /tmp/pgrx_test_out.txt
+          # Guard against a silent 0-test false-green: cargo pgrx test exits 0
+          # even when the harness discovers no #[pg_test]s. Assert >=1 passed.
+          grep -E "test result: ok\. [1-9][0-9]* passed" /tmp/pgrx_test_out.txt
 
       - name: Expose goldenmatch to Postgres' Python interpreter
         # Postgres runs as user `postgres` under a different Python than the
