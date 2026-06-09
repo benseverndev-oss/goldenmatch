@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Removed
+- Removed the dominated `GOLDENMATCH_COLUMNAR_CLUSTER_BUILD` opt-in (SP1);
+  superseded by `GOLDENMATCH_CLUSTER_FRAMES_OUT`.
+
 ## [1.30.0] - 2026-06-09
 
 ### Added

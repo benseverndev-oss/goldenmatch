@@ -2077,41 +2077,27 @@ def _run_dedupe_pipeline(
     # ── Step 7.6: IDENTITY GRAPH (optional) ──
     # Feed the identity evidence-edge consumer from a ClusterPairScores view
     # (byte-identical to the dict path, built once here) whenever the dict that
-    # reaches identity carries EMPTY per-cluster pair_scores. Two gates produce
-    # such a dict:
-    #   - _columnar_cluster_build_enabled (GOLDENMATCH_COLUMNAR_CLUSTER_BUILD):
-    #     the columnar build returns pair_scores={};
+    # reaches identity carries EMPTY per-cluster pair_scores. The frames-out gate
+    # produces such a dict:
     #   - _cluster_frames_out_enabled (GOLDENMATCH_CLUSTER_FRAMES_OUT, SP-B): the
-    #     lazily-rebuilt dict from cluster_frames_to_dict also has pair_scores={}.
-    # In BOTH cases resolve_clusters' info.get("pair_scores") fallback would yield
-    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (neither env set)
+    #     lazily-rebuilt dict from cluster_frames_to_dict has pair_scores={}.
+    # In that case resolve_clusters' info.get("pair_scores") fallback would yield
+    # ZERO evidence edges, so we MUST supply the view. Gate-OFF (env not set)
     # leaves the dict carrying real pair_scores and pair_score_view stays None --
     # byte-identical to today.
     # SP-C: on the frames-out path build the view from the FRAMES (assignments
     # frame + RAW all_pairs) and feed identity the `cluster_frames` directly --
     # NOT the rebuilt dict -- so the cluster->golden->identity stage never calls
-    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` is byte-identical
-    # to the columnar branch's `from_pairs(all_pairs, clusters)` (same input-order
-    # last-wins bucketing, same final membership). The columnar-build and gate-OFF
-    # branches are UNCHANGED: columnar builds the view from the dict + pairs and
-    # passes the dict; gate-OFF leaves the view None and passes the real-pair_scores
-    # dict. resolve_clusters' exactly-one assertion keeps the two mutually exclusive.
+    # `_clusters_dict()`. `from_frames(assignments, all_pairs)` buckets the raw
+    # input pairs (input-order last-wins) against the final cluster membership.
+    # The gate-OFF branch is UNCHANGED: it leaves the view None and passes the
+    # real-pair_scores dict.
     pair_score_view: ClusterPairScores | None = None
     if cluster_frames is not None:
         from goldenmatch.core.cluster_pairscores import ClusterPairScores
         pair_score_view = ClusterPairScores.from_frames(
             cluster_frames.assignments, all_pairs
         )
-    elif isinstance(clusters, dict):
-        from goldenmatch.core.cluster import _columnar_cluster_build_enabled
-        if _columnar_cluster_build_enabled():
-            from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            # SP4: the columnar-build dict reaching identity has pair_scores={}, so
-            # build the view from the RAW input pairs (input-order, last-wins == the
-            # dict path's per-cluster pair_scores) + final cluster membership. NOT
-            # from results["scored_pairs"] (max-score deduped, differs on
-            # dup-scored pairs).
-            pair_score_view = ClusterPairScores.from_pairs(all_pairs, clusters)
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters if cluster_frames is None else None,

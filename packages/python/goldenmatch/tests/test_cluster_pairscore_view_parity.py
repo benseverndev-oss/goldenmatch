@@ -20,9 +20,9 @@ native cluster kernel is absent (validated in CI's fresh native build).
 Scope: this test exercises the CONSUMER swap (``resolve_clusters`` reading from
 the view vs the dict) by passing ``pair_score_view=`` directly. The pipeline
 WIRING that builds the view and threads it in (``_run_dedupe_pipeline`` ->
-``_resolve_identities``, gated on ``_columnar_cluster_build_enabled()`` +
-``isinstance(clusters, dict)``) is exercised end-to-end by the existing
-``tests/identity/`` suite run with ``GOLDENMATCH_COLUMNAR_CLUSTER_BUILD=1``
+``_resolve_identities``, gated on the frames-out path producing a
+``cluster_frames`` view) is exercised end-to-end by the existing
+``tests/identity/`` suite run with ``GOLDENMATCH_CLUSTER_FRAMES_OUT=1``
 (no new failures vs gate OFF).
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ from goldenmatch.identity import IdentityStore, resolve_clusters
 
 
 def _adversarial_pairs():
-    # Mirror tests/test_columnar_cluster_build_parity.py::_adversarial_pairs:
+    # Mirror tests/test_cluster_frames_out_parity.py::_adversarial_pairs:
     # singleton (id 0), 2-member, fully-connected triple, weak chain, an
     # oversized barbell that SPLITS at max_cluster_size=5, score-tied edges,
     # a duplicate canonical pair, and a dense oversized clique (can't-split).
