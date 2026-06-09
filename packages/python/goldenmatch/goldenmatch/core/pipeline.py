@@ -1410,7 +1410,10 @@ def _run_dedupe_pipeline(
                     # ray/duckdb/datafusion scorers would reject the kwarg, so
                     # pass it solely when no later pass consumes matched_pairs
                     # AND we're on the parallel path (the False-skip win).
-                    _scorer_kwargs = dict(key_mode_kwargs)
+                    # dict[str, object] so the bool value sits alongside the
+                    # str key_mode_kwargs (store_path/signature).
+                    _scorer_kwargs: dict[str, object] = {}
+                    _scorer_kwargs.update(key_mode_kwargs)
                     if block_scorer is score_blocks_parallel and not _mp_consumed_after:
                         _scorer_kwargs["track_matched"] = False
                     pairs = block_scorer(

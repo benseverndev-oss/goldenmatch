@@ -26,7 +26,6 @@ from __future__ import annotations
 import random
 
 import polars as pl
-
 from goldenmatch._api import DedupeResult
 from goldenmatch.config.schemas import (
     BlockingConfig,
