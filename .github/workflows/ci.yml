@@ -863,11 +863,16 @@ jobs:
             echo "### $label" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             if cargo llvm-cov --summary-only "$@" >/tmp/cov.txt 2>/tmp/cov.err; then
-              { grep -E "TOTAL" /tmp/cov.txt || tail -2 /tmp/cov.txt; } >> "$GITHUB_STEP_SUMMARY"
+              local total
+              total=$(grep -iE "TOTAL" /tmp/cov.txt | tail -1)
+              [ -z "$total" ] && total=$(tail -1 /tmp/cov.txt)
+              echo "COVERAGE_RESULT ${label} | ${total}"   # grep-able marker in the job log
+              echo "$total" >> "$GITHUB_STEP_SUMMARY"
             else
+              echo "COVERAGE_RESULT ${label} | FAILED"
+              echo "::warning::rust_coverage: ${label} failed to instrument"
+              sed -n '1,15p' /tmp/cov.err || true
               echo "(coverage run failed -- see job log)" >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::rust_coverage: $label failed to instrument"
-              sed -n '1,12p' /tmp/cov.err || true
             fi
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           }
