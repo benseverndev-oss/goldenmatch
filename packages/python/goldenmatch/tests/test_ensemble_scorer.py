@@ -59,3 +59,83 @@ class TestEnsembleScorer:
     def test_ensemble_schema_valid(self):
         f = MatchkeyField(field="name", scorer="ensemble", weight=1.0)
         assert f.scorer == "ensemble"
+
+
+class TestEnsembleScalarParity:
+    """The scalar score_field('ensemble') must match the NxN matrix branch.
+
+    Regression for the Fellegi-Sunter training crash: EM training routes
+    through the SCALAR score_field (comparison_vector -> _build_comparison_matrix),
+    while scoring uses the vectorized _fuzzy_score_matrix. score_field lacked an
+    `ensemble` case, so any probabilistic matchkey whose auto-config assigned
+    `ensemble` (every `name` field) raised `Unknown scorer: 'ensemble'` at train
+    time and the FS path could not run at all.
+    """
+
+    @pytest.mark.parametrize(
+        "a,b",
+        [
+            ("John Smith", "Smith John"),   # token_sort wins (word reorder)
+            ("Jon", "John"),                # jaro_winkler / soundex
+            ("Catherine", "Kathryn"),       # soundex bridges spelling
+            ("Smith", "Smith"),             # identical -> 1.0
+            ("Smith", "Jones"),             # unrelated -> low
+        ],
+    )
+    def test_scalar_matches_matrix_offdiagonal(self, a, b):
+        from goldenmatch.core.scorer import _fuzzy_score_matrix, score_field
+
+        scalar = score_field(a, b, "ensemble")
+        matrix = _fuzzy_score_matrix([a, b], "ensemble")
+        assert scalar == pytest.approx(float(matrix[0, 1]), abs=1e-6)
+
+    def test_scalar_none_returns_none(self):
+        from goldenmatch.core.scorer import score_field
+
+        assert score_field(None, "Smith", "ensemble") is None
+        assert score_field("Smith", None, "ensemble") is None
+
+    def test_scalar_non_alpha_does_not_raise(self):
+        # jellyfish.soundex can choke on non-alpha input; the soundex component
+        # must degrade to 0.0 rather than blow up the whole pair score.
+        from goldenmatch.core.scorer import score_field
+
+        s = score_field("12345", "12345", "ensemble")
+        assert s == pytest.approx(1.0, abs=1e-6)  # token_sort/jw still see equality
+
+
+class TestFSEnsembleEndToEnd:
+    """Probabilistic (Fellegi-Sunter) dedupe must train+score when a field's
+    scorer is `ensemble` (the auto-config default for `name` columns)."""
+
+    def test_probabilistic_dedupe_with_ensemble_name_field(self):
+        from goldenmatch import dedupe_df
+        from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
+        df = pl.DataFrame(
+            {
+                "name": [
+                    "John Smith", "Jon Smith", "Mary Jones", "Marie Jones",
+                    "Robert Brown", "Bob Brown", "Linda Davis", "Lynda Davis",
+                    "James Wilson", "Jim Wilson", "Patricia Moore", "Pat Moore",
+                ],
+                "city": [
+                    "Boston", "Boston", "Denver", "Denver",
+                    "Austin", "Austin", "Seattle", "Seattle",
+                    "Portland", "Portland", "Chicago", "Chicago",
+                ],
+            }
+        )
+        cfg = auto_configure_probabilistic_df(df)
+        # Guard the regression's premise: at least one field is ensemble-scored.
+        scorers = {
+            f.scorer
+            for mk in cfg.get_matchkeys()
+            if mk.type == "probabilistic"
+            for f in (mk.fields or [])
+        }
+        assert "ensemble" in scorers, f"expected an ensemble field, got {scorers}"
+
+        # Must not raise (was: ValueError: Unknown scorer: 'ensemble' at EM train)
+        result = dedupe_df(df, config=cfg)
+        assert result.dupes is not None and result.dupes.height > 0
