@@ -15,6 +15,7 @@ links rather than reading everything.
 - [architecture/goldencheck-native-kernel.md](architecture/goldencheck-native-kernel.md) — GoldenCheck's Arrow-native runtime (`goldencheck-native`) + deep-profiling expansion (Benford / composite-key / FD / fuzzy / approx-FD kernels, `--deep`, `refs`, freshness) + the `cell_quality` / `functional_dependencies` bridge APIs; SHIPPED (#793, 2026-06-07).
 - [architecture/goldencheck-goldenmatch-integration.md](architecture/goldencheck-goldenmatch-integration.md) — data quality feeds entity resolution: four fail-open, default-OFF doors (survivorship, blocking, FD negative-evidence, quality-gated review); #794/#795/#798 shipped, #797 open.
 - [architecture/fellegi-sunter-splink-parity.md](architecture/fellegi-sunter-splink-parity.md) — the `type: probabilistic` matchkey from scorer to Splink-class engine: model lifecycle, supervised m, match-weight waterfall, calibration, accuracy analysis, bucket/native scale-out. FS auto-config v2 (#823, v1.29.0) now beats hand-rolled Splink on every dataset Splink scores (pairwise F1, shared evaluator), made reproducible by the #829 EM-sampling determinism fix; the deterministic three-engine bake-off is at [`docs/benchmarks/2026-06-09-splink-bakeoff.md`](../docs/benchmarks/2026-06-09-splink-bakeoff.md).
+- [architecture/rust-test-coverage.md](architecture/rust-test-coverage.md) — how the `packages/rust/extensions/` crates are tested in CI: per-crate map, the bridge CPython-in-CI dance, the `cargo pgrx test` structural dead-end, and the measured per-crate baseline; SHIPPED (#827/#830/#832, 2026-06-09).
 
 ## Decisions (records with no other home)
 - [decisions/0001-gate-reframe-engine-portability.md](decisions/0001-gate-reframe-engine-portability.md) — retire one-box RSS as the gate; engine portability is the destination.
@@ -25,6 +26,7 @@ links rather than reading everything.
 - [decisions/0006-goldenflow-native-nanp-gating.md](decisions/0006-goldenflow-native-nanp-gating.md) — GoldenFlow: vectorize in Polars first; gate the native phone kernel to NANP-only (parity-safe by construction).
 - [decisions/0007-goldencheck-goldenmatch-integration.md](decisions/0007-goldencheck-goldenmatch-integration.md) — GoldenCheck→GoldenMatch: fail-open quality bridges, additive, default-OFF + benchmark-gated; hold the DQ↔ER boundary.
 - [decisions/0008-fellegi-sunter-splink-parity.md](decisions/0008-fellegi-sunter-splink-parity.md) — Fellegi-Sunter: close the Splink engine gap in dependency order, reuse the scale substrate, keep defaults reproducible (new power opt-in), measure the scale gate on a real runner.
+- [decisions/0009-rust-test-coverage.md](decisions/0009-rust-test-coverage.md) — Rust coverage: make the tests real (de-skip the bridge, run the standalone crates), route around the `cargo pgrx test` dead-end (psql smoke), then measure — informational baseline, not a hard gate.
 
 ## Processes (how work is done here)
 - [processes/development-workflow.md](processes/development-workflow.md) — spec → plan → execute → review → CI → merge, plus the hard environment constraints.
@@ -39,4 +41,4 @@ links rather than reading everything.
 - [meta/maintenance.md](meta/maintenance.md) — how to keep nodes accurate and small.
 
 ---
-**Classification:** navigation • **Last updated:** 2026-06-07
+**Classification:** navigation • **Last updated:** 2026-06-09

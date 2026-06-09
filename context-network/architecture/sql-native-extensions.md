@@ -64,12 +64,18 @@ to that one wheel and keeping `goldenembed` pyo3-free. Postgres + DataFusion cal
   `core/pairs.py` primitives (behavior-exact ports, CI parity-gated).
 
 ## Verification
-- **Local:** `graph-core` `cargo test` (pyo3-free, 7 tests); DuckDB graph + cross-backend
-  parity pytest (DuckDB value == native kernel).
-- **CI-only (Windows can't link `ort`/libclang):** Postgres PG 15/16/17 (`cargo pgrx` +
-  `CREATE EXTENSION` on the 0.6.0 surface + `pg_test`); `embed_wheel` lane (maturin build +
+- **Local:** `graph-core` `cargo test` (pyo3-free, 7 tests — now also run in CI by the
+  `rust` job, see [rust-test-coverage.md](rust-test-coverage.md)); DuckDB graph +
+  cross-backend parity pytest (DuckDB value == native kernel).
+- **CI-only (Windows can't link `ort`/libclang):** Postgres PG 15/16/17 (`cargo pgrx
+  install` + `CREATE EXTENSION` + a **psql smoke** that asserts the graph/fingerprint
+  SQL functions against the real extension); `embed_wheel` lane (maturin build +
   load/embed the `tiny_model` fixture + best-effort in-house cosine parity); the
   datafusion FFI lane (`test_datafusion_ffi_udf.py`).
+- **NOT `cargo pgrx test`:** the crate's `#[pg_test]`s cannot run — pgrx schema
+  generation is broken for it (the reason its SQL is hand-maintained). The psql
+  smoke is the mechanism. See [rust-test-coverage.md](rust-test-coverage.md) +
+  [0009](../decisions/0009-rust-test-coverage.md).
 
 ## Known follow-ups (non-blocking, not part of #509 acceptance)
 - DataFusion `_str` (string-id) graph variants — int64-only this pass.
