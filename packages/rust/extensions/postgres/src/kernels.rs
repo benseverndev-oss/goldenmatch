@@ -285,38 +285,13 @@ mod tests {
         assert_ne!(comp_of("x"), comp_of("w"));
     }
 
-    /// Empty edge list: every id is its own singleton component.
-    #[pg_test]
-    fn connected_components_all_singletons_when_no_edges() {
-        let rows: Vec<(i64, i64)> = crate::kernels::goldenmatch_connected_components(
-            vec![],
-            vec![],
-            vec![],
-            vec![10, 20, 30],
-        )
-        .collect();
-        let labels: std::collections::HashSet<i64> = rows.iter().map(|(c, _)| *c).collect();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(labels.len(), 3);
-    }
-
-    /// Fingerprint is stable across key order (canonicalization sorts fields).
-    #[pg_test]
-    fn record_fingerprint_is_key_order_independent() {
-        let a = crate::kernels::goldenmatch_record_fingerprint(r#"{"x":"1","y":"2"}"#.to_string());
-        let b = crate::kernels::goldenmatch_record_fingerprint(r#"{"y":"2","x":"1"}"#.to_string());
-        assert_eq!(a, b);
-    }
-
-    /// dedup keeps the max score across duplicate canonical pairs.
-    #[pg_test]
-    fn pair_dedup_keeps_max_across_duplicates() {
-        let rows: Vec<(i64, i64, f64)> = crate::kernels::goldenmatch_pair_dedup(
-            vec![1, 1, 2],
-            vec![2, 2, 1],
-            vec![0.3, 0.7, 0.5],
-        )
-        .collect();
-        assert_eq!(rows, vec![(1, 2, 0.7)]);
-    }
+    // NOTE: these #[pg_test]s do NOT execute in CI. `cargo pgrx test` requires
+    // pgrx SQL schema generation (it installs each test into a `tests` schema
+    // and calls `SELECT tests.<name>()`), which is broken for this crate -- the
+    // extension SQL is hand-maintained (see the crate CLAUDE.md), so the run
+    // fails with `schema "tests" does not exist`. The graph + fingerprint SQL
+    // surface these wrappers expose is instead asserted end-to-end against a
+    // real CREATE EXTENSION in the `rust_pgrx` psql smoke
+    // (.github/workflows/ci.yml), and the underlying kernels have direct unit
+    // tests in goldenmatch-graph-core / goldenmatch-fingerprint-core.
 }
