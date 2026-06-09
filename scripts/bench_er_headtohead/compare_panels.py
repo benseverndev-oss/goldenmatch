@@ -79,6 +79,7 @@ def main() -> int:
         "| Dataset | v1 F1 | v2 F1 | ΔF1 | v1 P | v2 P | ΔP | v1 R | v2 R | ΔR | Splink F1 | flag |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
+    ran_both: list[str] = []
     regressions: list[str] = []
     improvements: list[str] = []
     for ds in datasets:
@@ -86,6 +87,7 @@ def main() -> int:
         a_ok, b_ok = a.get("status") == "ok", b.get("status") == "ok"
         flag = ""
         if a_ok and b_ok:
+            ran_both.append(ds)
             df1 = b["f1"] - a["f1"]
             if df1 < -args.eps:
                 flag = "⚠️ REGRESSION"
@@ -110,15 +112,17 @@ def main() -> int:
         )
 
     lines.append("")
-    if regressions:
-        verdict = f"**VERDICT: v2 REGRESSES** {', '.join(regressions)} — do NOT flip the default yet."
-    elif improvements:
-        verdict = (
-            f"**VERDICT: v2 safe to default** — gains on {', '.join(improvements)}, "
-            "no regression beyond eps on any dataset that ran under both settings."
-        )
-    else:
+    if not ran_both:
         verdict = "**VERDICT: inconclusive** — no dataset ran under both settings (check dataset availability)."
+    elif regressions:
+        verdict = f"**VERDICT: v2 REGRESSES** {', '.join(regressions)} — do NOT flip the default yet."
+    else:
+        gain_str = f"gains on {', '.join(improvements)}; " if improvements else ""
+        verdict = (
+            f"**VERDICT: v2 safe to default** — {gain_str}no F1 regression beyond eps "
+            f"on any of the {len(ran_both)} dataset(s) that ran under both settings "
+            f"({', '.join(ran_both)})."
+        )
     lines.append(verdict)
     md = "\n".join(lines) + "\n"
 
